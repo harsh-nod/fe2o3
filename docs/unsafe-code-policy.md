@@ -41,6 +41,22 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+The private V53 consuming execution adapter adds one unsafe backend trait and
+one private implementation of the existing gfx942 runtime authority. A safe
+content callback cannot establish protected compiler/proof provenance or native
+semantics, so the extension contract requires an independently approved provider
+for the exact retained source, graph, artifact and actual invocation. No provider
+is installed. The private implementation is constructed only after that contract,
+opaque current-record binding, complete V53 readmission, exact evidence-subject
+comparison and pre-/post-verification currentness checks. It retains the same
+prepared request, checked device, publication, proof artifacts and output borrows
+through the existing runtime completion boundary. Borrowed KFD inspection adds
+no unsafe operation or authority. Root and independent source review found no
+remaining scoped issue; content/accounting fixtures are not native qualification.
+Only this file's `impl: 1, trait: 1` entry is added to the inventory. The ordinary
+inventory gate and adapter compilation remain separate required qualification;
+this scoped update neither refreshes nor claims to audit unrelated allowances.
+
 The 2026-09-30 native-custody audit reconciles seventeen omitted or stale
 inventory entries. All seventeen source files are unchanged from the published
 `edd71e6762252d1990d10d84d10cc53b666d09b7` checkpoint; this is a review record,
@@ -817,6 +833,47 @@ GID then UID before exercising the unchanged receiver admission. The test requir
 an exact single-test invocation in a disposable process with CHOWN/SETGID/SETUID;
 it is not a shared-process credential API. The root template remains unchanged,
 and a separate read-only sealed image is assigned the deployment's credentials.
+
+## Original Request And Mixed Handoff Review
+
+The 2026-10-01 static review reconciles fifteen specifically reviewed inventory
+entries, accounting for fifty-one constructs omitted from the previous baseline.
+It changes neither the inventory gate nor the reviewed source implementations.
+The compiler qualification worker reviewed all fifteen files; the integrating
+reviewer also examined the coordinator call boundaries, personality observation,
+namespace filter and mixed host adapter. No blocking safety defect was identified
+under the existing caller contracts. Unreviewed paths receive no new allowance.
+
+The original-request coordinator retains the complete receiver and helper backing
+before fallible launch continuations, uses the original independently funded
+cleanup pool, and keeps the compiler exec gate closed. Dedicated creator-thread,
+exclusive-wait, mutation-exclusion and outside whole-domain custodian obligations
+remain with its unsafe caller. Its tests either check an unsafe function signature
+without calling it or operate through isolated re-exec roles with retained child
+and descriptor ownership.
+
+The child personality reader uses initialized, bounded syscall buffers and
+privately owned procfs descriptors. It binds the same calling task across the
+credential transition, requires an exact record and EOF, and closes each descriptor
+once on both success and failure. The namespace filter passes a fixed native BPF
+program through a live header after child setup; installation failure is terminal.
+Neither reader nor filter authenticates deployment provenance, cgroup exclusion,
+or post-exec compiler behavior. Native test mutations occur only in disposable
+processes with the existing cleanup and restoration contracts. Inert staging tests
+do not create children or grant compiler roles.
+
+The mixed application wrappers preserve the existing one-shot inherited-FD and
+single-threaded startup contract. Their safe continuations prepare a checked
+roster and audit its current record; they grant no native proof, loading or GPU
+dispatch authority. Three private test trait implementations exercise typed
+preparation and malformed-layout refusal without constructing an executable
+receiver. The extra Wave64 unsafe call and lookalike signature are deliberate
+source-rejection fixtures, counted once in the macro template.
+
+This review is not native execution or formal verification. The isolated inventory
+gate must be rerun after integration; protected runtime, installed deployment,
+compiler gate release, GPU execution and end-to-end production qualification remain
+separate obligations.
 
 ## Initial Reduction
 

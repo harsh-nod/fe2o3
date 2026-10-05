@@ -1,0 +1,134 @@
+// Shared constructor bodies only. The exact graph emitter still supplies every
+// checked operation, guard, successor component, effect and continuation.
+spec fn byte_result_v55(
+    before: MemoryStateV30, after: MemoryStateV30,
+    operation: MemorySourceOperationV30, effect: MemoryOperationEffectV30,
+) -> MemoryOperationResultV30 {
+    MemoryOperationResultV30 {
+        state: after,
+        observation: MemoryOperationObservationV30 {
+            operation, before, after,
+            valid_before: before.valid, valid_after: after.valid, effect,
+        },
+    }
+}
+
+spec fn byte_refused_v55(
+    before: MemoryStateV30, operation: MemorySourceOperationV30,
+) -> MemoryOperationResultV30 {
+    byte_result_v55(
+        before, MemoryStateV30 { valid: false, ..before },
+        operation, MemoryOperationEffectV30::Refused,
+    )
+}
+
+spec fn byte_micro_result_v55(
+    before: MemoryMicroStateV30, result: MemoryOperationResultV30,
+    next_operation: int,
+) -> MemoryMicroResultV30 {
+    MemoryMicroResultV30 {
+        next: MemoryMicroStateV30 {
+            state: result.state,
+            observations: before.observations.push(result.observation),
+            next_operation,
+        },
+        observation: result.observation,
+    }
+}
+
+spec fn byte_micro_refused_v55(before: MemoryMicroStateV30) -> MemoryMicroResultV30 {
+    byte_micro_result_v55(before, byte_refused_v55(
+        before.state, MemorySourceOperationV30 { function: -1, block: -1, operation: -1 },
+    ), -1)
+}
+
+spec fn byte_block_refused_v58(
+    state: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>,
+) -> MemoryBlockResultV30 {
+    MemoryBlockResultV30 {
+        state: MemoryStateV30 { valid: false, ..state },
+        observations, returned: Seq::empty(),
+    }
+}
+
+spec fn byte_micro_begin_result_v58(
+    state: MemoryStateV30, next_operation: int,
+) -> MemoryMicroStateV30 {
+    MemoryMicroStateV30 { state, observations: Seq::empty(), next_operation }
+}
+
+proof fn byte_block_refused_exact_v58(
+    state: MemoryStateV30, observations: Seq<MemoryOperationObservationV30>,
+)
+    ensures byte_block_refused_v58(state, observations) == (MemoryBlockResultV30 {
+        state: MemoryStateV30 { valid: false, ..state },
+        observations, returned: Seq::empty(),
+    }),
+{ }
+
+proof fn byte_micro_begin_result_exact_v58(state: MemoryStateV30, next_operation: int)
+    ensures byte_micro_begin_result_v58(state, next_operation) == (MemoryMicroStateV30 {
+        state, observations: Seq::empty(), next_operation,
+    }),
+{ }
+
+proof fn byte_operation_result_exact_v55(
+    before: MemoryStateV30, after: MemoryStateV30,
+    operation: MemorySourceOperationV30, effect: MemoryOperationEffectV30,
+)
+    ensures byte_result_v55(before, after, operation, effect)
+        == (MemoryOperationResultV30 {
+            state: after,
+            observation: MemoryOperationObservationV30 {
+                operation, before, after,
+                valid_before: before.valid, valid_after: after.valid, effect,
+            },
+        }),
+{ }
+
+proof fn byte_operation_refused_exact_v55(before: MemoryStateV30, operation: MemorySourceOperationV30)
+    ensures ({
+        let result = byte_refused_v55(before, operation);
+        let after = MemoryStateV30 { valid: false, ..before };
+        result == (MemoryOperationResultV30 {
+            state: after,
+            observation: MemoryOperationObservationV30 {
+                operation, before, after,
+                valid_before: before.valid, valid_after: false,
+                effect: MemoryOperationEffectV30::Refused,
+            },
+        })
+    }),
+{ }
+
+proof fn byte_micro_result_exact_v55(
+    before: MemoryMicroStateV30, result: MemoryOperationResultV30, next_operation: int,
+)
+    ensures byte_micro_result_v55(before, result, next_operation)
+        == (MemoryMicroResultV30 {
+            next: MemoryMicroStateV30 {
+                state: result.state,
+                observations: before.observations.push(result.observation),
+                next_operation,
+            },
+            observation: result.observation,
+        }),
+{ }
+
+proof fn byte_micro_refused_exact_v55(before: MemoryMicroStateV30)
+    ensures ({
+        let state = MemoryStateV30 { valid: false, ..before.state };
+        let observation = MemoryOperationObservationV30 {
+            operation: MemorySourceOperationV30 { function: -1, block: -1, operation: -1 },
+            before: before.state, after: state,
+            valid_before: before.state.valid, valid_after: false,
+            effect: MemoryOperationEffectV30::Refused,
+        };
+        byte_micro_refused_v55(before) == (MemoryMicroResultV30 {
+            next: MemoryMicroStateV30 {
+                state, observations: before.observations.push(observation), next_operation: -1,
+            },
+            observation,
+        })
+    }),
+{ }

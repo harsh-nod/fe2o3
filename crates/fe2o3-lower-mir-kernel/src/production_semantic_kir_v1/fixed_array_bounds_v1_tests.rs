@@ -121,7 +121,7 @@ impl Fixture {
         }
     }
 
-    fn lowering(&self) -> SemanticFunctionLoweringV1<'_> {
+    fn lowering(&self) -> SemanticFunctionLoweringV1<'_, '_> {
         let plan = plan_semantic_function_ssa_with_module_v1(
             FUNCTION,
             &self.function,
@@ -177,7 +177,7 @@ fn place(kind: SemanticProjectionKindV1) -> SemanticPlaceV1 {
 }
 
 fn fill_array(
-    lowering: &mut SemanticFunctionLoweringV1<'_>,
+    lowering: &mut SemanticFunctionLoweringV1<'_, '_>,
     operations: &mut Vec<Operation>,
 ) -> Vec<ValueId> {
     let fields = (0..4)
@@ -408,18 +408,29 @@ fn indexed_place_uses_actual_emitted_constants_without_host_truncation() {
 #[test]
 fn constant_index_place_resolves_forward_and_from_end_boundaries() {
     let fixture = Fixture::new();
-    for (offset, from_end, expected) in [
-        (3, false, Some(3)),
-        (1, true, Some(3)),
-        (3, true, Some(1)),
-        (0, true, None),
+    assert!(matches!(
+        SemanticProjectionV1::new(
+            SemanticProjectionKindV1::ConstantIndex {
+                offset: 0,
+                minimum_length: 4,
+                from_end: true,
+            },
+            ELEMENT,
+        ),
+        Err(fe2o3_mir_model::semantic_mir_v1::SemanticMirErrorV1::InvalidProjectionShape)
+    ));
+    for (offset, minimum_length, from_end, expected) in [
+        (3, 4, false, Some(3)),
+        (1, 4, true, Some(3)),
+        (3, 4, true, Some(1)),
+        (5, 5, true, None),
     ] {
         let mut lowering = fixture.lowering();
         let mut operations = vec![];
         let values = fill_array(&mut lowering, &mut operations);
         let place = place(SemanticProjectionKindV1::ConstantIndex {
             offset,
-            minimum_length: 4,
+            minimum_length,
             from_end,
         });
         let before = (

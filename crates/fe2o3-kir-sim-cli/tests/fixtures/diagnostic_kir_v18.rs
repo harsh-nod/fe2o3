@@ -197,8 +197,12 @@ pub fn generic_exposure_module(private: bool) -> Module {
     raw
 }
 
-pub fn storage_module(with_operation: bool) -> Module {
+pub fn union_storage_module(with_operation: bool) -> Module {
     let mut raw = module();
+    let StorageLayoutKindV1::Record(fields) = raw.storage_layouts[1].kind.clone() else {
+        unreachable!()
+    };
+    raw.storage_layouts[1].kind = StorageLayoutKindV1::Union(fields);
     let mut block = BasicBlock::new(BlockId(0));
     block.operations.push(Operation::effect_free(
         ValueDef::new(

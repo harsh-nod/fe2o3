@@ -674,3 +674,8 @@ impl<'a> SliceQuery<'a, '_> {
         })
     }
 }
+
+include!("production_source_slice_view_v18.rs");
+
+include!("production_optimized_source_slice_v18.rs");
+include!("production_optimized_source_descriptor_roles_v18.rs");

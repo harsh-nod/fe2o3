@@ -21,6 +21,8 @@ pub(crate) mod checked_output_policy3_v1;
 mod laid_out_plan_v1;
 #[path = "compiler_descriptor_source_abi_v1.rs"]
 pub(crate) mod source_abi_v1;
+#[path = "compiler_descriptor_source_owned_v29.rs"]
+pub(crate) mod source_owned_v29;
 
 #[path = "compiler_descriptor_conditional_contract_projection_v1.rs"]
 pub(crate) mod conditional_contract_projection_v1;

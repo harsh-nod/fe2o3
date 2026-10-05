@@ -30,7 +30,12 @@ const ROUTER_FLOOR: f32 = -1.0e30;
 ))]
 #[kernel(
     typed,
-    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1]),
+    launch(
+        required = [256, 1, 1],
+        max = [256, 1, 1],
+        max_grid = [4, 1, 1],
+        static_shared_memory_bytes = 8192
+    ),
     control_flow(loop_bounds(2880, 64, 4, 16))
 )]
 #[allow(clippy::too_many_arguments, clippy::many_single_char_names)]

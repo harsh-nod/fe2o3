@@ -1,6 +1,56 @@
 // These attachments retain call-instance identity and full-module coordinates.
 // They remain pending source-value equivalence, elision checks and discharge.
 
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum SourceEmissionPhaseV29 {
+    Admission,
+    ConstructionReplay,
+    ConsumerReplay,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+struct SourceEmissionObservationV29 {
+    phase: SourceEmissionPhaseV29,
+    owner: usize,
+    slot: usize,
+    ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+}
+
+#[cfg(test)]
+thread_local! {
+    static SOURCE_EMISSION_OBSERVATION_V29: std::cell::Cell<Option<SourceEmissionObservationV29>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+struct SourceEmissionObservationGuardV29(Option<SourceEmissionObservationV29>);
+
+#[cfg(test)]
+impl SourceEmissionObservationGuardV29 {
+    fn enter(
+        phase: SourceEmissionPhaseV29,
+        owner: &ProductionSemanticSsaOwnerV1,
+        budget: &ArgumentBudgetV1<'_>,
+    ) -> Self {
+        Self(
+            SOURCE_EMISSION_OBSERVATION_V29.replace(Some(SourceEmissionObservationV29 {
+                phase,
+                owner: std::ptr::from_ref(owner) as usize,
+                slot: std::ptr::from_ref(budget) as usize,
+                ledger: budget.work_ledger_identity_v1(),
+            })),
+        )
+    }
+}
+
+#[cfg(test)]
+impl Drop for SourceEmissionObservationGuardV29 {
+    fn drop(&mut self) {
+        SOURCE_EMISSION_OBSERVATION_V29.set(self.0);
+    }
+}
+
 #[cfg_attr(
     not(test),
     allow(dead_code, reason = "Scoped source admission remains gated")
@@ -124,6 +174,12 @@ impl SourceOwnedScopedModuleV29 {
                 cleanup,
                 budget,
                 |view, budget| {
+                    #[cfg(test)]
+                    let _phase = SourceEmissionObservationGuardV29::enter(
+                        SourceEmissionPhaseV29::Admission,
+                        view.owner,
+                        budget,
+                    );
                     admit_pending_scoped_module_with_cleanup_v29(view, limits, cleanup, budget)
                 },
             )?;
@@ -133,6 +189,12 @@ impl SourceOwnedScopedModuleV29 {
                 cleanup,
                 budget,
                 |view, budget| {
+                    #[cfg(test)]
+                    let _phase = SourceEmissionObservationGuardV29::enter(
+                        SourceEmissionPhaseV29::ConstructionReplay,
+                        view.owner,
+                        budget,
+                    );
                     reconstruct_scoped_source_with_cleanup_v29(
                         &pending, view, limits, cleanup, budget,
                     )
@@ -191,6 +253,12 @@ impl SourceOwnedScopedModuleV29 {
                 cleanup,
                 budget,
                 |view, budget| {
+                    #[cfg(test)]
+                    let _phase = SourceEmissionObservationGuardV29::enter(
+                        SourceEmissionPhaseV29::ConsumerReplay,
+                        view.owner,
+                        budget,
+                    );
                     reconstruct_scoped_source_with_cleanup_v29(
                         &self.pending,
                         view,
@@ -309,9 +377,11 @@ fn collect_scoped_module_assertions_v29(
                             functions: &module.functions,
                             function_ordinal: root.function_ordinal,
                             sidecars: &root.sidecars,
+                            active_instances: &root.active_instances,
                             coordinates: &root.coordinates,
                             slot_relocation: root.slot_relocation.as_ref(),
                             insertions: &root.insertions,
+                            terminal_failures: root.terminal_failures.as_ref(),
                         },
                         instances,
                         &graph,

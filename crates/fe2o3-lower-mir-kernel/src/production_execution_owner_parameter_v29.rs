@@ -157,6 +157,28 @@ fn execution_call_argument_shape_v29(
     parameter_types: &[Type],
     budget: &mut dyn SemanticEmissionBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    execution_call_argument_shape_with_representation_v29(
+        types,
+        ty,
+        source_argument,
+        binding,
+        projections,
+        parameter_types,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+        budget,
+    )
+}
+
+fn execution_call_argument_shape_with_representation_v29(
+    types: &[SemanticTypeDeclV1],
+    ty: SemanticTypeIdV1,
+    source_argument: u32,
+    binding: &SemanticValueBindingV1,
+    projections: &[HelperCallArgumentV1],
+    parameter_types: &[Type],
+    representation: ExecutionCfgRepresentationV29,
+    budget: &mut dyn SemanticEmissionBudgetV1,
+) -> Result<(), ProductionSemanticKirErrorV1> {
     if let Some((_, expected)) =
         execution_direct_projection_v29(source_argument, projections, parameter_types, budget)?
     {
@@ -166,7 +188,7 @@ fn execution_call_argument_shape_v29(
             return Err(execution_call_error_v29());
         }
     } else {
-        execution_call_shape_v29(types, ty, binding, budget)?;
+        execution_call_shape_with_representation_v29(types, ty, binding, representation, budget)?;
     }
     Ok(())
 }

@@ -387,7 +387,7 @@ impl ProductionContextCallBoundaryV29 {
     }
 }
 
-fn check_arguments(
+pub(crate) fn check_arguments(
     expected: &[SemanticOperandV1],
     actual: &[SemanticOperandV1],
     budget: &mut Budget<'_>,

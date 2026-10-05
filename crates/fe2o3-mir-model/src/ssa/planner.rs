@@ -74,6 +74,15 @@ impl<'a> Planner<'a> {
         let mut promotable_definition_events = 0_usize;
         for (block_index, block) in input.blocks.iter().enumerate() {
             work.charge(1)?;
+            if let Some(start) = block.terminal_failure_start {
+                work.charge(1)?;
+                if start > block.events.len() {
+                    return Err(SsaPlannerErrorV1::InvalidTerminalFailureTail {
+                        block: SsaBlockIdV1::new(block_index as u32),
+                        start,
+                    });
+                }
+            }
             input_events = checked_add_resource(
                 SsaPlannerResourceV1::Events,
                 input_events,
@@ -82,6 +91,12 @@ impl<'a> Planner<'a> {
             )?;
             work.charge(block.events.len())?;
             for (event_index, event) in block.events.iter().copied().enumerate() {
+                if block.is_failure_event(event_index) && matches!(event, SsaEventV1::Define(_)) {
+                    return Err(SsaPlannerErrorV1::InvalidTerminalFailureTail {
+                        block: SsaBlockIdV1::new(block_index as u32),
+                        start: block.terminal_failure_start.expect("failure tail"),
+                    });
+                }
                 validate_variable(
                     event.variable(),
                     variable_count,
@@ -444,11 +459,14 @@ impl<'a> Planner<'a> {
                 continue;
             }
             let mut defined = vec![0_u64; self.variable_words];
-            for event in block.events.iter().copied() {
+            for (event_index, event) in block.events.iter().copied().enumerate() {
                 self.work.charge(1)?;
                 let Some(variable) = self.promotable_index(event.variable()) else {
                     continue;
                 };
+                if block.is_failure_event(event_index) && matches!(event, SsaEventV1::Kill(_)) {
+                    continue;
+                }
                 match event {
                     SsaEventV1::Use(_) if !bit_contains(&defined, variable) => {
                         self.block_uses.insert(block_index, variable);
@@ -957,6 +975,7 @@ impl<'a> Planner<'a> {
             .ok_or(SsaPlannerErrorV1::IdentityOverflow)?;
         self.charge_storage_items::<(usize, Option<SsaValueV1>)>(scoped_change_capacity)?;
         let mut scoped_changes = Vec::with_capacity(scoped_change_capacity);
+        self.charge_storage_items::<Option<usize>>(1)?;
         let mut pending = vec![(entry, None)];
         while let Some((block_index, restore_to)) = pending.pop() {
             if let Some(restore_to) = restore_to {
@@ -1013,8 +1032,12 @@ impl<'a> Planner<'a> {
             self.charge_storage_items::<(u32, SsaResolvedEventV1)>(resolved_counts[block_index])?;
             let mut block_resolved = Vec::with_capacity(resolved_counts[block_index]);
             let mut next_event_definition = event_definition_bases[block_index];
+            let mut failure_restore = None;
             for (event_index, event) in block.events.iter().copied().enumerate() {
                 self.work.charge(1)?;
+                if block.terminal_failure_start == Some(event_index) {
+                    failure_restore = Some(scoped_changes.len());
+                }
                 let variable = event.variable();
                 let Some(variable_index) = self.promotable_index(variable) else {
                     continue;
@@ -1044,6 +1067,15 @@ impl<'a> Planner<'a> {
                     }
                 };
                 block_resolved.push((event_index as u32, resolved));
+            }
+            if let Some(restore) = failure_restore {
+                while scoped_changes.len() > restore {
+                    self.work.charge(1)?;
+                    let (variable, previous) = scoped_changes
+                        .pop()
+                        .ok_or(SsaPlannerErrorV1::IdentityOverflow)?;
+                    current_values[variable] = previous;
+                }
             }
             resolved_events[block_index] = block_resolved;
             for (edge_index, edge) in block.edges.iter().enumerate() {

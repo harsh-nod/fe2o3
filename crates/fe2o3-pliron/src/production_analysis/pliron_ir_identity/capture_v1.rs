@@ -12,11 +12,25 @@ fn build_identity_observed_v1(
     limits: ProductionAnalysisResourceLimitsV1,
     observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<(BuiltIdentityV1, ProductionAnalysisResourceUpperBoundV1), BuildIdentityFailureV1> {
+    build_identity_private_v1(context, function, limits, None, observer)
+}
+
+fn build_identity_private_v1(
+    context: &Context,
+    function: &FuncOp,
+    limits: ProductionAnalysisResourceLimitsV1,
+    private: PrivateIdentityV1<'_>,
+    observer: RenderObserverV1<'_, '_, '_>,
+) -> Result<(BuiltIdentityV1, ProductionAnalysisResourceUpperBoundV1), BuildIdentityFailureV1> {
     let phase = ProductionAnalysisResourcePhaseV1::StructuralIdentity;
-    let preflight = match observer {
-        None => preflight_identity_structure_v1(context, function, limits),
-        Some(_) => {
-            preflight_identity_structure_with_observation_v1(context, function, limits, observer)
+    let preflight = if private.is_some() {
+        preflight_private_identity_structure_v1(context, function, limits, private, observer)
+    } else {
+        match observer {
+            None => preflight_identity_structure_v1(context, function, limits),
+            Some(_) => preflight_identity_structure_with_observation_v1(
+                context, function, limits, observer,
+            ),
         }
     }
     .map_err(BuildIdentityFailureV1::ResourceLimit)?;
@@ -25,9 +39,13 @@ fn build_identity_observed_v1(
         .map_err(BuildIdentityFailureV1::ResourceLimit)?;
     require_identity_prefix_v1(limits, Ok(frozen_text), callbacks, observer)
         .map_err(BuildIdentityFailureV1::ResourceLimit)?;
-    let prescan = match observer {
-        None => prescan(context, function),
-        Some(_) => prescan_observed_v1(context, function, observer),
+    let prescan = if private.is_some() {
+        prescan_private_v1(context, function, private, observer)
+    } else {
+        match observer {
+            None => prescan(context, function),
+            Some(_) => prescan_observed_v1(context, function, observer),
+        }
     }?;
     let closure_limits = limits
         .remaining_after_retained(
@@ -94,6 +112,7 @@ fn build_identity_observed_v1(
         encode_attributes(
             context,
             &root_raw.attributes,
+            None,
             PlironPreserveLocationV1::Function,
             encoder,
             observer,
@@ -119,6 +138,7 @@ fn build_identity_observed_v1(
             encode_attributes(
                 context,
                 &block_ref.attributes,
+                None,
                 block_location.clone(),
                 encoder,
                 observer,
@@ -239,6 +259,7 @@ fn build_identity_observed_v1(
                 encode_attributes(
                     context,
                     &raw.attributes,
+                    private.map(|input| (input, operation)),
                     location.clone(),
                     encoder,
                     observer,
@@ -401,6 +422,8 @@ fn build_identity_observed_v1(
         counter.record_location_name_bytes,
     )
     .map_err(BuildIdentityFailureV1::ResourceLimit)?;
+    let resource_upper_bound = private_identity_capture_bound_v1(resource_upper_bound, private)
+        .map_err(BuildIdentityFailureV1::ResourceLimit)?;
     // The order index stays live through counting and verification. Conservatively
     // cover its overlap with the bundled capture envelope, including later encoding.
     let resource_upper_bound =

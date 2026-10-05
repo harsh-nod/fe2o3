@@ -8,8 +8,8 @@ mod masked_shift_value_v1_tests {
             operation: ProductionSemanticBinaryOpV2::BitAnd,
             scalar,
             overflow: ProductionOverflowContractV2::Wrapping,
-            lhs: Box::new(input),
-            rhs: Box::new(E::Constant { scalar, bits }),
+            lhs: NormalizedScalarNodeV18::legacy(input),
+            rhs: NormalizedScalarNodeV18::legacy(E::Constant { scalar, bits }),
         }
     }
     fn transported(source: S, target: S, value: E) -> E {
@@ -20,7 +20,7 @@ mod masked_shift_value_v1_tests {
                 kind: ProductionSemanticCastV2::Integer,
                 source,
                 target,
-                operand: Box::new(value),
+                operand: NormalizedScalarNodeV18::legacy(value),
             }
         }
     }
@@ -29,8 +29,8 @@ mod masked_shift_value_v1_tests {
             operation: ProductionSemanticBinaryOpV2::ShiftRight,
             scalar,
             overflow: ProductionOverflowContractV2::Wrapping,
-            lhs: Box::new(E::Symbol { symbol: 1, scalar }),
-            rhs: Box::new(count),
+            lhs: NormalizedScalarNodeV18::legacy(E::Symbol { symbol: 1, scalar }),
+            rhs: NormalizedScalarNodeV18::legacy(count),
         }
     }
     fn agrees(expected: &E, actual: &E, cap: usize) -> Option<bool> {
@@ -161,7 +161,7 @@ mod masked_shift_value_v1_tests {
             kind: ProductionSemanticCastV2::FloatToIntegerSaturating,
             source: count,
             target: scalar,
-            operand: Box::new(source.clone()),
+            operand: NormalizedScalarNodeV18::legacy(source.clone()),
         };
         assert_eq!(
             agrees(&expected, &shift(scalar, mask(scalar, bad, 7)), 1000),

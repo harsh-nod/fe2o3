@@ -142,6 +142,8 @@ pub(crate) fn preflight_provenance_alias_resource_upper_bound_v1(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PlironProvenanceFailureV1 {
+    NativeObligations,
+    NativeGuardResource,
     ResourceLimit {
         limit: usize,
         actual: usize,
@@ -181,6 +183,11 @@ pub enum PlironProvenanceFailureV1 {
 impl fmt::Display for PlironProvenanceFailureV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::NativeObligations => formatter
+                .write_str("native pointer provenance and alias obligations remain unresolved"),
+            Self::NativeGuardResource => {
+                formatter.write_str("native obligation guard resource admission was denied")
+            }
             Self::ResourceLimit { limit, actual } => write!(
                 formatter,
                 "ranked provenance subject count {actual} exceeds analysis limit {limit}",
@@ -238,6 +245,12 @@ impl PlironProvenanceFailureV1 {
     /// Large origin rosters are summarized instead of debug-formatted.
     pub(crate) fn bounded_description_v1(&self) -> String {
         match self {
+            Self::NativeObligations => {
+                "native pointer provenance and alias obligations remain unresolved".to_owned()
+            }
+            Self::NativeGuardResource => {
+                "native obligation guard resource admission was denied".to_owned()
+            }
             Self::ResourceLimit { limit, actual } => {
                 format!("ranked provenance subject count {actual} exceeds analysis limit {limit}")
             }

@@ -1,0 +1,96 @@
+// Thread writes check the logical extent before forming the source address.
+// This does not justify the separate zero-offset address in a native lowering.
+struct InvocationSourceThreadWriteV88 {
+    destination: int,
+    input: int,
+    index: int,
+    recipe: InvocationSourceDescriptorRecipeV51,
+    witness_type: int,
+    moved_receiver: bool,
+    moved_index: bool,
+    value: InvocationSourceOperandV36,
+}
+
+struct InvocationSourceThreadWriteResultV88 {
+    source: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+}
+
+spec fn invocation_source_thread_write_refused_v88(source: InvocationSourceByteStateV36)
+    -> InvocationSourceThreadWriteResultV88
+{
+    let after = invocation_source_byte_refused_v36(source);
+    InvocationSourceThreadWriteResultV88 { source: after,
+        observations: invocation_source_observe_effects_v39(
+            seq![MemoryOperationEffectV30::Refused], source, after) }
+}
+
+spec fn invocation_source_thread_write_v88(
+    source: InvocationSourceByteStateV36, write: InvocationSourceThreadWriteV88,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceThreadWriteResultV88 {
+    if !write.recipe.mutable || !write.moved_receiver
+        || !invocation_source_descriptor_reference_current_v51(source, write.input, write.recipe) {
+        invocation_source_thread_write_refused_v88(source)
+    } else {
+        let receiver = source.machine.values[write.input];
+        let consumed_receiver = invocation_source_byte_put_local_v36(
+            source, write.input, MemoryValueV30::Undefined);
+        if !invocation_source_witness_current_v38(consumed_receiver, write.index, write.witness_type) {
+            invocation_source_thread_write_refused_v88(consumed_receiver)
+        } else {
+            let position = consumed_receiver.machine.values[write.index];
+            let consumed_index = if write.moved_index { invocation_source_byte_put_local_v36(
+                consumed_receiver, write.index, MemoryValueV30::Undefined) }
+                else { consumed_receiver };
+            match write.value {
+                InvocationSourceOperandV36::Scalar { value, bits } => {
+                    let evaluated = invocation_source_byte_evaluate_v36(
+                        consumed_index, value, bits, root, instance, little_endian);
+                    let reads = invocation_source_observe_effects_v39(
+                        invocation_source_read_effect_v36(consumed_index, value, bits,
+                            root, instance, little_endian), consumed_index, evaluated.source);
+                    if !evaluated.source.machine.valid
+                        || !invocation_source_byte_value_typed_v36(evaluated.value, bits)
+                        || !(bits == 1 && write.recipe.width == 1
+                            || bits == 8 * write.recipe.width) {
+                        invocation_source_thread_write_refused_v88(evaluated.source)
+                    } else { match (receiver, position) {
+                        (MemoryValueV30::Slice(slice), MemoryValueV30::Scalar(offset)) => {
+                            if offset < 0 || offset >= memory_value_modulus_v30(write.recipe.metadata_bits / 8) {
+                                invocation_source_thread_write_refused_v88(evaluated.source)
+                            } else if offset >= slice.length {
+                                InvocationSourceThreadWriteResultV88 {
+                                    source: invocation_source_byte_put_local_v36(
+                                        evaluated.source, write.destination, MemoryValueV30::Scalar(0)),
+                                    observations: reads }
+                            } else {
+                                let pointer = MemoryPointerV30 {
+                                    byte_offset: slice.pointer.byte_offset + offset * write.recipe.width,
+                                    ..slice.pointer };
+                                let stored = InvocationSourceByteStateV36 {
+                                    machine: invocation_source_store_v36(evaluated.source.machine,
+                                        pointer, write.recipe.width, write.recipe.width,
+                                        evaluated.value, little_endian), ..evaluated.source };
+                                if !stored.machine.valid {
+                                    invocation_source_thread_write_refused_v88(stored)
+                                } else {
+                                    InvocationSourceThreadWriteResultV88 {
+                                        source: invocation_source_byte_put_local_v36(
+                                            stored, write.destination, MemoryValueV30::Scalar(1)),
+                                        observations: reads + invocation_source_observe_effects_v39(
+                                            seq![MemoryOperationEffectV30::Write {
+                                                address: MemoryValueV30::Pointer(pointer),
+                                                width: write.recipe.width, alignment: write.recipe.width,
+                                                value: evaluated.value }], evaluated.source, stored) }
+                                }
+                            }
+                        },
+                        _ => invocation_source_thread_write_refused_v88(evaluated.source),
+                    } }
+                },
+                _ => invocation_source_thread_write_refused_v88(consumed_index),
+            }
+        }
+    }
+}

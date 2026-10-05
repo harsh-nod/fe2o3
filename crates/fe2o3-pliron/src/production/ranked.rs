@@ -2515,6 +2515,9 @@ fn validate_live_semantic_loads(
         }
         ProductionSemanticExpressionV2::Symbol { .. }
         | ProductionSemanticExpressionV2::Constant { .. } => Ok(()),
+        ProductionSemanticExpressionV2::GlobalInvocation1d { .. } => {
+            Err(ProductionRankedKernelErrorV1::InvalidReferenceContract)
+        }
         ProductionSemanticExpressionV2::Unary { operand, .. }
         | ProductionSemanticExpressionV2::Cast { operand, .. } => {
             validate_live_semantic_loads(kernel, operand)
@@ -6010,6 +6013,11 @@ fn materialize_typed_semantic_expression(
     expression: &ProductionSemanticExpressionV2,
 ) -> Result<Value, ProductionRankedKernelErrorV1> {
     let operation = match expression {
+        ProductionSemanticExpressionV2::GlobalInvocation1d { .. } => {
+            return Err(ProductionRankedKernelErrorV1::Materialization(
+                "launch-coordinate expression requires a checked launch context",
+            ));
+        }
         ProductionSemanticExpressionV2::Symbol { symbol, scalar } => {
             SemanticTypedSymbolOp::new(context, *symbol, typed_scalar(*scalar)?).get_operation()
         }

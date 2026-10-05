@@ -1,10 +1,231 @@
-// Original geometry constructors and source subobjects; initialized-byte queries are deferred.
+// Reuse original geometry identities; add the bounded symbolic initialized-byte query.
 include!("production_source_storage_geometry_v29.rs");
 
 fn scalar_kind(scalar: SemanticScalarTypeV1) -> Result<ScalarType, Error> {
     match lower_scalar_kind(scalar)? {
         Type::Scalar(scalar) => Ok(scalar),
         _ => Err(error("source storage scalar lowering changed kind")),
+    }
+}
+
+impl SourceStorageLayoutsV29<'_> {
+    // Query a symbolic source data mask without materializing repeated array
+    // elements or bytes. Interior array repetitions share one element query.
+    fn data_covers(
+        &self,
+        ty: SemanticTypeIdV1,
+        range: SourceStorageRangeV29,
+        budget: &mut Budget<'_>,
+    ) -> Result<bool, Error> {
+        type Task = (SemanticTypeIdV1, SourceStorageRangeV29);
+        self.lease.reserve(2 * size_of::<Vec<Task>>(), budget)?;
+        let mut tasks = self.lease.vector(1, budget)?;
+        let mut visited = self.lease.vector::<Task>(0, budget)?;
+        self.lease.push(&mut tasks, (ty, range), budget)?;
+        let mut covered = true;
+        while let Some((ty, range)) = tasks.pop() {
+            self.lease.work(1, budget)?;
+            // A by-value type DAG can repeat the same field type many times.
+            // Memoize exact relative mask queries rather than expanding that
+            // DAG into its exponentially larger physical object tree.
+            let key = (ty, range);
+            let (mut low, mut high) = (0, visited.len());
+            let mut seen = false;
+            while low < high {
+                self.lease.work(1, budget)?;
+                let mid = low + (high - low) / 2;
+                match visited[mid].cmp(&key) {
+                    std::cmp::Ordering::Less => low = mid + 1,
+                    std::cmp::Ordering::Greater => high = mid,
+                    std::cmp::Ordering::Equal => {
+                        seen = true;
+                        break;
+                    }
+                }
+            }
+            if seen {
+                continue;
+            }
+            self.lease.push(&mut visited, key, budget)?;
+            self.lease.work(visited.len() - 1 - low, budget)?;
+            for index in (low + 1..visited.len()).rev() {
+                visited.swap(index - 1, index);
+            }
+            let declaration = self.declaration(ty)?;
+            range.check(
+                declaration
+                    .layout()
+                    .size_bytes()
+                    .ok_or_else(|| error("source byte mask has no admitted sized geometry"))?,
+            )?;
+            if range.start == range.end {
+                continue;
+            }
+            match declaration.shape() {
+                SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_) => {}
+                SemanticTypeShapeV1::Pointer(pointer) => {
+                    if pointer.metadata() == SemanticPointerMetadataV1::SliceLength {
+                        let (data, length, length_offset) = self.descriptor_parts(ty)?;
+                        let data_end = data.size_bytes().ok_or(ArgumentResourceV1::Arithmetic)?;
+                        let length_end = length_offset
+                            .checked_add(length.size_bytes().ok_or(ArgumentResourceV1::Arithmetic)?)
+                            .ok_or(ArgumentResourceV1::Arithmetic)?;
+                        if range.end > length_end
+                            || (range.start < length_offset
+                                && range.end > data_end
+                                && data_end != length_offset)
+                        {
+                            covered = false;
+                        }
+                    }
+                }
+                SemanticTypeShapeV1::Opaque
+                    if matches!(
+                        declaration.layout().backend_repr(),
+                        SemanticBackendReprV1::SimdVector { .. }
+                    ) => {}
+                SemanticTypeShapeV1::Enum { .. } => {
+                    // Every valid whole enum has its encoded tag initialized,
+                    // but the unknown variant proves no other payload bytes.
+                    let SemanticRustcVariantsV1::Multiple(layout) = declaration.layout().variants()
+                    else {
+                        covered = false;
+                        break;
+                    };
+                    let (offset, primitive) = match layout.encoding() {
+                        SemanticEnumEncodingV1::Direct(tag) => {
+                            (tag.tag_offset_bytes(), tag.tag().primitive())
+                        }
+                        SemanticEnumEncodingV1::Niche(tag) => {
+                            (tag.source().expected_offset_bytes(), tag.tag().primitive())
+                        }
+                    };
+                    let tag = SourceStorageRangeV29::new(
+                        offset,
+                        primitive
+                            .size_bytes()
+                            .ok_or(ArgumentResourceV1::Arithmetic)?,
+                        declaration
+                            .layout()
+                            .size_bytes()
+                            .ok_or(ArgumentResourceV1::Arithmetic)?,
+                    )?;
+                    covered = tag.contains(range);
+                }
+                SemanticTypeShapeV1::Array { element, .. } => {
+                    let SemanticFieldsShapeV1::Array {
+                        stride_bytes: stride,
+                        ..
+                    } = declaration.layout().fields()
+                    else {
+                        return Err(error("source array mask lacks original stride"));
+                    };
+                    let stride = *stride;
+                    if stride == 0 {
+                        return Err(error("nonempty source byte range has zero array stride"));
+                    }
+                    let first = range.start / stride;
+                    let last = (range.end - 1) / stride;
+                    let first_range = SourceStorageRangeV29::new(
+                        range.start % stride,
+                        if first == last {
+                            range.length()
+                        } else {
+                            stride - range.start % stride
+                        },
+                        stride,
+                    )?;
+                    self.lease
+                        .push(&mut tasks, (*element, first_range), budget)?;
+                    if first != last {
+                        self.lease.push(
+                            &mut tasks,
+                            (
+                                *element,
+                                SourceStorageRangeV29::new(
+                                    0,
+                                    (range.end - 1) % stride + 1,
+                                    stride,
+                                )?,
+                            ),
+                            budget,
+                        )?;
+                    }
+                    if last - first > 1 {
+                        self.lease.push(
+                            &mut tasks,
+                            (*element, SourceStorageRangeV29::new(0, stride, stride)?),
+                            budget,
+                        )?;
+                    }
+                }
+                SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields) => {
+                    let SemanticTypeLayoutDetailsV1::Aggregate(geometry) =
+                        declaration.layout().details()
+                    else {
+                        return Err(error("source record mask lacks original offsets"));
+                    };
+                    if fields.fields().len() != geometry.field_offsets().len() {
+                        return Err(error("source record mask field roster changed"));
+                    }
+                    self.lease
+                        .reserve(size_of::<Vec<SourceStorageRangeV29>>(), budget)?;
+                    let mut pieces = self.lease.vector(fields.fields().len(), budget)?;
+                    for (&field_ty, &offset) in fields.fields().iter().zip(geometry.field_offsets())
+                    {
+                        self.lease.work(1, budget)?;
+                        let end = offset
+                            .checked_add(
+                                self.declaration(field_ty)?
+                                    .layout()
+                                    .size_bytes()
+                                    .ok_or_else(|| error("source record mask field is unsized"))?,
+                            )
+                            .ok_or(ArgumentResourceV1::Arithmetic)?;
+                        let intersection = SourceStorageRangeV29 {
+                            start: range.start.max(offset),
+                            end: range.end.min(end),
+                        };
+                        if intersection.start < intersection.end {
+                            self.lease.push(&mut pieces, intersection, budget)?;
+                            self.lease.push(
+                                &mut tasks,
+                                (
+                                    field_ty,
+                                    SourceStorageRangeV29 {
+                                        start: intersection.start - offset,
+                                        end: intersection.end - offset,
+                                    },
+                                ),
+                                budget,
+                            )?;
+                        }
+                    }
+                    sort_rows(&mut pieces, &self.lease, budget)?;
+                    let mut end = range.start;
+                    for piece in &pieces {
+                        self.lease.work(1, budget)?;
+                        if piece.start > end {
+                            covered = false;
+                            break;
+                        }
+                        end = end.max(piece.end);
+                    }
+                    covered &= end == range.end;
+                    self.lease.discard_vec(pieces, budget)?;
+                    self.lease
+                        .refund(size_of::<Vec<SourceStorageRangeV29>>(), budget)?;
+                }
+                _ => covered = false,
+            }
+            if !covered {
+                break;
+            }
+        }
+        self.lease.discard_vec(tasks, budget)?;
+        self.lease.discard_vec(visited, budget)?;
+        self.lease.refund(2 * size_of::<Vec<Task>>(), budget)?;
+        Ok(covered)
     }
 }
 

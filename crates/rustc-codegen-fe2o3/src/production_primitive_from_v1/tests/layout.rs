@@ -14,42 +14,107 @@ enum OldCall<'tcx> {
     SafeCoreShift(SafeCoreShiftV1<'tcx>),
 }
 #[derive(Clone, Copy, Debug)]
-struct OldPlan<'tcx> {
+struct OldPlan<'tcx, Call = OldCall<'tcx>> {
     caller: SemanticFunctionIdV1,
     block: u32,
-    operation: OldCall<'tcx>,
+    operation: Call,
     element_type: Ty<'tcx>,
     instance: Instance<'tcx>,
     identities: CanonicalFunctionIdentitiesV1,
 }
 #[derive(Clone, Copy, Debug)]
-struct OldBody<'tcx> {
+struct OldBody<'tcx, Call = OldCall<'tcx>> {
     caller: SemanticFunctionIdV1,
     rustc_block: u32,
     expected_callee: Instance<'tcx>,
     expected_element_type: Ty<'tcx>,
-    operation: OldCall<'tcx>,
+    operation: Call,
+}
+
+#[allow(dead_code)]
+enum PrimitiveCall<'tcx> {
+    Rustc(ProductionRustcIntrinsicOperationV1),
+    SafeCoreShift(SafeCoreShiftV1<'tcx>),
+    CheckedPrimitiveFrom(CheckedPrimitiveFromV1<'tcx>),
+}
+
+#[allow(dead_code)]
+struct PanicFields<'tcx> {
+    caller: Instance<'tcx>,
+    block: rustc_middle::mir::BasicBlock,
+    callee: Instance<'tcx>,
+    message_type: Ty<'tcx>,
+    allocation: rustc_middle::mir::interpret::AllocId,
+    bytes: &'tcx [u8],
+    body: &'tcx rustc_middle::mir::Body<'tcx>,
+    abi: &'tcx rustc_target::callconv::FnAbi<'tcx, Ty<'tcx>>,
+}
+
+#[allow(dead_code)]
+enum CurrentCall<'tcx> {
+    Rustc(ProductionRustcIntrinsicOperationV1),
+    SafeCoreShift(SafeCoreShiftV1<'tcx>),
+    CheckedPrimitiveFrom(CheckedPrimitiveFromV1<'tcx>),
+    CorePanic(PanicFields<'tcx>),
 }
 
 #[test]
 fn primitive_from_retained_enum_and_both_recipe_layouts_equal_frozen_old_rosters() {
     assert!(size_of::<CheckedPrimitiveFromV1<'_>>() <= size_of::<SafeCoreShiftV1<'_>>());
     assert!(align_of::<CheckedPrimitiveFromV1<'_>>() <= align_of::<SafeCoreShiftV1<'_>>());
-    assert_eq!(size_of::<NormalizedCallV1<'_>>(), size_of::<OldCall<'_>>());
+    // Preserve the historical PrimitiveFrom delta independently of later variants.
+    assert_eq!(size_of::<PrimitiveCall<'_>>(), size_of::<OldCall<'_>>());
+    assert_eq!(align_of::<PrimitiveCall<'_>>(), align_of::<OldCall<'_>>());
     assert_eq!(
-        align_of::<NormalizedCallV1<'_>>(),
-        align_of::<OldCall<'_>>()
-    );
-    assert_eq!(
-        size_of::<NormalizedRustcIntrinsicRecipeV1<'_>>(),
+        size_of::<OldPlan<'_, PrimitiveCall<'_>>>(),
         size_of::<OldPlan<'_>>()
     );
     assert_eq!(
-        align_of::<NormalizedRustcIntrinsicRecipeV1<'_>>(),
+        align_of::<OldPlan<'_, PrimitiveCall<'_>>>(),
         align_of::<OldPlan<'_>>()
     );
-    assert_eq!(size_of::<BodyRecipe<'_>>(), size_of::<OldBody<'_>>());
-    assert_eq!(align_of::<BodyRecipe<'_>>(), align_of::<OldBody<'_>>());
+    assert_eq!(
+        size_of::<OldBody<'_, PrimitiveCall<'_>>>(),
+        size_of::<OldBody<'_>>()
+    );
+    assert_eq!(
+        align_of::<OldBody<'_, PrimitiveCall<'_>>>(),
+        align_of::<OldBody<'_>>()
+    );
+}
+
+#[test]
+fn core_panic_and_current_normalized_recipes_match_independent_field_rosters() {
+    use crate::production_core_panic_v50::CorePanicV50;
+    assert_eq!(size_of::<CorePanicV50<'_>>(), size_of::<PanicFields<'_>>());
+    assert_eq!(
+        align_of::<CorePanicV50<'_>>(),
+        align_of::<PanicFields<'_>>()
+    );
+    assert_eq!(
+        size_of::<NormalizedCallV1<'_>>(),
+        size_of::<CurrentCall<'_>>()
+    );
+    assert_eq!(
+        align_of::<NormalizedCallV1<'_>>(),
+        align_of::<CurrentCall<'_>>()
+    );
+    assert_eq!(
+        size_of::<NormalizedRustcIntrinsicRecipeV1<'_>>(),
+        size_of::<OldPlan<'_, CurrentCall<'_>>>()
+    );
+    assert_eq!(
+        align_of::<NormalizedRustcIntrinsicRecipeV1<'_>>(),
+        align_of::<OldPlan<'_, CurrentCall<'_>>>()
+    );
+    assert_eq!(
+        size_of::<BodyRecipe<'_>>(),
+        size_of::<OldBody<'_, CurrentCall<'_>>>()
+    );
+    assert_eq!(
+        align_of::<BodyRecipe<'_>>(),
+        align_of::<OldBody<'_, CurrentCall<'_>>>()
+    );
 }
 
 pub(super) fn check_actual<'tcx>(

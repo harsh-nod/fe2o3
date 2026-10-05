@@ -875,7 +875,7 @@ pub(crate) fn require_pliron_barrier_convergence_before_lowering_v1(
 fn barrier_trace(
     trace: &PlironInvocationTraceV1,
     scope: HierarchyAttr,
-) -> Vec<(PlironTraceLocationV1, AddressSpaceAttr)> {
+) -> Vec<(PlironTraceLocationV1, u8)> {
     trace
         .events
         .iter()
@@ -885,8 +885,26 @@ fn barrier_trace(
                 execution_scope,
                 address_space,
                 ..
-            } if *execution_scope == scope => Some((*location, *address_space)),
-            PlironTraceEventV1::Barrier { .. }
+            } if *execution_scope == scope => Some((
+                *location,
+                match address_space {
+                    AddressSpaceAttr::Private => 1,
+                    AddressSpaceAttr::Workgroup => 2,
+                    AddressSpaceAttr::Global => 4,
+                    AddressSpaceAttr::Constant => 8,
+                    AddressSpaceAttr::Generic => 16,
+                },
+            )),
+            PlironTraceEventV1::NativeBarrier {
+                location,
+                execution_scope,
+                address_spaces,
+                ..
+            } if *execution_scope == scope => Some((*location, *address_spaces)),
+            PlironTraceEventV1::NativeSubject { .. }
+            | PlironTraceEventV1::NativeBarrier { .. }
+            | PlironTraceEventV1::NativeFence { .. }
+            | PlironTraceEventV1::Barrier { .. }
             | PlironTraceEventV1::Fence { .. }
             | PlironTraceEventV1::TensorInstruction { .. }
             | PlironTraceEventV1::Trap { .. }
@@ -932,6 +950,13 @@ fn divergent_scope_trace(
     None
 }
 
+pub(crate) fn native_barrier_participation_v1(
+    traces: &[PlironInvocationTraceV1],
+) -> Option<PlironBarrierFindingV1> {
+    divergent_scope_trace(traces, HierarchyAttr::Workgroup)
+        .or_else(|| divergent_scope_trace(traces, HierarchyAttr::Subgroup))
+}
+
 fn report(finding: PlironBarrierFindingV1) -> PlironBarrierReportV1 {
     PlironBarrierReportV1 {
         findings: vec![finding],
@@ -958,6 +983,17 @@ fn write_trace_failure_detail_v1(
     failure: &PlironTraceFailureV1,
 ) -> fmt::Result {
     match failure {
+        PlironTraceFailureV1::Native {
+            block,
+            operation,
+            reason,
+        } => write!(
+            formatter,
+            "native trace refused at block {block}, operation {operation}: {reason:?}"
+        ),
+        PlironTraceFailureV1::NativeResource(error) => {
+            write!(formatter, "native trace resource denial: {error}")
+        }
         PlironTraceFailureV1::Sparse(failure) => {
             write!(formatter, "sparse index analysis failed: {failure:?}")
         }

@@ -1,7 +1,9 @@
 #[derive(Clone, Debug, Default)]
 struct SemanticControlFlowSsaPlanV1 {
+    representation: ExecutionCfgRepresentationV29,
     has_retained_arrays: bool,
     compiler_issued_bindings: BTreeMap<SemanticTypeIdV1, SemanticPromotedBindingV1>,
+    cfg_carriers: ExecutionCfgCarriersV29,
     implicit_entry_locals: BTreeSet<u32>,
     ssa_value_locals: BTreeSet<u32>,
     promoted: BTreeMap<u32, SemanticPromotedLocalV1>,
@@ -11,16 +13,14 @@ struct SemanticControlFlowSsaPlanV1 {
     definition_values: BTreeMap<(u32, u32), Vec<SsaValueV1>>,
     edge_definitions: BTreeMap<(u32, u32), Vec<SsaArgumentV1>>,
     edge_arguments: BTreeMap<(u32, u32), Vec<SsaArgumentV1>>,
-    retained_local_slots: BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
+    retained_local_slots: BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
     retained_initialized_at_entry: BTreeMap<u32, BTreeSet<u32>>,
 }
 
 #[derive(Clone, Debug)]
 struct SemanticRetainedLocalSlotPlanV1 {
     semantic_type: SemanticTypeIdV1,
-    kernel_type: Type,
-    alignment: u32,
-    array: Option<SemanticRetainedArrayLayoutV1>,
+    storage: SemanticRetainedStorageV29,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -103,23 +103,43 @@ fn private_slot_candidate_locals_v1(
     function: &SemanticFunctionDeclV1,
     promoted: &BTreeSet<u32>,
     retained_cross_edge: &BTreeSet<u32>,
+    representation: ExecutionCfgRepresentationV29,
 ) -> BTreeSet<u32> {
     let mut candidates = retained_cross_edge
         .difference(promoted)
         .copied()
         .collect::<BTreeSet<_>>();
-    visit_private_slot_roots_v1(function, &mut PrivateArrayNoWorkV1, |local, _| {
-        if !promoted.contains(&local) {
-            candidates.insert(local);
-        }
-        Ok(())
-    })
+    visit_private_slot_roots_with_representation_v29(
+        function,
+        representation,
+        &mut PrivateArrayNoWorkV1,
+        |local, _| {
+            if !promoted.contains(&local) {
+                candidates.insert(local);
+            }
+            Ok(())
+        },
+    )
     .unwrap_or_else(|never| match never {});
     candidates
 }
 
 fn visit_private_slot_roots_v1<W: PrivateArrayChargeV1>(
     function: &SemanticFunctionDeclV1,
+    work: &mut W,
+    visit: impl FnMut(u32, &mut W) -> Result<(), W::Error>,
+) -> Result<(), W::Error> {
+    visit_private_slot_roots_with_representation_v29(
+        function,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+        work,
+        visit,
+    )
+}
+
+fn visit_private_slot_roots_with_representation_v29<W: PrivateArrayChargeV1>(
+    function: &SemanticFunctionDeclV1,
+    representation: ExecutionCfgRepresentationV29,
     work: &mut W,
     mut visit: impl FnMut(u32, &mut W) -> Result<(), W::Error>,
 ) -> Result<(), W::Error> {
@@ -163,8 +183,20 @@ fn visit_private_slot_roots_v1<W: PrivateArrayChargeV1>(
                         add_root(operation.destination(), work)?;
                     }
                 }
-                SemanticStatementKindV1::SetDiscriminant { .. }
-                | SemanticStatementKindV1::Deinitialize(_)
+                SemanticStatementKindV1::SetDiscriminant { place, .. } => {
+                    if representation == ExecutionCfgRepresentationV29::LegacyAbi {
+                        continue;
+                    }
+                    // A tag write behind any pointer belongs to that pointee,
+                    // not to the local holding the pointer or its aggregate.
+                    work.charge_private_array_work(place.projections().len())?;
+                    if !place.projections().iter().any(|projection| {
+                        projection.kind() == SemanticProjectionKindV1::Dereference
+                    }) {
+                        add_root(place, work)?;
+                    }
+                }
+                SemanticStatementKindV1::Deinitialize(_)
                 | SemanticStatementKindV1::StorageLive(_)
                 | SemanticStatementKindV1::StorageDead(_)
                 | SemanticStatementKindV1::Assume(_)
@@ -186,17 +218,34 @@ fn retained_move_invalidates_local_v1(place: &SemanticPlaceV1, array: bool) -> b
     place.projections().is_empty() || array
 }
 
+fn retained_legacy_plan_v29(
+    retained: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
+    local: u32,
+) -> Result<Option<&SemanticRetainedLocalSlotPlanV1>, ProductionSemanticKirErrorV1> {
+    let slot = retained.get(&ScopedAllocationIdentityV29::LegacyLocal(local));
+    if let Some(slot) = slot {
+        slot.storage.scalar_array()?;
+    }
+    Ok(slot)
+}
+
 fn kill_moved_retained_operand_v1(
     operand: &SemanticOperandV1,
-    retained: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
+    retained: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
     initialized: &mut BTreeSet<u32>,
     budget: &mut SemanticRetainedInitializationBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     budget.charge_work(1)?;
     if let SemanticOperandV1::Move(place) = operand
-        && retained
-            .get(&place.local().index())
-            .is_some_and(|slot| retained_move_invalidates_local_v1(place, slot.array.is_some()))
+        && retained_legacy_plan_v29(retained, place.local().index())?.is_some_and(|slot| {
+            retained_move_invalidates_local_v1(
+                place,
+                matches!(
+                    slot.storage,
+                    SemanticRetainedStorageV29::ScalarArray { array: Some(_), .. }
+                ),
+            )
+        })
         && initialized.remove(&place.local().index())
     {
         budget.release_storage(1)?;
@@ -229,7 +278,7 @@ fn remove_retained_initialization_v1(
 
 fn apply_retained_rvalue_effects_v1(
     value: &SemanticRvalueKindV1,
-    retained: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
+    retained: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
     initialized: &mut BTreeSet<u32>,
     budget: &mut SemanticRetainedInitializationBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
@@ -267,7 +316,7 @@ fn apply_retained_rvalue_effects_v1(
 
 fn apply_retained_statement_effects_v1(
     statement: &SemanticStatementKindV1,
-    retained: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
+    retained: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
     initialized: &mut BTreeSet<u32>,
     budget: &mut SemanticRetainedInitializationBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
@@ -281,7 +330,8 @@ fn apply_retained_statement_effects_v1(
                 budget,
             )?;
             if assignment.destination().projections().is_empty()
-                && retained.contains_key(&assignment.destination().local().index())
+                && retained_legacy_plan_v29(retained, assignment.destination().local().index())?
+                    .is_some()
             {
                 insert_retained_initialization_v1(
                     assignment.destination().local().index(),
@@ -293,7 +343,8 @@ fn apply_retained_statement_effects_v1(
         SemanticStatementKindV1::Store(store) => {
             kill_moved_retained_operand_v1(store.value(), retained, initialized, budget)?;
             if store.destination().projections().is_empty()
-                && retained.contains_key(&store.destination().local().index())
+                && retained_legacy_plan_v29(retained, store.destination().local().index())?
+                    .is_some()
             {
                 insert_retained_initialization_v1(
                     store.destination().local().index(),
@@ -305,7 +356,8 @@ fn apply_retained_statement_effects_v1(
         SemanticStatementKindV1::AtomicRmw(operation) => {
             kill_moved_retained_operand_v1(operation.value(), retained, initialized, budget)?;
             if operation.destination().projections().is_empty()
-                && retained.contains_key(&operation.destination().local().index())
+                && retained_legacy_plan_v29(retained, operation.destination().local().index())?
+                    .is_some()
             {
                 insert_retained_initialization_v1(
                     operation.destination().local().index(),
@@ -318,7 +370,8 @@ fn apply_retained_statement_effects_v1(
             kill_moved_retained_operand_v1(operation.expected(), retained, initialized, budget)?;
             kill_moved_retained_operand_v1(operation.replacement(), retained, initialized, budget)?;
             if operation.destination().projections().is_empty()
-                && retained.contains_key(&operation.destination().local().index())
+                && retained_legacy_plan_v29(retained, operation.destination().local().index())?
+                    .is_some()
             {
                 insert_retained_initialization_v1(
                     operation.destination().local().index(),
@@ -333,9 +386,12 @@ fn apply_retained_statement_effects_v1(
         }
         SemanticStatementKindV1::Deinitialize(place) => {
             if place.projections().is_empty()
-                || retained
-                    .get(&place.local().index())
-                    .is_some_and(|slot| slot.array.is_some())
+                || retained_legacy_plan_v29(retained, place.local().index())?.is_some_and(|slot| {
+                    matches!(
+                        slot.storage,
+                        SemanticRetainedStorageV29::ScalarArray { array: Some(_), .. }
+                    )
+                })
             {
                 remove_retained_initialization_v1(place.local().index(), initialized, budget)?;
             }
@@ -350,7 +406,8 @@ fn apply_retained_statement_effects_v1(
 
 fn apply_retained_terminator_move_effects_v1(
     terminator: &SemanticTerminatorKindV1,
-    retained: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
+    representation: ExecutionCfgRepresentationV29,
+    retained: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
     initialized: &mut BTreeSet<u32>,
     budget: &mut SemanticRetainedInitializationBudgetV1,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
@@ -371,9 +428,18 @@ fn apply_retained_terminator_move_effects_v1(
             }
         }
         SemanticTerminatorKindV1::Assert {
-            condition, message, ..
+            condition,
+            message,
+            unwind,
+            ..
         } => {
             apply(condition)?;
+            if representation == ExecutionCfgRepresentationV29::OriginalSource
+                && !matches!(unwind, SemanticUnwindActionV1::Cleanup(_))
+            {
+                // The diagnostic tail does not return along the success edge.
+                return Ok(());
+            }
             match message {
                 SemanticAssertMessageV1::BoundsCheck { length, index } => {
                     apply(length)?;
@@ -411,33 +477,94 @@ fn apply_retained_terminator_move_effects_v1(
 
 fn retained_local_initialization_entries_v1(
     function: &SemanticFunctionDeclV1,
-    retained_local_slots: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
+    retained_local_slots: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
     reachable: &BTreeSet<u32>,
     max_analysis_work: usize,
     max_analysis_storage: usize,
 ) -> Result<BTreeMap<u32, BTreeSet<u32>>, ProductionSemanticKirErrorV1> {
+    retained_local_initialization_entries_with_representation_v29(
+        function,
+        retained_local_slots,
+        reachable,
+        max_analysis_work,
+        max_analysis_storage,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+    )
+}
+
+fn retained_local_initialization_entries_with_representation_v29(
+    function: &SemanticFunctionDeclV1,
+    retained_local_slots: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
+    reachable: &BTreeSet<u32>,
+    max_analysis_work: usize,
+    max_analysis_storage: usize,
+    representation: ExecutionCfgRepresentationV29,
+) -> Result<BTreeMap<u32, BTreeSet<u32>>, ProductionSemanticKirErrorV1> {
     let mut budget =
         SemanticRetainedInitializationBudgetV1::new(max_analysis_work, max_analysis_storage);
-    retained_local_initialization_entries_with_budget_v1(
+    retained_local_initialization_entries_with_budget_and_representation_v29(
         function,
         retained_local_slots,
         reachable,
         &mut budget,
+        representation,
     )
 }
 
 fn retained_local_initialization_entries_with_budget_v1(
     function: &SemanticFunctionDeclV1,
-    retained_local_slots: &BTreeMap<u32, SemanticRetainedLocalSlotPlanV1>,
+    retained_local_slots: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
     reachable: &BTreeSet<u32>,
     budget: &mut SemanticRetainedInitializationBudgetV1,
 ) -> Result<BTreeMap<u32, BTreeSet<u32>>, ProductionSemanticKirErrorV1> {
+    retained_local_initialization_entries_with_budget_and_representation_v29(
+        function,
+        retained_local_slots,
+        reachable,
+        budget,
+        ExecutionCfgRepresentationV29::LegacyAbi,
+    )
+}
+
+fn retained_local_initialization_entries_with_budget_and_representation_v29(
+    function: &SemanticFunctionDeclV1,
+    retained_local_slots: &BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
+    reachable: &BTreeSet<u32>,
+    budget: &mut SemanticRetainedInitializationBudgetV1,
+    representation: ExecutionCfgRepresentationV29,
+) -> Result<BTreeMap<u32, BTreeSet<u32>>, ProductionSemanticKirErrorV1> {
     budget.charge_work(retained_local_slots.len())?;
-    budget.charge_storage(retained_local_slots.len())?;
-    let retained = retained_local_slots
-        .keys()
-        .copied()
-        .collect::<BTreeSet<_>>();
+    if representation == ExecutionCfgRepresentationV29::LegacyAbi {
+        budget.charge_storage(retained_local_slots.len())?;
+    }
+    let mut retained = BTreeSet::new();
+    for (identity, slot) in retained_local_slots {
+        match (identity, &slot.storage) {
+            (
+                ScopedAllocationIdentityV29::LegacyLocal(local),
+                SemanticRetainedStorageV29::ScalarArray { .. },
+            ) => {
+                if representation == ExecutionCfgRepresentationV29::OriginalSource {
+                    budget.charge_storage(1)?;
+                }
+                retained.insert(*local);
+            }
+            (
+                ScopedAllocationIdentityV29::OriginalObject { .. }
+                | ScopedAllocationIdentityV29::OperandSnapshot { .. }
+                | ScopedAllocationIdentityV29::CallResultDestination { .. }
+                | ScopedAllocationIdentityV29::ReturnDestination { .. }
+                | ScopedAllocationIdentityV29::EntryValue { .. },
+                SemanticRetainedStorageV29::Object { .. },
+            ) => {
+                if representation != ExecutionCfgRepresentationV29::OriginalSource {
+                    return Err(scoped_object_allocation_error_v29());
+                }
+                // This whole-local scalar analysis does not grant Object initialization.
+            }
+            _ => return Err(scoped_object_allocation_error_v29()),
+        }
+    }
     if retained.is_empty() {
         return Ok(BTreeMap::new());
     }
@@ -482,80 +609,83 @@ fn retained_local_initialization_entries_with_budget_v1(
         }
         apply_retained_terminator_move_effects_v1(
             block.terminator().kind(),
+            representation,
             retained_local_slots,
             &mut outgoing,
             budget,
         )?;
-        block.terminator().kind().try_for_each_edge(|edge| {
-            budget.charge_work(1usize.saturating_add(outgoing.len()))?;
-            let target = edge.target().index();
-            if !reachable.contains(&target) {
-                return Ok(());
-            }
-            if target == entry {
-                return Err(unsupported(
-                    0,
-                    Some(source),
-                    None,
-                    "retained-local slots require a synthetic preheader for a cyclic entry",
-                ));
-            }
-            budget.charge_storage(outgoing.len())?;
-            let mut edge_state = outgoing.clone();
-            if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
-                && let Some(destination) = call.destination()
-                && destination.edge() == edge
-                && destination.place().projections().is_empty()
-                && retained.contains(&destination.place().local().index())
-            {
-                insert_retained_initialization_v1(
-                    destination.place().local().index(),
-                    &mut edge_state,
-                    budget,
-                )?;
-            }
-            let changed = match initialized_at_entry.get_mut(&target) {
-                Some(current) => {
-                    budget.charge_work(
-                        1usize
-                            .saturating_add(current.len())
-                            .saturating_add(edge_state.len()),
-                    )?;
-                    let next_len = current.intersection(&edge_state).count();
-                    budget.charge_storage(next_len)?;
-                    let next = current
-                        .intersection(&edge_state)
-                        .copied()
-                        .collect::<BTreeSet<_>>();
-                    if *current == next {
-                        budget.release_storage(next_len)?;
-                        false
-                    } else {
-                        let previous_len = current.len();
-                        *current = next;
-                        budget.release_storage(previous_len)?;
-                        true
-                    }
-                }
-                None => {
-                    budget.charge_storage(1)?;
-                    initialized_at_entry.insert(target, edge_state);
-                    if !queued.contains(&target) {
-                        budget.charge_storage(2)?;
-                        queued.insert(target);
-                        worklist.push_back(target);
-                    }
+        block.terminator().kind().try_for_each_edge(
+            |edge| -> Result<(), ProductionSemanticKirErrorV1> {
+                budget.charge_work(1usize.saturating_add(outgoing.len()))?;
+                let target = edge.target().index();
+                if !reachable.contains(&target) {
                     return Ok(());
                 }
-            };
-            budget.release_storage(edge_state.len())?;
-            if changed && !queued.contains(&target) {
-                budget.charge_storage(2)?;
-                queued.insert(target);
-                worklist.push_back(target);
-            }
-            Ok(())
-        })?;
+                if representation == ExecutionCfgRepresentationV29::LegacyAbi && target == entry {
+                    return Err(unsupported(
+                        0,
+                        Some(source),
+                        None,
+                        "retained-local slots require a synthetic preheader for a cyclic entry",
+                    ));
+                }
+                budget.charge_storage(outgoing.len())?;
+                let mut edge_state = outgoing.clone();
+                if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+                    && let Some(destination) = call.destination()
+                    && destination.edge() == edge
+                    && destination.place().projections().is_empty()
+                    && retained.contains(&destination.place().local().index())
+                {
+                    insert_retained_initialization_v1(
+                        destination.place().local().index(),
+                        &mut edge_state,
+                        budget,
+                    )?;
+                }
+                let changed = match initialized_at_entry.get_mut(&target) {
+                    Some(current) => {
+                        budget.charge_work(
+                            1usize
+                                .saturating_add(current.len())
+                                .saturating_add(edge_state.len()),
+                        )?;
+                        let next_len = current.intersection(&edge_state).count();
+                        budget.charge_storage(next_len)?;
+                        let next = current
+                            .intersection(&edge_state)
+                            .copied()
+                            .collect::<BTreeSet<_>>();
+                        if *current == next {
+                            budget.release_storage(next_len)?;
+                            false
+                        } else {
+                            let previous_len = current.len();
+                            *current = next;
+                            budget.release_storage(previous_len)?;
+                            true
+                        }
+                    }
+                    None => {
+                        budget.charge_storage(1)?;
+                        initialized_at_entry.insert(target, edge_state);
+                        if !queued.contains(&target) {
+                            budget.charge_storage(2)?;
+                            queued.insert(target);
+                            worklist.push_back(target);
+                        }
+                        return Ok(());
+                    }
+                };
+                budget.release_storage(edge_state.len())?;
+                if changed && !queued.contains(&target) {
+                    budget.charge_storage(2)?;
+                    queued.insert(target);
+                    worklist.push_back(target);
+                }
+                Ok(())
+            },
+        )?;
         budget.release_storage(outgoing.len())?;
     }
     budget.charge_work(initialized_at_entry.len().saturating_add(reachable.len()))?;
@@ -568,6 +698,248 @@ fn retained_local_initialization_entries_with_budget_v1(
     }
     budget.release_storage(retained.len())?;
     Ok(initialized_at_entry)
+}
+
+#[cfg(test)]
+mod retained_representation_tests_v1760 {
+    use super::*;
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticAbiIdentityV1, SemanticAbiValueV1, SemanticBasicBlockV1, SemanticBlockIdentityV1,
+        SemanticConstGenericArgumentsIdentityV1, SemanticConstantV1, SemanticControlFlowEdgeV1,
+        SemanticExternAbiV1, SemanticFunctionAbiV1, SemanticFunctionIdentityV1,
+        SemanticGenericTypeArgumentsIdentityV1, SemanticItemDefinitionIdentityV1,
+        SemanticLayoutIdentityV1, SemanticLocalDeclV1, SemanticLocalIdentityV1,
+        SemanticMonomorphizationIdentityV1, SemanticTerminatorV1,
+    };
+
+    fn scalar_slot() -> (
+        SemanticTypeIdV1,
+        BTreeMap<ScopedAllocationIdentityV29, SemanticRetainedLocalSlotPlanV1>,
+    ) {
+        let scalar = SemanticTypeIdV1::from_index(1);
+        (
+            scalar,
+            BTreeMap::from([(
+                ScopedAllocationIdentityV29::LegacyLocal(1),
+                SemanticRetainedLocalSlotPlanV1 {
+                    semantic_type: scalar,
+                    storage: SemanticRetainedStorageV29::ScalarArray {
+                        kernel_type: Type::Scalar(ScalarType::U64),
+                        alignment: 8,
+                        array: None,
+                    },
+                },
+            )]),
+        )
+    }
+
+    fn cyclic_function() -> SemanticFunctionDeclV1 {
+        let source = SemanticSourceProvenanceV1::unavailable();
+        let unit = SemanticTypeIdV1::from_index(0);
+        let scalar = SemanticTypeIdV1::from_index(1);
+        let abi = SemanticFunctionAbiV1::from_rustc(
+            SemanticAbiIdentityV1::from_sha256([216; 32]),
+            SemanticLayoutIdentityV1::from_sha256([217; 32]),
+            SemanticCanonAbiV1::Rust,
+            SemanticExternAbiV1::Rust,
+            false,
+            false,
+            0,
+            vec![],
+            SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+        )
+        .unwrap();
+        SemanticFunctionDeclV1::new(
+            SemanticFunctionIdentityV1::from_sha256([218; 32]),
+            SemanticFunctionRoleV1::InternalHelper,
+            SemanticItemDefinitionIdentityV1::from_sha256([219; 32]),
+            SemanticMonomorphizationIdentityV1::from_sha256([220; 32]),
+            SemanticGenericTypeArgumentsIdentityV1::from_sha256([221; 32]),
+            SemanticConstGenericArgumentsIdentityV1::from_sha256([222; 32]),
+            source,
+            abi,
+            vec![
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([223; 32]),
+                    unit,
+                    SemanticLocalRoleV1::Return,
+                    source,
+                ),
+                SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1::from_sha256([224; 32]),
+                    scalar,
+                    SemanticLocalRoleV1::Temporary,
+                    source,
+                ),
+            ],
+            SemanticBlockIdV1::from_index(0),
+            vec![
+                SemanticBasicBlockV1::new(
+                    SemanticBlockIdentityV1::from_sha256([225; 32]),
+                    source,
+                    vec![],
+                    SemanticTerminatorV1::new(
+                        source,
+                        SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                            SemanticEdgeRoleV1::Goto,
+                            SemanticBlockIdV1::from_index(0),
+                        )),
+                    ),
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn original_source_cycle_policy_does_not_enable_the_legacy_retained_route() {
+        let function = cyclic_function();
+        let (_, slots) = scalar_slot();
+        let reachable = BTreeSet::from([0]);
+        let error = retained_local_initialization_entries_v1(
+            &function,
+            &slots,
+            &reachable,
+            usize::MAX,
+            usize::MAX,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ProductionSemanticKirErrorV1::Unsupported {
+                function: 0,
+                block: Some(0),
+                statement: None,
+                detail: "retained-local slots require a synthetic preheader for a cyclic entry",
+            }
+        ));
+        let mut observed = SemanticRetainedInitializationBudgetV1::new(usize::MAX, usize::MAX);
+        let entries = retained_local_initialization_entries_with_budget_and_representation_v29(
+            &function,
+            &slots,
+            &reachable,
+            &mut observed,
+            ExecutionCfgRepresentationV29::OriginalSource,
+        )
+        .unwrap();
+        assert_eq!(entries, BTreeMap::from([(0, BTreeSet::new())]));
+        assert_eq!(observed.storage, 1);
+        let exact = retained_local_initialization_entries_with_representation_v29(
+            &function,
+            &slots,
+            &reachable,
+            observed.work,
+            observed.peak_storage,
+            ExecutionCfgRepresentationV29::OriginalSource,
+        )
+        .unwrap();
+        assert_eq!(exact, entries);
+        for (work, storage, resource) in [
+            (
+                observed.work - 1,
+                observed.peak_storage,
+                ProductionSemanticKirResourceV1::AnalysisWork,
+            ),
+            (
+                observed.work,
+                observed.peak_storage - 1,
+                ProductionSemanticKirResourceV1::AnalysisStorage,
+            ),
+        ] {
+            let error = retained_local_initialization_entries_with_representation_v29(
+                &function,
+                &slots,
+                &reachable,
+                work,
+                storage,
+                ExecutionCfgRepresentationV29::OriginalSource,
+            )
+            .unwrap_err();
+            assert!(
+                matches!(error, ProductionSemanticKirErrorV1::ResourceLimit { resource: actual_resource, .. } if actual_resource == resource)
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_diagnostic_moves_are_source_only_and_cleanup_edges_remain_live() {
+        let (scalar, slots) = scalar_slot();
+        let moved = || {
+            SemanticOperandV1::Move(
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], scalar).unwrap(),
+            )
+        };
+        for (representation, cleanup, expected) in [
+            (ExecutionCfgRepresentationV29::LegacyAbi, false, false),
+            (ExecutionCfgRepresentationV29::OriginalSource, false, true),
+            (ExecutionCfgRepresentationV29::OriginalSource, true, false),
+        ] {
+            let terminator = SemanticTerminatorKindV1::Assert {
+                condition: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                    scalar,
+                    SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(1, 8).unwrap()),
+                )),
+                expected: true,
+                message: SemanticAssertMessageV1::BoundsCheck {
+                    length: moved(),
+                    index: moved(),
+                },
+                target: SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::AssertSuccess,
+                    SemanticBlockIdV1::from_index(0),
+                ),
+                unwind: if cleanup {
+                    SemanticUnwindActionV1::Cleanup(SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::AssertUnwind,
+                        SemanticBlockIdV1::from_index(1),
+                    ))
+                } else {
+                    SemanticUnwindActionV1::Unreachable
+                },
+            };
+            // One terminator visit, one condition visit even for a constant,
+            // then two diagnostic operands only on the retained live path.
+            let expected_work = 1 + 1 + if expected { 0 } else { 2 };
+            let mut initialized = BTreeSet::from([1]);
+            let mut budget = SemanticRetainedInitializationBudgetV1::new(expected_work, usize::MAX);
+            budget.charge_storage(1).unwrap();
+            apply_retained_terminator_move_effects_v1(
+                &terminator,
+                representation,
+                &slots,
+                &mut initialized,
+                &mut budget,
+            )
+            .unwrap();
+            assert_eq!(initialized.contains(&1), expected);
+            assert_eq!(budget.storage, usize::from(expected));
+            assert_eq!(budget.work, expected_work);
+            let mut short_initialized = BTreeSet::from([1]);
+            let mut short =
+                SemanticRetainedInitializationBudgetV1::new(expected_work - 1, usize::MAX);
+            short.charge_storage(1).unwrap();
+            let error = apply_retained_terminator_move_effects_v1(
+                &terminator,
+                representation,
+                &slots,
+                &mut short_initialized,
+                &mut short,
+            )
+            .unwrap_err();
+            assert!(matches!(
+                error,
+                ProductionSemanticKirErrorV1::ResourceLimit {
+                    resource: ProductionSemanticKirResourceV1::AnalysisWork,
+                    actual,
+                    limit,
+                } if actual == expected_work && limit == expected_work - 1
+            ));
+            assert_eq!(short.work, expected_work);
+            assert_eq!(short_initialized.contains(&1), expected);
+            assert_eq!(short.storage, usize::from(expected));
+        }
+    }
 }
 
 fn first_retained_local_cause_v1(

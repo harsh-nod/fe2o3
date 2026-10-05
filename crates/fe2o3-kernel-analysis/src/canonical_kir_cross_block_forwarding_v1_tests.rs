@@ -1,4 +1,8 @@
 use super::*;
+#[path = "canonical_kir_store_consensus_v45_tests.rs"]
+mod consensus_v45;
+#[path = "canonical_kir_storage_scalar_forwarding_v54_tests.rs"]
+mod storage_v54;
 use fe2o3_kernel_ir::{
     BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work,
     CanonicalKirFunctionCoordinateV1 as FunctionId, Function, Operation, Signature, Terminator,
@@ -291,16 +295,19 @@ fn cross_block_pair_grounded_irreducible_phi_cycle_and_duplicate_occurrences() {
     blocks(&mut input)[2].terminator = Some(branch(20, 40));
     accept(&input, true);
     blocks(&mut input)[2].operations.push(store(100, 0));
-    reject(&input, "every phi input is the same Store or phi");
+    accept(&input, true);
 }
 #[test]
 fn cross_block_pair_exact_store_identity_and_all_memory_defs_are_cuts() {
     let mut input = fixture();
     blocks(&mut input)[1].operations.push(store(100, 0));
-    reject(&input, "every phi input is the same Store or phi");
+    accept(&input, true);
     let mut input = fixture();
     blocks(&mut input)[1].operations.push(allocation(200));
-    reject(&input, "every phi input is the same Store or phi");
+    reject(
+        &input,
+        "every phi input stores the same typed SSA value or is a phi",
+    );
     let mut input = fixture();
     blocks(&mut input)[0].operations.remove(1);
     let (output, mut rows) = rewritten(&input, true);
@@ -449,9 +456,10 @@ fn cross_block_pair_storage_first_denial_observation_requires_strict_successor()
             usize::from(selected)
         );
         // The all-reachable diamond's interval walk costs 10B+1; its final
-        // reducibility scan costs 13B+11E+7. Queries cost 3O + (4+11)S.
+        // reducibility scan costs 13B+11E+7. Queries cost 3O + 4S;
+        // the stored function argument is available without a dominance query.
         let tail_work =
-            23 * blocks + 11 * edges + 8 + 3 * operations + 15 * usize::from(selected) + 1;
+            23 * blocks + 11 * edges + 8 + 3 * operations + 4 * usize::from(selected) + 1;
         assert_eq!(
             (short.1, short.2, short.3, short.4),
             (full.1 - tail_work, full.2 - 2 * blocks, None, Some(full.2))
@@ -463,7 +471,8 @@ use std::mem::size_of_val;
 
 #[test]
 fn cross_block_pair_prepays_all_thirteen_scratch_headers_before_backing() {
-    assert_eq!(scratch_headers().unwrap(), 13 * size_of::<Vec<u8>>());
+    // Thirteen original headers plus the independently derived Store-key cache.
+    assert_eq!(scratch_headers().unwrap(), 14 * size_of::<Vec<u8>>());
     let input = fixture();
     let (output, rows) = rewritten(&input, true);
     let a = admit(&input);

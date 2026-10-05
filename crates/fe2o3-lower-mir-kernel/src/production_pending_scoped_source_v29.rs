@@ -97,6 +97,43 @@ impl ProductionPendingScopedSourceOwnerV29 {
         limits: ProductionSemanticKirLimitsV1,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<Self, ProductionPendingScopedSourceErrorV29> {
+        Self::materialize_with_optional_kernel_abi_v18(owner, launch, input, None, limits, budget)
+    }
+
+    /// Materializes the same pending source owner with its complete original
+    /// kernel descriptor ABI. No execution or memory-access authority is issued.
+    ///
+    /// The original descriptor/source census is authenticated before emission
+    /// and retained for independent replay. Preexisting occurrence storage keeps
+    /// the historical Pending contract: it remains separately caller-accounted.
+    /// Lost cleanup custody prevents containing refunds just as in the unprofiled
+    /// constructor. The profile cannot recover a concrete space from Generic.
+    pub fn try_materialize_with_kernel_abi_budget_v18(
+        owner: ProductionSemanticSsaOwnerV1,
+        launch: crate::ProductionSourceLaunchRosterV1,
+        input: crate::ProductionExecutionSourceInputV29<'_>,
+        kernel_abi: ProductionKernelArgumentAbiInputV18<'_>,
+        limits: ProductionSemanticKirLimitsV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionPendingScopedSourceErrorV29> {
+        Self::materialize_with_optional_kernel_abi_v18(
+            owner,
+            launch,
+            input,
+            Some(kernel_abi),
+            limits,
+            budget,
+        )
+    }
+
+    fn materialize_with_optional_kernel_abi_v18(
+        owner: ProductionSemanticSsaOwnerV1,
+        launch: crate::ProductionSourceLaunchRosterV1,
+        input: crate::ProductionExecutionSourceInputV29<'_>,
+        kernel_abi: Option<ProductionKernelArgumentAbiInputV18<'_>>,
+        limits: ProductionSemanticKirLimitsV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> Result<Self, ProductionPendingScopedSourceErrorV29> {
         let floor = budget.storage();
         if owner
             .occurrence_storage()
@@ -114,15 +151,19 @@ impl ProductionPendingScopedSourceOwnerV29 {
         with_scoped_source_cleanup_v29(budget, floor, move |cleanup, budget| {
             let attempt_floor = budget.storage();
             scoped_source_attempt_v29(cleanup, budget, attempt_floor, move |budget| {
-                let input = {
+                let mut input = {
                     let source = ExecutionLifecycleSourceV29 {
                         owner: &owner,
                         launch: &launch,
                         input,
+                        kernel_argument_abi: None,
                         ledger: source_ledger,
                     };
                     OwnedExecutionInputV29::capture(&source, budget)?
                 };
+                if let Some(kernel_abi) = kernel_abi {
+                    input.capture_kernel_argument_abi_v18(&owner, kernel_abi, budget)?;
+                }
                 let mut donor = Some(ScopedSourceInputsV29 {
                     owner,
                     launch,
@@ -177,4 +218,23 @@ impl ProductionPendingScopedSourceOwnerV29 {
     pub fn adopted_storage(&self) -> usize {
         self.inner.retained_storage
     }
+}
+
+// Capture owns the projection before any module table or root-emission scope
+// exists. The producer and the source-owning continuation share this exact join.
+fn capture_pending_source_inputs_v18(
+    owner: ProductionSemanticSsaOwnerV1,
+    launch: crate::ProductionSourceLaunchRosterV1,
+    input: crate::ProductionExecutionSourceInputV29<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<ScopedSourceInputsV29, ScopedModuleErrorV29> {
+    let input = {
+        let source = ExecutionLifecycleSourceV29::new(&owner, &launch, input, budget)?;
+        OwnedExecutionInputV29::capture(&source, budget)?
+    };
+    Ok(ScopedSourceInputsV29 {
+        owner,
+        launch,
+        input,
+    })
 }

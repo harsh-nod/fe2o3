@@ -17,6 +17,7 @@ fe2o3-kernel-ir.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
+rustix = { workspace = true, features = ["process", "thread"] }
 tempfile = "=3.21.0"
 
 [lints.rust]

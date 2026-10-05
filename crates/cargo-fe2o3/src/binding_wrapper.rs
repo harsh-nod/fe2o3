@@ -17,13 +17,10 @@ use fe2o3_artifact_transaction::{
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1;
 use fe2o3_hsaco_finalize::{
-    PublishedProtectedWorkerV3HsacoV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
-    WorkerV3HsacoPublicationErrorV1, finalize_protected_worker_v3_hsaco_v1,
-    inspect_protected_worker_v3_hsaco_v1,
-    persist_prepared_protected_worker_v3_hsaco_publication_v1,
-    prepare_protected_worker_v3_hsaco_publication_v1,
-    publish_recovered_protected_worker_v3_hsaco_v1,
-    recover_protected_worker_v3_hsaco_publication_v1,
+    PublishedMixedWorkerHsacoV89, RecoveredMixedWorkerPublicationV89,
+    WorkerV3HsacoPublicationErrorV1, persist_prepared_mixed_worker_publication_v89,
+    prepare_mixed_worker_publication_v89, publish_recovered_mixed_worker_hsaco_v89,
+    recover_mixed_worker_publication_v89,
 };
 use fe2o3_process_identity::{CapturedStdioV1, PinnedWorkingDirectoryV3};
 use fe2o3_runtime_protocol::{
@@ -1988,11 +1985,51 @@ fn report_source_isa_observation_emission(status: SourceIsaObservationEmissionTe
 }
 
 impl SourceIsaObservationEmitterV1 {
+    fn emit_mixed_finalized_v89(
+        &mut self,
+        finalized: &fe2o3_hsaco_finalize::PreparedFinalizedNominalWorkerHsacoV89,
+    ) {
+        if self.kind
+            == crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91
+        {
+            return;
+        }
+        if self.kind == crate::build_config::ProductionSourceIsaObservationKindV1::Characteristic {
+            self.sink.take();
+            report_source_isa_observation_emission(
+                SourceIsaObservationEmissionTelemetryV1::MappingFailed(
+                    "typed V18 source/ISA characteristic projection is not admitted".to_owned(),
+                ),
+            );
+            return;
+        }
+        let status = emit_source_isa_observation_once(
+            &mut self.sink,
+            self.attempt,
+            finalized.attempt(),
+            || {
+                crate::source_isa_observation::finalized_mixed_source_isa_observation_frame_v89(
+                    self.config,
+                    self.unit,
+                    finalized,
+                )
+            },
+            capability_broker::SourceIsaObservationSinkV1::submit,
+        );
+        report_source_isa_observation_emission(status);
+    }
+
     fn emit_finalized(
         &mut self,
         finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
     ) {
         let status = match self.kind {
+            crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91 => {
+                self.sink.take();
+                SourceIsaObservationEmissionTelemetryV1::MappingFailed(
+                    "production census requires the completed V89 managed path".to_owned(),
+                )
+            }
             crate::build_config::ProductionSourceIsaObservationKindV1::Summary => {
                 emit_source_isa_observation_once(
                     &mut self.sink,
@@ -2028,6 +2065,11 @@ impl SourceIsaObservationEmitterV1 {
     }
 
     fn emit_ready(&mut self, attempt: BuildAttempt, finalization: [u8; 32]) {
+        if self.kind
+            == crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91
+        {
+            return;
+        }
         if self.kind == crate::build_config::ProductionSourceIsaObservationKindV1::Characteristic {
             self.sink.take();
             report_source_isa_observation_emission(
@@ -2049,12 +2091,58 @@ impl SourceIsaObservationEmitterV1 {
 }
 
 impl ManagedProductionAttempt {
+    fn prepare_census_v91(
+        &self,
+        wire: &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeWireV2,
+        artifact: &[u8],
+    ) -> Option<Result<crate::production_census_v91::Census, String>> {
+        let observer = self.source_isa_observer.as_ref()?;
+        (observer.kind
+            == crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91)
+            .then(|| {
+                crate::production_census_v91::snapshot(
+                    observer.config,
+                    observer.unit,
+                    wire,
+                    artifact,
+                )
+            })
+    }
+
+    fn emit_completed_census_v91(
+        &mut self,
+        census: Option<Result<crate::production_census_v91::Census, String>>,
+    ) {
+        let (Some(observer), Some(census)) = (self.source_isa_observer.as_mut(), census) else {
+            return;
+        };
+        let attempt = self.attempt;
+        report_source_isa_observation_emission(emit_source_isa_observation_once(
+            &mut observer.sink,
+            observer.attempt,
+            attempt,
+            || {
+                let census = census?;
+                let frame = ready_source_isa_observation_frame_v1(
+                    observer.config,
+                    observer.unit,
+                    attempt,
+                    census.finalization,
+                )
+                .map_err(|error| error.to_string())?;
+                census.check_frame(&frame)?;
+                Ok::<_, String>((frame, census))
+            },
+            |sink, (frame, census)| sink.submit_census(frame, census),
+        ));
+    }
+
     fn emit_finalized_source_isa_observation(
         &mut self,
-        finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
+        finalized: &fe2o3_hsaco_finalize::PreparedFinalizedNominalWorkerHsacoV89,
     ) {
         if let Some(observer) = self.source_isa_observer.as_mut() {
-            observer.emit_finalized(finalized);
+            observer.emit_mixed_finalized_v89(finalized);
         }
     }
 
@@ -2136,7 +2224,7 @@ enum ManagedProductionBuild {
         compiler_closure: CompilerClosureV2,
     },
     Recovered {
-        recovered: Box<RecoveredProtectedWorkerV3HsacoPublicationV1>,
+        recovered: Box<RecoveredMixedWorkerPublicationV89>,
         compiler_closure: CompilerClosureV2,
         compiler_execution: Box<CompilerExecutionReceiptCarriageV1>,
     },
@@ -2212,6 +2300,7 @@ fn prepare_managed_production_build_for_profile(
         }
     };
     if let Some(envelope) = recovered_envelope {
+        check_ready_predicated_artifact(envelope.exact_artifact_bytes())?;
         let compiler_execution_profile = compiler_execution_profile.ok_or_else(|| {
             BindingWrapperError::BuildObservation(
                 "native intake refuses legacy load-readiness recovery".to_owned(),
@@ -2243,7 +2332,7 @@ fn prepare_managed_production_build_for_profile(
             false,
         ));
     }
-    match recover_protected_worker_v3_hsaco_publication_v1(output_dir, producer, attempt) {
+    match recover_mixed_worker_publication_v89(output_dir, producer, attempt) {
         Ok(recovered) => {
             let compiler_execution_profile = compiler_execution_profile.ok_or_else(|| {
                 BindingWrapperError::BuildObservation(
@@ -2297,6 +2386,23 @@ fn prepare_managed_production_build_for_profile(
             "production V3 restart recovery failed closed: {error}"
         ))),
     }
+}
+
+fn check_ready_predicated_artifact(bytes: &[u8]) -> Result<(), BindingWrapperError> {
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        fe2o3_hsaco_finalize::MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89,
+    );
+    let mut budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut work,
+        fe2o3_hsaco_finalize::MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89,
+    );
+    fe2o3_hsaco_finalize::check_finalized_nominal_hsaco_on_budget_v89(bytes, &mut budget).map_err(
+        |error| {
+            BindingWrapperError::BuildObservation(format!(
+                "production load readiness requires an exact finalized V89 descriptor: {error}"
+            ))
+        },
+    )
 }
 
 fn prepare_production_managed_attempt(
@@ -2569,24 +2675,34 @@ fn complete_fresh_production_artifact(
                 "strict V3 reproducible worker execution failed: {error}"
             ))
         })?;
-    let inspected = inspect_protected_worker_v3_hsaco_v1(evidence).map_err(|error| {
+    // Ordinary production accepts only the complete mixed descriptor. This
+    // performs the same strict Worker/physical checks and rejects every legacy
+    // descriptor instead of choosing another proof or finalization route.
+    let mut finalization_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        fe2o3_hsaco_finalize::MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89,
+    );
+    let mut finalization_budget =
+        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+            &mut finalization_work,
+            fe2o3_hsaco_finalize::MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89,
+        );
+    let finalized = fe2o3_hsaco_finalize::finalize_protected_worker_nominal_hsaco_on_budget_v89(
+        evidence,
+        &mut finalization_budget,
+    )
+    .map_err(|error| {
         CompletionFailure::Uncommitted(format!(
-            "independent strict V3 raw-HSACO inspection failed: {error}"
-        ))
-    })?;
-    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).map_err(|error| {
-        CompletionFailure::Uncommitted(format!(
-            "strict V3 canonical HSACO finalization failed: {error}"
+            "strict mixed V89 canonical HSACO finalization failed: {error}"
         ))
     })?;
     managed.emit_finalized_source_isa_observation(&finalized);
-    let prepared = prepare_protected_worker_v3_hsaco_publication_v1(&managed.producer, finalized)
-        .map_err(|error| {
-        CompletionFailure::Uncommitted(format!(
-            "strict V3 durable publication preparation failed: {error}"
-        ))
-    })?;
-    let recovered = persist_prepared_protected_worker_v3_hsaco_publication_v1(
+    let prepared =
+        prepare_mixed_worker_publication_v89(&managed.producer, finalized).map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "strict V3 durable publication preparation failed: {error}"
+            ))
+        })?;
+    let recovered = persist_prepared_mixed_worker_publication_v89(
         &managed.output_dir,
         &managed.producer,
         prepared,
@@ -2601,12 +2717,12 @@ fn complete_fresh_production_artifact(
 
 fn complete_recovered_production_artifact(
     managed: &mut ManagedProductionAttempt,
-    recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
+    recovered: RecoveredMixedWorkerPublicationV89,
     compiler_closure: CompilerClosureV2,
     compiler_execution: CompilerExecutionReceiptCarriageV1,
 ) -> Result<(), CompletionFailure> {
     managed.emit_finalized_source_isa_observation(recovered.finalized_evidence());
-    let published = publish_recovered_protected_worker_v3_hsaco_v1(
+    let published = publish_recovered_mixed_worker_hsaco_v89(
         &managed.output_dir,
         &managed.producer,
         compiler_closure,
@@ -2621,17 +2737,18 @@ fn complete_recovered_production_artifact(
 }
 
 fn complete_published_production_artifact(
-    managed: &ManagedProductionAttempt,
-    published: PublishedProtectedWorkerV3HsacoV1,
+    managed: &mut ManagedProductionAttempt,
+    published: PublishedMixedWorkerHsacoV89,
     compiler_execution: CompilerExecutionReceiptCarriageV1,
 ) -> Result<(), CompletionFailure> {
     let intent_identity = published.recovered_evidence().storage_record().identity();
-    let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(published, compiler_execution)
-        .map_err(|error| {
-        CompletionFailure::PreserveAttempt(format!(
-            "receipt-bearing strict V3 load-envelope custody construction failed: {error}"
-        ))
-    })?;
+    let envelope =
+        WorkerV3LoadEnvelopeV2::from_published_mixed_hsaco_v89(published, compiler_execution)
+            .map_err(|error| {
+                CompletionFailure::PreserveAttempt(format!(
+                    "receipt-bearing strict V3 load-envelope custody construction failed: {error}"
+                ))
+            })?;
     let readiness = envelope
         .persist_durable_replay_custody_v2(&managed.output_dir)
         .map_err(|error| {
@@ -2651,12 +2768,17 @@ fn complete_published_production_artifact(
             "strict V3 publication-intent retirement failed: {error}"
         ))
     })?;
+    let census = managed.prepare_census_v91(envelope.wire(), envelope.exact_artifact_bytes());
     drop(envelope);
-    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
-        CompletionFailure::PreserveAttempt(format!(
-            "strict V3 build-attempt completion failed: {error}"
-        ))
-    })
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(
+        |error| {
+            CompletionFailure::PreserveAttempt(format!(
+                "strict V3 build-attempt completion failed: {error}"
+            ))
+        },
+    )?;
+    managed.emit_completed_census_v91(census);
+    Ok(())
 }
 
 fn complete_ready_production_artifact(
@@ -2683,12 +2805,17 @@ fn complete_ready_production_artifact(
             )));
         }
     }
+    let census = managed.prepare_census_v91(envelope.wire(), envelope.exact_artifact_bytes());
     drop(envelope);
-    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
-        CompletionFailure::PreserveAttempt(format!(
-            "recovered strict V3 build-attempt completion failed: {error}"
-        ))
-    })
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(
+        |error| {
+            CompletionFailure::PreserveAttempt(format!(
+                "recovered strict V3 build-attempt completion failed: {error}"
+            ))
+        },
+    )?;
+    managed.emit_completed_census_v91(census);
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -3136,5 +3263,65 @@ mod lifecycle_tests {
             SourceIsaObservationEmissionTelemetryV1::SubmissionFailed("submit".to_owned())
         );
         assert!(submission_sink.is_none());
+    }
+
+    #[test]
+    fn ordinary_managed_worker_uses_mixed_v89_on_fresh_and_recovered_paths() {
+        let source = include_str!("binding_wrapper.rs");
+        let production = source
+            .split_once("fn complete_managed_production_build(")
+            .expect("ordinary completion")
+            .1
+            .split_once("#[cfg(test)]")
+            .unwrap()
+            .0;
+        for required in [
+            "finalize_protected_worker_nominal_hsaco_on_budget_v89(",
+            "MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89",
+            "MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89",
+            "prepare_mixed_worker_publication_v89(",
+            "persist_prepared_mixed_worker_publication_v89(",
+            "publish_recovered_mixed_worker_hsaco_v89(",
+            "from_published_mixed_hsaco_v89(",
+        ] {
+            assert!(production.contains(required), "missing {required}");
+        }
+        for old in [
+            "finalize_protected_worker_nominal_hsaco_v89(",
+            "finalize_protected_worker_nominal_hsaco_on_budget_v53(",
+            "prepare_mixed_worker_publication_v53(",
+            "persist_prepared_mixed_worker_publication_v53(",
+            "publish_recovered_mixed_worker_hsaco_v53(",
+            "from_published_mixed_hsaco_v53(",
+            "&mut |_| Ok::<_, std::convert::Infallible>(())",
+            "finalize_protected_worker_v3_hsaco_v1(",
+            "prepare_protected_worker_v3_hsaco_publication_v1(",
+            "from_published_hsaco_v1(",
+        ] {
+            assert!(!production.contains(old), "legacy ordinary fallback {old}");
+        }
+        let recovery = source
+            .split_once("fn prepare_managed_production_build_for_profile(")
+            .unwrap()
+            .1
+            .split_once("fn check_ready_predicated_artifact(")
+            .unwrap()
+            .0;
+        assert!(recovery.contains("recover_mixed_worker_publication_v89("));
+        assert!(!recovery.contains("recover_mixed_worker_publication_v53("));
+        let checked = recovery
+            .find("check_ready_predicated_artifact(envelope.exact_artifact_bytes())?")
+            .unwrap();
+        let ready = recovery.find("ManagedProductionBuild::Ready").unwrap();
+        assert!(checked < ready);
+        assert!(recovery.contains("validate_compiler_execution_receipt_carriage("));
+        assert!(recovery.contains("admit_compiler_execution_receipt_transport("));
+    }
+
+    #[test]
+    fn production_ready_state_does_not_admit_an_unchecked_artifact() {
+        for bytes in [&[][..], b"FE2O3D53\x35\x00", b"FE2O3D89\x59\x00"] {
+            assert!(check_ready_predicated_artifact(bytes).is_err());
+        }
     }
 }

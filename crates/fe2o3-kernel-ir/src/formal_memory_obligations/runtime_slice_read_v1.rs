@@ -2,14 +2,14 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-struct Origin<'module> {
-    value: ValueId,
-    origin: Option<ValueId>,
-    ty: &'module Type,
+pub(super) struct Origin<'module> {
+    pub(super) value: ValueId,
+    pub(super) origin: Option<ValueId>,
+    pub(super) ty: &'module Type,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
-enum ReadIndex {
+pub(super) enum ReadIndex {
     ProvenOrigin(ValueId),
     ExactBlockParameter(ValueId),
 }
@@ -52,15 +52,56 @@ struct ReadGuard {
     allocation: FormalAllocationIdentity,
     guard_index: ValueId,
     length: ValueId,
+    length_origin: ValueId,
     predicate: ValueId,
     edge: Edge,
     interval: (u32, u32),
     covering: usize,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct RuntimeSliceReadConditionsV1 {
+    pub(super) domain: FormalRuntimeSliceReadDomainV1,
+    pub(super) index_origin: ReadIndex,
+    pub(super) length_origin: ValueId,
+}
+
+fn read_conditions_frame_bytes<M: GuardMeter>() -> Result<usize, ResourceError> {
+    4_usize
+        .checked_mul(size_of::<ReadGuard>())
+        .and_then(|n| n.checked_add(size_of::<FormalRuntimeSliceReadDomainV1>()))
+        .and_then(|n| n.checked_add(2 * size_of::<RuntimeSliceReadConditionsV1>()))
+        .and_then(|n| {
+            n.checked_add(
+                2 * size_of::<Result<Option<RuntimeSliceReadConditionsV1>, ResourceError>>(),
+            )
+        })
+        .and_then(|n| {
+            n.checked_add(size_of::<
+                Result<Option<FormalRuntimeSliceReadDomainV1>, ResourceError>,
+            >())
+        })
+        .and_then(|n| n.checked_add(size_of::<Option<RuntimeSliceReadConditionsV1>>()))
+        .and_then(|n| {
+            n.checked_add(size_of::<(
+                &mut GuardedAnalysisV1<'_, M>,
+                FunctionOperationLocation,
+                ValueId,
+                FormalMemoryAccessKind,
+                MemoryAccess,
+                Option<ValueId>,
+            )>())
+        })
+        .ok_or(ResourceError::Arithmetic)
+}
+
+fn reserve_read_conditions_frame<M: GuardMeter>(meter: &mut M) -> Result<(), ResourceError> {
+    meter.storage(read_conditions_frame_bytes::<M>()?)
+}
+
 #[derive(Default)]
 pub(super) struct RuntimeReadState<'module> {
-    origins: Vec<Origin<'module>>,
+    pub(super) origins: Vec<Origin<'module>>,
     guards: Vec<ReadGuard>,
     representations: Vec<ReadRepresentation>,
 }
@@ -76,7 +117,7 @@ fn origin_lookup_work_v1(count: usize) -> Result<usize, ResourceError> {
         .ok_or(ResourceError::Arithmetic)
 }
 
-impl<'module> GuardedAnalysisV1<'module> {
+impl<'module, M: GuardMeter> GuardedAnalysisV1<'module, M> {
     pub(super) fn collect_runtime_reads(
         &mut self,
         definitions: &Definitions<'module>,
@@ -108,11 +149,23 @@ impl<'module> GuardedAnalysisV1<'module> {
             .sort(&mut self.runtime_reads.origins, 1, |a, b| {
                 a.value.cmp(&b.value)
             })?;
+        self.collect_runtime_access_guards_profile_v30::<false, false>(function)
+    }
+
+    pub(super) fn collect_runtime_access_guards_profile_v30<
+        const STORES: bool,
+        const GENERIC_ROOTS: bool,
+    >(
+        &mut self,
+        function: &'module Function,
+    ) -> Result<(), ResourceError> {
         self.collect_read_representations(function)?;
+        // Prepay reused constructor/query carriers once, not on every read.
+        reserve_read_conditions_frame(&mut self.ledger)?;
         self.ledger
             .reserve(&mut self.runtime_reads.guards, self.truths.len())?;
         for ordinal in 0..self.truths.len() {
-            self.ledger.charge(24)?;
+            self.ledger.charge(25)?;
             let truth = self.truths[ordinal];
             // Repeated predicates still have independently checked true edges.
             // This index retains every edge; the single-truth recipe does not.
@@ -146,7 +199,9 @@ impl<'module> GuardedAnalysisV1<'module> {
             let OperationKind::SliceLength { slice } = length_op.kind else {
                 continue;
             };
-            let Some((parameter, _)) = self.runtime_slice_parameter(slice)? else {
+            let Some((parameter, _)) =
+                self.runtime_slice_parameter_profile_v30::<STORES, GENERIC_ROOTS>(slice)?
+            else {
                 continue;
             };
             self.runtime_reads.guards.push(ReadGuard {
@@ -157,6 +212,7 @@ impl<'module> GuardedAnalysisV1<'module> {
                 },
                 guard_index: lhs,
                 length: rhs,
+                length_origin: length,
                 predicate: truth.predicate,
                 edge: truth.edge,
                 interval: truth.interval,
@@ -372,7 +428,10 @@ impl<'module> GuardedAnalysisV1<'module> {
         Ok(())
     }
 
-    fn runtime_type(&mut self, value: ValueId) -> Result<Option<&'module Type>, ResourceError> {
+    pub(super) fn runtime_type(
+        &mut self,
+        value: ValueId,
+    ) -> Result<Option<&'module Type>, ResourceError> {
         if let Some(ordinal) = self
             .ledger
             .find(&self.runtime_reads.origins, |row| row.value.cmp(&value))?
@@ -396,7 +455,10 @@ impl<'module> GuardedAnalysisV1<'module> {
             .map(|result| &result.ty))
     }
 
-    fn runtime_origin(&mut self, value: ValueId) -> Result<Option<ValueId>, ResourceError> {
+    pub(super) fn runtime_origin(
+        &mut self,
+        value: ValueId,
+    ) -> Result<Option<ValueId>, ResourceError> {
         Ok(self
             .ledger
             .find(&self.runtime_reads.origins, |row| row.value.cmp(&value))?
@@ -448,15 +510,18 @@ impl<'module> GuardedAnalysisV1<'module> {
         })
     }
 
-    fn runtime_slice_parameter(
+    fn runtime_slice_parameter_profile_v30<const STORES: bool, const GENERIC_ROOTS: bool>(
         &mut self,
         value: ValueId,
     ) -> Result<Option<(ParameterRow<'module>, &'module crate::SliceType)>, ResourceError> {
         let Some(Type::Slice(actual)) = self.runtime_type(value)? else {
             return Ok(None);
         };
-        if actual.address_space != AddressSpace::Global
-            || !matches!(actual.access, AccessMode::ReadOnly | AccessMode::ReadWrite)
+        if !matches!(
+            actual.address_space,
+            AddressSpace::Global | AddressSpace::Generic
+        ) || !(matches!(actual.access, AccessMode::ReadOnly | AccessMode::ReadWrite)
+            || STORES && actual.access == AccessMode::WriteOnly)
             || actual
                 .element
                 .as_scalar()
@@ -465,7 +530,12 @@ impl<'module> GuardedAnalysisV1<'module> {
         {
             return Ok(None);
         }
-        let Some(origin) = self.runtime_origin(value)? else {
+        let origin = if actual.address_space == AddressSpace::Generic {
+            self.peel_slice_casts(value)?
+        } else {
+            self.runtime_origin(value)?
+        };
+        let Some(origin) = origin else {
             return Ok(None);
         };
         let Some(ordinal) = self
@@ -479,7 +549,12 @@ impl<'module> GuardedAnalysisV1<'module> {
             return Ok(None);
         };
         self.ledger.charge(8)?;
-        if formal.element.as_scalar().is_none() || actual != formal {
+        if !(formal.address_space == AddressSpace::Global
+            || GENERIC_ROOTS && formal.address_space == AddressSpace::Generic)
+            || formal.element.as_scalar().is_none()
+            || actual.element != formal.element
+            || actual.access != formal.access
+        {
             return Ok(None);
         }
         Ok(Some((parameter, formal)))
@@ -494,17 +569,127 @@ impl<'module> GuardedAnalysisV1<'module> {
         invocations: InvocationRange1d,
         predicate: Option<ValueId>,
     ) -> Result<Option<FormalMemoryAccess>, ResourceError> {
+        let Some(domain) =
+            self.runtime_slice_read_domain(location, pointer, kind, access, predicate)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(FormalMemoryAccess {
+            location,
+            allocation: domain.allocation,
+            kind: FormalMemoryAccessKind::Read,
+            address_space: AddressSpace::Global,
+            byte_offset: ByteExpression::Unbounded,
+            byte_width: domain.element_bytes,
+            alignment: u64::from(access.alignment),
+            invocations,
+            domain: FormalAccessDomainV1::RuntimeSliceReadBounded(domain),
+        }))
+    }
+
+    pub(super) fn runtime_slice_read_domain(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        kind: FormalMemoryAccessKind,
+        access: MemoryAccess,
+        predicate: Option<ValueId>,
+    ) -> Result<Option<FormalRuntimeSliceReadDomainV1>, ResourceError> {
+        Ok(self
+            .runtime_slice_access_conditions_profile_v30::<false, false>(
+                location, pointer, kind, access, predicate,
+            )?
+            .map(|conditions| conditions.domain))
+    }
+
+    pub(super) fn runtime_slice_access_conditions_profile_v30<
+        const STORE: bool,
+        const GENERIC_ROOTS: bool,
+    >(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        kind: FormalMemoryAccessKind,
+        access: MemoryAccess,
+        predicate: Option<ValueId>,
+    ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
+        self.runtime_slice_access_conditions_profile_v84::<STORE, GENERIC_ROOTS, false>(
+            location, pointer, kind, access, predicate,
+        )
+    }
+
+    pub(super) fn runtime_predicated_store_conditions_v84(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        access: MemoryAccess,
+        predicate: ValueId,
+    ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
+        self.runtime_slice_access_conditions_profile_v84::<true, false, true>(
+            location,
+            pointer,
+            FormalMemoryAccessKind::Write,
+            access,
+            Some(predicate),
+        )
+    }
+
+    fn runtime_slice_access_conditions_profile_v84<
+        const STORE: bool,
+        const GENERIC_ROOTS: bool,
+        const PREDICATED: bool,
+    >(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        kind: FormalMemoryAccessKind,
+        access: MemoryAccess,
+        predicate: Option<ValueId>,
+    ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
         self.ledger.charge(24)?;
-        if kind != FormalMemoryAccessKind::Read
-            || access.address_space != AddressSpace::Global
+        if kind
+            != if STORE {
+                FormalMemoryAccessKind::Write
+            } else {
+                FormalMemoryAccessKind::Read
+            }
+            || !matches!(
+                access.address_space,
+                AddressSpace::Global | AddressSpace::Generic
+            )
             || access.volatile
-            || predicate.is_some()
-            || self.runtime_reads.guards.is_empty()
+            || if PREDICATED {
+                !STORE || predicate.is_none()
+            } else {
+                predicate.is_some() || self.runtime_reads.guards.is_empty()
+            }
         {
             return Ok(None);
         }
-        let Some(gep) = self.definition(pointer)? else {
-            return Ok(None);
+        let pointer_operation = self.definition(pointer)?;
+        // A preserved block parameter has no operation definition. Its unique
+        // typed edge origin must enter the same checked cast/alias peeler.
+        let (gep_pointer, gep) = if pointer_operation.is_none_or(|operation| {
+            matches!(
+                operation.kind,
+                OperationKind::Cast {
+                    kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
+                    ..
+                }
+            )
+        }) {
+            let Some(source) = self.peel_pointer_casts(pointer)? else {
+                return Ok(None);
+            };
+            let Some(operation) = self.definition(source)? else {
+                return Ok(None);
+            };
+            (source, operation)
+        } else {
+            (
+                pointer,
+                pointer_operation.expect("non-cast operation was selected"),
+            )
         };
         let OperationKind::GetElementPointer { base, offset } = gep.kind else {
             return Ok(None);
@@ -518,33 +703,101 @@ impl<'module> GuardedAnalysisV1<'module> {
         let Some(element_bytes) = pointer_byte_width(&result.ty) else {
             return Ok(None);
         };
-        if result.id != pointer
-            || pointer_type.address_space != AddressSpace::Global
+        if result.id != gep_pointer
             || !matches!(
-                pointer_type.access,
-                AccessMode::ReadOnly | AccessMode::ReadWrite
+                pointer_type.address_space,
+                AddressSpace::Global | AddressSpace::Generic
             )
+            || !(pointer_type.access == AccessMode::ReadWrite
+                || pointer_type.access
+                    == if STORE {
+                        AccessMode::WriteOnly
+                    } else {
+                        AccessMode::ReadOnly
+                    })
             || !matches!(element_bytes, 1 | 2 | 4 | 8)
             || !access.alignment.is_power_of_two()
             || u64::from(access.alignment) > element_bytes
         {
             return Ok(None);
         }
-        let Some(data) = self.definition(base)? else {
+        let actual_type = if gep_pointer == pointer {
+            &result.ty
+        } else {
+            let Some(actual) = self.runtime_type(pointer)? else {
+                return Ok(None);
+            };
+            actual
+        };
+        if !matches!(actual_type, Type::Pointer(p) if p.address_space == access.address_space) {
+            return Ok(None);
+        }
+        let base_operation = self.definition(base)?;
+        if let Some(operation) = base_operation {
+            if !single_type(operation, &result.ty) {
+                return Ok(None);
+            }
+        } else {
+            // The GEP still consumes exactly its actual base type. The peeler
+            // checks resolved carrier endpoint and cast types in the verified CFG.
+            self.ledger.charge(4)?;
+            if self.runtime_type(base)? != Some(&result.ty) {
+                return Ok(None);
+            }
+        }
+        let data = if base_operation.is_none_or(|operation| {
+            matches!(
+                operation.kind,
+                OperationKind::Cast {
+                    kind: CastKind::PointerToGeneric | CastKind::RestrictPointerAccess,
+                    ..
+                }
+            )
+        }) {
+            let Some(source) = self.peel_pointer_casts(base)? else {
+                return Ok(None);
+            };
+            let Some(operation) = self.definition(source)? else {
+                return Ok(None);
+            };
+            operation
+        } else {
+            base_operation.expect("non-cast base operation was selected")
+        };
+        let [data_result] = data.results.as_slice() else {
             return Ok(None);
         };
         let OperationKind::SliceData { slice } = data.kind else {
             return Ok(None);
         };
-        if !single_type(data, &result.ty) {
+        let Type::Pointer(data_type) = &data_result.ty else {
             return Ok(None);
-        }
-        let Some((parameter, slice_type)) = self.runtime_slice_parameter(slice)? else {
+        };
+        let Some((parameter, slice_type)) =
+            self.runtime_slice_parameter_profile_v30::<STORE, GENERIC_ROOTS>(slice)?
+        else {
             return Ok(None);
         };
         self.ledger.charge(8)?;
-        if slice_type.element != pointer_type.pointee || slice_type.access != pointer_type.access {
+        if slice_type.element != pointer_type.pointee
+            || slice_type.element != data_type.pointee
+            || slice_type.access != data_type.access
+            || (slice_type.address_space != data_type.address_space
+                && !matches!(self.runtime_type(slice)?, Some(Type::Slice(actual))
+                    if actual.element == data_type.pointee && actual.access == data_type.access
+                        && actual.address_space == data_type.address_space))
+        {
             return Ok(None);
+        }
+        if PREDICATED {
+            return self.explicit_store_bound_v84(
+                location,
+                pointer,
+                offset,
+                parameter,
+                element_bytes,
+                predicate.expect("predicated profile checked above"),
+            );
         }
         let Some(index) = self.runtime_read_index(offset)? else {
             return Ok(None);
@@ -555,16 +808,17 @@ impl<'module> GuardedAnalysisV1<'module> {
         let Some((start, end)) = control.interval else {
             return Ok(None);
         };
-        let selected = verification_find_last_by_v1(
-            &self.runtime_reads.guards,
-            4,
-            &mut Budget::new(&mut self.ledger.work, 0),
-            |row| match (row.index, row.slice).cmp(&(index, parameter.value)) {
-                std::cmp::Ordering::Equal if row.interval.0 <= start => std::cmp::Ordering::Equal,
-                std::cmp::Ordering::Equal => std::cmp::Ordering::Greater,
-                ordering => ordering,
-            },
-        )?;
+        let selected = self
+            .ledger
+            .find_width(&self.runtime_reads.guards, 4, |row| {
+                match (row.index, row.slice).cmp(&(index, parameter.value)) {
+                    std::cmp::Ordering::Equal if row.interval.0 <= start => {
+                        std::cmp::Ordering::Equal
+                    }
+                    std::cmp::Ordering::Equal => std::cmp::Ordering::Greater,
+                    ordering => ordering,
+                }
+            })?;
         let Some(selected) = selected else {
             return Ok(None);
         };
@@ -588,20 +842,198 @@ impl<'module> GuardedAnalysisV1<'module> {
                 target: guard.edge.target,
             },
         };
-        Ok(Some(FormalMemoryAccess {
-            location,
-            allocation: domain.allocation,
-            kind: FormalMemoryAccessKind::Read,
-            address_space: AddressSpace::Global,
-            byte_offset: ByteExpression::Unbounded,
-            byte_width: element_bytes,
-            alignment: u64::from(access.alignment),
-            invocations,
-            domain: FormalAccessDomainV1::RuntimeSliceReadBounded(domain),
+        self.ledger.charge(4)?;
+        Ok(Some(RuntimeSliceReadConditionsV1 {
+            domain,
+            index_origin: guard.index,
+            length_origin: guard.length_origin,
         }))
+    }
+
+    fn explicit_store_bound_v84(
+        &mut self,
+        location: FunctionOperationLocation,
+        pointer: ValueId,
+        offset: ValueId,
+        parameter: ParameterRow<'module>,
+        element_bytes: u64,
+        predicate: ValueId,
+    ) -> Result<Option<RuntimeSliceReadConditionsV1>, ResourceError> {
+        // Pay all additional traversal/query carriers before constructing them.
+        // Dynamic backing stays paid until the enclosing function analysis ends.
+        self.ledger.storage(size_of::<(
+            Vec<[bool; 2]>,
+            Vec<(ValueId, bool)>,
+            Vec<ValueId>,
+            [usize; 20],
+            [ValueId; 12],
+            [Option<&Operation>; 8],
+            ParameterRow<'_>,
+            RuntimeSliceReadConditionsV1,
+            Result<Option<RuntimeSliceReadConditionsV1>, ResourceError>,
+        )>())?;
+        self.ledger.charge(32)?;
+        if self
+            .control_row(location.block)?
+            .is_none_or(|row| row.interval.is_none())
+            || self.runtime_type(predicate)? != Some(&Type::BOOL)
+        {
+            return Ok(None);
+        }
+        let Some(select) = self.definition(offset)? else {
+            return Ok(None);
+        };
+        if !single_type(select, &Type::INDEX) {
+            return Ok(None);
+        }
+        let OperationKind::Select {
+            condition,
+            true_value: index,
+            false_value: zero,
+        } = select.kind
+        else {
+            return Ok(None);
+        };
+        if condition != predicate {
+            return Ok(None);
+        }
+        let Some(zero_op) = self.definition(zero)? else {
+            return Ok(None);
+        };
+        if !single_type(zero_op, &Type::INDEX)
+            || !matches!(zero_op.kind, OperationKind::Constant(Constant::Index(0)))
+        {
+            return Ok(None);
+        }
+        let Some(index_origin) = self.runtime_read_index(index)? else {
+            return Ok(None);
+        };
+        let predicates = self.explicit_true_predicates_v84(predicate)?;
+        for &predicate_leaf in &predicates {
+            self.ledger.charge(32)?;
+            let Some(compare) = self.definition(predicate_leaf)? else {
+                continue;
+            };
+            if !single_type(compare, &Type::BOOL) {
+                continue;
+            }
+            let OperationKind::Compare {
+                predicate: ComparePredicate::LessThan,
+                lhs,
+                rhs,
+            } = compare.kind
+            else {
+                continue;
+            };
+            if self.runtime_read_index(lhs)? != Some(index_origin) {
+                continue;
+            }
+            let Some(ReadIndex::ProvenOrigin(length_origin)) = self.runtime_read_index(rhs)? else {
+                continue;
+            };
+            let Some(length_op) = self.definition(length_origin)? else {
+                continue;
+            };
+            if !single_type(length_op, &Type::INDEX) {
+                continue;
+            }
+            let OperationKind::SliceLength { slice } = length_op.kind else {
+                continue;
+            };
+            let Some((length_parameter, _)) =
+                self.runtime_slice_parameter_profile_v30::<true, false>(slice)?
+            else {
+                continue;
+            };
+            if length_parameter.value != parameter.value {
+                continue;
+            }
+            return Ok(Some(RuntimeSliceReadConditionsV1 {
+                domain: FormalRuntimeSliceReadDomainV1 {
+                    allocation: FormalAllocationIdentity {
+                        parameter_index: parameter.ordinal,
+                    },
+                    slice: parameter.value,
+                    index,
+                    guard_index: lhs,
+                    length: rhs,
+                    predicate,
+                    pointer,
+                    element_bytes,
+                    path: FormalGuardedPathV1::ExplicitPredicate,
+                },
+                index_origin,
+                length_origin,
+            }));
+        }
+        Ok(None)
+    }
+
+    // The same Boolean introduction rules as expanded_predicates, but the
+    // hypothesis is this actual GuardedStore's predicate, never a fabricated edge.
+    fn explicit_true_predicates_v84(
+        &mut self,
+        root: ValueId,
+    ) -> Result<Vec<ValueId>, ResourceError> {
+        let count = self.definitions.len();
+        let mut visited = Vec::new();
+        self.ledger.reserve(&mut visited, count)?;
+        self.ledger.charge(count)?;
+        visited.resize(count, [false; 2]);
+        let mut pending = Vec::new();
+        let mut output = Vec::new();
+        self.ledger.push(&mut pending, (root, true))?;
+        while let Some((value, truth)) = pending.pop() {
+            self.ledger.charge(12)?;
+            let mut definition = self
+                .ledger
+                .find(&self.definitions, |row| row.value.cmp(&value))?;
+            if definition.is_none() {
+                definition = self.boolean_carrier_definition(value)?;
+            }
+            let Some(definition) = definition else {
+                continue;
+            };
+            let slot = usize::from(truth);
+            if visited[definition][slot] {
+                continue;
+            }
+            visited[definition][slot] = true;
+            let row = &self.definitions[definition];
+            let operation = row.operation;
+            self.ledger.charge(operation.results.len())?;
+            if !single_type(operation, &Type::BOOL) {
+                continue;
+            }
+            if truth {
+                self.ledger.push(&mut output, row.value)?;
+            }
+            match operation.kind {
+                OperationKind::Binary {
+                    op: BinaryOp::BitAnd,
+                    lhs,
+                    rhs,
+                } if truth => {
+                    self.ledger.push(&mut pending, (rhs, true))?;
+                    self.ledger.push(&mut pending, (lhs, true))?;
+                }
+                OperationKind::Unary {
+                    op: crate::UnaryOp::Not,
+                    operand,
+                } => {
+                    self.ledger.push(&mut pending, (operand, !truth))?;
+                }
+                _ => {}
+            }
+        }
+        Ok(output)
     }
 }
 
 #[cfg(test)]
 #[path = "runtime_slice_read_v1_tests.rs"]
-mod tests;
+pub(super) mod tests;
+
+#[cfg(test)]
+#[path = "runtime_slice_read_origin_frames_v1_tests.rs"]
+mod origin_frames;

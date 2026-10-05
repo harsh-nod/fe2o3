@@ -9,6 +9,70 @@ pub(super) enum Event {
     Read(usize),
 }
 
+// Reachability supplies the lattice top. A reached input loses information
+// monotonically: Unique -> Multiple -> Uninitialized. Different writers do
+// not imply equal values, but both may establish initialization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Initialized {
+    Uninitialized,
+    Unique(usize),
+    Multiple,
+}
+
+pub(super) trait InitializationState: Copy + Eq {
+    const EMPTY: Self;
+    const MAX_DESCENTS: usize;
+    fn written(ordinal: usize) -> Self;
+    fn meet(self, incoming: Self) -> Self;
+    fn initialized(self) -> bool;
+    fn writer(self) -> Option<usize>;
+}
+
+impl InitializationState for Initialized {
+    const EMPTY: Self = Self::Uninitialized;
+    const MAX_DESCENTS: usize = 2;
+
+    fn written(ordinal: usize) -> Self {
+        Self::Unique(ordinal)
+    }
+    fn meet(self, incoming: Self) -> Self {
+        match (self, incoming) {
+            (Self::Uninitialized, _) | (_, Self::Uninitialized) => Self::Uninitialized,
+            (Self::Unique(left), Self::Unique(right)) if left == right => self,
+            _ => Self::Multiple,
+        }
+    }
+    fn initialized(self) -> bool {
+        !matches!(self, Self::Uninitialized)
+    }
+    fn writer(self) -> Option<usize> {
+        match self {
+            Self::Unique(ordinal) => Some(ordinal),
+            Self::Uninitialized | Self::Multiple => None,
+        }
+    }
+}
+
+// The legacy owner promises an exact writer, not merely definite initialization.
+// Keep its stronger acceptance contract while sharing the CFG algorithm.
+impl InitializationState for Option<usize> {
+    const EMPTY: Self = None;
+    const MAX_DESCENTS: usize = 1;
+
+    fn written(ordinal: usize) -> Self {
+        Some(ordinal)
+    }
+    fn meet(self, incoming: Self) -> Self {
+        if self == incoming { self } else { None }
+    }
+    fn initialized(self) -> bool {
+        self.is_some()
+    }
+    fn writer(self) -> Option<usize> {
+        self
+    }
+}
+
 // Events retain dense inventory/cell ordinals only. They are not initialization
 // facts; read permission is established exclusively by the converged replay.
 fn events<O: typed::PrivateMemoryOwner>(
@@ -60,13 +124,13 @@ pub(super) fn row_start(block: usize, cells: usize) -> R<usize> {
     block.checked_mul(cells).ok_or_else(arithmetic)
 }
 
-pub(super) fn transfer(
+pub(super) fn transfer<S: InitializationState>(
     events: &[Event],
     operations: std::ops::Range<usize>,
     base: usize,
-    state: &mut [Option<usize>],
+    state: &mut [S],
     budget: &mut Budget<'_>,
-    mut read: impl FnMut(usize, Option<usize>, &mut Budget<'_>) -> R<()>,
+    mut read: impl FnMut(usize, S, &mut Budget<'_>) -> R<()>,
 ) -> R<()> {
     for ordinal in operations {
         charge(budget, 3)?;
@@ -76,11 +140,14 @@ pub(super) fn transfer(
                 let start = start.checked_sub(base).ok_or_else(arithmetic)?;
                 let end = start.checked_add(length).ok_or_else(arithmetic)?;
                 charge(budget, length)?;
-                state.get_mut(start..end).ok_or_else(arithmetic)?.fill(None);
+                state
+                    .get_mut(start..end)
+                    .ok_or_else(arithmetic)?
+                    .fill(S::EMPTY);
             }
             Event::Write(cell) => {
                 let cell = cell.checked_sub(base).ok_or_else(arithmetic)?;
-                *state.get_mut(cell).ok_or_else(arithmetic)? = Some(ordinal);
+                *state.get_mut(cell).ok_or_else(arithmetic)? = S::written(ordinal);
             }
             Event::Read(cell) => {
                 let cell = cell.checked_sub(base).ok_or_else(arithmetic)?;
@@ -92,6 +159,19 @@ pub(super) fn transfer(
 }
 
 pub(super) fn check<O: typed::PrivateMemoryOwner>(
+    inventory: &CanonicalKirInventoryV1<'_, O>,
+    addresses: &[Option<Address>],
+    latest: &mut [Option<usize>],
+    budget: &mut Budget<'_>,
+) -> R<()> {
+    if O::TYPED {
+        check_state::<O, Initialized>(inventory, addresses, latest, budget)
+    } else {
+        check_state::<O, Option<usize>>(inventory, addresses, latest, budget)
+    }
+}
+
+fn check_state<O: typed::PrivateMemoryOwner, S: InitializationState>(
     inventory: &CanonicalKirInventoryV1<'_, O>,
     addresses: &[Option<Address>],
     latest: &mut [Option<usize>],
@@ -119,10 +199,10 @@ pub(super) fn check<O: typed::PrivateMemoryOwner>(
             return Err(arithmetic());
         }
         let count = blocks.checked_mul(cells).ok_or_else(arithmetic)?;
-        let mut inputs = scratch::<Option<usize>>(count, budget)?;
+        let mut inputs = scratch::<S>(count, budget)?;
         let mut reached = scratch::<bool>(blocks, budget)?;
         let mut processings = scratch::<usize>(blocks, budget)?;
-        let mut state = scratch::<Option<usize>>(cells, budget)?;
+        let mut state = scratch::<S>(cells, budget)?;
         let mut queue = Queue::new(blocks, budget)?;
         charge(
             budget,
@@ -131,13 +211,16 @@ pub(super) fn check<O: typed::PrivateMemoryOwner>(
                 .and_then(|n| n.checked_add(cells))
                 .ok_or_else(arithmetic)?,
         )?;
-        inputs.resize(count, None);
+        inputs.resize(count, S::EMPTY);
         reached.resize(blocks, false);
         processings.resize(blocks, 0);
-        state.resize(cells, None);
+        state.resize(cells, S::EMPTY);
         reached[0] = true;
         queue.push(0, budget)?;
-        let bound = cells.checked_add(1).ok_or_else(arithmetic)?;
+        let bound = cells
+            .checked_mul(S::MAX_DESCENTS)
+            .and_then(|count| count.checked_add(1))
+            .ok_or_else(arithmetic)?;
         while let Some(block) = queue.pop(budget)? {
             charge(budget, 4)?;
             processings[block] = processings[block].checked_add(1).ok_or_else(arithmetic)?;
@@ -175,9 +258,12 @@ pub(super) fn check<O: typed::PrivateMemoryOwner>(
                     let slot = &mut inputs[start.checked_add(cell).ok_or_else(arithmetic)?];
                     if !reached[target] {
                         *slot = *incoming;
-                    } else if slot.is_some() && *slot != *incoming {
-                        *slot = None;
-                        changed = true;
+                    } else {
+                        let merged = slot.meet(*incoming);
+                        if merged != *slot {
+                            *slot = merged;
+                            changed = true;
+                        }
                     }
                 }
                 reached[target] = true;
@@ -215,18 +301,26 @@ pub(super) fn check<O: typed::PrivateMemoryOwner>(
                 base,
                 &mut state,
                 budget,
-                |ordinal, store, budget| {
+                |ordinal, state, budget| {
                     charge(budget, 4)?;
-                    let store = store.ok_or_else(|| {
-                        refused("private", "Load requires one exact reaching Store")
-                    })?;
-                    if latest[ordinal].is_some_and(|local| local != store) {
+                    if !state.initialized() {
+                        return Err(refused(
+                            "private",
+                            if O::TYPED {
+                                "Load requires initialized storage on every path"
+                            } else {
+                                "Load requires one exact reaching Store"
+                            },
+                        ));
+                    }
+                    let store = state.writer();
+                    if latest[ordinal].is_some_and(|local| Some(local) != store) {
                         return Err(refused(
                             "private",
                             "local and converged Store anchors agree",
                         ));
                     }
-                    latest[ordinal] = Some(store);
+                    latest[ordinal] = store;
                     Ok(())
                 },
             )?;

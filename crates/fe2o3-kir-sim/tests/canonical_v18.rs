@@ -9,6 +9,8 @@ use fe2o3_kernel_ir::{
     ValueId, VerifiedCanonicalKernelIrModuleV18 as Owner,
 };
 use fe2o3_kir_sim::*;
+#[path = "canonical_v18/aggregate_storage.rs"]
+mod aggregate_storage;
 #[path = "canonical_v18/execution_lifecycle.rs"]
 mod execution_lifecycle;
 #[path = "canonical_v18/generic_exposure.rs"]
@@ -364,7 +366,7 @@ fn table_only_change_is_a_different_replay_context() {
 }
 
 #[test]
-fn aggregate_storage_and_projection_remain_explicitly_unsupported() {
+fn union_storage_and_projection_remain_explicitly_unsupported() {
     for with_operations in [false, true] {
         let mut raw = module();
         let mut block = BasicBlock::new(BlockId(0));
@@ -372,13 +374,13 @@ fn aggregate_storage_and_projection_remain_explicitly_unsupported() {
             ValueDef::new(
                 ValueId(0),
                 Type::pointer(
-                    Type::StorageObject(StorageLayoutIdV1(1)),
+                    Type::StorageObject(StorageLayoutIdV1(2)),
                     AddressSpace::Private,
                     AccessMode::ReadWrite,
                 ),
             ),
             OperationKind::Alloca {
-                element: Type::StorageObject(StorageLayoutIdV1(1)),
+                element: Type::StorageObject(StorageLayoutIdV1(2)),
                 count: None,
                 address_space: AddressSpace::Private,
                 alignment: 4,

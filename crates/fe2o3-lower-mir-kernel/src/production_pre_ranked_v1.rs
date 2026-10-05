@@ -169,8 +169,9 @@ impl ProductionPreRankedKirOwnerV1 {
     /// This legacy constructor restores the floor on ordinary `Result` return;
     /// it does not provide an unwind-cleanup guarantee. An optional existing SSA
     /// occurrence-capture receipt stays separately caller-reserved and is not
-    /// included in the transferred receipts. Only pending source-local helpers
-    /// trigger new capture. Its existing planner/source-replay cost exclusions
+    /// included in the transferred receipts. Pending source-local helpers and
+    /// actual workgroup-pipeline creation sites trigger new capture. Its existing
+    /// planner/source-replay cost exclusions
     /// remain unchanged; the canonical ledger covers its capture-only payload.
     pub fn try_materialize_with_budget(
         semantic_ssa: ProductionSemanticSsaOwnerV1,
@@ -282,7 +283,13 @@ impl ProductionPreRankedKirOwnerV1 {
             .reserve_storage(executable_storage.retained_storage())
             .map_err(SemanticKirAssertOriginErrorV1::from)?;
         drop(module);
-        if requires_source && matches!(capture, HelperOccurrenceCaptureV1::Absent) {
+        if matches!(capture, HelperOccurrenceCaptureV1::Absent)
+            && (requires_source
+                || pre_ranked_pipeline_occurrences_required_v1(
+                    &semantic_ssa,
+                    emitted_origins.budget,
+                )?)
+        {
             let receipt = semantic_ssa
                 .try_capture_occurrences_with_budget_v1(emitted_origins.budget)
                 .map_err(ProductionPreRankedKirErrorV1::Occurrences)?;
@@ -415,6 +422,40 @@ impl ProductionPreRankedKirOwnerV1 {
     pub const fn grants_artifact_or_launch_authority(&self) -> bool {
         false
     }
+}
+
+// The ranked pipeline projector consumes original use-site SSA, not merely
+// lowered scalar types. A declared-but-unused intrinsic creates no demand.
+// This scan borrows the already admitted source and allocates no side table.
+fn pre_ranked_pipeline_occurrences_required_v1(
+    owner: &ProductionSemanticSsaOwnerV1,
+    budget: &mut AssertOriginBudgetV1<'_>,
+) -> Result<bool, ProductionPreRankedKirErrorV1> {
+    let source = owner.source_semantic();
+    for function in source.functions() {
+        budget.charge_work(1)?;
+        for block in function.blocks() {
+            budget.charge_work(1)?;
+            let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+                continue;
+            };
+            budget.charge_work(1)?;
+            let callable = source
+                .callables()
+                .get(call.callee().index() as usize)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            if matches!(
+                callable,
+                SemanticCallableDeclV1::CompilerIntrinsic {
+                    operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineCreate { .. },
+                    ..
+                }
+            ) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 /// Ranked checks attached to the exact previously materialized graph.

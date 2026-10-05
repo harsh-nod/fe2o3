@@ -193,7 +193,7 @@ fn typed_private_restriction_keeps_count_extent_and_multiple_aliases() {
 }
 
 #[test]
-fn typed_private_restriction_cfg_requires_the_same_definite_store_occurrence() {
+fn typed_private_restriction_cfg_tracks_initialization_and_exact_writers_separately() {
     let positive = fixture(
         ScalarType::U32,
         4,
@@ -226,13 +226,11 @@ fn typed_private_restriction_cfg_requires_the_same_definite_store_occurrence() {
         .operations
         .push(write(4));
     with_inventory(&conflict, |inventory, floor| {
-        assert!(matches!(
-            exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
-            Err(Error::Unsupported {
-                phase: "private",
-                detail: "Load requires one exact reaching Store"
-            })
-        ));
+        // Both paths initialize the allocation, but the read cannot claim
+        // either predecessor's write as its single reaching value anchor.
+        exercise(inventory, floor, WORK, STORAGE, 1, &[None; 5])
+            .0
+            .unwrap();
     });
     let mut absent = positive.clone();
     absent.functions[0].body.as_mut().unwrap().blocks[0]
@@ -243,7 +241,7 @@ fn typed_private_restriction_cfg_requires_the_same_definite_store_occurrence() {
             exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
             Err(Error::Unsupported {
                 phase: "private",
-                detail: "Load requires one exact reaching Store"
+                detail: "Load requires initialized storage on every path"
             })
         ));
     });
@@ -271,13 +269,9 @@ fn typed_private_restriction_cfg_requires_the_same_definite_store_occurrence() {
         .operations
         .push(write(4));
     with_inventory(&looped, |inventory, floor| {
-        assert!(matches!(
-            exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
-            Err(Error::Unsupported {
-                phase: "private",
-                detail: "Load requires one exact reaching Store"
-            })
-        ));
+        exercise(inventory, floor, WORK, STORAGE, 1, &[None; 5])
+            .0
+            .unwrap();
     });
     let mut reentry = fixture(
         ScalarType::U32,
@@ -318,8 +312,45 @@ fn typed_private_restriction_cfg_requires_the_same_definite_store_occurrence() {
             exercise(inventory, floor, WORK, STORAGE, 1, &[]).0,
             Err(Error::Unsupported {
                 phase: "private",
-                detail: "Load requires one exact reaching Store"
+                detail: "Load requires initialized storage on every path"
             })
+        ));
+    });
+}
+
+#[test]
+fn typed_private_restriction_join_requires_exact_work_and_storage_without_a_writer() {
+    let module = fixture(
+        ScalarType::U32,
+        4,
+        4,
+        vec![
+            block(
+                100,
+                vec![allocation(4), write(4), restriction(10, 30)],
+                conditional(200, 300),
+            ),
+            block(300, vec![write(4)], branch(400)),
+            block(200, vec![], branch(400)),
+            block(400, vec![alias_read(ScalarType::U32, 4, 30, 40)], ret()),
+        ],
+    );
+    with_inventory(&module, |inventory, floor| {
+        let expected = [None; 5];
+        let measured = exercise(inventory, floor, WORK, STORAGE, 1, &expected);
+        measured.0.unwrap();
+        exercise(inventory, floor, measured.1, measured.2, 1, &expected)
+            .0
+            .unwrap();
+        assert!(matches!(
+            exercise(inventory, floor, measured.1 - 1, measured.2, 1, &expected).0,
+            Err(Error::Resource(Resource::Work(error)))
+                if error.limit() == measured.1 - 1 && error.actual() > error.limit(),
+        ));
+        assert!(matches!(
+            exercise(inventory, floor, measured.1, measured.2 - 1, 1, &expected).0,
+            Err(Error::Resource(Resource::Storage(error)))
+                if error.limit() == measured.2 - 1 && error.actual() > error.limit(),
         ));
     });
 }
@@ -337,7 +368,7 @@ fn typed_private_restriction_same_layout_other_allocation_cannot_supply_initiali
             exercise(inventory, floor, WORK, STORAGE, 2, &[]).0,
             Err(Error::Unsupported {
                 phase: "private",
-                detail: "Load requires one exact reaching Store"
+                detail: "Load requires initialized storage on every path"
             })
         ));
     });

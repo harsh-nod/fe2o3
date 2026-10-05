@@ -9,6 +9,8 @@ struct Donor {
     calls: Vec<SemanticKirCallReturnV1>,
     components: Vec<CallResultComponentV1>,
     memory: Vec<ScopedMemoryAnchorV29>,
+    objects: Vec<ScopedObjectPayloadV29>,
+    object_components: Vec<ScopedObjectComponentV29>,
     source: Option<ProductionCallInstanceIdV1>,
     slots: Option<Vec<ScopedSlotOriginV29>>,
 }
@@ -23,6 +25,18 @@ impl Donor {
             calls: lowered.call_returns.sites.rows.clone(),
             components: lowered.call_returns.components.rows.clone(),
             memory: lowered.scoped_memory_anchors.as_ref().unwrap().rows.clone(),
+            objects: lowered
+                .scoped_memory_anchors
+                .as_ref()
+                .unwrap()
+                .objects
+                .clone(),
+            object_components: lowered
+                .scoped_memory_anchors
+                .as_ref()
+                .unwrap()
+                .object_components
+                .clone(),
             source: lowered.source_call_instance,
             slots: lowered.scoped_slot_origins.clone(),
         }
@@ -46,6 +60,18 @@ impl Donor {
             &mut self.memory,
         );
         std::mem::swap(&mut lowered.source_call_instance, &mut self.source);
+        std::mem::swap(
+            &mut lowered.scoped_memory_anchors.as_mut().unwrap().objects,
+            &mut self.objects,
+        );
+        std::mem::swap(
+            &mut lowered
+                .scoped_memory_anchors
+                .as_mut()
+                .unwrap()
+                .object_components,
+            &mut self.object_components,
+        );
         std::mem::swap(&mut lowered.scoped_slot_origins, &mut self.slots);
     }
 }
@@ -82,6 +108,7 @@ enum Refusal {
     Correspondence,
     Memory,
     SourceRows,
+    Object,
 }
 
 fn assert_refusal(
@@ -111,6 +138,12 @@ fn assert_refusal(
                     detail: "execution call parameters differ from their source instance",
                 }),
                 Refusal::SourceRows
+            ) | (
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    detail: "typed object source payload differs from its actual operation",
+                    ..
+                }),
+                Refusal::Object
             )
         ),
         "{label}: expected {expected:?}, got {result:?}"
@@ -222,12 +255,34 @@ fn observe_repeated(
             .iter()
             .any(|operation| matches!(operation.kind, OperationKind::Call { .. }))
     );
-    assert!(
+    let typed = slots.slots.iter().any(|slot| {
+        slot.instance.index() == index
+            && slot.origin.identity.original_local() == Some(3)
+            && matches!(
+                slot.representation,
+                ScopedSlotRepresentationV29::Object { .. }
+            )
+    });
+    assert_eq!(
         intrinsic_block
             .operations
             .iter()
-            .any(|operation| matches!(operation.kind, OperationKind::Store { .. }))
+            .filter(|operation| {
+                if typed {
+                    matches!(
+                        operation.kind,
+                        OperationKind::Storage(ScopedObjectOperationV29::WriteValue { .. })
+                    )
+                } else {
+                    matches!(operation.kind, OperationKind::Store { .. })
+                }
+            })
+            .count(),
+        1
     );
+    if typed {
+        super::typed_call_results::inspect(instances, emitted, slots, budget)?;
+    }
     for (index, lowered) in emitted.iter().enumerate() {
         let id = instances.id_at(index).unwrap();
         assert_eq!(
@@ -431,7 +486,7 @@ fn observe_call_faults(
     let call_position = call_operation as usize;
     let other_pointer = slots.slots[slots.instances[index].slots.clone()]
         .iter()
-        .find(|row| row.origin.local == 0)
+        .find(|row| row.origin.identity.original_local() == Some(0))
         .unwrap()
         .origin
         .pointer;
@@ -454,6 +509,15 @@ fn observe_call_faults(
         CallFault::ExtraIntrinsicCall,
     ] {
         let expected = match fault {
+            CallFault::WrongPointer | CallFault::WrongValue | CallFault::WrongAccess
+                if matches!(
+                    block_mut(emitted[index].as_mut().unwrap(), 0).operations[call_position + 1]
+                        .kind,
+                    OperationKind::Storage(ScopedObjectOperationV29::WriteValue { .. })
+                ) =>
+            {
+                Refusal::Object
+            }
             CallFault::MissingBounds | CallFault::DuplicateBounds | CallFault::WrongBounds => {
                 Refusal::SourceRows
             }
@@ -506,14 +570,20 @@ fn observe_call_faults(
                     let wrong_value = arguments[0];
                     let result = block.operations[call_position].results[0].id;
                     assert_ne!(wrong_value, result);
-                    let OperationKind::Store {
-                        pointer,
-                        value,
-                        access,
-                    } = &mut block.operations[call_position + 1].kind
-                    else {
-                        unreachable!()
-                    };
+                    let (pointer, value, access) =
+                        match &mut block.operations[call_position + 1].kind {
+                            OperationKind::Store {
+                                pointer,
+                                value,
+                                access,
+                            }
+                            | OperationKind::Storage(ScopedObjectOperationV29::WriteValue {
+                                address: pointer,
+                                value,
+                                access,
+                            }) => (pointer, value, access),
+                            _ => panic!("actual scalar or typed result write required"),
+                        };
                     match fault {
                         CallFault::WrongPointer => {
                             assert_ne!(*pointer, other_pointer);
@@ -809,21 +879,23 @@ fn observe_resources(
 
 #[test]
 fn defined_call_validation_obeys_exact_and_one_short_shared_work_and_scratch() {
-    for short in [false, true] {
-        SHORT_WORK.set(short);
-        let (result, _, _) = run(
-            false,
-            ScopedFixture::CallDestinations {
-                projected: false,
-                retained_address: false,
-                indexed: true,
-            },
-            observe_resources,
-            LIMIT,
-            LIMIT,
-        );
-        assert_eq!(OBSERVED.get(), 1, "{result:?}");
-        assert!(is_stopped(&result), "{result:?}");
+    for (projected, indexed) in [(false, true), (true, false)] {
+        for short in [false, true] {
+            SHORT_WORK.set(short);
+            let (result, _, _) = run(
+                false,
+                ScopedFixture::CallDestinations {
+                    projected,
+                    retained_address: false,
+                    indexed,
+                },
+                observe_resources,
+                LIMIT,
+                LIMIT,
+            );
+            assert_eq!(OBSERVED.get(), 1, "{result:?}");
+            assert!(is_stopped(&result), "{result:?}");
+        }
     }
     SHORT_WORK.set(false);
 }

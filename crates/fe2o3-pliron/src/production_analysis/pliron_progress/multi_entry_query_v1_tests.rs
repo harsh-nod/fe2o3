@@ -184,13 +184,12 @@ fn multi_entry_actual_queries_cover_consuming_canonical_then_nested_fallback() {
         assert!(matches!(canonical, CanonicalLoopResultV1::Incomplete(_)));
         assert_eq!(queries, 2);
         let e = graph.edges.iter().map(Vec::len).sum::<usize>();
-        let b = blocks.len();
         for _ in 0..16 {
             let (report, actual) = counted(|| run_pliron_progress_check_v1(&context, &function));
             assert!(report.is_clean(), "{:?}", report.findings());
             assert_eq!(report.certificates().len(), 2);
             assert!(actual > queries);
-            assert!(actual <= e * (2 + b * e), "actual={actual}, E={e}, B={b}");
+            assert!(actual <= e * (2 + e), "actual={actual}, E={e}");
         }
     }
 }
@@ -208,5 +207,221 @@ fn multi_entry_ranked_checker_rejects_different_and_parallel_seed_values() {
             )));
             assert!(actual >= 2);
         }
+    }
+}
+
+fn propagation_chain(
+    count: usize,
+    reverse_layout: bool,
+    parallel: bool,
+    internal_cycle: bool,
+    conflicting_parallel: bool,
+) -> (Context, FuncOp, Vec<Ptr<BasicBlock>>) {
+    assert!(count >= 4);
+    let mut context = Context::new();
+    dialect_kernel::register_dialect(
+        &mut context,
+        &pliron::dialect::DialectName::try_new(dialect_kernel::DIALECT_NAME).unwrap(),
+    )
+    .unwrap();
+    let ty = FunctionType::get(&context, vec![], vec![]);
+    let function = FuncOp::new(&mut context, "propagation_chain".try_into().unwrap(), ty);
+    let entry = function.get_entry_block(&context);
+    let mut chain = (0..count)
+        .map(|_| block(&mut context, &function, 1).0)
+        .collect::<Vec<_>>();
+    if reverse_layout {
+        chain.reverse();
+    }
+    let zero = IndexConstantOp::new(&mut context, 0);
+    let seed = zero.result(&context);
+    append(&context, entry, &zero);
+    let enter = BranchArgsOp::new(&mut context, vec![seed], chain[0]);
+    append(&context, entry, &enter);
+    for (index, source) in chain.iter().copied().enumerate() {
+        let value = source.deref(&context).get_argument(0);
+        let target = chain[(index + 1) % count];
+        if index + 1 == count && internal_cycle {
+            let jump = AnalysisSplitOp::new_with_arguments(
+                &mut context,
+                vec![value],
+                vec![value],
+                target,
+                chain[count / 2],
+            );
+            append(&context, source, &jump);
+        } else if parallel {
+            let jump = AnalysisSplitOp::new_with_arguments(
+                &mut context,
+                vec![value],
+                vec![if conflicting_parallel { seed } else { value }],
+                target,
+                target,
+            );
+            append(&context, source, &jump);
+        } else {
+            let jump = BranchArgsOp::new(&mut context, vec![value], target);
+            append(&context, source, &jump);
+        }
+    }
+    verify_operation(function.get_operation(), &context).unwrap();
+    (context, function, chain)
+}
+
+#[test]
+fn nested_induction_worklist_visits_each_occurrence_once_across_chain_sizes() {
+    for reverse_layout in [false, true] {
+        for count in [16, 32, 64, 128] {
+            let (context, function, chain) =
+                propagation_chain(count, reverse_layout, false, false, false);
+            let inventory = bounded_structural_inventory(&context, &function).unwrap();
+            let blocks = &inventory.root_blocks;
+            let indices: HashMap<_, _> = blocks.iter().enumerate().map(|(i, b)| (*b, i)).collect();
+            let graph = build_root_graph(&context, blocks, &indices).unwrap();
+            let members = chain.iter().map(|block| indices[block]).collect();
+            let header = indices[&chain[0]];
+            let induction = chain[0].deref(&context).get_argument(0);
+            let (facts, queries) = counted(|| {
+                propagate_loop_induction_v1(
+                    &context,
+                    blocks,
+                    &graph.edges,
+                    &members,
+                    header,
+                    induction,
+                )
+            });
+            let facts = facts.unwrap();
+            assert_eq!(
+                queries,
+                count - 1,
+                "count={count}, reverse={reverse_layout}"
+            );
+            assert_eq!(facts.len(), count);
+            for block in chain {
+                assert_eq!(
+                    facts[&indices[&block]],
+                    block.deref(&context).get_argument(0)
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_induction_worklist_checks_internal_cycles_and_parallel_occurrences() {
+    for reverse_layout in [false, true] {
+        for parallel in [false, true] {
+            let count = 16;
+            let (context, function, chain) =
+                propagation_chain(count, reverse_layout, parallel, true, false);
+            let inventory = bounded_structural_inventory(&context, &function).unwrap();
+            let blocks = &inventory.root_blocks;
+            let indices: HashMap<_, _> = blocks.iter().enumerate().map(|(i, b)| (*b, i)).collect();
+            let graph = build_root_graph(&context, blocks, &indices).unwrap();
+            let members = chain.iter().map(|block| indices[block]).collect();
+            let (facts, queries) = counted(|| {
+                propagate_loop_induction_v1(
+                    &context,
+                    blocks,
+                    &graph.edges,
+                    &members,
+                    indices[&chain[0]],
+                    chain[0].deref(&context).get_argument(0),
+                )
+            });
+            assert_eq!(facts.unwrap().len(), count);
+            // Header backedges are excluded; the nonheader cycle's last
+            // occurrence must still check an already processed target.
+            assert_eq!(queries, (count - 1) * (1 + usize::from(parallel)) + 1);
+        }
+    }
+}
+
+#[test]
+fn nested_induction_worklist_refuses_conflicting_join_aliases() {
+    for reverse_targets in [false, true] {
+        let mut context = Context::new();
+        dialect_kernel::register_dialect(
+            &mut context,
+            &pliron::dialect::DialectName::try_new(dialect_kernel::DIALECT_NAME).unwrap(),
+        )
+        .unwrap();
+        let ty = FunctionType::get(&context, vec![], vec![]);
+        let diamond = FuncOp::new(&mut context, "conflicting_aliases".try_into().unwrap(), ty);
+        let entry = diamond.get_entry_block(&context);
+        let (header, header_args) = block(&mut context, &diamond, 1);
+        let (left, left_args) = block(&mut context, &diamond, 1);
+        let (right, right_args) = block(&mut context, &diamond, 1);
+        let (join, join_args) = block(&mut context, &diamond, 2);
+        let zero = IndexConstantOp::new(&mut context, 0);
+        let z = zero.result(&context);
+        append(&context, entry, &zero);
+        let enter = BranchArgsOp::new(&mut context, vec![z], header);
+        append(&context, entry, &enter);
+        let (first, second) = if reverse_targets {
+            (right, left)
+        } else {
+            (left, right)
+        };
+        let split = AnalysisSplitOp::new_with_arguments(
+            &mut context,
+            header_args.clone(),
+            header_args.clone(),
+            first,
+            second,
+        );
+        append(&context, header, &split);
+        let first = BranchArgsOp::new(&mut context, vec![left_args[0], z], join);
+        append(&context, left, &first);
+        let second = BranchArgsOp::new(&mut context, vec![z, right_args[0]], join);
+        append(&context, right, &second);
+        let repeat = BranchArgsOp::new(&mut context, vec![join_args[0]], header);
+        append(&context, join, &repeat);
+        verify_operation(diamond.get_operation(), &context).unwrap();
+        let inventory = bounded_structural_inventory(&context, &diamond).unwrap();
+        let blocks = &inventory.root_blocks;
+        let indices: HashMap<_, _> = blocks.iter().enumerate().map(|(i, b)| (*b, i)).collect();
+        let graph = build_root_graph(&context, blocks, &indices).unwrap();
+        let members = [header, left, right, join]
+            .iter()
+            .map(|b| indices[b])
+            .collect();
+        let (result, queries) = counted(|| {
+            propagate_loop_induction_v1(
+                &context,
+                blocks,
+                &graph.edges,
+                &members,
+                indices[&header],
+                header_args[0],
+            )
+        });
+        assert!(result.is_err());
+        assert_eq!(queries, 4);
+    }
+}
+
+#[test]
+fn nested_induction_worklist_refuses_unequal_parallel_payloads_before_assignment() {
+    for reverse_layout in [false, true] {
+        let (context, function, chain) = propagation_chain(8, reverse_layout, true, false, true);
+        let inventory = bounded_structural_inventory(&context, &function).unwrap();
+        let blocks = &inventory.root_blocks;
+        let indices: HashMap<_, _> = blocks.iter().enumerate().map(|(i, b)| (*b, i)).collect();
+        let graph = build_root_graph(&context, blocks, &indices).unwrap();
+        let members = chain.iter().map(|block| indices[block]).collect();
+        let (result, queries) = counted(|| {
+            propagate_loop_induction_v1(
+                &context,
+                blocks,
+                &graph.edges,
+                &members,
+                indices[&chain[0]],
+                chain[0].deref(&context).get_argument(0),
+            )
+        });
+        assert!(result.is_err());
+        assert_eq!(queries, 1);
     }
 }

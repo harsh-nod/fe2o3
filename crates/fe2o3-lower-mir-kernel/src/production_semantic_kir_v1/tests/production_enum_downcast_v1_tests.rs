@@ -41,7 +41,7 @@ mod enum_downcast_observation_tests_v1 {
     fn lowering<'a>(
         types: &'a [SemanticTypeDeclV1],
         function: &'a SemanticFunctionDeclV1,
-    ) -> SemanticFunctionLoweringV1<'a> {
+    ) -> SemanticFunctionLoweringV1<'a, 'a> {
         SemanticFunctionLoweringV1::new(
             types,
             &[],

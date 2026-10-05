@@ -864,6 +864,7 @@ fn failure_class(kind: &SimulationExecutionErrorKindV1) -> &'static str {
         K::UndefinedIntegerOperation(_) => "undefined_integer_operation",
         K::IntegerOutOfRange => "integer_out_of_range",
         K::PointerOffsetOverflow => "pointer_offset_overflow",
+        K::StorageArrayIndexOutOfBounds { .. } => "storage_array_index_out_of_bounds",
         K::PointerDistanceDifferentAllocation { .. } => "pointer_distance_different_allocation",
         K::PointerDistanceOutOfBounds => "pointer_distance_out_of_bounds",
         K::PointerDistanceNotDivisible { .. } => "pointer_distance_not_divisible",
@@ -937,6 +938,10 @@ fn hash_execution_detail(hash: &mut Sha256, kind: &SimulationExecutionErrorKindV
         } => {
             hash.update(byte_difference.to_le_bytes());
             hash.update(unit_bytes.to_le_bytes());
+        }
+        K::StorageArrayIndexOutOfBounds { index, length } => {
+            hash.update(index.to_le_bytes());
+            hash.update(length.to_le_bytes());
         }
         K::CopyRangesOverlap {
             allocation,

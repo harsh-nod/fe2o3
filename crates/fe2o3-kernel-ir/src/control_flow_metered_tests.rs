@@ -168,6 +168,7 @@ fn metered_cfg_sparse_identity_queries_and_empty_lookup_are_bounded() {
         let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 0);
         let mut resources = ControlFlowResourcesV1 {
             budget: Some(&mut budget),
+            storage: ControlFlowStorageV2::LegacyRows,
         };
         let result = resources.block_position(&[], BlockId(u32::MAX));
         if limit == 1 {
@@ -188,6 +189,7 @@ fn metered_cfg_sparse_identity_queries_and_empty_lookup_are_bounded() {
         let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, 0);
         let mut resources = ControlFlowResourcesV1 {
             budget: Some(&mut budget),
+            storage: ControlFlowStorageV2::LegacyRows,
         };
         let result = resources.block_position(&[(BlockId(1), 0), (BlockId(7), 1)], BlockId(1));
         if limit == 6 {

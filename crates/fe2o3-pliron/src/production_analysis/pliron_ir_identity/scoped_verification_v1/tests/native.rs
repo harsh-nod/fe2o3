@@ -48,7 +48,7 @@ fn checked_result_and_overflow_are_independent_dominance_uses() {
 }
 
 #[test]
-fn native_switch_checks_every_payload_occurrence_without_admitting_the_dialect() {
+fn native_switch_checks_every_payload_occurrence_with_closed_control_admission() {
     for cases in [0, 1, 16, 17] {
         let context = &mut setup();
         let integer = IntegerType::get(context, 128, Signedness::Unsigned).into();
@@ -72,10 +72,7 @@ fn native_switch_checks_every_payload_occurrence_without_admitting_the_dialect()
         compare(context, &function, true);
         assert_eq!(TRACE.get().tree_requests, 1);
         assert_eq!(TRACE.get().operand_visits, 1 + 2 * (cases + 1));
-        assert!(matches!(
-            prescan(context, &function),
-            Err(PlironIrIdentityErrorV1::UnsupportedOperation { .. })
-        ));
+        assert!(prescan(context, &function).is_ok());
 
         // Check each case and the default independently. A block argument of
         // the destination is not available in the branching predecessor.

@@ -1,6 +1,10 @@
 use super::*;
 use crate::production_semantic_kir_v1::scoped_slot_uses_v29;
 
+thread_local! {
+    static HISTORY_PAYLOAD_COMPLETED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn stop_after_uses(
     _source: &ExecutionLifecycleSourceV29<'_>,
     instances: &ExecutionInstancesV29<'_>,
@@ -23,7 +27,7 @@ fn stop_after_uses(
     for slot in &receipt.slots {
         let source = instances.instance(slot.instance).unwrap();
         assert_eq!(
-            source.declaration().locals()[slot.origin.local as usize].ty(),
+            source.declaration().locals()[slot.legacy_local().unwrap() as usize].ty(),
             slot.origin.semantic_type
         );
         let body = emitted[slot.instance.index()]
@@ -78,6 +82,10 @@ fn observe_source_alias(
     receipt: &OwnedScopedSourceSlotsV29,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    OBSERVED.set(OBSERVED.get() + 1);
+    assert!(receipt.ledger == budget.work_ledger_identity_v1());
+    assert!(receipt.source == ExecutionCallSourceV29::from_instances(instances, budget)?);
+    assert_eq!(source.owner.identity(), instances.owner().identity());
     let mut helpers = 0;
     let mut pointers = BTreeSet::new();
     for (index, output) in emitted.iter().enumerate() {
@@ -126,7 +134,9 @@ fn observe_source_alias(
             .iter()
             .find(|row| row.block.index() == 3)
             .unwrap();
-        assert!(initialization.initialized_locals[entry.initialized.clone()].contains(&2));
+        // Typed objects are checked by the original C2 snapshot, not inserted
+        // into the legacy scalar-only initialization summary.
+        assert!(!initialization.initialized_locals[entry.initialized.clone()].contains(&2));
         let block_id = output
             .lifecycle_events
             .as_ref()
@@ -146,7 +156,9 @@ fn observe_source_alias(
             .operations
             .iter()
             .filter_map(|operation| match &operation.kind {
-                OperationKind::Load { pointer, access } => Some((*pointer, access)),
+                OperationKind::Storage(ScopedObjectOperationV29::ReadValue { address, access }) => {
+                    Some((operation, *address, access))
+                }
                 _ => None,
             })
             .collect();
@@ -157,34 +169,171 @@ fn observe_source_alias(
             .filter(|slot| slot.instance == id)
             .collect();
         assert_eq!(slots.len(), 1);
-        assert_eq!(slots[0].origin.local, 2);
+        assert!(matches!(
+            slots[0].origin.identity,
+            ScopedAllocationIdentityV29::OriginalObject {
+                local: 2,
+                generation: 0
+            }
+        ));
+        let ScopedSlotRepresentationV29::Object { schema, .. } = slots[0].representation else {
+            panic!("the original raw address must select the scalar object representation");
+        };
+        assert_eq!(slots[0].origin.semantic_type, U32);
         assert!(pointers.insert(slots[0].origin.pointer));
-        assert_eq!(loads[0].0, slots[0].origin.pointer);
-        assert_eq!(loads[0].1.address_space, AddressSpace::Private);
-        assert_eq!(loads[0].1.alignment, 4);
+        let (read_operation, pointer, access) = loads[0];
+        assert_eq!(read_operation.results.len(), 1);
+        assert_eq!(read_operation.results[0].ty, Type::Scalar(ScalarType::U32));
+        let mut births = block
+            .operations
+            .iter()
+            .filter(|operation| operation.results.iter().any(|result| result.id == pointer));
+        let birth = births
+            .next()
+            .expect("the original mutable AddressOf has a fresh result");
+        assert!(births.next().is_none());
+        let OperationKind::Select {
+            condition,
+            true_value,
+            false_value,
+        } = birth.kind
+        else {
+            panic!("exact original mutable-address generation birth");
+        };
         assert_eq!(
-            loads[0].1.volatile,
+            (true_value, false_value),
+            (slots[0].origin.pointer, slots[0].origin.pointer)
+        );
+        assert!(
+            matches!(&birth.results[..], [ValueDef { ty: Type::Pointer(pointer_type), .. }]
+            if pointer_type.pointee.as_ref() == &Type::StorageObject(schema)
+                && pointer_type.address_space == AddressSpace::Private
+                && pointer_type.access == AccessMode::ReadWrite)
+        );
+        assert!(block.operations.iter().any(|operation| {
+            operation
+                .results
+                .iter()
+                .any(|result| result.id == condition)
+                && operation.kind == OperationKind::Constant(Constant::Bool(true))
+        }));
+        let anchors = output.scoped_memory_anchors.as_ref().unwrap();
+        let position = block
+            .operations
+            .iter()
+            .position(|operation| std::ptr::eq(operation, read_operation))
+            .unwrap();
+        let mut rows = anchors
+            .rows
+            .iter()
+            .filter(|row| row.block == block.id && row.position == position);
+        let row = rows
+            .next()
+            .expect("one exact original typed read occurrence");
+        assert!(rows.next().is_none());
+        let ScopedMemoryAnchorKindV29::Object(payload) = row.kind else {
+            panic!("typed read payload");
+        };
+        let payload = anchors.objects[payload];
+        assert_eq!(
+            payload.operation,
+            ScopedObjectOperationV29::ReadValue {
+                address: pointer,
+                access: *access
+            }
+        );
+        assert_eq!(payload.result, Some(read_operation.results[0].id));
+        let ScopedObjectRoleV29::ReadValue {
+            source: endpoint,
+            read: ScopedObjectReadOriginV29::Original(original),
+        } = payload.role
+        else {
+            panic!("original scalar dereference read role");
+        };
+        let read_site = ExecutionSiteV29::Statement {
+            block: SsaBlockIdV1::new(3),
+            statement: 1,
+        };
+        assert_eq!(
+            (original.site, original.role, original.prefix, original.ty),
+            (read_site, ExecutionOperandV29::RvaluePlace, 1, U32)
+        );
+        assert_eq!(
+            endpoint.object,
+            ScopedObjectIdentityV29::Reference {
+                instance: id,
+                site: read_site,
+                role: ExecutionOperandV29::RvaluePlace,
+                dereference_prefix: 1,
+            }
+        );
+        assert_eq!(
+            (endpoint.root_schema, endpoint.projected_schema),
+            (schema, schema)
+        );
+        assert_eq!(access.address_space, AddressSpace::Private);
+        assert_eq!(
+            access.alignment, 1,
+            "raw dereference retains conservative alignment"
+        );
+        assert_eq!(
+            access.volatile,
             load.volatility() == SemanticVolatilityV1::Volatile
         );
     }
     assert_eq!(helpers, 2);
-    stop_after_uses(source, instances, emitted, receipt, budget)
+    Ok(())
 }
 
 #[test]
 fn real_source_initialized_address_of_load_reuses_each_instance_slot() {
-    // This Semantic-MIR fixture checks alias lowering, not kill-sensitive initialization.
     for looping in [false, true] {
         for volatile in [false, true] {
-            let fixture = ScopedFixture::Initialization(InitializationFixtureV29 {
+            let config = InitializationFixtureV29 {
                 looping,
                 address_read: true,
                 volatile,
                 ..InitializationFixtureV29::default()
-            });
-            let (result, _, _) = run(false, fixture, observe_source_alias, 10_000_000, 10_000_000);
-            assert!(is_stopped(&result), "{fixture:?}: {result:?}");
-            assert_eq!(OBSERVED.get(), 1);
+            };
+            let mut initialized = false;
+            with_selected_pointer_test_root_plan_v29(
+                super::super::fixtures::initialization_owner(config),
+                |plan, root, budget| {
+                    assert!(plan.storage_root.is_some(), "original C2 source storage");
+                    let mut helpers = 0;
+                    for entry in &plan.blocks {
+                        let instance = plan.instances.instance(entry.instance).unwrap();
+                        if instance.function() != SemanticFunctionIdV1::from_index(3)
+                            || entry.block.index() != 3
+                        {
+                            continue;
+                        }
+                        let local = &plan.states[entry.entry][2];
+                        assert_eq!(local.generation, 0);
+                        let snapshot = plan.storage_snapshots
+                            [local.storage.expect("exact original holder snapshot")];
+                        assert!(root.snapshot_initialized(snapshot, &[], budget).unwrap());
+                        helpers += 1;
+                    }
+                    assert_eq!(helpers, 2);
+                    initialized = true;
+                    Ok(())
+                },
+            )
+            .unwrap_or_else(|error| panic!("{config:?}: original C2 state: {error:?}"));
+            assert!(initialized);
+            let (result, _, _, completed) = run_original_repeated_source_v29(
+                || super::super::fixtures::initialization_owner(config),
+                observe_source_alias,
+                10_000_000,
+                10_000_000,
+            );
+            assert!(result.is_ok(), "{config:?}: {result:?}");
+            assert!(
+                completed,
+                "the inspected original alias candidate must finish physical admission"
+            );
+            assert_eq!(OBSERVED.get(), 3);
         }
     }
 }
@@ -256,12 +405,13 @@ fn production_pre_splice_hook_rejects_slot_identity_observation_after_capture() 
         10_000_000,
     );
     assert_eq!(OBSERVED.get(), 1);
+    // The complete scalar-cell use check now rejects this before the slot graph.
     assert!(
         matches!(
             result,
             Err(ProductionSemanticKirErrorV1::Unsupported {
-                function: 3,
-                detail: "scoped source-slot address escapes through an unsupported operand",
+                function: 0,
+                detail: "source reference cell pointer has an unbound emitted use",
                 ..
             })
         ),
@@ -278,13 +428,8 @@ fn replace_initial_store_with_read(
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     check_receipt(instances, emitted, receipt, budget);
     let slot = receipt.slots[0];
-    let body = emitted[slot.instance.index()]
-        .as_mut()
-        .unwrap()
-        .function
-        .body
-        .as_mut()
-        .unwrap();
+    let lowered = emitted[slot.instance.index()].as_mut().unwrap();
+    let body = lowered.function.body.as_mut().unwrap();
     assert!(
         !body
             .blocks
@@ -293,8 +438,12 @@ fn replace_initial_store_with_read(
             .flat_map(|operation| &operation.results)
             .any(|result| result.id == ValueId(u32::MAX))
     );
-    let operation = body.blocks.iter_mut().flat_map(|block| &mut block.operations)
-        .find(|operation| matches!(operation.kind, OperationKind::Store { pointer, .. } if pointer == slot.origin.pointer)).unwrap();
+    let (block, position) = body.blocks.iter().enumerate().find_map(|(block, row)|
+        row.operations.iter().position(|operation|
+            matches!(operation.kind, OperationKind::Store { pointer, .. } if pointer == slot.origin.pointer))
+            .map(|position| (block, position))).unwrap();
+    let block_id = body.blocks[block].id;
+    let operation = &mut body.blocks[block].operations[position];
     let OperationKind::Store { access, .. } = &operation.kind else {
         unreachable!()
     };
@@ -305,11 +454,56 @@ fn replace_initial_store_with_read(
             access: *access,
         },
     );
+    let anchors = &mut lowered.scoped_memory_anchors.as_mut().unwrap().rows;
+    let mut matches = anchors.iter_mut().filter(|row| {
+        row.block == block_id
+            && row.position == position
+            && matches!(row.kind, ScopedMemoryAnchorKindV29::Access { pointer, .. }
+                if pointer == slot.origin.pointer)
+    });
+    let row = matches.next().unwrap();
+    assert!(matches.next().is_none());
+    assert!(matches!(
+        row.kind,
+        ScopedMemoryAnchorKindV29::Access {
+            payload: Some(ScopedMemoryPayloadV29::Store { .. }),
+            ..
+        }
+    ));
+    let source = instances.instance(slot.instance).unwrap().declaration();
+    let occurrences = instances.occurrences(slot.instance).unwrap();
+    let payload_error = check_scoped_payload_v29(source, &occurrences, row, operation, budget);
+    assert!(
+        matches!(
+            payload_error,
+            Err(ProductionSemanticKirErrorV1::Unsupported {
+                detail: "scoped memory anchors differ from their source instance",
+                ..
+            })
+        ),
+        "{payload_error:?}"
+    );
+    // The stale Store receipt is independently rejected above. An absent
+    // payload grants nothing and lets this test still reach physical history.
+    let before = *row;
+    let ScopedMemoryAnchorKindV29::Access { payload, .. } = &mut row.kind else {
+        unreachable!()
+    };
+    *payload = None;
+    assert_eq!(row.block, before.block);
+    assert_eq!(row.position, before.position);
+    assert_eq!(row.source, before.source);
+    assert!(
+        matches!(row.kind, ScopedMemoryAnchorKindV29::Access { pointer, payload: None }
+        if pointer == slot.origin.pointer)
+    );
+    HISTORY_PAYLOAD_COMPLETED.set(HISTORY_PAYLOAD_COMPLETED.get() + 1);
     Ok(())
 }
 
 #[test]
 fn production_physical_history_does_not_trust_source_initialization_summaries() {
+    HISTORY_PAYLOAD_COMPLETED.set(0);
     let (result, _, _) = run(
         false,
         ScopedFixture::RepeatedSlots,
@@ -318,6 +512,7 @@ fn production_physical_history_does_not_trust_source_initialization_summaries() 
         10_000_000,
     );
     assert_eq!(OBSERVED.get(), 1);
+    assert_eq!(HISTORY_PAYLOAD_COMPLETED.get(), 1);
     assert!(
         matches!(
             result,

@@ -21,6 +21,7 @@ impl NormalizedScalarExpressionV1 {
     fn template_scalar(&self) -> Scalar {
         match self {
             Self::Symbol { scalar, .. }
+            | Self::GlobalInvocation1d { scalar }
             | Self::Constant { scalar, .. }
             | Self::Load { scalar, .. }
             | Self::Unary { scalar, .. }
@@ -63,6 +64,11 @@ impl NormalizedScalarExpressionV1 {
                 .checked_add(1)
                 .ok_or("native expression depth overflow")?;
             match expression {
+                E::GlobalInvocation1d { scalar } => {
+                    ProductionSemanticExpressionV2::GlobalInvocation1d { scalar: *scalar }
+                        .validate()
+                        .map_err(|_| "native expression launch coordinate invalid")?;
+                }
                 E::Symbol { symbol, scalar } => {
                     ProductionSemanticExpressionV2::Symbol {
                         symbol: *symbol,
@@ -628,7 +634,10 @@ impl Template {
             .get(value.index)
             .ok_or("foreign template value")?;
         let scalar = node.scalar;
-        let child = |value| self.emit(value, arguments).map(Box::new);
+        let child = |value| {
+            self.emit(value, arguments)
+                .map(NormalizedScalarNodeV18::legacy)
+        };
         Ok(match node.kind {
             Kind::Parameter(parameter) => arguments
                 .get(parameter)

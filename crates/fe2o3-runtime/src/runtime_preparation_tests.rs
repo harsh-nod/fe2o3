@@ -148,6 +148,67 @@ fn preparation_accepts_complete_workgroups_in_each_dimension() {
 }
 
 #[test]
+fn inert_prepared_inspection_borrows_exact_request_and_preserves_buffer_policy() {
+    let hsaco = module_with_resources(0, None);
+    let geometry = AqlDispatchGeometryV1::new([64, 1, 1], [32, 1, 1]).unwrap();
+    let prepared = prepare_gfx942_runtime_dispatch_v1(&hsaco, "vecadd", inputs(geometry)).unwrap();
+    let view = prepared.inspection_v1();
+    let second = prepared.inspection_v1();
+    assert_eq!(view.geometry, geometry);
+    assert_eq!(view.descriptor_offset, prepared.descriptor_offset());
+    assert_eq!(view.kernarg_alignment, 16);
+    assert_eq!(view.kernarg_template.len(), 272);
+    assert_eq!(
+        &view.kernarg_template[..16],
+        &inputs(geometry).explicit_kernarg
+    );
+    assert_eq!(view.private_segment_size, 0);
+    assert_eq!(
+        view.group_segment_size,
+        prepared.packet_group_segment_bytes()
+    );
+    assert_eq!(view.timeout_milliseconds, 1_000);
+    assert_eq!(view.buffers[0].bytes(), &[0xa5; 8]);
+    let fixup = view.pointer_fixups[0];
+    assert_eq!(
+        (
+            fixup.kernarg_offset(),
+            fixup.buffer_index(),
+            fixup.buffer_byte_offset(),
+            fixup.required_alignment()
+        ),
+        (0, 0, 0, 4)
+    );
+    assert_eq!(
+        prepared.buffer_policies_v1().collect::<Vec<_>>(),
+        vec![(Gfx942RuntimeBufferAccessV1::ReadOnly, 8)]
+    );
+    assert!(view.conditional_premises.is_none() && view.mixed_conditional_premises.is_none());
+    assert!(std::ptr::eq(view.executable_image, second.executable_image));
+    assert!(std::ptr::eq(view.kernarg_template, second.kernarg_template));
+    assert!(std::ptr::eq(view.buffers, second.buffers));
+    assert!(std::ptr::eq(view.pointer_fixups, second.pointer_fixups));
+    let mut donor_inputs = inputs(geometry);
+    donor_inputs.buffers = vec![
+        Gfx942RuntimeDispatchBufferV1::new(vec![0xb6; 8], Gfx942RuntimeBufferAccessV1::ReadWrite)
+            .unwrap(),
+    ];
+    let donor = prepare_gfx942_runtime_dispatch_v1(&hsaco, "vecadd", donor_inputs).unwrap();
+    assert_ne!(
+        view.buffers[0].bytes(),
+        donor.inspection_v1().buffers[0].bytes()
+    );
+    assert_ne!(
+        prepared.dispatch_contract_sha256(),
+        donor.dispatch_contract_sha256()
+    );
+    assert_eq!(
+        donor.buffer_policies_v1().collect::<Vec<_>>(),
+        vec![(Gfx942RuntimeBufferAccessV1::ReadWrite, 8)]
+    );
+}
+
+#[test]
 fn uniform_requirement_rejects_remainders_on_every_axis() {
     let hsaco = module_with_resources(0, Some(true));
     for grid in PARTIAL_GRIDS {

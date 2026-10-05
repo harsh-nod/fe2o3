@@ -512,6 +512,39 @@ impl WorkerV3LoadEnvelopeV2 {
         })
     }
 
+    /// Retain the exact mixed V53 descriptor, all V26 premises, actual Worker
+    /// replay and compiler-execution receipt. This transports no launch grant;
+    /// the receiving verifier must admit the distinct typed proof and premises.
+    pub fn from_published_mixed_hsaco_v53(
+        published: fe2o3_hsaco_finalize::PublishedMixedWorkerHsacoV53,
+        compiler_execution: CompilerExecutionReceiptCarriageV1,
+    ) -> Result<Self, WorkerV3LoadEnvelopeErrorV2> {
+        let parts = published
+            .into_load_envelope_parts_v1()
+            .map_err(WorkerV3LoadEnvelopeErrorV1::from)?;
+        Self::from_published_parts(parts, compiler_execution)
+    }
+
+    /// Retains the complete V89 descriptor and its V86 predicated contracts
+    /// without converting them to a legacy descriptor or granting authority.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_hsaco_finalize::PublishedMixedWorkerHsacoV53;
+    /// use fe2o3_runtime_protocol::{CompilerExecutionReceiptCarriageV1, WorkerV3LoadEnvelopeV2};
+    /// fn substitute(old: PublishedMixedWorkerHsacoV53, receipt: CompilerExecutionReceiptCarriageV1) {
+    ///     let _ = WorkerV3LoadEnvelopeV2::from_published_mixed_hsaco_v89(old, receipt);
+    /// }
+    /// ```
+    pub fn from_published_mixed_hsaco_v89(
+        published: fe2o3_hsaco_finalize::PublishedMixedWorkerHsacoV89,
+        compiler_execution: CompilerExecutionReceiptCarriageV1,
+    ) -> Result<Self, WorkerV3LoadEnvelopeErrorV2> {
+        let parts = published
+            .into_load_envelope_parts_v1()
+            .map_err(WorkerV3LoadEnvelopeErrorV1::from)?;
+        Self::from_published_parts(parts, compiler_execution)
+    }
+
     pub const fn wire(&self) -> &WorkerV3LoadEnvelopeWireV2 {
         &self.wire
     }

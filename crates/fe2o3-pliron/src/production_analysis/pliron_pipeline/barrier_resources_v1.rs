@@ -33,6 +33,7 @@ fn preflight_barrier_stage_with_observation_v1(
         input_census,
         trace_admission,
         pipeline_protocol_upper_bound,
+        None,
         observer,
     )
     .map(|(result, _)| result)
@@ -45,6 +46,7 @@ fn preflight_barrier_stage_admission_v1(
     input_census: &ProductionAnalysisInputCensusV1,
     trace_admission: Option<crate::production_analysis::pliron_invocation_trace::ProductionInvocationTraceResourceAdmissionV1>,
     pipeline_protocol_upper_bound: ProductionAnalysisResourceUpperBoundV1,
+    graph: Option<&crate::production_analysis::pliron_progress::PreparedProgressGraphV2<'_>>,
     observer: PipelineObservationV1<'_, '_, '_>,
 ) -> Result<
     (
@@ -72,10 +74,11 @@ fn preflight_barrier_stage_admission_v1(
         let barrier_progress_needed =
             admit_barrier_progress_probe_v1(context, analyses, input_census)?;
         let barrier_progress_upper_bound = if barrier_progress_needed {
-            Some(preflight_scoped_progress_resource_upper_bound_v1(
-                *input_census,
-                remaining_resource_limits_v1(analyses, Phase::Progress)?,
-            )?)
+            let limits = remaining_resource_limits_v1(analyses, Phase::Progress)?;
+            Some(match graph {
+                Some(graph) => graph.continuation_bound(*input_census, limits)?,
+                None => preflight_scoped_progress_resource_upper_bound_v1(*input_census, limits)?,
+            })
         } else {
             None
         };

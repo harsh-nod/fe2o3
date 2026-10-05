@@ -12,7 +12,7 @@ fn op(id: u32, ty: Type, kind: OperationKind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(id), ty), kind)
 }
 
-fn fixture(scalar: ScalarType, mode: AccessMode) -> Module {
+pub(in super::super) fn fixture(scalar: ScalarType, mode: AccessMode) -> Module {
     let element = Type::Scalar(scalar);
     let width = scalar_byte_width(scalar).unwrap() as u32;
     let slice = Type::slice(element.clone(), AddressSpace::Global, mode);

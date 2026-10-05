@@ -139,8 +139,8 @@ fn scoped_source_candidate_v29(
         limits,
         cleanup,
         budget,
-        |_demands, _layouts, budget| {
-            let emitted = scoped_module_roots_v29(source, limits, budget)?;
+        |demands, layouts, budget| {
+            let emitted = scoped_module_roots_v29(source, demands, layouts, limits, budget)?;
             scoped_module_candidate_v29(source, emitted, limits, budget)
         },
         |(mut candidate, roots), layouts, demands, budget| {

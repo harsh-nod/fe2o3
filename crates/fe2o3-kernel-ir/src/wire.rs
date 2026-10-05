@@ -349,7 +349,29 @@ impl fmt::Display for KernelIrDecodeError {
     }
 }
 
-impl std::error::Error for KernelIrDecodeError {}
+impl std::error::Error for KernelIrDecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Encode(error) => Some(error),
+            Self::WorkLimit(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::TooLarge { .. }
+            | Self::InvalidMagic
+            | Self::UnknownVersion(_)
+            | Self::UnsupportedFlags(_)
+            | Self::InvalidLength { .. }
+            | Self::Truncated
+            | Self::TrailingBytes
+            | Self::ReservedNonZero { .. }
+            | Self::UnknownTag { .. }
+            | Self::InvalidUtf8 { .. }
+            | Self::LimitExceeded { .. }
+            | Self::TypeNestingTooDeep { .. }
+            | Self::NonCanonical
+            | Self::InvalidSemanticOperationInstance => None,
+        }
+    }
+}
 
 impl From<KernelIrEncodeError> for KernelIrDecodeError {
     fn from(error: KernelIrEncodeError) -> Self {

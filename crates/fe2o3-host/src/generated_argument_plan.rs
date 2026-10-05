@@ -2394,6 +2394,16 @@ fn packing_plan_from_layout(
     }
 }
 
+/// Provisional generated packing shape only. The mixed receiver must consume
+/// this through the complete nominal ABI and V26 premise checks before exposing
+/// runtime preparation. This never constructs descriptor or load authority.
+pub(crate) fn mixed_generated_packing_candidate_v53(
+    kernel_id: KernelId,
+    generated: &CompilerGeneratedArgumentLayoutV1,
+) -> GeneratedArgumentPackingPlanV1 {
+    packing_plan_from_layout(kernel_id, &generated.layout)
+}
+
 fn worker_v3_field_mismatch(
     table: &DeviceDescriptorTableV1,
     index: usize,

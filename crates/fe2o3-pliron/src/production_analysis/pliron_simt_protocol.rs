@@ -314,6 +314,11 @@ fn protocol_sequence(trace: &PlironInvocationTraceV1) -> Vec<PlironProtocolEvent
                 location,
                 execution_scope: HierarchyAttr::Subgroup,
                 ..
+            }
+            | PlironTraceEventV1::NativeBarrier {
+                location,
+                execution_scope: HierarchyAttr::Subgroup,
+                ..
             } => Some(PlironProtocolEventV1 {
                 kind: PlironProtocolEventKindV1::SubgroupBarrier,
                 location: (*location).into(),

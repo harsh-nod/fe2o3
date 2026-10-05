@@ -116,6 +116,14 @@ fn run_pliron_ranked_race_observed_inner_v1(
     analyses: &mut PlironAnalysisManagerV1,
     observer: RaceObserverV1<'_, '_, '_>,
 ) -> RankedRaceReportV1 {
+    if analyses.has_native_obligations_v1() {
+        if let (Some(observer), Some(failure)) = (observer, analyses.native_guard_denial_v1()) {
+            observer.deny(failure);
+        }
+        return one(RankedRaceFindingV1::AllocationContractUnavailable {
+            detail: "native byte overlap and alias obligations remain unresolved".to_owned(),
+        });
+    }
     analyses.prepare_sparse_indices(context, function);
     analyses.prepare_presburger(context, function);
     analyses.prepare_provenance_alias(context, function);

@@ -173,6 +173,7 @@ pub(crate) const fn is_traversed_reviewed_helper_v1(item: TrustedDeviceItem) -> 
             | TrustedDeviceItem::Gfx942Wave64ReduceSum
             | TrustedDeviceItem::Gfx942Wave64InclusiveScanSum
             | TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum
+            | TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper
             | TrustedDeviceItem::DeviceGlobalMutPtrU32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrI32AsAtomic
             | TrustedDeviceItem::DeviceGlobalMutPtrU64AsAtomic

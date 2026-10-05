@@ -189,6 +189,37 @@ impl PrivateArrayLazyBudgetV1 {
             .map(|work| work.work.limit())
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
     }
+
+    fn merge_payload(
+        &mut self,
+        left: PrivateArrayPayloadV1,
+        right: PrivateArrayPayloadV1,
+    ) -> Result<PrivateArrayPayloadV1, ProductionSemanticKirErrorV1> {
+        // Scalar-only call trees carry the empty payload without activating
+        // private-array analysis. Nonempty payloads must have an active meter.
+        if self.active.is_none()
+            && left.occupied == 0
+            && left.capacity == 0
+            && right.occupied == 0
+            && right.capacity == 0
+        {
+            return Ok(PrivateArrayPayloadV1::default());
+        }
+        left.add(right, self)
+    }
+
+    fn carry_inherited_payload_v1(
+        &mut self,
+        inherited: PrivateArrayPayloadV1,
+        added: PrivateArrayPayloadV1,
+    ) -> Result<PrivateArrayPayloadV1, ProductionSemanticKirErrorV1> {
+        // A scalar subtree may carry an already accounted ancestor payload.
+        // Only a genuinely empty contribution can bypass the inactive meter.
+        if self.active.is_none() && added.occupied == 0 && added.capacity == 0 {
+            return Ok(inherited);
+        }
+        self.merge_payload(inherited, added)
+    }
 }
 
 impl PrivateArrayChargeV1 for PrivateArrayLazyBudgetV1 {
@@ -246,14 +277,42 @@ impl PrivateArrayChargeV1 for PrivateArrayRecorderBudgetV1 {
 
 enum PrivateArrayRecorderWorkV1<'a> {
     Shared(&'a mut PrivateArrayLazyBudgetV1),
+    Detached,
     #[cfg(test)]
     Owned(PrivateArrayLazyBudgetV1),
 }
 
 impl PrivateArrayRecorderWorkV1<'_> {
+    fn carry_inherited_payload_v1(
+        &mut self,
+        inherited: PrivateArrayPayloadV1,
+        added: PrivateArrayPayloadV1,
+    ) -> Result<PrivateArrayPayloadV1, ProductionSemanticKirErrorV1> {
+        match self {
+            Self::Shared(work) => work.carry_inherited_payload_v1(inherited, added),
+            Self::Detached => Err(emission_service_error_v1()),
+            #[cfg(test)]
+            Self::Owned(work) => work.carry_inherited_payload_v1(inherited, added),
+        }
+    }
+
+    fn merge_payload(
+        &mut self,
+        left: PrivateArrayPayloadV1,
+        right: PrivateArrayPayloadV1,
+    ) -> Result<PrivateArrayPayloadV1, ProductionSemanticKirErrorV1> {
+        match self {
+            Self::Shared(work) => work.merge_payload(left, right),
+            Self::Detached => Err(emission_service_error_v1()),
+            #[cfg(test)]
+            Self::Owned(work) => work.merge_payload(left, right),
+        }
+    }
+
     fn activate(&mut self) -> Result<(), ProductionSemanticKirErrorV1> {
         match self {
             Self::Shared(work) => work.activate(),
+            Self::Detached => Err(emission_service_error_v1()),
             #[cfg(test)]
             Self::Owned(work) => work.activate(),
         }
@@ -266,6 +325,7 @@ impl PrivateArrayChargeV1 for PrivateArrayRecorderWorkV1<'_> {
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), Self::Error> {
         match self {
             Self::Shared(work) => work.charge_private_array_work(amount),
+            Self::Detached => Err(emission_service_error_v1()),
             #[cfg(test)]
             Self::Owned(work) => work.charge_private_array_work(amount),
         }
@@ -287,7 +347,7 @@ impl PrivateArrayChargeV1 for PrivateArrayQueryWorkV1<'_, '_> {
 }
 
 struct PrivateArrayCorrelationWorkV1<'a> {
-    budget: &'a mut UnsupportedIndexCorrelationBudgetV1,
+    budget: &'a mut dyn CorrelationChargeV18,
 }
 
 impl PrivateArrayChargeV1 for PrivateArrayCorrelationWorkV1<'_> {
@@ -295,10 +355,8 @@ impl PrivateArrayChargeV1 for PrivateArrayCorrelationWorkV1<'_> {
 
     fn charge_private_array_work(&mut self, amount: usize) -> Result<(), Self::Error> {
         // One atomic fixed-batch admission preserves the shared remaining-work ceiling.
-        self.budget.remaining = self
-            .budget
-            .remaining
-            .checked_sub(amount)
+        self.budget
+            .charge_many(amount)
             .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
         Ok(())
     }

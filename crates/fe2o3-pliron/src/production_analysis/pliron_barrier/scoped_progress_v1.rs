@@ -2,10 +2,11 @@ use crate::production_analysis::pliron_pass_contract::{
     PlironPassPreservationErrorV1, ScopedVerifiedProgressInputV1,
 };
 
-pub(crate) fn require_pliron_barrier_with_scoped_observation_v1(
+pub(crate) fn require_pliron_barrier_with_prepared_graph_v2(
     input: ScopedVerifiedProgressInputV1<'_, true>,
     analyses: &mut PlironAnalysisManagerV1,
     progress_admitted: bool,
+    graph: Option<&crate::production_analysis::pliron_progress::PreparedProgressGraphV2<'_>>,
     observer: BarrierObserverV1<'_, '_, '_>,
 ) -> Result<Result<PlironBarrierReportV1, PlironBarrierCheckErrorV1>, PlironPassPreservationErrorV1>
 {
@@ -21,7 +22,7 @@ pub(crate) fn require_pliron_barrier_with_scoped_observation_v1(
                         detail: "barrier progress was not resource-admitted",
                     });
                 }
-                crate::production_analysis::pliron_progress::run_pliron_progress_with_scoped_observation_v1(input, observer)
+                crate::production_analysis::pliron_progress::run_pliron_progress_with_prepared_graph_v2(input, graph, observer)
             .map(|progress| progress.report)
             },
             observer,

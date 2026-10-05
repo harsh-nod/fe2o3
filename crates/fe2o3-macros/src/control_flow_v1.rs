@@ -23,6 +23,9 @@ const MAX_NODES_V1: usize = 4096;
 const MAX_BYTES_V1: usize = 1024 * 1024;
 const MAX_LITERAL_FOR_UNROLL_V1: u32 = 32;
 
+#[path = "rustc_resolved_match_v49.rs"]
+mod rustc_resolved_match;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ParsedIntegerSwitchTypeV1 {
     width: u16,
@@ -169,6 +172,9 @@ pub(crate) fn parse_control_flow_options_v1(
 #[derive(Default)]
 struct DirectControlFlowUseVisitor {
     first: Option<(Span, &'static str)>,
+    rustc_patterns: bool,
+    #[cfg(test)]
+    pattern_visits: usize,
 }
 
 impl DirectControlFlowUseVisitor {
@@ -196,8 +202,17 @@ impl<'ast> Visit<'ast> for DirectControlFlowUseVisitor {
     }
 
     fn visit_expr_match(&mut self, expression: &'ast ExprMatch) {
-        self.record(expression.match_token.span, "match");
+        if !self.rustc_patterns || !rustc_resolved_match::accepts(expression) {
+            self.record(expression.match_token.span, "match");
+            return;
+        }
         syn::visit::visit_expr_match(self, expression);
+    }
+
+    #[cfg(test)]
+    fn visit_pat(&mut self, pattern: &'ast Pat) {
+        self.pattern_visits += 1;
+        syn::visit::visit_pat(self, pattern);
     }
 
     fn visit_expr_break(&mut self, expression: &'ast ExprBreak) {
@@ -215,7 +230,10 @@ pub(crate) fn analyze_kernel_control_flow_v1(
     input: &ItemFn,
     declaration: Option<&ParsedControlFlowOptionsV1>,
 ) -> syn::Result<Option<Vec<u8>>> {
-    let mut visitor = DirectControlFlowUseVisitor::default();
+    let mut visitor = DirectControlFlowUseVisitor {
+        rustc_patterns: declaration.is_none(),
+        ..DirectControlFlowUseVisitor::default()
+    };
     visitor.visit_block(&input.block);
     let Some(declaration) = declaration else {
         if let Some((span, kind)) = visitor.first {
@@ -232,6 +250,63 @@ pub(crate) fn analyze_kernel_control_flow_v1(
     let mut builder = GraphBuilder::new(input, declaration)?;
     builder.build_function(input)?;
     Ok(Some(builder.encode()?))
+}
+
+#[cfg(test)]
+mod rejected_match_traversal_v50_tests {
+    use super::*;
+    use syn::parse_quote;
+
+    #[test]
+    fn rejected_deep_match_stops_before_recursive_syn_pattern_traversal() {
+        let mut expression: ExprMatch = parse_quote!(match input {
+            Name => (),
+        });
+        let mut pattern: Pat = parse_quote!(Name);
+        for _ in 0..1024 {
+            pattern = Pat::Paren(syn::PatParen {
+                attrs: Vec::new(),
+                paren_token: Default::default(),
+                pat: Box::new(pattern),
+            });
+        }
+        expression.arms[0].pat = pattern;
+        for rustc_patterns in [false, true] {
+            let mut visitor = DirectControlFlowUseVisitor {
+                rustc_patterns,
+                ..Default::default()
+            };
+            visitor.visit_expr_match(&expression);
+            assert_eq!(visitor.first.map(|(_, kind)| kind), Some("match"));
+            assert_eq!(visitor.pattern_visits, 0);
+            visitor.first = Some((Span::call_site(), "while loop"));
+            visitor.visit_expr_match(&expression);
+            assert_eq!(visitor.first.map(|(_, kind)| kind), Some("while loop"));
+            assert_eq!(visitor.pattern_visits, 0);
+        }
+        // Tear down the adversarial AST without making the test's own Drop recursive.
+        let mut pattern = std::mem::replace(&mut expression.arms[0].pat, parse_quote!(_));
+        while let Pat::Paren(parent) = pattern {
+            pattern = *parent.pat;
+        }
+    }
+
+    #[test]
+    fn accepted_match_still_checks_arm_control_after_bounded_pattern_validation() {
+        let expression: ExprMatch = parse_quote!(match input {
+            Some(value) => loop {
+                consume(value);
+            },
+            None => (),
+        });
+        let mut visitor = DirectControlFlowUseVisitor {
+            rustc_patterns: true,
+            ..Default::default()
+        };
+        visitor.visit_expr_match(&expression);
+        assert_eq!(visitor.first.map(|(_, kind)| kind), Some("loop"));
+        assert_eq!(visitor.pattern_visits, 3);
+    }
 }
 
 pub(crate) fn lower_bounded_for_loops_v1(

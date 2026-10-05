@@ -202,6 +202,11 @@ fn golden_encoding_round_trips_and_retains_complete_preimages() {
     let decoded = InertProductionSemanticCapsuleV3::decode(encoded).expect("strict roundtrip");
 
     assert_eq!(decoded, capsule);
+    let invocation_length = fe2o3_rustc_invocation::encode_descriptor_v3(capsule.invocation())
+        .unwrap()
+        .len();
+    assert_eq!(capsule.invocation_canonical_length(), invocation_length);
+    assert_eq!(decoded.invocation_canonical_length(), invocation_length);
     assert_eq!(&encoded[..8], &INERT_PRODUCTION_SEMANTIC_CAPSULE_MAGIC_V3);
     assert_eq!(
         u16_at(encoded, 8),

@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use crate::kernel::{ATTENTION_TOKENS, GEMM_K, GEMM_M, GEMM_N, VALUE_COLUMNS};
+use super::dimensions::{ATTENTION_TOKENS, GEMM_K, GEMM_M, GEMM_N, VALUE_COLUMNS};
 
 /// Input encoding accepted by one fixed kernel.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

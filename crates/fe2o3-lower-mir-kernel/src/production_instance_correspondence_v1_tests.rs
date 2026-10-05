@@ -7,6 +7,355 @@ use production_call_instances_v1::{
 #[path = "production_instance_coordinates_owner_v1_tests.rs"]
 mod coordinates_owner_tests;
 
+pub(super) fn cfg_carrier_index_storage_v29() -> usize {
+    use std::mem::size_of;
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + size_of::<Result<T, ArgumentResourceV1>>()
+            + size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+    }
+    type Row = (u32, ExecutionCfgCarrierV29);
+    // Independent lookup/append argument and binary-search carrier equation.
+    h::<(
+        &ExecutionCfgCarriersV29,
+        u32,
+        &mut dyn SemanticEmissionBudgetV1,
+    )>() + h::<(
+        &mut ExecutionCfgCarriersV29,
+        u32,
+        ExecutionCfgCarrierV29,
+        &mut dyn SemanticEmissionBudgetV1,
+    )>() + h::<(&mut Vec<Row>, Row, &mut dyn SemanticEmissionBudgetV1)>()
+        + h::<(usize, &mut dyn SemanticEmissionBudgetV1)>()
+        + h::<Vec<Row>>()
+        + h::<&mut Vec<Row>>()
+        + h::<&Vec<Row>>()
+        + h::<&[Row]>()
+        + h::<&Row>()
+        + h::<Option<&Row>>()
+        + h::<&ExecutionCfgCarriersV29>()
+        + h::<Row>()
+        + h::<ExecutionCfgCarrierV29>()
+        + h::<&ExecutionCfgCarrierV29>()
+        + h::<Option<&ExecutionCfgCarrierV29>>()
+        + h::<Result<usize, usize>>()
+        + h::<Option<usize>>()
+        + h::<u32>()
+        + h::<&u32>()
+        + h::<usize>()
+        + h::<bool>()
+        + h::<()>()
+}
+
+pub(super) fn scalar_lowering_scratch_storage_v29(output: &LoweredFunctionResultV1) -> usize {
+    assert!(
+        output
+            .scoped_slot_origins
+            .as_ref()
+            .is_none_or(Vec::is_empty)
+    );
+    assert!(
+        output
+            .function
+            .body
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .all(|block| {
+                block
+                    .operations
+                    .iter()
+                    .all(|operation| !matches!(operation.kind, OperationKind::Alloca { .. }))
+            })
+    );
+    // Low-level emission leaves scratch paid for its enclosing ownership scope.
+    // These slot-free fixtures own that scope: one original map header, one
+    // cloned map header, and the clone's two result envelopes. No map rows or
+    // type payloads exist. Use an independent empty-map type, not ledger deltas.
+    type EmptyMap = BTreeMap<(), ()>;
+    2usize
+        .checked_mul(std::mem::size_of::<EmptyMap>())
+        .unwrap()
+        .checked_add(
+            2usize
+                .checked_mul(std::mem::size_of::<
+                    Result<EmptyMap, ProductionSemanticKirErrorV1>,
+                >())
+                .unwrap(),
+        )
+        .unwrap()
+}
+
+pub(super) fn rvalue_archive_frame_storage_v30() -> usize {
+    fn h<T>() -> usize {
+        std::mem::size_of::<T>()
+            + 2 * std::mem::size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+    }
+    h::<ExecutionArchiveCreditV29>()
+        + h::<Option<ExecutionArchiveCreditV29>>()
+        + h::<ExecutionSiteV29>()
+        + h::<(u32, u32)>()
+        + h::<SemanticTypeIdV1>()
+        + h::<SemanticValueBindingV1>()
+        + h::<Option<[ValueId; 2]>>()
+        + h::<Box<ExecutionRvalueBindingV30>>()
+        + h::<&ExecutionRvalueBindingV30>()
+        + h::<&SemanticValueBindingV1>()
+        + h::<&ExecutionArchiveV29>()
+        + h::<&ExecutionAvailabilityV29<'_>>()
+        + h::<&ExecutionInstancesV29<'_>>()
+        + h::<&SemanticFunctionDeclV1>()
+        + h::<&fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1>()
+        + h::<&mut ExecutionRvalueBindingsV30>()
+        + h::<&mut Option<ExecutionArchiveCreditV29>>()
+        + h::<&mut dyn SemanticEmissionBudgetV1>()
+        + h::<SourceIssuedActualValueV29<'_>>()
+        + h::<&Type>()
+        + h::<&Operation>()
+        + h::<ValueId>()
+        + 4 * h::<usize>()
+        + h::<()>()
+}
+
+pub(super) fn archive_map_nodes_v30(count: usize) -> usize {
+    if count == 0 {
+        return 0;
+    }
+    let mut remaining = count;
+    let mut levels = 1;
+    while remaining != 0 {
+        remaining /= 2;
+        levels += 1;
+    }
+    count + levels
+}
+
+pub(super) fn scalar_archive_storage_v1(
+    output: &LoweredFunctionResultV1,
+    instances: &ProductionCallInstancePlanV1<'_>,
+    instance: ProductionCallInstanceIdV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> usize {
+    use std::mem::size_of;
+    assert_eq!(output.source_call_instance, Some(instance));
+    let archive = output.execution_observation.as_ref().unwrap();
+    archive
+        .check_original_v29(instances, instance, budget)
+        .unwrap();
+    assert!(archive.bindings.values().all(|binding| matches!(
+        binding,
+        SemanticValueBindingV1::Unit
+            | SemanticValueBindingV1::Value {
+                ty: Type::Scalar(_),
+                ..
+            }
+    )));
+    // These cursors have no nominal identity plan and therefore no seed slots.
+    assert!(archive.retained_seeds.is_empty());
+
+    // Scalar fixtures have no deep payload. Count the complete retained map,
+    // reusable split allowance, one boxed binding per row, and archive header.
+    let node = 32usize
+        .checked_mul(size_of::<(SsaValueV1, Box<SemanticValueBindingV1>, usize)>())
+        .unwrap();
+    let map = archive_map_nodes_v30(archive.bindings.len()) * node
+        + archive.bindings.len() * size_of::<SemanticValueBindingV1>();
+    assert!(archive.rvalues.values().all(|row| matches!(
+        row.binding,
+        SemanticValueBindingV1::Unit
+            | SemanticValueBindingV1::Value {
+                ty: Type::Scalar(_),
+                ..
+            }
+    )));
+    let rvalue_node = 32 * size_of::<((u32, u32), Box<ExecutionRvalueBindingV30>, usize)>();
+    let rvalues = archive_map_nodes_v30(archive.rvalues.len()) * rvalue_node
+        + archive.rvalues.len() * size_of::<ExecutionRvalueBindingV30>();
+    let frame = if archive.rvalues.is_empty() {
+        0
+    } else {
+        rvalue_archive_frame_storage_v30()
+    };
+    let owned = size_of::<ExecutionArchiveV29>() + map + rvalues + frame;
+    assert_eq!(archive.credit.bytes, owned);
+    // These fixtures use cursors without source-reference plans, so their
+    // carrier descriptor tables stay empty. The table/query headers are paid,
+    // but an empty sorted table has no vector capacity or carrier payload.
+    let function = instances
+        .owner()
+        .source_semantic()
+        .functions()
+        .get(instances.instance(instance).unwrap().function().index() as usize)
+        .unwrap();
+    assert_eq!(archive.locals.len(), function.locals().len());
+    let carrier_scratch = size_of::<ExecutionCfgCarriersV29>() + cfg_carrier_index_storage_v29();
+    // The seed copy and planning scratch stay outside archive.credit; the
+    // fixture's enclosing ownership scope remains responsible for their cleanup.
+    owned
+        .checked_add(
+            archive
+                .retained_seeds
+                .capacity()
+                .checked_mul(size_of::<Option<SemanticExecutionBindingV29>>())
+                .unwrap(),
+        )
+        .unwrap()
+        .checked_add(carrier_scratch)
+        .unwrap()
+        .checked_add(scalar_transport_planning_credits_v29(instances, instance).0)
+        .unwrap()
+}
+
+pub(super) fn scalar_transport_planning_credits_v29(
+    instances: &ProductionCallInstancePlanV1<'_>,
+    instance: ProductionCallInstanceIdV1,
+) -> (usize, usize) {
+    use std::mem::size_of;
+    // A test-only storage model for whole-place scalar fixtures. It walks the
+    // original source and captured transport roster, never the measured ledger
+    // or production resolver. Capability/borrow/projected inputs are excluded.
+    // Outer alias-visited scratch remains paid; scoped resolver query/map
+    // credit is retired before the transport plan is returned.
+    #[allow(dead_code)]
+    enum Key {
+        Local(u32, u32),
+        Payload(u32, u32, u32, u32),
+    }
+    fn entry<K, V>(previous: usize) -> usize {
+        (previous.checked_ilog2().unwrap_or(0) as usize + 2) * 32 * size_of::<(K, V, usize)>()
+    }
+    fn resolve(
+        local: u32,
+        definitions: &[Vec<Option<u32>>],
+        promoted: &BTreeSet<u32>,
+        memo: &mut BTreeSet<u32>,
+        visiting: &mut BTreeSet<u32>,
+    ) -> usize {
+        let mut bytes = size_of::<Key>()
+            + size_of::<Option<SemanticPromotedBindingV1>>()
+            + size_of::<Result<Option<SemanticPromotedBindingV1>, ProductionSemanticKirErrorV1>>()
+            // resolve_local's closure borrows the original local and type.
+            + size_of::<(&SemanticLocalIdV1, &SemanticTypeIdV1)>();
+        if memo.contains(&local) || visiting.contains(&local) {
+            return bytes;
+        }
+        bytes += entry::<Key, ()>(visiting.len());
+        assert!(visiting.insert(local));
+        // Every scalar origin is non-capability. The first definition therefore
+        // returns None, following its source only for an exact whole-place use.
+        if promoted.contains(&local)
+            && let Some(Some(source)) = definitions[local as usize].first()
+        {
+            bytes += resolve(*source, definitions, promoted, memo, visiting);
+        }
+        assert!(visiting.remove(&local));
+        bytes += entry::<Key, Option<SemanticPromotedBindingV1>>(memo.len());
+        assert!(memo.insert(local));
+        bytes
+    }
+    let original = instances.instance(instance).unwrap();
+    let model = instances.owner().source_semantic();
+    let function = &model.functions()[original.function().index() as usize];
+    let plan = original.ssa().plan();
+    let promoted: BTreeSet<_> = plan
+        .promoted_variables()
+        .iter()
+        .map(|local| local.get())
+        .collect();
+    let mut transported = BTreeSet::new();
+    for block in plan.reverse_postorder() {
+        transported.extend(
+            plan.transport_variables(*block)
+                .unwrap()
+                .iter()
+                .map(|local| local.get()),
+        );
+    }
+    let mut definitions = vec![Vec::new(); function.locals().len()];
+    for block in function.blocks() {
+        for statement in block.statements() {
+            match statement.kind() {
+                SemanticStatementKindV1::Assign(assignment) => {
+                    let destination = assignment.destination();
+                    assert!(destination.projections().is_empty());
+                    let source = match assignment.value().kind() {
+                        SemanticRvalueKindV1::Use(
+                            SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place),
+                        ) => {
+                            assert!(place.projections().is_empty());
+                            assert_eq!(place.ty(), destination.ty());
+                            Some(place.local().index())
+                        }
+                        SemanticRvalueKindV1::Borrow { .. }
+                        | SemanticRvalueKindV1::AddressOf { .. } => {
+                            panic!("scalar oracle excludes capability/address definitions")
+                        }
+                        _ => None,
+                    };
+                    definitions[destination.local().index() as usize].push(source);
+                }
+                SemanticStatementKindV1::Nop => {}
+                _ => panic!("scalar oracle excludes source storage/invalidation statements"),
+            }
+        }
+        if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind()
+            && let Some(destination) = call.destination()
+        {
+            assert!(destination.place().projections().is_empty());
+            definitions[destination.place().local().index() as usize].push(None);
+        }
+    }
+    let (mut memo, mut visiting) = (BTreeSet::new(), BTreeSet::new());
+    let mut bytes = 0;
+    let mut retired = 0;
+    // Original carrier tracking queries all promoted scalar locals before the
+    // phi transport walk, including locals whose values never cross an edge.
+    // This first pass owns no alias-visited table, but populates the same memo
+    // later queried by transport. Unit/scalar types exclude nominal carriers.
+    for &local in &promoted {
+        let declaration = &function.locals()[local as usize];
+        assert!(matches!(
+            model.types()[declaration.ty().index() as usize].shape(),
+            SemanticTypeShapeV1::Unit
+                | SemanticTypeShapeV1::Scalar(_)
+                | SemanticTypeShapeV1::ValidityScalar(_)
+        ));
+        retired += resolve(local, &definitions, &promoted, &mut memo, &mut visiting);
+    }
+    for local in transported {
+        bytes += size_of::<BTreeSet<u32>>();
+        let mut visited = BTreeSet::new();
+        let mut current = local;
+        loop {
+            assert!(promoted.contains(&current));
+            let declaration = &function.locals()[current as usize];
+            assert!(matches!(
+                model.types()[declaration.ty().index() as usize].shape(),
+                SemanticTypeShapeV1::Scalar(_) | SemanticTypeShapeV1::ValidityScalar(_)
+            ));
+            bytes += entry::<u32, ()>(visited.len());
+            assert!(
+                visited.insert(current),
+                "fixture transport aliases are acyclic"
+            );
+            retired += resolve(current, &definitions, &promoted, &mut memo, &mut visiting);
+            if declaration.role().is_entry_argument() {
+                break;
+            }
+            let [Some(source)] = definitions[current as usize].as_slice() else {
+                break;
+            };
+            if !promoted.contains(source) {
+                break;
+            }
+            current = *source;
+        }
+    }
+    assert!(visiting.is_empty());
+    (bytes, retired)
+}
+
 fn with_plan(test: impl FnOnce(&ProductionCallInstancePlanV1<'_>, &mut ArgumentBudgetV1<'_>)) {
     with_plan_owner(resource_tests::helper_closure_semantic_owner(), test);
 }
@@ -210,7 +559,9 @@ fn lower_pair(
         caller.call_returns.sites.rows.len() + callee.call_returns.sites.rows.len(),
         caller.call_returns.components.rows.len() + callee.call_returns.components.rows.len(),
     )
-    .unwrap();
+    .unwrap()
+        + scalar_lowering_scratch_storage_v29(&caller)
+        + scalar_lowering_scratch_storage_v29(&callee);
     (caller, callee, storage)
 }
 
@@ -235,7 +586,9 @@ fn cursor_selected_instance_cannot_be_relabelled_on_append() {
             caller.call_returns.sites.rows.len(),
             caller.call_returns.components.rows.len(),
         )
-        .unwrap();
+        .unwrap()
+            + scalar_lowering_scratch_storage_v29(&caller)
+            + scalar_archive_storage_v1(&caller, plan, plan.root(), budget);
         caller.source_call_instance = plan.calls(plan.root()).unwrap()[0].child();
         let storage = storage
             + caller

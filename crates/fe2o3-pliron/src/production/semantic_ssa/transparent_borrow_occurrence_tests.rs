@@ -1,5 +1,304 @@
 use super::*;
 
+fn shared_borrow_v41(reference: u32) -> SemanticStatementV1 {
+    SemanticStatementV1::new(
+        fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1::unavailable(),
+        SemanticStatementKindV1::Assign(
+            fe2o3_mir_model::semantic_mir_v1::SemanticAssignmentV1::new(
+                test_scalar_place(reference),
+                SemanticRvalueV1::new(
+                    SemanticTypeIdV1::from_index(1),
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Shared,
+                        place: test_typed_place(1, 0),
+                    },
+                ),
+            ),
+        ),
+    )
+}
+
+fn shared_copy_chain_v41(count: u32) -> SemanticFunctionDeclV1 {
+    let mut statements = vec![shared_borrow_v41(2)];
+    for index in 0..count {
+        statements.push(test_assign(
+            3 + index,
+            SemanticOperandV1::Copy(test_scalar_place(2 + index)),
+        ));
+    }
+    test_function_with_reference_locals(
+        vec![test_block(
+            230,
+            statements,
+            occurrence_call(2 + count, None),
+        )],
+        (count as usize + 3).max(4),
+    )
+}
+
+#[test]
+fn shared_reference_copy_chains_keep_only_the_original_borrow_occurrence() {
+    for count in [1, 8, 64, 128] {
+        let function = shared_copy_chain_v41(count);
+        let callables = [test_intrinsic_callable(function.abi().clone())];
+        let sites = transparent_borrow_sites_v1(&function, &callables);
+        assert_eq!(
+            sites
+                .iter()
+                .map(|site| site.test_coordinates())
+                .collect::<Vec<_>>(),
+            [(0, 0)]
+        );
+        assert!(source_is_promotable(&function, &callables));
+        plan_semantic_function_ssa_with_callables_v1(
+            SemanticFunctionIdV1::from_index(0),
+            &function,
+            &callables,
+            ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn shared_reference_original_and_every_copy_may_each_have_a_closed_consumer() {
+    for copies in [1, 8, 32] {
+        let mut statements = vec![shared_borrow_v41(2)];
+        for index in 0..copies {
+            statements.push(test_assign(
+                3 + index,
+                SemanticOperandV1::Copy(test_scalar_place(2)),
+            ));
+        }
+        let mut blocks = vec![test_block(100, statements, occurrence_call(2, Some(1)))];
+        for index in 0..copies {
+            blocks.push(test_block(
+                101 + index as u8,
+                vec![],
+                occurrence_call(3 + index, (index + 1 < copies).then_some(index + 2)),
+            ));
+        }
+        let function = test_function_with_reference_locals(blocks, copies as usize + 3);
+        let callables = [test_intrinsic_callable(function.abi().clone())];
+        assert_eq!(transparent_borrow_sites_v1(&function, &callables).len(), 1);
+        assert!(source_is_promotable(&function, &callables));
+        plan_semantic_function_ssa_with_callables_v1(
+            SemanticFunctionIdV1::from_index(0),
+            &function,
+            &callables,
+            ProductionSemanticSsaLimitsV1::default(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn one_escaped_shared_copy_poisons_the_entire_borrow_even_with_a_closed_sibling() {
+    let function = test_function_with_reference_locals(
+        vec![
+            test_block(
+                230,
+                vec![
+                    shared_borrow_v41(2),
+                    test_assign(3, SemanticOperandV1::Copy(test_scalar_place(2))),
+                ],
+                occurrence_call(2, Some(1)),
+            ),
+            test_block(
+                231,
+                vec![test_assign(
+                    4,
+                    SemanticOperandV1::Move(test_scalar_place(3)),
+                )],
+                SemanticTerminatorKindV1::Return,
+            ),
+        ],
+        5,
+    );
+    let callables = [test_intrinsic_callable(function.abi().clone())];
+    assert!(transparent_borrow_sites_v1(&function, &callables).is_empty());
+    assert!(!source_is_promotable(&function, &callables));
+}
+
+#[test]
+fn copied_reference_types_and_mutability_cannot_manufacture_a_shared_origin() {
+    for (borrow, operand) in [
+        (
+            test_borrow(2, 1),
+            SemanticOperandV1::Copy(test_scalar_place(2)),
+        ),
+        (
+            shared_borrow_v41(2),
+            SemanticOperandV1::Copy(test_typed_place(2, 2)),
+        ),
+        (
+            shared_borrow_v41(2),
+            SemanticOperandV1::Copy(test_dereference_place(2, 0)),
+        ),
+    ] {
+        let function = test_function(vec![test_block(
+            230,
+            vec![borrow, test_assign(3, operand)],
+            occurrence_call(3, None),
+        )]);
+        let callables = [test_intrinsic_callable(function.abi().clone())];
+        assert!(transparent_borrow_sites_v1(&function, &callables).is_empty());
+        assert!(!source_is_promotable(&function, &callables));
+    }
+}
+
+#[test]
+fn shared_copy_before_its_unique_borrow_definition_is_not_authenticated() {
+    let function = test_function(vec![test_block(
+        230,
+        vec![
+            test_assign(3, SemanticOperandV1::Copy(test_scalar_place(2))),
+            shared_borrow_v41(2),
+        ],
+        occurrence_call(3, None),
+    )]);
+    let callables = [test_intrinsic_callable(function.abi().clone())];
+    assert!(transparent_borrow_sites_v1(&function, &callables).is_empty());
+}
+
+#[test]
+fn repeated_shared_borrow_and_copy_temporaries_bind_each_local_occurrence() {
+    let function = test_function(vec![
+        test_block(
+            230,
+            vec![
+                shared_borrow_v41(2),
+                test_assign(3, SemanticOperandV1::Copy(test_scalar_place(2))),
+            ],
+            occurrence_call(3, Some(1)),
+        ),
+        test_block(
+            231,
+            vec![
+                shared_borrow_v41(2),
+                test_assign(3, SemanticOperandV1::Copy(test_scalar_place(2))),
+            ],
+            occurrence_call(3, None),
+        ),
+    ]);
+    let callables = [test_intrinsic_callable(function.abi().clone())];
+    let sites = transparent_borrow_sites_v1(&function, &callables);
+    assert_eq!(
+        sites
+            .iter()
+            .map(|site| site.test_coordinates())
+            .collect::<Vec<_>>(),
+        [(0, 0), (1, 0)]
+    );
+    assert!(source_is_promotable(&function, &callables));
+}
+
+#[test]
+fn copied_alias_redefinition_and_ungrounded_cycles_do_not_reuse_a_receipt() {
+    for statements in [
+        vec![
+            shared_borrow_v41(2),
+            test_assign(3, SemanticOperandV1::Copy(test_scalar_place(2))),
+            test_assign(3, SemanticOperandV1::Copy(test_scalar_place(0))),
+        ],
+        vec![
+            shared_borrow_v41(2),
+            test_assign(3, SemanticOperandV1::Copy(test_scalar_place(4))),
+            test_assign(4, SemanticOperandV1::Copy(test_scalar_place(3))),
+        ],
+    ] {
+        let function = test_function_with_reference_locals(
+            vec![test_block(230, statements, occurrence_call(3, None))],
+            5,
+        );
+        let callables = [test_intrinsic_callable(function.abi().clone())];
+        assert!(transparent_borrow_sites_v1(&function, &callables).is_empty());
+    }
+}
+
+#[test]
+fn shared_copy_graph_pricing_has_an_independent_indexed_linear_envelope() {
+    let mut previous = None;
+    for count in [8, 16, 32, 64, 128] {
+        let function = shared_copy_chain_v41(count);
+        let resources = adapter::borrow_graph_resources_v41(&function, 0).unwrap();
+        let count = count as usize;
+        let height = (usize::BITS - (2 * count + 4).leading_zeros()) as usize + 1;
+        assert_eq!(resources.storage_words, 64 + 64 * (count + 1));
+        assert_eq!(
+            resources.work_units,
+            (2 * count + 3) * 32 * height + 32 * (count + 1)
+        );
+        if let Some((work, storage)) = previous {
+            assert!(resources.work_units < 3 * work);
+            assert!(resources.storage_words < 2 * storage);
+        }
+        previous = Some((resources.work_units, resources.storage_words));
+    }
+}
+
+#[test]
+fn shared_copy_graph_is_included_in_exact_and_one_short_function_resources() {
+    let function = shared_copy_chain_v41(8);
+    let callables = [test_intrinsic_callable(function.abi().clone())];
+    let id = SemanticFunctionIdV1::from_index(0);
+    let base = plan_semantic_function_ssa_with_callables_v1(
+        id,
+        &function,
+        &callables,
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap();
+    let graph = adapter::borrow_graph_resources_v41(&function, 0).unwrap();
+    assert!(base.auxiliary_resources.work_units >= graph.work_units);
+    assert!(base.auxiliary_resources.storage_words >= graph.storage_words);
+    let work = base.resources().work_units()
+        + base.auxiliary_resources.work_units
+        + base.partial_moves.work_units();
+    let storage = base.resources().storage_words()
+        + base.auxiliary_resources.storage_words
+        + base.partial_moves.state_entries();
+    let defaults = SsaPlannerLimitsV1::default();
+    let limits = |storage, work| {
+        ProductionSemanticSsaLimitsV1::new(
+            SsaPlannerLimitsV1::try_new(
+                defaults.max_variables(),
+                defaults.max_blocks(),
+                defaults.max_edges(),
+                defaults.max_events(),
+                defaults.max_edge_definitions(),
+                defaults.max_output_items(),
+                storage,
+                work,
+            )
+            .unwrap(),
+        )
+    };
+    let exact = plan_semantic_function_ssa_with_callables_v1(
+        id,
+        &function,
+        &callables,
+        limits(storage, work),
+    )
+    .unwrap();
+    assert_eq!(exact, base);
+    for (s, w, expected, limit) in [
+        (
+            storage - 1,
+            work,
+            SsaPlannerResourceV1::StorageWords,
+            storage - 1,
+        ),
+        (storage, work - 1, SsaPlannerResourceV1::WorkUnits, work - 1),
+    ] {
+        assert!(
+            matches!(plan_semantic_function_ssa_with_callables_v1(id, &function, &callables, limits(s, w)),
+            Err(ProductionSemanticSsaErrorV1::PartialMoveResourceLimit { resource, required, limit: actual_limit, .. })
+            if resource == expected && actual_limit == limit && required == limit + 1)
+        );
+    }
+}
+
 fn occurrence_call(reference: u32, target: Option<u32>) -> SemanticTerminatorKindV1 {
     test_call(
         0,
@@ -174,13 +473,39 @@ fn overwriting_a_borrow_does_not_give_the_old_occurrence_a_consumer() {
 
 #[test]
 fn an_ordinary_redefinition_or_storage_kill_cannot_reuse_a_borrow_occurrence() {
-    for replacement in [
-        test_assign(2, SemanticOperandV1::Copy(test_scalar_place(3))),
-        test_storage_dead(2),
+    for (replacement, independent_fresh_borrow) in [
+        (
+            test_assign(2, SemanticOperandV1::Copy(test_scalar_place(3))),
+            true,
+        ),
+        (
+            test_assign(2, SemanticOperandV1::Move(test_scalar_place(3))),
+            false,
+        ),
+        (test_storage_dead(2), false),
+        (
+            SemanticStatementV1::new(
+                fe2o3_mir_model::semantic_mir_v1::SemanticSourceProvenanceV1::unavailable(),
+                SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(2)),
+            ),
+            false,
+        ),
     ] {
         let function = two_occurrences(vec![test_borrow(2, 1), replacement]);
         let callables = [test_intrinsic_callable(function.abi().clone())];
-        assert!(transparent_borrow_sites_v1(&function, &callables).is_empty());
+        let sites: BTreeSet<_> = transparent_borrow_sites_v1(&function, &callables)
+            .iter()
+            .map(SemanticTransparentBorrowSiteV1::test_coordinates)
+            .collect();
+        let expected = if independent_fresh_borrow {
+            // The Copy has a distinct, ungrounded definition. It cannot reuse
+            // block 0's borrow, but need not poison block 1's fresh definition.
+            [(1, 0)].into_iter().collect()
+        } else {
+            BTreeSet::new()
+        };
+        assert_eq!(sites, expected);
+        assert!(!sites.contains(&(0, 0)));
         assert!(!source_is_promotable(&function, &callables));
     }
 }

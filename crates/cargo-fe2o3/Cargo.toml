@@ -35,6 +35,7 @@ fe2o3-compiler-ffi.workspace = true
 fe2o3-compiler-closure-capability.workspace = true
 fe2o3-compiler-execution-client.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
+fe2o3-compiler-lineage.workspace = true
 fe2o3-core = { workspace = true, optional = true }
 fe2o3-hsa-runtime = { workspace = true, optional = true }
 fe2o3-hsaco.workspace = true
@@ -68,7 +69,6 @@ toml = "1.1.4"
 dialect-amdgcn.workspace = true
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }
-fe2o3-compiler-lineage.workspace = true
 fe2o3-device.workspace = true
 fe2o3-functional-proof.workspace = true
 fe2o3-lower-mir-kernel.workspace = true

@@ -10,10 +10,10 @@ use fe2o3_kernel_descriptor::*;
 mod support;
 use support::{free, substitute_cpu};
 
-fn wire(target: &str, entries: usize) -> Vec<u8> {
+pub(super) fn wire(target: &str, entries: usize) -> Vec<u8> {
     support::wires(target, entries, 2, None, "v5-inert").0
 }
-fn fixture(
+pub(super) fn fixture(
     wire: &[u8],
     target: &str,
     entries: usize,

@@ -1,5 +1,9 @@
 use super::*;
 
+mod source_representation_tests {
+    include!("production_source_array_representation_v29_tests.rs");
+}
+
 // These descriptors test private type helpers, not source admission or owner custody.
 fn fact_declaration(
     tag: u32,

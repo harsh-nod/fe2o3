@@ -234,14 +234,15 @@ pub fn execute_compiler_execution_systemd_machine_tool_v1(
         runtime.path(),
         &identity,
     )?;
-    let error = Command::new(plan.program())
+    let mut command = Command::new(plan.program());
+    command
         .args(plan.arguments())
         .env_clear()
         .envs(plan.environment().iter().copied())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit())
-        .exec();
+        .stdin(Stdio::null());
+    // Root custody was captured above; console=pipe now shares the bounded diagnostic pipe.
+    diagnostics_v85::connect_machine_output_v87(&mut command, std::io::stderr())?;
+    let error = command.exec();
     Err(std_io_error(
         "replace systemd machine helper with pinned systemd-nspawn",
         error,
@@ -695,7 +696,7 @@ fn machine_exit_error(
     invalid(
         DeploymentVerificationErrorKindV1::InvalidQualificationBoot,
         format!(
-            "systemd machine exited {stage}: exit_code={:?} signal={:?} stderr_prefix={}",
+            "systemd machine exited {stage}: exit_code={:?} signal={:?} output_prefix={}",
             status.code(),
             status.signal(),
             stderr.prefix(),

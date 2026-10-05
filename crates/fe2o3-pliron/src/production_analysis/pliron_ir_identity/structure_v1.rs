@@ -15,7 +15,19 @@ fn prescan_observed_v1(
     function: &FuncOp,
     observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<PrescanV1, PlironIrIdentityErrorV1> {
+    prescan_private_v1(context, function, None, observer)
+}
+
+fn prescan_private_v1(
+    context: &Context,
+    function: &FuncOp,
+    private: PrivateIdentityV1<'_>,
+    observer: RenderObserverV1<'_, '_, '_>,
+) -> Result<PrescanV1, PlironIrIdentityErrorV1> {
     let result = (|| {
+        if private.is_some_and(|input| !input.authenticate(context, function)) {
+            return Err(PlironIrIdentityErrorV1::TraversalPanicked);
+        }
         let root = function.get_operation();
         let root_ref = root.deref(context);
         let root_name = render_operation_name_observed_v1(
@@ -49,6 +61,7 @@ fn prescan_observed_v1(
         let mut type_nodes = validate_attribute_dict(
             context,
             &root_ref.attributes,
+            None,
             PlironPreserveLocationV1::Function,
             observer,
         )?;
@@ -101,6 +114,7 @@ fn prescan_observed_v1(
                 .checked_add(validate_attribute_dict(
                     context,
                     &block_ref.attributes,
+                    None,
                     block_location.clone(),
                     observer,
                 )?)
@@ -159,7 +173,11 @@ fn prescan_observed_v1(
                     operation_count,
                     MAX_PLIRON_IDENTITY_OPERATIONS_V1,
                 )?;
-                if !is_production_ranked_operation_v1(dynamic.as_ref()) {
+                let admitted = match private {
+                    None => is_production_ranked_operation_v1(dynamic.as_ref()),
+                    Some(input) => input.operation(context, operation).is_some(),
+                };
+                if !admitted {
                     return Err(PlironIrIdentityErrorV1::UnsupportedOperation {
                         location,
                         detail: "operation is outside the closed ranked operation allowlist",
@@ -170,6 +188,7 @@ fn prescan_observed_v1(
                     .checked_add(validate_attribute_dict(
                         context,
                         &raw.attributes,
+                        private.map(|input| (input, operation)),
                         location.clone(),
                         observer,
                     )?)
@@ -261,16 +280,25 @@ fn prescan_observed_v1(
 fn validate_attribute_dict(
     context: &Context,
     attributes: &AttributeDict,
+    private: PrivateAttributeV1<'_>,
     location: PlironPreserveLocationV1,
     observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<usize, PlironIrIdentityErrorV1> {
     let mut type_nodes = 0_usize;
-    for attribute in attributes.0.values() {
+    for (key, attribute) in &attributes.0 {
         let attribute_id = attribute.get_attr_id();
         if !is_production_attribute_id_parts_v1(
             attribute_id.dialect.as_ref(),
             attribute_id.name.as_ref(),
-        ) {
+        ) && !private.is_some_and(|(input, operation)| {
+            input.attribute(
+                context,
+                operation,
+                key.as_ref(),
+                attribute_id.dialect.as_ref(),
+                attribute_id.name.as_ref(),
+            )
+        }) {
             return Err(PlironIrIdentityErrorV1::UnsupportedAttribute {
                 location: location.clone(),
                 attribute: render_attribute_id_v1(attribute, location.clone(), observer)?,
@@ -293,6 +321,7 @@ fn validate_attribute_dict(
 fn encode_attributes(
     context: &Context,
     attributes: &AttributeDict,
+    private: PrivateAttributeV1<'_>,
     location: PlironPreserveLocationV1,
     encoder: &mut IdentityEncoderV1,
     observer: RenderObserverV1<'_, '_, '_>,
@@ -317,8 +346,14 @@ fn encode_attributes(
             summary.append(format_args!("no attributes"));
         }
         for (index, (key, attribute)) in sorted.iter().enumerate() {
-            let (attribute_id, value) =
-                render_attribute(context, attribute, location.clone(), observer)?;
+            let (attribute_id, value) = render_attribute(
+                context,
+                attribute,
+                private,
+                key.as_ref(),
+                location.clone(),
+                observer,
+            )?;
             if index != 0 {
                 summary.append(format_args!(", "));
             }
@@ -331,8 +366,14 @@ fn encode_attributes(
             |encoder| {
                 encoder.usize(sorted.len())?;
                 for (key, attribute) in sorted {
-                    let (attribute_id, value) =
-                        render_attribute(context, attribute, location.clone(), observer)?;
+                    let (attribute_id, value) = render_attribute(
+                        context,
+                        attribute,
+                        private,
+                        key.as_ref(),
+                        location.clone(),
+                        observer,
+                    )?;
                     encoder.string(AsRef::<str>::as_ref(key).as_bytes())?;
                     encoder.string(attribute_id.as_bytes())?;
                     encoder.string(value.as_bytes())?;
@@ -352,11 +393,24 @@ fn is_debug_info_attribute_v1(attribute: &dyn pliron::attribute::Attribute) -> b
 fn render_attribute(
     context: &Context,
     attribute: &AttrObj,
+    private: PrivateAttributeV1<'_>,
+    key: &str,
     location: PlironPreserveLocationV1,
     observer: RenderObserverV1<'_, '_, '_>,
 ) -> Result<(String, String), PlironIrIdentityErrorV1> {
     let attribute_id = render_attribute_id_v1(attribute, location.clone(), observer)?;
-    if !is_production_attribute_id(&attribute_id) {
+    let id = attribute.get_attr_id();
+    if !is_production_attribute_id(&attribute_id)
+        && !private.is_some_and(|(input, operation)| {
+            input.attribute(
+                context,
+                operation,
+                key,
+                id.dialect.as_ref(),
+                id.name.as_ref(),
+            )
+        })
+    {
         return Err(PlironIrIdentityErrorV1::UnsupportedAttribute {
             location,
             attribute: attribute_id,
@@ -514,6 +568,25 @@ fn validate_and_count_type_handle_at_depth_v1(
             ty: render_type_id_v1(&*borrowed, location, observer)?,
         });
     }
+    // These fixed-field V18 descriptors are structural names only. The owning
+    // bridge still authenticates the table, row, graph and source separately.
+    let valid_storage_leaf = if let Some(object) =
+        borrowed.downcast_ref::<dialect_gpu::storage_types_v18::StorageObjectTypeV18>()
+    {
+        pliron::common_traits::Verify::verify(object, context).is_ok()
+    } else if let Some(role) =
+        borrowed.downcast_ref::<dialect_gpu::storage_types_v18::ExecutionRoleTypeV18>()
+    {
+        pliron::common_traits::Verify::verify(role, context).is_ok()
+    } else {
+        true
+    };
+    if !valid_storage_leaf {
+        return Err(PlironIrIdentityErrorV1::UnsupportedType {
+            location: location.clone(),
+            ty: render_type_id_v1(&*borrowed, location, observer)?,
+        });
+    }
     let data_child = if let Some(pointer) =
         borrowed.downcast_ref::<dialect_gpu::optimization_v1::PointerType>()
     {
@@ -536,7 +609,9 @@ fn validate_and_count_type_handle_at_depth_v1(
     if let Some(child) = data_child {
         drop(borrowed);
         let child_type = child.deref(context);
-        if !crate::kir_bridge_v1::ranked_data_type_node_is_supported_v2(&*child_type) {
+        if !crate::kir_bridge_v1::ranked_data_type_node_is_supported_v2(&*child_type)
+            && !is_storage_identity_leaf_v18(&*child_type)
+        {
             return Err(PlironIrIdentityErrorV1::UnsupportedType {
                 location: location.clone(),
                 ty: render_type_id_v1(&*child_type, location, observer)?,
@@ -599,6 +674,14 @@ fn validate_and_count_type_handle_at_depth_v1(
         })
 }
 
+fn is_storage_identity_leaf_v18(ty: &dyn Type) -> bool {
+    ty.downcast_ref::<dialect_gpu::storage_types_v18::StorageObjectTypeV18>()
+        .is_some()
+        || ty
+            .downcast_ref::<dialect_gpu::storage_types_v18::ExecutionRoleTypeV18>()
+            .is_some()
+}
+
 fn is_production_type(ty: &dyn Type) -> bool {
     ty.downcast_ref::<FunctionType>().is_some()
         || ty.downcast_ref::<IntegerType>().is_some()
@@ -628,6 +711,7 @@ fn is_production_type(ty: &dyn Type) -> bool {
         || is_checked_access_capability_type(ty)
         || ty.downcast_ref::<ObligationRefType>().is_some()
         || ty.downcast_ref::<EvidenceRefType>().is_some()
+        || is_storage_identity_leaf_v18(ty)
 }
 
 fn is_production_attribute_id(attribute: &str) -> bool {
@@ -669,6 +753,9 @@ fn is_production_attribute_id_parts_v1(dialect: &str, name: &str) -> bool {
                 | "cast_kind"
                 | "index_value"
                 | "bf16_value"
+                | "switch_key_kind_v3"
+                | "switch_case_bits_v3"
+                | "switch_successor_offsets_v3"
         ),
         "kernel" => matches!(
             name,

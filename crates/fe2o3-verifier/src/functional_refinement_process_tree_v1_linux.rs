@@ -162,6 +162,21 @@ const FILTER_LEN: usize = DENIED_FILTER_START + DENIED_SYSCALLS.len() * 2 + 1;
 static LAST_TEST_DESCENDANT: AtomicI32 = AtomicI32::new(0);
 #[cfg(test)]
 static FIRST_TEST_DESCENDANT: AtomicI32 = AtomicI32::new(0);
+#[cfg(test)]
+std::thread_local! {
+    static PEAK_TEST_EXECUTED_SOLVER_GROUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FINISHED_TEST_SOLVER_CONTEXTS: std::cell::Cell<Option<(usize, usize, usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(super) fn finished_solver_contexts_for_test() -> Option<(usize, usize, usize, usize)> {
+    FINISHED_TEST_SOLVER_CONTEXTS.get()
+}
+
+#[cfg(test)]
+fn reset_solver_context_observation() {
+    PEAK_TEST_EXECUTED_SOLVER_GROUPS.set(0);
+    FINISHED_TEST_SOLVER_CONTEXTS.set(None);
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct SockFilter {
@@ -328,8 +343,13 @@ impl Tracee {
 
 #[path = "functional_refinement_process_tree_v1_custody.rs"]
 mod custody;
+use super::super::GeneratedProofProcessPolicyV2;
 pub(crate) use custody::AttemptV1;
 use custody::{Run, Tracees};
+
+#[path = "functional_refinement_solver_contexts_v2.rs"]
+mod solver_contexts;
+use solver_contexts::SolverContextsV2;
 
 #[path = "functional_refinement_process_tree_v1_spawn.rs"]
 mod seized_spawn;
@@ -343,6 +363,25 @@ struct Capture {
     bytes: Vec<u8>,
     eof: bool,
 }
+
+#[derive(Clone, Copy)]
+enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+impl OutputStream {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "functional_refinement_process_tree_v1_output_tests.rs"]
+mod output_tests;
 
 #[derive(Clone, Debug)]
 pub(super) struct AllowedRuntimeExecutableV1 {
@@ -466,6 +505,27 @@ pub(super) fn execute(
     output_limit: usize,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
+    execute_with_policy(
+        attempt,
+        runtime,
+        source,
+        deadline,
+        output_limit,
+        GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+    )
+}
+
+pub(super) fn execute_with_policy(
+    attempt: &mut AttemptV1,
+    runtime: std::sync::Arc<RetainedRuntimeClosureV2>,
+    source: &CanonicalGeneratedVerusProofInputV3,
+    deadline: Instant,
+    output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
+    #[cfg(test)]
+    reset_solver_context_observation();
     crate::authenticated_verus_execution_v2::validate_controller_security_v2().map_err(
         |error| {
             controller_error(
@@ -580,7 +640,7 @@ pub(super) fn execute(
         run.descriptors = duplicates;
     }
     seized_spawn::spawn_in(attempt, command, bindings.clone(), cpu_seconds, deadline)?;
-    let result = supervise(
+    let result = supervise_with_policy(
         attempt,
         &bindings,
         bindings[0].identity,
@@ -590,6 +650,7 @@ pub(super) fn execute(
         true,
         deadline,
         output_limit,
+        policy,
     );
     attempt
         .run()?
@@ -737,6 +798,36 @@ fn supervise(
     output_limit: usize,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
+    supervise_with_policy(
+        attempt,
+        bindings,
+        verifier_identity,
+        solver_identity,
+        allowed_mappings,
+        validate_mappings,
+        require_auxiliary_verifier,
+        deadline,
+        output_limit,
+        GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn supervise_with_policy(
+    attempt: &mut AttemptV1,
+    bindings: &[DescriptorBinding],
+    verifier_identity: ObjectIdentityV2,
+    solver_identity: ObjectIdentityV2,
+    allowed_mappings: &[AllowedRuntimeExecutableV1],
+    validate_mappings: bool,
+    require_auxiliary_verifier: bool,
+    deadline: Instant,
+    output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
+    #[cfg(test)]
+    reset_solver_context_observation();
     let run = attempt.run()?;
     run.check_thread()?;
     let result = supervise_run(
@@ -749,6 +840,7 @@ fn supervise(
         require_auxiliary_verifier,
         deadline,
         output_limit,
+        policy,
     );
     run.release_spawn_after_terminal();
     result
@@ -765,6 +857,7 @@ fn supervise_run(
     require_auxiliary_verifier: bool,
     deadline: Instant,
     output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
     let Run {
@@ -810,11 +903,13 @@ fn supervise_run(
         let mut process_descendants_created = 0_usize;
         let mut auxiliary_started = false;
         let mut solver_started = false;
+        let mut contexts = (!policy.is_legacy())
+            .then(|| SolverContextsV2::with_policy(policy, require_auxiliary_verifier));
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
         let mut idle_interval = ACTIVE_TREE_POLL_INTERVAL;
         while !tracees.is_empty() {
-            drain(stdout, stdout_capture, output_limit)?;
-            drain(stderr, stderr_capture, output_limit)?;
+            drain(stdout, stdout_capture, output_limit, OutputStream::Stdout)?;
+            drain(stderr, stderr_capture, output_limit, OutputStream::Stderr)?;
             if Instant::now() >= deadline {
                 return Err(controller_error(
                     RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
@@ -824,6 +919,11 @@ fn supervise_run(
             let mut progressed = false;
             let processes = tracees.pids();
             for process in processes {
+                // A stable birth checkpoint may already have authenticated and
+                // retired a queued terminal from this outer census snapshot.
+                if contexts.is_some() && !tracees.contains_key(&process) {
+                    continue;
+                }
                 let Some(status) = stable::next_status(tracees, process)? else {
                     continue;
                 };
@@ -833,8 +933,8 @@ fn supervise_run(
                     let signal = stop_signal(status);
                     let inspection_deadline = if event == PTRACE_EVENT_EXEC {
                         Some(stable::park_for_inspection(tracees, deadline, &mut || {
-                            drain(stdout, stdout_capture, output_limit)?;
-                            drain(stderr, stderr_capture, output_limit)
+                            drain(stdout, stdout_capture, output_limit, OutputStream::Stdout)?;
+                            drain(stderr, stderr_capture, output_limit, OutputStream::Stderr)
                         })?)
                     } else {
                         None
@@ -854,7 +954,27 @@ fn supervise_run(
                                 ));
                             }
                             let observed = executable_identity(process)?;
-                            let role = if require_auxiliary_verifier
+                            let role = if let Some(contexts) = &mut contexts {
+                                let role = contexts.expected_exec(process)?;
+                                let (identity, name) = match role {
+                                    TraceeRole::AuxiliaryVerifier => {
+                                        (verifier_identity, "auxiliary rust_verify")
+                                    }
+                                    TraceeRole::Solver => (solver_identity, "Z3"),
+                                    _ => {
+                                        return Err(process_failure(
+                                            "unexpected admitted context role",
+                                        ));
+                                    }
+                                };
+                                if observed != identity {
+                                    return Err(process_failure(
+                                        "traced context executable differs from its admitted role",
+                                    ));
+                                }
+                                validate_exact_descriptor_closure(process, bindings, name)?;
+                                role
+                            } else if require_auxiliary_verifier
                                 && !auxiliary_started
                                 && observed == verifier_identity
                             {
@@ -884,27 +1004,42 @@ fn supervise_run(
                             if validate_mappings {
                                 validate_executable_mappings(process, allowed_mappings)?;
                             }
+                            if let Some(contexts) = &mut contexts {
+                                contexts.executed(process, role)?;
+                            }
                             stable::check_before_release(
                                 inspection_deadline.expect("exec inspection deadline"),
                                 &mut || {
-                                    drain(stdout, stdout_capture, output_limit)?;
-                                    drain(stderr, stderr_capture, output_limit)
+                                    drain(
+                                        stdout,
+                                        stdout_capture,
+                                        output_limit,
+                                        OutputStream::Stdout,
+                                    )?;
+                                    drain(
+                                        stderr,
+                                        stderr_capture,
+                                        output_limit,
+                                        OutputStream::Stderr,
+                                    )
                                 },
                             )?;
                             resume_tracee(tracees, process, 0)?;
                         }
                         PTRACE_EVENT_SECCOMP => {
                             let mut progress = || {
-                                drain(stdout, stdout_capture, output_limit)?;
-                                drain(stderr, stderr_capture, output_limit)
+                                drain(stdout, stdout_capture, output_limit, OutputStream::Stdout)?;
+                                drain(stderr, stderr_capture, output_limit, OutputStream::Stderr)
                             };
                             stable::complete_request(
                                 tracees,
                                 process,
+                                policy,
                                 allowed_mappings,
                                 validate_mappings,
                                 &mut process_descendants_created,
                                 expected_process_descendants,
+                                &mut contexts,
                                 deadline,
                                 &mut progress,
                             )?;
@@ -936,6 +1071,17 @@ fn supervise_run(
                         stable::release_interrupts(tracees, inspection_deadline)?;
                     }
                 } else {
+                    if let Some(contexts) = &mut contexts
+                        && matches!(
+                            tracees[&process].role,
+                            TraceeRole::Solver
+                                | TraceeRole::AuxiliaryVerifier
+                                | TraceeRole::PendingExecutable
+                        )
+                    {
+                        contexts.retire_terminal(tracees, process, status)?;
+                        continue;
+                    }
                     let tracee = tracees.remove_terminal(&process)?;
                     if !tracee
                         .exit_boundary
@@ -968,6 +1114,17 @@ fn supervise_run(
         }
         let verifier_terminal = verifier_terminal
             .ok_or_else(|| process_failure("verifier terminal status is missing"))?;
+        if let Some(contexts) = &mut contexts {
+            contexts.finish().map_err(|error| {
+                context_terminal_failure(
+                    error,
+                    verifier_terminal,
+                    &stdout_capture.bytes,
+                    &stderr_capture.bytes,
+                )
+            })?;
+            return Ok(verifier_terminal);
+        }
         let solver_terminal = solver_terminal.ok_or_else(|| {
             process_failure(format!(
                 "Z3 descendant was not observed; verifier={verifier_terminal:?} auxiliary={auxiliary_terminal:?} stdout={:?} stderr={:?}",
@@ -998,6 +1155,7 @@ fn supervise_run(
         deadline,
     )?;
     Ok(RetainedFunctionalRefinementRuntimeOutputV1 {
+        policy,
         exit_code: terminal.0,
         signal: terminal.1,
         stdout: std::mem::take(&mut stdout_capture.bytes),
@@ -1090,9 +1248,14 @@ fn ptrace(
     process: i32,
     data: usize,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    ptrace_result(request, process, data)
+        .map_err(|error| process_failure(format!("operate on traced proof process: {error}")))
+}
+
+fn ptrace_result(request: u32, process: i32, data: usize) -> io::Result<()> {
     // SAFETY: ptrace interprets null address and the scalar data according to the request.
     if unsafe { linux_ptrace(request, process, std::ptr::null_mut(), data as *mut c_void) } < 0 {
-        Err(io_process_failure("operate on traced proof process"))
+        Err(io::Error::last_os_error())
     } else {
         Ok(())
     }
@@ -1245,14 +1408,33 @@ fn descriptor_numbers(
     Ok(result)
 }
 
+#[cfg(test)]
 fn validate_sensitive_registers(
     process: i32,
     registers: &UserRegistersX86_64,
     allowed: &[AllowedRuntimeExecutableV1],
     validate_mappings: bool,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    validate_sensitive_registers_with_policy(
+        process,
+        registers,
+        allowed,
+        validate_mappings,
+        GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+        TraceeRole::Verifier,
+    )
+}
+
+fn validate_sensitive_registers_with_policy(
+    process: i32,
+    registers: &UserRegistersX86_64,
+    allowed: &[AllowedRuntimeExecutableV1],
+    validate_mappings: bool,
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     match u32::try_from(registers.orig_rax) {
-        Ok(CLONE3_SYSCALL) => validate_clone3_request(process, registers),
+        Ok(CLONE3_SYSCALL) => validate_clone3_request(process, registers, policy, role),
         Ok(OPEN_SYSCALL) => validate_read_only_open(registers.rsi),
         Ok(OPENAT_SYSCALL) => validate_read_only_open(registers.rdx),
         Ok(PRCTL_SYSCALL) if registers.rdi == PR_SET_NAME && registers.rsi != 0 => Ok(()),
@@ -1326,6 +1508,8 @@ fn validate_read_only_open(flags: u64) -> Result<(), RetainedFunctionalRefinemen
 fn validate_clone3_request(
     process: i32,
     registers: &UserRegistersX86_64,
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if registers.rsi != CLONE3_ARGUMENT_BYTES || registers.rdi == 0 {
         return Err(process_failure(
@@ -1344,6 +1528,14 @@ fn validate_clone3_request(
     for (index, chunk) in bytes.chunks_exact(8).enumerate() {
         arguments[index] = u64::from_ne_bytes(chunk.try_into().expect("eight-byte chunk"));
     }
+    validate_clone3_arguments(arguments, policy, role)
+}
+
+fn validate_clone3_arguments(
+    arguments: [u64; 11],
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let [
         flags,
         pidfd,
@@ -1361,7 +1553,6 @@ fn validate_clone3_request(
         && set_tid_size == 0
         && cgroup == 0
         && stack != 0
-        && (1..=MAX_CLONE_STACK_BYTES).contains(&stack_size)
         && stack.checked_add(stack_size).is_some();
     let rust_thread = flags == RUST_THREAD_CLONE3_FLAGS
         && exit_signal == 0
@@ -1376,7 +1567,15 @@ fn validate_clone3_request(
         && child_tid == 0
         && parent_tid == 0
         && tls == 0;
-    if common && (rust_thread || rust_process) {
+    // Only roles established by the retained executable checks can use V3's
+    // pinned interpreter stack. The pending child and solver never inherit it.
+    let stack_limit =
+        if rust_thread && matches!(role, TraceeRole::Verifier | TraceeRole::AuxiliaryVerifier) {
+            policy.verifier_thread_stack_bytes()
+        } else {
+            MAX_CLONE_STACK_BYTES
+        };
+    if common && (1..=stack_limit).contains(&stack_size) && (rust_thread || rust_process) {
         Ok(())
     } else {
         Err(process_failure(format!(
@@ -1914,6 +2113,7 @@ fn drain(
     pipe: &mut impl Read,
     capture: &mut Capture,
     limit: usize,
+    stream: OutputStream,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut buffer = [0_u8; 4096];
     loop {
@@ -1924,9 +2124,11 @@ fn drain(
             }
             Ok(count) => {
                 if count > limit.saturating_sub(capture.bytes.len()) {
-                    return Err(controller_error(
-                        RetainedFunctionalRefinementRuntimeErrorKindV1::OutputTooLarge,
-                        "functional-refinement process exceeded its output bound",
+                    return Err(output_too_large(
+                        stream,
+                        &capture.bytes,
+                        &buffer[..count],
+                        limit,
                     ));
                 }
                 capture.bytes.extend_from_slice(&buffer[..count]);
@@ -1935,6 +2137,76 @@ fn drain(
             Err(_) => return Err(io_process_failure("read traced proof output")),
         }
     }
+}
+
+fn output_too_large(
+    stream: OutputStream,
+    retained: &[u8],
+    incoming: &[u8],
+    limit: usize,
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    let (prefix, truncated) = bounded_output_prefix(retained, incoming);
+    let detail = format!(
+        "functional-refinement process exceeded its output bound: stream={} limit={limit} retained={} observed_at_least={} prefix=\"{prefix}\"{}",
+        stream.name(),
+        retained.len(),
+        retained.len().saturating_add(incoming.len()),
+        if truncated { " (truncated)" } else { "" },
+    );
+    controller_error(
+        RetainedFunctionalRefinementRuntimeErrorKindV1::OutputTooLarge,
+        detail,
+    )
+}
+
+const MAX_ESCAPED_OUTPUT_PREFIX_BYTES: usize = 1024;
+
+fn bounded_output_prefix(retained: &[u8], incoming: &[u8]) -> (String, bool) {
+    bounded_output_prefix_with_limit(retained, incoming, MAX_ESCAPED_OUTPUT_PREFIX_BYTES)
+}
+
+fn bounded_output_prefix_with_limit(
+    retained: &[u8],
+    incoming: &[u8],
+    limit: usize,
+) -> (String, bool) {
+    let mut prefix = String::with_capacity(limit);
+    for byte in retained.iter().chain(incoming) {
+        let escaped = std::ascii::escape_default(*byte);
+        if escaped.len() > limit - prefix.len() {
+            return (prefix, true);
+        }
+        prefix.extend(escaped.map(char::from));
+    }
+    (prefix, false)
+}
+
+const MAX_CENSUS_DIAGNOSTIC_PREFIX_BYTES: usize = 512;
+
+fn context_terminal_failure(
+    error: RetainedFunctionalRefinementRuntimeErrorV1,
+    verifier: (Option<i32>, Option<i32>),
+    stdout: &[u8],
+    stderr: &[u8],
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    let prefix = |bytes: &[u8]| {
+        bounded_output_prefix_with_limit(bytes, &[], MAX_CENSUS_DIAGNOSTIC_PREFIX_BYTES)
+    };
+    let (cause, cause_truncated) = prefix(error.detail().as_bytes());
+    let (out, out_truncated) = prefix(stdout);
+    let (err, err_truncated) = prefix(stderr);
+    let marker = |truncated| if truncated { " (truncated)" } else { "" };
+    RetainedFunctionalRefinementRuntimeErrorV1::new(
+        error.kind(),
+        format!(
+            "{cause}{}; verifier={verifier:?}; stderr_bytes={} stderr=\"{err}\"{}; stdout_bytes={} stdout=\"{out}\"{}",
+            marker(cause_truncated),
+            stderr.len(),
+            marker(err_truncated),
+            stdout.len(),
+            marker(out_truncated),
+        ),
+    )
 }
 
 fn drain_to_eof(
@@ -1947,8 +2219,8 @@ fn drain_to_eof(
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let grace = deadline.min(Instant::now() + Duration::from_millis(200));
     while (!stdout_capture.eof || !stderr_capture.eof) && Instant::now() < grace {
-        drain(stdout, stdout_capture, limit)?;
-        drain(stderr, stderr_capture, limit)?;
+        drain(stdout, stdout_capture, limit, OutputStream::Stdout)?;
+        drain(stderr, stderr_capture, limit, OutputStream::Stderr)?;
         if !stdout_capture.eof || !stderr_capture.eof {
             thread::sleep(POLL_INTERVAL);
         }
@@ -2010,12 +2282,17 @@ mod memory_tests;
 mod stable_tests;
 
 #[cfg(test)]
+#[path = "functional_refinement_clone3_stack_v3_tests.rs"]
+mod clone3_stack_v3_tests;
+
+#[cfg(test)]
 #[path = "functional_refinement_process_tree_v1_quarantine_tests.rs"]
 mod quarantine_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("functional_refinement_solver_process_v2_tests.rs");
 
     #[test]
     fn tree_poll_interval_backs_off_caps_and_resets_after_progress() {
@@ -2038,6 +2315,7 @@ mod tests {
         >,
         first_descendant: i32,
         last_descendant: i32,
+        peak_executed_solver_groups: usize,
     }
 
     pub(super) fn identity(path: &str) -> ObjectIdentityV2 {
@@ -2115,11 +2393,45 @@ mod tests {
         allowed_mappings: &[AllowedRuntimeExecutableV1],
         validate_mappings: bool,
     ) -> HostileRun {
+        run_hostile_with_policy(
+            script,
+            expected_solver,
+            deadline_after,
+            leaked,
+            allowed_mappings,
+            validate_mappings,
+            GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+        )
+    }
+
+    fn run_contexts(script: &str, expected_solver: &str, leaked: Option<&File>) -> HostileRun {
+        run_hostile_with_policy(
+            script,
+            expected_solver,
+            Duration::from_secs(3),
+            leaked,
+            &[],
+            false,
+            GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV2,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_hostile_with_policy(
+        script: &str,
+        expected_solver: &str,
+        deadline_after: Duration,
+        leaked: Option<&File>,
+        allowed_mappings: &[AllowedRuntimeExecutableV1],
+        validate_mappings: bool,
+        policy: GeneratedProofProcessPolicyV2,
+    ) -> HostileRun {
         let _guard = super::super::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         FIRST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
         LAST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
+        PEAK_TEST_EXECUTED_SOLVER_GROUPS.set(0);
         let mut duplicates = Vec::new();
         let mut child_bindings = Vec::new();
         if let Some(leaked) = leaked {
@@ -2143,7 +2455,7 @@ mod tests {
             .stderr(Stdio::piped());
         let deadline = Instant::now() + deadline_after;
         let mut child = seized_spawn::spawn(command, child_bindings, 2, deadline).unwrap();
-        let result = supervise(
+        let result = supervise_with_policy(
             &mut child,
             &[],
             identity("/bin/sh"),
@@ -2153,12 +2465,14 @@ mod tests {
             false,
             deadline,
             4096,
+            policy,
         );
         drop(duplicates);
         HostileRun {
             result,
             first_descendant: FIRST_TEST_DESCENDANT.load(Ordering::SeqCst),
             last_descendant: LAST_TEST_DESCENDANT.load(Ordering::SeqCst),
+            peak_executed_solver_groups: PEAK_TEST_EXECUTED_SOLVER_GROUPS.get(),
         }
     }
 

@@ -10,6 +10,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+#[path = "pliron_presburger_metered_v2.rs"]
+mod metered_v2;
+pub use metered_v2::*;
+
 pub const MAX_PRESBURGER_VARIABLES_V1: usize = 16;
 pub const MAX_PRESBURGER_CONSTRAINTS_V1: usize = 256;
 pub const MAX_PRESBURGER_OUTPUTS_V1: usize = 16;
@@ -331,39 +335,41 @@ impl PresburgerSetV1 {
 
     pub fn find_witness(&self) -> PresburgerSetDecisionV1 {
         let mut budget = PresburgerBudgetV1::default();
-        match self.find_witness_with_budget(&mut budget) {
+        match self.find_witness_with_meter(&mut budget) {
             Ok(Some(point)) => PresburgerSetDecisionV1::Witness(PresburgerWitnessV1 { point }),
             Ok(None) => PresburgerSetDecisionV1::Empty,
             Err(failure) => PresburgerSetDecisionV1::Incomplete(failure),
         }
     }
 
-    fn find_witness_with_budget(
+    fn find_witness_with_meter<M: WitnessSearchMeter>(
         &self,
-        budget: &mut PresburgerBudgetV1,
-    ) -> Result<Option<Vec<i128>>, PresburgerFailureV1> {
+        budget: &mut M,
+    ) -> Result<Option<Vec<i128>>, M::Error> {
+        budget.traversal(2 * self.domain.rank() + 1)?;
         if self.domain.is_empty() {
             return Ok(None);
         }
-        let mut point = self.domain.lower.clone();
+        let mut point = budget.copy_point(&self.domain.lower)?;
         self.search(0, &mut point, budget)
     }
 
-    fn search(
+    fn search<M: WitnessSearchMeter>(
         &self,
         dimension: usize,
         point: &mut [i128],
-        budget: &mut PresburgerBudgetV1,
-    ) -> Result<Option<Vec<i128>>, PresburgerFailureV1> {
-        budget.charge(1)?;
-        if !self.partial_constraints_possible(point, dimension)? {
+        budget: &mut M,
+    ) -> Result<Option<Vec<i128>>, M::Error> {
+        budget.node()?;
+        if !self.partial_constraints_with_meter(point, dimension, budget)? {
             return Ok(None);
         }
         if dimension == self.domain.rank() {
-            return Ok(Some(point.to_vec()));
+            return Ok(Some(budget.copy_point(point)?));
         }
         let mut coordinate = self.domain.lower[dimension];
         while coordinate < self.domain.upper_exclusive[dimension] {
+            budget.traversal(2)?;
             point[dimension] = coordinate;
             if let Some(witness) = self.search(dimension + 1, point, budget)? {
                 return Ok(Some(witness));
@@ -380,12 +386,24 @@ impl PresburgerSetV1 {
         point: &[i128],
         assigned: usize,
     ) -> Result<bool, PresburgerFailureV1> {
+        self.partial_constraints_with_meter(point, assigned, &mut PresburgerBudgetV1::default())
+    }
+
+    fn partial_constraints_with_meter<M: WitnessSearchMeter>(
+        &self,
+        point: &[i128],
+        assigned: usize,
+        budget: &mut M,
+    ) -> Result<bool, M::Error> {
         for constraint in &self.constraints {
+            budget.traversal(1)?;
             let possible = match constraint {
                 PresburgerConstraintV1::LessEqualZero(expression) => {
+                    budget.traversal(12 * expression.coefficients.len() + 8)?;
                     expression.interval(point, assigned, &self.domain)?.0 <= 0
                 }
                 PresburgerConstraintV1::EqualZero(expression) => {
+                    budget.traversal(12 * expression.coefficients.len() + 8)?;
                     let (minimum, maximum) = expression.interval(point, assigned, &self.domain)?;
                     minimum <= 0 && maximum >= 0
                 }
@@ -393,6 +411,7 @@ impl PresburgerSetV1 {
                     expression,
                     modulus,
                 } if assigned == self.domain.rank() => {
+                    budget.traversal(4 * expression.coefficients.len() + 4)?;
                     expression.evaluate(point)?.rem_euclid(*modulus) == 0
                 }
                 PresburgerConstraintV1::CongruentZero { .. } => true,
@@ -921,6 +940,26 @@ pub enum PresburgerEquivalenceDecisionV1 {
         second: Vec<i128>,
     },
     Incomplete(PresburgerFailureV1),
+}
+
+trait WitnessSearchMeter {
+    type Error: From<PresburgerFailureV1>;
+    fn node(&mut self) -> Result<(), Self::Error>;
+    fn traversal(&mut self, work: usize) -> Result<(), Self::Error>;
+    fn copy_point(&mut self, point: &[i128]) -> Result<Vec<i128>, Self::Error>;
+}
+
+impl WitnessSearchMeter for PresburgerBudgetV1 {
+    type Error = PresburgerFailureV1;
+    fn node(&mut self) -> Result<(), Self::Error> {
+        self.charge(1)
+    }
+    fn traversal(&mut self, _: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn copy_point(&mut self, point: &[i128]) -> Result<Vec<i128>, Self::Error> {
+        Ok(point.to_vec())
+    }
 }
 
 #[derive(Clone, Debug, Default)]

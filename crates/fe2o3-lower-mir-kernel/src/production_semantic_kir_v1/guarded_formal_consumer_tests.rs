@@ -1,3 +1,5 @@
+include!("formal_envelope_preflight_v2_tests.rs");
+
 fn guarded_read_source_v360(pending_first: bool, mixed: bool) -> ProductionSemanticMirOwnerV1 {
     use fe2o3_mir_model::semantic_mir_v1::*;
 

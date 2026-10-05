@@ -63,7 +63,16 @@ impl fmt::Display for Error {
         }
     }
 }
-impl StdError for Error {}
+impl StdError for Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Arithmetic | Self::InvalidCoordinate | Self::IncompleteRows | Self::Rule(_) => {
+                None
+            }
+        }
+    }
+}
 
 /// The result borrows the actual checked inventories and immutable candidate
 /// rows. It cannot outlive either graph or authorize adoption of another owner.
@@ -209,6 +218,7 @@ struct State<'a, 'input, 'output, 'rows, O = VerifiedCanonicalKernelIrModuleV12>
     incoming_next: Vec<usize>,
     edge_target: Vec<usize>,
     edge_output: Vec<usize>,
+    selected_edges: Vec<usize>,
     reachable: Vec<u8>,
     pending: Vec<usize>,
 }
@@ -266,6 +276,7 @@ impl<'a, 'input, 'output, 'rows, O> State<'a, 'input, 'output, 'rows, O> {
             incoming_next: allocate(input.edges().len(), NONE, budget)?,
             edge_target: allocate(input.edges().len(), NONE, budget)?,
             edge_output: allocate(input.edges().len(), NONE, budget)?,
+            selected_edges: allocate(input.blocks().len(), NONE, budget)?,
             reachable: allocate(input.blocks().len(), 0, budget)?,
             pending: allocate(input.blocks().len(), NONE, budget)?,
         };

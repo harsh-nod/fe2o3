@@ -12,12 +12,21 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 
+#[path = "canonical_kir_private_byte_memory_v38.rs"]
+mod bytes;
 #[path = "canonical_kir_private_memory_cfg_v1.rs"]
 mod physical_cfg;
 #[path = "canonical_kir_private_memory_queue_v1.rs"]
 mod queue;
 #[path = "canonical_kir_private_memory_typed_v18.rs"]
 mod typed;
+pub use bytes::{
+    CanonicalKirPrivateByteAddressV38, CanonicalKirPrivateByteAnalysisV38,
+    CanonicalKirPrivateByteLimitsV38, CanonicalKirPrivateByteObligationV38,
+    CanonicalKirPrivateByteOperationKindV38, CanonicalKirPrivateByteOperationV38,
+    CanonicalKirPrivateByteRangeV38, CanonicalKirPrivateByteStorageV38,
+    analyze_canonical_kir_private_bytes_v38,
+};
 #[doc(hidden)]
 pub use queue::CanonicalKirPrivateDataflowQueueV1;
 pub use typed::{CheckedCanonicalKirPrivateMemoryV18, check_canonical_kir_private_memory_v18};

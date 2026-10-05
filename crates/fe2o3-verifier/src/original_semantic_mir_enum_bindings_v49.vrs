@@ -1,0 +1,40 @@
+// The checked host census supplies a closed actual Alloca site and register.
+// A register value, not bytes or a generation counter, supplies its pointer.
+spec fn invocation_enum_spill_read_v49(
+    target: MemoryStateV30, definition: int, owner: int,
+    site: MemorySourceOperationV30, width: int, alignment: int,
+    pointer_payload: bool, little_endian: bool,
+) -> Option<MemoryValueV30> {
+    if !target.valid || definition < 0 || target.values.len() <= definition
+        || !ordinary_memory_width_v30(width) || alignment <= 0 {
+        None
+    } else {
+        match target.values[definition] {
+            MemoryValueV30::Pointer(address) => {
+                let allocation_matches = match address.allocation {
+                    MemoryAllocationV30::Private {
+                        owner: actual_owner, invocation, site: actual_site, generation,
+                    } => actual_owner == owner && invocation == 0 && actual_site == site
+                        && 0 <= generation
+                        && generation < private_generation_v30(target.generations,
+                            MemoryPrivateSiteV30 { owner, invocation: 0, site }),
+                    _ => false,
+                };
+                if !allocation_matches || address.byte_offset != 0 || address.view.is_some()
+                    || !byte_range_aligned_v30(target.memory, address, width, alignment)
+                    || target.memory.live[address.allocation].bytes.len() != width {
+                    None
+                } else if pointer_payload {
+                    if byte_pointer_load_valid_v37(target.memory, address, width, little_endian) {
+                        Some(MemoryValueV30::Pointer(byte_pointer_load_v37(
+                            target.memory, address, width, little_endian)))
+                    } else { None }
+                } else if byte_scalar_range_initialized_v37(target.memory, address, width) {
+                    Some(MemoryValueV30::Scalar(byte_load_v30(
+                        target.memory, address, width, little_endian)))
+                } else { None }
+            },
+            _ => None,
+        }
+    }
+}

@@ -1,0 +1,94 @@
+// Relate the same native heap under independently installed source and target registries.
+proof fn invocation_native_pointer_reflexive_v77(
+    pointer: MemoryPointerV30, map: InvocationByteMapV36,
+    source: ByteMemoryV30, target: ByteMemoryV30,
+)
+    requires !invocation_private_allocation_v36(pointer.allocation),
+        byte_pointer_view_shape_v38(pointer), byte_pointer_has_no_guards_v38(pointer),
+    ensures invocation_pointer_related_v36(pointer, pointer, map, source, target),
+{
+    match pointer.view {
+        Some(view) => { assert(view.guards.len() == 0); },
+        None => {},
+    }
+}
+
+proof fn invocation_native_object_reflexive_v77(
+    memory: ByteMemoryV30, arguments: Seq<MemoryValueV30>, allocation: MemoryAllocationV30,
+    map: InvocationByteMapV36, source: ByteMemoryV30, target: ByteMemoryV30,
+)
+    requires byte_memory_well_formed_v30(memory),
+        byte_native_view_inputs_v38(memory, arguments),
+        invocation_native_provenance_v39(memory, arguments),
+        memory.live.contains_key(allocation),
+    ensures invocation_external_bytes_related_v38(
+        memory.live[allocation], memory.live[allocation], map, source, target),
+{
+    // Instantiate the native heap quantifier before using its object payload facts.
+    assert(invocation_native_live_allocation_v77(allocation));
+    let object = memory.live[allocation];
+    assert(byte_object_relocations_well_formed_v37(object));
+    assert forall|i: int| 0 <= i < object.bytes.len() && object.initialized[i] implies
+        invocation_byte_token_related_v37(object.bytes[i], object.bytes[i], map, source, target) by {
+        match object.bytes[i] {
+            MemoryByteV37::Octet(_) => {},
+            MemoryByteV37::PointerFragment { pointer, .. } => {
+                invocation_native_pointer_reflexive_v77(pointer, map, source, target);
+            },
+        }
+    }
+    assert forall|at: int| object.relocations.contains_key(at) implies
+        invocation_relocation_related_v37(object.relocations[at], object.relocations[at],
+            map, source, target) by {
+        let relocation = object.relocations[at];
+        assert(0 < relocation.width);
+        assert(0 <= at < object.bytes.len());
+        assert(object.bytes[at] == byte_relocation_fragment_v37(relocation, 0));
+        assert(byte_token_well_formed_v37(object.bytes[at]));
+        invocation_native_pointer_reflexive_v77(
+            relocation.pointer, map, source, target);
+    }
+}
+
+proof fn invocation_native_initial_heaps_related_v77(
+    memory: ByteMemoryV30, arguments: Seq<MemoryValueV30>,
+)
+    requires byte_memory_well_formed_v30(memory),
+        byte_native_view_inputs_v38(memory, arguments),
+        invocation_native_provenance_v39(memory, arguments),
+        byte_view_contracts_shape_v38(invocation_source_view_contracts_0_v39(
+            invocation_runtime_little_endian_v36())),
+        byte_view_contracts_shape_v38(byte_target_view_contracts_1_v38(
+            invocation_runtime_little_endian_v36())),
+    ensures invocation_byte_heaps_related_v36(
+        ByteMemoryV30 { view_contracts: invocation_source_view_contracts_0_v39(
+            invocation_runtime_little_endian_v36()), ..memory },
+        ByteMemoryV30 { view_contracts: byte_target_view_contracts_1_v38(
+            invocation_runtime_little_endian_v36()), ..memory },
+        InvocationByteMapV36 { private: Map::empty() }),
+{
+    let source = ByteMemoryV30 { view_contracts: invocation_source_view_contracts_0_v39(
+        invocation_runtime_little_endian_v36()), ..memory };
+    let target = ByteMemoryV30 { view_contracts: byte_target_view_contracts_1_v38(
+        invocation_runtime_little_endian_v36()), ..memory };
+    let map = InvocationByteMapV36 { private: Map::empty() };
+    assert(byte_memory_well_formed_v30(source));
+    assert(byte_memory_well_formed_v30(target));
+    assert(invocation_view_registries_related_v40(source, target));
+    assert forall|allocation: MemoryAllocationV30|
+        !invocation_private_allocation_v36(allocation) implies
+        (source.live.contains_key(allocation) == target.live.contains_key(allocation))
+        && (source.live.contains_key(allocation) ==>
+            invocation_external_bytes_related_v38(source.live[allocation],
+                target.live[allocation], map, source, target)) by {
+        if source.live.contains_key(allocation) {
+            invocation_native_object_reflexive_v77(memory, arguments, allocation, map, source, target);
+        }
+    }
+    assert forall|allocation: MemoryAllocationV30| map.private.contains_key(allocation)
+        <==> source.live.contains_key(allocation) && invocation_private_allocation_v36(allocation) by {
+        if source.live.contains_key(allocation) {
+            assert(invocation_native_live_allocation_v77(allocation));
+        }
+    }
+}

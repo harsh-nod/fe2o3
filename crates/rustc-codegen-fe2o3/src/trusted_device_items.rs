@@ -33,8 +33,12 @@ use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
 use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 
 mod primitive_from_v1;
+mod wave64_scan_provider_v1;
 mod wave64_shuffle_provider_v1;
 pub(crate) use primitive_from_v1::primitive_from_candidate_v1;
+#[cfg(test)]
+pub(crate) use wave64_scan_provider_v1::check_actual_scan_instances_v1;
+pub(crate) use wave64_scan_provider_v1::is_authenticated_gfx942_wave64_scan_instance_v1;
 #[cfg(test)]
 pub(crate) use wave64_shuffle_provider_v1::check_actual_sealed_trait_chain_paths_v1;
 pub(crate) use wave64_shuffle_provider_v1::{
@@ -47,13 +51,13 @@ const WORKGROUP_SYNC_PROVIDER_SOURCE_IDENTITY_DOMAIN_V1: &[u8] =
 const WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1: &[u8] =
     b"FE2O3/WORKGROUP-SYNC-PROVIDER-SOURCE-CLOSURE/V1\0";
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x88, 0x9c, 0x81, 0x27, 0xd1, 0xa1, 0xbf, 0x34, 0xf7, 0x7e, 0x96, 0xad, 0xa6, 0x9e, 0x9b, 0xe5,
-    0x8e, 0xe1, 0x9b, 0x49, 0x10, 0xf4, 0x74, 0xe4, 0xdd, 0x54, 0xc0, 0x70, 0xd9, 0x69, 0x22, 0x51,
+    0xb2, 0x91, 0x2e, 0xfa, 0x29, 0xc0, 0xed, 0x94, 0xc1, 0xc3, 0x27, 0x84, 0x5c, 0x50, 0x0e, 0xc3,
+    0x1d, 0xc7, 0xd8, 0x3b, 0xcb, 0xd2, 0x83, 0x5c, 0xfc, 0xa5, 0xbd, 0xaf, 0x65, 0x00, 0xf7, 0x9c,
 ];
 // The pinned Cargo-produced manifest fixture is checked with the complete source tree.
 const REVIEWED_SAFE_EXECUTION_CARGO_VENDOR_SOURCE_CLOSURE_V1: [u8; 32] = [
-    0x15, 0x22, 0x2e, 0xa9, 0xdc, 0xb7, 0x1f, 0x03, 0xe0, 0x79, 0xf4, 0x63, 0x08, 0xb8, 0x66, 0x04,
-    0x0e, 0x17, 0x7d, 0x15, 0xc4, 0xe3, 0x16, 0x77, 0xc7, 0x2e, 0x14, 0xfe, 0x13, 0x70, 0xef, 0xf1,
+    0xba, 0x21, 0xad, 0x25, 0xec, 0xa3, 0x9d, 0x48, 0xeb, 0xea, 0xd6, 0xb4, 0xd9, 0xea, 0xbe, 0x68,
+    0xe6, 0xa8, 0xd1, 0x55, 0x1e, 0x26, 0x16, 0x86, 0x1a, 0xcc, 0x1a, 0xea, 0xe0, 0x80, 0xab, 0x35,
 ];
 const REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1: [[u8; 32]; 2] = [
     REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1,
@@ -305,6 +309,7 @@ pub(crate) enum TrustedDeviceItem {
     Gfx942Wave64ReduceSum,
     Gfx942Wave64InclusiveScanSum,
     Gfx942Wave64ExclusiveScanSum,
+    Gfx942Wave64InclusiveScanHelper,
     Gfx942WorkgroupReduceSum,
     Gfx942WorkgroupInclusiveScanSum,
     Gfx942WorkgroupExclusiveScanSum,
@@ -997,6 +1002,11 @@ const TRUSTED_ITEMS: &[(TrustedDeviceItem, &str, &str)] = &[
         "fe2o3_device::SubgroupTile::<64>::exclusive_scan_sum",
     ),
     (
+        TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper,
+        "fe2o3_device_gfx942_wave64_inclusive_scan_helper_v1",
+        "fe2o3_device::collective::wave64_inclusive_scan",
+    ),
+    (
         TrustedDeviceItem::Gfx942WorkgroupReduceSum,
         "fe2o3_device_gfx942_workgroup_reduce_sum_v1",
         "fe2o3_device::Workgroup::reduce_sum",
@@ -1675,6 +1685,9 @@ fn provider_rule(tcx: TyCtxt<'_>, def_id: DefId, item: TrustedDeviceItem) -> Res
     if let TrustedDeviceItem::Gfx942Wave64Shuffle(scalar) = item {
         wave64_shuffle_provider_v1::validate_definition(tcx, def_id, scalar, &definition)?;
     }
+    if item == TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper {
+        wave64_scan_provider_v1::validate_definition(tcx, def_id, &definition)?;
+    }
     Ok(())
 }
 
@@ -1697,6 +1710,9 @@ fn validate_reviewed_fe2o3_device_provider_definition_v1(
 }
 fn exact_provider_compiler_definition_path_v1(item: TrustedDeviceItem) -> Option<&'static str> {
     match item {
+        TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper => {
+            Some("fe2o3_device::collective::wave64_inclusive_scan")
+        }
         TrustedDeviceItem::AmdGpuOrderedXorAddE32 => {
             Some("fe2o3_device::diagnostics::__amdgpu_ordered_xor_add_e32_v1")
         }
@@ -2168,6 +2184,7 @@ const fn safe_execution_provider_bound_item(item: TrustedDeviceItem) -> bool {
             | TrustedDeviceItem::Gfx942Wave64ReduceSum
             | TrustedDeviceItem::Gfx942Wave64InclusiveScanSum
             | TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum
+            | TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper
             | TrustedDeviceItem::Gfx942WorkgroupReduceSum
             | TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum
             | TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum
@@ -2398,6 +2415,10 @@ pub(crate) fn authenticate_reviewed_safe_core_fabs_f32_helper_v1<'tcx>(
 
 #[path = "trusted_device_items/core_saturating_integer_v1.rs"]
 mod core_saturating_integer_v1;
+
+#[path = "trusted_device_items/core_slice_metadata_v1.rs"]
+mod core_slice_metadata_v1;
+pub(crate) use core_slice_metadata_v1::authenticate_v1 as authenticate_reviewed_safe_core_slice_metadata_helper_v1;
 
 pub(crate) fn authenticate_reviewed_safe_core_saturating_integer_helper_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -3438,6 +3459,7 @@ mod tests {
     include!("trusted_device_items/core_01_tests.rs");
     include!("trusted_device_items/generative_provider_v1_tests.rs");
     include!("trusted_device_items/wave64_shuffle_provider_v1_tests.rs");
+    include!("trusted_device_items/wave64_scan_metadata_v1_tests.rs");
     include!("trusted_device_items/materialization_v1_tests.rs");
 
     include!("trusted_device_items/wrapping_integer_v1_tests.rs");
@@ -3739,7 +3761,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             closure,
-            digest("889c8127d1a1bf34f77e96ada69e9be58ee19b4910f474e4dd54c070d9692251")
+            digest("b2912efa29c0ed94c1c327845c500ec31dc7d83bcbd2835cfca5bdaf6500f79c")
         );
         assert_eq!(closure, super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURE_V1);
     }
@@ -4262,6 +4284,7 @@ mod tests {
             TrustedDeviceItem::Gfx942Wave64ReduceSum,
             TrustedDeviceItem::Gfx942Wave64InclusiveScanSum,
             TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum,
+            TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper,
             TrustedDeviceItem::Gfx942WorkgroupReduceSum,
             TrustedDeviceItem::Gfx942WorkgroupInclusiveScanSum,
             TrustedDeviceItem::Gfx942WorkgroupExclusiveScanSum,
@@ -4363,6 +4386,21 @@ mod tests {
 
         let paths = items.map(TrustedDeviceItem::canonical_path);
         assert_eq!(paths.len(), super::TRUSTED_ITEMS.len());
+        for item in items {
+            let matching = super::TRUSTED_ITEMS
+                .iter()
+                .filter(|(registered, _, _)| *registered == item)
+                .collect::<Vec<_>>();
+            assert_eq!(matching.len(), 1, "registered identity {item:?}");
+            assert_eq!(matching[0].2, item.canonical_path());
+        }
+        for (item, _, path) in super::TRUSTED_ITEMS {
+            assert!(
+                items.contains(item),
+                "missing independent registry item {item:?}"
+            );
+            assert_eq!(*path, item.canonical_path());
+        }
         for (index, path) in paths.iter().enumerate() {
             assert!(!path.is_empty());
             assert!(!paths[..index].contains(path));

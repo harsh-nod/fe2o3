@@ -2,10 +2,7 @@
 
 use fe2o3_device::{DisjointSlice, kernel, thread};
 
-/// CPU result for one output coordinate; launch coverage is checked separately.
-pub fn fill_reference(_point: usize, out: &mut f32) {
-    *out = 42.5;
-}
+include!("reference.rs");
 
 #[cfg_attr(
     not(feature = "reference-proof"),

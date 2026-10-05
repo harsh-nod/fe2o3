@@ -60,6 +60,31 @@ const VERUS_CONFIGURATION_DOMAIN: &[u8] =
     b"FE2O3/FUNCTIONAL-REFINEMENT/RETAINED-RUST-VERIFY-CONFIG/V2\0";
 const SOLVER_CONFIGURATION_DOMAIN: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/RETAINED-Z3-CONFIG/V2\0";
 const EXECUTION_IDENTITY_DOMAIN: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/VERUS-EXECUTION/V2\0";
+const POLICY_CONFIGURATION_DOMAIN_V3: &[u8] =
+    b"FE2O3/FUNCTIONAL-REFINEMENT/PROCESS-POLICY-CONFIG/V3\0";
+const EXECUTION_IDENTITY_DOMAIN_V3: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/VERUS-EXECUTION/V3\0";
+const POLICY_CONFIGURATION_DOMAIN_V4: &[u8] =
+    b"FE2O3/FUNCTIONAL-REFINEMENT/PROCESS-POLICY-CONFIG/V4\0";
+const EXECUTION_IDENTITY_DOMAIN_V4: &[u8] = b"FE2O3/FUNCTIONAL-REFINEMENT/VERUS-EXECUTION/V4\0";
+
+fn process_configuration_digest(
+    domain: &[u8],
+    configuration: &[u8],
+    policy: crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2,
+) -> DigestV1 {
+    if policy.is_legacy() {
+        return domain_digest(domain, configuration);
+    }
+    let mut digest = Sha256::new();
+    put_blob(&mut digest, match policy {
+        crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV3 => POLICY_CONFIGURATION_DOMAIN_V4,
+        _ => POLICY_CONFIGURATION_DOMAIN_V3,
+    });
+    put_blob(&mut digest, domain);
+    put_blob(&mut digest, configuration);
+    put_blob(&mut digest, policy.canonical_bytes());
+    DigestV1::from_untrusted_bytes(digest.finalize().into())
+}
 
 /// Returns the exact toolchain identity enforced by the retained runtime lease.
 pub fn functional_refinement_verus_toolchain_identity_v2(
@@ -70,14 +95,16 @@ pub fn functional_refinement_verus_toolchain_identity_v2(
         .map_err(FunctionalRefinementVerusExecutionErrorV2::runtime)?;
     VerusToolchainIdentityV2::new(
         DigestV1::from_untrusted_bytes(VERUS_EXECUTABLE_SHA256),
-        domain_digest(
+        process_configuration_digest(
             VERUS_CONFIGURATION_DOMAIN,
             b"sealed-generated-source-fd;fixed-env",
+            runtime.process_policy(),
         ),
         DigestV1::from_untrusted_bytes(SOLVER_EXECUTABLE_SHA256),
-        domain_digest(
+        process_configuration_digest(
             SOLVER_CONFIGURATION_DOMAIN,
             b"rust_verify-managed-z3;fixed-env",
+            runtime.process_policy(),
         ),
         DigestV1::from_untrusted_bytes(runtime.identity().as_bytes()),
     )
@@ -1182,6 +1209,7 @@ fn render_bitvector_expression_v2(
 
     let width = u64::from(expression.scalar().bit_width());
     let rendered = match expression {
+        Expression::GlobalInvocation1d { .. } => return Err(invalid_ranked_recipe()),
         Expression::Symbol { symbol, .. } => {
             format!("fe2o3_bv_norm_v2(s{symbol}, {width})")
         }
@@ -1327,6 +1355,7 @@ fn render_ieee_congruence_expression_v2(
     use fe2o3_pliron::ProductionSemanticExpressionV2 as Expression;
     let scalar = scalar_tag_v2(expression.scalar());
     let rendered = match expression {
+        Expression::GlobalInvocation1d { .. } => return Err(invalid_ranked_recipe()),
         Expression::Symbol { symbol, .. } => {
             format!(
                 "fe2o3_ieee_operator_congruence_v2({}, s{symbol}, 0, 0)",
@@ -1517,7 +1546,7 @@ fn claim_specific_numerical_proof_required() -> FunctionalRefinementVerusExecuti
     }
 }
 
-fn validate_proved_output(
+pub(crate) fn validate_proved_output(
     observed: &FunctionalRefinementRuntimeProcessOutputV1,
 ) -> Result<(), FunctionalRefinementVerusExecutionErrorV2> {
     let prefix = b"verification results:: ";
@@ -1572,9 +1601,26 @@ fn execution_identity(
     binding: FunctionalRefinementBindingV2,
     observed: &FunctionalRefinementRuntimeProcessOutputV1,
 ) -> DigestV1 {
+    execution_identity_for_runtime(runtime.identity().as_bytes(), source, binding, observed)
+}
+
+fn execution_identity_for_runtime(
+    runtime_identity: [u8; 32],
+    source: &CanonicalGeneratedVerusProofInputV3,
+    binding: FunctionalRefinementBindingV2,
+    observed: &FunctionalRefinementRuntimeProcessOutputV1,
+) -> DigestV1 {
     let mut digest = Sha256::new();
-    digest.update(EXECUTION_IDENTITY_DOMAIN);
-    put_blob(&mut digest, &runtime.identity().as_bytes());
+    if observed.policy.is_legacy() {
+        digest.update(EXECUTION_IDENTITY_DOMAIN);
+    } else {
+        digest.update(match observed.policy {
+            crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV3 => EXECUTION_IDENTITY_DOMAIN_V4,
+            _ => EXECUTION_IDENTITY_DOMAIN_V3,
+        });
+        put_blob(&mut digest, observed.policy.canonical_bytes());
+    }
+    put_blob(&mut digest, &runtime_identity);
     put_blob(&mut digest, &source.identity().as_bytes());
     put_blob(&mut digest, source.source());
     for value in [
@@ -1688,6 +1734,7 @@ pub(crate) fn conditional_formula_development_source_v1(wrong_value: bool) -> St
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("functional_refinement_process_identity_v2_tests.rs");
     use dialect_kernel::SemanticBinaryKindAttr;
     use fe2o3_functional_proof::SafeReferenceKindV2;
     use fe2o3_pliron::{
@@ -1703,6 +1750,7 @@ mod tests {
         stderr: &[u8],
     ) -> FunctionalRefinementRuntimeProcessOutputV1 {
         FunctionalRefinementRuntimeProcessOutputV1 {
+            policy: crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
             exit_code: Some(exit_code),
             signal: None,
             stdout: stdout.to_vec(),

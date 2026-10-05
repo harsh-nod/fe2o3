@@ -70,6 +70,7 @@ impl Wire for ProductionSemanticExpressionV2 {
             $($value.emit(out)?;)*
         }}; }
         match self {
+            Self::GlobalInvocation1d { scalar } => fields!(9; scalar),
             Self::Symbol { symbol, scalar } => fields!(1; symbol, scalar),
             Self::Constant { scalar, bits } => fields!(2; scalar, bits),
             Self::Load(load) => fields!(3; load),
@@ -119,6 +120,9 @@ impl Wire for ProductionSemanticExpressionV2 {
         input.depth += 1;
         input.nodes += 1;
         let value = match u8::read(input)? {
+            9 => Self::GlobalInvocation1d {
+                scalar: ProductionSemanticScalarTypeV2::read(input)?,
+            },
             1 => Self::Symbol {
                 symbol: u32::read(input)?,
                 scalar: ProductionSemanticScalarTypeV2::read(input)?,

@@ -1,0 +1,124 @@
+struct InvocationSourceCheckedObjectV44 {
+    access: InvocationSourceByteAccessV36,
+    source_type: int,
+    value_offset: int,
+    overflow_offset: int,
+    operation: int,
+    bits: int,
+    signed: bool,
+    left: InvocationSourceByteValueV36,
+    right: InvocationSourceByteValueV36,
+}
+
+struct InvocationSourceCheckedObjectResultV44 {
+    source: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+}
+
+spec fn invocation_source_checked_pair_v44(
+    left: MemoryValueV30, right: MemoryValueV30,
+    operation: int, bits: int, signed: bool,
+) -> Option<(MemoryValueV30, MemoryValueV30)> {
+    if !(bits == 8 || bits == 16 || bits == 32 || bits == 64)
+        || !(0 <= operation < 3)
+        || !invocation_source_byte_value_typed_v36(left, bits)
+        || !invocation_source_byte_value_typed_v36(right, bits) {
+        None
+    } else { match (left, right) {
+        (MemoryValueV30::Scalar(left), MemoryValueV30::Scalar(right)) => {
+            let modulus = memory_value_modulus_v30(bits / 8);
+            let a = if signed { source_signed_v30(left, modulus) } else { left };
+            let b = if signed { source_signed_v30(right, modulus) } else { right };
+            let mathematical = if operation == 0 { a + b }
+                else if operation == 1 { a - b } else { a * b };
+            let overflow = if signed { mathematical < -(modulus / 2) || mathematical >= modulus / 2 }
+                else { mathematical < 0 || mathematical >= modulus };
+            Some((MemoryValueV30::Scalar(((mathematical % modulus) + modulus) % modulus),
+                MemoryValueV30::Scalar(if overflow { 1int } else { 0int })))
+        },
+        _ => None,
+    } }
+}
+
+spec fn invocation_source_checked_object_refused_v44(
+    source: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+) -> InvocationSourceCheckedObjectResultV44 {
+    let after = invocation_source_byte_refused_v36(source);
+    InvocationSourceCheckedObjectResultV44 { source: after,
+        observations: observations + invocation_source_observe_effects_v39(
+            seq![MemoryOperationEffectV30::Refused], source, after) }
+}
+
+spec fn invocation_source_checked_object_v44(
+    source: InvocationSourceByteStateV36, event: InvocationSourceCheckedObjectV44,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceCheckedObjectResultV44 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !matches!(event.access.base, InvocationSourceByteBaseV36::ObjectLocal(_))
+        || event.access.offset != 0
+        || !(event.bits == 8 || event.bits == 16 || event.bits == 32 || event.bits == 64)
+        || !(0 <= event.operation < 3)
+        || !invocation_source_checked_object_type_v47(event.source_type,
+            event.bits, event.signed, event.access.width, event.access.alignment,
+            event.value_offset, event.overflow_offset)
+        || !(match event.access.base {
+            InvocationSourceByteBaseV36::ObjectLocal(local) =>
+                source.objects.contains_key(local)
+                    && source.objects[local].slot.semantic_type == event.source_type,
+            _ => false,
+        })
+        || event.value_offset < 0 || event.value_offset + event.bits / 8 > event.access.width
+        || event.overflow_offset < 0 || event.overflow_offset + 1 > event.access.width
+        || !(event.value_offset + event.bits / 8 <= event.overflow_offset
+            || event.overflow_offset + 1 <= event.value_offset) {
+        invocation_source_checked_object_refused_v44(source, seq![])
+    } else {
+        // Both RHS snapshots and any original Move effects precede either
+        // destination store. Bytes outside these two payload ranges are untouched.
+        let lhs = invocation_source_byte_evaluate_v36(source, event.left, event.bits,
+            root, instance, little_endian);
+        let left_observations = invocation_source_observe_effects_v39(
+            invocation_source_read_effect_v36(source, event.left, event.bits, root, instance, little_endian),
+            source, lhs.source);
+        let rhs = invocation_source_byte_evaluate_v36(lhs.source, event.right, event.bits,
+            root, instance, little_endian);
+        let observations = left_observations + invocation_source_observe_effects_v39(
+            invocation_source_read_effect_v36(lhs.source, event.right, event.bits, root, instance, little_endian),
+            lhs.source, rhs.source);
+        if !lhs.source.machine.valid || !rhs.source.machine.valid {
+            invocation_source_checked_object_refused_v44(rhs.source, observations)
+        } else {
+            match (invocation_source_checked_pair_v44(lhs.value, rhs.value,
+                event.operation, event.bits, event.signed),
+                invocation_source_byte_address_v36(rhs.source, event.access, root, instance)) {
+                (Some((value, overflow)), Some(base)) => {
+                    if !invocation_private_allocation_v36(base.allocation)
+                        || !byte_range_aligned_v30(rhs.source.machine.memory, base,
+                            event.access.width, event.access.alignment) {
+                        invocation_source_checked_object_refused_v44(rhs.source, observations)
+                    } else {
+                        let value_pointer = MemoryPointerV30 {
+                            byte_offset: base.byte_offset + event.value_offset, ..base };
+                        let first = InvocationSourceByteStateV36 {
+                            machine: invocation_source_store_v36(rhs.source.machine, value_pointer,
+                                event.bits / 8, 1, value, little_endian), ..rhs.source };
+                        let overflow_pointer = MemoryPointerV30 {
+                            byte_offset: base.byte_offset + event.overflow_offset, ..base };
+                        let second = InvocationSourceByteStateV36 {
+                            machine: invocation_source_store_v36(first.machine, overflow_pointer,
+                                1, 1, overflow, little_endian), ..first };
+                        if !first.machine.valid || !second.machine.valid {
+                            invocation_source_checked_object_refused_v44(second, observations)
+                        } else {
+                            // Both private writes are covered by the mandatory
+                            // heap relation. Their external projection is empty.
+                            InvocationSourceCheckedObjectResultV44 { source: second, observations }
+                        }
+                    }
+                },
+                _ => invocation_source_checked_object_refused_v44(rhs.source, observations),
+            }
+        }
+    }
+}

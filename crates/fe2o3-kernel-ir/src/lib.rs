@@ -180,6 +180,7 @@ mod verification_storage_operation_v1;
 mod verification_storage_v1;
 mod verification_terminator_v1;
 mod verification_type_comparison_v1;
+mod verification_typed_storage_v2;
 mod verification_wave_operation_v1;
 mod verify;
 mod wave_operations;
@@ -227,10 +228,11 @@ pub use gfx942_physical_lds_exchange_profile_v22::gfx942_physical_lds_exchange_d
 pub use gfx942_physical_lds_exchange_v22::*;
 pub use integer_semantic_oracle_v1::*;
 pub use interprocedural_effects::{
-    InterproceduralEffectAnalysisV1, InterproceduralEffectDecisionV1,
+    CanonicalEffectDecisionV19, CanonicalEffectErrorV19, CanonicalEffectReasonV19,
+    CanonicalEffectScopeV19, InterproceduralEffectAnalysisV1, InterproceduralEffectDecisionV1,
     InterproceduralEffectIncompleteReasonV1, MAX_INTERPROCEDURAL_EFFECT_CALL_EDGES_V1,
     MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1, analyze_interprocedural_effects_from_verified_v1,
-    analyze_interprocedural_effects_v1,
+    analyze_interprocedural_effects_v1, with_canonical_effects_v19,
 };
 pub use ir::*;
 #[doc(hidden)]

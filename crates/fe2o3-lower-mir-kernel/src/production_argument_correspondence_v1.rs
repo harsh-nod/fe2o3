@@ -2,7 +2,7 @@
 use fe2o3_pliron::source_argument_v1 as source_arguments_v1;
 use source_arguments_v1::{
     ArgumentBudgetV1, ArgumentLedgerV1, ArgumentResourceV1, ArgumentTraceV1, argument_product_v1,
-    argument_sum_v1, argument_vec_v1, sort_correspondence_keys_v1,
+    argument_sum_v1, argument_vec_v1, shared_slice_leaf_v1, sort_correspondence_keys_v1,
 };
 #[cfg(test)]
 use source_arguments_v1::{
@@ -119,3 +119,5 @@ fn prepay_typed_shape_v1(
     source_arguments_v1::prepay_typed_shape_v1(types, ty, callable_count, budget)
         .map_err(Into::into)
 }
+
+include!("production_argument_correspondence_v18.rs");

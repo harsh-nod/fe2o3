@@ -240,11 +240,22 @@ fn every_new_scalar_sibling_source_event_is_mandatory() {
         (Shape::AssertConditionFolded, vec![Role::AssertCondition]),
     ] {
         let mut required = Vec::new();
+        let mut definitions = BTreeSet::new();
+        let mut terminal_failure_operands = BTreeSet::new();
         lower_cfg_fixture_with_cursor(
             shape,
             |_| {},
             |cursor| {
                 required.extend_from_slice(&cursor.events.required);
+                definitions.extend(required.iter().copied().filter(|index| {
+                    cursor.occurrences.events()[*index].role()
+                        == ExecutionEventV29::DestinationDefine
+                }));
+                terminal_failure_operands.extend(required.last().copied().filter(|index| {
+                    let event = &cursor.occurrences.events()[*index];
+                    event.role() == ExecutionEventV29::BaseUse
+                        && matches!(event.operand(), Role::AssertMessage(_))
+                }));
                 let operands = required
                     .iter()
                     .skip(3)
@@ -285,9 +296,21 @@ fn every_new_scalar_sibling_source_event_is_mandatory() {
                 },
                 |_, _, result| {
                     let error = result.err().expect("an omitted source event must reject");
+                    // Definitions are authenticated while archiving their binding,
+                    // before the next event or block-completion check.
+                    let expected = if definitions.contains(&omitted) {
+                        execution_archive_error_v29()
+                    } else if terminal_failure_operands.contains(&omitted) {
+                        // The failure tail claims all operands before recording
+                        // anchors. A later claim detects earlier omissions; only
+                        // the final omission reaches the scoped anchor check.
+                        scoped_memory_error_v29()
+                    } else {
+                        execution_availability_error_v29()
+                    };
                     assert_eq!(
                         format!("{error:?}"),
-                        format!("{:?}", execution_availability_error_v29()),
+                        format!("{expected:?}"),
                         "{shape:?}, omitted {omitted}"
                     );
                 },
@@ -380,7 +403,7 @@ fn selected_field_archive_checks_reject_moved_and_stale_nominal_values() {
             assert!(
                 check_execution_archive_v29(
                     &observation.locals,
-                    &BTreeMap::new(),
+                    &SemanticSsaBindingsV1::default(),
                     &selected(1, U32),
                     definition,
                     &mut budget
@@ -646,19 +669,29 @@ fn shared_emitter_consumes_storage_and_ordinary_siblings_of_nominal_roots() {
 #[test]
 fn shared_emitter_rejects_every_omitted_nominal_event_including_the_last() {
     for omitted in [0, 1, 2, 3, 4, 5, 6, 8, 9] {
+        let definition = std::cell::Cell::new(false);
         lower_cfg_fixture_with_cursor(
             Shape::Storage,
             |_| {},
             |cursor| {
+                definition.set(
+                    cursor.occurrences.events()[omitted].role()
+                        == ExecutionEventV29::DestinationDefine,
+                );
                 cursor.skipped_event = Some(omitted);
             },
             |_, _, result| {
                 let error = result
                     .err()
                     .expect("a missing source event cannot produce a lowered function");
+                let expected = if definition.get() {
+                    execution_archive_error_v29()
+                } else {
+                    execution_availability_error_v29()
+                };
                 assert_eq!(
                     format!("{error:?}"),
-                    format!("{:?}", execution_availability_error_v29()),
+                    format!("{expected:?}"),
                     "omitted {omitted}"
                 );
             },

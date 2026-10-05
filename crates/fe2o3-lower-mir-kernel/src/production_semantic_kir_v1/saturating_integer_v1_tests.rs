@@ -473,20 +473,20 @@ mod saturating_integer_v1_tests {
             operation,
             scalar: ty,
             overflow: ProductionOverflowContractV2::Wrapping,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
+            lhs: NormalizedScalarNodeV18::legacy(lhs),
+            rhs: NormalizedScalarNodeV18::legacy(rhs),
         };
         let less = |lhs, rhs| E::Compare {
             operation: ProductionSemanticComparisonV2::LessThan,
             operand_scalar: ty,
-            lhs: Box::new(lhs),
-            rhs: Box::new(rhs),
+            lhs: NormalizedScalarNodeV18::legacy(lhs),
+            rhs: NormalizedScalarNodeV18::legacy(rhs),
         };
         let select = |condition, when_true, when_false| E::Select {
             scalar: ty,
-            condition: Box::new(condition),
-            when_true: Box::new(when_true),
-            when_false: Box::new(when_false),
+            condition: NormalizedScalarNodeV18::legacy(condition),
+            when_true: NormalizedScalarNodeV18::legacy(when_true),
+            when_false: NormalizedScalarNodeV18::legacy(when_false),
         };
         let raw = binary(
             match op {
@@ -547,7 +547,26 @@ mod saturating_integer_v1_tests {
                     assert_eq!(budget.remaining, 0);
                 }
                 let overflow = operations[0].results[1].id;
-                assert!(normalize(operations.clone(), scalar, overflow).is_none());
+                let overflow = normalize(operations.clone(), scalar, overflow)
+                    .expect("checked overflow has its own Boolean normalization");
+                assert!(matches!(
+                    &overflow,
+                    NormalizedScalarExpressionV1::Compare { .. }
+                        | NormalizedScalarExpressionV1::Select {
+                            scalar: ProductionSemanticScalarTypeV2::Bool,
+                            ..
+                        }
+                ));
+                assert_eq!(
+                    scalar_value_expressions_correspond_v1(
+                        &wanted,
+                        &overflow,
+                        0,
+                        &mut UnsupportedIndexCorrelationBudgetV1 { remaining: 4096 }
+                    ),
+                    Some(false),
+                    "overflow result cannot replace the saturating integer payload"
+                );
                 for mutation in 0..5 {
                     let mut changed = operations.clone();
                     match mutation {

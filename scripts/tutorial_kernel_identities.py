@@ -767,6 +767,7 @@ def validate_kernel_inventory(
     scan_functions: Callable[[str], list[dict[str, Any]]], *, max_records: int = 4096,
     load_fixture_sources: Callable | None = None, rust_syntax: Callable | None = None,
     load_source_case_sources: Callable | None = None,
+    observe_sources: Callable | None = None,
 ) -> dict[str, Any]:
     """Validate the optional sibling and return only bounded validated fields.
 
@@ -1141,7 +1142,7 @@ def validate_kernel_inventory(
     if runtime_inventory is None:
         unresolved.append({"reason": "The live runtime function census and source/display joins have not been validated."})
     complete = runtime_inventory is not None and not unresolved
-    return {
+    result = {
         "inventoryComplete": complete, "requiredPairCount": len(kernels) if complete else None,
         "knownKernelIdentityCount": len(kernels), "displayItemCount": len(displays),
         "knownVariantObligationCount": variant_count,
@@ -1156,3 +1157,6 @@ def validate_kernel_inventory(
         "unresolvedBindings": unresolved, "kernelIdentities": kernels,
         "negativeCases": negative_refs, "displayItems": displays,
     }
+    if observe_sources is not None:
+        observe_sources(selections, selected_source, result)
+    return result

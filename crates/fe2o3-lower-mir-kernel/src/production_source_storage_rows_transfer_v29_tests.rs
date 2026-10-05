@@ -292,3 +292,59 @@ fn source_storage_rows_transfer_lost_or_foreign_custody_never_refunds() {
         assert!(candidate.storage_layouts.is_empty());
     }
 }
+
+#[test]
+fn source_storage_rows_transfer_refuses_a_forgotten_active_checkpoint_without_refund() {
+    super::root_custody_tests::instances(|instances, budget| {
+        let mut table = SourceStorageLayoutsV29::new(instances.owner(), &[PAIR], budget).unwrap();
+        let before = budget.storage();
+        let checkpoint =
+            SourceStorageRootCheckpointV29::begin(&mut table, instances, budget).unwrap();
+        // The integrated wrapper never lends this consuming token to callbacks.
+        // Even an internal forgotten token cannot authorize row installation.
+        std::mem::forget(checkpoint);
+        let mut candidate = Module::new("active-root-table");
+        let work = budget.work();
+        assert!(matches!(
+            table.install_rows(instances.owner(), &mut candidate, budget),
+            Err(Error::Unsupported {
+                detail: "source storage rows still have an active root scope",
+                ..
+            })
+        ));
+        assert!(candidate.storage_layouts.is_empty());
+        assert_eq!(budget.storage(), before);
+        assert_eq!(budget.work(), work);
+    });
+}
+
+#[test]
+fn source_storage_rows_transfer_poisoned_scope_returns_its_stop_signal_without_further_work() {
+    super::root_custody_tests::instances(|instances, budget| {
+        let before = budget.storage();
+        let mut table = SourceStorageLayoutsV29::new(instances.owner(), &[PAIR], budget).unwrap();
+        let result: Result<(), Error> =
+            with_source_storage_root_v29(&mut table, instances, budget, |_, _, _| {
+                Err(error("selected root failure before installation").into())
+            });
+        assert!(matches!(
+            result,
+            Err(Error::Unsupported {
+                detail: "selected root failure before installation",
+                ..
+            })
+        ));
+        let work = budget.work();
+        let mut candidate = Module::new("poisoned-root-table");
+        assert!(matches!(
+            table.install_rows(instances.owner(), &mut candidate, budget),
+            Err(Error::Unsupported {
+                detail: "selected root failure before installation",
+                ..
+            })
+        ));
+        assert!(candidate.storage_layouts.is_empty());
+        assert_eq!(budget.storage(), before);
+        assert_eq!(budget.work(), work);
+    });
+}

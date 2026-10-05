@@ -9,6 +9,8 @@ use fe2o3_kernel_ir::{
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 mod contextual_control;
+mod physical_context_v2;
+pub use physical_context_v2::{UniformityPhysicalLaunchErrorV2, UniformityPhysicalLaunchV2};
 
 /// Conservatively classifies SSA values and barrier control in one function.
 ///
@@ -40,6 +42,14 @@ pub fn analyze_function(function: &Function) -> AnalysisReport {
 /// Classifies one kernel entry using uniform ABI parameters and conservative
 /// summaries for reachable pure helpers.
 pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisReport {
+    analyze_kernel_entry_with_physical_context_v2(module, function, None)
+}
+
+fn analyze_kernel_entry_with_physical_context_v2(
+    module: &Module,
+    function: &Function,
+    physical: Option<&UniformityPhysicalLaunchV2<'_>>,
+) -> AnalysisReport {
     let (summarized_calls, uniform_input_calls) = summarize_uniform_helpers(module, function);
     let parameters = vec![Variation::GridUniform; function.signature.parameters.len()];
     let mut matching_contracts = module
@@ -51,13 +61,14 @@ pub fn analyze_kernel_entry(module: &Module, function: &Function) -> AnalysisRep
         .next()
         .filter(|first| matching_contracts.all(|contract| contract == *first))
         .flatten();
-    analyze_function_with_contract(
+    analyze_function_with_physical_contract_v2(
         function,
         &parameters,
         &summarized_calls,
         &uniform_input_calls,
         workgroup_size,
         contextual_control::exact_d1_workgroup(module, function),
+        physical,
     )
 }
 
@@ -68,6 +79,26 @@ fn analyze_function_with_contract(
     uniform_input_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
     workgroup_size: Option<WorkgroupSize>,
     exact_d1_workgroup: Option<u32>,
+) -> AnalysisReport {
+    analyze_function_with_physical_contract_v2(
+        function,
+        parameter_variations,
+        summarized_calls,
+        uniform_input_calls,
+        workgroup_size,
+        exact_d1_workgroup,
+        None,
+    )
+}
+
+fn analyze_function_with_physical_contract_v2(
+    function: &Function,
+    parameter_variations: &[Variation],
+    summarized_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
+    uniform_input_calls: &BTreeSet<fe2o3_kernel_ir::FunctionId>,
+    workgroup_size: Option<WorkgroupSize>,
+    exact_d1_workgroup: Option<u32>,
+    physical: Option<&UniformityPhysicalLaunchV2<'_>>,
 ) -> AnalysisReport {
     let Some(body) = &function.body else {
         let mut report = AnalysisReport {
@@ -84,7 +115,7 @@ fn analyze_function_with_contract(
         return report;
     };
 
-    Analyzer::new(
+    Analyzer::new_with_physical_context_v2(
         function,
         body,
         parameter_variations,
@@ -92,6 +123,7 @@ fn analyze_function_with_contract(
         uniform_input_calls,
         workgroup_size,
         exact_d1_workgroup,
+        physical,
     )
     .run()
 }
@@ -379,6 +411,7 @@ struct PrivateStore {
 }
 
 impl<'a> Analyzer<'a> {
+    #[cfg(test)]
     fn new(
         function: &'a Function,
         body: &'a FunctionBody,
@@ -387,6 +420,28 @@ impl<'a> Analyzer<'a> {
         uniform_input_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
         workgroup_size: Option<WorkgroupSize>,
         exact_d1_workgroup: Option<u32>,
+    ) -> Self {
+        Self::new_with_physical_context_v2(
+            function,
+            body,
+            parameter_variations,
+            summarized_calls,
+            uniform_input_calls,
+            workgroup_size,
+            exact_d1_workgroup,
+            None,
+        )
+    }
+
+    fn new_with_physical_context_v2(
+        function: &'a Function,
+        body: &'a FunctionBody,
+        parameter_variations: &'a [Variation],
+        summarized_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
+        uniform_input_calls: &'a BTreeSet<fe2o3_kernel_ir::FunctionId>,
+        workgroup_size: Option<WorkgroupSize>,
+        exact_d1_workgroup: Option<u32>,
+        physical: Option<&UniformityPhysicalLaunchV2<'_>>,
     ) -> Self {
         let mut report = AnalysisReport {
             function: function.id.clone(),
@@ -496,14 +551,26 @@ impl<'a> Analyzer<'a> {
         }
         let mut effective_successors = effective_successors(body, &known_integer_values);
         if !malformed && !malformed_values && !malformed_edges && !control_flow_malformed {
-            contextual_control::refine_successors(
-                body,
-                &incoming,
-                &dominators,
-                &value_types,
-                &value_definitions,
-                &mut effective_successors,
-            );
+            if let Some(physical) = physical {
+                physical_context_v2::refine_successors(
+                    physical,
+                    body,
+                    &incoming,
+                    &dominators,
+                    &value_types,
+                    &value_definitions,
+                    &mut effective_successors,
+                );
+            } else {
+                contextual_control::refine_successors(
+                    body,
+                    &incoming,
+                    &dominators,
+                    &value_types,
+                    &value_definitions,
+                    &mut effective_successors,
+                );
+            }
         }
         let postdominance_available =
             postdominance_available(&blocks, &reachable, &effective_successors);

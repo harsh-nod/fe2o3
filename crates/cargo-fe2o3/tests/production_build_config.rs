@@ -635,15 +635,17 @@ fn source_isa_observer_lifecycle_is_one_shot_and_prepublication() {
         .next()
         .expect("recovered completion follows fresh completion");
     let finalization = fresh
-        .find("finalize_protected_worker_v3_hsaco_v1")
+        .find("finalize_protected_worker_nominal_hsaco_on_budget_v53")
         .expect("fresh finalization exists");
     let observation = fresh
         .find("emit_finalized_source_isa_observation(&finalized)")
         .expect("fresh observation exists");
     let preparation = fresh
-        .find("prepare_protected_worker_v3_hsaco_publication_v1")
+        .find("prepare_mixed_worker_publication_v53")
         .expect("publication preparation exists");
     assert!(finalization < observation && observation < preparation);
+    assert!(!fresh.contains("finalize_protected_worker_v3_hsaco_v1"));
+    assert!(!fresh.contains("prepare_protected_worker_v3_hsaco_publication_v1"));
 
     let recovered = source
         .split("fn complete_recovered_production_artifact(")
@@ -751,7 +753,15 @@ fn production_receipt_is_carried_by_one_v2_envelope_through_host_admission() {
         .expect("fresh intake consumes the exact handoff");
     assert!(receipt_recovery < consumption);
 
-    assert!(binding.contains("WorkerV3LoadEnvelopeV2::from_published_hsaco_v1"));
+    let publication = binding
+        .split("fn complete_published_production_artifact(")
+        .nth(1)
+        .expect("published mixed completion exists")
+        .split("fn complete_ready_production_artifact(")
+        .next()
+        .expect("Ready completion follows published completion");
+    assert!(publication.contains("WorkerV3LoadEnvelopeV2::from_published_mixed_hsaco_v53"));
+    assert!(!publication.contains("WorkerV3LoadEnvelopeV2::from_published_hsaco_v1"));
     assert!(binding.contains("persist_durable_replay_custody_v2"));
     assert!(binding.contains("recover_worker_v3_load_envelope_v2"));
     assert!(binding.contains("validate_compiler_execution_receipt_carriage"));

@@ -100,9 +100,50 @@ reports.
 
 This census is not a compiler-execution receipt, proof, executable artifact or
 qualification. `diagnosticOnly` is true; `qualified` and
-`authenticatesCompilerExecution` are false. It does not yet join the tutorial's
-Cargo/lock/source-closure/default-feature contracts or generated-source maps.
-Consequently it does not change any pending display binding or kernel count.
+`authenticatesCompilerExecution` are false. The ordinary-source corpus adapter
+below joins Cargo/lock/source-closure/default-feature contracts around its actual
+callback. Generated-source body maps remain separate obligations. Neither path
+changes any pending display binding or kernel count.
+
+### Same-Run Corpus Joins
+
+The existing ordinary-source P4 corpus runner now retains `source_census` and
+`source_census_error` per case. Before Cargo capture and after the actual callback,
+it runs this validator's `--emit-source-input-snapshot` mode against the exact
+registered fixture or source-driver invocation. Snapshots retain the raw manifest
+digest, validated package/lock/default/direct-feature contract, expanded feature
+set, and all physical package source hashes and lengths. Inputs changing across
+the invocation, an incomplete census, or a mismatched root roster block that case.
+The runner generates its nonce internally and uses the existing create-only
+recorder. The test callback requires terminal census completion when requested;
+normal invocations without a requested census keep their existing behavior.
+
+Consume the fixture corpus with the existing `--ordinary-source-report` option
+and the additional source-driver corpus with `--source-driver-report`, alongside
+`--emit-kernel-pairs --site-inventory`. Each supplied report must contain its whole
+registered invocation roster. New census-bearing reports require the live runtime
+inventory; legacy reports without census fields retain their diagnostic behavior.
+`sourceCensusObservations` is added to the existing projection after the source,
+runtime, and identity validators succeed. The mandatory matrix script-test gate
+runs the join and CLI regression suite.
+
+The adapter checks before/after/current input equality, independently retained
+arguments/cwd/nonce against the census, fixed P4 mode, target, Cargo feature cfgs,
+complete selected roots, physical hashes, and original/normalized identifier
+coordinates. Runtime joins use exact whole-file or unique fragment bytes, never a
+name-only match. Existing explicit variant bindings are replayed; pending variant
+implementations and unavailable/expanded root identifiers remain precisely
+unresolved. The adapter cannot choose SIMT, tile, or mixed implementations from
+names or code shape. Negative drivers remain negative obligations.
+An early aggregate limit of 4096 derived rows counts joins, origins, repeated
+runtime/variant occurrences, and unresolved obligations before retaining them;
+the existing 16 MiB projection encoding bound remains an additional limit.
+
+This is legacy P4 diagnostic provenance, not expanded mixed-production compilation.
+The retained census digest detects modifications after retention, not forgery or
+execution authenticity. A nonce correlates the callback with its runner, not a
+signed timestamp. No qualification, source-bound flags, classifications, accepted
+compiler pins, source receipts, or artifact/launch authority are advanced.
 
 ### Inventory Projection
 

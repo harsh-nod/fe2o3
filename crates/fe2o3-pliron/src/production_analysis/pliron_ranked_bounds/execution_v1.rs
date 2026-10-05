@@ -1,5 +1,10 @@
+use crate::kir_bridge_v1::NativePrivateInputV1;
 use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::InvocationObserverV1;
 use fe2o3_kernel_analysis::PresburgerFailureV1;
+type LegacyPrivateInputV1<'a> =
+    crate::kir_bridge_v1::canonical_ranked_v1::private_profile::NativeCanonicalPrivateAdmissionV1<
+        'a,
+    >;
 
 type RankedBoundsObserverV1<'o, 'p, 'r> = Option<&'o InvocationObserverV1<'p, 'r>>;
 
@@ -68,20 +73,38 @@ fn run_pliron_ranked_bounds_with_capture_v1(
     capture: Option<&mut conditional_v1::ReadCaptureV1>,
 ) -> RankedBoundsReportV1 {
     match observer {
-        None => run_pliron_ranked_bounds_inner_v1(context, function, analyses, None, capture),
+        None => run_pliron_ranked_bounds_inner_v1::<LegacyPrivateInputV1<'_>>(
+            context, function, analyses, None, None, None, capture,
+        ),
         Some(observer) => observer.with_projection(&Ok, |nested| {
-            run_pliron_ranked_bounds_inner_v1(context, function, analyses, Some(nested), capture)
+            run_pliron_ranked_bounds_inner_v1::<LegacyPrivateInputV1<'_>>(
+                context,
+                function,
+                analyses,
+                None,
+                None,
+                Some(nested),
+                capture,
+            )
         }),
     }
 }
 
-fn run_pliron_ranked_bounds_inner_v1(
+fn run_pliron_ranked_bounds_inner_v1<A: NativePrivateInputV1>(
     context: &Context,
     function: &FuncOp,
     analyses: &mut PlironAnalysisManagerV1,
+    private: Option<&A>,
+    lifecycle: Option<&crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'_>>,
     observer: RankedBoundsObserverV1<'_, '_, '_>,
     mut capture: Option<&mut conditional_v1::ReadCaptureV1>,
 ) -> RankedBoundsReportV1 {
+    if private.is_some_and(|input| !input.authenticate(context, function)) {
+        return structural_failure();
+    }
+    if lifecycle.is_some_and(|input| !input.authenticate(context, function)) {
+        return structural_failure();
+    }
     let mut budget = RankedBoundsBudget::default();
     analyses.prepare_function_inventory(context, function);
     let inventory = match analyses.function_inventory_handle() {
@@ -120,7 +143,25 @@ fn run_pliron_ranked_bounds_inner_v1(
                 return finding_failure(finding, observer);
             }
             let operation = Operation::get_op_dyn(operation_pointer, context);
-            let Some(kind) = ranked_operation_kind(operation.as_ref()) else {
+            let classified = match private {
+                None => ranked_operation_kind(operation.as_ref()).or_else(|| {
+                    // Only exact imported lifecycle operations or the exact
+                    // zero-edge Unreachable terminal reach this extension.
+                    // It supplies no memory or completed source-role authority.
+                    lifecycle.and_then(|input| {
+                        input.operation(context, operation_pointer)?;
+                        Some(if input.unreachable(context, operation_pointer) {
+                            RankedOperationKind::TerminalEnd
+                        } else {
+                            RankedOperationKind::NativeData
+                        })
+                    })
+                }),
+                Some(input) => {
+                    canonical_private_operation_kind_v1(input, context, operation_pointer)
+                }
+            };
+            let Some(kind) = classified else {
                 let finding = if terminator == Some(operation_pointer) {
                     RankedBoundsFindingV1::UnsupportedTerminator {
                         block: block_index,
@@ -288,8 +329,19 @@ fn run_pliron_ranked_bounds_inner_v1(
         Ok(reachable) => reachable,
         Err(finding) => return finding_failure(finding, observer),
     };
+    if let Err(finding) = budget.work(1) {
+        return finding_failure(finding, observer);
+    }
+    // Authentication and complete schema/edge validation above remain required
+    // for both domains. This changes no reachability fact and supplies no access
+    // proof: dataflow and access checking below still cover every reachable node.
+    let cfg_domain = private.map_or(
+        crate::kir_bridge_v1::NativeCfgDomainV26::AllBlocksReachableV1,
+        NativePrivateInputV1::cfg_domain_v26,
+    );
     for (block, is_reachable) in reachable.iter().copied().enumerate() {
         if !is_reachable
+            && cfg_domain == crate::kir_bridge_v1::NativeCfgDomainV26::AllBlocksReachableV1
             && let Err(finding) = push_finding(&mut findings, &mut budget, || {
                 RankedBoundsFindingV1::UnreachableBlock { block }
             })
@@ -532,4 +584,76 @@ fn intersect_predecessor_facts(
         result.intersect_edge(&inputs[edge.block], edge.guard_fact);
     }
     Ok(result)
+}
+
+pub(crate) fn require_canonical_private_bounds_v1<A: NativePrivateInputV1>(
+    input: &A,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
+) -> Result<RankedBoundsReportV1, RankedBoundsCheckErrorV1> {
+    // The shared private prepare gate admits the explicit lookup recurrence
+    // before this reader; no standalone public private-permission flag exists.
+    let report = match observer {
+        None => run_pliron_ranked_bounds_inner_v1(
+            input.context(),
+            input.function(),
+            analyses,
+            Some(input),
+            None,
+            None,
+            None,
+        ),
+        Some(observer) => observer.with_projection(&Ok, |nested| {
+            run_pliron_ranked_bounds_inner_v1(
+                input.context(),
+                input.function(),
+                analyses,
+                Some(input),
+                None,
+                Some(nested),
+                None,
+            )
+        }),
+    };
+    if report.is_clean() {
+        Ok(report)
+    } else {
+        Err(RankedBoundsCheckErrorV1 { report })
+    }
+}
+
+pub(crate) fn require_canonical_lifecycle_bounds_v18(
+    input: &crate::kir_bridge_v1::NativeLifecycleIdentityAdmissionV18<'_>,
+    analyses: &mut PlironAnalysisManagerV1,
+    observer: RankedBoundsObserverV1<'_, '_, '_>,
+) -> Result<RankedBoundsReportV1, RankedBoundsCheckErrorV1> {
+    // The fixed pipeline prepays the bounded occurrence lookups before this
+    // shared solver, just as the existing private profile prepays its joins.
+    let report = match observer {
+        None => run_pliron_ranked_bounds_inner_v1::<LegacyPrivateInputV1<'_>>(
+            input.context(),
+            input.function(),
+            analyses,
+            None,
+            Some(input),
+            None,
+            None,
+        ),
+        Some(observer) => observer.with_projection(&Ok, |nested| {
+            run_pliron_ranked_bounds_inner_v1::<LegacyPrivateInputV1<'_>>(
+                input.context(),
+                input.function(),
+                analyses,
+                None,
+                Some(input),
+                Some(nested),
+                None,
+            )
+        }),
+    };
+    if report.is_clean() {
+        Ok(report)
+    } else {
+        Err(RankedBoundsCheckErrorV1 { report })
+    }
 }

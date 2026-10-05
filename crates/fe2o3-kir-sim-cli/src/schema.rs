@@ -171,6 +171,7 @@ pub(crate) enum ErrorKind {
     ExecutionUndefinedIntegerOperation,
     ExecutionIntegerOutOfRange,
     ExecutionPointerOffsetOverflow,
+    ExecutionStorageArrayIndexOutOfBounds,
     ExecutionPointerDistanceDifferentAllocation,
     ExecutionPointerDistanceOutOfBounds,
     ExecutionPointerDistanceNotDivisible,

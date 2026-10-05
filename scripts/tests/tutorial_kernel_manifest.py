@@ -160,7 +160,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "5435470da937c6a4f7ea315bdafb9839ccecc1453a62aeee923b0770db67623b")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "a4039392b4b4f52ee484485d52da641b08156a1449b2ba0861f25a6f08846674")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -640,12 +640,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "10ce71f65fa9855ff8089e8127b7cbf0a8d76fb349a3a465554d8e05d44f1777")
+                         "7504c13866f67b20cfda65fd6f564d75e77ae5e75a12e982efab7bb12c2ec6bc")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 19})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 5, "source-driver-contract": 14, "fixture-source-contract": 64,
+                         {"pending": 6, "source-driver-contract": 14, "fixture-source-contract": 63,
                           "not-applicable": 45})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
@@ -731,7 +731,11 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                                and row["classification"] == "kernel")
                 identity = f"fixture:{fixture_id}:{symbol}"
                 self.assertEqual(display["kernelIds"], [identity])
-                self.assertEqual(display["bindingStatus"], "fixture-source-contract")
+                self.assertEqual(display["bindingStatus"],
+                                 "pending" if variant == "pipelined-attention" else "fixture-source-contract")
+                if variant == "pipelined-attention":
+                    self.assertIn("8192 bytes of LDS", display["reason"])
+                    self.assertIn("https://github.com/harsh-nod/fe2o3/issues/271", display["reason"])
                 identities.append(identity)
         self.assertEqual(len(set(identities)), 2)
         report = self.kernel_pair_report()
@@ -742,12 +746,29 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
 
     def test_attention_bindings_reject_same_symbol_source_substitution(self):
         lesson_id = "gfx950-gpt-oss-120b-megakernel"
-        rows = [row for row in self.original["kernelInventory"]["displayItems"]
+        # Synthetic current-source baseline for validator hostility only. This
+        # does not change or claim to refresh the pinned historical website.
+        baseline = copy.deepcopy(self.original)
+        lesson = next(row for row in baseline["curriculum"]["lessons"] if row["lessonId"] == lesson_id)
+        tab = next(row for row in lesson["codeTabs"] if row["ordinal"] == 5)
+        source = (ROOT / tab["sourcePath"]).read_text()
+        encoded = source.encode("utf-8")
+        digest = hashlib.sha256(encoded).hexdigest()
+        tab.update(displayedUtf8Bytes=len(encoded), displayedSha256=digest, sourceSha256=digest)
+        display = next(row for row in baseline["kernelInventory"]["displayItems"]
+                       if row["lessonId"] == lesson_id and row["tabOrdinal"] == 5)
+        occurrences = [row for row in self.validator.ordinary_rust_function_items(source)
+                       if row["attributedKernel"] and row["kernelSymbol"] == display["kernelSymbol"]]
+        self.assertEqual(len(occurrences), 1)
+        display.update(bindingStatus="fixture-source-contract",
+                       functionUtf8Offset=occurrences[0]["functionUtf8Offset"])
+        self.assertIs(self.validator.validate_kernel_inventory(baseline, None, repo_root=ROOT)["inventoryComplete"], False)
+        rows = [row for row in baseline["kernelInventory"]["displayItems"]
                 if row["lessonId"] == lesson_id and row["tabOrdinal"] in (5, 6)
                 and row["classification"] == "kernel"]
         self.assertEqual(len(rows), 2)
         for index, variant in enumerate(("pipelined-attention", "scalar-attention")):
-            document = copy.deepcopy(self.original)
+            document = copy.deepcopy(baseline)
             display = next(row for row in document["kernelInventory"]["displayItems"]
                            if row["lessonId"] == lesson_id and row["tabOrdinal"] == 5 + index
                            and row["classification"] == "kernel")
@@ -756,7 +777,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                 SystemExit, "exact selected source",
             ):
                 self.validator.validate_kernel_inventory(document, None, repo_root=ROOT)
-            document = copy.deepcopy(self.original)
+            document = copy.deepcopy(baseline)
             fixture = next(row for row in document["compilerFixtures"]
                            if row["fixtureId"] == f"gfx950-gpt-oss-{variant}")
             other = "scalar-attention" if index == 0 else "pipelined-attention"
@@ -766,6 +787,31 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                 SystemExit, "exact current source occurrence",
             ):
                 self.validator.validate_kernel_inventory(document, None, repo_root=ROOT)
+
+    def test_attention_historical_lds_snapshot_cannot_regain_exact_binding(self):
+        lesson_id = "gfx950-gpt-oss-120b-megakernel"
+        lesson = next(row for row in self.manifest["curriculum"]["lessons"] if row["lessonId"] == lesson_id)
+        tab = next(row for row in lesson["codeTabs"] if row["ordinal"] == 5)
+        display = next(row for row in self.manifest["kernelInventory"]["displayItems"]
+                       if row["lessonId"] == lesson_id and row["tabOrdinal"] == 5)
+        self.assertEqual(display["bindingStatus"], "pending")
+        self.assertEqual(display["functionUtf8Offset"], 1508)
+        self.assertEqual(tab["displayedUtf8Bytes"], 22863)
+        self.assertEqual(tab["displayedSha256"], "faf9bc589658b1381e1042c71b952881488261cc85ff86c21dbb7f1f1a83a460")
+        self.assertEqual(tab["sourceSha256"], tab["displayedSha256"])
+        source = (ROOT / tab["sourcePath"]).read_bytes()
+        self.assertNotEqual(hashlib.sha256(source).hexdigest(), tab["sourceSha256"])
+        before = copy.deepcopy(self.manifest["curriculum"])
+        report = self.validator.validate_kernel_inventory(self.manifest, None, repo_root=ROOT)
+        self.assertIs(report["inventoryComplete"], False)
+        self.assertIs(report["runtimeCensusValidated"], False)
+        self.assertIsNone(report["requiredPairCount"])
+        self.assertTrue(any(row.get("lessonId") == lesson_id and row.get("tabOrdinal") == 5
+                            for row in report["unresolvedBindings"]))
+        display["bindingStatus"] = "fixture-source-contract"
+        with self.assertRaisesRegex(SystemExit, "exact current source occurrence"):
+            self.validator.validate_kernel_inventory(self.manifest, None, repo_root=ROOT)
+        self.assertEqual(self.manifest["curriculum"], before)
 
     def gpt_fixture_document(self):
         """A six-binding component projection, not the live website census."""

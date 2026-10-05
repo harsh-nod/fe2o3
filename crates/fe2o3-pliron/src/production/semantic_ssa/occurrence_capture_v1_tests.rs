@@ -979,3 +979,7 @@ fn sealed_capture_moves_with_owner_without_rebinding_or_replay_mutation() {
 
 #[path = "occurrence_payload_resource_v1_tests.rs"]
 mod occurrence_payload_resource_v1_tests;
+
+mod terminal_boundary_capture_v1760_tests {
+    include!("terminal_boundary_capture_v1760_tests.rs");
+}

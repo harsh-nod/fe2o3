@@ -1,9 +1,23 @@
 // Checks live call attachment and memory phases, not source value equivalence.
+include!("production_scoped_typed_call_result_v29.rs");
+
 fn check_scoped_defined_call_phases_v29(
     instances: &ProductionCallInstancePlanV1<'_>,
     emitted: &[Option<LoweredFunctionResultV1>],
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
+    check_scoped_defined_call_phases_with_references_v29(instances, emitted, None, budget)
+}
+
+fn check_scoped_defined_call_phases_with_references_v29(
+    instances: &ProductionCallInstancePlanV1<'_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    references: Option<&SourceReferencePlanV29<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    if let Some(references) = references {
+        references.check_owner(instances, budget)?;
+    }
     with_canonical_call_scratch_v1(budget, |budget| {
         let mismatch = || ProductionSemanticKirErrorV1::CorrespondenceMismatch;
         budget.charge_work(1)?;
@@ -16,6 +30,12 @@ fn check_scoped_defined_call_phases_v29(
                 budget.charge_work(12)?;
                 let id = instances.id_at(index).ok_or_else(mismatch)?;
                 let source = instances.instance(id).ok_or_else(mismatch)?;
+                if instances.instance_reachable(id) == Some(false) {
+                    if lowered.is_some() {
+                        return Err(mismatch());
+                    }
+                    return Ok(());
+                }
                 let lowered = lowered.as_ref().ok_or_else(mismatch)?;
                 if lowered.source_call_instance != Some(id) {
                     return Err(mismatch());
@@ -23,8 +43,14 @@ fn check_scoped_defined_call_phases_v29(
                 if let Some(events) = &lowered.lifecycle_events {
                     events.check_identity(instances, id, budget)?;
                 }
-                instance_check_source_rows_v1(source, source_identity.root, lowered, budget)
-                    .map_err(pending_scope_correspondence_error_v29)?;
+                instance_check_source_rows_with_control_v1(
+                    instances,
+                    id,
+                    source_identity.root,
+                    lowered,
+                    budget,
+                )
+                .map_err(pending_scope_correspondence_error_v29)?;
                 let anchors = lowered
                     .scoped_memory_anchors
                     .as_ref()
@@ -58,32 +84,81 @@ fn check_scoped_defined_call_phases_v29(
                 }
                 let calls = instances.calls(id).ok_or_else(mismatch)?;
                 budget.charge_work(calls.len())?;
-                let expected = calls.iter().filter(|call| call.child().is_some()).count();
+                let expected = calls
+                    .iter()
+                    .filter(|call| {
+                        call.child().is_some()
+                            && instances.call_control(call.occurrence())
+                                != Some(ProductionCallControlV1::Unreachable)
+                    })
+                    .count();
                 if rows
                     .iter()
-                    .filter(|row| matches!(row.kind, SemanticKirCallReturnKindV1::Call { .. }))
+                    .filter(|row| {
+                        matches!(
+                            row.kind,
+                            SemanticKirCallReturnKindV1::Call { .. }
+                                | SemanticKirCallReturnKindV1::NoNormalReturnCall { .. }
+                        )
+                    })
                     .count()
                     != expected
                 {
                     return Err(mismatch());
                 }
-                let values = CallFunctionIndexV1::new(&lowered.function, budget)?;
+                let values =
+                    scoped_call_index_with_deferred_parts_v29(instances, id, lowered, budget)?;
                 check_scoped_call_census_v29(lowered, emitted, budget)?;
-                check_call_signature_v1(
-                    instances.owner().source_semantic(),
-                    source.declaration(),
-                    source.function(),
-                    if id == instances.root() {
-                        SemanticKirFunctionRoleV1::KernelEntry
-                    } else {
-                        SemanticKirFunctionRoleV1::InternalHelper
-                    },
-                    &lowered.function,
-                    budget,
-                )?;
+                if let Some(references) = references.filter(|_| id != instances.root()) {
+                    let expected = execution_function_signature_with_references_v29(
+                        instances,
+                        id,
+                        Some(references),
+                        budget,
+                    )?;
+                    if lowered.function.role != fe2o3_kernel_ir::FunctionRole::InternalHelper
+                        || expected.parameter_types.len()
+                            != lowered.function.signature.parameters.len()
+                        || expected.result_types.len() != lowered.function.signature.results.len()
+                    {
+                        return Err(mismatch());
+                    }
+                    for (expected, actual) in expected
+                        .parameter_types
+                        .iter()
+                        .zip(&lowered.function.signature.parameters)
+                        .chain(
+                            expected
+                                .result_types
+                                .iter()
+                                .zip(&lowered.function.signature.results),
+                        )
+                    {
+                        if !call_types_equal_v1(expected, actual, budget)? {
+                            return Err(mismatch());
+                        }
+                    }
+                } else {
+                    check_call_signature_v1(
+                        instances.owner().source_semantic(),
+                        source.declaration(),
+                        source.function(),
+                        if id == instances.root() {
+                            SemanticKirFunctionRoleV1::KernelEntry
+                        } else {
+                            SemanticKirFunctionRoleV1::InternalHelper
+                        },
+                        &lowered.function,
+                        budget,
+                    )?;
+                }
                 let exits = instances.exits(id).ok_or_else(mismatch)?;
                 budget.charge_work(exits.len())?;
-                let returns = instances.returns(id).ok_or_else(mismatch)?.count();
+                let returns = instances
+                    .returns(id)
+                    .ok_or_else(mismatch)?
+                    .filter(|exit| instances.block_reachable(id, exit.block) == Some(true))
+                    .count();
                 if rows
                     .iter()
                     .filter(|row| matches!(row.kind, SemanticKirCallReturnKindV1::Return { .. }))
@@ -121,7 +196,7 @@ fn check_scoped_defined_call_phases_v29(
                     )?;
                     let first = span.first_operation_ordinal as usize;
                     let end = argument_sum_v1(&[first, span.operation_count as usize])?;
-                    check_call_return_v1(
+                    check_scoped_call_return_v29(
                         block,
                         first,
                         block.operations.get(first..end).ok_or_else(mismatch)?,
@@ -134,6 +209,11 @@ fn check_scoped_defined_call_phases_v29(
                 for call in calls {
                     let Some(child) = call.child() else { continue };
                     budget.charge_work(8)?;
+                    if instances.call_control(call.occurrence())
+                        == Some(ProductionCallControlV1::Unreachable)
+                    {
+                        continue;
+                    }
                     let occurrence = call.occurrence();
                     let callee = instances.instance(child).ok_or_else(mismatch)?;
                     let target = emitted
@@ -156,16 +236,6 @@ fn check_scoped_defined_call_phases_v29(
                         .ok()
                         .map(|index| &rows[index])
                         .ok_or_else(mismatch)?;
-                    let SemanticKirCallReturnKindV1::Call {
-                        arguments_first,
-                        call_operation,
-                        destination_end,
-                        destination,
-                        transport,
-                    } = row.kind
-                    else {
-                        return Err(mismatch());
-                    };
                     budget.charge_work(lowered.terminator_operation_spans.len())?;
                     let span = lowered
                         .terminator_operation_spans
@@ -178,15 +248,149 @@ fn check_scoped_defined_call_phases_v29(
                     }
                     let block = values.block(block_id, budget)?;
                     let source_call = call.source();
+                    let first = span.first_operation_ordinal as usize;
+                    let end = argument_sum_v1(&[first, span.operation_count as usize])?;
+                    let (arguments_first, call_operation) = match row.kind {
+                        SemanticKirCallReturnKindV1::Call {
+                            arguments_first,
+                            call_operation,
+                            ..
+                        }
+                        | SemanticKirCallReturnKindV1::NoNormalReturnCall {
+                            arguments_first,
+                            call_operation,
+                            ..
+                        } => (arguments_first, call_operation),
+                        SemanticKirCallReturnKindV1::Return { .. } => return Err(mismatch()),
+                    };
+                    let inputs = match (&target.invocation_entry, &target.direct_call_inputs) {
+                        (Some(entry), None) => Some(&entry.inputs),
+                        (None, inputs) => inputs.as_ref(),
+                        (Some(_), Some(_)) => return Err(mismatch()),
+                    };
+                    if references.is_some() && inputs.is_none() {
+                        return Err(mismatch());
+                    }
+                    if let Some(inputs) = inputs {
+                        if references.is_some() || target.direct_call_inputs.is_some() {
+                            invocation_check_inputs_v1(
+                                callee.declaration(),
+                                inputs,
+                                target.function.signature.parameters.len(),
+                                budget,
+                            )?;
+                        }
+                        check_reference_call_replay_v26(
+                            instances.owner().source_semantic().types(),
+                            source.declaration(),
+                            callee.declaration(),
+                            occurrence,
+                            source_call,
+                            &target.function,
+                            inputs,
+                            block,
+                            arguments_first as usize,
+                            call_operation as usize,
+                            &values,
+                            budget,
+                        )?;
+                    }
+                    if let SemanticKirCallReturnKindV1::NoNormalReturnCall {
+                        arguments_first,
+                        call_operation,
+                        destination,
+                    } = row.kind
+                    {
+                        check_resolved_no_normal_call_v1(
+                            instances,
+                            call,
+                            &target.function,
+                            block,
+                            first,
+                            end,
+                            arguments_first as usize,
+                            call_operation as usize,
+                            destination,
+                            &values,
+                            budget,
+                        )?;
+                        if check_scoped_call_access_phases_v29(
+                            anchors,
+                            occurrence.block,
+                            block,
+                            source_call,
+                            first,
+                            end,
+                            arguments_first as usize,
+                            call_operation as usize,
+                            end,
+                            budget,
+                        )?
+                        .is_some()
+                        {
+                            return Err(mismatch());
+                        }
+                        continue;
+                    }
+                    let SemanticKirCallReturnKindV1::Call {
+                        arguments_first,
+                        call_operation,
+                        destination_end,
+                        destination,
+                        transport,
+                    } = row.kind
+                    else {
+                        return Err(mismatch());
+                    };
+                    if instances.call_control(occurrence)
+                        != Some(ProductionCallControlV1::MayReturn)
+                    {
+                        return Err(mismatch());
+                    }
                     let next = source_call
                         .destination()
                         .ok_or_else(mismatch)?
                         .edge()
                         .target();
                     let successor = scoped_call_block_v29(lowered, next, budget)?;
-                    let first = span.first_operation_ordinal as usize;
-                    let end = argument_sum_v1(&[first, span.operation_count as usize])?;
-                    check_resolved_defined_call_v1(
+                    let typed_candidate = (call_operation as usize)
+                        .checked_add(1)
+                        .and_then(|position| block.operations.get(position))
+                        .is_some_and(|operation| {
+                            matches!(
+                                operation.kind,
+                                OperationKind::Storage(ScopedObjectOperationV29::WriteValue { .. })
+                            )
+                        });
+                    let typed_recipe = if typed_candidate {
+                        if !(first <= arguments_first as usize
+                            && arguments_first <= call_operation
+                            && call_operation < destination_end
+                            && destination_end as usize <= end
+                            && end <= block.operations.len())
+                        {
+                            return Err(mismatch());
+                        }
+                        let ordinal = check_scoped_call_access_phases_v29(
+                            anchors,
+                            occurrence.block,
+                            block,
+                            source_call,
+                            first,
+                            end,
+                            arguments_first as usize,
+                            call_operation as usize,
+                            destination_end as usize,
+                            budget,
+                        )?
+                        .ok_or_else(mismatch)?;
+                        Some(scoped_typed_call_result_recipe_v29(
+                            instances, call, anchors, ordinal, block, references, budget,
+                        )?)
+                    } else {
+                        None
+                    };
+                    check_resolved_defined_call_with_scoped_recipe_v29(
                         instances.owner().source_semantic(),
                         callee.declaration(),
                         &target.function.id,
@@ -200,10 +404,11 @@ fn check_scoped_defined_call_phases_v29(
                         call_operation as usize,
                         destination_end as usize,
                         destination,
+                        typed_recipe,
                         &values,
                         budget,
                     )?;
-                    check_resolved_call_transport_v1(
+                    check_scoped_call_transport_v29(
                         source.ssa(),
                         occurrence.block,
                         block,
@@ -216,23 +421,34 @@ fn check_scoped_defined_call_phases_v29(
                         &values,
                         budget,
                     )?;
-                    check_scoped_call_access_phases_v29(
-                        anchors,
-                        occurrence.block,
-                        block,
-                        source_call,
-                        first,
-                        end,
-                        arguments_first as usize,
-                        call_operation as usize,
-                        destination_end as usize,
-                        budget,
-                    )?;
+                    if !typed_candidate {
+                        if check_scoped_call_access_phases_v29(
+                            anchors,
+                            occurrence.block,
+                            block,
+                            source_call,
+                            first,
+                            end,
+                            arguments_first as usize,
+                            call_operation as usize,
+                            destination_end as usize,
+                            budget,
+                        )?
+                        .is_some()
+                        {
+                            return Err(mismatch());
+                        }
+                    }
                 }
                 Ok(())
             })?;
         }
         Ok(())
+    })
+    .inspect_err(|error| {
+        if let Some(references) = references {
+            source_reference_record_failure_v29(references, error);
+        }
     })
 }
 
@@ -252,7 +468,9 @@ fn check_scoped_call_census_v29(
             let mut internal = false;
             for candidate in emitted {
                 budget.charge_work(1)?;
-                let candidate = candidate.as_ref().ok_or_else(mismatch)?;
+                let Some(candidate) = candidate.as_ref() else {
+                    continue;
+                };
                 budget.charge_work(argument_sum_v1(&[
                     callee.as_str().len(),
                     candidate.function.id.as_str().len(),
@@ -281,6 +499,7 @@ fn check_scoped_call_census_v29(
                 .map(|index| &rows[index])
                 .ok_or_else(mismatch)?;
             if !matches!(anchor.kind, SemanticKirCallReturnKindV1::Call { call_operation, .. }
+                | SemanticKirCallReturnKindV1::NoNormalReturnCall { call_operation, .. }
                 if call_operation as usize == ordinal)
             {
                 return Err(mismatch());
@@ -325,7 +544,7 @@ fn check_scoped_call_access_phases_v29(
     call_operation: usize,
     destination_end: usize,
     budget: &mut ArgumentBudgetV1<'_>,
-) -> Result<(), ProductionSemanticKirErrorV1> {
+) -> Result<Option<usize>, ProductionSemanticKirErrorV1> {
     let operations = block
         .operations
         .get(first..end)
@@ -333,14 +552,22 @@ fn check_scoped_call_access_phases_v29(
     budget.charge_work(argument_sum_v1(&[operations.len(), anchors.rows.len()])?)?;
     let expected = operations
         .iter()
-        .filter(|operation| scoped_memory_pointer_v29(&operation.kind).is_some())
+        .filter(|operation| {
+            scoped_memory_pointer_v29(&operation.kind).is_some()
+                || matches!(operation.kind, OperationKind::Storage(_))
+        })
         .count();
     let site = execution_site_v29(source_block, None);
     let mut previous = None;
     let mut checked = 0;
-    for row in &anchors.rows {
-        let ScopedMemoryAnchorKindV29::Access { pointer } = row.kind else {
-            continue;
+    let mut typed_result = None;
+    for (ordinal, row) in anchors.rows.iter().enumerate() {
+        let pointer = match row.kind {
+            ScopedMemoryAnchorKindV29::Access { pointer, .. } => Some(pointer),
+            ScopedMemoryAnchorKindV29::Object(_) => None,
+            ScopedMemoryAnchorKindV29::Kill { .. }
+            | ScopedMemoryAnchorKindV29::ScalarMove { .. }
+            | ScopedMemoryAnchorKindV29::FailureRead { .. } => continue,
         };
         if row.block != block.id || !(first..end).contains(&row.position) {
             continue;
@@ -349,9 +576,14 @@ fn check_scoped_call_access_phases_v29(
         let operation = &block.operations[row.position].kind;
         if frame.site != site
             || previous.is_some_and(|position| position >= row.position)
-            || scoped_memory_pointer_v29(operation) != Some(pointer)
+            || pointer.is_some_and(|pointer| scoped_memory_pointer_v29(operation) != Some(pointer))
         {
             return Err(scoped_memory_error_v29());
+        }
+        if pointer.is_none() {
+            anchors
+                .object_payload(row, budget)?
+                .check_operation(&block.operations[row.position], budget)?;
         }
         let valid = if row.position < arguments_first {
             frame.role
@@ -360,7 +592,13 @@ fn check_scoped_call_access_phases_v29(
                 ))
                 && matches!(
                     operation,
-                    OperationKind::Load { .. } | OperationKind::GuardedLoad { .. }
+                    OperationKind::Load { .. }
+                        | OperationKind::GuardedLoad { .. }
+                        | OperationKind::Storage(
+                            ScopedObjectOperationV29::Project { .. }
+                                | ScopedObjectOperationV29::ReadValue { .. }
+                                | ScopedObjectOperationV29::ReadDiscriminant { .. }
+                        )
                 )
         } else if row.position < call_operation {
             matches!(frame.role,
@@ -370,12 +608,31 @@ fn check_scoped_call_access_phases_v29(
             frame.role == Some(ScopedMemoryRoleV29::CallResult)
                 && matches!(
                     operation,
-                    OperationKind::Store { .. } | OperationKind::GuardedStore { .. }
+                    OperationKind::Store { .. }
+                        | OperationKind::GuardedStore { .. }
+                        | OperationKind::Storage(
+                            ScopedObjectOperationV29::Project { .. }
+                                | ScopedObjectOperationV29::ReadValue { .. }
+                                | ScopedObjectOperationV29::ReadDiscriminant { .. }
+                                | ScopedObjectOperationV29::WriteValue { .. }
+                                | ScopedObjectOperationV29::CopyObject { .. }
+                                | ScopedObjectOperationV29::SetDiscriminant { .. }
+                        )
                 )
         } else {
             false
         };
         if !valid {
+            return Err(scoped_memory_error_v29());
+        }
+        if row.position > call_operation
+            && row.position < destination_end
+            && matches!(
+                operation,
+                OperationKind::Storage(ScopedObjectOperationV29::WriteValue { .. })
+            )
+            && typed_result.replace(ordinal).is_some()
+        {
             return Err(scoped_memory_error_v29());
         }
         previous = Some(row.position);
@@ -384,5 +641,5 @@ fn check_scoped_call_access_phases_v29(
     if checked != expected {
         return Err(scoped_memory_error_v29());
     }
-    Ok(())
+    Ok(typed_result)
 }

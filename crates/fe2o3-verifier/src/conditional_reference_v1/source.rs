@@ -405,7 +405,7 @@ pub(super) fn visit_loads(
             visit_loads(when_true, budget, visit)?;
             visit_loads(when_false, budget, visit)
         }
-        Expr::Constant { .. } | Expr::Symbol { .. } => Ok(()),
+        Expr::Constant { .. } | Expr::Symbol { .. } | Expr::GlobalInvocation1d { .. } => Ok(()),
     }
 }
 

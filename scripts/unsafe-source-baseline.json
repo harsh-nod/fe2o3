@@ -785,8 +785,8 @@
     "function": 1
   },
   "crates/fe2o3-host/src/application_descriptor_handoff.rs": {
-    "block": 13,
-    "function": 3
+    "block": 14,
+    "function": 4
   },
   "crates/fe2o3-host/src/argument_alias.rs": {
     "block": 19,
@@ -817,6 +817,9 @@
   "crates/fe2o3-host/src/generated_kfd_invocation.rs": {
     "impl": 1
   },
+  "crates/fe2o3-host/src/generated_kfd_mixed_preparation_v53_tests.rs": {
+    "impl": 3
+  },
   "crates/fe2o3-host/src/generated_worker_v3_dispatch.rs": {
     "block": 5,
     "trait": 1
@@ -831,6 +834,10 @@
     "block": 2,
     "function": 1
   },
+  "crates/fe2o3-host/src/mixed_worker_v53_execution.rs": {
+    "impl": 1,
+    "trait": 1
+  },
   "crates/fe2o3-host/src/prepared_launch.rs": {
     "block": 7,
     "function": 1
@@ -838,6 +845,10 @@
   "crates/fe2o3-host/src/production_application.rs": {
     "block": 2,
     "function": 2
+  },
+  "crates/fe2o3-host/src/production_mixed_application_v53.rs": {
+    "block": 1,
+    "function": 1
   },
   "crates/fe2o3-host/src/tile_interop.rs": {
     "block": 1,
@@ -1477,8 +1488,8 @@
     "function": 2
   },
   "crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/wave64_capture.rs": {
-    "block": 1,
-    "function": 3
+    "block": 2,
+    "function": 4
   },
   "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs": {
     "block": 1

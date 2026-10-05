@@ -89,6 +89,45 @@ pub(crate) fn verification_radix_sort_u32_by_key_v1<T: Copy>(
     budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
     key: impl Fn(&T) -> u32,
 ) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    verification_radix_sort_shared_v2(values, Some(scratch_cells_per_row), budget, &key)
+}
+
+// Byte-accounted scratch for the private CFG adapter. This is not a change to
+// the public verifier's logical row-cell convention.
+pub(crate) fn verification_radix_sort_u32_bytes_v2<T: Copy>(
+    values: &mut [T],
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    key: impl Fn(&T) -> u32 + Copy,
+) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
+    use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+    type Error = CanonicalKernelIrVerificationResourceErrorV1;
+    let floor = budget.storage_checkpoint();
+    let frame = std::mem::size_of::<std::thread::Result<Result<(), Error>>>()
+        .checked_add(std::mem::size_of_val(&key))
+        .and_then(|bytes| {
+            bytes.checked_add(std::mem::size_of::<(
+                &mut [T],
+                &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+            )>())
+        })
+        .ok_or(Error::Arithmetic)?;
+    budget.reserve_storage(frame)?;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        verification_radix_sort_shared_v2(values, None, budget, &key)
+    }));
+    budget.rollback_storage(floor)?;
+    match result {
+        Ok(result) => result,
+        Err(panic) => resume_unwind(panic),
+    }
+}
+
+fn verification_radix_sort_shared_v2<T: Copy>(
+    values: &mut [T],
+    scratch_cells_per_row: Option<usize>,
+    budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    key: &impl Fn(&T) -> u32,
+) -> Result<(), CanonicalKernelIrVerificationResourceErrorV1> {
     let count = values.len();
     if count < 2 {
         return Ok(());
@@ -118,17 +157,41 @@ pub(crate) fn verification_radix_sort_u32_by_key_v1<T: Copy>(
         .checked_mul(U32_RADIX_PASSES_V1)
         .and_then(|work| work.checked_add(count))
         .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
-    let scratch_storage = count
-        .checked_mul(scratch_cells_per_row)
-        .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+    let scratch_storage = if let Some(cells) = scratch_cells_per_row {
+        count.checked_mul(cells)
+    } else {
+        count
+            .checked_mul(std::mem::size_of::<T>())
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Vec<T>>()))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<[usize; RADIX_BUCKETS_V1]>()))
+    }
+    .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
     budget.charge_work(work)?;
     budget.reserve_storage(scratch_storage)?;
 
     let mut scratch = Vec::new();
     if scratch.try_reserve_exact(count).is_err() {
+        drop(scratch);
         budget.release_storage(scratch_storage)?;
         return Err(CanonicalKernelIrVerificationResourceErrorV1::Allocation);
     }
+    let scratch_storage = if scratch_cells_per_row.is_none() {
+        let excess = scratch
+            .capacity()
+            .checked_sub(count)
+            .and_then(|excess| excess.checked_mul(std::mem::size_of::<T>()))
+            .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?;
+        if let Err(error) = budget.reserve_storage(excess) {
+            drop(scratch);
+            budget.release_storage(scratch_storage)?;
+            return Err(error);
+        }
+        scratch_storage
+            .checked_add(excess)
+            .ok_or(CanonicalKernelIrVerificationResourceErrorV1::Arithmetic)?
+    } else {
+        scratch_storage
+    };
     scratch.extend_from_slice(values);
 
     for shift in [0_u32, 8, 16, 24] {

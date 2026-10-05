@@ -174,7 +174,12 @@ pub(super) fn release_interrupts(tree: &mut Tracees, deadline: Instant) -> Resul
     Ok(())
 }
 
-pub(super) fn birth_request(pid: i32, r: &UserRegistersX86_64) -> Result<Option<Birth>> {
+pub(super) fn birth_request(
+    pid: i32,
+    r: &UserRegistersX86_64,
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
+) -> Result<Option<Birth>> {
     let birth = match r.orig_rax as u32 {
         57 => Birth::Fork,
         58 => Birth::Vfork,
@@ -191,7 +196,7 @@ pub(super) fn birth_request(pid: i32, r: &UserRegistersX86_64) -> Result<Option<
             }
         },
         CLONE3_SYSCALL => {
-            validate_clone3_request(pid, r)?;
+            validate_clone3_request(pid, r, policy, role)?;
             let memory = File::open(format!("/proc/{pid}/mem"))
                 .map_err(|_| io_process_failure("open stable clone flags"))?;
             let mut bytes = [0; 8];
@@ -289,6 +294,7 @@ fn register_child(
     event: u32,
     created: &mut usize,
     expected: usize,
+    contexts: &mut Option<SolverContextsV2>,
 ) -> Result<i32> {
     let pid = event_child(parent)?;
     let parent_task = tree[&parent];
@@ -350,7 +356,9 @@ fn register_child(
         *created = created
             .checked_add(1)
             .ok_or_else(|| process_failure("proof descendant counter overflow"))?;
-        if parent_task.role != TraceeRole::Verifier || *created > expected {
+        if let Some(contexts) = contexts {
+            contexts.birth(parent_task.role, group)?;
+        } else if parent_task.role != TraceeRole::Verifier || *created > expected {
             return Err(process_failure(
                 "rust_verify created an additional or nested descendant, including sequential creation",
             ));
@@ -368,10 +376,12 @@ fn register_child(
 pub(super) fn complete_request(
     tree: &mut Tracees,
     pid: i32,
+    policy: GeneratedProofProcessPolicyV2,
     allowed: &[AllowedRuntimeExecutableV1],
     validate_maps: bool,
     created: &mut usize,
     expected: usize,
+    contexts: &mut Option<SolverContextsV2>,
     deadline: Instant,
     progress: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
@@ -381,7 +391,14 @@ pub(super) fn complete_request(
         initial.orig_rax as u32,
         OPEN_SYSCALL | OPENAT_SYSCALL | PRCTL_SYSCALL
     ) {
-        return validate_sensitive_registers(pid, &initial, allowed, validate_maps);
+        return validate_sensitive_registers_with_policy(
+            pid,
+            &initial,
+            allowed,
+            validate_maps,
+            policy,
+            tree[&pid].role,
+        );
     }
     let deadline = deadline.min(Instant::now() + STABLE_TIMEOUT);
     park_all(tree, deadline, progress)?;
@@ -419,7 +436,13 @@ pub(super) fn complete_request(
             progress,
         );
     }
-    let birth = birth_request(pid, &registers)?;
+    let birth = birth_request(pid, &registers, policy, tree[&pid].role)?;
+    if birth.is_some_and(|kind| kind != Birth::Thread)
+        && let Some(contexts) = contexts
+    {
+        contexts.retire_queued(tree)?;
+        contexts.before_birth(tree[&pid].role)?;
+    }
     if birth.is_some() {
         if tree[&pid].role == TraceeRole::PendingExecutable {
             return Err(process_failure(
@@ -427,7 +450,14 @@ pub(super) fn complete_request(
             ));
         }
     } else {
-        validate_sensitive_registers(pid, &registers, allowed, validate_maps)?;
+        validate_sensitive_registers_with_policy(
+            pid,
+            &registers,
+            allowed,
+            validate_maps,
+            policy,
+            tree[&pid].role,
+        )?;
     }
     #[cfg(test)]
     super::stable_tests::probe(pid, &registers, false)?;
@@ -461,8 +491,15 @@ pub(super) fn complete_request(
                         "one creation syscall reported multiple children",
                     ));
                 }
-                let new =
-                    register_child(tree, pid, kind, (status as u32) >> 16, created, expected)?;
+                let new = register_child(
+                    tree,
+                    pid,
+                    kind,
+                    (status as u32) >> 16,
+                    created,
+                    expected,
+                    contexts,
+                )?;
                 child = Some(new);
                 let first = wait_stopped(tree, new, deadline, progress)?;
                 if (first as u32) >> 16 != PTRACE_EVENT_STOP || stop_signal(first) != SIGTRAP {
@@ -476,10 +513,12 @@ pub(super) fn complete_request(
                     run_vfork_to_exec(
                         tree,
                         new,
+                        policy,
                         allowed,
                         validate_maps,
                         created,
                         expected,
+                        contexts,
                         deadline,
                         progress,
                     )?;
@@ -531,10 +570,12 @@ pub(super) fn complete_request(
 fn run_vfork_to_exec(
     tree: &mut Tracees,
     child: i32,
+    policy: GeneratedProofProcessPolicyV2,
     allowed: &[AllowedRuntimeExecutableV1],
     validate_maps: bool,
     created: &mut usize,
     expected: usize,
+    contexts: &mut Option<SolverContextsV2>,
     deadline: Instant,
     progress: &mut impl FnMut() -> Result<()>,
 ) -> Result<()> {
@@ -550,10 +591,12 @@ fn run_vfork_to_exec(
                 complete_request(
                     tree,
                     child,
+                    policy,
                     allowed,
                     validate_maps,
                     created,
                     expected,
+                    contexts,
                     deadline,
                     progress,
                 )?;
@@ -569,6 +612,70 @@ fn run_vfork_to_exec(
     Err(process_failure(
         "vfork child exceeded its pre-exec event bound",
     ))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GroupExitResume {
+    Resumed,
+    AwaitingTerminal,
+}
+
+fn group_exit_resume_result(result: io::Result<()>) -> Result<GroupExitResume> {
+    match result {
+        Ok(()) => Ok(GroupExitResume::Resumed),
+        Err(error) if error.raw_os_error() == Some(3) => Ok(GroupExitResume::AwaitingTerminal),
+        Err(error) => Err(process_failure(format!(
+            "continue authenticated exiting proof sibling: {error}"
+        ))),
+    }
+}
+
+fn group_exit_sibling_at_stop(
+    requester: i32,
+    group: i32,
+    member: i32,
+    task: &Tracee,
+    exit_status: i32,
+) -> bool {
+    requester != member
+        && task.thread_group == group
+        && task.current_stop.is_some()
+        && !task.terminal_consumed
+        && task
+            .exit_boundary
+            .is_some_and(|exit| exit.matches(exit_status))
+}
+
+/// Called only after the requester's authenticated group EXIT. A fatal group
+/// signal can invalidate a sibling's observed stop before CONT, with waitpid
+/// still returning no status yet. ESRCH is not a terminal observation: retain
+/// the PID/boundary, retire only the stale stop, and let the existing bounded
+/// drain authenticate its exact terminal wait. No userspace permission is given.
+fn resume_group_exit_sibling(
+    tree: &mut Tracees,
+    requester: i32,
+    group: i32,
+    member: i32,
+    exit_status: i32,
+) -> Result<GroupExitResume> {
+    let task = tree
+        .get_mut(&member)
+        .ok_or_else(|| process_failure("unknown exiting group sibling"))?;
+    if !group_exit_sibling_at_stop(requester, group, member, task, exit_status) {
+        return Err(process_failure(
+            "group-exit continuation lacks exact stopped sibling custody",
+        ));
+    }
+    let result = ptrace_result(PTRACE_CONT, member, 0);
+    #[cfg(test)]
+    let result = super::stable_tests::group_exit_continue_result(member, result);
+    let state = group_exit_resume_result(result)?;
+    task.current_stop = None;
+    #[cfg(test)]
+    if state == GroupExitResume::AwaitingTerminal {
+        super::stable_tests::record_group_exit_wait_only(member);
+    }
+    Ok(state)
 }
 
 fn complete_exit(
@@ -668,7 +775,13 @@ fn complete_exit(
                         ));
                     }
                 }
-                resume_tracee(tree, tid, 0)?;
+                if tid != pid && group_exit && group_dying {
+                    // Both outcomes still require the genuine terminal wait and
+                    // exact ExitBoundary check above before completion succeeds.
+                    let _ = resume_group_exit_sibling(tree, pid, group, tid, exit_status)?;
+                } else {
+                    resume_tracee(tree, tid, 0)?;
+                }
                 #[cfg(test)]
                 if group_exit && tree[&tid].leader && (status as u32) >> 16 == PTRACE_EVENT_EXIT {
                     super::stable_tests::abort_after_group_leader_exit_resume(tree, tid)?;
@@ -679,5 +792,58 @@ fn complete_exit(
             return Ok(());
         }
         thread::sleep(ACTIVE_TREE_POLL_INTERVAL);
+    }
+}
+
+#[cfg(test)]
+mod group_exit_custody_tests {
+    use super::*;
+
+    #[test]
+    fn group_exit_wait_only_distinguishes_esrch_from_resume_and_other_errors() {
+        assert_eq!(
+            group_exit_resume_result(Ok(())).unwrap(),
+            GroupExitResume::Resumed
+        );
+        assert_eq!(
+            group_exit_resume_result(Err(io::Error::from_raw_os_error(3))).unwrap(),
+            GroupExitResume::AwaitingTerminal
+        );
+        for errno in [1, 4, 5, 10, 22] {
+            let error =
+                group_exit_resume_result(Err(io::Error::from_raw_os_error(errno))).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("continue authenticated exiting proof sibling")
+            );
+        }
+    }
+
+    #[test]
+    fn group_exit_wait_only_requires_exact_unreaped_stopped_sibling_boundary() {
+        let stop = ((PTRACE_EVENT_STOP as i32) << 16) | (SIGTRAP << 8) | 0x7f;
+        let mut task = Tracee::pending(TraceeRole::Verifier, 101, false);
+        task.current_stop = TraceeStop::observed(stop);
+        task.exit_boundary = Some(ExitBoundary::Group(0));
+        assert!(group_exit_sibling_at_stop(101, 101, 102, &task, 0));
+        assert!(!group_exit_sibling_at_stop(102, 101, 102, &task, 0));
+        assert!(!group_exit_sibling_at_stop(101, 103, 102, &task, 0));
+        assert!(!group_exit_sibling_at_stop(101, 101, 102, &task, 1 << 8));
+        assert!(!group_exit_sibling_at_stop(101, 101, 102, &task, stop));
+        for boundary in [
+            None,
+            Some(ExitBoundary::Group(1 << 8)),
+            Some(ExitBoundary::Task(1 << 8)),
+        ] {
+            let mut changed = task;
+            changed.exit_boundary = boundary;
+            assert!(!group_exit_sibling_at_stop(101, 101, 102, &changed, 0));
+        }
+        task.terminal_consumed = true;
+        assert!(!group_exit_sibling_at_stop(101, 101, 102, &task, 0));
+        task.terminal_consumed = false;
+        task.current_stop = None;
+        assert!(!group_exit_sibling_at_stop(101, 101, 102, &task, 0));
     }
 }

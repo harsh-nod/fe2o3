@@ -25,8 +25,10 @@ impl PrivateMemoryOwner for VerifiedCanonicalKernelIrModuleV18 {
     }
 }
 
-/// Exact physical initialization of this V18 inventory only. This is not a
-/// source allocation/slot-generation correspondence or native memory permission.
+/// Exact physical initialization of this V18 inventory only. Different reaching
+/// stores can establish initialization without an exact `latest_stores` anchor.
+/// This is not a source allocation/slot-generation correspondence, value
+/// equivalence, or native memory permission.
 ///
 /// ```compile_fail
 /// use fe2o3_kernel_analysis::{CheckedCanonicalKirPrivateMemoryV1,

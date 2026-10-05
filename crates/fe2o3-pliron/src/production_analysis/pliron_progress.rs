@@ -12,8 +12,8 @@ use std::{
 };
 
 use dialect_kernel::{
-    AnalysisSplitOp, BranchArgsOp, BranchOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
-    IndexEqualBranchArgsOp, IndexLessThanBranchArgsOp, IndexUnsignedCastOp,
+    BranchArgsOp, BranchOp, IndexBinaryKindAttr, IndexBinaryOp, IndexConstantOp,
+    IndexLessThanBranchArgsOp, IndexUnsignedCastOp,
 };
 #[cfg(test)]
 use pliron::operation::verify_operation;
@@ -300,8 +300,26 @@ impl PlironProgressReportV1 {
 }
 
 include!("pliron_progress/nested_loops_v1.rs");
+include!("pliron_progress/prepared_graph_v2.rs");
+include!("pliron_progress/prepared_graph_v2_tests.rs");
 include!("pliron_progress/scoped_input_v67.rs");
 include!("pliron_progress/scoped_resource_v67_tests.rs");
 include!("pliron_progress/structural_inventory_v1.rs");
 include!("pliron_progress/loop_graph_v1.rs");
 include!("pliron_progress/resource_tests.rs");
+
+include!("pliron_progress/native_arithmetic_domain_v1.rs");
+include!("pliron_progress/native_scalar_views_v1.rs");
+#[cfg(test)]
+#[path = "pliron_progress/native_loop_resource_v1_tests.rs"]
+mod native_loop_resource_v1_tests;
+#[cfg(test)]
+#[path = "pliron_progress/native_loop_v1_tests.rs"]
+mod native_loop_v1_tests;
+#[cfg(test)]
+#[path = "pliron_progress/native_scalar_views_v1_tests.rs"]
+mod native_scalar_views_v1_tests;
+
+#[cfg(test)]
+#[path = "pliron_progress/native_direct_ssa_v1_tests.rs"]
+mod native_direct_ssa_v1_tests;

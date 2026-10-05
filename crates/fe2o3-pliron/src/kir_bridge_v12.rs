@@ -13,15 +13,27 @@ pub const KIR_PLIRON_BRIDGE_V12_IDENTITY_DOMAIN_V1: &[u8] =
 mod native_profile_v1;
 pub(crate) use native_profile_v1::{NativeBridgeWitnessV1, import_native_neutral_v1};
 
+#[path = "kir_bridge_canonical_ranked_v1.rs"]
+pub(crate) mod canonical_ranked_v1;
+
 include!("kir_bridge_type_profile_v1.rs");
+
+#[path = "kir_bridge_storage_v18.rs"]
+mod storage_v18;
 
 #[path = "kir_bridge_v18.rs"]
 mod bridge_v18;
-#[path = "kir_bridge_storage_v18.rs"]
-mod storage_v18;
+include!("kir_bridge_lifecycle_identity_v18.rs");
+include!("kir_bridge_native_private_input_v1.rs");
+pub(crate) use bridge_v18::{BOUNDED_PAYLOAD_CLEANUP_ATTEMPTS_V1, discard_bounded_payload_v1};
+pub(crate) use bridge_v18::{
+    ExecutedV18Parts, optimize_integer_v18_graph, optimize_integer_worklist_v18_graph,
+    optimize_mixed_fixedpoint_v18_graph, optimize_mixed_pure_cse_v18_graph, optimize_v18_graph,
+};
 pub use bridge_v18::{
     KirBridgeErrorV18, KirBridgeReportV18, KirBridgeStorageV18, KirPlironGraphV18,
 };
+pub(crate) use bridge_v18::{StructuralBridgeWitnessV18, import_structural_native_v30};
 
 /// Transfer reservation for a V12 bridge owner or extracted output and report.
 ///
@@ -60,7 +72,16 @@ impl fmt::Display for KirBridgeErrorV12 {
         }
     }
 }
-impl Error for KirBridgeErrorV12 {}
+impl Error for KirBridgeErrorV12 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Bridge(error) => Some(error),
+            Self::Resource(error) => Some(error),
+            Self::Canonical(error) => Some(error),
+            Self::SessionSetup => None,
+        }
+    }
+}
 impl From<KirBridgeErrorV1> for KirBridgeErrorV12 {
     fn from(error: KirBridgeErrorV1) -> Self {
         Self::Bridge(error)
@@ -704,6 +725,11 @@ impl KirPlironGraphV12<'_> {
                 | crate::fixed_policy_v3::FixedPolicy::Integer6 => {
                     CaptureV12::new_for_policy(limits, &roster, policy)
                 }
+                crate::fixed_policy_v3::FixedPolicy::IntegerWorklist9
+                | crate::fixed_policy_v3::FixedPolicy::MixedPureCse10
+                | crate::fixed_policy_v3::FixedPolicy::MixedFixedpoint11 => {
+                    Err(crate::KirOptimizationMapErrorV12::Passes)
+                }
             }
         }));
         let capture = match captured {
@@ -904,8 +930,7 @@ impl KirPlironGraphV12<'_> {
         self.optimization_roster_metered_v1::<false, _>(limit, &mut |_| Ok(()))
     }
 
-    // Legacy calls instantiate the no-op meter above. Neutral execution meters
-    // its additional physical roster traversal without changing target reports.
+    // Both typed bridge owners share the same physical roster traversal.
     fn optimization_roster_metered_v1<const METER: bool, F>(
         &self,
         limit: usize,
@@ -914,135 +939,23 @@ impl KirPlironGraphV12<'_> {
     where
         F: FnMut(usize) -> Result<(), crate::KirOptimizationMapErrorV12> + ?Sized,
     {
-        use crate::kir_optimization_map_v12::{LiveKeyV12 as Key, LiveRosterV12};
-        use crate::{KirOptimizationEndpointV12 as Endpoint, KirOptimizationMapErrorV12 as E};
-        if METER {
-            meter(
-                self.source
-                    .module()
-                    .functions
-                    .len()
-                    .checked_mul(4)
-                    .and_then(|n| n.checked_add(4))
-                    .ok_or(E::Arithmetic)?,
-            )?;
-        }
-        let context = &self.session.context;
-        let root = self.session.operations[&self.root.identity];
-        if !Operation::is_op::<ModuleOp>(root, context) || root.deref(context).num_regions() != 1 {
-            return Err(E::Coverage);
-        }
-        let region = root.deref(context).get_region(0);
-        let raw_region = region.deref(context);
-        let mut root_blocks = raw_region.iter(context);
-        let root_block = root_blocks.next().ok_or(E::Coverage)?;
-        if root_blocks.next().is_some() {
-            return Err(E::Coverage);
-        }
-        let raw_root_block = root_block.deref(context);
-        let live_functions = index_live_functions(
-            raw_root_block.iter(context),
+        optimization_roster_metered_v1::<METER, F>(
+            &self.session.context,
+            self.session.operations[&self.root.identity],
             self.source.module(),
             &self.origins,
+            limit,
+            meter,
         )
-        .map_err(|_| E::Coverage)?;
-        let mut roster = LiveRosterV12::new();
-        roster.try_reserve_exact(limit).map_err(|_| E::Allocation)?;
-        let mut push = |key, endpoint| {
-            if roster.len() == limit {
-                return Err(E::Limit);
-            }
-            roster.push((key, endpoint));
-            Ok(())
-        };
-        let index = |n: usize| u32::try_from(n).map_err(|_| E::Arithmetic);
-        for (function_index, source) in self.source.module().functions.iter().enumerate() {
-            if METER {
-                meter(1)?;
-            }
-            let Some(body) = &source.body else { continue };
-            let function = index(function_index)?;
-            let live_function = live_functions[function_index].ok_or(E::Coverage)?;
-            if !Operation::is_op::<FuncOp>(live_function, context)
-                || live_function.deref(context).num_regions() != 1
-            {
-                return Err(E::Coverage);
-            }
-            let region = live_function.deref(context).get_region(0);
-            let raw_region = region.deref(context);
-            for (block_index, live_block) in raw_region.iter(context).enumerate() {
-                if METER {
-                    meter(1)?;
-                }
-                let block = index(block_index)?;
-                let raw_block = live_block.deref(context);
-                let offset = if block_index == 0 {
-                    body.parameters.len()
-                } else {
-                    0
-                };
-                if raw_block.get_num_arguments() < offset {
-                    return Err(E::Coverage);
-                }
-                for (argument, value) in raw_block.arguments().enumerate() {
-                    if METER {
-                        meter(1)?;
-                    }
-                    let endpoint = if argument < offset {
-                        Endpoint::FunctionArgument {
-                            function,
-                            argument: index(argument)?,
-                        }
-                    } else {
-                        Endpoint::BlockArgument {
-                            function,
-                            block,
-                            argument: index(argument - offset)?,
-                        }
-                    };
-                    push(Key::Value(value), endpoint)?;
-                }
-                let mut operations = raw_block.iter(context).peekable();
-                let mut operation_index = 0;
-                while let Some(op) = operations.next() {
-                    if METER {
-                        meter(1)?;
-                    }
-                    let coordinate = if operations.peek().is_some() {
-                        KirBridgeCoordinateV1::Operation {
-                            function,
-                            block,
-                            operation: index(operation_index)?,
-                        }
-                    } else {
-                        KirBridgeCoordinateV1::Terminator { function, block }
-                    };
-                    if op.deref(context).num_regions() != 0 {
-                        return Err(E::UnsupportedMutation);
-                    }
-                    push(Key::Operation(op), Endpoint::Operation(coordinate))?;
-                    for (result, value) in op.deref(context).results().enumerate() {
-                        if METER {
-                            meter(1)?;
-                        }
-                        push(
-                            Key::Value(value),
-                            Endpoint::Result {
-                                operation: coordinate,
-                                result: index(result)?,
-                            },
-                        )?;
-                    }
-                    operation_index += 1;
-                }
-                if operation_index == 0 {
-                    return Err(E::Coverage);
-                }
-            }
-        }
-        Ok(roster)
     }
 }
 
 include!("kir_bridge_v12_capture_v1.rs");
+include!("kir_bridge_live_roster_v1.rs");
 include!("kir_bridge_commutative_owner_v1.rs");
+
+#[path = "kir_bridge_canonical_trace_v1.rs"]
+pub(crate) mod canonical_trace_v1;
+
+pub(crate) use bridge_v18::NativeCanonicalMixedAdmissionV26;
+pub(crate) use bridge_v18::NativeCanonicalPrivateAdmissionV18;

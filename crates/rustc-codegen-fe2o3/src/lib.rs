@@ -100,6 +100,7 @@ pub use source_local_order_recipe_api_v1::{
     SourceLocalOrderRecipeRetainedStorageV1, SourceLocalOrderRelationV1,
     SourceLocalOrderSourceBindingModeV1, SourceLocalOrderStrengthV1,
 };
+mod production_core_panic_v50;
 mod production_rustc_drop_v1;
 mod production_rustc_intrinsic_v1;
 mod production_rustc_slice_metadata_v1;

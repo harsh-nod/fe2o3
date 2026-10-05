@@ -13,7 +13,7 @@ use fe2o3_kernel_ir::{
     CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirOperationCoordinateV1 as Site,
     ControlFlowLimits, KirLocalMemoryEffectRefV1 as Effect, MemoryAccess, Module,
     OperationKind as Kind, ScalarType, Type, UnaryOp, ValueId,
-    VerifiedCanonicalKernelIrModuleV12 as Owner, with_canonical_kir_control_flow_v1,
+    VerifiedCanonicalKernelIrModuleV12 as Owner, VerifiedCanonicalKernelIrModuleV18 as Owner18,
 };
 use std::{fmt, mem::size_of};
 
@@ -34,7 +34,9 @@ pub struct CanonicalKirCrossBlockForwardingOriginV1 {
     pub input: Site,
     /// Exact unchanged coordinate in the actual output.
     pub output: Site,
-    /// An exact retained initializing Store, or None for an unchanged operation.
+    /// A retained representative of the independently checked incoming Store
+    /// value/access class, or None for an unchanged operation. Its coordinate
+    /// alone grants neither dominance nor initialization authority.
     pub store: Option<Site>,
 }
 type Row = CanonicalKirCrossBlockForwardingOriginV1;
@@ -116,18 +118,21 @@ impl CanonicalKirCrossBlockForwardingStorageV1 {
 ///     let _ = pair.input();
 /// }
 /// ```
-pub struct CheckedCanonicalKirCrossBlockForwardingV1<'a> {
-    input: &'a Owner,
-    output: &'a Owner,
+pub struct CheckedCanonicalKirCrossBlockForwardingV1<'a, O = Owner> {
+    input: &'a O,
+    output: &'a O,
     origins: &'a [Row],
 }
-impl<'a> CheckedCanonicalKirCrossBlockForwardingV1<'a> {
+/// Exact storage-capable endpoints; layouts and all non-forwarded operations remain unchanged.
+pub type CheckedCanonicalKirCrossBlockForwardingV18<'a> =
+    CheckedCanonicalKirCrossBlockForwardingV1<'a, Owner18>;
+impl<'a, O> CheckedCanonicalKirCrossBlockForwardingV1<'a, O> {
     /// Actual connected input owner.
-    pub const fn input(&self) -> &'a Owner {
+    pub const fn input(&self) -> &'a O {
         self.input
     }
     /// Actual independently checked output owner.
-    pub const fn output(&self) -> &'a Owner {
+    pub const fn output(&self) -> &'a O {
         self.output
     }
     /// Complete original-order correspondence, including every retained operation.
@@ -140,9 +145,10 @@ impl<'a> CheckedCanonicalKirCrossBlockForwardingV1<'a> {
     }
 }
 
-/// Independently checks same-site fixed-integer Load copies from one dominating
-/// direct private Store. Every syntactic memory-phi input is retained; each
-/// visited phi must have a real matching Store terminal in its dependency closure.
+/// Independently checks same-site fixed-integer Load copies from exact typed
+/// direct private Stores of the same SSA value. Every syntactic memory-phi input
+/// is retained; each visited phi must have a real matching Store terminal in its
+/// dependency closure, and the replacement definition must dominate the Load.
 /// Entry, other Defs, escaping pointers and conservative non-total interval cuts
 /// refuse. It never calls the producer or accepts producer analysis arrays.
 ///
@@ -163,7 +169,29 @@ pub fn check_canonical_kir_cross_block_forwarding_v1<'a>(
     resources::scoped(budget, |meter| check(input, output, origins, limits, meter))
 }
 
-#[derive(Clone, Copy)]
+/// Independently checks the same private direct-scalar consensus rule on V18.
+/// Storage layouts and every non-selected operation are preserved exactly.
+/// Object memory, casts, calls, atomics and synchronization do not become aliases
+/// or forwarding authority; their actual effects remain conservative barriers.
+pub fn check_canonical_kir_cross_block_forwarding_v18<'a>(
+    input: &'a Owner18,
+    output: &'a Owner18,
+    origins: &'a [Row],
+    limits: Limits,
+    budget: &mut Budget<'_>,
+) -> Result<(
+    CheckedCanonicalKirCrossBlockForwardingV18<'a>,
+    CanonicalKirCrossBlockForwardingStorageV1,
+)> {
+    resources::scoped(budget, |meter| check(input, output, origins, limits, meter))
+}
+
+#[path = "canonical_kir_cross_block_forwarding_profiles_v45.rs"]
+mod profiles;
+use fe2o3_kernel_ir::{StorageLayoutKindV1, StorageOperationV1 as Storage};
+use profiles::Profile;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
 struct Access {
     pointer: ValueId,
     definition: usize,
@@ -171,39 +199,41 @@ struct Access {
     stored: Option<(ValueId, usize)>,
 }
 
-fn check<'a>(
-    input: &'a Owner,
-    output: &'a Owner,
+fn check<'a, O: Profile>(
+    input: &'a O,
+    output: &'a O,
     rows: &'a [Row],
     limits: Limits,
     meter: &mut Meter<'_, '_>,
 ) -> Result<(
-    CheckedCanonicalKirCrossBlockForwardingV1<'a>,
+    CheckedCanonicalKirCrossBlockForwardingV1<'a, O>,
     CanonicalKirCrossBlockForwardingStorageV1,
 )> {
-    let header = size_of::<CheckedCanonicalKirCrossBlockForwardingV1<'_>>();
+    let header = size_of::<CheckedCanonicalKirCrossBlockForwardingV1<'_, O>>();
     meter.reserve(header)?;
     meter.work(13)?;
     meter.reserve(scratch_headers()?)?;
-    let (a, size) = meter.derive(|b| Ok(Inventory::derive(input, b)?))?;
+    let (a, size) = meter.derive(|b| input.inventory(b))?;
     meter.reserve(size.retained_storage())?;
-    let (b, size) = meter.derive(|b| Ok(Inventory::derive(output, b)?))?;
+    let (b, size) = meter.derive(|b| output.inventory(b))?;
     meter.reserve(size.retained_storage())?;
-    let (memory, size) = meter.derive(|b| Ok(Memory::derive(&a, limits.memory, b)?))?;
+    let (memory, size) = meter.derive(|b| O::memory(&a, limits.memory, b))?;
     meter.reserve(size.retained_storage())?;
     meter.work(
         input
-            .canonical()
-            .canonical_bytes()
-            .len()
-            .checked_add(output.canonical().canonical_bytes().len())
+            .wire_len()
+            .checked_add(output.wire_len())
             .ok_or(Resource::Arithmetic)?,
     )?;
-    headers(input.module(), output.module())?;
+    input.headers(output)?;
     if rows.len() != a.operations().len() || rows.len() != b.operations().len() {
         return Err(Error::Mismatch("complete operation cardinality"));
     }
     let slots = slots(&a, meter)?;
+    let mut stores = filled(a.operations().len(), None::<Access>, meter)?;
+    for (at, entry) in stores.iter_mut().enumerate() {
+        *entry = access(&a, at, &slots, meter)?.filter(|value| value.stored.is_some());
+    }
     let (local_cut, exit_cut) = cuts(&a, &memory, meter)?;
     let m = memory.node_count();
     let incidence = a
@@ -239,9 +269,7 @@ fn check<'a>(
             continue;
         };
         let store_at = operation_index(&a, store_site)?;
-        let store = access(&a, store_at, &slots, meter)?
-            .filter(|a| a.stored.is_some())
-            .ok_or(Error::Mismatch("exact ordinary direct-slot Store"))?;
+        let store = stores[store_at].ok_or(Error::Mismatch("exact ordinary direct-slot Store"))?;
         let load = access(&a, at, &slots, meter)?
             .filter(|a| a.stored.is_none())
             .ok_or(Error::Mismatch("exact ordinary direct-slot Load"))?;
@@ -250,7 +278,8 @@ fn check<'a>(
             || store_site.block == row.input.block
             || store.pointer != load.pointer
             || store.definition != load.definition
-            || store.access != load.access
+            || store.access.address_space != load.access.address_space
+            || store.access.volatile != load.access.volatile
             || local_cut[at]
             || a.definitions()[definition].ty != &old.operation.results[0].ty
             || old.operation.results != new.operation.results
@@ -274,7 +303,14 @@ fn check<'a>(
             } if operation == row.input => incoming,
             _ => return Err(Error::Mismatch("exact Load version")),
         };
-        label(incoming, store_at, &mut required, &mut queue, meter)?;
+        label(
+            incoming,
+            store_at,
+            &stores,
+            &mut required,
+            &mut queue,
+            meter,
+        )?;
     }
 
     // Independent closure, then reverse grounding; no producer lattice is used.
@@ -286,7 +322,8 @@ fn check<'a>(
         let index = id.index();
         let store = required[index].ok_or(Error::Mismatch("required terminal"))?;
         match meter.derive(|b| Ok(memory.node(id, b)?.clone()))? {
-            Node::Def { operation, .. } if operation == a.operations()[store].coordinate => {}
+            Node::Def { operation, .. }
+                if same_store(&stores, operation_index(&a, operation)?, store, meter)? => {}
             Node::Phi { block, .. } => {
                 phi[index] = true;
                 if block.function != a.operations()[store].coordinate.block.function {
@@ -306,7 +343,12 @@ fn check<'a>(
                     let child = incoming.state();
                     match meter.derive(|b| Ok(memory.node(child, b)?.clone()))? {
                         Node::Def { operation, .. }
-                            if operation == a.operations()[store].coordinate =>
+                            if same_store(
+                                &stores,
+                                operation_index(&a, operation)?,
+                                store,
+                                meter,
+                            )? =>
                         {
                             if !grounded[index] {
                                 grounded[index] = true;
@@ -316,7 +358,7 @@ fn check<'a>(
                         Node::Phi {
                             block: child_block, ..
                         } if child_block.function == block.function => {
-                            label(child, store, &mut required, &mut queue, meter)?;
+                            label(child, store, &stores, &mut required, &mut queue, meter)?;
                             meter.push(&mut reverse, (child.index(), index))?;
                             counts[child.index() + 1] = counts[child.index() + 1]
                                 .checked_add(1)
@@ -324,7 +366,7 @@ fn check<'a>(
                         }
                         _ => {
                             return Err(Error::Mismatch(
-                                "every phi input is the same Store or phi",
+                                "every phi input stores the same typed SSA value or is a phi",
                             ));
                         }
                     }
@@ -364,7 +406,14 @@ fn check<'a>(
         for parent in &parents[counts[child]..counts[child + 1]] {
             meter.work(4)?;
             let parent = *parent;
-            if parent >= m || required[parent] != required[child] {
+            if parent >= m
+                || !same_store(
+                    &stores,
+                    required[parent].ok_or(Error::Mismatch("parent grounding label"))?,
+                    required[child].ok_or(Error::Mismatch("child grounding label"))?,
+                    meter,
+                )?
+            {
                 return Err(Error::Mismatch("grounding label"));
             }
             if !grounded[parent] {
@@ -387,22 +436,19 @@ fn check<'a>(
             continue;
         }
         meter.derive(|budget| {
-            with_canonical_kir_control_flow_v1(
-                input,
+            input.with_flow(
                 function.coordinate,
                 limits.control_flow,
                 budget,
                 |flow, budget| {
                     for at in function.operations.clone() {
                         budget.charge_work(3)?;
-                        let Some(store) = rows[at].store else {
+                        let Some(_) = rows[at].store else {
                             continue;
                         };
                         let load = rows[at].input;
-                        if !flow.is_reachable(load.block, budget)?
-                            || !flow.dominates(store.block, load.block, budget)?
-                        {
-                            return Err(Error::Mismatch("reachable dominating initializing Store"));
+                        if !flow.is_reachable(load.block, budget)? {
+                            return Err(Error::Mismatch("reachable initialized Load"));
                         }
                         let definition = stored_definitions[at]
                             .ok_or(Error::Mismatch("replacement definition"))?;
@@ -447,12 +493,14 @@ fn check<'a>(
 
 fn scratch_headers() -> Result<usize> {
     // slots; local/exit cuts; required/phi/grounded; closure/reverse/grounding;
-    // CSR counts/cursor/parents; stored-definition table. Backing is paid below.
+    // CSR counts/cursor/parents; stored definitions and exact Store keys.
+    // Backing is paid below.
     [
         size_of::<Vec<u32>>(),
         size_of::<Vec<bool>>(),
         size_of::<Vec<bool>>(),
         size_of::<Vec<Option<usize>>>(),
+        size_of::<Vec<Option<Access>>>(),
         size_of::<Vec<bool>>(),
         size_of::<Vec<bool>>(),
         size_of::<Vec<NodeId>>(),
@@ -480,6 +528,7 @@ fn filled<T: Clone>(len: usize, value: T, meter: &mut Meter<'_, '_>) -> Result<V
 fn label(
     id: NodeId,
     store: usize,
+    stores: &[Option<Access>],
     labels: &mut [Option<usize>],
     queue: &mut Vec<NodeId>,
     meter: &mut Meter<'_, '_>,
@@ -489,8 +538,8 @@ fn label(
         .get_mut(id.index())
         .ok_or(Error::Mismatch("memory node bound"))?;
     match *slot {
-        Some(previous) if previous != store => {
-            Err(Error::Mismatch("conflicting exact Store labels"))
+        Some(previous) if !same_store(stores, previous, store, meter)? => {
+            Err(Error::Mismatch("conflicting typed Store value labels"))
         }
         Some(_) => Ok(()),
         None => {
@@ -498,6 +547,19 @@ fn label(
             meter.push(queue, id)
         }
     }
+}
+fn same_store(
+    stores: &[Option<Access>],
+    left: usize,
+    right: usize,
+    meter: &mut Meter<'_, '_>,
+) -> Result<bool> {
+    meter.work(8)?;
+    let left = stores.get(left).ok_or(Error::Mismatch("Store key bound"))?;
+    let right = stores
+        .get(right)
+        .ok_or(Error::Mismatch("Store key bound"))?;
+    Ok(left.is_some() && left == right)
 }
 fn integer(ty: &Type) -> bool {
     matches!(
@@ -517,12 +579,12 @@ fn integer(ty: &Type) -> bool {
 fn scalar(ty: &Type) -> bool {
     *ty == Type::BOOL || integer(ty)
 }
-fn slots(a: &Inventory<'_>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
+fn slots<O: Profile>(a: &Inventory<'_, O>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
     let mut alignment = filled(a.definitions().len(), 0u32, meter)?;
     for row in a.operations() {
         meter.work(7)?;
         let Kind::Alloca {
-            element: Type::Scalar(element),
+            element,
             count: None,
             address_space: AddressSpace::Private,
             alignment: align,
@@ -530,11 +592,14 @@ fn slots(a: &Inventory<'_>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
         else {
             continue;
         };
-        if !integer(&Type::Scalar(*element))
+        let Some(scalar) = storage_scalar(a.owner(), element, meter)? else {
+            continue;
+        };
+        if !integer(&Type::Scalar(scalar))
             || !align.is_power_of_two()
             || *align
                 < u32::from(
-                    element
+                    scalar
                         .bit_width()
                         .ok_or(Error::Mismatch("fixed cell width"))?
                         / 8,
@@ -554,7 +619,7 @@ fn slots(a: &Inventory<'_>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
         };
         if pointer.address_space == AddressSpace::Private
             && pointer.access == AccessMode::ReadWrite
-            && *pointer.pointee == Type::Scalar(*element)
+            && pointer.pointee.as_ref() == element
         {
             alignment[row.results.start] = *align;
         }
@@ -567,7 +632,11 @@ fn slots(a: &Inventory<'_>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
                 continue;
             }
             let allowed = match row.operation.kind {
-                Kind::Load { pointer, access } => {
+                Kind::Load { pointer, access }
+                | Kind::Storage(Storage::ReadValue {
+                    address: pointer,
+                    access,
+                }) => {
                     pointer == operand.value
                         && !access.volatile
                         && access.address_space == AddressSpace::Private
@@ -576,7 +645,12 @@ fn slots(a: &Inventory<'_>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
                     pointer,
                     value,
                     access,
-                } => {
+                }
+                | Kind::Storage(Storage::WriteValue {
+                    address: pointer,
+                    value,
+                    access,
+                }) => {
                     pointer == operand.value
                         && value != operand.value
                         && !access.volatile
@@ -598,8 +672,38 @@ fn slots(a: &Inventory<'_>, meter: &mut Meter<'_, '_>) -> Result<Vec<u32>> {
     }
     Ok(alignment)
 }
-fn access(
-    a: &Inventory<'_>,
+fn storage_scalar<O: Profile>(
+    owner: &O,
+    ty: &Type,
+    meter: &mut Meter<'_, '_>,
+) -> Result<Option<ScalarType>> {
+    if let Type::Scalar(scalar) = ty {
+        return Ok(integer(ty).then_some(*scalar));
+    }
+    let Type::StorageObject(id) = ty else {
+        return Ok(None);
+    };
+    meter.work(12)?;
+    let Some(layout) = owner.layout(*id) else {
+        return Ok(None);
+    };
+    let StorageLayoutKindV1::Scalar(scalar) = &layout.kind else {
+        return Ok(None);
+    };
+    let Some(bits) = scalar.bit_width() else {
+        return Ok(None);
+    };
+    if !integer(&Type::Scalar(*scalar))
+        || layout.size != u64::from(bits / 8)
+        || !layout.alignment.is_power_of_two()
+        || layout.alignment > u32::from(bits / 8)
+    {
+        return Ok(None);
+    }
+    Ok(Some(*scalar))
+}
+fn access<O: Profile>(
+    a: &Inventory<'_, O>,
     at: usize,
     slots: &[u32],
     meter: &mut Meter<'_, '_>,
@@ -611,9 +715,12 @@ fn access(
         .ok_or(Error::Mismatch("memory operation coordinate"))?;
     let (pointer, memory, value) = match row.operation.kind {
         Kind::Load { pointer, access }
-            if row.operands.len() == 1
-                && row.results.len() == 1
-                && integer(&row.operation.results[0].ty) =>
+        | Kind::Storage(Storage::ReadValue {
+            address: pointer,
+            access,
+        }) if row.operands.len() == 1
+            && row.results.len() == 1
+            && integer(&row.operation.results[0].ty) =>
         {
             (pointer, access, None)
         }
@@ -621,7 +728,12 @@ fn access(
             pointer,
             value,
             access,
-        } if row.operands.len() == 2 && row.results.is_empty() => (pointer, access, Some(value)),
+        }
+        | Kind::Storage(Storage::WriteValue {
+            address: pointer,
+            value,
+            access,
+        }) if row.operands.len() == 2 && row.results.is_empty() => (pointer, access, Some(value)),
         _ => return Ok(None),
     };
     if memory.address_space != AddressSpace::Private
@@ -639,6 +751,25 @@ fn access(
     let definition = uses[0].definition;
     if slots[definition] == 0 || memory.alignment > slots[definition] {
         return Ok(None);
+    }
+    if matches!(row.operation.kind, Kind::Storage(_)) {
+        let Type::Pointer(holder) = a.definitions()[definition].ty else {
+            return Ok(None);
+        };
+        if !matches!(holder.pointee.as_ref(), Type::StorageObject(_)) {
+            return Ok(None);
+        }
+        let Some(scalar) = storage_scalar(a.owner(), &holder.pointee, meter)? else {
+            return Ok(None);
+        };
+        let actual_type = if value.is_some() {
+            a.definitions()[uses[1].definition].ty
+        } else {
+            &row.operation.results[0].ty
+        };
+        if actual_type != &Type::Scalar(scalar) {
+            return Ok(None);
+        }
     }
     let stored = if let Some(value) = value {
         if uses[1].value != value {
@@ -669,7 +800,7 @@ fn access(
         stored,
     }))
 }
-fn transparent(a: &Inventory<'_>, at: usize, meter: &mut Meter<'_, '_>) -> Result<bool> {
+fn transparent<O>(a: &Inventory<'_, O>, at: usize, meter: &mut Meter<'_, '_>) -> Result<bool> {
     meter.work(5)?;
     let row = &a.operations()[at];
     if row.results.len() != 1
@@ -703,9 +834,9 @@ fn transparent(a: &Inventory<'_>, at: usize, meter: &mut Meter<'_, '_>) -> Resul
     }
     Ok(true)
 }
-fn cuts(
-    a: &Inventory<'_>,
-    memory: &Memory<'_, '_>,
+fn cuts<O>(
+    a: &Inventory<'_, O>,
+    memory: &Memory<'_, '_, O>,
     meter: &mut Meter<'_, '_>,
 ) -> Result<(Vec<bool>, Vec<bool>)> {
     let mut local = filled(a.operations().len(), false, meter)?;
@@ -734,7 +865,7 @@ fn cuts(
     }
     Ok((local, exits))
 }
-fn block_index(a: &Inventory<'_>, block: Block) -> Result<usize> {
+fn block_index<O>(a: &Inventory<'_, O>, block: Block) -> Result<usize> {
     let function = a
         .functions()
         .get(block.function.0 as usize)
@@ -746,7 +877,7 @@ fn block_index(a: &Inventory<'_>, block: Block) -> Result<usize> {
         .filter(|at| *at < function.blocks.end && a.blocks()[*at].coordinate == block)
         .ok_or(Error::Mismatch("block coordinate"))
 }
-fn operation_index(a: &Inventory<'_>, site: Site) -> Result<usize> {
+fn operation_index<O>(a: &Inventory<'_, O>, site: Site) -> Result<usize> {
     let block = &a.blocks()[block_index(a, site.block)?];
     block
         .operations
@@ -756,6 +887,12 @@ fn operation_index(a: &Inventory<'_>, site: Site) -> Result<usize> {
         .ok_or(Error::Mismatch("operation coordinate"))
 }
 fn headers(a: &Module, b: &Module) -> Result<()> {
+    if !a.storage_layouts.is_empty() || !b.storage_layouts.is_empty() {
+        return Err(Error::Mismatch("legacy profile excludes storage layouts"));
+    }
+    headers_v18(a, b)
+}
+fn headers_v18(a: &Module, b: &Module) -> Result<()> {
     let Module {
         id,
         functions,
@@ -763,11 +900,8 @@ fn headers(a: &Module, b: &Module) -> Result<()> {
         required_capabilities,
         storage_layouts,
     } = a;
-    // O(1) old-profile eligibility, separate from prepaid legacy equality.
-    if !storage_layouts.is_empty() || !b.storage_layouts.is_empty() {
-        return Err(Error::Mismatch("legacy profile excludes storage layouts"));
-    }
     if id != &b.id
+        || storage_layouts != &b.storage_layouts
         || kernels != &b.kernels
         || required_capabilities != &b.required_capabilities
         || functions.len() != b.functions.len()

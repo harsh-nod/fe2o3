@@ -6,7 +6,7 @@ use rustc_middle::mir::{
     Body, Local, Location, Operand, Place, ProjectionElem, RawPtrKind, Rvalue, Statement,
     StatementKind, StmtDebugInfo, Terminator, TerminatorKind, UnOp,
 };
-use rustc_middle::ty::{EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypingEnv, UintTy};
+use rustc_middle::ty::{EarlyBinder, Instance, Ty, TyCtxt, TyKind, TypingEnv};
 
 #[derive(Debug)]
 pub(crate) enum SliceMetadataErrorV1<E> {
@@ -202,8 +202,12 @@ fn metadata_pair<'tcx>(
     let TyKind::Ref(_, pointee, Mutability::Not) = *slice.kind() else {
         return None;
     };
-    if !matches!(pointee.kind(), TyKind::Slice(element) if matches!(element.kind(), TyKind::Uint(UintTy::U32)))
-    {
+    let TyKind::Slice(element) = pointee.kind() else {
+        return None;
+    };
+    // Slice metadata is a target usize independent of the element's storage
+    // size. The complete type/ABI admission still owns element support.
+    if !element.is_sized(tcx, TypingEnv::fully_monomorphized()) {
         return None;
     }
     if !matches!(normalize(temporary)?.kind(), TyKind::RawPtr(raw, Mutability::Not) if *raw == pointee)

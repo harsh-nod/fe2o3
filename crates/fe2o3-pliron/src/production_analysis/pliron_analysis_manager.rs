@@ -87,6 +87,9 @@ pub(crate) enum PlironSimtProtocolAnalysisFailureV1 {
 /// observes pre-lowering cache state.
 pub(crate) struct PlironAnalysisManagerV1 {
     function: pliron::context::Ptr<Operation>,
+    native_context: Option<crate::production_analysis::pliron_invocation_trace::native_input_v1::NativeTraceKeyV1>,
+    native_obligations: Option<crate::production_analysis::pliron_invocation_trace::native_input_v1::NativeTraceObligationsV1>,
+    native_guard_denial: Option<ProductionAnalysisResourceLimitV1>,
     input_census: Option<ProductionAnalysisInputCensusV1>,
     resource_contract: ProductionAnalysisResourceContractV1,
     lineage_identity_retained_storage: usize,
@@ -186,6 +189,9 @@ impl PlironAnalysisManagerV1 {
     ) -> Self {
         Self {
             function: function.get_operation(),
+            native_context: None,
+            native_obligations: None,
+            native_guard_denial: None,
             input_census,
             resource_contract,
             lineage_identity_retained_storage,
@@ -368,6 +374,14 @@ impl PlironAnalysisManagerV1 {
 
     pub(crate) fn prepare_provenance_alias(&mut self, context: &Context, function: &FuncOp) {
         self.assert_function(function);
+        if self.has_native_obligations_v1() {
+            self.provenance_alias = Some(Err(if self.native_guard_denial.is_some() {
+                PlironProvenanceFailureV1::NativeGuardResource
+            } else {
+                PlironProvenanceFailureV1::NativeObligations
+            }));
+            return;
+        }
         if self.provenance_alias.is_none() {
             self.prepare_function_inventory(context, function);
             self.provenance_alias = Some(match self.function_inventory() {
@@ -420,6 +434,12 @@ impl PlironAnalysisManagerV1 {
         if self.exact_trace.is_some() {
             return;
         }
+        if self.native_context.is_some() {
+            self.exact_trace = Some(Err(crate::production_analysis::pliron_invocation_trace::native_input_v1::failure(
+                0, 0, crate::production_analysis::pliron_invocation_trace::native_input_v1::NativeTraceRefusalV1::Context,
+            )));
+            return;
+        }
         self.prepare_sparse_indices(context, function);
         self.prepare_execution_layout(context, function);
         self.exact_trace = Some(match (&self.sparse_indices, &self.execution_layout) {
@@ -438,6 +458,103 @@ impl PlironAnalysisManagerV1 {
 
     pub(crate) fn has_successful_exact_trace_v1(&self) -> bool {
         matches!(&self.exact_trace, Some(Ok(_)))
+    }
+
+    pub(crate) fn has_native_obligations_v1(&mut self) -> bool {
+        if self.native_context.is_none() {
+            return false;
+        }
+        if self.native_guard_denial.is_some() {
+            return true;
+        }
+        let phase = ProductionAnalysisResourcePhaseV1::InvocationTrace;
+        if let Err(failure) = ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, 1, 0, 0)
+            .and_then(|bound| self.resource_contract.admit_retained(phase, bound))
+        {
+            self.native_guard_denial = Some(failure);
+        }
+        true
+    }
+
+    pub(crate) fn native_guard_denial_v1(&self) -> Option<ProductionAnalysisResourceLimitV1> {
+        self.native_guard_denial
+    }
+
+    pub(crate) fn native_obligations_v1(&self) -> Option<crate::production_analysis::pliron_invocation_trace::native_input_v1::NativeTraceObligationsV1>{
+        self.native_obligations
+    }
+
+    pub(crate) fn prepare_native_exact_trace_v1(
+        &mut self,
+        context: &Context,
+        function: &FuncOp,
+        input: &crate::production_analysis::pliron_invocation_trace::native_input_v1::NativeTraceInputV1<'_, '_>,
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<(), PlironTraceFailureV1> {
+        use crate::production_analysis::pliron_invocation_trace::{
+            native_input_v1::{NativeTraceRefusalV1, failure},
+            native_values_v1::NativeTraceStateV1,
+            preflight_native_trace_v1, trace_pliron_invocations_scoped_v1,
+        };
+        input.authenticate(context, function)?;
+        self.assert_function(function);
+        if let Some(key) = self.native_context {
+            if key != input.key {
+                return Err(failure(0, 0, NativeTraceRefusalV1::Context));
+            }
+            if self.exact_trace.is_some() {
+                return Ok(());
+            }
+        } else if self.cached_entries() != 0 {
+            return Err(failure(0, 0, NativeTraceRefusalV1::Context));
+        }
+        self.native_context = Some(input.key);
+        self.native_obligations = Some(input.obligations);
+        let result = (|| {
+            self.prepare_function_inventory(context, function);
+            let census = self
+                .input_census
+                .ok_or(PlironTraceFailureV1::ResourceLimit)?;
+            let limits = self
+                .remaining_resource_limits(ProductionAnalysisResourcePhaseV1::InvocationTrace)
+                .map_err(|_| PlironTraceFailureV1::ResourceLimit)?;
+            let bound = preflight_native_trace_v1(
+                context,
+                self.function_inventory()
+                    .map_err(|_| PlironTraceFailureV1::ResourceLimit)?,
+                census,
+                input.geometry,
+                limits,
+            )
+            .map_err(|_| PlironTraceFailureV1::ResourceLimit)?;
+            self.resource_contract
+                .admit_retained(ProductionAnalysisResourcePhaseV1::InvocationTrace, bound)
+                .map_err(|_| PlironTraceFailureV1::ResourceLimit)?;
+            let floor = budget.storage();
+            let mut native = NativeTraceStateV1::new(input, budget, census.block_arguments)?;
+            let environment_storage = native.budget.storage() - floor;
+            let traces = trace_pliron_invocations_scoped_v1(
+                context,
+                self.function_inventory()
+                    .map_err(|_| PlironTraceFailureV1::ResourceLimit)?,
+                None,
+                None,
+                Some(&mut native),
+            );
+            drop(native);
+            let release = if traces.is_ok() {
+                environment_storage
+            } else {
+                budget.storage() - floor
+            };
+            budget
+                .release_storage(release)
+                .map_err(PlironTraceFailureV1::NativeResource)?;
+            input.authenticate(context, function)?;
+            traces
+        })();
+        self.exact_trace = Some(result);
+        Ok(())
     }
 
     pub(crate) fn exact_trace(&self) -> Result<&[PlironInvocationTraceV1], PlironTraceFailureV1> {
@@ -475,6 +592,16 @@ impl PlironAnalysisManagerV1 {
 
     pub(crate) fn prepare_memory_order(&mut self, context: &Context, function: &FuncOp) {
         self.assert_function(function);
+        if self.has_native_obligations_v1() {
+            self.memory_order = Some(Err(if self.native_guard_denial.is_some() {
+                PlironMemoryOrderAnalysisFailureV1::Trace(PlironTraceFailureV1::ResourceLimit)
+            } else {
+                PlironMemoryOrderAnalysisFailureV1::MemoryOrder(
+                    PlironMemoryOrderFailureV1::NativeObligations,
+                )
+            }));
+            return;
+        }
         if self.memory_order.is_some() {
             return;
         }

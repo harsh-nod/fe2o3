@@ -112,19 +112,24 @@ pub(super) fn candidates(function: &Function) -> Vec<ScopedSourceSlotV29> {
             slots.push(ScopedSourceSlotV29 {
                 instance: ProductionCallInstanceIdV1(0),
                 origin: ScopedSlotOriginV29 {
-                    local: slots.len() as u32,
+                    identity: ScopedAllocationIdentityV29::LegacyLocal(slots.len() as u32),
+                    source: ScopedAllocationSourceV29::Legacy,
                     semantic_type: SemanticTypeIdV1::from_index(0),
                     pointer: row.results[0].id,
                 },
-                element_type: SemanticTypeIdV1::from_index(0),
-                element: PrivateRetainedSlotFactsV1 {
-                    element,
-                    size,
-                    alignment: 8,
-                },
-                length: 1,
-                bytes: size,
-                count: None,
+                representation: ScopedSlotRepresentationV29::ScalarArray(
+                    ScopedScalarArraySlotV29 {
+                        element_type: SemanticTypeIdV1::from_index(0),
+                        element: PrivateRetainedSlotFactsV1 {
+                            element,
+                            size,
+                            alignment: 8,
+                        },
+                        length: 1,
+                        bytes: size,
+                        count: None,
+                    },
+                ),
                 allocation: PrivateArrayPhysicalLocationV1 {
                     block_ordinal,
                     block: block.id,

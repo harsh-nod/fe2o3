@@ -18,6 +18,27 @@ const FLOAT_PREFIX_V1: &str = "__fe2o3_ir_float_v1_";
 mod effect_tests;
 
 impl crate::Operation {
+    /// Allocation-free closed descriptor query. This recognizes only the
+    /// registered zero-argument/no-result Trap call, not arbitrary calls with
+    /// empty memory effects. It does not authenticate a declaration, source
+    /// origin, block continuation, owner, target, or runtime permission.
+    pub fn has_registered_trap_contract_with_budget_v26(
+        &self,
+        budget: &mut CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<bool, CanonicalKernelIrVerificationResourceErrorV1> {
+        budget.charge_work(4)?;
+        let crate::OperationKind::Call { callee, arguments } = &self.kind else {
+            return Ok(false);
+        };
+        charge_diagnostic_lookup_v1(callee, budget)?;
+        Ok(arguments.is_empty()
+            && self.results.is_empty()
+            && matches!(
+                AmdGpuDiagnosticOperation::intrinsic_descriptor_v1(callee),
+                Some(AmdGpuDiagnosticIntrinsicDescriptorV1::Trap)
+            ))
+    }
+
     /// Allocation-free equivalent of `has_complete_effect_summary`, charging
     /// descriptor/name classification before inspection. This classifies only
     /// registered local effects, not ordinary callees or program safety.

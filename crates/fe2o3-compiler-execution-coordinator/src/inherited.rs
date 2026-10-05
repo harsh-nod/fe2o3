@@ -8,7 +8,9 @@ use fe2o3_compiler_closure_capability::{
     CompilerExecutionExternalAnchorSigningKeyCapabilityV1, CompilerExecutionPolicyCapabilityV1,
     CompilerExecutionSigningKeyCapabilityV1, CompilerExecutionSupervisorDeploymentCapabilityV1,
 };
-use fe2o3_compiler_execution_lifecycle::CompilerExecutionServiceLifecycleLeaseV1;
+use fe2o3_compiler_execution_lifecycle::{
+    CompilerExecutionLifecycleRootV89, CompilerExecutionServiceLifecycleLeaseV1,
+};
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_DEPLOYMENT_BYTES_V1,
     COMPILER_EXECUTION_EXTERNAL_ANCHOR_PROVISIONING_BYTES_V1,
@@ -147,9 +149,17 @@ impl InheritedCompilerExecutionDeploymentV1 {
 
         let lifecycle =
             CompilerExecutionLifecycleLeaseV1::admit_service_from_root(&supervisor_root)?;
-        let supervisor_lifecycle = CompilerExecutionServiceLifecycleLeaseV1::open(&supervisor_root)
+        let supervisor_lifecycle =
+            CompilerExecutionServiceLifecycleLeaseV1::open_for_root_coordinator_v89(
+                &supervisor_root,
+                CompilerExecutionLifecycleRootV89::Supervisor,
+            )
             .map_err(CompilerExecutionCoordinatorErrorV1::ServiceLifecycle)?;
-        let anchor_lifecycle = CompilerExecutionServiceLifecycleLeaseV1::open(&anchor_root)
+        let anchor_lifecycle =
+            CompilerExecutionServiceLifecycleLeaseV1::open_for_root_coordinator_v89(
+                &anchor_root,
+                CompilerExecutionLifecycleRootV89::ExternalAnchor,
+            )
             .map_err(CompilerExecutionCoordinatorErrorV1::ServiceLifecycle)?;
 
         let supervisor_deployment =

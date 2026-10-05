@@ -16,6 +16,7 @@ mod compiler_execution_boundary;
 mod compiler_toolchain;
 mod doctor;
 mod engineering_hsaco;
+mod engineering_rustc_runtime;
 mod example_manifest;
 mod generation;
 mod inert_rustc_invocation_capture;
@@ -31,6 +32,8 @@ mod pinned_executable;
 mod pinned_executable_test_directory;
 mod process_execution;
 mod production_cargo_plan;
+mod production_census_v91;
+mod production_graph_capture_v92;
 mod profile_command;
 mod profile_dispatch_import_v1;
 mod profile_live_qualification_v1;
@@ -201,8 +204,11 @@ fn main() -> ExitCode {
         Some("doctor") => with_utf8_args(&rest, doctor::command),
         Some("engineering") => match rest.as_slice() {
             [subcommand, args @ ..] if subcommand == "hsaco" => engineering_hsaco::command(args),
+            [subcommand, args @ ..] if subcommand == "rustc-runtime" => {
+                engineering_rustc_runtime::command(args)
+            }
             _ => {
-                eprintln!("cargo fe2o3 engineering requires the `hsaco` subcommand");
+                eprintln!("cargo fe2o3 engineering requires `hsaco` or `rustc-runtime`");
                 ExitCode::FAILURE
             }
         },
@@ -2029,6 +2035,52 @@ fn finish_capability_broker_observations_to(
             let frames = decoded.frames().len();
             let missing = decoded.missing_units().len();
             let failure = decoded.failure().map_or(0, |failure| failure.code());
+            if !completed.census.is_empty() {
+                if completed.census.len() != frames || missing != 0 || failure != 0 {
+                    let _ = observer_telemetry::write_line_to(
+                        output,
+                        format_args!("[cargo-fe2o3] incomplete production census refused"),
+                    );
+                    return;
+                }
+                let encoded = (|| -> Result<Vec<u8>, String> {
+                    let mut rows = Vec::new();
+                    rows.try_reserve_exact(frames).map_err(|e| e.to_string())?;
+                    for ((unit, bytes), frame) in completed.census.iter().zip(decoded.frames()) {
+                        let row = production_census_v91::Census::decode(bytes)?;
+                        row.check_frame(frame)?;
+                        if row.unit != *unit || row.config != completed.config {
+                            return Err("production census collector context differs".to_owned());
+                        }
+                        rows.push(row);
+                    }
+                    let bytes = serde_json::to_vec(&rows).map_err(|e| e.to_string())?;
+                    if bytes.len() > production_census_v91::MAX_AGGREGATE {
+                        return Err("production census aggregate bound".to_owned());
+                    }
+                    Ok(bytes)
+                })();
+                match encoded.and_then(|bytes| source_isa_collection_hex(&bytes)) {
+                    Ok(bytes) => {
+                        let _ = observer_telemetry::write_line_to(
+                            output,
+                            format_args!(
+                                "{} frames={frames} missing=0 failure=0 encoding=hex:{bytes} authority=observation-only",
+                                production_census_v91::PREFIX
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        let _ = observer_telemetry::write_line_to(
+                            output,
+                            format_args!(
+                                "[cargo-fe2o3] production census encoding failed: {error}"
+                            ),
+                        );
+                    }
+                }
+                return;
+            }
             if let Some((unit, characteristic)) = completed.characteristic {
                 if frames != 1 || missing != 0 || failure != 0 {
                     let _ = observer_telemetry::write_line_to(
@@ -3892,6 +3944,9 @@ fn find_workspace_root() -> Result<PathBuf, String> {
 fn print_help() {
     eprintln!(
         "usage: cargo fe2o3 <command>\n\ncommands:\n  authority release   run an authority build through the protected self-launch boundary\n  doctor              report direct-KFD runtime, compiler, and optional tool readiness\n  engineering hsaco   emit a non-authoritative measured source-to-HSACO observation\n  check               check host targets with compiler-derived kernel bindings\n  clippy              lint host targets with compiler-derived kernel bindings\n  test --all-targets  run trusted binding-aware host tests; no artifact/GPU authority\n  build               build with the fe2o3 rustc backend\n  run                 run with the fe2o3 rustc backend\n  examples            validate or query the example regression manifest\n  clean [--dry-run]   remove guarded fe2o3-owned target artifacts\n  inspect             inspect bounded artifact, HSACO, or observation metadata\n  sanitize            plan or execute bounded ROCgdb precise-memory diagnostics\n  debug               plan or execute bounded batch/interactive ROCgdb sessions\n  profile             plan or authorize bounded rocprofv3 collection",
+    );
+    eprintln!(
+        "  engineering rustc-runtime --lib-tree <path>  observe the canonical rustc library-tree digest; no authority"
     );
 }
 

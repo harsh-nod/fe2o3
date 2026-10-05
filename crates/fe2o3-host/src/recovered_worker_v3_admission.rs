@@ -44,6 +44,23 @@ pub use nominal::{
     admit_recovered_nominal_worker_v3_roster,
 };
 
+#[path = "mixed_worker_v53_admission.rs"]
+mod mixed_v53;
+#[path = "mixed_worker_v89_admission.rs"]
+mod mixed_v89;
+#[cfg(target_os = "linux")]
+pub(crate) use mixed_v53::execution as mixed_execution_v53;
+pub use mixed_v53::{
+    MixedWorkerV53PreparationError, MixedWorkerV53VerificationRequest,
+    PreparedMixedWorkerV53Invocation, RecoveredMixedWorkerV53PinnedRoster,
+    admit_recovered_mixed_worker_v53_roster,
+};
+pub use mixed_v89::{
+    MixedWorkerV89PreparationError, MixedWorkerV89VerificationRequest,
+    PreparedMixedWorkerV89Invocation, RecoveredMixedWorkerV89PinnedRoster,
+    admit_recovered_mixed_worker_v89_roster,
+};
+
 /// Canonical identity of every V3 compiler, publication, descriptor, and selected-kernel axis
 /// independently retained by host admission.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1164,6 +1181,12 @@ fn select_exact_kernel(
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RecoveredWorkerV3AdmissionErrorV1 {
+    MixedV89(&'static str),
+    MixedCodecV89(Box<dyn Error + Send + Sync>),
+    MixedReceiptV90(fe2o3_verifier::MixedOptimizerRelocationErrorV28),
+    MixedV53(&'static str),
+    MixedCodecV53(Box<dyn Error + Send + Sync>),
+    MixedReceiptV53(fe2o3_verifier::MixedOptimizerRelocationErrorV28),
     Envelope(WorkerV3LoadEnvelopeErrorV2),
     CurrentPublication(DurableLinkPublicationError),
     FinalizerDerivation(WorkerV3HsacoPublicationErrorV1),
@@ -1216,6 +1239,12 @@ pub enum RecoveredWorkerV3AdmissionErrorV1 {
 impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::MixedV53(detail) => write!(formatter, "mixed Worker V53 admission: {detail}"),
+            Self::MixedV89(detail) => write!(formatter, "mixed Worker V89 admission: {detail}"),
+            Self::MixedCodecV89(error) => write!(formatter, "mixed Worker V89 codec: {error}"),
+            Self::MixedCodecV53(error) => write!(formatter, "mixed Worker V53 codec: {error}"),
+            Self::MixedReceiptV53(error) => write!(formatter, "mixed Worker V53 typed receipt: {error}"),
+            Self::MixedReceiptV90(error) => write!(formatter, "mixed Worker V89 predicated typed receipt V90: {error}"),
             Self::Envelope(error) => write!(formatter, "invalid Worker V3 envelope: {error}"),
             Self::CurrentPublication(error) => {
                 write!(formatter, "Worker V3 publication is not current: {error}")
@@ -1343,6 +1372,10 @@ impl fmt::Display for RecoveredWorkerV3AdmissionErrorV1 {
 impl Error for RecoveredWorkerV3AdmissionErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::MixedCodecV53(error) => Some(error.as_ref()),
+            Self::MixedCodecV89(error) => Some(error.as_ref()),
+            Self::MixedReceiptV53(error) => Some(error),
+            Self::MixedReceiptV90(error) => Some(error),
             Self::Envelope(error) => Some(error),
             Self::CurrentPublication(error) => Some(error),
             Self::FinalizerDerivation(error) => Some(error),

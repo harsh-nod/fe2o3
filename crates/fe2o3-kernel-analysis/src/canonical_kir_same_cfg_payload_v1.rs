@@ -3,17 +3,32 @@ pub(super) fn check(
     a: &fe2o3_kernel_ir::Module,
     b: &fe2o3_kernel_ir::Module,
 ) -> Result<(), &'static str> {
+    // O(1) old-profile eligibility, separate from prepaid legacy equality.
+    if !a.storage_layouts.is_empty() || !b.storage_layouts.is_empty() {
+        return Err("legacy profile excludes storage layouts");
+    }
+    common(a, b)
+}
+
+// Both callers prepay complete endpoint bytes before traversing exact payloads.
+pub(super) fn check_v18(
+    a: &fe2o3_kernel_ir::Module,
+    b: &fe2o3_kernel_ir::Module,
+) -> Result<(), &'static str> {
+    if a.storage_layouts != b.storage_layouts {
+        return Err("exact storage layout table");
+    }
+    common(a, b)
+}
+
+fn common(a: &fe2o3_kernel_ir::Module, b: &fe2o3_kernel_ir::Module) -> Result<(), &'static str> {
     let fe2o3_kernel_ir::Module {
         id,
         functions,
         kernels,
         required_capabilities,
-        storage_layouts,
+        storage_layouts: _,
     } = a;
-    // O(1) old-profile eligibility, separate from prepaid legacy equality.
-    if !storage_layouts.is_empty() || !b.storage_layouts.is_empty() {
-        return Err("legacy profile excludes storage layouts");
-    }
     if id != &b.id
         || kernels != &b.kernels
         || required_capabilities != &b.required_capabilities
