@@ -199,6 +199,9 @@ const RELEASE_ENVIRONMENT_ALLOWLIST: &[&str] = &[
     "FE2O3_BACKEND",
     "FE2O3_PRODUCTION_BUILD_CONFIG_V1",
     "FE2O3_PRODUCTION_BUILD_CONFIG_V2",
+    crate::build_config::PRODUCTION_BUILD_EXPECTED_ID_ENV,
+    crate::build_config::PRODUCTION_BUILD_EXPECTED_ID_V2_ENV,
+    crate::production_graph_capture_v92::DIRECTORY_ENV,
     "FE2O3_TARGET",
     "FE2O3_WORKER_V2_CONFIG_V2",
     "LANG",
@@ -1216,7 +1219,11 @@ fn current_environment() -> Result<Vec<(OsString, OsString)>, String> {
 }
 
 fn validate_release_environment() -> Result<(), String> {
-    for (name, value) in env::vars_os() {
+    validate_release_environment_values(&current_environment()?)
+}
+
+fn validate_release_environment_values(values: &[(OsString, OsString)]) -> Result<(), String> {
+    for (name, value) in values {
         let Some(name_text) = name.to_str() else {
             return Err("authority release rejects a non-UTF-8 environment name".to_owned());
         };
@@ -1227,7 +1234,11 @@ fn validate_release_environment() -> Result<(), String> {
         }
     }
     for (name, expected) in [("LANG", "C"), ("LC_ALL", "C"), ("TZ", "UTC")] {
-        if env::var_os(name).as_deref() != Some(OsStr::new(expected)) {
+        let observed = values
+            .iter()
+            .find(|(key, _)| key.as_os_str() == OsStr::new(name))
+            .map(|(_, value)| value);
+        if observed.map(OsString::as_os_str) != Some(OsStr::new(expected)) {
             return Err(format!(
                 "authority release requires exact environment {name}={expected}"
             ));
@@ -1844,6 +1855,7 @@ mod tests {
     use super::*;
     include!("authority_release_v4_tests.rs");
     include!("authority_release_sealed_memfd_tests.rs");
+    include!("authority_release_observation_tests.rs");
 
     fn object(seed: u64, mode: u32) -> ObjectIdentity {
         ObjectIdentity {

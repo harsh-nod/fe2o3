@@ -7,6 +7,34 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 struct ScratchDirectory(PathBuf);
 
+#[test]
+fn protected_release_accepts_observation_names_before_the_unchanged_locale_gate() {
+    for (name, value) in [
+        ("FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V1", "12".repeat(32)),
+        ("FE2O3_PRODUCTION_BUILD_EXPECTED_ID_V2", "34".repeat(32)),
+        ("FE2O3_TUTORIAL_GRAPH_CAPTURE_V92", "/private/graphs".into()),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+            .env_clear()
+            .env("LANG", "C")
+            .env("LC_ALL", "C")
+            .env(name, value)
+            .args(["authority", "release", "probe"])
+            .output()
+            .expect("run protected release environment admission");
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("authority release requires exact environment TZ=UTC"),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains("unexpected inherited environment"),
+            "{stderr}"
+        );
+    }
+}
+
 impl ScratchDirectory {
     fn new() -> Self {
         let nonce = SystemTime::now()
