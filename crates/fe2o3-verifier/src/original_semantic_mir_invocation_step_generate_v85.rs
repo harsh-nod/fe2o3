@@ -13,6 +13,9 @@ macro_rules! emit {
 #[path = "original_semantic_mir_cut_summary_generate_v96.rs"]
 mod summaries;
 
+#[path = "original_semantic_mir_constructor_state_generate_v162.rs"]
+mod constructor_states;
+
 #[derive(Clone, Copy)]
 enum Goal {
     All,
@@ -79,6 +82,10 @@ pub(super) fn emit(
         let Some(cut) = cut else { continue };
         let hint = source_hint(row, hints, cut, out)?;
         let constructor = constructor(row, hints, cut, hint, out)?;
+        let constructor_state = match constructor {
+            Some((call, entry)) => constructor_states::derive(model, row, block, call, entry, out)?,
+            None => None,
+        };
         let summary = summaries::derive(model, row, hints, block, cut, hint, out)?;
         if (summary.is_some() || constructor.is_some()) && !*summary_shared {
             emit!(out, "{}", summaries::SHARED);
@@ -86,6 +93,20 @@ pub(super) fn emit(
         }
         if let Some(summary) = &summary {
             summaries::emit(model, root, row, cut, hint, summary, out)?;
+        }
+        if let (Some((call, entry)), Some(state)) = (constructor, constructor_state.as_ref()) {
+            constructor_states::emit(
+                model,
+                root,
+                cut,
+                hints,
+                hint,
+                call,
+                entry,
+                state,
+                follow_fuel,
+                out,
+            )?;
         }
         let partition = summary.is_none() && (constructor.is_some() || !hints.conserves_heap);
         if partition {
@@ -108,6 +129,9 @@ pub(super) fn emit(
                         }
                     }
                     _ => {
+                        if constructor_state.is_some() {
+                            constructor_states::consume(root, cut.source, out)?;
+                        }
                         out.budget.charge_work(1)?;
                         if matches!(goal, Goal::Heap) && hint.has_write_normalization() {
                             emit!(out, " hide(invocation_source_thread_write_v88);\n");
@@ -633,6 +657,7 @@ pub(super) fn dispatch(root: usize, row: &Root, out: &mut Writer<'_, '_>) -> Res
 fn headers() -> usize {
     size_of::<Goal>()
         + size_of::<Option<summaries::Summary>>()
+        + size_of::<Option<constructor_states::Summary>>()
         + size_of::<Result<Option<summaries::Summary>>>()
         + size_of::<std::iter::Enumerate<std::slice::Iter<'static, Option<Cut>>>>()
         + 2 * size_of::<bool>()
