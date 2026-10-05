@@ -990,6 +990,18 @@ separate obligations.
 
 ## Initial Reduction
 
+The three unsafe functions and three blocks in
+`native_compiler_attempt_runtime.rs` delegate consuming takeover, exec
+confirmation, and issuer launch to the existing original-trace APIs. The private
+Attempt retains the same inventory, controller, helper, deadline, creator and
+cleanup obligations. Exec confirmation closes the full Stage and both gate
+aliases before observing native status EOF. No application instruction is resumed
+before first-exec policy validation and actual issuer readiness. Consuming failure
+with unresolved runtime custody requires the established dedicated-process
+fail-stop; it cannot silently defer descendant waits to root-only cleanup. These
+sites add no raw syscall or PID-based authority constructor. The production gate
+still refuses; live native qualification remains separate.
+
 The initial audit of `d9f6bbcd0` found 1,924 source sites in 288 Rust files:
 1,026 in non-test crate source across all configurations, 874 in tests/fixtures,
 and 24 in examples/benchmarks. This includes legacy qualification code, not just
