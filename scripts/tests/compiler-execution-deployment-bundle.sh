@@ -113,6 +113,7 @@ readonly qualification_fault_source="${repo_root}/crates/fe2o3-compiler-executio
 readonly qualification_preflight_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/preflight.rs"
 readonly qualification_provision_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/provision.rs"
 readonly qualification_boot_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/boot.rs"
+readonly qualification_runtime_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/boot_runtime_v86.rs"
 readonly qualification_client_transaction_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/client_transaction.rs"
 readonly qualification_cgroup_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/cgroup.rs"
 readonly qualification_run_source="${repo_root}/crates/fe2o3-compiler-execution-deployment/src/run.rs"
@@ -139,7 +140,12 @@ for boot_contract in \
   'getpgid' \
   'getpgrp' \
   '--private-network' \
-  '--bind=+/run/fe2o3:/run/fe2o3:norbind,noidmap' \
+  '--bind={runtime_source}:/run/fe2o3:norbind,noidmap' \
+  'runtime_v86::checked_bind_source(runtime_source, identity)?' \
+  'runtime_v86::MachineRuntimeSourceV86::capture(&root, staging_name, (0, 0))?' \
+  'runtime.attach(&base, &root, (0, 0))?' \
+  'runtime.revalidate()?' \
+  'runtime.path()' \
   'COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1' \
   'MachineSocketReadinessV1' \
   'try_admit_client_transaction_report_v1' \
@@ -148,6 +154,18 @@ for boot_contract in \
   grep -Fq -- "${boot_contract}" "${qualification_boot_source}" ||
     fail "missing isolated systemd boot contract ${boot_contract}"
 done
+for runtime_contract in \
+  'QualificationMachineIdentityV1::from_staging_name(staging)? != *identity' \
+  'ResolveFlags::BENEATH | ResolveFlags::NO_SYMLINKS | ResolveFlags::NO_MAGICLINKS' \
+  'rustix::mount::mount_bind(' \
+  'alias.revalidate()?' \
+  'machine runtime alias changed before nspawn exec'; do
+  grep -Fq -- "${runtime_contract}" "${qualification_runtime_source}" ||
+    fail "missing child-private runtime alias contract ${runtime_contract}"
+done
+if grep -Fq -- '--bind=+/run/fe2o3:/run/fe2o3:norbind,noidmap' "${qualification_boot_source}"; then
+  fail 'systemd runtime bind must retain the validated child-private alias'
+fi
 if grep -Eq -- 'connect\(|getpeername\(|socket_peercred' "${qualification_boot_source}"; then
   fail 'host readiness must not consume the production supervisor session'
 fi
