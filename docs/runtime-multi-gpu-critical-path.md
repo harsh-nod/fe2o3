@@ -28,6 +28,13 @@ all four private namespace layers, and validates one matching execution record
 after successful child exit. Its read-only selector passes on MI300X for render
 nodes 128 and 136; this does not establish device idleness or execute GPU work.
 
+The [portable proof-input audit](evidence/dev-qualification-proof-inputs-2026-10-04/README.md)
+now checks the pinned toolchain and libc/zlib package members before any private
+installation state is created. It passes as an unprivileged user with the whole
+filesystem read-only; it neither executes inspected inputs nor grants installed
+approval. Existing post-overlay source/installed audits and genuine admission
+still pass. This is one input-bundle prerequisite, not a complete deployment.
+
 Current work order:
 
 1. Prepare the complete pinned compiler/proof/offline-cache input bundle and make
@@ -35,7 +42,12 @@ Current work order:
    checks reach the host, but the fixed services are absent, noninteractive sudo
    requires a password and direct root SSH is unavailable. Compiler/tool paths and
    four setup DSO hashes match the qualification host; that is not the complete
-   deployment closure. Do not bypass admission or weaken device permissions.
+   deployment closure. Add a private, separately manifested source/toolchain/cache
+   projection at the CLI's exact compiled-in source root. Give application UID1000
+   searchable private ancestors without changing the UID1002 host checkout or
+   exposing its home. Preserve the pinned Rust runtime's mode bits and exact
+   registry/git bytes; qualify the host static-link tool closure separately.
+   Do not bypass admission or weaken device permissions.
 2. Select two freshly observed free physical GPUs, resolve their hardware IDs and
    expose only their render nodes plus KFD in the private application namespace.
    The harness preserves application UID1000 and derives necessary numeric GPU
@@ -47,6 +59,13 @@ Current work order:
    timeouts, process exit and quarantined work are not native settlement.
 4. Exercise second-invocation and transfer-deadline failure controls. Require no
    hardware success record and inspect owned shutdown/quarantine.
+
+Latest proof-input qualification: **22 shell controls passed**. Real pinned input
+audit passes without root or writable filesystems; a bad package fails before
+cgroup creation. A fresh genuine zero-argument campaign passes 1/1 in 493.57
+seconds including deployment and cleanup (481.00 seconds in the test). No Rust
+unit suite, hardware execution or performance comparison was rerun for this
+shell-only change. The complete input projection and hardware gates remain open.
 
 Latest harness qualification: **38 unit tests passed, 12 ignored**, strict Clippy,
 shell parser controls and four-layer synthetic character-node carriage passed.

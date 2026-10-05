@@ -60,6 +60,11 @@ case "${1:-}" in
       export FE2O3_GENUINE_GPU_SELECTION
       configure_two_gpu_mounts
     fi
+    # Audit portable proof inputs before allocating any private installation state.
+    # Later package/source/installed checks retain their independent authority.
+    /bin/bash "$repo/scripts/functional-refinement-verus-runtime-v1.sh" \
+      audit-qualification-source "$FE2O3_PROOF_VERUS_DIST" \
+      "$FE2O3_PROOF_RUST_TOOLCHAIN" "$FE2O3_PROOF_RUNTIME_INPUTS"
     export FE2O3_PROOF_INSTALL_PRIVATE=1
     FE2O3_PROOF_INSTALL_HOST_PID_NAMESPACE="$(readlink /proc/self/ns/pid)"
     export FE2O3_PROOF_INSTALL_HOST_PID_NAMESPACE

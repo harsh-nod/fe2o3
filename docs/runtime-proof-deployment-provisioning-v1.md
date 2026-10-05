@@ -109,6 +109,31 @@ sources, host-library aliases, loader cache/preload and hwcaps alternatives.
 The current qualified Worker links LLVM/LLD statically and needs seven external
 base DSOs at their canonical paths, not a relocated libLLVM directory.
 
+Before allocating a cgroup or private installation state, every resource campaign
+now runs a non-installing source-package audit:
+
+```sh
+bash scripts/functional-refinement-verus-runtime-v1.sh \
+  audit-qualification-source "$FE2O3_PROOF_VERUS_DIST" \
+  "$FE2O3_PROOF_RUST_TOOLCHAIN" "$FE2O3_PROOF_RUNTIME_INPUTS"
+```
+
+It verifies existing libc/zlib package hashes before parsing, streams the exact
+manifest-pinned DSO/interpreter members without filesystem extraction, and checks
+the remaining host-provided proof DSOs, Verus distribution, Rust target files and
+excluded launcher/rustup provenance. It does not execute inspected inputs and
+requires no root or writable filesystem. Its distinct `QUALIFICATION_INPUTS_OK`
+marker is not `SOURCE_OK` or `INSTALLED_OK`; the current host loader may differ
+from the package-backed private installation. Paths are reopened between checks,
+so this is point-in-time preflight, not retained immutable custody. Existing
+package rechecks, post-overlay source audit, installed audit and production
+resource admission remain mandatory.
+
+The [input-audit evidence](evidence/dev-qualification-proof-inputs-2026-10-04/README.md)
+records 22 shell controls, read-only unprivileged inspection, fail-before-cgroup
+rejection and a fresh genuine admission regression. This does not supply the
+complete compiler/source/offline-cache bundle or qualify native GPU execution.
+
 The campaign runs the actual inspector twice as UID 61002/GID 61003 under the
 closed proof profile, requires identical candidates, rejects missing resources
 without output, and installs/reopens the result. It then reuses the actual
