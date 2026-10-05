@@ -161,3 +161,25 @@ fn source_execution_borrow_endpoint_preserves_account_custody() {
         assert!(result.is_err());
     }
 }
+#[test]
+#[ignore = "diagnostic inert tile descriptor export; grants no producer or proof authority"]
+fn diagnostic_original_tile_descriptor_export_without_authority_v163() {
+    use sha2::{Digest, Sha256};
+    use std::io::{BufWriter, Write as _};
+    let owner = kernel_argument_abi_v18::tests::fixture_descriptor_ownership_v18(
+        super::super::fixtures::tile_parts_repeated_owner(),
+    );
+    let bytes = owner.source_semantic().canonical_encoding();
+    assert!(!bytes.is_empty() && bytes.len() <= 1024 * 1024);
+    let mut output = BufWriter::new(std::io::stdout().lock());
+    write!(output, "{{\"kind\":\"fe2o3-original-tile-descriptor-v163\",\"authority\":false,\"bytes\":{},\"sha256\":\"", bytes.len()).unwrap();
+    for byte in Sha256::digest(bytes) {
+        write!(output, "{byte:02x}").unwrap();
+    }
+    write!(output, "\",\"descriptor_hex\":\"").unwrap();
+    for byte in bytes {
+        write!(output, "{byte:02x}").unwrap();
+    }
+    writeln!(output, "\"}}").unwrap();
+    output.flush().unwrap();
+}
