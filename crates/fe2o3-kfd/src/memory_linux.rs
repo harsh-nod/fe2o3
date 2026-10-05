@@ -1059,6 +1059,43 @@ impl<D: LinuxMemoryDevice> MemoryBackend for LinuxMemoryBackendFor<D> {
         Ok(())
     }
 
+    fn publish_closed_program_aql_header(
+        mapping: &mut Self::Mapping,
+        requested_bytes: usize,
+        slot_index: u32,
+        program_index: u32,
+        program_count: u32,
+        header: fe2o3_aql::AqlClosedProgramHeaderV1,
+    ) -> Result<(), MemorySessionError> {
+        let offset = usize::try_from(slot_index)
+            .ok()
+            .and_then(|index| index.checked_mul(AQL_KERNEL_DISPATCH_PACKET_BYTES_V1))
+            .ok_or_else(|| malformed_aql_mapping("closed-program packet slot offset"))?;
+        let pointer = checked_mapping_pointer(
+            mapping,
+            requested_bytes,
+            offset,
+            core::mem::size_of::<AtomicU32>(),
+            core::mem::align_of::<AtomicU32>(),
+        )?;
+        // SAFETY: the checked slot retains its initialized, aligned AtomicU32.
+        let atomic = unsafe { &*pointer.cast::<AtomicU32>() };
+        let unpublished = u32::from_le(atomic.load(Ordering::Relaxed));
+        let setup = unpublished >> 16;
+        if unpublished & 0xffff != u32::from(AQL_INVALID_PACKET_HEADER_V1)
+            || !header.admits(program_index, program_count, setup as u16)
+        {
+            return Err(malformed_aql_mapping(
+                "closed-program unpublished header or position",
+            ));
+        }
+        atomic.store(
+            ((setup << 16) | u32::from(header.header())).to_le(),
+            Ordering::Release,
+        );
+        Ok(())
+    }
+
     fn observe_i64_acquire(
         mapping: &mut Self::Mapping,
         requested_bytes: usize,
@@ -1547,6 +1584,116 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn closed_program_publication_preserves_setup_and_rejects_wrong_position_or_old_route() {
+        use fe2o3_aql::{
+            AqlDispatchGeometryV1, AqlDispatchOrderingV1, AqlKernelDispatchPacketV1,
+            AqlPreparedClosedKernelDispatchProgramV1, ObservedGpuAddressV1,
+        };
+        let program = AqlPreparedClosedKernelDispatchProgramV1::try_from_packets(
+            (0..3)
+                .map(|index| {
+                    AqlKernelDispatchPacketV1::new_unpublished_with_ordering(
+                        AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+                        0,
+                        0,
+                        ObservedGpuAddressV1::new(0x400000).unwrap(),
+                        ObservedGpuAddressV1::new(0x100000 + index * 64).unwrap(),
+                        64,
+                        ObservedGpuAddressV1::new(0x800000 + index * 64).unwrap(),
+                        AqlDispatchOrderingV1::WaitForPrior,
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )
+        .unwrap();
+        let mut packet = OnePacket([0; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]);
+        let mut mapping = LinuxCpuMapping {
+            address: NonNull::from(&mut packet).cast(),
+            bytes: AQL_KERNEL_DISPATCH_PACKET_BYTES_V1,
+            active: true,
+            accessible: true,
+            reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
+        };
+        for index in 0..3 {
+            let header = program.header_for_packet(index).unwrap();
+            for setup in [1u32, 2, 3] {
+                let unpublished = (setup << 16) | 1;
+                packet.0[..4].copy_from_slice(&unpublished.to_le_bytes());
+                assert!(
+                    LinuxMemoryBackend::publish_aql_header(&mut mapping, 64, 0, header.header())
+                        .is_err()
+                );
+                assert_eq!(
+                    u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+                    unpublished
+                );
+                for (position, count, slot) in [(index + 1, 3, 0), (index, 2, 0), (index, 3, 1)] {
+                    assert!(
+                        LinuxMemoryBackend::publish_closed_program_aql_header(
+                            &mut mapping,
+                            64,
+                            slot,
+                            position,
+                            count,
+                            header
+                        )
+                        .is_err()
+                    );
+                    assert_eq!(
+                        u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+                        unpublished
+                    );
+                }
+                LinuxMemoryBackend::publish_closed_program_aql_header(
+                    &mut mapping,
+                    64,
+                    0,
+                    index,
+                    3,
+                    header,
+                )
+                .unwrap();
+                assert_eq!(
+                    u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+                    (setup << 16) | u32::from(header.header())
+                );
+                assert!(
+                    LinuxMemoryBackend::publish_closed_program_aql_header(
+                        &mut mapping,
+                        64,
+                        0,
+                        index,
+                        3,
+                        header
+                    )
+                    .is_err()
+                );
+            }
+            for setup in [0u32, 4, u16::MAX as u32] {
+                let unpublished = (setup << 16) | 1;
+                packet.0[..4].copy_from_slice(&unpublished.to_le_bytes());
+                assert!(
+                    LinuxMemoryBackend::publish_closed_program_aql_header(
+                        &mut mapping,
+                        64,
+                        0,
+                        index,
+                        3,
+                        header
+                    )
+                    .is_err()
+                );
+                assert_eq!(
+                    u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+                    unpublished
+                );
+            }
+        }
     }
 
     #[test]

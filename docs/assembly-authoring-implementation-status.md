@@ -11,6 +11,54 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Paired debugger completion package and startup — 2026-10-05
+
+The optional, disabled [physical-v9 debugger source layer](../tools/rocgdb-one-stop-native-adapters-v1/physical-v9/README.md)
+now records the host-first paired CPU/wave resume correction. Its bounded
+completion sequence requires actual returns from both CPU-thread and wave
+resume bodies before the final commit. Reordered, missing, repeated and failed
+edges cannot authorize completion; exceptions poison the transaction.
+The same-stop wave requery occurs before the CPU-side effect.
+
+The four hook postimages are identical to those in the successful private
+selective rebuild described below. The public layer remains disabled:
+activation, capture and publication are unavailable. It preserves predecessor
+packages, the 65,536-byte native logical reservation and all other native caps.
+Source verification selects exactly 63 files / 2,264,529 bytes; this is not a
+complete-checkout or native qualification claim.
+
+Root validation passed 52 package/account/reader/transform controls, 13
+completion-placement controls, strict C++17 and undefined-behavior-sanitized
+completion-sequence tests, the selected public-source verifier, the exact
+312,312-byte AMD API-header verifier, and unified-patch application checking.
+Independent review also reconstructed all four postimages from the 21 offset
+edits and the separate 17 unified-patch hunks. Source and CPU checks do not
+substitute for a successful GPU stop/resume transaction.
+
+The rebuilt private debugger subsequently passed a fresh no-inferior startup:
+two MI commands, 14 records, normal exit, both streams closed, no adopted
+children or kill attempts, and an empty service cgroup. Its 246,019-byte
+collector frame matched the raw MI stream. Current artifact and executable
+observations matched before and after. All five cleanup controls passed
+(normal, timeout, double-fork, surviving stdout holder and execution failure),
+along with 55 supervisor, 17 process-census, 28 collector and 19 startup-source
+controls. The fresh build and deliberately borrowed configured/Python data
+roots are explicitly distinguished.
+
+The independent startup audit is
+`debugger-paired-startup-actual-independent-review-r68-r1/REVIEW.json`
+(SHA256 `59c33989327b2ec9543a13c264a2e3b0705bc15e2a50002c3c0c91544a7b0434`).
+This is startup-only evidence: it loaded no inferior and performed no kernel
+dispatch or physical capture. It does not establish complete import history,
+cache provenance, historical process cleanup or global writer exclusion.
+The fresh native controller, semantic runtime binding, currentness checks and
+one-use execution scope remain pending; no expired execution scope is reused.
+
+External compiler-worker execution, artifact/launch admission, GPU/numerical
+qualification and public debugger qualification remain pending. No milestone
+or tutorial is completed by this checkpoint. Accepted exits remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private BF16 owning descriptor continuation — 2026-10-05
 
 The private continuation now constructs and retains a canonical compiler

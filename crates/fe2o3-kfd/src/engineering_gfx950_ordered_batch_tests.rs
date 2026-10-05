@@ -17,6 +17,8 @@ enum PreparationFault {
 #[derive(Default)]
 struct Fake {
     native_program: bool,
+    boundary_fences: bool,
+    closed_headers: Vec<u16>,
     deadlines: Vec<Instant>,
     events: Vec<String>,
     fail_at: Option<usize>,
@@ -110,6 +112,26 @@ impl OrderedExposure for Fake {
     }
 }
 
+impl fe2o3_aql::AqlClosedProgramPublicationTargetV1 for Fake {
+    fn publish_closed_release_header(
+        &mut self,
+        index: u32,
+        header: fe2o3_aql::AqlClosedProgramHeaderV1,
+    ) -> Result<()> {
+        assert!(self.boundary_fences);
+        assert!(header.matches_position(index, self.count as u32));
+        assert_eq!(
+            self.events[self.publication_start..]
+                .iter()
+                .filter(|event| event.starts_with("body:"))
+                .count(),
+            self.count
+        );
+        self.closed_headers.push(header.header());
+        self.event(format!("header:{index}"))
+    }
+}
+
 impl OrderedBackend for Fake {
     type Prepared = usize;
     type Staged = usize;
@@ -154,6 +176,17 @@ impl OrderedBackend for Fake {
         self.deadlines.push(deadline);
         self.publication_start = self.events.len();
         self.event("ring_capacity_reservation".into())?;
+        if self.boundary_fences {
+            let program = fe2o3_aql::AqlPreparedClosedKernelDispatchProgramV1::try_from_packets(
+                (0..count)
+                    .map(Self::packet)
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            )
+            .unwrap();
+            native_program::expose_closed_program(program, self)?;
+            return Ok(count);
+        }
         if self.native_program {
             let program = fe2o3_aql::AqlPreparedKernelDispatchProgramV1::try_from_packets(
                 (0..count)
@@ -628,6 +661,9 @@ fn optional_arena_and_signals_are_reinitialized_after_confirmed_queue_rollover()
 
 #[path = "engineering_gfx950_ordered64_tests.rs"]
 mod ordered64;
+
+#[path = "engineering_gfx950_boundary_fence_tests.rs"]
+mod boundary_fences;
 
 #[test]
 fn native_program_publishes_once_and_observes_every_signal_at_cardinality_boundaries() {

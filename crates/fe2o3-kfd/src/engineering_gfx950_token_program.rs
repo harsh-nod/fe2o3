@@ -111,14 +111,22 @@ pub(super) fn run_prepared_groups<T>(
 
 impl Context {
     pub(super) fn token_program_backend(&self) -> &'static str {
-        match (self.token_program_enabled, self.token_program_native) {
-            (true, true) => "native-whole-program-v1",
-            (true, false) => "ordered64-groups-v1",
+        match (
+            self.token_program_enabled,
+            self.token_program_native,
+            self.token_program_boundary_fences,
+        ) {
+            (true, true, true) => "native-boundary-fences-v1",
+            (true, true, false) => "native-whole-program-v1",
+            (true, false, false) => "ordered64-groups-v1",
             _ => "disabled",
         }
     }
 
     fn require_token_program_enabled(&self) -> Result<()> {
+        if self.token_program_boundary_fences && !self.token_program_native {
+            return Err("closed token program requires native publication".into());
+        }
         require_policy(self.token_program_enabled, self.ordered64_wait_policy)
     }
 

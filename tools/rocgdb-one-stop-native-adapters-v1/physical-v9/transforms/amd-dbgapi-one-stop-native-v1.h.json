@@ -1,0 +1,44 @@
+{
+  "schema": "fe2o3-disabled-physical-v9-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+  "before": {
+    "bytes": 23735,
+    "sha256": "e496490ec0cd0c613ca0fc3391ddd8b3d85d54c7e5ba363f2f83aa59d9f0df7e"
+  },
+  "after": {
+    "bytes": 25115,
+    "sha256": "fe672505fdcf400cd71ea87d41259e1f2b4123d4215d777c8c2ebdfcb36ef3f0"
+  },
+  "changes": [
+    {
+      "beforeOffset": 10938,
+      "afterOffset": 10938,
+      "before": "class native_adapter final {\npublic:",
+      "after": "// Separate logical reservation for the paired completion helpers and diagnostic.\n// Existing targets, owners, maps, and thread objects are only borrowed.\nstruct completion_resume_scratch final {\n  terminal_maintenance_scratch common;\n  struct frames {\n    native_adapter *current,*origin,*before,*cpu,*wave,*body,*generic,*commit;\n    completion_sequence *sequence;\n    completion_edge edge;\n    thread_info *thread;\n    process_stratum_target *proc;\n    target_ops *base,*top;\n    bool cpu_running,wave_running,commit_required,yes;\n    std::size_t host,gpu,total;\n    identity actual;\n  } frames;\n  char fatal_error_payload[224];\n};\n[[gnu::used]] static const completion_resume_scratch *\ncompletion_resume_debug_type (const completion_resume_scratch *p) noexcept\n{ return p; }\nclass native_adapter final {\npublic:"
+    },
+    {
+      "beforeOffset": 13881,
+      "afterOffset": 14660,
+      "before": "  using terminal_stage = owner::terminal_stage;",
+      "after": "  using terminal_stage = owner::terminal_stage;\n  enum class resume_site : std::uint8_t {\n    none, infrun_origin, generic_origin, completion_cpu_scope,\n    completion_wave_scope, completion_environment, completion_roster,\n    completion_thread_state, cpu_return, wave_return, body_return,\n    generic_return, commit_begin, commit_amd, commit_generic\n  };\n  void resume_require (bool, resume_site);\n  void completion_current (bool cpu_running, bool wave_running, bool commit_required);"
+    },
+    {
+      "beforeOffset": 19885,
+      "afterOffset": 21102,
+      "before": "  checkpoint_note m_checkpoint_note {};",
+      "after": "  checkpoint_note m_checkpoint_note {};\n  completion_sequence m_completion;\n  resume_site m_first_resume_site=resume_site::none;"
+    },
+    {
+      "beforeOffset": 22811,
+      "afterOffset": 24117,
+      "before": "    + sizeof (checkpoint_diagnostic_scratch)\n    + limits::client_output_bytes",
+      "after": "    + sizeof (checkpoint_diagnostic_scratch) + sizeof (completion_resume_scratch)\n    + limits::client_output_bytes"
+    },
+    {
+      "beforeOffset": 23380,
+      "afterOffset": 24723,
+      "before": "               + sizeof (checkpoint_diagnostic_scratch)\n               <= limits::logical_bytes",
+      "after": "               + sizeof (checkpoint_diagnostic_scratch) + sizeof (completion_resume_scratch)\n               <= limits::logical_bytes"
+    }
+  ]
+}

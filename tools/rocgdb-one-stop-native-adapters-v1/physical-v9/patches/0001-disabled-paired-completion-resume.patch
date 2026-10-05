@@ -1,0 +1,388 @@
+--- a/gdb/amd-dbgapi-owned-one-stop-v1.h
++++ b/gdb/amd-dbgapi-owned-one-stop-v1.h
+@@ -78,6 +78,30 @@
+   unloaded_retirement = 45
+ };
+ enum class resume_kind : std::uint8_t { publication, completion };
++/* Bounded bookkeeping for the selected all-stop-on-non-stop completion.
++   This carries no native owner/authority and has no reset or recovery path. */
++enum class completion_edge : std::uint8_t {
++  cpu_begin, cpu_return, cpu_body, cpu_generic,
++  wave_begin, wave_return, wave_body, wave_generic,
++  commit_begin, commit_amd, commit_generic, count
++};
++class completion_sequence final {
++public:
++  bool expects (completion_edge edge) const noexcept {
++    return !m_failed && m_next == static_cast<unsigned> (edge);
++  }
++  bool advance (completion_edge edge) noexcept {
++    if (edge == completion_edge::count || !expects (edge)) {
++      m_failed = true; return false;
++    }
++    ++m_next; return true;
++  }
++  bool completed () const noexcept { return expects (completion_edge::count); }
++private:
++  std::uint8_t m_next = 0;
++  bool m_failed = false;
++};
++static_assert (sizeof (completion_sequence) == 2, "fixed completion sequence");
+ enum class counter : std::uint8_t {
+   api, read_bytes, read_calls, work, diagnostic_rows,
+   file_requested_bytes, file_observed_bytes, file_probe_bytes, file_rounds, proc_requested_bytes
+--- a/gdb/amd-dbgapi-one-stop-native-v1.h
++++ b/gdb/amd-dbgapi-one-stop-native-v1.h
+@@ -220,6 +220,26 @@
+ [[gnu::used]] static const checkpoint_diagnostic_scratch *
+ checkpoint_diagnostic_debug_type (const checkpoint_diagnostic_scratch *p) noexcept
+ { return p; }
++// Separate logical reservation for the paired completion helpers and diagnostic.
++// Existing targets, owners, maps, and thread objects are only borrowed.
++struct completion_resume_scratch final {
++  terminal_maintenance_scratch common;
++  struct frames {
++    native_adapter *current,*origin,*before,*cpu,*wave,*body,*generic,*commit;
++    completion_sequence *sequence;
++    completion_edge edge;
++    thread_info *thread;
++    process_stratum_target *proc;
++    target_ops *base,*top;
++    bool cpu_running,wave_running,commit_required,yes;
++    std::size_t host,gpu,total;
++    identity actual;
++  } frames;
++  char fatal_error_payload[224];
++};
++[[gnu::used]] static const completion_resume_scratch *
++completion_resume_debug_type (const completion_resume_scratch *p) noexcept
++{ return p; }
+ class native_adapter final {
+ public:
+   native_adapter (const native_adapter &) = delete;
+@@ -278,6 +298,14 @@
+ private:
+   friend class owned_checkpoint_breakpoint;
+   using terminal_stage = owner::terminal_stage;
++  enum class resume_site : std::uint8_t {
++    none, infrun_origin, generic_origin, completion_cpu_scope,
++    completion_wave_scope, completion_environment, completion_roster,
++    completion_thread_state, cpu_return, wave_return, body_return,
++    generic_return, commit_begin, commit_amd, commit_generic
++  };
++  void resume_require (bool, resume_site);
++  void completion_current (bool cpu_running, bool wave_running, bool commit_required);
+   enum class refresh_kind : std::uint8_t { none,initial,terminal };
+   enum class reset_state : std::uint8_t { idle,armed,consumed };
+   enum class breakpoint_site : std::uint8_t {
+@@ -401,6 +429,8 @@
+   int m_first_breakpoint_number=0;
+   native_result_note m_native_result_note {};
+   checkpoint_note m_checkpoint_note {};
++  completion_sequence m_completion;
++  resume_site m_first_resume_site=resume_site::none;
+   enum class path : std::uint8_t { none,entry,callback_step,callback_continue,publication,completion };
+   enum class callback_progress : std::uint8_t { none,step_ready,step_inflight,continue_ready };
+   enum class entry_epoch : std::uint8_t { unused,entry_commit,armed,retired };
+@@ -445,7 +475,7 @@
+     + finish_step_context_scratch + sizeof (callback_maintenance_scratch) + sizeof (terminal_maintenance_scratch) + sizeof (unloaded_maintenance_scratch)
+     + sizeof (breakpoint_refresh_scratch)
+     + sizeof (native_result_diagnostic_scratch)
+-    + sizeof (checkpoint_diagnostic_scratch)
++    + sizeof (checkpoint_diagnostic_scratch) + sizeof (completion_resume_scratch)
+     + limits::client_output_bytes + publication_output::scratch_bytes;
+ }
+ static_assert (sizeof (native_adapter) + 4096 + 1024 + 256 + sizeof (loaded_maintenance_scratch) + limits::client_output_bytes + 256
+@@ -453,7 +483,7 @@
+                + sizeof (callback_maintenance_scratch) + sizeof (terminal_maintenance_scratch) + sizeof (unloaded_maintenance_scratch)
+                + sizeof (breakpoint_refresh_scratch)
+                + sizeof (native_result_diagnostic_scratch)
+-               + sizeof (checkpoint_diagnostic_scratch)
++               + sizeof (checkpoint_diagnostic_scratch) + sizeof (completion_resume_scratch)
+                <= limits::logical_bytes, "all new fixed retained data is prepaid");
+ static_assert (limits::file_requested_bytes == target_file_read_cap
+                && limits::file_rounds == target_file_round_cap,
+--- a/gdb/amd-dbgapi-one-stop-native-io-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-io-v1.inc
+@@ -12,6 +12,11 @@
+   clear_breakpoint_refresh ();
+   retire_loaded_maintenance ();
+   retire_entry_maintenance ();
++  if (m_first_resume_site!=resume_site::none)
++    error ("fixed owned one-stop native relation refused (%u); commit-site=%u; resume-site=%u",
++           static_cast<unsigned> (m_owner.why ()),
++           static_cast<unsigned> (m_owner.first_commit_site ()),
++           static_cast<unsigned> (m_first_resume_site));
+   if (m_first_breakpoint_site!=breakpoint_site::none)
+     error ("fixed owned one-stop native relation refused (%u); commit-site=%u; breakpoint-site=%u; breakpoint-type=%u; breakpoint-number=%d",
+            static_cast<unsigned> (m_owner.why ()),
+@@ -41,6 +46,12 @@
+ void native_adapter::require (bool yes, failure why, commit_site site) {
+   if (!yes || m_owner.invalid ()) reject (why, site);
+ }
++void native_adapter::resume_require (bool yes, resume_site site) {
++  if (!yes && m_owner.selected () && !m_owner.invalid ()
++      && m_first_resume_site==resume_site::none)
++    m_first_resume_site=site;
++  require (yes,failure::resume_scope);
++}
+ void native_adapter::debit (counter kind, std::uint64_t amount) {
+   if (!m_owner.debit (kind, amount)) reject (failure::budget);
+ }
+--- a/gdb/amd-dbgapi-one-stop-native-resume-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-resume-v1.inc
+@@ -357,7 +357,7 @@
+              && !m_owner.m_empty_objects && m_callback_progress==callback_progress::none
+              && !m_host->control.trap_expected && !m_infrun_step
+              && !m_infrun_trap && !m_infrun_inline
+-             && (m_infrun_scope==minus_one_ptid || m_infrun_scope==ptid_t (m_inferior->pid)),
++             && m_completion.completed () && m_infrun_scope==m_gpu_thread->ptid,
+              failure::commit,commit_site::terminal_thread_state);
+   } else {
+     // Two exact completed terminal callback stages, each retaining the source
+@@ -495,12 +495,84 @@
+     m_owner.poison (failure::commit,commit_site::unloaded_retirement);
+   m_unloaded_epoch=unloaded_epoch::retired; // Never rearm, release refs or grant resume.
+ }
++// The selected completion profile admits exactly the actual host-first,
++// one-host/one-wave roster used by proceed's all-stop-on-non-stop loop.
++// Reverse order, extra/exited threads, stack drift, and pending statuses fail
++// before the next effect. This is a narrow profile, not a global ordering claim.
++void native_adapter::completion_current (bool cpu_running, bool wave_running,
++                                         bool commit_required) {
++  debit (counter::work,160);
++  resume_require (m_inferior!=nullptr && m_inferior_ref.get ()==m_inferior
++                  && current_inferior ()==m_inferior && m_host!=nullptr
++                  && m_host_ref.get ()==m_host && m_gpu_thread!=nullptr
++                  && m_gpu_thread_ref.get ()==m_gpu_thread
++                  && !non_stop && target_is_non_stop_p ()
++                  && m_loaded_process_ref.get ()!=nullptr
++                  && m_loaded_base_ref.get ()!=nullptr
++                  && m_loaded_top_ref.get ()==&the_amd_dbgapi_target,
++                  resume_site::completion_environment);
++  auto *const proc=m_inferior->process_target ();
++  auto *const base=m_loaded_base_ref.get ();
++  resume_require (proc==m_loaded_process_ref.get () && proc==get_native_target ()
++                  && m_inferior->top_target ()==m_loaded_top_ref.get ()
++                  && m_inferior->target_is_pushed (proc)
++                  && m_inferior->target_is_pushed (base)
++                  && m_inferior->find_target_beneath (&the_amd_dbgapi_target)==base
++                  && (base==proc || (base->stratum ()==thread_stratum
++                                    && m_inferior->find_target_beneath (base)==proc))
++                  && info ().runtime_state==AMD_DBGAPI_RUNTIME_STATE_LOADED_SUCCESS
++                  && m_owner.check_owner (current_identity ())
++                  && !m_owner.m_callback && !m_owner.m_allocation_active
++                  && m_callback_progress==callback_progress::none
++                  && m_inferior->ptid_thread_map.size ()==2
++                  && info ().wave_info_map.size ()==1,
++                  resume_site::completion_environment);
++  std::size_t total=0;
++  for (auto *inf : all_inferiors ()) {
++    debit (counter::work,8);
++    resume_require (++total==1 && inf==m_inferior,resume_site::completion_roster);
++  }
++  resume_require (total==1,resume_site::completion_roster);
++  total=0;
++  for (auto *thread : m_inferior->threads ()) {
++    debit (counter::work,32);
++    resume_require (++total<=2 && thread==(total==1 ? m_host : m_gpu_thread)
++                    && thread->inf==m_inferior && thread->state==THREAD_RUNNING
++                    && thread->ptid.pid ()==m_inferior->pid
++                    && !thread->has_pending_waitstatus (),
++                    resume_site::completion_roster);
++  }
++  resume_require (total==2 && !ptid_is_gpu (m_host->ptid)
++                  && ptid_is_gpu (m_gpu_thread->ptid)
++                  && proc->find_thread (m_gpu_thread->ptid)==m_gpu_thread
++                  && static_cast<std::uint64_t> (m_gpu_thread->global_num)==m_owner.m_stop.thread
++                  && get_amd_dbgapi_wave_id (m_gpu_thread->ptid).handle==m_owner.m_stop.wave
++                  && m_host->executing ()==cpu_running && m_host->resumed ()==cpu_running
++                  && m_gpu_thread->executing ()==wave_running
++                  && m_gpu_thread->resumed ()==wave_running
++                  && !m_host->control.trap_expected && !m_gpu_thread->control.trap_expected
++                  && !m_host->control.stepping_command && !m_gpu_thread->control.stepping_command
++                  && proc->commit_resumed_state==commit_required
++                  && !proc->has_resumed_with_pending_wait_status (),
++                  resume_site::completion_thread_state);
++  const auto cached=info ().wave_info_map.begin ();
++  resume_require (cached->first==m_owner.m_stop.wave
++                  && cached->second.coords.wave_id.handle==m_owner.m_stop.wave
++                  && cached->second.coords.queue_id.handle==m_owner.m_stop.queue
++                  && cached->second.coords.dispatch_id.handle==m_owner.m_stop.dispatch
++                  && cached->second.coords.agent_id.handle==m_owner.m_stop.agent,
++                  resume_site::completion_environment);
++}
+ void native_adapter::infrun_begin (thread_info *thread,ptid_t scope,bool step,gdb_signal signal,
+                                   bool trap,bool inline_step,bool software,bool user_step) {
+   if (!selected ()) return;
+-  require (!m_infrun_origin && m_path==path::none && thread!=nullptr
+-           && thread==inferior_thread () && (thread==m_host || thread==m_gpu_thread)
+-           && m_owner.check_owner (current_identity ()),failure::resume_scope);
++  resume_require (!m_infrun_origin
++                  && (m_path==path::none
++                      || (m_path==path::completion
++                          && m_completion.expects (completion_edge::wave_begin)))
++                  && thread!=nullptr && thread==inferior_thread ()
++                  && (thread==m_host || thread==m_gpu_thread)
++                  && m_owner.check_owner (current_identity ()),resume_site::infrun_origin);
+   m_infrun_origin=true; m_infrun_scope=scope; m_infrun_step=step; m_infrun_signal=signal;
+   m_infrun_trap=trap; m_infrun_inline=inline_step; m_infrun_software=software;
+   m_infrun_user_step=user_step;
+@@ -513,16 +585,32 @@
+   retire_callback_maintenance ();
+   retire_loaded_maintenance ();
+   retire_entry_maintenance ();
+-  require (m_infrun_origin && m_path==path::none && !m_generic_returned
+-           && !m_generic_commit && m_infrun_scope==scope && m_infrun_step==(step!=0)
+-           && m_infrun_signal==signal && signal==GDB_SIGNAL_0
+-           && !m_infrun_software && !m_infrun_user_step
+-           && !inferior_thread ()->executing () && !inferior_thread ()->resumed ()
+-           && m_owner.check_owner (current_identity ()),failure::resume_scope);
++  resume_require (m_infrun_origin
++                  && (m_path==path::none
++                      || (m_path==path::completion
++                          && m_completion.expects (completion_edge::wave_begin)))
++                  && !m_generic_returned && !m_generic_commit && !m_amd_body_returned
++                  && !m_amd_commit_returned
++                  && m_infrun_scope==scope && m_infrun_step==(step!=0)
++                  && m_infrun_signal==signal && signal==GDB_SIGNAL_0
++                  && !m_infrun_software && !m_infrun_user_step
++                  && !inferior_thread ()->executing () && !inferior_thread ()->resumed ()
++                  && m_owner.check_owner (current_identity ()),resume_site::generic_origin);
+   std::size_t host=0,gpu=0; thread_roster (host,gpu);
+   const bool all=scope==minus_one_ptid || scope==ptid_t (m_inferior->pid);
+   const bool host_only=scope==m_host->ptid || (all && host==1 && gpu==0);
+-  if (m_callback_progress==callback_progress::step_ready) {
++  if (m_path==path::completion) {
++    resume_require (m_owner.state ()==phase::completion_consumed
++                    && !m_command_continue && !m_stop_retired
++                    && inferior_thread ()==m_gpu_thread && scope==m_gpu_thread->ptid
++                    && host==1 && gpu==1 && step==0
++                    && !m_infrun_trap && !m_infrun_inline
++                    && same (m_candidate_stop,m_owner.m_stop),
++                    resume_site::completion_wave_scope);
++    completion_current (true,false,false);
++    resume_require (m_completion.advance (completion_edge::wave_begin),
++                    resume_site::completion_wave_scope);
++  } else if (m_callback_progress==callback_progress::step_ready) {
+     require (!m_command_continue && inferior_thread ()==m_host
+              && scope==m_host->ptid && step==1 && m_infrun_trap && m_infrun_inline
+              && regcache_read_pc (get_thread_regcache (m_host))==m_callback_pc
+@@ -552,16 +640,22 @@
+              failure::resume_scope);
+     m_path=path::publication;
+   } else if (m_owner.state ()==phase::current_gpu_stop) {
+-    require (m_command_continue && m_stop_retired && inferior_thread ()==m_gpu_thread
+-             && all && step==0 && !m_infrun_trap && !m_infrun_inline,
+-             failure::resume_scope);
++    resume_require (m_command_continue && m_stop_retired
++                    && inferior_thread ()==m_host && scope==m_host->ptid
++                    && host==1 && gpu==1 && step==0
++                    && !m_infrun_trap && !m_infrun_inline
++                    && m_completion.expects (completion_edge::cpu_begin),
++                    resume_site::completion_cpu_scope);
++    completion_current (false,false,false);
+     m_command_continue=false; m_stop_retired=false;
+-    // Frontend state is now RUNNING intent. Native STOP/PC and actual
+-    // !executing/!resumed still hold before the target effect.
++    // Exactly one actual same-stop requery, before EITHER target effect.
++    // query_stop(false) reads the retained GPU, independent of selected host.
+     m_candidate_stop=query_stop (m_gpu_thread,false);
+     require (m_owner.consume_completion (current_identity (),m_candidate_stop,host,gpu,step,signal),
+              failure::resume_scope);
+-    m_snapshot.revoke (snapshot_issue::resumed); // Before any existing resume effect.
++    m_snapshot.revoke (snapshot_issue::resumed);
++    resume_require (m_completion.advance (completion_edge::cpu_begin),
++                    resume_site::completion_cpu_scope);
+     m_path=path::completion;
+   } else reject (failure::resume_scope);
+ }
+@@ -570,20 +664,32 @@
+   require (m_path==path::publication || m_path==path::completion
+            || m_path==path::callback_step || m_path==path::callback_continue,
+            failure::resume_scope);
++  if (m_path==path::completion)
++    resume_require (m_completion.advance (completion_edge::cpu_return),
++                    resume_site::cpu_return);
+   if (m_path==path::publication || m_path==path::completion)
+     require (m_owner.cpu_resume_returned (),failure::native_result);
+ }
+ void native_adapter::after_amd_wave_resume (amd_dbgapi_wave_id_t wave,amd_dbgapi_status_t status) {
+   if (!selected ()) return;
+-  require (m_path==path::completion
+-           && m_owner.wave_resume_returned (wave.handle,status),failure::native_result);
++  resume_require (m_path==path::completion
++                  && m_completion.advance (completion_edge::wave_return),
++                  resume_site::wave_return);
++  require (m_owner.wave_resume_returned (wave.handle,status),failure::native_result);
+   // Called before existing INVALID_WAVE_ID compatibility. No selected waiver.
+ }
+ void native_adapter::after_amd_resume () {
+   if (!selected ()) return;
+   require (!m_amd_body_returned && m_path!=path::none && m_path!=path::entry,
+            failure::resume_scope);
+-  if (m_path==path::publication || m_path==path::completion)
++  if (m_path==path::completion) {
++    if (m_completion.expects (completion_edge::cpu_body))
++      resume_require (m_completion.advance (completion_edge::cpu_body),resume_site::body_return);
++    else {
++      resume_require (m_completion.advance (completion_edge::wave_body),resume_site::body_return);
++      require (m_owner.resume_body_returned (),failure::native_result);
++    }
++  } else if (m_path==path::publication)
+     require (m_owner.resume_body_returned (),failure::native_result);
+   m_amd_body_returned=true;
+ }
+@@ -592,6 +698,16 @@
+   require (m_path!=path::none && !m_generic_returned
+            && (m_path==path::entry ? !m_amd_body_returned : m_amd_body_returned),
+            failure::native_result);
++  if (m_path==path::completion) {
++    if (m_completion.expects (completion_edge::cpu_generic)) {
++      resume_require (m_completion.advance (completion_edge::cpu_generic),
++                      resume_site::generic_return);
++      m_amd_body_returned=false;
++      return; // First complete call; retain transaction, await exact wave call.
++    }
++    resume_require (m_completion.advance (completion_edge::wave_generic),
++                    resume_site::generic_return);
++  }
+   m_generic_returned=true;
+ }
+ void native_adapter::before_generic_commit () {
+@@ -629,6 +745,15 @@
+     m_entry_maintenance_inflight=true; // Consume before the one existing commit.
+     return; // No target_resume credit, owner phase change, ACK, or output.
+   }
++  if (m_path==path::completion) {
++    resume_require (!m_infrun_origin && !m_command_continue
++                    && m_generic_returned && m_amd_body_returned
++                    && m_completion.expects (completion_edge::commit_begin),
++                    resume_site::commit_begin);
++    completion_current (true,true,true);
++    resume_require (m_completion.advance (completion_edge::commit_begin),
++                    resume_site::commit_begin);
++  }
+   require (m_path!=path::none && m_generic_returned && !m_generic_commit,
+            failure::commit, commit_site::before_pending);
+   if (m_path==path::entry) retain_entry_commit_targets ();
+@@ -660,6 +785,9 @@
+   }
+   require (m_generic_commit && !m_amd_commit_returned && m_path!=path::entry
+            && m_amd_body_returned,failure::commit, commit_site::after_amd);
++  if (m_path==path::completion)
++    resume_require (m_completion.advance (completion_edge::commit_amd),
++                    resume_site::commit_amd);
+   m_amd_commit_returned=true;
+ }
+ void native_adapter::after_generic_commit () {
+@@ -699,6 +827,9 @@
+   require (m_generic_commit && m_generic_returned
+            && (m_path==path::entry ? !m_amd_commit_returned : m_amd_commit_returned),
+            failure::commit, commit_site::after_pending);
++  if (m_path==path::completion)
++    resume_require (m_completion.advance (completion_edge::commit_generic),
++                    resume_site::commit_generic);
+   if (m_path==path::publication || m_path==path::completion)
+     require (m_owner.commit_returned (),failure::commit, commit_site::owner_return_bridge);
+   if (m_path==path::callback_continue) m_callback_progress=callback_progress::none;
