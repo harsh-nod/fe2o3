@@ -222,3 +222,7 @@ mod float_tests;
 #[cfg(test)]
 #[path = "original_semantic_mir_source_wrapping_v172_tests.rs"]
 mod wrapping_tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_source_wrapping_effects_v172_tests.rs"]
+mod wrapping_effects_tests;
