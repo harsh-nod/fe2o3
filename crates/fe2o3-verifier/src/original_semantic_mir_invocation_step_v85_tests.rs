@@ -54,7 +54,8 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                         check_four(&out.text, &format!("invocation_paired_step_{root}_v36"), root);
                         check_four(&out.text, &format!("invocation_paired_cut_{root}_terminal_all_v85"), root);
                         let dispatcher = theorem(&out.text, &format!("invocation_paired_step_{root}_v36"));
-                        for cut in row.cuts.iter().flatten() {
+                        for (block, cut) in row.cuts.iter().enumerate() {
+                            let Some(cut) = cut else { continue };
                             let pc = cut.source;
                             check_four(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_all_v85"), root);
                             assert!(dispatcher.contains(&format!("else if source.machine.pc == {pc}")));
@@ -84,6 +85,16 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 assert!(control.contains(&format!("assert(invocation_source_byte_state_well_formed_v36(source) && invocation_byte_states_related_v36(source.machine, target, invocation_source_byte_map_{root}_v36(source, target))) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}")));
                                 assert!(control.contains(&format!("invocation_related_target_inputs_v96(source.machine, target, invocation_source_byte_map_{root}_v36(source, target));")));
                                 assert!(control.contains(&format!("assert(invocation_paired_control_values_{root}_v36(source, original, actual)) by {{\n reveal(invocation_paired_control_values_{root}_v36);\n }}")));
+                                let observations = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_observations_v85"));
+                                assert!(!observations.contains("hide(invocation_source_enter_"));
+                                assert!(observations.contains(&format!("assert(invocation_source_byte_state_well_formed_v36(source)) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}")));
+                                assert!(observations.contains(&format!("assert(target.pc == {}) by {{\n reveal(invocation_paired_related_{root}_v36);\n }}", row.blocks.start + block)));
+                                for side in ["source", "actual"] {
+                                    let argument = if side == "source" { "source" } else { "target" };
+                                    assert!(observations.contains(&format!("assert(invocation_paired_{side}_step_{root}_v36({argument}).events == Seq::empty()) by {{\n reveal(invocation_paired_{side}_step_{root}_v36);\n }}")));
+                                }
+                                let premises = observations.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
+                                assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
                                 assert!(map.contains(&format!("invocation_source_constructor_clear_well_formed_v84(source, {}, {}, {}, {});", entry.locals.start, entry.locals.end, entry.owner, entry.pc)));
                                 for (argument, local) in entry.arguments.iter().enumerate() {
                                     assert!(map.contains(&format!("invocation_source_put_local_well_formed_v78(entered, {local}, argument_{argument});")));

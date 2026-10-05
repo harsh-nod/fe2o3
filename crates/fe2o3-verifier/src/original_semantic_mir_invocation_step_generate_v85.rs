@@ -127,6 +127,9 @@ pub(super) fn emit(
                                 " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_paired_control_values_{root}_v36);\n hide(invocation_source_enter_{root}_{child}_v36);\n hide(invocation_byte_states_related_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(byte_memory_well_formed_v30);\n hide(byte_frame_runtime_well_formed_v30);\n hide(byte_private_frames_live_v30);\n hide(private_generation_counters_valid_v30);\n assert(invocation_source_byte_state_well_formed_v36(source) && invocation_byte_states_related_v36(source.machine, target, invocation_source_byte_map_{root}_v36(source, target))) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}\n invocation_related_target_inputs_v96(source.machine, target, invocation_source_byte_map_{root}_v36(source, target));\n"
                             );
                         }
+                        if constructor.is_some() && matches!(goal, Goal::Observations) {
+                            observations_context(root, add(row.blocks.start, block)?, out)?;
+                        }
                         unfold(
                             root,
                             row,
@@ -153,6 +156,8 @@ pub(super) fn emit(
                                 enter(root, hint, call, entry, out)?;
                             } else if matches!(goal, Goal::Control) {
                                 control_values(model, root, cut, call, out)?;
+                            } else if matches!(goal, Goal::Observations) {
+                                empty_observations(root, out)?;
                             }
                         }
                     }
@@ -187,6 +192,24 @@ fn compose_opaquely(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
     emit!(
         out,
         " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_byte_states_related_v36);\n"
+    );
+    Ok(())
+}
+
+fn observations_context(root: usize, block: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+    out.budget.charge_work(10)?;
+    emit!(
+        out,
+        " hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_paired_observations_related_{root}_v39);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(byte_state_memory_well_formed_v30);\n hide(invocation_source_byte_map_{root}_v36);\n assert(invocation_source_byte_state_well_formed_v36(source)) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}\n assert(target.pc == {block}) by {{\n reveal(invocation_paired_related_{root}_v36);\n }}\n"
+    );
+    Ok(())
+}
+
+fn empty_observations(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+    out.budget.charge_work(3)?;
+    emit!(
+        out,
+        " assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n assert(invocation_paired_actual_step_{root}_v36(target).events == Seq::empty()) by {{\n reveal(invocation_paired_actual_step_{root}_v36);\n }}\n assert(invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events)) by {{\n reveal(invocation_paired_observations_related_{root}_v39);\n }}\n"
     );
     Ok(())
 }
