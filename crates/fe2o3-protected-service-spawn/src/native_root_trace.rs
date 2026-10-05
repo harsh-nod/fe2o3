@@ -16,6 +16,13 @@ pub use observation::RootTaskObservationV2;
 #[path = "native_root_late.rs"]
 mod late;
 
+#[path = "native_runtime_trace.rs"]
+mod runtime;
+pub use runtime::{
+    MAX_RUNTIME_TASKS, RootRuntimeTraceV1, RuntimeSyscallEntryV1, RuntimeTaskObservationV1,
+    RuntimeTraceEventV1,
+};
+
 // One word of private payload plus Rc's strong/weak counters. This is logical
 // allocation storage, not allocator metadata or RSS. No child backing is shared.
 struct IdentityAllocation {
@@ -189,6 +196,7 @@ enum TraceState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TraceRequest {
     Seize,
+    Interrupt,
     Continue,
     Listen,
 }
@@ -291,6 +299,44 @@ impl<'work> RootTaskTraceV2<'work> {
     /// Scalar identity of the owned root, not separate wait or signal authority.
     pub fn pid(&self) -> Pid {
         self.child.pid()
+    }
+
+    /// Requests a stop of the original seized root. Its actual consuming wait
+    /// must still be observed by poll; this request itself is not a held stop.
+    pub fn interrupt(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        b.with_prepaid_scope(
+            self.retained,
+            ENTRY,
+            Self::OPERATION_WORK,
+            Self::OPERATION_SCRATCH,
+            |b| {
+                self.check_budget(b)?;
+                self.check_thread()?;
+                self.child.record()?.prepare_root_trace()?;
+                if self.held != TraceState::Pending {
+                    return Err(Error::State("root interrupt requires a running owned task"));
+                }
+                ptrace(TraceRequest::Interrupt, self.pid(), 0)
+            },
+        )
+    }
+
+    /// Consumes this original trace; no root-only resume or cleanup API escapes.
+    /// Prepay RootRuntimeTraceV1::STORAGE_GROWTH on this same account.
+    ///
+    /// # Safety
+    /// Preserve RootRuntimeTraceV1's dedicated-process/outside-custodian contract,
+    /// the child's still-closed exec gate, and exclusive
+    /// wait ownership. The trace must hold its own pre-exec interrupt, with no
+    /// descendants. Before any later gate release authenticate the exact typed
+    /// checkpoint stage and complete policy. Supply the original absolute deadline.
+    pub unsafe fn into_runtime_trace(
+        self,
+        deadline: std::time::Instant,
+        b: &mut Budget<'_>,
+    ) -> Result<RootRuntimeTraceV1<'work>> {
+        // SAFETY: the caller supplies the same original-child takeover contract.
+        unsafe { RootRuntimeTraceV1::begin(self, deadline, b) }
     }
 
     fn check_thread(&self) -> Result<()> {
@@ -436,6 +482,7 @@ fn ptrace(request: TraceRequest, pid: Pid, data: usize) -> Result<()> {
     // libc's request type differs between glibc and musl; infer its native ABI.
     let request = match request {
         TraceRequest::Seize => libc::PTRACE_SEIZE,
+        TraceRequest::Interrupt => libc::PTRACE_INTERRUPT,
         TraceRequest::Continue => libc::PTRACE_CONT,
         TraceRequest::Listen => libc::PTRACE_LISTEN,
     };
