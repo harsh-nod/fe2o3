@@ -9,38 +9,52 @@ execution. This page distinguishes implemented stage wiring from qualification.
 
 The ordinary `ProductionCompilation::publish_worker_handoff` entry in
 [`production_pipeline.rs`](../../crates/rustc-codegen-fe2o3/src/production_pipeline.rs)
-calls `publish_mixed_worker_handoff_v53`. It does not retry the older `Current`
+calls `publish_predicated_worker_handoff_v90`. It does not retry the older `Current`
 importer or publication continuation on failure. Older stage APIs remain for
 diagnostics and replacement testing; their presence does not qualify retirement
 of the duplicated projections.
 
 The source-owned Worker route in
-[`production_pipeline_source_mixed_worker_v28.rs`](../../crates/rustc-codegen-fe2o3/src/production_pipeline_source_mixed_worker_v28.rs)
-now requires this sequence:
+[`production_pipeline_source_predicated_worker_v90.rs`](../../crates/rustc-codegen-fe2o3/src/production_pipeline_source_predicated_worker_v90.rs)
+selects the predicated stage types and requires this sequence:
 
 ```text
 collector-authenticated Rust closure and compiler bindings
   -> nominal V35 semantic import and original semantic SSA
   -> canonical mixed KIR with original ABI, target and launch custody
-  -> fixed Policy11 scalar fixed point
-  -> checked V18 LICM with captured source layout limits
-  -> checked cross-block store-consensus forwarding
+  -> conditional/predicated Policy11 scalar fixed point (V89)
+  -> checked predicated LICM with captured source layout limits (V90)
+  -> checked predicated cross-block store-consensus forwarding (V90)
   -> fresh native/source completion for the final forwarding output
   -> typed original-source / Policy11 / LICM / forwarding composition
   -> target lowering of that exact final graph
   -> original-root descriptor construction
   -> inert Worker input
-  -> admitted execution of the exact V50 source-to-final-KIR proof
-  -> strict V53 capsule with complete V26 contracts and original nominal ABI
+  -> admitted execution of the exact V90 source-to-final-KIR proof
+  -> strict lineage capsule with V89 descriptors, V86 contracts and original ABI
   -> protected measured compiler handoff and receipt
-  -> charged V53 finalization and managed publication
+  -> charged V90 typed-content / V89 physical finalization and managed publication
 ```
 
-Fresh Cargo publication and durable/compact recovery retain the V53 schema;
-they do not downgrade to unconditional descriptors. Descriptor traversal work
+The ordinary publication wrapper selects `MixedDescriptorTableV89`,
+`MixedContractV86`, V89 target-selection validation and `replay_lineage_capsule_v90`.
+Its emitted descriptor section is `.fe2o3.kd.v89`. See
+[`production_pipeline_source_predicated_publish_v90.rs`](../../crates/rustc-codegen-fe2o3/src/production_pipeline_source_predicated_publish_v90.rs)
+and
+[`production_pipeline_source_predicated_lineage_v90.rs`](../../crates/rustc-codegen-fe2o3/src/production_pipeline_source_predicated_lineage_v90.rs).
+It does not downgrade to unconditional descriptors. Descriptor traversal work
 and scratch are charged through finite real resource budgets. Existing bounded
 ELF, artifact and output allocations are separate domains, not a claim that the
 descriptor budget measures all process memory.
+
+The versioned wrappers select concrete stage owners, proof execution and wire
+contracts; the sequencing and cleanup live in shared
+[`production_pipeline_source_mixed_worker_family.rs`](../../crates/rustc-codegen-fe2o3/src/production_pipeline_source_mixed_worker_family.rs),
+[`production_pipeline_source_mixed_publication_family.rs`](../../crates/rustc-codegen-fe2o3/src/production_pipeline_source_mixed_publication_family.rs)
+and
+[`production_pipeline_source_mixed_publish_family.rs`](../../crates/rustc-codegen-fe2o3/src/production_pipeline_source_mixed_publish_family.rs).
+A historical filename or a shared helper's older version suffix does not select
+an older production route; follow the ordinary entry and its concrete wrappers.
 
 Policy11 repeats these five passes, in order, through a complete unchanged
 round: select-same-value canonicalization, integer-neutral worklist
@@ -61,15 +75,17 @@ operation gap, not just removal from an effect projection. See
 
 ## Exact Program And Proof Boundary
 
-`prepare_typed_source_tail_v50` composes the original source, scalar prefix,
-motion and forwarding stages. Its subject retains four graph identities:
+`prepare_predicated_typed_source_tail_with_references_v90` composes the original
+source, scalar prefix, motion, forwarding and retained reference obligations.
+Its `PredicatedTypedSourceTailSubjectV90` retains four graph identities:
 original canonical KIR, Policy11 output, LICM output, and final forwarding
 output. It also binds original semantic MIR/SSA and the complete prefix
 execution witness. A matching digest alone does not replace the actual owner
 or its source provenance.
 
-The V50 request, execution receipt and finalizer lineage are distinct from
-the older V29/V36 proof interfaces. Final lineage includes the semantic MIR,
+`prepare_predicated_typed_execution_v90` executes that retained request; an
+`ExecutedPredicatedTypedSourceTailV90` is distinct from a prepared source or
+older execution interface. Final lineage includes the semantic MIR,
 source SSA, four graphs, prefix execution, generated proof source and executed
 receipt identities. The final capsule must name the forwarding graph. A
 pre-motion or pre-forwarding proof cannot be relabeled as final evidence.
