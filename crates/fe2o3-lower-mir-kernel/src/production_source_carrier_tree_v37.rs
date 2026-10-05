@@ -220,6 +220,10 @@ fn source_carrier_definition_v37(
             return Ok(None);
         }
         SourceSsaPhysicalV36::Value { value, ty, .. } => (value, ty),
+        SourceSsaPhysicalV36::ExecutionBorrow(borrow) => (
+            borrow.value,
+            SourceSsaCarrierTypeV36::Execution(borrow.role),
+        ),
         SourceSsaPhysicalV36::Witness(witness) => (
             witness.value,
             SourceSsaCarrierTypeV36::Scalar(ScalarType::Index),
@@ -276,7 +280,9 @@ impl<'a, 'source> ProductionSourceSsaEndpointV36<'a, 'source> {
             budget.charge_work(1)?;
             match *self.physical {
                 SourceSsaPhysicalV36::Unit => Ok(ProductionSourceSsaCarrierShapeV37::Unit),
-                SourceSsaPhysicalV36::Value { .. } | SourceSsaPhysicalV36::Witness(_) => {
+                SourceSsaPhysicalV36::Value { .. }
+                | SourceSsaPhysicalV36::Witness(_)
+                | SourceSsaPhysicalV36::ExecutionBorrow(_) => {
                     Ok(ProductionSourceSsaCarrierShapeV37::Value)
                 }
                 SourceSsaPhysicalV36::Aggregate { length, .. } => {

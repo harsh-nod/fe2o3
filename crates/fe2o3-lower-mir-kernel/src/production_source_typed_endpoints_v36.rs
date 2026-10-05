@@ -2,6 +2,7 @@
 // These locators do not establish pointer validity, aliasing, or heap equality.
 include!("production_source_carrier_tree_v37.rs");
 include!("production_source_reference_endpoints_v38.rs");
+include!("production_source_execution_borrow_endpoint_v163.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceSsaElementV36 {
     Scalar(ScalarType),
@@ -26,6 +27,7 @@ impl SourceSsaElementV36 {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceSsaCarrierTypeV36 {
+    Execution(ExecutionRoleV15),
     Scalar(ScalarType),
     Vector(fe2o3_kernel_ir::FixedVectorTypeV12),
     Pointer {
@@ -61,6 +63,7 @@ impl SourceSsaCarrierTypeV36 {
 
     fn matches(self, ty: &Type) -> bool {
         match (self, ty) {
+            (Self::Execution(expected), Type::Execution(actual)) => expected == *actual,
             (Self::Scalar(expected), Type::Scalar(actual)) => expected == *actual,
             (Self::Vector(expected), Type::Vector(actual)) => expected == *actual,
             (
@@ -139,6 +142,7 @@ enum SourceSsaPhysicalV36 {
         loan: Option<SourceSsaLoanV36>,
     },
     Witness(SourceSsaWitnessV50),
+    ExecutionBorrow(SourceSsaExecutionBorrowV163),
     Unmodeled,
 }
 
@@ -289,6 +293,11 @@ fn retain_source_carrier_leaf_v37(
         .ok_or_else(source_typed_endpoint_error_v36)?
         .shape();
     let physical = match (binding, shape) {
+        (SemanticValueBindingV1::ExecutionBorrow(borrow), SemanticTypeShapeV1::Pointer(_)) => {
+            SourceSsaPhysicalV36::ExecutionBorrow(retain_source_execution_borrow_v163(
+                instances, ty, borrow, budget,
+            )?)
+        }
         (SemanticValueBindingV1::Unit, SemanticTypeShapeV1::Unit) => SourceSsaPhysicalV36::Unit,
         (
             SemanticValueBindingV1::IndexWitness {
@@ -625,6 +634,7 @@ fn source_typed_endpoint_headers_v36() -> Result<usize, ArgumentResourceV1> {
         h::<SourceSsaElementV36>()?,
         h::<SourceSsaCarrierTypeV36>()?,
         h::<SourceSsaLoanV36>()?,
+        source_execution_borrow_headers_v163()?,
         source_reference_endpoint_headers_v38()?,
         h::<SourceSsaWitnessV50>()?,
         h::<(ValueId, SourceSsaCarrierTypeV36)>()?,

@@ -89,6 +89,29 @@ fn prepared_tile_schedule_v155(budget: &mut ArgumentBudgetV1<'_>) -> ProductionP
     prepared_tile_schedule_result_v155(budget).unwrap()
 }
 
+#[test]
+fn explicit_source_tile_repeated_loads_have_checked_reconvergent_arrival() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let prepared = prepared_tile_schedule_v155(&mut budget);
+    with_actual_optimized_source_v18(prepared, &mut budget, |view, budget| {
+        let cfg = view.output_root_cfg_v18(0, budget)?;
+        let result = fe2o3_kernel_analysis::check_canonical_tile_convergence_v160(
+            cfg.inventory(),
+            cfg.function().coordinate,
+            budget,
+        );
+        assert!(
+            result.is_ok(),
+            "actual repeated-load source arrival: {result:?}"
+        );
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
 fn tile_schedule_header_v155() -> usize {
     std::mem::size_of::<ProductionOptimizedTileLoadScheduleV155<'_, '_>>()
         + std::mem::size_of::<SourceOwnedResultV18<ProductionOptimizedTileLoadScheduleV155<'_, '_>>>(

@@ -149,6 +149,9 @@ fn checked_rows(
                         SourceSsaCarrierTypeV36::Slice { .. } => counts[2] += 1,
                         SourceSsaCarrierTypeV36::Scalar(_) => {}
                         SourceSsaCarrierTypeV36::Vector(_) => {}
+                        SourceSsaCarrierTypeV36::Execution(_) => {
+                            panic!("execution roles require the dedicated borrow endpoint")
+                        }
                     }
                     counts[3] += usize::from(loan.is_some());
                 }
@@ -160,7 +163,9 @@ fn checked_rows(
                     assert_eq!(endpoint.physical_type(budget)?, Some(actual.ty));
                     assert!(endpoint.reference(budget)?.is_none());
                 }
-                SourceSsaPhysicalV36::EnumVariant { .. } | SourceSsaPhysicalV36::Unmodeled => {
+                SourceSsaPhysicalV36::ExecutionBorrow(_)
+                | SourceSsaPhysicalV36::EnumVariant { .. }
+                | SourceSsaPhysicalV36::Unmodeled => {
                     unreachable!()
                 }
             }
