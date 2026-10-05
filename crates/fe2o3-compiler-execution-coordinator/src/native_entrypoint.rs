@@ -151,6 +151,10 @@ trait Runtime<'work> {
         Ok(false)
     }
     fn cancel(&mut self);
+    /// True retires foreground trace custody, not aggregate cleanup custody.
+    fn retire_foreground(&mut self, _b: &mut Budget<'_>) -> Result<bool> {
+        Ok(true)
+    }
     fn pump(&mut self) -> Result<()>;
     fn shutdown(&mut self) -> Result<()>;
     fn restore(&mut self, b: &mut Budget<'_>) -> Result<()>;
@@ -187,10 +191,12 @@ fn drain<'work>(
     turns: usize,
     b: &mut Budget<'work>,
 ) -> Result<Option<Failure>> {
-    match runtime.shutdown() {
-        Ok(()) => return Ok(None),
-        Err(Failure::Cleanup(CleanupError::Busy)) => {}
-        Err(error) => return Err(error),
+    if runtime.retire_foreground(b)? {
+        match runtime.shutdown() {
+            Ok(()) => return Ok(None),
+            Err(Failure::Cleanup(CleanupError::Busy)) => {}
+            Err(error) => return Err(error),
+        }
     }
     let mut wait_error = None;
     for _ in 0..turns {
@@ -200,10 +206,12 @@ fn drain<'work>(
             }
         }
         runtime.pump()?;
-        match runtime.shutdown() {
-            Ok(()) => return Ok(wait_error),
-            Err(Failure::Cleanup(CleanupError::Busy)) => {}
-            Err(error) => return Err(error),
+        if runtime.retire_foreground(b)? {
+            match runtime.shutdown() {
+                Ok(()) => return Ok(wait_error),
+                Err(Failure::Cleanup(CleanupError::Busy)) => {}
+                Err(error) => return Err(error),
+            }
         }
     }
     Err(CleanupError::Busy.into())
@@ -340,6 +348,13 @@ impl<'work> Runtime<'work> for Native<'work> {
     fn pump(&mut self) -> Result<()> {
         self.creator.pump(CAPACITY)?;
         Ok(())
+    }
+
+    fn retire_foreground(&mut self, b: &mut Budget<'_>) -> Result<bool> {
+        match &mut self.request {
+            Some(request) => request.cancel_step(b),
+            None => Ok(true),
+        }
     }
 
     fn shutdown(&mut self) -> Result<()> {

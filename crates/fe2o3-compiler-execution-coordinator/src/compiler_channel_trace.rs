@@ -111,6 +111,22 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
         self.retained
     }
 
+    /// Only trace retirement permits handing the remaining domain cleanup to
+    /// the original pool. This is not an empty-pool or completion observation.
+    pub(crate) fn needs_foreground_cancellation(&self) -> bool {
+        match &self.trace {
+            TraceOwner::Original(_) => false,
+            TraceOwner::Runtime(trace) => !trace.observation().is_trace_retired(),
+        }
+    }
+
+    pub(crate) fn cancellation_quota() -> Result<native::CompilerExecutionLaunchQuotaV2> {
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, RootRuntimeTraceV1::OPERATION_WORK])?,
+            scratch: native::sum(&[FRAME, RootRuntimeTraceV1::OPERATION_SCRATCH])?,
+        })
+    }
+
     /// Fixed consuming-takeover work and extra peak above the original owner.
     /// Interrupt/poll turns before takeover are funded separately; no new ledger
     /// or execution deadline is created by this inert schedule.

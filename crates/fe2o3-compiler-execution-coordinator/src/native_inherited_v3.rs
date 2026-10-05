@@ -52,12 +52,16 @@ impl InheritedCompilerExecutionDeploymentV3 {
         let launch = RootCompilerRequest::launch_quota()?;
         let (cleanup_work, cleanup_storage) = RootCompilerRequest::cleanup_growth()?;
         let refusal = RootCompilerRequest::refusal_quota()?;
+        let cancellation = RootCompilerRequest::cancellation_quota()?;
         quota.request_work = root::sum(&[
             quota.request_work,
             root::LOCAL_WORK,
             Inputs::WORK,
             request.work(),
             launch.work(),
+            // One immediate foreground retirement attempt, then at most one
+            // per original cleanup turn. No new account or renewed deadline.
+            root::repeated(root::sum(&[cleanup_turns, 1])?, cancellation.work())?,
             root::repeated(
                 turns,
                 root::sum(&[Receiver::TURN_WORK, continuity.work(), refusal.work()])?,
@@ -76,6 +80,7 @@ impl InheritedCompilerExecutionDeploymentV3 {
             launch.scratch(),
             refusal.scratch(),
             continuity.scratch(),
+            cancellation.scratch(),
         ])?;
         quota.cleanup_work = root::sum(&[quota.cleanup_work, cleanup_work])?;
         quota.cleanup_storage = root::sum(&[quota.cleanup_storage, cleanup_storage])?;

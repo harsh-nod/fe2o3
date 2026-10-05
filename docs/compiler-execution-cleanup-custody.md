@@ -201,6 +201,18 @@ integration must still connect funded pumping to service lifetime. A request-loc
 scratch scope or expired ledger identity cannot pay for deferred custody. The
 V1 periodic worker remains unmetered and is never a fallback for native refusal.
 
+The private native runtime trace adds a separate foreground retirement phase.
+Cancellation first marks the original trace and retains the compiler attempt;
+funded steps on the original request account consume every acquired task's
+terminal wait. Only then can the attempt drop and the original cleanup pool
+finish deferred domain retirement. The trace's cached `Pending` disposition is
+not a later empty-pool observation. Signal restoration still requires successful
+original-pool shutdown. The fixed schedule adds one immediate foreground step
+and one per existing cleanup turn, without renewing a deadline or account.
+Exhaustion, unresolved trace custody, or unwind retains the dedicated-process
+fail-stop and outside-custodian obligation; it does not promise eventual cleanup.
+This plumbing does not enable compiler execution or select the native default.
+
 ## Tests
 
 Fake syscall schedules cover failed kills, interruptions, uncertain waits,

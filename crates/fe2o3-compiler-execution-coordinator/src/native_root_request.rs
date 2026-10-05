@@ -77,6 +77,14 @@ impl<'work> RootCompilerRequest<'work> {
         quota::cleanup_growth()
     }
 
+    pub(crate) fn cancellation_quota() -> Result<root::CompilerExecutionRootAdmissionQuotaV2> {
+        let trace = compiler_attempt::Attempt::cancellation_quota().map_err(helper_error)?;
+        Ok(root::CompilerExecutionRootAdmissionQuotaV2 {
+            work: root::sum(&[root::LOCAL_WORK, trace.work()])?,
+            scratch: trace.scratch(),
+        })
+    }
+
     /// Infallible ownership installation, BEFORE any fallible validation or
     /// admission. Native prepaid ENVELOPE alongside the whole Receiver before
     /// accept. Preserve every existing reservation until this request drops.
@@ -385,8 +393,11 @@ impl<'work> RootCompilerRequest<'work> {
 
     pub(crate) fn cancel(&mut self) {
         self.state = State::Cancelled;
-        if let Some(mut attempt) = self.attempt.take() {
+        if let Some(attempt) = &mut self.attempt {
             let _ = attempt.cancel();
+            if !attempt.needs_foreground_cancellation() {
+                drop(self.attempt.take());
+            }
         }
         if let Some(helper) = self.helper.take() {
             let _ = helper.cancel();
@@ -394,6 +405,26 @@ impl<'work> RootCompilerRequest<'work> {
         // The original pool must reap the anchor before signal restoration.
         // Raw received rights and any prepared compiler backing stay through drain.
         drop(self.prepared.take());
+    }
+
+    /// Retire only foreground wait ownership. A true result still requires the
+    /// original independently funded pool to finish every deferred domain.
+    pub(crate) fn cancel_step(&mut self, b: &mut Budget<'_>) -> Result<bool> {
+        if self.state != State::Cancelled {
+            return Err(rejected("foreground cleanup requires cancellation"));
+        }
+        if self.attempt.is_none() {
+            return Ok(true);
+        }
+        b.charge_work(root::LOCAL_WORK)?;
+        self.check_account(b)?;
+        if let Some(attempt) = &mut self.attempt {
+            if !attempt.cancel_step(b).map_err(helper_error)? {
+                return Ok(false);
+            }
+            drop(self.attempt.take());
+        }
+        Ok(true)
     }
 
     #[cfg(test)]

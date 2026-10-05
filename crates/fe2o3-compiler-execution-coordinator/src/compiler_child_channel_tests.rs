@@ -311,6 +311,7 @@ fn run_native(case: usize, pool: &mut Cleanup) {
             .is_err()
     );
     assert!(trace.resume(&mut b).is_err());
+    assert!(!trace.needs_foreground_cancellation());
     if case == 9 {
         trace.interrupt_for_runtime(&mut b).unwrap();
         loop {
@@ -336,6 +337,7 @@ fn run_native(case: usize, pool: &mut Cleanup) {
         b.release_storage(full).unwrap();
         b.reserve_storage(runtime_full).unwrap();
         assert!(runtime_full > full);
+        assert!(trace.needs_foreground_cancellation());
         assert_eq!(trace.pid().as_raw_pid() as u32, child_pid);
         trace
             .with_backing(&mut b, |(_, cwd, _, _), _| -> Result<()> {
@@ -348,10 +350,15 @@ fn run_native(case: usize, pool: &mut Cleanup) {
             trace.cancel(),
             fe2o3_protected_service_spawn::cleanup_bridge::CleanupPollV1::Pending
         ));
-        while !matches!(
-            trace.cancel_step(&mut b).unwrap(),
-            fe2o3_protected_service_spawn::cleanup_bridge::CleanupPollV1::Reaped
-        ) {
+        let cancellation = CompilerTrace::<()>::cancellation_quota().unwrap();
+        while trace.needs_foreground_cancellation() {
+            let work = b.work();
+            let peak = b.peak_storage();
+            let floor = b.storage();
+            let _domain_disposition = trace.cancel_step(&mut b).unwrap();
+            assert!(b.work() - work <= cancellation.work());
+            assert!(b.peak_storage() <= peak.max(floor + cancellation.scratch()));
+            assert_eq!(b.storage(), floor);
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(1));
         }
