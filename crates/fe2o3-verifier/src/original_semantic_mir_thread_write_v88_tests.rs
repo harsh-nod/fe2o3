@@ -588,11 +588,18 @@ fn original_thread_write_partitions_every_authentic_cut_without_heap_conservatio
                     ] {
                         assert!(header.contains(&conclusion), "{name}: {conclusion}");
                     }
-                    for goal in ["relation", "observations", "halted", "control"] {
-                        assert!(body.contains(&format!("{prefix}{pc}_{goal}_v85(source, target);")));
-                    }
-                    for goal in ["map", "heap", "residual"] {
-                        assert!(text.contains(&format!("{prefix}{pc}_{goal}_v85(source, target);")));
+                    if text.contains(&format!("proof fn invocation_source_cut_summary_{root}_{pc}_v96(")) {
+                        assert!(body.contains(&format!("invocation_source_cut_summary_{root}_{pc}_v96(source);")));
+                        assert!(body.contains(&format!("invocation_target_cut_summary_{root}_{pc}_v96(target);")));
+                        assert!(body.contains("invocation_related_target_inputs_v96(source.machine, target,"));
+                        assert!(body.contains("invocation_cut_frame_states_related_v93("));
+                    } else {
+                        for goal in ["relation", "observations", "halted", "control"] {
+                            assert!(body.contains(&format!("{prefix}{pc}_{goal}_v85(source, target);")));
+                        }
+                        for goal in ["map", "heap", "residual"] {
+                            assert!(text.contains(&format!("{prefix}{pc}_{goal}_v85(source, target);")));
+                        }
                     }
                     count += 1;
                 }
