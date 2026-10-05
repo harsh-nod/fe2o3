@@ -130,7 +130,7 @@ fn native_child_channel_joins_original_pidfd_before_trace() {
         }
     }
     let mut pool = Drain(Cleanup::admit(Account::new(Work::new(LIMIT), LIMIT)).unwrap());
-    for case in 0..9 {
+    for case in 0..10 {
         run_native(case, &mut pool.0);
     }
 }
@@ -311,6 +311,72 @@ fn run_native(case: usize, pool: &mut Cleanup) {
             .is_err()
     );
     assert!(trace.resume(&mut b).is_err());
+    if case == 9 {
+        trace.interrupt_for_runtime(&mut b).unwrap();
+        loop {
+            let event = trace.poll(&mut b).unwrap();
+            if event.is_original_interrupt() {
+                break;
+            }
+            assert!(event.is_pending());
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let quota = CompilerTrace::<()>::runtime_takeover_quota().unwrap();
+        let initial_work = b.work();
+        let initial_peak = b.peak_storage();
+        let floor = b.storage();
+        // SAFETY: this explicitly isolated diagnostic owns the original gated
+        // child, original account and waits; no gate is released. The outer
+        // isolated test custodian retains its pidfd/deadline and cleanup pool.
+        let (mut trace, runtime_full) = unsafe { trace.arm_runtime(&mut b) }.unwrap();
+        assert!(b.work() - initial_work <= quota.work);
+        assert!(b.peak_storage() <= initial_peak.max(floor + quota.scratch));
+        assert_eq!(b.storage(), floor);
+        b.release_storage(full).unwrap();
+        b.reserve_storage(runtime_full).unwrap();
+        assert!(runtime_full > full);
+        assert_eq!(trace.pid().as_raw_pid() as u32, child_pid);
+        trace
+            .with_backing(&mut b, |(_, cwd, _, _), _| -> Result<()> {
+                assert!(cwd.metadata().unwrap().is_dir());
+                Ok(())
+            })
+            .unwrap();
+        assert!(trace.resume(&mut b).is_err());
+        assert!(matches!(
+            trace.cancel(),
+            fe2o3_protected_service_spawn::cleanup_bridge::CleanupPollV1::Pending
+        ));
+        while !matches!(
+            trace.cancel_step(&mut b).unwrap(),
+            fe2o3_protected_service_spawn::cleanup_bridge::CleanupPollV1::Reaped
+        ) {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            trace
+                .with_runtime(&mut b, |_, _| -> Result<()> {
+                    panic!("cancelled compiler exposed runtime execution")
+                })
+                .is_err()
+        );
+        drop(trace);
+        b.release_storage(runtime_full).unwrap();
+        drop(stage);
+        drop((
+            sender,
+            exec_reader,
+            exec_writer,
+            profile_reader,
+            profile_writer,
+            gate_reader,
+            gate_writer,
+        ));
+        drain_child(pool, exit_observer.as_fd());
+        return;
+    }
     drop(stage);
     drop((
         sender,

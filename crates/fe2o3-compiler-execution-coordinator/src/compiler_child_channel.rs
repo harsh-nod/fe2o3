@@ -128,7 +128,7 @@ impl CompilerChildChannel {
 
 #[path = "compiler_channel_trace.rs"]
 mod trace;
-pub(crate) use trace::CompilerTrace;
+pub(crate) use trace::{CompilerTrace, Event as CompilerTraceEvent};
 
 fn require_live<T: Send + 'static>(child: &Child<T>, b: &mut Budget<'_>) -> Result<()> {
     if !child.is_live(b)? {
