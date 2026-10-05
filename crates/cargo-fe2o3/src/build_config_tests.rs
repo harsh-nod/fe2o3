@@ -455,6 +455,32 @@ fn production_v1_schema_identity_and_inert_observer_behavior_are_frozen() {
 }
 
 #[test]
+fn production_v2_identity_matches_tutorial_census_golden_vectors() {
+    let vectors: Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/production_build_identity_v2.json"
+    ))
+    .unwrap();
+    let executable =
+        ContentIdentityV1::calculate(vectors["worker_bytes"].as_str().unwrap().as_bytes());
+    for vector in vectors["cases"].as_array().unwrap() {
+        let measurement = WorkerMeasurementV1::new(
+            executable,
+            vector["worker_build_identity"].as_str().unwrap(),
+            vector["llvm_build_identity"].as_str().unwrap(),
+        )
+        .unwrap();
+        let identity = transitive_identity_from_measurement(
+            PRODUCTION_CONFIG_IDENTITY_DOMAIN_V2,
+            PRODUCTION_CONFIG_PROFILE_ID_V2,
+            vectors["manifest"].as_str().unwrap().as_bytes(),
+            &measurement,
+            &[],
+        );
+        assert_eq!(identity.to_hex(), vector["expected"].as_str().unwrap());
+    }
+}
+
+#[test]
 fn production_v2_observation_is_exact_and_has_a_distinct_identity_domain() {
     assert_ne!(
         PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1,

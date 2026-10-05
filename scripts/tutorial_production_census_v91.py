@@ -87,11 +87,19 @@ def domain_hash(fields):
     return digest.digest()
 
 
+def build_identity(value):
+    # WorkerMeasurementV1 identities are bounded ASCII strings, not SHA-256 bytes.
+    require(isinstance(value, str) and 0 < len(value) <= 160
+            and all(32 <= ord(character) < 127 for character in value),
+            "invalid worker build identity")
+    return value.encode("ascii")
+
+
 def config_identity(raw, config):
     worker = config["worker"]
     fields = [b"fe2o3-build-config-transitive-v2", b"production-v2", raw,
               hex_hash(worker["sha256"]), worker["byte_len"].to_bytes(8, "little"),
-              hex_hash(worker["worker_build_identity"]), hex_hash(worker["llvm_build_identity"]),
+              build_identity(worker["worker_build_identity"]), build_identity(worker["llvm_build_identity"]),
               len(config["providers"]).to_bytes(8, "little")]
     pins = []
     _, pin = read_file(worker["path"], retain=False)

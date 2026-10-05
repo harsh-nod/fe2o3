@@ -37,6 +37,30 @@ def log(rows):
 
 
 class ProductionCensusTests(unittest.TestCase):
+    def test_build_identity_matches_rust_string_policy(self):
+        for value in ["worker-build-v1", "a" * 160, " with spaces ", "11" * 32]:
+            self.assertEqual(m.build_identity(value), value.encode("ascii"))
+        for value in ["", "a" * 161, "x\x00", "x\n", "x\x7f", "x\u0080", None, 12, []]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                m.build_identity(value)
+
+    def test_config_identity_matches_shared_rust_golden_vectors(self):
+        vectors = json.loads((ROOT / "crates/cargo-fe2o3/tests/fixtures/production_build_identity_v2.json").read_bytes())
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Path(directory) / "worker"
+            worker.write_bytes(vectors["worker_bytes"].encode())
+            for vector in vectors["cases"]:
+                config = {"providers": [], "worker": {
+                    "path": str(worker), "byte_len": worker.stat().st_size,
+                    "sha256": hashlib.sha256(worker.read_bytes()).hexdigest(),
+                    "worker_build_identity": vector["worker_build_identity"],
+                    "llvm_build_identity": vector["llvm_build_identity"],
+                }}
+                with self.subTest(identity=vector["worker_build_identity"]):
+                    identity, pins = m.config_identity(vectors["manifest"].encode(), config)
+                    self.assertEqual(identity.hex(), vector["expected"])
+                    m.check_pins({"pins": pins})
+
     def test_complete_positive_remains_observation_only(self):
         value = row()
         result = m.check_log(log([value]), expected(value))
@@ -126,7 +150,8 @@ class ProductionCensusTests(unittest.TestCase):
             digest = hashlib.sha256(executable.read_bytes()).hexdigest()
             template = dict(format="fe2o3-production-build-config-v1", units=[], providers=[],
                             worker=dict(path=str(executable), sha256=digest, byte_len=15,
-                                        worker_build_identity="11"*32, llvm_build_identity="22"*32),
+                                        worker_build_identity="fe2o3-worker-v1-sha256-"+"11"*32,
+                                        llvm_build_identity="fe2o3-llvm-sha256-"+"22"*32),
                             candidate_output_max_bytes=1000, limits={}, link_options=[])
             template_path = root / "template.json"
             template_path.write_bytes(m.canonical(template))
