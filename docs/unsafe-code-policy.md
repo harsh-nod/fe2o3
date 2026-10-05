@@ -692,7 +692,45 @@ checkpoints include executable-memory operations and descriptor imports;
 `creat`, `openat2`, and replacement `seccomp` calls are denied. Only the same
 retained parent trace may mediate those checkpoints. Staging and filter
 installation alone do not establish runtime enforcement or authorize a gate
-release, and the production attempt does not yet select this mode.
+release. Selection of the staged mode is not permission to execute a compiler.
+
+The original-trace runtime adapter consumes the retained root owner instead of
+creating another tracer or accepting a PID. Its one unsafe constructor requires
+the original closed gate, exclusive same-thread waits, original account and
+absolute deadline, no pre-existing descendants, a dedicated process and an
+independent outside-domain custodian. Before releasing that gate the caller must
+authenticate the actual typed-filter stage and complete runtime policy. Four
+blocks in `native_runtime_trace.rs` initialize the fixed integer register record,
+issue bounded ptrace requests to owned tasks, fail-stop an unresolved dedicated
+process, and drop the original owner once after complete foreground retirement.
+The original root and retained-resource bridges each add one unsafe function and
+block to forward that same consuming contract. There is no public PID constructor,
+second seize, policy-success token or enforcement guard.
+
+Four unsafe functions/blocks in `native_runtime_trace_custody.rs` forward the
+original late-custody and exec-confirmation contracts without exposing mutable
+legacy trace access. Exact root exec observation remains required. The one
+block in `native_runtime_task_observation.rs` compares actual kernel file-table
+sharing with `KCMP_FILES`; unsupported or denied comparisons refuse. Scoped
+observations bind the original task, held stop, census generation, account and
+thread before and after bounded descriptor, maps and personality reads. Returned
+files and bytes are inert, fully charged data, not mapping or compiler admission.
+
+Every acquired child is retained before fallible birth handling. Terminal exit
+and fatal-signal kinds remain distinct; descendant slots are reusable only after
+a consuming terminal wait is explicitly acknowledged. Cancellation remains a
+funded foreground operation until every known task has a terminal wait. A
+budgetless cancellation marker performs no syscall or cleanup-success claim;
+unresolved drop terminates the dedicated process rather than handing traced
+descendants to root-only background cleanup. This does not replace the outside
+custodian's separate whole-domain cleanup obligation.
+
+Three test blocks exercise original takeover in bounded disposable processes.
+Three standalone fixture blocks install NNP and the exact namespace/checkpoint
+filters before bounded thread creation. The fixture is separately compiled and
+explicitly selected, not an admitted compiler image. Component lifecycle evidence
+does not qualify compiler source/output policy, runtime enforcement, deployment,
+proof execution or GPU production activation.
 
 Twelve diagnostic blocks in `native_compiler_restrictions_exec_tests.rs`
 stage/clone retained inert inputs, query/set/restore isolated creator state,
