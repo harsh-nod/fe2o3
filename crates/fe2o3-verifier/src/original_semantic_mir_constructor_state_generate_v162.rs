@@ -115,13 +115,11 @@ pub(super) fn emit(
     );
     emit!(
         out,
-        " let entered = InvocationSourceByteStateV36 {{ machine: MemoryStateV30 {{ pc: {}, values: Seq::new(source.machine.values.len(), |i: int| if {} <= i < {} {{ MemoryValueV30::Undefined }} else {{ source.machine.values[i] }}), memory: source.machine.memory, generations: source.machine.generations, frames: byte_enter_frame_v30(source.machine.frames, {}), valid: true }}, logical: invocation_source_logical_clear_v38(source.logical, {}, {}), ..source }};\n",
+        " let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));\n",
         entry.pc,
         entry.locals.start,
         entry.locals.end,
-        entry.owner,
-        entry.locals.start,
-        entry.locals.end
+        entry.owner
     );
     for (destination, (source, moved, _)) in entry.arguments.iter().zip(&call.arguments) {
         out.budget.charge_work(2)?;

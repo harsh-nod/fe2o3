@@ -462,7 +462,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
         }
-        write!(out, " {{ invocation_source_byte_refused_v36(source) }} else {{\n let entered = InvocationSourceByteStateV36 {{ machine: MemoryStateV30 {{ pc: {}, values: Seq::new(source.machine.values.len(), |i: int| if {} <= i < {} {{ MemoryValueV30::Undefined }} else {{ source.machine.values[i] }}), memory: source.machine.memory, generations: source.machine.generations, frames: ", self.entry, self.locals.start, self.locals.end).map_err(|_| out.error())?;
+        write!(out, " {{ invocation_source_byte_refused_v36(source) }} else {{\n let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, ", self.entry, self.locals.start, self.locals.end).map_err(|_| out.error())?;
         if self.instance == 0 {
             write!(out, "source.machine.frames").map_err(|_| out.error())?;
         } else {
@@ -473,7 +473,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             )
             .map_err(|_| out.error())?;
         }
-        write!(out, ", valid: true }}, logical: invocation_source_logical_clear_v38(source.logical, {}, {}), ..source }};\n", self.locals.start, self.locals.end).map_err(|_| out.error())?;
+        write!(out, ");\n").map_err(|_| out.error())?;
         for slot in &self.allocations {
             out.budget.charge_work(1)?;
             if slot.implicit {
@@ -610,7 +610,21 @@ mod tests {
                     assert_eq!(entry.owners.len(), if instance == 0 { 1 } else { 2 });
                     assert_eq!(entry.arguments.len(), 2);
                     assert_eq!(entry.arguments[0].unwrap().local, row.locals.start + 1);
+                    let before = out.text.len();
                     entry.emit(out)?;
+                    let emitted = &out.text[before..];
+                    let frames = if instance == 0 {
+                        "source.machine.frames".to_owned()
+                    } else {
+                        format!("byte_enter_frame_v30(source.machine.frames, {})", row.function.index())
+                    };
+                    assert!(emitted.contains(&format!(
+                        " let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, {frames});",
+                        entry.entry, row.locals.start, row.locals.end
+                    )));
+                    assert_eq!(emitted.matches("invocation_source_entry_initialize_v166(").count(), 1);
+                    assert_eq!(emitted.matches("byte_enter_frame_v30(").count(), usize::from(instance != 0));
+                    assert!(!emitted.contains("Seq::new("));
                 }
             }
             assert_eq!(
@@ -630,6 +644,37 @@ mod tests {
         })
         .0
         .unwrap();
+    }
+
+    #[test]
+    fn shared_entry_initializer_retains_the_complete_original_record_equation() {
+        let text = include_str!("original_semantic_mir_source_entry_initialize_v166.vrs");
+        let (_, body) = text
+            .split_once(") -> InvocationSourceByteStateV36 {\n")
+            .unwrap();
+        assert_eq!(
+            body,
+            concat!(
+                "    InvocationSourceByteStateV36 {\n",
+                "        machine: MemoryStateV30 {\n",
+                "            pc,\n",
+                "            values: Seq::new(source.machine.values.len(), |i: int|\n",
+                "                if begin <= i < end { MemoryValueV30::Undefined }\n",
+                "                else { source.machine.values[i] }),\n",
+                "            memory: source.machine.memory,\n",
+                "            generations: source.machine.generations,\n",
+                "            frames,\n",
+                "            valid: true,\n",
+                "        },\n",
+                "        logical: invocation_source_logical_clear_v38(source.logical, begin, end),\n",
+                "        ..source\n",
+                "    }\n",
+                "}\n",
+            )
+        );
+        assert!(!text.contains("requires"));
+        assert!(!text.contains("assume("));
+        assert!(!text.contains("external_body"));
     }
 
     #[test]
