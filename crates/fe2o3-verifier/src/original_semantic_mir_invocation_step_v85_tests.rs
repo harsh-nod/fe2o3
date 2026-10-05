@@ -12,6 +12,27 @@ fn theorem<'a>(text: &'a str, name: &str) -> &'a str {
         .unwrap()
 }
 
+fn assert_leading_opacity_headers(theorem: &str) {
+    let body = theorem
+        .split_once("\n{\n")
+        .unwrap()
+        .1
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    let mut statements = false;
+    for line in body.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if line.starts_with("hide(") {
+            assert!(
+                !statements,
+                "opacity header after a proof statement: {line}"
+            );
+        } else {
+            statements = true;
+        }
+    }
+}
+
 pub(super) fn check_four(text: &str, name: &str, root: usize) {
     let header = theorem(text, name).split_once("\n{\n").unwrap().0;
     for conclusion in [
@@ -47,6 +68,8 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                     assert_eq!(out.text.matches("proof fn invocation_related_target_inputs_v96").count(), 1);
                     for (root, row) in paired.roots.iter().enumerate() {
                         let follow_fuel = generate::target_follow_fuel_for_test(&paired, root, out)?;
+                        let inventory = paired.slots.correspondence(out)?.inventory(out.budget)?;
+                        let mut state_summaries = 0;
                         let hints = row.step_hints.as_ref().unwrap();
                         assert!(hints.conserves_heap);
                         assert!(!out.text.contains("proof fn invocation_scalar_store_"));
@@ -65,6 +88,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 let entry = hints.entries[index].as_ref().unwrap();
                                 let map = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_map_v85"));
                                 let hint = hints.cuts.iter().find(|hint| hint.pc == pc).unwrap();
+                                assert_eq!(entry.arguments.len(), hint.call.as_ref().unwrap().arguments.len());
                                 assert_eq!(map.matches("reveal_with_fuel(invocation_source_micro_run_").count(), 1);
                                 assert!(map.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
                                 assert!(map.contains(&format!("reveal_with_fuel(invocation_byte_follow_{root}_v36, {follow_fuel});")));
@@ -72,7 +96,58 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 for predicate in ["invocation_paired_source_step", "invocation_paired_source_defined", "invocation_source_byte_storage_related", "invocation_source_byte_map", "invocation_paired_control_values"] {
                                     assert!(control.contains(&format!(" hide({predicate}_{root}_v36);")));
                                 }
-                                assert!(!control.contains("hide(invocation_paired_actual_step_"));
+                                let state_name = format!("invocation_constructor_states_{root}_{pc}_v162");
+                                let has_state = out.text.contains(&format!("proof fn {state_name}("));
+                                assert_eq!(control.contains("hide(invocation_paired_actual_step_"), has_state);
+                                if has_state {
+                                    state_summaries += 1;
+                                    let target_declaration = format!("spec fn invocation_constructor_target_{root}_{pc}_v162(");
+                                    let target_state = out.text.split_once(&target_declaration).unwrap().1.split_once("\n}\n").unwrap().0;
+                                    let mut current = row.blocks.start + block;
+                                    let mut visited = std::collections::BTreeSet::new();
+                                    let mut bindings = 0;
+                                    loop {
+                                        assert!(visited.insert(current));
+                                        let actual = &inventory.blocks()[current];
+                                        assert!(actual.operations.is_empty());
+                                        assert!(matches!(actual.terminator, fe2o3_kernel_ir::Terminator::Branch { .. }));
+                                        assert_eq!(actual.edges.len(), 1);
+                                        let edge = &inventory.edges()[actual.edges.start];
+                                        assert_eq!(edge.target.function, actual.coordinate.function);
+                                        for transfer in &inventory.edge_arguments()[edge.bindings.clone()] {
+                                            assert!(target_state.contains(&format!(".update({}, before[{}])", transfer.target_definition, transfer.incoming_definition)));
+                                            bindings += 1;
+                                        }
+                                        current = row.blocks.start + edge.target.block as usize;
+                                        if let Some(next) = &row.cuts[current - row.blocks.start] {
+                                            assert_eq!(next.source, entry.pc);
+                                            assert_eq!(next.instance, child);
+                                            break;
+                                        }
+                                    }
+                                    assert_eq!(target_state.matches(" let before = values;").count(), visited.len());
+                                    assert_eq!(target_state.matches(".update(").count(), bindings);
+                                    assert!(!target_state.contains(".update(values["));
+                                    assert!(target_state.contains(&format!("MemoryStateV30 {{ pc: {current}, values, valid: true, ..target }}")));
+                                    let state = theorem(&out.text, &state_name);
+                                    assert_leading_opacity_headers(state);
+                                    let (premises, conclusions) = state.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap();
+                                    assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},"));
+                                    let contract = conclusions.split_once("\n{\n").unwrap().0;
+                                    for (side, argument, value) in [("source", "source", "source"), ("actual", "target", "target")] {
+                                        assert!(contract.contains(&format!("invocation_paired_{side}_step_{root}_v36({argument}).state == invocation_constructor_{value}_{root}_{pc}_v162({argument})")));
+                                        assert!(contract.contains(&format!("invocation_paired_{side}_step_{root}_v36({argument}).events.len() == 0")));
+                                        assert!(contract.contains(&format!("!invocation_paired_{side}_step_{root}_v36({argument}).halted")));
+                                    }
+                                    for part in ["map", "heap", "residual", "observations", "halted", "control"] {
+                                        let body = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_{part}_v85"));
+                                        assert_leading_opacity_headers(body);
+                                        assert_eq!(body.matches(&format!("{state_name}(source, target);")).count(), 1);
+                                        for name in ["invocation_paired_source_step", "invocation_paired_actual_step", "invocation_source_block_runtime", "invocation_byte_boundary"] {
+                                            assert!(body.contains(&format!("hide({name}_{root}_v36);")));
+                                        }
+                                    }
+                                }
                                 assert!(control.contains(&format!("hide(invocation_source_enter_{root}_{index}_v36);")));
                                 assert!(out.text.contains(&format!("spec fn invocation_source_enter_{root}_{index}_v36(")));
                                 assert_eq!(control.matches("hide(invocation_source_enter_").count(), 1);
@@ -103,12 +178,31 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 }
                                 let premises = observations.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
                                 assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
+                                let residual = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_residual_v85"));
+                                for predicate in ["invocation_source_byte_storage_related", "invocation_paired_source_defined"] {
+                                    assert!(residual.contains(&format!("hide({predicate}_{root}_v36);")));
+                                }
+                                for predicate in ["invocation_byte_states_related_v36", "invocation_source_byte_state_well_formed_v36", "byte_memory_well_formed_v30", "byte_frame_runtime_well_formed_v30", "byte_private_frames_live_v30", "private_generation_counters_valid_v30"] {
+                                    assert!(residual.contains(&format!("hide({predicate});")));
+                                }
+                                assert!(residual.contains(&format!("assert(invocation_source_byte_state_well_formed_v36(source) && invocation_byte_states_related_v36(source.machine, target, invocation_source_byte_map_{root}_v36(source, target))) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}")));
+                                assert!(residual.contains(&format!("invocation_related_target_inputs_v96(source.machine, target, invocation_source_byte_map_{root}_v36(source, target));")));
+                                for predicate in ["invocation_source_enter_", "invocation_source_byte_map_", "invocation_paired_residual_", "byte_state_memory_well_formed_v30", "invocation_value_related_v36"] {
+                                    assert!(!residual.contains(&format!("hide({predicate}")));
+                                }
+                                for side in ["source", "actual"] {
+                                    assert_eq!(residual.contains(&format!("hide(invocation_paired_{side}_step_")), has_state);
+                                }
+                                let (premises, conclusion) = residual.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap();
+                                assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
+                                assert_eq!(conclusion.split_once("\n{\n").unwrap().0.trim(), format!("invocation_paired_residual_{root}_v85(invocation_paired_source_step_{root}_v36(source).state, invocation_paired_actual_step_{root}_v36(target).state),"));
                                 assert!(map.contains(&format!("invocation_source_constructor_clear_well_formed_v84(source, {}, {}, {}, {});", entry.locals.start, entry.locals.end, entry.owner, entry.pc)));
                                 for (argument, local) in entry.arguments.iter().enumerate() {
                                     assert!(map.contains(&format!("invocation_source_put_local_well_formed_v78(entered, {local}, argument_{argument});")));
                                 }
                             }
                         }
+                        assert!(state_summaries > 0);
                         let related = out.text.split_once(&format!("spec fn invocation_paired_related_{root}_v36(")).unwrap().1.split_once("\n}").unwrap().0;
                         let residual = out.text.split_once(&format!("spec fn invocation_paired_residual_{root}_v85(")).unwrap().1.split_once("\n}").unwrap().0;
                         let storage = format!(" && invocation_source_byte_storage_related_{root}_v36(source, target)\n");
@@ -123,6 +217,33 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
             },
         ).0.unwrap();
     }
+}
+
+#[test]
+fn original_mir_step_constructor_refuses_truncated_entry_captures() {
+    super::super::super::invocations::tests::run_root_variant(
+        LIMIT,
+        LIMIT,
+        true,
+        false,
+        2,
+        |plan, out| {
+            with_slots(plan, out, |slots, out| {
+                let program = SourceByteProgram::derive(plan, slots, out)?;
+                let mut paired =
+                    PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
+                let hints = paired.roots[0].step_hints.as_mut().unwrap();
+                let call = hints.cuts.iter().find_map(|cut| cut.call.as_ref()).unwrap();
+                let entry = hints.entries[call.child].as_mut().unwrap();
+                assert_eq!(entry.arguments.len(), call.arguments.len());
+                assert!(entry.arguments.pop().is_some());
+                assert!(paired.emit(out).is_err());
+                Ok(())
+            })
+        },
+    )
+    .0
+    .unwrap();
 }
 
 fn run_target_follow_topology(
@@ -308,6 +429,9 @@ fn original_mir_step_nonempty_blocks_and_moved_captures_keep_complete_fallback_o
                                 assert!(!fallback.contains("constructor_clear_well_formed"));
                                 assert!(!fallback.contains("hide(invocation_paired_control_values_"));
                                 assert!(!fallback.contains("hide(invocation_source_enter_"));
+                                assert!(!fallback.contains("hide(invocation_source_byte_storage_related_"));
+                                assert!(!fallback.contains("invocation_related_target_inputs_v96("));
+                                assert!(!out.text.contains(&format!("proof fn invocation_constructor_states_{root}_{pc}_v162(")));
                                 let premises = fallback.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
                                 assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
                             }
