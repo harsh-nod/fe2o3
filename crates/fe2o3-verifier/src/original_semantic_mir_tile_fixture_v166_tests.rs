@@ -297,6 +297,9 @@ fn run_fixture(
             Err(fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Adoption(
                 fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(error),
             )) => Err(error),
+            Err(fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Adoption(
+                fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Resource(error),
+            )) => Err(error.into()),
             Err(error) => panic!("original tile fixture preparation: {error:?}"),
         }
     })
