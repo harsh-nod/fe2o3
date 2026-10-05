@@ -498,6 +498,7 @@ fn helper_error(error: ProofHelperLaunchError) -> Error {
     match error {
         ProofHelperLaunchError::Resource(e) => e.into(),
         ProofHelperLaunchError::Backing(e) => helper_backing_error(e),
+        ProofHelperLaunchError::Runtime(e) => runtime_guard_error(e),
         ProofHelperLaunchError::Descriptor(crate::native_runtime_descriptors::Error::Resource(
             e,
         )) => e.into(),
@@ -515,6 +516,19 @@ fn helper_error(error: ProofHelperLaunchError) -> Error {
             fe2o3_compiler_execution_protocol::ProofExecutorBootstrapErrorV1::Resource(e),
         ) => e.into(),
         _ => rejected("native pre-exec attempt refused"),
+    }
+}
+
+fn runtime_guard_error(error: crate::native_runtime_guard::Error) -> Error {
+    use crate::native_runtime_guard::Error as Guard;
+    use fe2o3_protected_service_spawn::native_spawn::ProtectedServiceSpawnErrorV2 as Spawn;
+    match error {
+        Guard::Resource(e)
+        | Guard::Spawn(Spawn::Resource(e))
+        | Guard::Inventory(crate::native_runtime_inventory::Error::Resource(e))
+        | Guard::Descriptor(crate::native_runtime_descriptors::Error::Resource(e)) => e.into(),
+        Guard::Inventory(crate::native_runtime_inventory::Error::Backing(e)) => backing_error(e),
+        _ => rejected("native runtime checkpoint refused"),
     }
 }
 
