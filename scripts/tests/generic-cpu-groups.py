@@ -145,13 +145,25 @@ class CpuGroupTests(unittest.TestCase):
         for name in [
             "cargo-fe2o3-tests", "cargo-fe2o3-worker-v3-envelope-tests",
             "fe2o3-pliron-default-api-ui", "fe2o3-artifact-transaction-tests",
-            "fe2o3-runtime-release-tests", "wrapper-managed-cpu-tests",
+            "fe2o3-runtime-release-tests", "fe2o3-device-release-tests", "wrapper-managed-cpu-tests",
             "tiled-gemm-capability-ui", "cpu-reference-tiled-gemm-paired-default",
             "cpu-reference-tiled-gemm-paired-simt", "cpu-test-partition-revalidation",
             "cpu-test-binding-projection-revalidation", "dialect-mir-pliron-tests",
         ]:
             self.assertEqual(names[name], 1, name)
         self.assertEqual(sum(name.startswith("host-reference-") for name in names), 35)
+
+    def test_device_release_tests_disable_assertions_and_run_the_complete_library(self):
+        for arguments in [("run_cpu_tests",), ("run_cpu_tests", "integration"),
+                          ("main", "generic-core", "cpu-integration")]:
+            with self.subTest(arguments=arguments):
+                rows = self.successful(*arguments)
+                actual = [row for row in rows if row[0] == "fe2o3-device-release-tests"]
+                self.assertEqual(actual, [(
+                    "fe2o3-device-release-tests", "env",
+                    "CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=false", "cargo", "test",
+                    "--locked", "--release", "-p", "fe2o3-device", "--lib",
+                )])
 
     def test_package_groups_keep_exact_unfiltered_rosters_and_cold_prerequisites(self):
         roster = self.roster()

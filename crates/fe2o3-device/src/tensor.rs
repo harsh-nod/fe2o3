@@ -479,7 +479,8 @@ impl<T: LdsElement> LdsTile16x16<'_, T, LdsUninitialized> {
         let indices = RowMajorXor4::lane_fragment_indices(lane.get() as usize)
             .expect("authenticated wave64 lane is in range");
         for (index, value) in indices.into_iter().zip(values) {
-            debug_assert!(self.lds.write(index, value).is_some());
+            let written = self.lds.write(index, value);
+            debug_assert!(written.is_some());
         }
     }
 }
@@ -696,7 +697,7 @@ mod tests {
 
     #[test]
     fn tile_preserves_typestate_and_fragment_order() {
-        let mut storage = [0_u32; 256];
+        let mut storage = [u32::MAX; 256];
         let mut scope = WorkgroupLdsScope::for_host_test();
         let lds = unsafe {
             DynamicLds::<u32>::from_host_parts_for_test(
@@ -709,12 +710,18 @@ mod tests {
         let mut tile = LdsTile16x16::try_from_dynamic(lds).ok().unwrap();
         for lane in 0..64 {
             let witness = WaveLane::<Wave64>::from_model_snapshot(lane).unwrap();
-            tile.write_wave_fragment(&witness, [lane; 4]);
+            tile.write_wave_fragment(
+                &witness,
+                core::array::from_fn(|component| lane * 4 + component as u32),
+            );
         }
         let tile = unsafe { tile.assume_init_for_host_test() };
         for lane in 0..64 {
             let witness = WaveLane::<Wave64>::from_model_snapshot(lane).unwrap();
-            assert_eq!(tile.read_wave_fragment(&witness), [lane; 4]);
+            assert_eq!(
+                tile.read_wave_fragment(&witness),
+                core::array::from_fn(|component| lane * 4 + component as u32),
+            );
         }
     }
 

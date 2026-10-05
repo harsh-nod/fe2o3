@@ -876,6 +876,9 @@ run_cpu_tests() {
     run_step "${package_step}" env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
   fi
   run_runtime_release_tests
+  run_step fe2o3-device-release-tests \
+    env CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=false \
+      cargo test --locked --release -p fe2o3-device --lib
   load_dynamic_loader_environment_removals loader_environment_removals
   if ((${#wrapper_cpu_examples[@]} > 0)); then
     validate_cargo_fe2o3_driver
