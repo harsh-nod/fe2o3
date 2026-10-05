@@ -74,8 +74,8 @@ pub(super) fn emit(
     header(root, None, Goal::All, out)?;
     emit!(out, "}}\n");
     for (block, cut) in row.cuts.iter().enumerate() {
-        let Some(cut) = cut else { continue };
         out.budget.charge_work(1)?;
+        let Some(cut) = cut else { continue };
         let hint = source_hint(row, hints, cut, out)?;
         let constructor = constructor(row, hints, cut, hint, out)?;
         let summary = summaries::derive(model, row, hints, block, cut, hint, out)?;
