@@ -897,6 +897,9 @@ for core_step in \
   device-copy-derive-ui \
   core-production-runtime-surface-ui \
   kernel-compile-matrix-shell-tests \
+  tutorial-default-cargo-harness-tests \
+  tutorial-production-census-tests \
+  tutorial-current-simulation-tests \
   tutorial-cpu-reference-tests \
   s09-debug-checker; do
   assert_step_count "${core_step}" 1 \

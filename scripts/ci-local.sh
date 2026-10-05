@@ -1442,6 +1442,10 @@ run_generic_core() {
     python3 -I -B scripts/tests/tutorial_scalar_gemm_corpus.py
   run_step tutorial-default-cargo-harness-tests \
     python3 -I -B scripts/tests/tutorial_default_cargo.py
+  run_step tutorial-production-census-tests \
+    python3 -I -B scripts/tests/tutorial_production_census_v91.py
+  run_step tutorial-current-simulation-tests \
+    python3 -I -B scripts/tests/tutorial_simulation_v92.py
   run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
   run_step kernel-compile-matrix-shell-tests \
     bash scripts/tests/kernel-compile-matrix.sh
