@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::Write as _;
 use std::os::fd::FromRawFd as _;
 
-use rustix::fs::{MemfdFlags, Mode, SealFlags};
+use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
 
 #[derive(Debug, Eq, PartialEq)]
 struct Credentials {
@@ -26,6 +26,12 @@ pub(super) fn run() -> Result<serde_json::Value, String> {
 
 fn probe() -> Result<(), Box<dyn Error>> {
     let initial = credentials()?;
+    let procfs = rustix::fs::open(
+        c"/proc",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?;
+    assert_eq!(rustix::fs::fstatfs(&procfs)?.f_type, libc::PROC_SUPER_MAGIC);
     for (number, expected) in [
         (libc::SYS_setfsuid, initial.uid),
         (libc::SYS_setfsgid, initial.gid),

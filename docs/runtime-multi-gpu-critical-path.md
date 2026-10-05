@@ -6,6 +6,48 @@ existing MI300X evidence independently. Primary owns edits, integration and test
 
 ## Immediate Priority
 
+The [committed host binding and application checkpoint](evidence/dev-production-host-binding-2026-10-04/README.md)
+now passes the genuine installed CPU application campaign: selected device
+compilation, issuer/anchor publication, Worker finalization, ordinary typed host
+compilation, FD195/current-record audit and retained remote conditional proof.
+The proof manager and compiler coordinator remain live through the successful
+application. This closes the composed admission prerequisite, not native GPU
+execution, A3/A7, full HIP/HSA parity or a general formal-verification claim.
+
+Current work order:
+
+1. Extend the same admitted fixture with an optional exact two-device path; keep
+   its no-argument admission test and original device kernel unchanged. Retain one
+   remote artifact through both generated fills, exact completion receipts,
+   full output readback and owned current-thread engine shutdown.
+2. Make the required installed service deployment available on MI300X. Read-only
+   checks reach the host, but the fixed services are absent, noninteractive sudo
+   requires a password and direct root SSH is unavailable. This is a deployment
+   prerequisite, not approval to bypass admission or weaken device permissions.
+3. Select two freshly observed free physical GPUs, resolve their hardware IDs and
+   expose only their render nodes plus KFD in the private application namespace.
+   Preserve the application UID and add only the actual render supplementary group.
+4. Execute 65-element fills with G128/WG64 on both devices, then stage their actual
+   completed bytes into PUBLIC native peer copies in both directions. Require two
+   native peer completions, complete payload/source checks, separate sentinel
+   destinations and intact guards. Require explicit successful drain/release;
+   timeouts, process exit and quarantined work are not native settlement.
+
+Latest frontend qualification: **436 unit tests passed, 7 ignored**, plus the
+real static Cargo warm-cache test and strict scoped Clippy. The genuine campaign
+passes 1/1 in 470.89 seconds including isolated deployment/cleanup. Two existing
+source-string contract assertions still fail in a broader integration check;
+the new host/device boundary check passes. See the evidence for exact limits.
+No GPU work or performance measurement was performed in this checkpoint.
+
+General performance tuning, wider opcode/collective coverage, additional GPU
+counts and same-process reopen remain behind this two-device correctness path.
+
+## Prior Integration Checkpoints
+
+The records below retain each earlier checkpoint's evidence and then-current
+gaps. The immediate work order above supersedes their historical next-step wording.
+
 The fresh [genuine application campaign](evidence/dev-genuine-application-startup-2026-10-04/README.md)
 now starts the actual installed manager/coordinator with fresh compiler/anchor
 keys, authenticates coordinator readiness, and reaches the selected kernel in

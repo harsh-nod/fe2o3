@@ -9,6 +9,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args_os().count() != 1 {
         return Err("this admission application accepts no arguments".into());
     }
+    assert!(std::env::var_os("FE2O3_PRODUCTION_HOST_BINDING_MODE_V1").is_none());
+    for descriptor in [200, 201] {
+        let error = std::fs::symlink_metadata(format!("/proc/self/fd/{descriptor}"))
+            .expect_err("host binding descriptor leaked into the application");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
     let deadline = Instant::now() + Duration::from_secs(180);
     let kernel = KernelId::from_bytes(fill_write_only_gpu::Marker::KERNEL_BINDING_ID_V1);
     // SAFETY: single-threaded startup exclusively consumes Cargo's inherited handoff once.

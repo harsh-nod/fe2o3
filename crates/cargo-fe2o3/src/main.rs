@@ -31,6 +31,7 @@ mod pinned_executable;
 mod pinned_executable_test_directory;
 mod process_execution;
 mod production_cargo_plan;
+mod production_host_binding;
 mod profile_command;
 mod profile_dispatch_import_v1;
 mod profile_live_qualification_v1;
@@ -165,6 +166,15 @@ fn main() -> ExitCode {
         .is_some_and(|argument| argument == BINDING_HOST_TEST_RUNNER_ARG)
     {
         return binding_host_test_runner(&raw_args[1..]);
+    }
+    if env::var_os(production_host_binding::MODE_ENV).is_some() {
+        return match production_host_binding::run(raw_args) {
+            Ok(status) => ExitCode::from(binding_check_wrapper::exit_code(status)),
+            Err(error) => {
+                eprintln!("cargo-fe2o3 production host binding: {error}");
+                ExitCode::FAILURE
+            }
+        };
     }
     if env::var_os(binding_check_wrapper::MODE_ENV_V1).is_some() {
         return match binding_check_wrapper::run(raw_args) {
@@ -1818,10 +1828,7 @@ fn run_cargo_with_backend_inner(
             );
         }
         inject_production_application_runner(
-            &context.project,
-            &context.pinned_cargo,
-            &context.pinned_rustc,
-            context.generation.artifact_dir(),
+            context,
             production_plan.host_mut().args_mut(),
             compiler_service,
         )?;
@@ -2061,6 +2068,31 @@ fn run_production_host_cargo(
     phase: &production_cargo_plan::CargoPhase,
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
 ) -> Result<(), String> {
+    let mut projection = protected_release
+        .map(|admission| {
+            production_host_binding::CommittedHostBindingProjection::prepare(context, admission)
+        })
+        .transpose()?;
+    let result =
+        run_production_host_cargo_inner(context, phase, protected_release, projection.as_ref());
+    aggregate_post_spawn_results(
+        result,
+        [(
+            "committed host binding revalidation",
+            projection.as_mut().map_or(
+                Ok(()),
+                production_host_binding::CommittedHostBindingProjection::revalidate,
+            ),
+        )],
+    )
+}
+
+fn run_production_host_cargo_inner(
+    context: &BackendRunContext,
+    phase: &production_cargo_plan::CargoPhase,
+    protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+    projection: Option<&production_host_binding::CommittedHostBindingProjection<'_>>,
+) -> Result<(), String> {
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
     context.generation.reject_if_substituted()?;
@@ -2089,6 +2121,8 @@ fn run_production_host_cargo(
         .env("RUSTC_WORKSPACE_WRAPPER", "")
         .env_remove(CARGO_PRIMARY_PACKAGE_ENV)
         .env_remove(BINDING_WRAPPER_MODE_ENV)
+        .env_remove(production_host_binding::MODE_ENV)
+        .env_remove(reserved_fe2o3_symbols::CRATE_BINDING_ID_ENV_V1)
         .env_remove(MANAGED_RUSTC_ARGS_ENV)
         .env_remove(EXPECTED_RUSTC_SHA256_ENV)
         .env_remove(EXPECTED_COMPILER_CLOSURE_SHA256_ENV)
@@ -2129,44 +2163,21 @@ fn run_production_host_cargo(
         admission.configure_descendant(cargo.as_command_mut());
     }
 
-    let invocation_authorization =
-        cargo_invocation_boundary::InvocationAuthorizationRegistryV1::new();
-    let pending_invocation_boundary =
-        cargo_invocation_boundary::PendingCargoInvocationBoundary::start(
-            &context.pinned_cargo,
-            &context.pinned_binding_wrapper,
-            None,
-            invocation_authorization.clone(),
-        )?;
-    pending_invocation_boundary.configure_child(cargo.as_command_mut());
+    if let Some(projection) = projection {
+        projection.configure_child(cargo.as_command_mut(), &context.pinned_binding_wrapper)?;
+    } else if phase.command() == "run" {
+        context
+            .pinned_binding_wrapper
+            .inherit_for_child_at(cargo.as_command_mut(), CARGO_BINDING_CHECK_WRAPPER_CHILD_FD)
+            .map_err(|error| format!("inherit production application runner: {error}"))?;
+    }
+    // Ordinary host Cargo has no compiler capability broker or permit consumer. Its namespace
+    // projection grants no compiler authority. Do not inherit a compiler notification listener:
+    // the application installs its own one-exec/no-fork listener, and Linux rejects nesting them.
     let mut cargo_child = cargo
         .spawn()
         .map_err(|error| format!("failed to run pinned host Cargo: {error}"))?;
-    let invocation_boundary =
-        match pending_invocation_boundary.complete(cargo_child.id(), invocation_authorization) {
-            Ok(boundary) => boundary,
-            Err(error) => {
-                let _ = cargo_child.kill();
-                let cleanup_result = cargo_child.wait().map(|_| ()).map_err(|cleanup| {
-                    format!("failed to reap rejected host Cargo child: {cleanup}")
-                });
-                let lib_tree_result = context.pinned_rustc.revalidate_lib_tree();
-                let closure_result = context
-                    .authorized_closure
-                    .as_ref()
-                    .map_or(Ok(()), |closure| closure.revalidate());
-                return aggregate_post_spawn_results(
-                    Err(error),
-                    [
-                        ("host Cargo child cleanup", cleanup_result),
-                        ("rustc runtime-tree revalidation", lib_tree_result),
-                        ("authorized kernel-closure revalidation", closure_result),
-                    ],
-                );
-            }
-        };
     let status = cargo_child.wait();
-    let boundary_result = invocation_boundary.finish();
     let lib_tree_result = context.pinned_rustc.revalidate_lib_tree();
     let closure_result = context
         .authorized_closure
@@ -2183,7 +2194,6 @@ fn run_production_host_cargo(
     aggregate_post_spawn_results(
         cargo_result,
         [
-            ("host Cargo invocation-boundary finish", boundary_result),
             ("rustc runtime-tree revalidation", lib_tree_result),
             ("authorized kernel-closure revalidation", closure_result),
         ],
@@ -2279,28 +2289,34 @@ fn resolve_application_runner(
 }
 
 fn inject_production_application_runner(
-    project: &project::CargoProject,
-    pinned_cargo: &pinned_executable::PinnedExecutable,
-    pinned_rustc: &PinnedRustc,
-    artifact_dir: &project::PinnedDirectory,
+    context: &BackendRunContext,
     args: &mut Vec<OsString>,
     compiler_service: application_handoff::ApplicationCompilerServiceExposureV1,
 ) -> Result<(), String> {
-    let (target, original_runner) =
-        resolve_application_runner(project, pinned_cargo, pinned_rustc, args, true)?;
+    let (target, original_runner) = resolve_application_runner(
+        &context.project,
+        &context.pinned_cargo,
+        &context.pinned_rustc,
+        args,
+        true,
+    )?;
     if !original_runner.is_empty() {
         return Err(
             "production Worker V3 application handoff does not permit an intermediate Cargo runner"
                 .to_owned(),
         );
     }
-    let executable = application_runner_executable()?;
+    let executable = context
+        .pinned_binding_wrapper
+        .fixed_child_path(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD)
+        .map_err(|error| format!("retain production application runner: {error}"))?;
+    let artifact_dir = context.generation.artifact_dir();
     let (artifact_device, artifact_inode) = artifact_dir.identity_parts();
     inject_serialized_application_runner_config(
         args,
         &target,
         vec![
-            executable,
+            executable.to_string_lossy().into_owned(),
             INTERNAL_RUNNER_ARG.to_string(),
             match compiler_service {
                 application_handoff::ApplicationCompilerServiceExposureV1::CustodianRequired => {
@@ -2326,15 +2342,6 @@ fn inject_production_application_runner(
             "0".to_owned(),
         ],
     )
-}
-
-fn application_runner_executable() -> Result<String, String> {
-    let executable = env::current_exe()
-        .map_err(|error| format!("failed to locate cargo-fe2o3 runner executable: {error}"))?;
-    executable.to_str().map(str::to_owned).ok_or_else(|| {
-        "cargo fe2o3 run requires a UTF-8 cargo-fe2o3 executable path for Cargo runner configuration"
-            .to_string()
-    })
 }
 
 fn inject_serialized_application_runner_config(

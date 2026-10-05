@@ -740,7 +740,11 @@ impl<'directory> PinnedApplicationEnvelope<'directory> {
         Ok(())
     }
 
-    fn revalidate(&mut self) -> Result<(), String> {
+    pub(crate) fn wire(&self) -> &WorkerV3LoadEnvelopeWireV2 {
+        &self.envelope
+    }
+
+    pub(crate) fn revalidate(&mut self) -> Result<(), String> {
         self.file
             .seek(SeekFrom::Start(0))
             .map_err(|error| format!("failed to rewind inherited envelope: {error}"))?;

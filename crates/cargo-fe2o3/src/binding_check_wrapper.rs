@@ -28,6 +28,7 @@ pub(crate) const MODE_ENV_V1: &str = "FE2O3_BINDING_CHECK_WRAPPER_MODE_V1";
 pub(crate) const CLIPPY_DRIVER_ENV_V1: &str = "FE2O3_BINDING_HOST_CLIPPY_DRIVER_V1";
 
 const PROHIBITED_ENVIRONMENT: &[&str] = &[
+    "FE2O3_PRODUCTION_HOST_BINDING_MODE_V1",
     "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
     "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_PATH_V1",
     "FE2O3_AUTHORITY_CARGO_BINDING_TRAMPOLINE_SHA256_V1",
@@ -309,7 +310,7 @@ fn projected_target_for_source<'projection>(
         })
 }
 
-fn validate_source_identity(
+pub(crate) fn validate_source_identity(
     target: &crate::binding_check_projection::TargetSource,
     observed: crate::binding_check_projection::ObjectIdentity,
 ) -> Result<(), String> {
@@ -322,7 +323,7 @@ fn validate_source_identity(
     Ok(())
 }
 
-fn validate_cargo_owner(
+pub(crate) fn validate_cargo_owner(
     target: &crate::binding_check_projection::TargetSource,
     cargo_name: Option<&std::ffi::OsStr>,
     cargo_manifest: Option<&std::ffi::OsStr>,
@@ -360,7 +361,7 @@ fn find_target_source<'projection>(
         .map(|index| &projection.targets[index])
 }
 
-fn lexical_normalize_absolute(path: &Path) -> Result<PathBuf, String> {
+pub(crate) fn lexical_normalize_absolute(path: &Path) -> Result<PathBuf, String> {
     if !path.is_absolute() {
         return Err("rustc target source did not resolve to an absolute path".to_owned());
     }
@@ -394,7 +395,7 @@ pub(crate) fn reject_prohibited_environment() -> Result<(), BindingCheckWrapperE
     Ok(())
 }
 
-fn reject_codegen_backend(argv: &[OsString]) -> Result<(), BindingCheckWrapperError> {
+pub(crate) fn reject_codegen_backend(argv: &[OsString]) -> Result<(), BindingCheckWrapperError> {
     for (index, argument) in argv.iter().enumerate() {
         if is_rustc_codegen_backend_selector_v2(
             argument,

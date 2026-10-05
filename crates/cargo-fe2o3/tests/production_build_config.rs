@@ -444,6 +444,24 @@ fn ordinary_host_phase_has_no_device_compiler_controls() {
     assert!(host_phase.contains("configure_pinned_rustc_child"));
     assert!(host_phase.contains("generation.reject_if_substituted"));
     assert!(!host_phase.contains("configure_production_target_environment"));
+    let device_phase = source
+        .split("fn run_cargo_with_backend_inner(")
+        .nth(1)
+        .expect("device phase exists")
+        .split("fn run_production_host_cargo(")
+        .next()
+        .unwrap();
+    for boundary in [
+        "PendingCargoInvocationBoundary::start",
+        "InvocationAuthorizationRegistryV1::new",
+    ] {
+        assert!(
+            !host_phase.contains(boundary),
+            "host must not install {boundary}"
+        );
+    }
+    assert!(device_phase.contains("PendingCargoInvocationBoundary::start"));
+    assert!(device_phase.contains("capability_broker.broker().invocation_authorization()"));
 }
 
 #[test]

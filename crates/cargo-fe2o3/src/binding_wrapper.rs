@@ -1340,7 +1340,9 @@ fn append_prepared_rustc_arguments(
     Ok(())
 }
 
-fn decode_managed_rustc_args(value: &OsStr) -> Result<Vec<OsString>, BindingWrapperError> {
+pub(crate) fn decode_managed_rustc_args(
+    value: &OsStr,
+) -> Result<Vec<OsString>, BindingWrapperError> {
     let fields = os_bytes(value)
         .split(|byte| *byte == 0x1f)
         .map(|field| os_string(field.to_vec()))

@@ -711,6 +711,7 @@ fn allowed_application_syscalls() -> &'static [libc::c_long] {
         libc::SYS_access,
         libc::SYS_faccessat,
         libc::SYS_faccessat2,
+        libc::SYS_open,
         libc::SYS_openat,
         libc::SYS_openat2,
         libc::SYS_getdents64,
@@ -796,6 +797,69 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Instant;
+
+    #[test]
+    fn application_listener_cannot_be_nested_under_compiler_listener() {
+        use std::os::unix::process::CommandExt as _;
+
+        let (parent, child) = UnixDatagram::pair().unwrap();
+        let socket = child.as_raw_fd();
+        let compiler_filter = cargo_exec_notification_filter();
+        let application_filter = no_fork_application_filter();
+        let mut command = std::process::Command::new("/bin/true");
+        // SAFETY: both immutable filters and the retained socket outlive this synchronous spawn.
+        // Only the disposable child acquires the irreversible filters; it fails before exec.
+        unsafe {
+            command.pre_exec(move || {
+                install_application_profile(&compiler_filter, socket)?;
+                install_application_profile(&application_filter, socket)?;
+                Err(io::Error::from_raw_os_error(libc::EINVAL))
+            });
+        }
+        let error = command
+            .spawn()
+            .expect_err("nested listener must fail closed");
+        assert_eq!(error.raw_os_error(), Some(libc::EBUSY));
+        let (_listener, pid) = receive_listener(parent.as_raw_fd()).unwrap();
+        assert_ne!(
+            pid,
+            std::process::id(),
+            "first listener belongs to the child"
+        );
+        assert!(receive_listener(parent.as_raw_fd()).is_err());
+    }
+
+    #[test]
+    fn application_profile_allows_the_production_rustix_directory_opener() {
+        use rustix::fs::{Mode, OFlags};
+        use std::os::unix::process::CommandExt as _;
+
+        let (parent, child) = UnixDatagram::pair().unwrap();
+        let socket = child.as_raw_fd();
+        let filter = no_fork_application_filter();
+        let mut command = std::process::Command::new("/bin/true");
+        // SAFETY: this disposable child performs only direct syscalls with preallocated inputs.
+        // It always returns before exec, so an unserviced notification cannot block spawn.
+        unsafe {
+            command.pre_exec(move || {
+                install_application_profile(&filter, socket)?;
+                // Match the installed-deployment auditor, not std::fs's different syscall path.
+                let procfs = rustix::fs::open(
+                    c"/proc",
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )?;
+                if rustix::fs::fstatfs(&procfs)?.f_type != libc::PROC_SUPER_MAGIC {
+                    return Err(io::Error::from_raw_os_error(libc::EINVAL));
+                }
+                Err(io::Error::from_raw_os_error(libc::ECANCELED))
+            });
+        }
+        let error = command.spawn().expect_err("probe must return before exec");
+        assert_eq!(error.raw_os_error(), Some(libc::ECANCELED));
+        let (_listener, pid) = receive_listener(parent.as_raw_fd()).unwrap();
+        assert_ne!(pid, std::process::id());
+    }
 
     fn application_filter_decision(number: libc::c_long, args: [u64; 6]) -> u32 {
         let mut words = [0_u32; 16];
@@ -915,6 +979,7 @@ mod tests {
             libc::SYS_poll,
             libc::SYS_ioctl,
             libc::SYS_getrandom,
+            libc::SYS_open,
             libc::SYS_openat,
             libc::SYS_read,
             libc::SYS_fstat,

@@ -1,6 +1,7 @@
 //! Immutable workspace target projection for the authority-free check wrapper.
 
 use rustix::fs::{FileType, MemfdFlags, SealFlags, fcntl_add_seals, fcntl_get_seals, fstat};
+use serde::{Deserialize, Serialize};
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
@@ -13,6 +14,7 @@ use std::process::Command;
 
 const MAGIC: &[u8] = b"fe2o3-binding-check-target-projection-v1\0";
 const MEMFD_NAME: &str = "fe2o3-binding-check-projection-v1";
+pub(crate) const HOST_MEMFD_NAME: &str = "fe2o3-production-host-binding-v1";
 const MAX_PROJECTION_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_TARGETS: usize = 65_536;
 const MAX_FIELD_BYTES: usize = 1024 * 1024;
@@ -21,7 +23,8 @@ const REQUIRED_SEALS: SealFlags = SealFlags::WRITE
     .union(SealFlags::SHRINK)
     .union(SealFlags::SEAL);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ObjectIdentity {
     pub(crate) device: u64,
     pub(crate) inode: u64,
@@ -51,7 +54,8 @@ impl ObjectIdentity {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TargetSource {
     pub(crate) package_name: String,
     pub(crate) package_root: PathBuf,
@@ -62,7 +66,8 @@ pub(crate) struct TargetSource {
     pub(crate) managed: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct Projection {
     pub(crate) workspace_root: PathBuf,
     pub(crate) workspace_device: u64,
@@ -172,11 +177,22 @@ pub(crate) struct SealedProjection {
 impl SealedProjection {
     pub(crate) fn new(projection: &Projection) -> Result<Self, String> {
         let bytes = projection.validate_and_encode()?;
+        Self::from_bytes(&bytes, MEMFD_NAME)
+    }
+
+    pub(crate) fn for_production_host(bytes: &[u8]) -> Result<Self, String> {
+        Self::from_bytes(bytes, HOST_MEMFD_NAME)
+    }
+
+    fn from_bytes(bytes: &[u8], name: &str) -> Result<Self, String> {
+        if bytes.is_empty() || bytes.len() as u64 > MAX_PROJECTION_BYTES {
+            return Err("binding projection has an invalid byte count".to_owned());
+        }
         let mut file =
-            rustix::fs::memfd_create(MEMFD_NAME, MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING)
+            rustix::fs::memfd_create(name, MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING)
                 .map(File::from)
                 .map_err(|error| format!("failed to create binding projection memfd: {error}"))?;
-        file.write_all(&bytes)
+        file.write_all(bytes)
             .map_err(|error| format!("failed to write binding projection: {error}"))?;
         fcntl_add_seals(
             &file,
@@ -242,6 +258,14 @@ impl SealedProjection {
 }
 
 pub(crate) fn consume_inherited() -> Result<Projection, String> {
+    decode(&consume_inherited_bytes(MEMFD_NAME)?)
+}
+
+pub(crate) fn consume_inherited_host_bytes() -> Result<Vec<u8>, String> {
+    consume_inherited_bytes(HOST_MEMFD_NAME)
+}
+
+fn consume_inherited_bytes(name: &str) -> Result<Vec<u8>, String> {
     let descriptor = crate::CARGO_BINDING_CHECK_PROJECTION_CHILD_FD;
     // SAFETY: the fixed descriptor is validated before ownership is consumed.
     let borrowed = unsafe { BorrowedFd::borrow_raw(descriptor) };
@@ -270,16 +294,15 @@ pub(crate) fn consume_inherited() -> Result<Projection, String> {
     }
     let link = std::fs::read_link(format!("/proc/self/fd/{descriptor}"))
         .map_err(|error| format!("failed to inspect binding projection proc link: {error}"))?;
-    let expected = format!("/memfd:{MEMFD_NAME} (deleted)");
-    let alternate = format!("memfd:{MEMFD_NAME} (deleted)");
+    let expected = format!("/memfd:{name} (deleted)");
+    let alternate = format!("memfd:{name} (deleted)");
     if link != Path::new(&expected) && link != Path::new(&alternate) {
         return Err(format!(
             "inherited binding projection is not the exact named memfd: {}",
             link.display()
         ));
     }
-    let bytes = read_projection_at_zero(&file, stat.st_size as usize)?;
-    decode(&bytes)
+    read_projection_at_zero(&file, stat.st_size as usize)
 }
 
 fn read_projection_at_zero(file: &File, size: usize) -> Result<Vec<u8>, String> {
