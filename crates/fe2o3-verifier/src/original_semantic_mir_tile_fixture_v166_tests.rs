@@ -408,8 +408,11 @@ fn run_fixture_with_preparation(
 }
 
 #[test]
-#[ignore = "diagnostic original-source lifetime boundary; not an admission or proof result"]
-fn diagnostic_original_context_reborrow_while_workgroup_live_v170() {
+fn original_context_reborrow_while_workgroup_live_is_refused_v170() {
+    use fe2o3_lower_mir_kernel::{
+        ProductionPendingScopedSourceErrorV29 as Pending, ProductionSemanticKirErrorV1 as Semantic,
+        ProductionSourceOwnedViewErrorV18 as Source,
+    };
     for layout in [Layout::Blocked, Layout::Striped] {
         let result = run_fixture_with_preparation(
             layout,
@@ -418,7 +421,17 @@ fn diagnostic_original_context_reborrow_while_workgroup_live_v170() {
             |budget| prepared_with_owner(budget, owner_with_live_context_reborrow_v170),
             generate_actual_tile_source_v168,
         );
-        println!("original-context-reborrow-v170 {layout:?}: {:?}", result.0);
+        assert!(matches!(
+            result.0,
+            Err(Error::Source(Source::Source(Pending::Source(
+                Semantic::Unsupported {
+                    function: 0,
+                    block: None,
+                    statement: None,
+                    detail: "nominal identity equations differ from their original source",
+                }
+            ))))
+        ));
     }
 }
 
