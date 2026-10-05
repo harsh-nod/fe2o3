@@ -196,8 +196,8 @@ fn retain_packets(out: &mut Writer<'_, '_>, packets: &[&'static str]) -> Result<
         support[index].expanded = true;
         references(support[index].body, support, out.budget)?;
     }
-    // Charge all possible shifting before changing output, so a short budget
-    // cannot leave a partially pruned proof request.
+    // Choose between sparse deletion and one-pass compaction. Both costs are
+    // paid before mutation, so budget denial preserves the complete request.
     let mut shifts = 0usize;
     for item in support.iter() {
         out.budget.charge_work(1)?;
@@ -205,11 +205,36 @@ fn retain_packets(out: &mut Writer<'_, '_>, packets: &[&'static str]) -> Result<
             shifts = add(shifts, out.text.len() - item.end)?;
         }
     }
-    out.budget.charge_work(shifts)?;
-    for item in support.iter().rev().filter(|item| !item.needed) {
-        drop(out.text.drain(item.start..item.end));
+    let compact_work = add(
+        out.text.len().checked_mul(4).ok_or(Resource::Arithmetic)?,
+        count.checked_mul(2).ok_or(Resource::Arithmetic)?,
+    )?;
+    if shifts <= compact_work {
+        out.budget.charge_work(shifts)?;
+        for item in support.iter().rev().filter(|item| !item.needed) {
+            drop(out.text.drain(item.start..item.end));
+        }
+    } else {
+        out.budget.charge_work(compact_work)?;
+        compact(&mut out.text, support);
     }
     Ok(())
+}
+
+fn compact(text: &mut String, support: &[Support]) {
+    let mut offset = 0usize;
+    let mut index = 0usize;
+    text.retain(|character| {
+        let start = offset;
+        // These offsets traverse the original valid UTF-8 string exactly once.
+        offset += character.len_utf8();
+        while index < support.len() && support[index].end <= start {
+            index += 1;
+        }
+        support
+            .get(index)
+            .is_none_or(|item| item.needed || start < item.start)
+    });
 }
 
 #[cfg(test)]
@@ -223,11 +248,20 @@ mod tests {
         "spec fn required_semantics() -> bool { true }\n",
         "// fe2o3_optional_support_v97: a\nproof fn a() { b(); }\n",
         "// fe2o3_optional_support_v97: b\nproof fn b() { a(); }\n",
-        "// fe2o3_optional_support_v97: c\nproof fn c() { }\n",
+        "// fe2o3_optional_support_v97: c\nproof fn c() { /* \u{4e2d} */ }\n",
         "// fe2o3_optional_support_v97: END\n",
     );
 
     fn run(text: &str, work_limit: usize, storage_limit: usize) -> (Result<String>, usize, usize) {
+        run_packets(text, &[PACKET], work_limit, storage_limit)
+    }
+
+    fn run_packets(
+        text: &str,
+        packets: &[&'static str],
+        work_limit: usize,
+        storage_limit: usize,
+    ) -> (Result<String>, usize, usize) {
         let mut work = Work::new(work_limit);
         let mut budget = Budget::new(&mut work, storage_limit);
         let result = (|| {
@@ -235,7 +269,7 @@ mod tests {
             let mut out = Writer::new(&mut budget)?;
             out.write_str(text).map_err(|_| out.error())?;
             let before = out.text.clone();
-            match retain_packets(&mut out, &[PACKET]) {
+            match retain_packets(&mut out, packets) {
                 Ok(()) => out.finish(),
                 Err(error) => {
                     assert_eq!(out.text, before);
@@ -304,5 +338,78 @@ mod tests {
         }];
         references("actual", &mut collision, &mut budget).unwrap();
         assert!(!collision[0].needed);
+    }
+
+    #[test]
+    fn proof_support_compaction_matches_sparse_deletion_for_all_subsets() {
+        let text = format!("// \u{03bb}\n{PACKET}// \u{4e2d} trailing semantic content\n");
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        let mut support = [EMPTY; MAX_SUPPORT];
+        let count = collect(&text, &[PACKET], &mut support, &mut budget).unwrap();
+        for mask in 0..(1 << count) {
+            for (index, item) in support[..count].iter_mut().enumerate() {
+                item.needed = mask & (1 << index) != 0;
+            }
+            let mut expected = text.clone();
+            for item in support[..count].iter().rev().filter(|item| !item.needed) {
+                drop(expected.drain(item.start..item.end));
+            }
+            let mut actual = text.clone();
+            compact(&mut actual, &support[..count]);
+            assert_eq!(actual, expected, "retained subset {mask}");
+        }
+    }
+
+    #[test]
+    fn proof_support_compaction_keeps_non_support_utf8_and_empty_inputs() {
+        for text in [String::new(), String::from("\u{03bb}\u{4e2d}\u{1f642}")] {
+            let mut actual = text.clone();
+            compact(&mut actual, &[]);
+            assert_eq!(actual, text);
+        }
+    }
+
+    #[test]
+    fn proof_support_dense_compaction_exact_budget_is_transactional() {
+        const DENSE_PACKET: &str = concat!(
+            "// fe2o3_optional_support_v97: a\nproof fn a() { b(); }\n",
+            "// fe2o3_optional_support_v97: b\nproof fn b() { a(); }\n",
+            "// fe2o3_optional_support_v97: c\nproof fn c() { }\n",
+            "// fe2o3_optional_support_v97: d\nproof fn d() { }\n",
+            "// fe2o3_optional_support_v97: e\nproof fn e() { }\n",
+            "// fe2o3_optional_support_v97: f\nproof fn f() { }\n",
+            "// fe2o3_optional_support_v97: g\nproof fn g() { }\n",
+            "// fe2o3_optional_support_v97: h\nproof fn h() { }\n",
+            "// fe2o3_optional_support_v97: END\n",
+        );
+        let tail = format!(
+            "proof fn original_trace() {{ a(); }}\n// {}\n",
+            "\u{4e2d}".repeat(4096)
+        );
+        let text = format!("// \u{03bb}\n{DENSE_PACKET}{tail}");
+        let (result, work, storage) = run_packets(&text, &[DENSE_PACKET], usize::MAX, usize::MAX);
+        let expected = result.unwrap();
+        assert!(expected.starts_with("// \u{03bb}\n"));
+        assert!(expected.ends_with(&tail));
+        assert!(expected.contains("proof fn a() { b(); }"));
+        assert!(expected.contains("proof fn b() { a(); }"));
+        for name in ["c", "d", "e", "f", "g", "h"] {
+            assert!(!expected.contains(&format!("proof fn {name}()")));
+        }
+        assert_eq!(
+            run_packets(&text, &[DENSE_PACKET], work, storage)
+                .0
+                .unwrap(),
+            expected
+        );
+        assert!(matches!(
+            run_packets(&text, &[DENSE_PACKET], work - 1, storage).0,
+            Err(Error::Resource(Resource::Work(_)))
+        ));
+        assert!(matches!(
+            run_packets(&text, &[DENSE_PACKET], work, storage - 1).0,
+            Err(Error::Resource(Resource::Storage(_)))
+        ));
     }
 }
