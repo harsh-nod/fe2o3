@@ -132,10 +132,15 @@ fn lifecycle(service: &mut Service, b: &mut Budget<'_>, cancel_at_birth: bool) {
     // authenticated standalone fixture installs the exact checkpoint filter
     // immediately after its gate read; this test does not execute a compiler.
     let mut runtime = unsafe { trace.into_runtime_trace(deadline, b) }.unwrap();
+    assert!(runtime.park_all_bounded(1, b).is_err());
+    let before = b.work();
+    runtime.park_all_bounded(8192, b).unwrap();
+    assert!(b.work() - before <= Runtime::bounded_census_work(8192).unwrap());
     rustix::io::write(&gate, b"g").unwrap();
     runtime.resume_selected(b).unwrap();
     let (mut births, mut terminals, mut later_opens, mut events) = (0, 0, 0, 0);
     let mut observed_descendants = [None; 2];
+    let mut last_generation = None;
     while !runtime.is_trace_retired() {
         assert!(
             Instant::now() < deadline,
@@ -146,21 +151,32 @@ fn lifecycle(service: &mut Service, b: &mut Budget<'_>, cancel_at_birth: bool) {
             continue;
         };
         events += 1;
+        if let Some(previous) = last_generation {
+            assert!(event.generation() > previous);
+        }
+        last_generation = Some(event.generation());
         assert!(events <= 256, "runtime component event bound exceeded");
         eprintln!("runtime component event {events}: {event:?}");
         if event.is_checkpoint() {
-            runtime.park_all(b).unwrap();
+            if cancel_at_birth {
+                runtime.park_all(b).unwrap();
+            } else {
+                runtime.park_all_bounded(8192, b).unwrap();
+            }
             let entry = runtime.syscall_entry(b).unwrap();
             if matches!(entry.number, 2 | 257) && event.pid() == root && terminals > 0 {
                 later_opens += 1;
             }
             runtime.step_syscall(b).unwrap();
         } else if event.is_birth() {
+            let child = runtime.selected_birth_child(b).unwrap();
+            assert_ne!(child, event.pid());
             while !runtime.hold_born_child(b).unwrap() {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(1));
             }
             births += 1;
+            assert_eq!(runtime.selected_birth_child(b).unwrap(), child);
             if cancel_at_birth {
                 runtime.mark_cancellation();
                 assert!(runtime.poll(b).is_err());

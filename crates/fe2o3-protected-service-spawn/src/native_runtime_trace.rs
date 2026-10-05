@@ -74,12 +74,35 @@ struct Task {
 pub struct RuntimeTraceEventV1 {
     pid: Pid,
     stop: Stop,
+    generation: u64,
 }
 
 impl RuntimeTraceEventV1 {
     /// Context only; no caller-supplied PID can select an operation.
     pub fn pid(self) -> Pid {
         self.pid
+    }
+    /// Original owner's observation generation; inert data, never a selector.
+    pub fn generation(self) -> u64 {
+        self.generation
+    }
+    /// A controller-owned interrupt, not a generic permission to resume.
+    pub fn is_interrupt(self) -> bool {
+        self.stop == Stop::Interrupt
+    }
+    /// Exact signal-delivery stop, distinct from a terminal signal or group stop.
+    pub fn delivery_signal(self) -> Option<i32> {
+        match self.stop {
+            Stop::Signal(signal) => Some(signal),
+            _ => None,
+        }
+    }
+    /// Exact job-control stop. Resumption uses LISTEN, not signal injection.
+    pub fn group_signal(self) -> Option<i32> {
+        match self.stop {
+            Stop::Group(signal) => Some(signal),
+            _ => None,
+        }
     }
     pub fn is_exec(self) -> bool {
         self.stop == Stop::Exec
@@ -154,6 +177,21 @@ impl<'work> RootRuntimeTraceV1<'work> {
     pub const OPERATION_SCRATCH: usize = 4 * std::mem::size_of::<Self>() + 4096;
     /// Additional fixed entry work above an original root observation.
     pub const ROOT_OBSERVATION_WORK: usize = ENTRY;
+    /// One metered census operation, including descriptor-relative row parsing.
+    pub const CENSUS_OPERATION_WORK: usize = ENTRY + 16 * (1024 + 64);
+
+    /// Complete work upper bound for explicitly bounded stopped-census calls.
+    pub fn bounded_census_work(maximum_operations: usize) -> Result<usize> {
+        if maximum_operations == 0 {
+            return Err(Error::State(
+                "bounded runtime census needs a positive limit",
+            ));
+        }
+        maximum_operations
+            .checked_mul(Self::CENSUS_OPERATION_WORK)
+            .and_then(|work| work.checked_add(ENTRY))
+            .ok_or_else(|| Resource::Arithmetic.into())
+    }
 
     /// The trace must hold its own pre-exec interrupt stop. Prepay STORAGE_GROWTH.
     ///
@@ -307,6 +345,7 @@ impl<'work> RootRuntimeTraceV1<'work> {
                 return Ok(Some(RuntimeTraceEventV1 {
                     pid: task.pid,
                     stop: task.stop,
+                    generation: this.generation,
                 }));
             }
             if let Some(index) = this.inflight {
@@ -319,6 +358,7 @@ impl<'work> RootRuntimeTraceV1<'work> {
                 return Ok(Some(RuntimeTraceEventV1 {
                     pid: task.pid,
                     stop: task.stop,
+                    generation: this.generation,
                 }));
             }
             for index in 0..CAPACITY {
@@ -331,6 +371,7 @@ impl<'work> RootRuntimeTraceV1<'work> {
                         return Ok(Some(RuntimeTraceEventV1 {
                             pid: task.pid,
                             stop: task.stop,
+                            generation: this.generation,
                         }));
                     }
                 }
@@ -559,6 +600,26 @@ impl<'work> RootRuntimeTraceV1<'work> {
         })
     }
 
+    /// Read only the identity already acquired from the current original birth
+    /// stop. No caller-provided PID can create, select or claim task custody.
+    pub fn selected_birth_child(&mut self, b: &mut Budget<'_>) -> Result<Pid> {
+        self.scope(b, true, |this| {
+            let (_, task) = this.selected()?;
+            if !matches!(task.stop, Stop::Birth(_)) {
+                return Err(Error::State(
+                    "selected observation is not an acquired birth",
+                ));
+            }
+            let child = task
+                .child
+                .ok_or(Error::State("birth child is not acquired"))?;
+            if !this.tasks.iter().flatten().any(|task| task.pid == child) {
+                return Err(Error::State("acquired birth child is not retained"));
+            }
+            Ok(child)
+        })
+    }
+
     /// Retire only the selected status already obtained by this controller's
     /// consuming wait. Keep root completion distinct; descendant slot reuse is
     /// permitted only after this transition, never after a signal or EXIT stop.
@@ -571,6 +632,7 @@ impl<'work> RootRuntimeTraceV1<'work> {
             let event = RuntimeTraceEventV1 {
                 pid: task.pid,
                 stop: task.stop,
+                generation: this.generation,
             };
             this.invalidate_census()?;
             if index == 0 {
@@ -625,12 +687,29 @@ impl<'work> RootRuntimeTraceV1<'work> {
     /// or interrupt is charged to the original account; the original absolute
     /// deadline is checked even if the complete census was already stopped.
     pub fn park_all(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        self.park_with_allowance(None, b)
+    }
+
+    /// The same stable-stop algorithm, additionally refusing when its original
+    /// charged observation/interrupt/census allowance is exhausted. No deadline
+    /// is renewed. Refusal leaves all owned tasks retained, never resumed.
+    pub fn park_all_bounded(
+        &mut self,
+        maximum_operations: usize,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        let _quote = Self::bounded_census_work(maximum_operations)?;
+        self.park_with_allowance(Some(maximum_operations), b)
+    }
+
+    fn park_with_allowance(&mut self, remaining: Option<usize>, b: &mut Budget<'_>) -> Result<()> {
         self.check(b, true)?;
         let deadline = self.deadline;
         b.with_prepaid_scope(self.retained, ENTRY, ENTRY, Self::OPERATION_SCRATCH, |b| {
             let mut census = Census {
                 owner: self,
                 budget: b,
+                remaining,
             };
             crate::trace_runtime::stable::park_all(&mut census, deadline, &mut || Ok(()))?;
             census.owner.check(census.budget, true)?;
@@ -766,11 +845,23 @@ impl<'work> RootRuntimeTraceV1<'work> {
 struct Census<'owner, 'budget, 'work> {
     owner: &'owner mut RootRuntimeTraceV1<'work>,
     budget: &'owner mut Budget<'budget>,
+    remaining: Option<usize>,
+}
+
+fn consume_census_allowance(remaining: &mut Option<usize>) -> Result<()> {
+    if let Some(remaining) = remaining {
+        *remaining = remaining.checked_sub(1).ok_or(Error::State(
+            "bounded runtime census operation allowance exhausted",
+        ))?;
+    }
+    Ok(())
 }
 
 impl Census<'_, '_, '_> {
     fn debit(&mut self) -> Result<()> {
-        self.budget.charge_work(ENTRY + 16 * (1024 + 64))?;
+        consume_census_allowance(&mut self.remaining)?;
+        self.budget
+            .charge_work(RootRuntimeTraceV1::CENSUS_OPERATION_WORK)?;
         self.owner.check(self.budget, true)
     }
 }
