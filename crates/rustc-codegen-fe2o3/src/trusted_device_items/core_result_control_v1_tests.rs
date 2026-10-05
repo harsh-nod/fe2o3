@@ -203,11 +203,11 @@ impl Callbacks for FixtureCallbacks {
         });
         reject_mutation(tcx, instance, body, "swapped branches", |body| {
             let TerminatorKind::SwitchInt { targets, .. } = &mut body.basic_blocks.as_mut()[bb(0)].terminator_mut().kind else { unreachable!() };
-            *targets = SwitchTargets::new([(0, bb(2)), (1, bb(3))], bb(1));
+            *targets = SwitchTargets::new([(0, bb(2)), (1, bb(3))].into_iter(), bb(1));
         });
         reject_mutation(tcx, instance, body, "reachable invalid discriminant", |body| {
             let TerminatorKind::SwitchInt { targets, .. } = &mut body.basic_blocks.as_mut()[bb(0)].terminator_mut().kind else { unreachable!() };
-            *targets = SwitchTargets::new([(0, bb(3)), (1, bb(2))], bb(4));
+            *targets = SwitchTargets::new([(0, bb(3)), (1, bb(2))].into_iter(), bb(4));
         });
         results.control += 3;
         for index in [2, 3] {
