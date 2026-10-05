@@ -119,6 +119,13 @@ pub(super) fn emit(
                                 " hide(invocation_source_byte_state_well_formed_v36);\n"
                             );
                         }
+                        if constructor.is_some() && matches!(goal, Goal::Control) {
+                            out.budget.charge_work(6)?;
+                            emit!(
+                                out,
+                                " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_paired_control_values_{root}_v36);\n"
+                            );
+                        }
                         unfold(
                             root,
                             row,
@@ -478,6 +485,11 @@ fn control_values(
             }
         }
     }
+    out.budget.charge_work(1)?;
+    emit!(
+        out,
+        " assert(invocation_paired_control_values_{root}_v36(source, original, actual)) by {{\n reveal(invocation_paired_control_values_{root}_v36);\n }}\n"
+    );
     Ok(())
 }
 

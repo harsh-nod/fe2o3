@@ -65,6 +65,11 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 let hint = hints.cuts.iter().find(|hint| hint.pc == pc).unwrap();
                                 assert_eq!(map.matches("reveal_with_fuel(invocation_source_micro_run_").count(), 1);
                                 assert!(map.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
+                                let control = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_control_v85"));
+                                for predicate in ["invocation_paired_source_step", "invocation_paired_actual_step", "invocation_paired_source_defined", "invocation_source_byte_storage_related", "invocation_source_byte_map", "invocation_paired_control_values"] {
+                                    assert!(control.contains(&format!(" hide({predicate}_{root}_v36);")));
+                                }
+                                assert!(control.contains(&format!("assert(invocation_paired_control_values_{root}_v36(source, original, actual)) by {{\n reveal(invocation_paired_control_values_{root}_v36);\n }}")));
                                 assert!(map.contains(&format!("invocation_source_constructor_clear_well_formed_v84(source, {}, {}, {}, {});", entry.locals.start, entry.locals.end, entry.owner, entry.pc)));
                                 for (argument, local) in entry.arguments.iter().enumerate() {
                                     assert!(map.contains(&format!("invocation_source_put_local_well_formed_v78(entered, {local}, argument_{argument});")));
@@ -138,6 +143,7 @@ fn original_mir_step_nonempty_blocks_and_moved_captures_keep_complete_fallback_o
                                 assert_eq!(fallback.matches("reveal_with_fuel(invocation_source_micro_run_").count(), 1);
                                 assert!(fallback.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
                                 assert!(!fallback.contains("constructor_clear_well_formed"));
+                                assert!(!fallback.contains("hide(invocation_paired_control_values_"));
                                 let premises = fallback.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
                                 assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
                             }
