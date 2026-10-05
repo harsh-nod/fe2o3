@@ -206,7 +206,11 @@ pub(super) fn emit(
     residual_context(root, out)?;
     emit!(out, " assert(target.pc == {});\n", summary.start);
     unfold(root, follow_fuel, hints, hint, true, out)?;
-    out.budget.charge_work(5)?;
+    out.budget.charge_work(6)?;
+    emit!(
+        out,
+        " assert(invocation_source_block_runtime_{root}_v36(source).source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n"
+    );
     emit!(
         out,
         " assert(invocation_source_block_runtime_{root}_v36(source).source == invocation_constructor_source_{root}_{pc}_v162(source)\n && invocation_source_block_runtime_{root}_v36(source).returned.is_none()\n && invocation_source_block_runtime_{root}_v36(source).operands.len() == {}\n",
