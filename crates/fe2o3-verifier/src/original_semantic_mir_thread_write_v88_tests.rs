@@ -1036,7 +1036,12 @@ fn descriptor_cut_summary_laws_keep_values_frames_and_conditional_validity() {
 fn thread_write_normalization_uses_authentic_literals_without_new_step_premises() {
     let laws = include_str!("original_semantic_mir_thread_write_normal_laws_v94.vrs");
     assert_eq!(laws.matches("proof fn ").count(), 4);
-    assert_eq!(laws.matches("#[verifier::spinoff_prover]").count(), 1);
+    assert_eq!(laws.matches("#[verifier::spinoff_prover]").count(), 2);
+    for part in ["frame", "valid"] {
+        assert!(laws.contains(&format!(
+            "#[verifier::spinoff_prover]\nproof fn invocation_thread_write_local_normal_{part}_v93("
+        )));
+    }
     for required in [
         "local != write.input, local != write.index",
         "ordinary_memory_width_v30(write.recipe.width)",
