@@ -78,6 +78,22 @@ proof fn invocation_source_scalar_local_preserves_heap_v78(
     invocation_source_local_evaluate_preserves_heap_v78(source, local, moved, bits, root, instance, little_endian);
 }
 
+// fe2o3_optional_support_v97: invocation_source_scalar_copy_valid_identity_v164
+#[verifier::spinoff_prover]
+proof fn invocation_source_scalar_copy_valid_identity_v164(
+    source: InvocationSourceByteStateV36, local: int,
+    bits: int, root: int, instance: int, little_endian: bool,
+)
+    ensures
+        invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved: false }, bits }, root, instance, little_endian).source.machine.valid ==>
+            invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved: false }, bits }, root, instance, little_endian).source == source,
+        invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved: false }, bits }, root, instance, little_endian).source.machine.valid ==>
+            invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved: false }, bits }, root, instance, little_endian).value == InvocationSourceValueV42::Carrier(source.machine.values[local]),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_byte_value_typed_v36);
+}
+
 // fe2o3_optional_support_v97: invocation_source_plain_return_install_preserves_heap_v78
 #[verifier::spinoff_prover]
 proof fn invocation_source_plain_return_install_preserves_heap_v78(

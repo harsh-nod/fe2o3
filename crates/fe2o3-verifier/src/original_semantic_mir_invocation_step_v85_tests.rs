@@ -64,6 +64,12 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                     // Copied proof coordinates do not prevent the original owner from emitting.
                     program.emit(out)?;
                     paired.emit(out)?;
+                    let copy_law = theorem(&out.text, "invocation_source_scalar_copy_valid_identity_v164");
+                    assert_eq!(out.text.matches("proof fn invocation_source_scalar_copy_valid_identity_v164(").count(), 1);
+                    assert!(!copy_law.contains(" requires "));
+                    assert_eq!(copy_law.matches(".source.machine.valid ==>").count(), 2);
+                    assert!(copy_law.contains(".source == source,"));
+                    assert!(copy_law.contains(".value == InvocationSourceValueV42::Carrier(source.machine.values[local]),"));
                     assert!(!out.text.contains("proof fn invocation_source_cut_summary_"));
                     assert_eq!(out.text.matches("proof fn invocation_related_target_inputs_v96").count(), 1);
                     for (root, row) in paired.roots.iter().enumerate() {
@@ -133,6 +139,14 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert_leading_opacity_headers(state);
                                     assert!(state.contains(&format!("hide(invocation_source_block_runtime_{root}_v36);")));
                                     assert!(state.contains(&format!("hide(invocation_byte_boundary_{root}_v36);")));
+                                    assert!(state.contains("hide(invocation_source_value_evaluate_v42);"));
+                                    let call = hint.call.as_ref().unwrap();
+                                    assert_eq!(state.matches(" invocation_source_scalar_copy_valid_identity_v164(").count(), call.arguments.len());
+                                    for (ordinal, (local, moved, bits)) in call.arguments.iter().enumerate() {
+                                        assert!(!moved);
+                                        assert!(state.contains(&format!(" invocation_source_scalar_copy_valid_identity_v164(copied_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance)));
+                                        assert!(state.contains(&format!(" let copied_{} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36()).source;", ordinal + 1, hint.instance)));
+                                    }
                                     assert_eq!(state.matches(&format!("reveal(invocation_source_block_runtime_{root}_v36);")).count(), 1);
                                     assert_eq!(state.matches(&format!("reveal(invocation_byte_boundary_{root}_v36);")).count(), 1);
                                     let valid = format!("assert(invocation_source_block_runtime_{root}_v36(source).source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}");
