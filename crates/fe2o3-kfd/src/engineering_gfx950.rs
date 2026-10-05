@@ -145,6 +145,7 @@ struct Context {
     active_poll_counters: ActivePollCounters,
     token_program_enabled: bool,
     token_program_native: bool,
+    token_program_boundary_fences: bool,
     token_program_storage: ordered_batch::native_program::ProgramStorage,
     token_program_counters: TokenProgramCountersV1,
     next_token_program: u64,
@@ -358,6 +359,7 @@ impl Context {
             active_poll_counters: ActivePollCounters::default(),
             token_program_enabled: false,
             token_program_native: false,
+            token_program_boundary_fences: false,
             token_program_storage: Default::default(),
             token_program_counters: Default::default(),
             next_token_program: 1,
@@ -1399,7 +1401,13 @@ fn patch_pointer_arguments(
 pub unsafe fn run_gfx950_engineering_worker_unchecked_v1(unique_id: u64) -> Result<()> {
     // SAFETY: retain the same dedicated-process and trusted-code obligations.
     unsafe {
-        run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::Sleep50usV1, false, false)
+        run_worker_with_wait_policy(
+            unique_id,
+            Ordered64WaitPolicy::Sleep50usV1,
+            false,
+            false,
+            false,
+        )
     }
 }
 
@@ -1427,6 +1435,7 @@ pub unsafe fn run_gfx950_engineering_worker_active_poll_10ms_unchecked_v1(
             Ordered64WaitPolicy::ActivePoll10msV1,
             false,
             false,
+            false,
         )
     }
 }
@@ -1446,7 +1455,15 @@ pub unsafe fn run_gfx950_engineering_worker_token_program_unchecked_v1(
     unique_id: u64,
 ) -> Result<()> {
     // SAFETY: the caller accepts the same terminal expert execution boundary.
-    unsafe { run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::Sleep50usV1, true, false) }
+    unsafe {
+        run_worker_with_wait_policy(
+            unique_id,
+            Ordered64WaitPolicy::Sleep50usV1,
+            true,
+            false,
+            false,
+        )
+    }
 }
 
 /// Runs the default-off, single-publication native token-program experiment.
@@ -1463,7 +1480,45 @@ pub unsafe fn run_gfx950_engineering_worker_token_program_native_unchecked_v1(
     unique_id: u64,
 ) -> Result<()> {
     // SAFETY: this additive entry retains the same expert execution boundary.
-    unsafe { run_worker_with_wait_policy(unique_id, Ordered64WaitPolicy::Sleep50usV1, true, true) }
+    unsafe {
+        run_worker_with_wait_policy(
+            unique_id,
+            Ordered64WaitPolicy::Sleep50usV1,
+            true,
+            true,
+            false,
+        )
+    }
+}
+
+/// Runs an explicit closed-program experiment with system boundary fences.
+/// Ordinary commands and all previous worker modes keep system-scoped fences.
+///
+/// # Safety
+/// All obligations of [`run_gfx950_engineering_worker_unchecked_v1`] apply.
+/// Additionally, every token-program kernel must communicate only through
+/// this private single-agent owner's buffers: no host, peer, other queue or
+/// external observer may access program data during execution. All host inputs
+/// must precede publication. Intermediate completion signals do not authorize
+/// data access or reuse; final system completion and all-signal retirement do.
+/// Metadata checks do not prove these trusted-code obligations.
+///
+/// ```compile_fail
+/// fe2o3_kfd::run_gfx950_engineering_worker_token_program_boundary_fences_unchecked_v1(1).unwrap();
+/// ```
+pub unsafe fn run_gfx950_engineering_worker_token_program_boundary_fences_unchecked_v1(
+    unique_id: u64,
+) -> Result<()> {
+    // SAFETY: the caller accepts the additional closed single-agent contract.
+    unsafe {
+        run_worker_with_wait_policy(
+            unique_id,
+            Ordered64WaitPolicy::Sleep50usV1,
+            true,
+            true,
+            true,
+        )
+    }
 }
 
 unsafe fn run_worker_with_wait_policy(
@@ -1471,6 +1526,7 @@ unsafe fn run_worker_with_wait_policy(
     wait_policy: Ordered64WaitPolicy,
     token_program_enabled: bool,
     token_program_native: bool,
+    token_program_boundary_fences: bool,
 ) -> Result<()> {
     let kfd = OpenedKfd::open_default()
         .map_err(explain)?
@@ -1484,6 +1540,7 @@ unsafe fn run_worker_with_wait_policy(
     context.ordered64_wait_policy = wait_policy;
     context.token_program_enabled = token_program_enabled;
     context.token_program_native = token_program_native;
+    context.token_program_boundary_fences = token_program_boundary_fences;
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let mut fatal_response_written = false;

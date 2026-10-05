@@ -358,3 +358,308 @@ fn program_responses_round_trip_and_do_not_define_partial_success() {
         );
     }
 }
+
+fn assert_counted_encoding_equivalent(
+    value: &TokenProgramDefinitionV1,
+    kernargs: &[u8],
+    expected: Option<&str>,
+) {
+    let before = (value.clone(), kernargs.to_vec());
+    let owned = encode_token_program_v1(value, kernargs)
+        .err()
+        .map(|error| (error.kind(), error.to_string()));
+    let counted = validate_token_program_encoding_v1(value, kernargs)
+        .err()
+        .map(|error| (error.kind(), error.to_string()));
+    assert_eq!(counted, owned);
+    assert_eq!(
+        counted,
+        expected.map(|message| (io::ErrorKind::InvalidData, message.to_string()))
+    );
+    assert_eq!(value, &before.0);
+    assert_eq!(kernargs, before.1);
+}
+
+#[test]
+fn counted_encoding_preserves_valid_empty_maximum_and_numeric_templates() {
+    assert_counted_encoding_equivalent(&definition(), &[0; 16], None);
+    let mut value = definition();
+    value.slots.clear();
+    value.dispatches[0].payload_bytes = 0;
+    value.dispatches[0].pointers.clear();
+    assert_counted_encoding_equivalent(&value, &[], None);
+    value.dispatches = vec![value.dispatches[0].clone(); MAX_TOKEN_PROGRAM_DISPATCHES_V1];
+    assert_counted_encoding_equivalent(&value, &[], None);
+
+    let mut value = definition();
+    value.slots.clear();
+    value.dispatches[0].payload_bytes = MAX_KERNARG_BYTES_V1;
+    value.dispatches[0].kernel = u64::MAX;
+    value.dispatches[0].workgroup = [u16::MAX, 0, 1];
+    value.dispatches[0].grid = [0, u32::MAX, 1];
+    value.dispatches[0].pointers[0].buffer_offset = u64::MAX;
+    value.dispatches[0].pointers[0].extent_bytes = u64::MAX;
+    value.dispatches[0].pointers =
+        vec![value.dispatches[0].pointers[0].clone(); MAX_POINTER_FIXUPS_V1];
+    assert_counted_encoding_equivalent(&value, &vec![0xa5; MAX_KERNARG_BYTES_V1 as usize], None);
+
+    let mut value = definition();
+    value.dispatches[0].payload_bytes = (MAX_TOKEN_PROGRAM_SLOTS_V1 * 4) as u32;
+    value.slots = (0..MAX_TOKEN_PROGRAM_SLOTS_V1)
+        .map(|index| TokenProgramSlotV1::ScalarU32 {
+            dispatch: 0,
+            offset: (index * 4) as u32,
+            minimum: 0,
+            maximum: u32::MAX,
+        })
+        .collect();
+    assert_counted_encoding_equivalent(&value, &vec![0; MAX_TOKEN_PROGRAM_SLOTS_V1 * 4], None);
+}
+
+#[test]
+fn counted_encoding_preserves_structural_rejection_order_and_messages() {
+    let mut value = definition();
+    value.dispatches.clear();
+    assert_counted_encoding_equivalent(&value, &[], Some("token program count limits"));
+    let mut value = definition();
+    value.dispatches = vec![value.dispatches[0].clone(); MAX_TOKEN_PROGRAM_DISPATCHES_V1 + 1];
+    assert_counted_encoding_equivalent(&value, &[], Some("token program count limits"));
+    let mut value = definition();
+    value.slots = vec![value.slots[0].clone(); MAX_TOKEN_PROGRAM_SLOTS_V1 + 1];
+    assert_counted_encoding_equivalent(&value, &[0; 16], Some("token program count limits"));
+    assert_counted_encoding_equivalent(
+        &definition(),
+        &vec![0; MAX_TRANSFER_BYTES_V1 as usize + 1],
+        Some("token program count limits"),
+    );
+    let mut value = definition();
+    value.dispatches[0].payload_bytes = MAX_KERNARG_BYTES_V1 + 1;
+    assert_counted_encoding_equivalent(&value, &[], Some("token program dispatch limits"));
+    let mut value = definition();
+    value.dispatches[0].pointers =
+        vec![value.dispatches[0].pointers[0].clone(); MAX_POINTER_FIXUPS_V1 + 1];
+    assert_counted_encoding_equivalent(&value, &[], Some("token program dispatch limits"));
+    let mut value = definition();
+    value.dispatches[0].payload_bytes = MAX_KERNARG_BYTES_V1;
+    value.dispatches = vec![value.dispatches[0].clone(); 65];
+    assert_counted_encoding_equivalent(&value, &[], Some("token program payload overflow"));
+    for size in [15, 17] {
+        assert_counted_encoding_equivalent(
+            &definition(),
+            &vec![0; size],
+            Some("token program kernarg length"),
+        );
+    }
+    for (slot, message) in [
+        (
+            TokenProgramSlotV1::ScalarU32 {
+                dispatch: u16::MAX,
+                offset: 0,
+                minimum: 0,
+                maximum: 1,
+            },
+            "token program dispatch index",
+        ),
+        (
+            TokenProgramSlotV1::ScalarU32 {
+                dispatch: 0,
+                offset: u32::MAX,
+                minimum: 0,
+                maximum: 1,
+            },
+            "token program scalar extent",
+        ),
+        (
+            TokenProgramSlotV1::ScalarU32 {
+                dispatch: 0,
+                offset: 13,
+                minimum: 0,
+                maximum: 1,
+            },
+            "token program scalar extent",
+        ),
+        (
+            TokenProgramSlotV1::ScalarU32 {
+                dispatch: 0,
+                offset: 0,
+                minimum: 2,
+                maximum: 1,
+            },
+            "token program scalar slot",
+        ),
+        (
+            TokenProgramSlotV1::Pointer {
+                dispatch: u16::MAX,
+                pointer: 0,
+                buffers: vec![1],
+                maximum_offset: 0,
+            },
+            "token program dispatch index",
+        ),
+        (
+            TokenProgramSlotV1::Pointer {
+                dispatch: 0,
+                pointer: 1,
+                buffers: vec![1],
+                maximum_offset: 0,
+            },
+            "token program pointer slot",
+        ),
+    ] {
+        let mut value = definition();
+        value.slots = vec![slot];
+        assert_counted_encoding_equivalent(&value, &[0; 16], Some(message));
+    }
+    for buffers in [vec![], vec![0], vec![1, 1], (1..=9).collect()] {
+        let mut value = definition();
+        value.slots = vec![TokenProgramSlotV1::Pointer {
+            dispatch: 0,
+            pointer: 0,
+            buffers,
+            maximum_offset: 0,
+        }];
+        assert_counted_encoding_equivalent(&value, &[0; 16], Some("token program pointer slot"));
+    }
+    for (index, message) in [
+        (0, "token program scalar slot"),
+        (1, "token program pointer slot"),
+    ] {
+        let mut value = definition();
+        value.slots.push(value.slots[index].clone());
+        assert_counted_encoding_equivalent(&value, &[0; 16], Some(message));
+    }
+    let mut value = definition();
+    value.slots.push(TokenProgramSlotV1::ScalarU32 {
+        dispatch: 0,
+        offset: 2,
+        minimum: 0,
+        maximum: 1,
+    });
+    assert_counted_encoding_equivalent(&value, &[0; 16], Some("token program scalar slot"));
+}
+
+fn definition_at_json_length(target: usize) -> TokenProgramDefinitionV1 {
+    let mut value = definition();
+    value.slots.clear();
+    value.dispatches[0].payload_bytes = 0;
+    value.dispatches[0].pointers.clear();
+    let empty = value.dispatches[0].clone();
+    let pointer = PointerFixupV1 {
+        kernarg_offset: 0,
+        buffer: 1,
+        buffer_offset: 1,
+        extent_bytes: 1,
+        access: BufferAccessV1::Read,
+    };
+    let pointer_bytes = serde_json::to_vec(&pointer).unwrap().len();
+    let dispatch_bytes = serde_json::to_vec(&empty).unwrap().len();
+    let mut bytes = serde_json::to_vec(&value).unwrap().len();
+    loop {
+        let last = value.dispatches.last_mut().unwrap();
+        if last.pointers.len() == MAX_POINTER_FIXUPS_V1 {
+            if bytes + dispatch_bytes + 1 > target {
+                break;
+            }
+            value.dispatches.push(empty.clone());
+            bytes += dispatch_bytes + 1;
+        } else {
+            let extra = pointer_bytes + usize::from(!last.pointers.is_empty());
+            if bytes + extra > target {
+                break;
+            }
+            last.pointers.push(pointer.clone());
+            bytes += extra;
+        }
+    }
+    let mut remaining = target - bytes;
+    for dispatch in &mut value.dispatches {
+        for pointer in &mut dispatch.pointers {
+            for field in [
+                &mut pointer.buffer,
+                &mut pointer.buffer_offset,
+                &mut pointer.extent_bytes,
+            ] {
+                let digits = remaining.min(19);
+                *field = 10u64.pow(digits as u32);
+                remaining -= digits;
+            }
+        }
+    }
+    assert_eq!(remaining, 0);
+    assert!(value.dispatches.len() <= MAX_TOKEN_PROGRAM_DISPATCHES_V1);
+    assert_eq!(serde_json::to_vec(&value).unwrap().len(), target);
+    value
+}
+
+#[test]
+fn counted_encoding_preserves_exact_serialized_definition_limit() {
+    let limit = MAX_TOKEN_PROGRAM_DEFINITION_BYTES_V1 as usize;
+    for bytes in [limit - 1, limit, limit + 1] {
+        let value = definition_at_json_length(bytes);
+        assert_counted_encoding_equivalent(
+            &value,
+            &[],
+            (bytes > limit).then_some("token program definition limit"),
+        );
+        let mut count = JsonByteCount::default();
+        serde_json::to_writer(&mut count, &value).unwrap();
+        assert_eq!(count.bytes, bytes);
+    }
+}
+
+#[test]
+fn counted_encoding_preserves_exact_combined_transfer_limit() {
+    let mut value = definition();
+    value.slots.clear();
+    value.dispatches[0].pointers.clear();
+    value.dispatches[0].payload_bytes = MAX_KERNARG_BYTES_V1;
+    value.dispatches = vec![value.dispatches[0].clone(); 64];
+    let definition_bytes = serde_json::to_vec(&value).unwrap().len();
+    for total in [
+        MAX_TRANSFER_BYTES_V1 - 1,
+        MAX_TRANSFER_BYTES_V1,
+        MAX_TRANSFER_BYTES_V1 + 1,
+    ] {
+        let payload_bytes = total as usize - definition_bytes;
+        value.dispatches.last_mut().unwrap().payload_bytes =
+            (payload_bytes - 63 * MAX_KERNARG_BYTES_V1 as usize) as u32;
+        assert_eq!(serde_json::to_vec(&value).unwrap().len(), definition_bytes);
+        assert_counted_encoding_equivalent(
+            &value,
+            &vec![0; payload_bytes],
+            (total > MAX_TRANSFER_BYTES_V1).then_some("token program transfer limit"),
+        );
+    }
+}
+
+#[test]
+fn counted_encoding_keeps_definition_limit_before_transfer_limit() {
+    let mut value = definition_at_json_length(MAX_TOKEN_PROGRAM_DEFINITION_BYTES_V1 as usize + 1);
+    let mut empty = value.dispatches[0].clone();
+    empty.pointers.clear();
+    value.dispatches.resize(64, empty);
+    for dispatch in &mut value.dispatches {
+        dispatch.payload_bytes = MAX_KERNARG_BYTES_V1;
+    }
+    assert!(
+        serde_json::to_vec(&value).unwrap().len() > MAX_TOKEN_PROGRAM_DEFINITION_BYTES_V1 as usize
+    );
+    assert_counted_encoding_equivalent(
+        &value,
+        &vec![0; MAX_TRANSFER_BYTES_V1 as usize],
+        Some("token program definition limit"),
+    );
+}
+
+#[test]
+fn counted_json_writer_counts_exact_bytes_and_propagates_overflow() {
+    let value = definition();
+    let expected = serde_json::to_vec(&value).unwrap();
+    let mut count = JsonByteCount::default();
+    serde_json::to_writer(&mut count, &value).unwrap();
+    assert_eq!(count.bytes, expected.len());
+    count.flush().unwrap();
+    let mut full = JsonByteCount { bytes: usize::MAX };
+    assert!(serde_json::to_writer(&mut full, &value).is_err());
+    assert_eq!(full.bytes, usize::MAX);
+}

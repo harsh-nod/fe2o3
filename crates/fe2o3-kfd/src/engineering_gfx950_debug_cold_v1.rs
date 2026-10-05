@@ -283,6 +283,7 @@ impl Context {
             active_poll_counters: super::ActivePollCounters::default(),
             token_program_enabled: false,
             token_program_native: false,
+            token_program_boundary_fences: false,
             token_program_storage: Default::default(),
             token_program_counters: Default::default(),
             next_token_program: 1,

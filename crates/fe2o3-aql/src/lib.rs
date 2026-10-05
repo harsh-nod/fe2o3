@@ -10,6 +10,11 @@
 extern crate alloc;
 
 use alloc::boxed::Box;
+mod closed_program_v1;
+pub use closed_program_v1::{
+    AqlClosedProgramHeaderV1, AqlClosedProgramPublicationTargetV1,
+    AqlPreparedClosedKernelDispatchProgramV1, AqlPreparedClosedProgramErrorV1,
+};
 use core::{
     mem::{align_of, offset_of, size_of},
     sync::atomic::{AtomicI64, Ordering},

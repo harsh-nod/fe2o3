@@ -1,7 +1,10 @@
 //! Default-off whole-program submission with independently retained arenas.
 
 use super::*;
-use fe2o3_aql::AqlPreparedKernelDispatchProgramV1;
+use fe2o3_aql::{
+    AqlClosedProgramHeaderV1, AqlClosedProgramPublicationTargetV1,
+    AqlPreparedClosedKernelDispatchProgramV1, AqlPreparedKernelDispatchProgramV1,
+};
 
 const PROGRAM_KERNARG: usize = 0;
 const PROGRAM_SIGNAL: usize = 1;
@@ -90,6 +93,20 @@ struct NativeProgram<'a> {
     prepared: Option<Vec<PreparedDispatch>>,
 }
 
+enum StagedProgram {
+    System(AqlPreparedKernelDispatchProgramV1),
+    Boundary(AqlPreparedClosedKernelDispatchProgramV1),
+}
+
+impl StagedProgram {
+    fn packet_count(&self) -> u32 {
+        match self {
+            Self::System(program) => program.packet_count(),
+            Self::Boundary(program) => program.packet_count(),
+        }
+    }
+}
+
 impl NativeProgram<'_> {
     fn retain_storage(&mut self, layout: &ProgramLayout) -> Result<()> {
         self.context.check_idle()?;
@@ -126,7 +143,7 @@ impl NativeProgram<'_> {
 
 impl OrderedBackend for NativeProgram<'_> {
     type Prepared = PreparedDispatch;
-    type Staged = AqlPreparedKernelDispatchProgramV1;
+    type Staged = StagedProgram;
     type Pending = OrderedPending;
 
     fn dispatch_fence(&mut self) -> Result<()> {
@@ -205,8 +222,15 @@ impl OrderedBackend for NativeProgram<'_> {
                 layout.initialized_bytes,
             )?;
         }
-        AqlPreparedKernelDispatchProgramV1::try_from_packets(packets.into_boxed_slice())
-            .map_err(explain)
+        if self.context.token_program_boundary_fences {
+            AqlPreparedClosedKernelDispatchProgramV1::try_from_packets(packets.into_boxed_slice())
+                .map(StagedProgram::Boundary)
+                .map_err(explain)
+        } else {
+            AqlPreparedKernelDispatchProgramV1::try_from_packets(packets.into_boxed_slice())
+                .map(StagedProgram::System)
+                .map_err(explain)
+        }
     }
 
     fn publish(&mut self, program: Self::Staged, deadline: Instant) -> Result<Self::Pending> {
@@ -235,7 +259,10 @@ impl OrderedBackend for NativeProgram<'_> {
             reservation: &reservation,
             deadline,
         };
-        expose_program(program, &mut target)?;
+        match program {
+            StagedProgram::System(program) => expose_program(program, &mut target)?,
+            StagedProgram::Boundary(program) => expose_closed_program(program, &mut target)?,
+        }
         record_elapsed(&mut self.context.counters.dispatch_publish_ns, started)?;
         if started.is_some() {
             add_counter(&mut self.context.token_program_counters.publications, 1)?;
@@ -362,6 +389,46 @@ pub(super) fn expose_program(
     program.publish_with(target)?;
     target.publication_checkpoint()?;
     target.ring_final_doorbell()
+}
+
+pub(super) fn expose_closed_program(
+    program: AqlPreparedClosedKernelDispatchProgramV1,
+    target: &mut (impl OrderedExposure + AqlClosedProgramPublicationTargetV1),
+) -> Result<()> {
+    target.advance_write(program.packet_count())?;
+    program.publish_with(target)?;
+    target.publication_checkpoint()?;
+    target.ring_final_doorbell()
+}
+
+impl AqlClosedProgramPublicationTargetV1 for OrderedPublication<'_> {
+    fn publish_closed_release_header(
+        &mut self,
+        index: u32,
+        header: AqlClosedProgramHeaderV1,
+    ) -> Result<()> {
+        if !self.context.token_program_enabled
+            || !self.context.token_program_native
+            || !self.context.token_program_boundary_fences
+            || self.context.ordered64_wait_policy != Ordered64WaitPolicy::Sleep50usV1
+            || !header.matches_position(index, self.reservation.packet_count())
+        {
+            return Err("closed-program publication mode or position".into());
+        }
+        let entry = self
+            .reservation
+            .entry(index)
+            .ok_or("closed-program publication slot")?;
+        Backend::publish_closed_program_aql_header(
+            &mut self.context.internal[RING].mapping,
+            RING_BYTES,
+            entry.slot_index(),
+            index,
+            self.reservation.packet_count(),
+            header,
+        )
+        .map_err(explain)
+    }
 }
 
 impl Context {

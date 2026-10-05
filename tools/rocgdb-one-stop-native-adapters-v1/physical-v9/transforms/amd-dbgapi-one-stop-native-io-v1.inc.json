@@ -1,0 +1,26 @@
+{
+  "schema": "fe2o3-disabled-physical-v9-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+  "before": {
+    "bytes": 11103,
+    "sha256": "4edd5dfe27ea29a964beb89899a9421feb8fa4d0a901201b003544df162433e2"
+  },
+  "after": {
+    "bytes": 11662,
+    "sha256": "f5e54f50a48f1728cd78fa8c964d067ed4dbf65a8230dee04d48115116de771d"
+  },
+  "changes": [
+    {
+      "beforeOffset": 581,
+      "afterOffset": 581,
+      "before": "  if (m_first_breakpoint_site!=breakpoint_site::none)",
+      "after": "  if (m_first_resume_site!=resume_site::none)\n    error (\"fixed owned one-stop native relation refused (%u); commit-site=%u; resume-site=%u\",\n           static_cast<unsigned> (m_owner.why ()),\n           static_cast<unsigned> (m_owner.first_commit_site ()),\n           static_cast<unsigned> (m_first_resume_site));\n  if (m_first_breakpoint_site!=breakpoint_site::none)"
+    },
+    {
+      "beforeOffset": 2430,
+      "afterOffset": 2745,
+      "before": "void native_adapter::debit (counter kind, std::uint64_t amount) {",
+      "after": "void native_adapter::resume_require (bool yes, resume_site site) {\n  if (!yes && m_owner.selected () && !m_owner.invalid ()\n      && m_first_resume_site==resume_site::none)\n    m_first_resume_site=site;\n  require (yes,failure::resume_scope);\n}\nvoid native_adapter::debit (counter kind, std::uint64_t amount) {"
+    }
+  ]
+}

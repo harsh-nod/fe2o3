@@ -172,6 +172,18 @@ fn original_mir_paired_trace_joins_every_observation_at_its_own_allocation_gener
                     assert_eq!(body.matches(&assertion).count(), 1);
                     assert_eq!(body.matches(&equality).count(), 1);
                     proved_empty += 1;
+                    let state = format!("proof fn invocation_constructor_states_{root}_{}_v162(", cut.source);
+                    if out.text.contains(&state) {
+                        assert_eq!(out.text.matches(&state).count(), 1);
+                        let theorem = out.text.split_once(&state).unwrap().1.split("proof fn ").next().unwrap();
+                        let (contract, body) = theorem.split_once("\n{\n").unwrap();
+                        assert!(!contract.contains(&equality));
+                        let premises = contract.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap().0;
+                        assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {},", cut.source));
+                        assert_eq!(body.matches(&assertion).count(), 1);
+                        assert_eq!(body.matches(&equality).count(), 1);
+                        proved_empty += 1;
+                    }
                 }
             }
             // Only these proved constructor facts may compare a source trace directly.

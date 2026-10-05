@@ -870,6 +870,59 @@ mod tests {
 
     const LIMIT: usize = 100_000_000;
 
+    #[test]
+    #[ignore = "diagnostic only: prints original general-fixture convergence refusal"]
+    fn diagnostic_original_mir_tile_general_arrival_v167() {
+        use fe2o3_kernel_analysis::{
+            CanonicalTileConvergenceErrorV160 as Convergence, check_canonical_tile_convergence_v160,
+        };
+        super::super::super::invocations::tests::run_allocation_variant(
+            LIMIT,
+            LIMIT,
+            |plan, out| {
+                let source = plan.source(out)?;
+                let result = source.with_checked_mixed_fixedpoint_optimization_v18(
+                    out.budget,
+                    |_, optimized, budget| {
+                        let cfg = optimized.output_root_cfg_v18(0, budget)?;
+                        let result = check_canonical_tile_convergence_v160(
+                            cfg.inventory(),
+                            cfg.function().coordinate,
+                            budget,
+                        );
+                        let site = match &result {
+                            Err(
+                                Convergence::UnsupportedArrival(site)
+                                | Convergence::VaryingArrival(site)
+                                | Convergence::VaryingTileInput(site)
+                                | Convergence::LaunchMismatch(site),
+                            ) => Some(*site),
+                            _ => None,
+                        };
+                        let operation = site.and_then(|site| {
+                            cfg.inventory()
+                                .operations()
+                                .iter()
+                                .find(|row| row.coordinate == site)
+                                .map(|row| &row.operation.kind)
+                        });
+                        println!("tile_arrival_diagnostic={result:?}; operation={operation:?}");
+                        Ok::<_, Error>(((), 0))
+                    },
+                );
+                match result {
+                    Ok((owner, (), _)) => {
+                        drop(owner);
+                        Ok(())
+                    }
+                    Err(error) => panic!("tile arrival diagnostic preparation: {error:?}"),
+                }
+            },
+        )
+        .0
+        .unwrap();
+    }
+
     pub(super) fn run_tile_slots(
         layout: fe2o3_kernel_ir::ExecutionTileLayoutV1,
         examine: impl FnOnce(&SourceSlots<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
@@ -921,6 +974,18 @@ mod tests {
                             fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(error),
                         ),
                     ) => Err(error),
+                    Err(
+                        fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Adoption(
+                            fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Resource(error),
+                        ),
+                    ) => Err(error.into()),
+                    Err(
+                        fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Observation(
+                            fe2o3_pliron::KirNeutralOptimizationErrorV18::Execution(
+                                fe2o3_pliron::PlironOptimizationErrorV12::Resources(error),
+                            ),
+                        ),
+                    ) => Err(error.into()),
                     Err(error) => panic!("tile slot fixture preparation failed: {error:?}"),
                 }
             },
@@ -1450,6 +1515,7 @@ mod tests {
     fn original_mir_allocation_index_headers_have_independent_field_envelope() {
         type Fields<'a, 's> = (
             &'a Correspondence<'s>,
+            Option<&'a TileExpansion<'a, 's>>,
             Vec<Operation>,
             Vec<Option<Frame>>,
             Vec<(SourceKey, usize)>,
@@ -1487,7 +1553,9 @@ mod tests {
                     fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
                     usize
                 )>()
-                + 4 * h::<&()>()
+                + 5 * h::<&()>()
+                + h::<Option<(fe2o3_kernel_ir::ExecutionTileLayoutV1, u16)>>()
+                + h::<fe2o3_lower_mir_kernel::ProductionSourceTileLeafV162>()
                 + 32 * size_of::<usize>()
                 + 24 * size_of::<&()>()
                 + 4 * size_of::<std::result::Result<usize, SourceError>>()

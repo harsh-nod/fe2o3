@@ -1,0 +1,14 @@
+{
+  "schema": "fe2o3-paired-completion-source-contract-v1",
+  "edges": 11,
+  "sequence_bytes": 2,
+  "source_changes": 4,
+  "host_first_profile_only": true,
+  "user_continue": 1,
+  "same_stop_requeries": 1,
+  "host_threads": 1,
+  "gpu_waves": 1,
+  "step": 0,
+  "signal": 0,
+  "native_qualified": false
+}

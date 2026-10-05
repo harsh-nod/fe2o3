@@ -13,6 +13,9 @@ macro_rules! emit {
 #[path = "original_semantic_mir_cut_summary_generate_v96.rs"]
 mod summaries;
 
+#[path = "original_semantic_mir_constructor_state_generate_v162.rs"]
+mod constructor_states;
+
 #[derive(Clone, Copy)]
 enum Goal {
     All,
@@ -79,6 +82,10 @@ pub(super) fn emit(
         let Some(cut) = cut else { continue };
         let hint = source_hint(row, hints, cut, out)?;
         let constructor = constructor(row, hints, cut, hint, out)?;
+        let constructor_state = match constructor {
+            Some((call, entry)) => constructor_states::derive(model, row, block, call, entry, out)?,
+            None => None,
+        };
         let summary = summaries::derive(model, row, hints, block, cut, hint, out)?;
         if (summary.is_some() || constructor.is_some()) && !*summary_shared {
             emit!(out, "{}", summaries::SHARED);
@@ -86,6 +93,20 @@ pub(super) fn emit(
         }
         if let Some(summary) = &summary {
             summaries::emit(model, root, row, cut, hint, summary, out)?;
+        }
+        if let (Some((call, entry)), Some(state)) = (constructor, constructor_state.as_ref()) {
+            constructor_states::emit(
+                model,
+                root,
+                cut,
+                hints,
+                hint,
+                call,
+                entry,
+                state,
+                follow_fuel,
+                out,
+            )?;
         }
         let partition = summary.is_none() && (constructor.is_some() || !hints.conserves_heap);
         if partition {
@@ -108,6 +129,9 @@ pub(super) fn emit(
                         }
                     }
                     _ => {
+                        if constructor_state.is_some() {
+                            constructor_states::opacity(root, out)?;
+                        }
                         out.budget.charge_work(1)?;
                         if matches!(goal, Goal::Heap) && hint.has_write_normalization() {
                             emit!(out, " hide(invocation_source_thread_write_v88);\n");
@@ -131,6 +155,12 @@ pub(super) fn emit(
                         if constructor.is_some() && matches!(goal, Goal::Observations) {
                             let child = constructor.ok_or_else(mismatch)?.0.child;
                             observations_context(root, child, add(row.blocks.start, block)?, out)?;
+                        }
+                        if constructor.is_some() && matches!(goal, Goal::Residual) {
+                            residual_context(root, out)?;
+                        }
+                        if constructor_state.is_some() {
+                            constructor_states::consume(root, cut.source, out)?;
                         }
                         unfold(
                             root,
@@ -273,6 +303,15 @@ fn observations_context(
     emit!(
         out,
         " hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_paired_observations_related_{root}_v39);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(byte_state_memory_well_formed_v30);\n hide(invocation_source_byte_map_{root}_v36);\n assert(invocation_source_byte_state_well_formed_v36(source)) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}\n assert(target.pc == {block}) by {{\n reveal(invocation_paired_related_{root}_v36);\n }}\n"
+    );
+    Ok(())
+}
+
+fn residual_context(root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+    out.budget.charge_work(10)?;
+    emit!(
+        out,
+        " hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_byte_states_related_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(byte_memory_well_formed_v30);\n hide(byte_frame_runtime_well_formed_v30);\n hide(byte_private_frames_live_v30);\n hide(private_generation_counters_valid_v30);\n assert(invocation_source_byte_state_well_formed_v36(source) && invocation_byte_states_related_v36(source.machine, target, invocation_source_byte_map_{root}_v36(source, target))) by {{\n reveal(invocation_source_byte_storage_related_{root}_v36);\n }}\n invocation_related_target_inputs_v96(source.machine, target, invocation_source_byte_map_{root}_v36(source, target));\n"
     );
     Ok(())
 }
@@ -621,6 +660,7 @@ pub(super) fn dispatch(root: usize, row: &Root, out: &mut Writer<'_, '_>) -> Res
 fn headers() -> usize {
     size_of::<Goal>()
         + size_of::<Option<summaries::Summary>>()
+        + size_of::<Option<constructor_states::Summary>>()
         + size_of::<Result<Option<summaries::Summary>>>()
         + size_of::<std::iter::Enumerate<std::slice::Iter<'static, Option<Cut>>>>()
         + 2 * size_of::<bool>()

@@ -1,7 +1,7 @@
 //! Conservative, bounded workgroup arrival analysis over an actual V18 owner.
 //!
-//! Control taint is deliberately never cleared at a join. In particular a
-//! divergent backedge taints all later loop visits, not merely its edge values.
+//! Acyclic control reconverges only at its exact postdominator. Cyclic control
+//! remains conservative: divergent backedges taint all later loop visits.
 //! This does not prove memory definedness, termination, or source refinement.
 
 use crate::{
@@ -16,6 +16,11 @@ use fe2o3_kernel_ir::{
     Terminator, WorkgroupSize,
 };
 use std::{fmt, mem::size_of};
+
+#[path = "canonical_tile_callee_summaries_v167.rs"]
+mod callees;
+#[path = "canonical_tile_reconvergence_v165.rs"]
+mod reconvergence;
 
 /// A refusal from an analysis of the exact borrowed canonical owner. Success is
 /// conditional on defined execution and does not grant source or launch authority.
@@ -98,6 +103,7 @@ impl Graph<'_, '_> {
     fn dependencies(
         &self,
         reachable: &[bool],
+        postdominance: Option<&reconvergence::Postdominance>,
         meter: &mut Meter<'_, '_, Error>,
         mut visit: impl FnMut(usize, usize) -> Result<()>,
     ) -> Result<()> {
@@ -151,10 +157,22 @@ impl Graph<'_, '_> {
             }
             for edge in block.edges.clone() {
                 meter.work(1)?;
-                let target = self.block(self.target(edge)?)?;
-                visit(control, target)?;
-                if let Some(selector) = selector {
-                    visit(selector, target)?;
+                let mut target = self.target(edge)?;
+                if let Some(postdominance) = postdominance {
+                    let stop = postdominance.parent(ordinal)?;
+                    while target != stop {
+                        meter.work(1)?;
+                        visit(control, self.block(target)?)?;
+                        if let Some(selector) = selector {
+                            visit(selector, self.block(target)?)?;
+                        }
+                        target = postdominance.parent(target)?;
+                    }
+                } else {
+                    visit(control, self.block(target)?)?;
+                    if let Some(selector) = selector {
+                        visit(selector, self.block(target)?)?;
+                    }
                 }
                 for binding in
                     &self.inventory.edge_arguments()[self.inventory.edges()[edge].bindings.clone()]
@@ -164,6 +182,12 @@ impl Graph<'_, '_> {
                         self.definition(binding.incoming_definition)?,
                         self.definition(binding.target_definition)?,
                     )?;
+                    // Reconverged arrival does not make an edge-selected value
+                    // uniform. Preserve both incoming-path and edge selection.
+                    visit(control, self.definition(binding.target_definition)?)?;
+                    if let Some(selector) = selector {
+                        visit(selector, self.definition(binding.target_definition)?)?;
+                    }
                 }
             }
         }
@@ -224,6 +248,18 @@ fn varying_seed(kind: &Kind, site: Site) -> Result<bool> {
             | Execution::FragmentIntoPartsU32 { .. }
             | Execution::ScopeEnd { .. },
         ) => true,
+        Kind::Storage(operation) => {
+            // Every closed storage step is finite and noncollective on defined
+            // executions. Read results remain varying, even at uniform addresses.
+            let mut reads = false;
+            operation
+                .try_visit_memory_accesses(|_, _, kind| {
+                    reads |= kind == fe2o3_kernel_ir::StorageMemoryAccessKindV1::Read;
+                    Ok::<_, std::convert::Infallible>(())
+                })
+                .unwrap_or_else(|never| match never {});
+            reads
+        }
         // A missing result is not evidence that an opaque operation returns on
         // every lane. Calls, assembly, and physical collectives refuse here.
         _ => return Err(Error::UnsupportedArrival(site)),
@@ -256,12 +292,18 @@ fn analyze(graph: &Graph<'_, '_>, meter: &mut Meter<'_, '_, Error>) -> Result<()
     }
 
     scratch.degrees = filled(meter, graph.nodes, 0_usize)?;
-    graph.dependencies(&scratch.reachable, meter, |from, _| {
-        scratch.degrees[from] = scratch.degrees[from]
-            .checked_add(1)
-            .ok_or(Resource::Arithmetic)?;
-        Ok(())
-    })?;
+    let postdominance = reconvergence::derive(graph, &scratch.reachable, meter)?;
+    graph.dependencies(
+        &scratch.reachable,
+        postdominance.as_ref(),
+        meter,
+        |from, _| {
+            scratch.degrees[from] = scratch.degrees[from]
+                .checked_add(1)
+                .ok_or(Resource::Arithmetic)?;
+            Ok(())
+        },
+    )?;
     scratch.starts = meter
         .table(graph.nodes.checked_add(1).ok_or(Resource::Arithmetic)?)?
         .0;
@@ -276,25 +318,37 @@ fn analyze(graph: &Graph<'_, '_>, meter: &mut Meter<'_, '_, Error>) -> Result<()
         meter.work(1)?;
         *degree = 0;
     }
-    graph.dependencies(&scratch.reachable, meter, |from, to| {
-        let index = scratch.starts[from]
-            .checked_add(scratch.degrees[from])
-            .ok_or(Resource::Arithmetic)?;
-        if index >= scratch.starts[from + 1] {
-            return Err(Error::Inventory);
-        }
-        scratch.edges[index] = to;
-        scratch.degrees[from] += 1;
-        Ok(())
-    })?;
+    graph.dependencies(
+        &scratch.reachable,
+        postdominance.as_ref(),
+        meter,
+        |from, to| {
+            let index = scratch.starts[from]
+                .checked_add(scratch.degrees[from])
+                .ok_or(Resource::Arithmetic)?;
+            if index >= scratch.starts[from + 1] {
+                return Err(Error::Inventory);
+            }
+            scratch.edges[index] = to;
+            scratch.degrees[from] += 1;
+            Ok(())
+        },
+    )?;
     scratch.varying = filled(meter, graph.nodes, false)?;
     scratch.queue = meter.table(graph.nodes)?.0;
+    let callees = callees::Summaries::derive(graph.inventory, meter)?;
     for index in graph.function.operations.clone() {
         meter.work(1)?;
         let operation = &graph.inventory.operations()[index];
-        if scratch.reachable[operation.coordinate.block.block as usize]
-            && varying_seed(&operation.operation.kind, operation.coordinate)?
-        {
+        if !scratch.reachable[operation.coordinate.block.block as usize] {
+            continue;
+        }
+        let varying = if matches!(operation.operation.kind, Kind::Call { .. }) {
+            callees.varying(index, operation.coordinate, meter)?
+        } else {
+            varying_seed(&operation.operation.kind, operation.coordinate)?
+        };
+        if varying {
             let node = graph.operation(index)?;
             scratch.varying[node] = true;
             meter.push(&mut scratch.queue, node)?;
@@ -350,11 +404,20 @@ fn analyze(graph: &Graph<'_, '_>, meter: &mut Meter<'_, '_, Error>) -> Result<()
 
 /// Checks uniform tile descriptors, bases, and workgroup arrival in the actual
 /// borrowed graph. ABI uniformity is assumed only for a declared kernel entry.
-/// Reachable opaque operations refuse. Divergent reconvergence is conservative:
-/// control taint survives joins and backedges. Scratch and work are fully charged
-/// to the continuing ledger, and no result storage or authority is retained.
+/// Reachable opaque operations refuse. Defined helper calls require an acyclic
+/// reachable body and transitive, noncollective finite summaries; their arguments
+/// and any inherently varying helper operation still taint returned values.
+/// Acyclic arrival reconverges only at exact postdominators; edge-selected values
+/// remain tainted. Cyclic root control retains divergence through joins and
+/// backedges. Scratch and work are fully charged to the continuing ledger, and
+/// no result storage or authority is retained.
 ///
-/// Complexity is linear in definitions, blocks, operations, uses, and CFG edges.
+/// Acyclic postdominance costs O((blocks + CFG edges) log blocks); propagation is
+/// linear in definitions, operations, uses, edges, and derived control dependencies.
+/// Enumerating control dependencies can require O(CFG edges * blocks) in the
+/// worst case. Each postdominator-chain visit is charged to the work budget.
+/// Defined-callee summaries add a linear pass over the module's functions,
+/// blocks, CFG edges, operations and call occurrences; recursive SCCs refuse.
 /// Memory validity, undefined arithmetic, and original-source semantics remain
 /// independent obligations; this analysis is conditional on defined execution.
 pub fn check_canonical_tile_convergence_v160(

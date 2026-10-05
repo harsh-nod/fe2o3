@@ -18,6 +18,41 @@ fn legacy_worker_arguments_keep_the_default_wait_policy() {
 }
 
 #[test]
+fn boundary_fences_require_exact_separate_noncomposable_explicit_mode() {
+    let base = [
+        "--device-unique-id",
+        "7",
+        "--allow-unauthenticated-machine-code",
+        "--diagnostic-token-program-boundary-fences-v1",
+    ];
+    assert_eq!(
+        parse_args(&args(&base)),
+        Some((7, WorkerMode::BoundaryFenceTokenProgram))
+    );
+    for flag in [
+        "--diagnostic-active-poll-10ms",
+        "--diagnostic-token-program-v1",
+        "--diagnostic-token-program-native-v1",
+        "--diagnostic-token-program-boundary-fences-v1",
+    ] {
+        let mut values = args(&base);
+        values.push(flag.into());
+        assert!(parse_args(&values).is_none());
+    }
+    for tail in [
+        "--boundary-fences",
+        "--diagnostic-token-program-boundary-fences-v1=1",
+        "--diagnostic-token-program-boundary-fences-v2",
+    ] {
+        let mut values = args(&base);
+        values[3] = tail.into();
+        assert!(parse_args(&values).is_none());
+    }
+    assert!(parse_args(&args(&[base[0], base[1], base[3]])).is_none());
+    assert!(parse_args(&args(&[base[0], base[1], base[3], base[2]])).is_none());
+}
+
+#[test]
 fn active_polling_requires_the_exact_explicit_fourth_argument() {
     assert_eq!(
         parse_args(&args(&[

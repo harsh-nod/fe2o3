@@ -128,6 +128,7 @@ pub(crate) enum ProductionPipelineError {
     PrivateBf16CanonicalInput(fe2o3_kernel_ir::CanonicalKernelIrReplayAdmissionErrorV12),
     PrivateBf16Optimization(fe2o3_kernel_opt::KernelIrCheckedOptimizationErrorV1),
     PrivateBf16OptimizationReplay(fe2o3_kernel_opt::KernelIrCheckedOptimizationReceiptErrorV1),
+    PrivateBf16NativeLlvm(dialect_amdgcn::PrivateBf16NativeLlvmErrorV1),
     CheckedOutputStage(checked_output_policy4_v1::CheckedOutputStageErrorV1),
     CheckedOutputPolicy5Stage(checked_output_policy5_v1::CheckedOutputPolicy5StageErrorV1),
     CheckedOutputPolicy6Stage(checked_output_policy6_v1::CheckedOutputPolicy6StageErrorV1),
@@ -320,6 +321,7 @@ impl fmt::Display for ProductionPipelineError {
             Self::PrivateBf16CanonicalInput(error) => write!(formatter, "private BF16 V12 input admission failed: {error}"),
             Self::PrivateBf16Optimization(error) => write!(formatter, "private BF16 checked V12 optimization failed: {error}"),
             Self::PrivateBf16OptimizationReplay(error) => write!(formatter, "private BF16 checked V12 replay failed: {error}"),
+            Self::PrivateBf16NativeLlvm(error) => write!(formatter, "private BF16 native LLVM failed: {error}"),
             Self::TargetKernelIrV8(error) => write!(
                 formatter,
                 "production compilation target-bound Kernel IR V8 identity failed: {error}"
@@ -420,6 +422,7 @@ impl std::error::Error for ProductionPipelineError {
             Self::PrivateBf16CanonicalInput(error) => Some(error),
             Self::PrivateBf16Optimization(error) => Some(error),
             Self::PrivateBf16OptimizationReplay(error) => Some(error),
+            Self::PrivateBf16NativeLlvm(error) => Some(error),
             Self::CheckedOutputStage(error) => Some(error),
             Self::CheckedOutputPolicy5Stage(error) => Some(error),
             Self::CheckedOutputPolicy6Stage(error) => Some(error),
@@ -5153,5 +5156,90 @@ impl PrivateBf16OptimizedCompilationV1 {
             &self.bindings.typed_descriptor_roots,
             self.bindings.rustc_target.profile(),
         )
+    }
+}
+
+/// Inert private LLVM text retains the actual O/B/source/formal/target owner and
+/// authenticated bindings. It is not a legacy TargetLowered/Connected stage and
+/// cannot publish a descriptor, Worker request, object, or launch.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16LlvmCompilationV1 {
+    llvm: crate::production_ranked_projection_v1::PrivateBf16LlvmV1,
+    bindings: AuthenticatedProductionBindings,
+}
+impl PrivateBf16OptimizedCompilationV1 {
+    #[allow(dead_code)]
+    fn lower_private_bf16_llvm_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<PrivateBf16LlvmCompilationV1, ProductionPipelineError> {
+        let Self {
+            optimized,
+            bindings,
+        } = self;
+        let llvm = optimized.lower_private_bf16_llvm_v1(
+            requested_return,
+            &bindings.typed_descriptor_roots,
+            bindings.rustc_target.profile(),
+        )?;
+        Ok(PrivateBf16LlvmCompilationV1 { llvm, bindings })
+    }
+}
+impl PrivateBf16LlvmCompilationV1 {
+    #[allow(dead_code)]
+    fn revalidate_private_bf16_llvm_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), ProductionPipelineError> {
+        self.llvm.revalidate_private_bf16_llvm_v1(
+            requested_return,
+            &self.bindings.typed_descriptor_roots,
+            self.bindings.rustc_target.profile(),
+        )
+    }
+}
+
+/// Private descriptor bytes and exact descriptor-bound LLVM, retaining the
+/// actual LLVM/O/source/formal owner and authenticated compiler bindings.
+/// No conversion to TargetLowered, OutputOwnerV1, signed source or Worker stage.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16DescriptorCompilationV1 {
+    descriptor: crate::production_ranked_projection_v1::PrivateBf16DescriptorV1,
+    bindings: AuthenticatedProductionBindings,
+}
+impl PrivateBf16LlvmCompilationV1 {
+    #[allow(dead_code)]
+    fn prepare_private_bf16_descriptor_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<PrivateBf16DescriptorCompilationV1, ProductionPipelineError> {
+        let Self { llvm, bindings } = self;
+        let descriptor = llvm.prepare_private_bf16_descriptor_v1(
+            requested_return,
+            &bindings.typed_descriptor_roots,
+            bindings.rustc_target.profile(),
+        )?;
+        Ok(PrivateBf16DescriptorCompilationV1 {
+            descriptor,
+            bindings,
+        })
+    }
+}
+impl PrivateBf16DescriptorCompilationV1 {
+    #[allow(dead_code)]
+    fn revalidate_private_bf16_descriptor_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), ProductionPipelineError> {
+        self.descriptor.revalidate_private_bf16_descriptor_v1(
+            requested_return,
+            &self.bindings.typed_descriptor_roots,
+            self.bindings.rustc_target.profile(),
+        )
+    }
+
+    #[allow(dead_code)]
+    const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
     }
 }

@@ -140,6 +140,7 @@ impl<'a, 'source> ProductionSourceSsaEndpointV36<'a, 'source> {
                     loan,
                 })),
                 SourceSsaPhysicalV36::Value { loan: None, .. }
+                | SourceSsaPhysicalV36::ExecutionBorrow(_)
                 | SourceSsaPhysicalV36::Witness(_)
                 | SourceSsaPhysicalV36::Unit => Ok(None),
                 SourceSsaPhysicalV36::Aggregate { .. }

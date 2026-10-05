@@ -84,6 +84,25 @@ spec fn invocation_source_statement_observations_v39(
             else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
                 observation.before, observation.after) }
         },
+        Some(InvocationSourceByteEventV36::ContextIssue(issue)) => {
+            let result = invocation_source_context_issue_v161(observation.before, issue);
+            if result.source == observation.after { result.observations }
+            else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                observation.before, observation.after) }
+        },
+        Some(InvocationSourceByteEventV36::TileLoad(load)) => {
+            let result = invocation_source_tile_load_v161(observation.before, load,
+                observation.root, observation.instance, little_endian);
+            if result.source == observation.after { result.observations }
+            else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                observation.before, observation.after) }
+        },
+        Some(InvocationSourceByteEventV36::TileTransport(transfer)) => {
+            let result = invocation_source_tile_transport_v161(observation.before, transfer);
+            if result.source == observation.after { result.observations }
+            else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
+                observation.before, observation.after) }
+        },
         Some(InvocationSourceByteEventV36::ScalarOperands(event)) => {
             let result = invocation_source_scalar_operands_v48(observation.before, event,
                 observation.root, observation.instance, little_endian);

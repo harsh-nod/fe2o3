@@ -733,6 +733,28 @@ explicitly selected, not an admitted compiler image. Component lifecycle evidenc
 does not qualify compiler source/output policy, runtime enforcement, deployment,
 proof execution or GPU production activation.
 
+The private compiler channel's consuming runtime transition adds one unsafe
+function and block. It preserves the same channel, original backing and receive
+deadline, and accepts only the original gated trace's held interrupt. Its caller
+must keep the native gate closed and preserve the dedicated process and outside
+custodian contract. The private trace-owner enum adds one unsafe confirmation
+function and block, forwarding the existing exact-exec/alias-closure obligations
+to its actual owner. A runtime event from a descendant cannot confirm root exec.
+Budgetless runtime cancellation only marks refusal and retains foreground
+custody; funded cancellation drives the same task tree to terminal waits before
+reporting the original cleanup disposition. No default selection or compiler
+resume permission follows from these transitions.
+
+Publication forwarding adds four unsafe function sites (two private declarations
+and two macro definitions) and two blocks. Only the original retained trace and
+its consuming runtime successor implement the private trait. Both use the same
+concrete artifact quote, install-before-acquire sequence, Acquire/Validate
+builders and original cleanup slot. No arbitrary observation provider, payload
+owner or mutable root-only trace is exposed. Observation quotes include the
+runtime view's additional entry charge. One additional isolated channel-test
+block exercises closed-gate takeover and funded cancellation; it never executes
+a compiler and does not qualify runtime admission.
+
 Native image-policy preparation uses those same held-task views for bounded
 read-only auxv and memory copies; no proc descriptor escapes. Kernel-image
 metadata is captured only at an actual exec stop from AT_SYSINFO_EHDR, the

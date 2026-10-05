@@ -108,7 +108,12 @@ fn backend_identity_and_diagnostics_have_separate_exact_wire_schemas() {
         value["payload_bytes"] = 0.into();
         assert!(serde_json::from_value::<CommandV1>(value).is_err());
     }
-    for backend in ["disabled", "ordered64-groups-v1", "native-whole-program-v1"] {
+    for backend in [
+        "disabled",
+        "ordered64-groups-v1",
+        "native-whole-program-v1",
+        "native-boundary-fences-v1",
+    ] {
         let response = ResponseV1::TokenProgramBackendV1 {
             backend: backend.into(),
         };
@@ -152,6 +157,7 @@ fn native_arena_lifecycle_keeps_default_storage_and_validation_separate() {
     );
     assert!(!source.contains("self.context.internal[SIGNAL]"));
     assert!(context.contains("token_program_native: false"));
+    assert!(context.contains("token_program_boundary_fences: false"));
     for section in ["fn rollover_queue(", "fn close_inner("] {
         let body = context
             .split(section)

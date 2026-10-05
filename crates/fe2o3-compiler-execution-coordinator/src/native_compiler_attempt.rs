@@ -71,6 +71,21 @@ impl Attempt<'_> {
         self.trace.cancel()
     }
 
+    pub(super) fn needs_foreground_cancellation(&self) -> bool {
+        self.trace.needs_foreground_cancellation()
+    }
+
+    pub(super) fn cancellation_quota() -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        Ok(Trace::cancellation_quota()?)
+    }
+
+    pub(super) fn cancel_step(&mut self, b: &mut Budget<'_>) -> AttemptResult<bool> {
+        let _domain_disposition = self.trace.cancel_step(b)?;
+        // A deferred domain's disposition is cached. Only the original pool
+        // can establish its later completion; do not wait for this to say Reaped.
+        Ok(!self.trace.needs_foreground_cancellation())
+    }
+
     #[cfg(test)]
     pub(super) fn pid(&self) -> rustix::process::Pid {
         self.trace.pid()

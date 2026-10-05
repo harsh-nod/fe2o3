@@ -28,6 +28,12 @@ mod descriptor_indices;
 mod index_calls;
 #[path = "original_semantic_mir_source_thread_write_v88.rs"]
 mod thread_write;
+#[path = "original_semantic_mir_source_tile_calls_v161.rs"]
+mod tile_calls;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_tile_fixture_v166_tests.rs"]
+mod tile_fixture_tests;
 
 #[path = "original_semantic_mir_source_assert_control_v40.rs"]
 mod assertions;
