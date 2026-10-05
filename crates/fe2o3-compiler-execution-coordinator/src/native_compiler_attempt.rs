@@ -3,6 +3,7 @@ use super::*;
 use crate::{
     compiler_child_channel::CompilerTrace,
     native_launch::{self as native, Channels, CompilerExecutionLaunchErrorV2 as NativeError},
+    native_runtime_inventory::NativeCompilerExecutableInventory as Executables,
     proof_helper_backing::ProofHelperBackingError,
     proof_helper_launch::{ManagedProofHelper as Helper, ProofHelperLaunchError as Failure},
 };
@@ -38,6 +39,7 @@ pub(super) const FRAME: usize = 4 * size_of::<Attempt<'static>>()
 pub(super) struct Attempt<'work> {
     // Foreground trace cancellation precedes stage/gate descriptor retirement.
     trace: Trace<'work>,
+    executables: Executables,
     stage: Stage,
     _gate_reader: OwnedFd,
     _gate_writer: OwnedFd,
@@ -48,6 +50,7 @@ pub(super) struct Attempt<'work> {
 impl Attempt<'_> {
     const ENVELOPE: usize = size_of::<Self>()
         - size_of::<Trace<'static>>()
+        - size_of::<Executables>()
         - size_of::<Stage>()
         - 3 * size_of::<OwnedFd>();
 
@@ -55,6 +58,7 @@ impl Attempt<'_> {
         b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
             self.trace.with_backing(b, |helper, b| {
                 helper.with_compiler(b, |compiler, b| {
+                    self.executables.revalidate(compiler, b)?;
                     validate(compiler, received, &self.stage, b)
                 })
             })
@@ -87,6 +91,10 @@ pub(super) unsafe fn launch<'work>(
 ) -> AttemptResult<(Attempt<'work>, usize)> {
     let input = helper.retained_storage();
     b.with_prepaid_scope(input, 8, LOCAL_WORK, FRAME, |b| {
+        let executables = helper.with_compiler(b, |compiler, b| -> AttemptResult<_> {
+            Ok(Executables::capture(compiler, b)?)
+        })?;
+        b.reserve_storage(executables.retained_storage())?;
         let channels = Channels::new()?;
         b.reserve_storage(Channels::STORAGE)?;
         let (stage, storage) =
@@ -143,10 +151,17 @@ pub(super) unsafe fn launch<'work>(
         RootCompilerRequest::postclone_checkpoint_for_test("compiler-trace", trace.pid(), b)?;
         drop((sender, exec_writer, profile_reader, profile_writer));
         b.release_storage(4 * native::FILE_STORAGE)?;
-        let retained = native::sum(&[full, storage, 3 * native::FILE_STORAGE, Attempt::ENVELOPE])?;
+        let retained = native::sum(&[
+            full,
+            executables.retained_storage(),
+            storage,
+            3 * native::FILE_STORAGE,
+            Attempt::ENVELOPE,
+        ])?;
         b.reserve_storage(Attempt::ENVELOPE)?;
         let attempt = Attempt {
             trace,
+            executables,
             stage,
             _gate_reader: gate_reader,
             _gate_writer: gate_writer,

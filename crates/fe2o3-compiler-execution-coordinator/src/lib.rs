@@ -77,6 +77,7 @@ mod native_inherited_v2;
 mod native_inherited_v3;
 mod native_launch;
 mod native_launch_adapter;
+mod native_runtime_inventory;
 mod native_provisioner;
 mod native_provisioning;
 mod native_root_source;
