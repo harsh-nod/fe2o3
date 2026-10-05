@@ -123,7 +123,8 @@ spec fn invocation_source_context_issue_v161(
                     .insert(seq![3int], MemoryValueV30::Unit)
                     .insert(seq![4int], MemoryValueV30::Unit);
                 let after = invocation_source_aggregate_install_v42(source, issue.destination,
-                    InvocationSourceAggregateV42 { source_type: issue.source_type, leaves });
+                    InvocationSourceAggregateV42 { source_type: issue.source_type, leaves,
+                        execution_lease: None });
                 invocation_source_tile_installed_v161(source, after, seq![])
             },
             _ => invocation_source_tile_refused_v161(source),
@@ -245,7 +246,8 @@ spec fn invocation_source_tile_load_v161(
                             components.values, components.masks, 0);
                         let after = invocation_source_aggregate_install_v42(
                             components.source, load.destination,
-                            InvocationSourceAggregateV42 { source_type: load.source_type, leaves });
+                            InvocationSourceAggregateV42 { source_type: load.source_type, leaves,
+                                execution_lease: None });
                         invocation_source_tile_installed_v161(components.source, after,
                             base_reads + components.observations)
                     }
@@ -274,7 +276,8 @@ spec fn invocation_source_tile_transport_v161(
             original.leaves.remove(seq![2int]).remove(seq![3int])
         } else { original.leaves };
         let after = invocation_source_aggregate_install_v42(consumed, transfer.destination,
-            InvocationSourceAggregateV42 { source_type: transfer.output_type, leaves });
+            InvocationSourceAggregateV42 { source_type: transfer.output_type, leaves,
+                execution_lease: if transfer.parts { None } else { original.execution_lease } });
         invocation_source_tile_installed_v161(consumed, after, seq![])
     }
 }

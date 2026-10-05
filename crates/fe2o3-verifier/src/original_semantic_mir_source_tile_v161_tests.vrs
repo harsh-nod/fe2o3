@@ -95,7 +95,8 @@ proof fn source_tile_transport_install_failure_keeps_refusal_v161(
                 original.leaves.remove(seq![2int]).remove(seq![3int])
             } else { original.leaves };
             !invocation_source_aggregate_install_v42(consumed, transfer.destination,
-                InvocationSourceAggregateV42 { source_type: transfer.output_type, leaves }).machine.valid
+                InvocationSourceAggregateV42 { source_type: transfer.output_type, leaves,
+                    execution_lease: if transfer.parts { None } else { original.execution_lease } }).machine.valid
         }),
     ensures ({
         let consumed = invocation_source_byte_put_local_v36(

@@ -90,7 +90,7 @@ spec fn invocation_source_scalar_operands_write_v48(
         },
         InvocationSourceByteDestinationV36::Component(place) => {
             let after = invocation_source_aggregate_place_replace_v42(source, place,
-                InvocationSourceAggregateV42 { source_type: place.result_type,
+                InvocationSourceAggregateV42 { source_type: place.result_type, execution_lease: None,
                     leaves: Map::empty().insert(seq![], value) });
             if !after.machine.valid { invocation_source_scalar_operands_refused_v48(after, observations) }
             else { InvocationSourceScalarOperandsResultV48 { source: after, observations } }

@@ -3,6 +3,8 @@
 struct InvocationSourceAggregateV42 {
     source_type: int,
     leaves: Map<Seq<int>, MemoryValueV30>,
+    // Shadow provenance is not a Rust field and cannot be reconstructed from leaves.
+    execution_lease: Option<InvocationSourceExecutionReferenceV168>,
 }
 
 enum InvocationSourceValueV42 {
@@ -92,11 +94,13 @@ spec fn invocation_source_aggregate_snapshot_v42(
         || !source.logical.aggregates.contains_key(local)
         || source.logical.aggregates[local].source_type != source_type
         || !invocation_source_aggregate_well_formed_v42(source.logical.aggregates[local])
+        || (path.len() != 0 && source.logical.aggregates[local].execution_lease.is_some())
         || invocation_source_aggregate_type_at_v42(source_type, path) != Some(result_type) {
         None
     } else {
         let original = source.logical.aggregates[local];
         let snapshot = InvocationSourceAggregateV42 { source_type: result_type,
+            execution_lease: if path.len() == 0 { original.execution_lease } else { None },
             leaves: Map::new(original.leaves.dom()
                 .filter(|key: Seq<int>| invocation_source_path_prefix_v42(path, key))
                 .map(|key: Seq<int>| key.subrange(path.len() as int, key.len() as int)),
@@ -108,7 +112,12 @@ spec fn invocation_source_aggregate_snapshot_v42(
 spec fn invocation_source_aggregate_install_v42(
     source: InvocationSourceByteStateV36, local: int, value: InvocationSourceAggregateV42,
 ) -> InvocationSourceByteStateV36 {
-    if source.objects.contains_key(local) || !invocation_source_aggregate_well_formed_v42(value) {
+    if source.objects.contains_key(local) || !invocation_source_aggregate_well_formed_v42(value)
+        || match value.execution_lease {
+            Some(lease) => local == lease.origin
+                || !invocation_source_execution_lease_current_v170(source, lease),
+            None => false,
+        } {
         invocation_source_byte_refused_v36(source)
     } else {
         let changed = invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined);
@@ -124,11 +133,12 @@ spec fn invocation_source_aggregate_remove_v42(
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
         || !source.logical.aggregates.contains_key(local)
         || source.logical.aggregates[local].source_type != source_type
+        || (path.len() != 0 && source.logical.aggregates[local].execution_lease.is_some())
         || invocation_source_aggregate_type_at_v42(source_type, path).is_none() {
         invocation_source_byte_refused_v36(source)
     } else {
         let original = source.logical.aggregates[local];
-        let remaining = InvocationSourceAggregateV42 { source_type,
+        let remaining = InvocationSourceAggregateV42 { source_type, execution_lease: None,
             leaves: Map::new(original.leaves.dom()
                 .filter(|key: Seq<int>| !invocation_source_path_prefix_v42(path, key)),
                 |key: Seq<int>| original.leaves[key]) };
@@ -175,6 +185,9 @@ spec fn invocation_source_aggregate_replace_v42(
     if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
         || !invocation_source_aggregate_complete_v42(value)
         || invocation_source_aggregate_type_at_v42(source_type, path) != Some(value.source_type)
+        || (path.len() != 0 && (value.execution_lease.is_some()
+            || source.logical.aggregates.contains_key(local)
+                && source.logical.aggregates[local].execution_lease.is_some()))
         || (source.logical.aggregates.contains_key(local)
             && source.logical.aggregates[local].source_type != source_type) {
         invocation_source_byte_refused_v36(source)
@@ -183,6 +196,7 @@ spec fn invocation_source_aggregate_replace_v42(
             source.logical.aggregates[local].leaves
         } else { Map::empty() };
         let replaced = InvocationSourceAggregateV42 { source_type,
+            execution_lease: if path.len() == 0 { value.execution_lease } else { None },
             leaves: Map::new(original.dom()
                 .filter(|key: Seq<int>| !invocation_source_path_prefix_v42(path, key))
                 .union(value.leaves.dom().map(|suffix: Seq<int>| path + suffix)),
@@ -220,7 +234,7 @@ spec fn invocation_source_checked_v42(
                     match invocation_source_checked_pair_v44(MemoryValueV30::Scalar(left),
                         MemoryValueV30::Scalar(right), operation, bits, signed) {
                         Some((value, overflow)) => {
-                            let value = InvocationSourceAggregateV42 { source_type,
+                            let value = InvocationSourceAggregateV42 { source_type, execution_lease: None,
                                 leaves: Map::empty().insert(seq![0int], value).insert(seq![1int], overflow) };
                             invocation_source_aggregate_install_v42(rhs.source, destination, value)
                         },
@@ -271,7 +285,8 @@ spec fn invocation_source_aggregate_place_deinitialize_v42(
             invocation_source_aggregate_place_path_v42(place))
     } else {
         invocation_source_aggregate_install_v42(source, place.local,
-            InvocationSourceAggregateV42 { source_type: place.root_type, leaves: Map::empty() })
+            InvocationSourceAggregateV42 { source_type: place.root_type, leaves: Map::empty(),
+                execution_lease: None })
     }
 }
 

@@ -104,7 +104,7 @@ spec fn invocation_source_statement_observations_v39(
                 observation.before, observation.after) }
         },
         Some(InvocationSourceByteEventV36::TileTransport(transfer)) => {
-            let result = invocation_source_tile_transport_v161(observation.before, transfer);
+            let result = invocation_source_execution_tile_transport_v170(observation.before, transfer);
             if result.source == observation.after { result.observations }
             else { invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused],
                 observation.before, observation.after) }

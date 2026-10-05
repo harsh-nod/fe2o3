@@ -76,3 +76,84 @@ proof fn execution_invalid_workgroup_loan_refuses_before_tile_evaluation_v168(
     ensures invocation_source_execution_tile_load_v168(source, event, root, instance, little_endian)
         == invocation_source_tile_refused_v161(source),
 {}
+
+proof fn execution_workgroup_payload_without_lease_refuses_v170(
+    source: InvocationSourceByteStateV36, local: int, ty: int,
+)
+    requires source.logical.aggregates.contains_key(local),
+        source.logical.aggregates[local].execution_lease.is_none(),
+    ensures !invocation_source_execution_value_v168(source, local, ty,
+        InvocationSourceExecutionRoleV168::Workgroup),
+{}
+
+proof fn execution_live_aggregate_suspends_context_v170(
+    source: InvocationSourceByteStateV36, local: int,
+    lease: InvocationSourceExecutionReferenceV168,
+    candidate: InvocationSourceExecutionReferenceV168,
+)
+    requires source.logical.aggregates.contains_key(local),
+        source.logical.aggregates[local].execution_lease == Some(lease),
+        invocation_source_execution_lease_current_v170(source, lease),
+        invocation_source_execution_same_origin_v168(candidate, lease),
+    ensures !invocation_source_execution_no_conflict_v168(source, candidate),
+{
+    if invocation_source_execution_no_conflict_v168(source, candidate) {
+        assert(!invocation_source_execution_same_origin_v168(candidate, lease));
+    }
+}
+
+proof fn execution_lease_origin_overwrite_refuses_v170(
+    source: InvocationSourceByteStateV36, value: InvocationSourceAggregateV42,
+    lease: InvocationSourceExecutionReferenceV168,
+)
+    requires value.execution_lease == Some(lease),
+    ensures !invocation_source_aggregate_install_v42(source, lease.origin, value).machine.valid,
+{}
+
+proof fn execution_lease_projection_refuses_v170(
+    source: InvocationSourceByteStateV36, local: int, ty: int,
+    path: Seq<int>, result_type: int,
+)
+    requires source.logical.aggregates.contains_key(local),
+        source.logical.aggregates[local].execution_lease.is_some(), path.len() > 0,
+    ensures invocation_source_aggregate_snapshot_v42(source, local, ty, path, result_type).is_none(),
+{}
+
+proof fn execution_whole_snapshot_retains_lease_v170(
+    source: InvocationSourceByteStateV36, local: int, ty: int,
+    value: InvocationSourceAggregateV42,
+)
+    requires invocation_source_aggregate_snapshot_v42(source, local, ty, seq![], ty) == Some(value),
+    ensures source.logical.aggregates.contains_key(local),
+        value.execution_lease == source.logical.aggregates[local].execution_lease,
+{}
+
+proof fn execution_stale_context_lease_refuses_v170(
+    source: InvocationSourceByteStateV36, lease: InvocationSourceExecutionReferenceV168,
+)
+    requires 0 <= lease.origin < source.logical.versions.len(),
+        source.logical.versions[lease.origin] != lease.origin_version,
+    ensures !invocation_source_execution_lease_current_v170(source, lease),
+{}
+
+proof fn execution_parent_frame_exit_invalidates_lease_v170(
+    source: InvocationSourceByteStateV36, lease: InvocationSourceExecutionReferenceV168,
+)
+    requires forall|i: int| 0 <= i < source.machine.frames.active.len() ==>
+        source.machine.frames.active[i] != lease.frame,
+    ensures !invocation_source_execution_lease_current_v170(source, lease),
+{}
+
+proof fn execution_tile_load_retains_evaluation_observation_prefix_v170(
+    source: InvocationSourceByteStateV36, event: InvocationSourceExecutionTileLoadV168,
+    root: int, instance: int, little_endian: bool,
+)
+    requires invocation_source_execution_operand_valid_v168(source, event.workgroup,
+        InvocationSourceExecutionRoleV168::Workgroup, false),
+    ensures ({
+        let consumed = invocation_source_execution_operand_consume_v168(source, event.workgroup);
+        let evaluated = invocation_source_tile_load_v161(consumed, event.load, root, instance, little_endian);
+        let result = invocation_source_execution_tile_load_v168(source, event, root, instance, little_endian);
+        result.observations.take(evaluated.observations.len() as int) == evaluated.observations
+    }),
+{}

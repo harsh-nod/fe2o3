@@ -638,7 +638,8 @@ spec fn invocation_source_return_install_v42(
         Some((root_type, result_type, path)) => {
             let aggregate = match value {
                 InvocationSourceValueV42::Carrier(value) => Some(InvocationSourceAggregateV42 {
-                    source_type: result_type, leaves: Map::empty().insert(seq![], value) }),
+                    source_type: result_type, leaves: Map::empty().insert(seq![], value),
+                    execution_lease: None }),
                 InvocationSourceValueV42::Aggregate(value) => Some(value),
                 InvocationSourceValueV42::Enum(_) | InvocationSourceValueV42::Descriptor(_) => None,
             };

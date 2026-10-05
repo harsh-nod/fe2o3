@@ -89,7 +89,7 @@ spec fn invocation_source_statement_effects_v36(
                 } else { seq![MemoryOperationEffectV30::Refused] }
             }
             Some(InvocationSourceByteEventV36::TileTransport(transfer)) => {
-                let result = invocation_source_tile_transport_v161(observation.before, transfer);
+                let result = invocation_source_execution_tile_transport_v170(observation.before, transfer);
                 if result.source == observation.after {
                     Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
                 } else { seq![MemoryOperationEffectV30::Refused] }

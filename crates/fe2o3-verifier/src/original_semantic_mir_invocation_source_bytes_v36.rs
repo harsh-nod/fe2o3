@@ -2314,14 +2314,14 @@ spec fn invocation_source_byte_step_v36(
         InvocationSourceByteEventV36::TileLoad(load) =>
             invocation_source_execution_tile_load_v168(source, load, root, instance, little_endian).source,
         InvocationSourceByteEventV36::TileTransport(transfer) =>
-            invocation_source_tile_transport_v161(source, transfer).source,
+            invocation_source_execution_tile_transport_v170(source, transfer).source,
         InvocationSourceByteEventV36::Transfer { destination, value, bits } => {
             let evaluated = invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian);
             if !evaluated.source.machine.valid { evaluated.source }
             else { match destination {
                 InvocationSourceByteDestinationV36::Component(place) =>
                     invocation_source_aggregate_place_replace_v42(evaluated.source, place,
-                        InvocationSourceAggregateV42 { source_type: place.result_type,
+                        InvocationSourceAggregateV42 { source_type: place.result_type, execution_lease: None,
                             leaves: Map::empty().insert(seq![], evaluated.value) }),
                 InvocationSourceByteDestinationV36::Local(local) =>
                     invocation_source_byte_put_local_v36(evaluated.source, local, evaluated.value),
