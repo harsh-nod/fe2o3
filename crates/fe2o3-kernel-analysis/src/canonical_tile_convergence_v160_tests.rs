@@ -472,5 +472,8 @@ fn tile_convergence_nested_diamonds_retain_outer_control_until_its_postdominator
     // insufficient because the enclosing branch is lane-varying.
     let blocks = &mut input.functions[0].body.as_mut().unwrap().blocks;
     blocks[5].operations = std::mem::take(&mut blocks[1].operations);
+    // The arm issues its own context; terminate it without merging that
+    // ownership history with the paths that never issued a context.
+    blocks[5].terminator = Some(Terminator::Return { values: vec![] });
     assert!(matches!(check(&input), Err(Error::VaryingArrival(_))));
 }
