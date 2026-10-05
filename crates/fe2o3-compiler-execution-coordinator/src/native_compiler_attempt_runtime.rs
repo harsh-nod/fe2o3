@@ -286,26 +286,33 @@ impl<'work> Attempt<'work> {
         &mut self,
         b: &mut Budget<'_>,
     ) -> AttemptResult<crate::native_runtime_controller::Progress> {
-        if self.phase != Phase::Issued {
-            return Err(Failure::Invalid(
-                "compiler checkpoint lacks original issued attempt",
-            ));
-        }
-        let Some(Owner::Issued(attempt)) = &mut self.owner else {
-            return Err(Failure::Invalid("compiler issuer custody is absent"));
-        };
-        let controller = self
-            .controller
-            .as_mut()
-            .ok_or(Failure::Invalid("compiler controller is absent"))?;
-        let inventory = &self.executables;
-        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+        let result = b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase != Phase::Issued {
+                return Err(Failure::Invalid(
+                    "compiler checkpoint lacks original issued attempt",
+                ));
+            }
+            let Some(Owner::Issued(attempt)) = &mut self.owner else {
+                return Err(Failure::Invalid("compiler issuer custody is absent"));
+            };
+            let controller = self
+                .controller
+                .as_mut()
+                .ok_or(Failure::Invalid("compiler controller is absent"))?;
+            let inventory = &self.executables;
             attempt.with_runtime_backing(b, |runtime, helper, b| {
                 helper.with_compiler_checkpoint(b, |backing, b| -> AttemptResult<_> {
                     Ok(controller.step(runtime, backing, inventory, b)?)
                 })
             })
-        })
+        });
+        if result.is_err() {
+            // This wrapper owns the genuine trace; no supplied runtime can be
+            // cancelled. The controller's standalone wrong-owner refusal stays
+            // non-mutating for an unrelated runtime passed to that lower API.
+            self.cancel();
+        }
+        result
     }
 
     pub(super) fn runtime_step_quota() -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
@@ -324,6 +331,32 @@ impl<'work> Attempt<'work> {
                 helper.scratch(),
                 Controller::STEP_SCRATCH,
             ])?,
+        })
+    }
+
+    pub(super) fn runtime_poll_quota() -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        Trace::gated_operation_quota().map_err(Into::into)
+    }
+
+    pub(super) fn runtime_confirmation_quota()
+    -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let inner = Trace::runtime_confirmation_quota()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            // LOCAL_WORK includes the one bounded native status read and alias closures.
+            work: native::sum(&[LOCAL_WORK, inner.work()])?,
+            scratch: native::sum(&[FRAME, inner.scratch()])?,
+        })
+    }
+
+    pub(super) fn runtime_issuer_quota(
+        &self,
+        prepared: &crate::native_v3::PreparedCompilerExecutionSupervisorV3,
+    ) -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let launch = prepared.issuer_launch_quota(self.gated_trace()?)?;
+        let ready = prepared.issuer_continuity_quota::<Helper>()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, launch.work(), ready.work()])?,
+            scratch: native::sum(&[FRAME, launch.scratch(), ready.scratch()])?,
         })
     }
 }
