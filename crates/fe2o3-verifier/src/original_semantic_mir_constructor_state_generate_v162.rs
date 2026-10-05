@@ -170,7 +170,7 @@ pub(super) fn emit(
         " MemoryStateV30 {{ pc: {}, values, valid: true, ..target }}\n}}\n",
         summary.next
     );
-    source_state(root, pc, hints, hint, call, out)?;
+    source_state(root, pc, hints, hint, call, entry, out)?;
     emit!(
         out,
         "#[verifier::spinoff_prover]\nproof fn invocation_constructor_states_{root}_{pc}_v162(source: InvocationSourceByteStateV36, target: MemoryStateV30)\n requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},\n ensures\n"
@@ -227,9 +227,10 @@ fn source_state(
     hints: &SourceStepHintsV85,
     hint: &SourceCutHintsV85,
     call: &SourceCallHintsV85,
+    entry: &SourceEntryHintsV85,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
-    out.budget.reserve_storage(12 * size_of::<usize>())?;
+    out.budget.reserve_storage(13 * size_of::<usize>())?;
     out.budget.charge_work(21)?;
     let fuel = add(hint.statements, 1)?;
     if fuel > *hints.fuels.get(hint.instance).ok_or_else(mismatch)? {
@@ -306,7 +307,11 @@ fn source_state(
     out.budget.charge_work(5)?;
     emit!(
         out,
-        " assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2) by {{\n reveal(invocation_source_entry_initialize_v166);\n }}\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n"
+        " invocation_source_entry_initialize_pc_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n",
+        entry.pc,
+        entry.locals.start,
+        entry.locals.end,
+        entry.owner
     );
     Ok(())
 }
