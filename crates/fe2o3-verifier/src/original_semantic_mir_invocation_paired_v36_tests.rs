@@ -148,9 +148,35 @@ fn original_mir_paired_trace_joins_every_observation_at_its_own_allocation_gener
             ] {
                 assert!(out.text.contains(&required), "{required}");
             }
-            assert!(!out.text.contains(&format!(
-                "invocation_paired_source_step_{root}_v36(source).events =="
-            )));
+            let equality = format!("invocation_paired_source_step_{root}_v36(source).events ==");
+            let mut proved_empty = 0;
+            let row = &paired.roots[root];
+            if let Some(hints) = &row.step_hints {
+                for cut in row.cuts.iter().flatten() {
+                    let End::Call(child) = cut.end else { continue };
+                    let hint = hints.cuts.iter().find(|hint| hint.pc == cut.source).unwrap();
+                    let Some(call) = &hint.call else { continue };
+                    if hint.statements != 0 || call.arguments.iter().any(|(_, moved, _)| *moved)
+                        || hints.entries.get(call.child).and_then(Option::as_ref).is_none()
+                    {
+                        continue;
+                    }
+                    assert_eq!(child.checked_sub(row.instances.start), Some(call.child));
+                    assert_eq!(cut.instance.checked_sub(row.instances.start), Some(hint.instance));
+                    let declaration = format!("proof fn invocation_paired_cut_{root}_pc{}_observations_v85(", cut.source);
+                    assert_eq!(out.text.matches(&declaration).count(), 1);
+                    let theorem = out.text.split_once(&declaration).unwrap().1.split("proof fn ").next().unwrap();
+                    let (contract, body) = theorem.split_once("\n{\n").unwrap();
+                    assert!(!contract.contains(&equality));
+                    let assertion = format!(" assert({equality} Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n");
+                    assert_eq!(body.matches(&assertion).count(), 1);
+                    assert_eq!(body.matches(&equality).count(), 1);
+                    proved_empty += 1;
+                }
+            }
+            // Only these proved constructor facts may compare a source trace directly.
+            // All contracts and the general trace relation retain per-event mapping.
+            assert_eq!(out.text.matches(&equality).count(), proved_empty);
         }
         assert!(out.text.contains("CfgStepV26<InvocationSourceByteStateV36, InvocationSourceEffectObservationV39>"));
         assert!(out.text.contains("CfgStepV26<MemoryStateV30, MemoryOperationObservationV30>"));
