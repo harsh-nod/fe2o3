@@ -197,19 +197,40 @@ pub(super) fn emit(
         );
     }
     emit!(out, "{{\n");
-    out.budget.charge_work(6)?;
+    out.budget.charge_work(8)?;
     emit!(
         out,
-        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_actual_observations_v39);\n",
+        " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_actual_observations_v39);\n",
         call.child
     );
     residual_context(root, out)?;
     emit!(out, " assert(target.pc == {});\n", summary.start);
     unfold(root, follow_fuel, hints, hint, true, out)?;
+    out.budget.charge_work(5)?;
     emit!(
         out,
-        " assert(invocation_paired_source_step_{root}_v36(source).state == invocation_constructor_source_{root}_{pc}_v162(source)) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_enter_{root}_{}_v36);\n }}\n",
+        " assert(invocation_source_block_runtime_{root}_v36(source).source == invocation_constructor_source_{root}_{pc}_v162(source)\n && invocation_source_block_runtime_{root}_v36(source).returned.is_none()\n && invocation_source_block_runtime_{root}_v36(source).operands.len() == {}\n",
+        call.arguments.len()
+    );
+    for (ordinal, (local, _, _)) in call.arguments.iter().enumerate() {
+        out.budget.charge_work(1)?;
+        emit!(
+            out,
+            " && invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}].value == InvocationSourceValueV42::Carrier(source.machine.values[{local}])\n"
+        );
+    }
+    emit!(
+        out,
+        " && invocation_source_observations_v39(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36()) == Seq::empty()) by {{\n reveal(invocation_source_block_runtime_{root}_v36);\n reveal(invocation_source_enter_{root}_{}_v36);\n reveal(invocation_source_observations_v39);\n }}\n",
         call.child
+    );
+    emit!(
+        out,
+        " assert(invocation_byte_boundary_{root}_v36(target).state == invocation_constructor_target_{root}_{pc}_v162(target)\n && invocation_byte_boundary_{root}_v36(target).returned.len() == 0\n && invocation_byte_boundary_{root}_v36(target).observations.len() == 0) by {{\n reveal(invocation_byte_boundary_{root}_v36);\n }}\n"
+    );
+    emit!(
+        out,
+        " assert(invocation_paired_source_step_{root}_v36(source).state == invocation_constructor_source_{root}_{pc}_v162(source)) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n"
     );
     emit!(
         out,
@@ -218,7 +239,7 @@ pub(super) fn emit(
     empty_observations(root, call.child, out)?;
     emit!(
         out,
-        " reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_paired_actual_step_{root}_v36);\n}}\n"
+        " assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n assert(!invocation_paired_actual_step_{root}_v36(target).halted) by {{\n reveal(invocation_paired_actual_step_{root}_v36);\n }}\n}}\n"
     );
     Ok(())
 }
