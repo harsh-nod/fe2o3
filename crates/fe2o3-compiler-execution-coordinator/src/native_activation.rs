@@ -485,14 +485,21 @@ impl TerminationSignals {
     }
 
     /// A single one-second sigtimedwait; EINTR/EAGAIN are empty ticks, never retried.
-    #[allow(unsafe_code)]
     pub(crate) fn wait_interval(&self, b: &mut Budget<'_>) -> Result<Option<i32>> {
+        self.wait_once(false, b)
+    }
+
+    /// The same single funded signal observation without delaying a runnable
+    /// compiler checkpoint. The caller still bounds turns and its deadline.
+    pub(crate) fn poll(&self, b: &mut Budget<'_>) -> Result<Option<i32>> {
+        self.wait_once(true, b)
+    }
+
+    #[allow(unsafe_code)]
+    fn wait_once(&self, nonblocking: bool, b: &mut Budget<'_>) -> Result<Option<i32>> {
         wait_with(self, b, |signals| {
             check_main_thread(signals.main_pid)?;
-            let timeout = libc::timespec {
-                tv_sec: WAIT_INTERVAL_SECONDS,
-                tv_nsec: 0,
-            };
+            let timeout = signal_wait_timeout(nonblocking);
             // SAFETY: the install contract preserves this thread's initialized blocked set.
             let signal =
                 unsafe { libc::sigtimedwait(&signals.set, std::ptr::null_mut(), &timeout) };
@@ -520,6 +527,17 @@ impl TerminationSignals {
                 "restore termination signal mask",
             )
         })
+    }
+}
+
+fn signal_wait_timeout(nonblocking: bool) -> libc::timespec {
+    libc::timespec {
+        tv_sec: if nonblocking {
+            0
+        } else {
+            WAIT_INTERVAL_SECONDS
+        },
+        tv_nsec: 0,
     }
 }
 

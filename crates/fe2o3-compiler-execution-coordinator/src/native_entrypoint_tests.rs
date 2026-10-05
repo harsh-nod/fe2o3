@@ -27,6 +27,7 @@ struct Fake {
     intake: bool,
     foreground: bool,
     foreground_pending: usize,
+    nonblocking_monitor: bool,
 }
 impl Fake {
     fn new() -> Self {
@@ -45,6 +46,7 @@ impl Fake {
             intake: false,
             foreground: false,
             foreground_pending: 0,
+            nonblocking_monitor: false,
         }
     }
     fn effect(&self, name: &'static str) -> Result<()> {
@@ -79,6 +81,14 @@ impl<'work> Runtime<'work> for Fake {
     }
     fn wait(&mut self, b: &mut Budget<'_>) -> Result<Option<i32>> {
         self.request("wait", b)?;
+        self.waits += 1;
+        Ok((self.waits == self.signal_at).then_some(libc::SIGTERM))
+    }
+    fn wait_monitor(&mut self, b: &mut Budget<'_>) -> Result<Option<i32>> {
+        if !self.nonblocking_monitor {
+            return self.wait(b);
+        }
+        self.request("monitor-poll", b)?;
         self.waits += 1;
         Ok((self.waits == self.signal_at).then_some(libc::SIGTERM))
     }
@@ -168,6 +178,42 @@ fn termination_cancels_then_closes_then_restores_on_the_original_request() {
     assert_eq!(request.peak_storage(), 13 + FRAME + RETAINED);
     assert_eq!(request.failed_work(), None);
     assert_eq!(trace.borrow().cleanup.work(), 0);
+}
+
+#[test]
+fn active_monitor_poll_does_not_replace_cleanup_wait_or_renew_turns() {
+    let mut fake = Fake::new();
+    fake.nonblocking_monitor = true;
+    fake.signal_at = usize::MAX;
+    fake.busy = 1;
+    let (result, trace, _) = run(fake, 2, 1);
+    assert!(matches!(
+        result,
+        Err(Failure::Invalid {
+            role: "lifetime",
+            ..
+        })
+    ));
+    assert_eq!(
+        trace.borrow().events,
+        [
+            "start",
+            "publish",
+            "monitor-poll",
+            "continuity",
+            "pump",
+            "monitor-poll",
+            "continuity",
+            "pump",
+            "cancel",
+            "shutdown",
+            "wait",
+            "pump",
+            "shutdown",
+            "restore",
+            "drop"
+        ]
+    );
 }
 
 #[test]

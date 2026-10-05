@@ -845,6 +845,14 @@ fn wait_exact_and_one_short_never_retries_or_mutates_state() {
 }
 
 #[test]
+fn active_signal_poll_is_nonblocking_and_idle_wait_keeps_original_interval() {
+    let active = signal_wait_timeout(true);
+    let idle = signal_wait_timeout(false);
+    assert_eq!((active.tv_sec, active.tv_nsec), (0, 0));
+    assert_eq!((idle.tv_sec, idle.tv_nsec), (WAIT_INTERVAL_SECONDS, 0));
+}
+
+#[test]
 fn restore_exact_and_one_short_preserve_live_state_until_success() {
     for (work_limit, scratch_limit, success) in [
         (RESTORE_WORK, RESTORE_SCRATCH, true),

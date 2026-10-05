@@ -28,8 +28,10 @@ pub(crate) const FRAME: usize =
 
 /// Runs one fixed native V3 activation with two independent, nonrenewable accounts.
 ///
-/// The maximum schedule is 86,400 one-second monitoring attempts and 20 cleanup
-/// attempts. An interrupted wait consumes a turn too; this is not a wall-clock
+/// The maximum schedule is 86,400 monitoring attempts and 20 cleanup attempts.
+/// Idle monitoring and cleanup wait one second; an active compiler request uses
+/// one nonblocking signal observation per turn. Interrupted waits consume a turn
+/// too; this is not a wall-clock
 /// lease. Reaching the monitoring limit cancels the service and returns a refusal
 /// even if cleanup succeeds. No V1/V2 fallback or runtime family selector exists.
 /// The paired binary selects this original-root listener. One bounded authenticated
@@ -146,6 +148,9 @@ trait Runtime<'work> {
     fn start(&mut self, b: &mut Budget<'_>) -> Result<()>;
     fn publish(&mut self, b: &mut Budget<'_>) -> Result<()>;
     fn wait(&mut self, b: &mut Budget<'_>) -> Result<Option<i32>>;
+    fn wait_monitor(&mut self, b: &mut Budget<'_>) -> Result<Option<i32>> {
+        self.wait(b)
+    }
     fn continuity(&mut self, b: &mut Budget<'_>) -> Result<()>;
     fn intake(&mut self, _b: &mut Budget<'work>) -> Result<bool> {
         Ok(false)
@@ -169,7 +174,7 @@ fn monitor<'work>(
     runtime.publish(b)?;
     for _ in 0..turns {
         b.charge_work(root::TURN_WORK)?;
-        if runtime.wait(b)?.is_some() {
+        if runtime.wait_monitor(b)?.is_some() {
             return Ok(());
         }
         runtime.continuity(b)?;
@@ -275,6 +280,16 @@ impl<'work> Runtime<'work> for Native<'work> {
             .as_ref()
             .ok_or_else(|| root::invalid("activation", "missing signal owner"))?
             .wait_interval(b)
+    }
+
+    fn wait_monitor(&mut self, b: &mut Budget<'_>) -> Result<Option<i32>> {
+        if self.request.is_none() {
+            return self.wait(b);
+        }
+        self.signals
+            .as_ref()
+            .ok_or_else(|| root::invalid("activation", "missing signal owner"))?
+            .poll(b)
     }
 
     fn continuity(&mut self, b: &mut Budget<'_>) -> Result<()> {
