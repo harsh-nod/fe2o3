@@ -108,6 +108,19 @@ fn original_validation_quota_funds_attempt_scope_and_actual_trace_session_checks
 }
 
 #[test]
+fn original_policy_identity_quote_keeps_original_payload_access_funded() {
+    let quota = NativeAttempt::<()>::original_policy_identity_quota();
+    assert_eq!(
+        quota.work(),
+        LOCAL_WORK + Resources::<Payload<()>>::ACCESS_WORK
+    );
+    assert_eq!(
+        quota.scratch(),
+        FRAME + Resources::<Payload<()>>::ACCESS_SCRATCH
+    );
+}
+
+#[test]
 fn issuer_account_scope_rejects_funded_foreign_ledger_before_access() {
     let floor = 256;
     let mut original_work = Work::new(LOCAL_WORK);
