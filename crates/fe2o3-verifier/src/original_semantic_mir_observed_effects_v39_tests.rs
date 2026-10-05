@@ -226,3 +226,87 @@ fn original_mir_legacy_source_effect_helpers_have_no_silent_event_wildcards() {
         .unwrap();
     assert!(!operands.contains("_ =>"));
 }
+
+#[test]
+fn original_execution_loan_effect_projection_is_exhaustive_and_checks_transition() {
+    let source = include_str!("original_semantic_mir_invocation_source_bytes_v36.rs");
+    let fields = source
+        .split_once("enum InvocationSourceByteEventV36 {")
+        .unwrap()
+        .1
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    let declaration: syn::ItemEnum =
+        syn::parse_str(&format!("enum InvocationSourceByteEventV36 {{{fields}\n}}")).unwrap();
+    let expected: BTreeSet<_> = declaration
+        .variants
+        .iter()
+        .map(|variant| variant.ident.to_string())
+        .collect();
+    let statement = super::INVOCATION_EFFECTS_V36
+        .split_once("spec fn invocation_source_statement_effects_v36")
+        .unwrap()
+        .1
+        .split("spec fn ")
+        .next()
+        .unwrap();
+    let function: syn::ItemFn = syn::parse_str(&format!(
+        "fn invocation_source_statement_effects_v36{statement}"
+    ))
+    .unwrap();
+    let [syn::Stmt::Expr(syn::Expr::If(condition), None)] = function.block.stmts.as_slice() else {
+        panic!("statement effects must first check before/after validity");
+    };
+    let Some((_, alternative)) = &condition.else_branch else {
+        panic!("valid statement branch");
+    };
+    let syn::Expr::Block(alternative) = alternative.as_ref() else {
+        panic!("valid statement effects block");
+    };
+    let [syn::Stmt::Expr(syn::Expr::Match(events), None)] = alternative.block.stmts.as_slice()
+    else {
+        panic!("one exhaustive event match");
+    };
+    fn alternatives(pattern: &syn::Pat, output: &mut BTreeSet<String>, absent: &mut usize) {
+        match pattern {
+            syn::Pat::Or(or) => {
+                for case in &or.cases {
+                    alternatives(case, output, absent);
+                }
+            }
+            syn::Pat::Path(path) if path.path.is_ident("None") => *absent += 1,
+            syn::Pat::TupleStruct(some) if some.path.is_ident("Some") => {
+                assert_eq!(some.elems.len(), 1);
+                let path = match &some.elems[0] {
+                    syn::Pat::Path(pattern) => &pattern.path,
+                    syn::Pat::TupleStruct(pattern) => &pattern.path,
+                    syn::Pat::Struct(pattern) => &pattern.path,
+                    _ => panic!("event wildcard or non-variant pattern"),
+                };
+                assert_eq!(path.segments.len(), 2);
+                assert_eq!(path.segments[0].ident, "InvocationSourceByteEventV36");
+                assert!(output.insert(path.segments[1].ident.to_string()));
+            }
+            _ => panic!("top-level wildcard or non-event effect pattern"),
+        }
+    }
+    let mut actual = BTreeSet::new();
+    let mut absent = 0;
+    for arm in &events.arms {
+        assert!(arm.guard.is_none());
+        alternatives(&arm.pat, &mut actual, &mut absent);
+    }
+    assert_eq!(actual, expected);
+    assert_eq!(absent, 1);
+    let loan = statement
+        .split_once("Some(InvocationSourceByteEventV36::ExecutionLoan(event)) => {")
+        .unwrap()
+        .1
+        .split_once("Some(InvocationSourceByteEventV36::")
+        .unwrap()
+        .0;
+    assert!(loan.contains("invocation_source_execution_step_v168(observation.before, event)"));
+    assert!(loan.contains("if after == observation.after { seq![] }"));
+    assert!(loan.contains("else { seq![MemoryOperationEffectV30::Refused] }"));
+}
