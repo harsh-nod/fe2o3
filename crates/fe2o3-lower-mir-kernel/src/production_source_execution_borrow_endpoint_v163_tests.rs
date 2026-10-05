@@ -81,7 +81,7 @@ fn check_source_execution_borrows_v163(
         let definition = endpoint.original_definition(budget)?.unwrap();
         assert_eq!(
             relation.inventory.definitions()[definition].value,
-            retained.value
+            Some(retained.value)
         );
         match coordinates.kind {
             SemanticBorrowKindV1::Shared => shared += 1,
