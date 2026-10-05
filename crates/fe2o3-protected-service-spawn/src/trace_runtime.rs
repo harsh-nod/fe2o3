@@ -11,6 +11,9 @@ use std::fmt;
 #[path = "trace_runtime_elf_v1.rs"]
 pub mod elf;
 
+#[path = "trace_runtime_memory.rs"]
+pub mod memory;
+
 #[path = "trace_runtime_stable.rs"]
 pub mod stable;
 
