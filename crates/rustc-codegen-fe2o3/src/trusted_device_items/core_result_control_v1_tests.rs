@@ -497,7 +497,7 @@ impl Drop for FixtureDirectory {
 // Host prebuilt core retains unwind Continue even with callback panic=abort.
 // Build genuine target core with the measured matrix's gfx942 release flags;
 // this is a compiler fixture, not gfx950 device qualification.
-fn target_core_metadata(fixture: &FixtureDirectory, sysroot: &std::path::Path) -> (PathBuf, PathBuf) {
+fn target_core_metadata(fixture: &FixtureDirectory, sysroot: &std::path::Path) -> (PathBuf, PathBuf, PathBuf) {
     let manifest = fixture.0.join("Cargo.toml");
     fs::write(&manifest, r#"[package]
 name = "fe2o3_core_result_fixture"
@@ -538,11 +538,13 @@ path = "fixture.rs"
         .expect("build genuine AMD target core for Result callback");
     assert!(output.stdout.len() <= 4 << 20 && output.stderr.len() <= 4 << 20);
     assert!(output.status.success(), "target-core build failed: {}", String::from_utf8_lossy(&output.stderr));
-    let expected_source = sysroot.join("lib/rustlib/src/rust/library/core/src/lib.rs")
-        .canonicalize().expect("pinned rust-src core source");
+    let expected_sources = [
+        "lib/rustlib/src/rust/library/core/src/lib.rs",
+        "lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins/src/lib.rs",
+    ].map(|relative| sysroot.join(relative).canonicalize().expect("pinned rust-src library source"));
     let dependencies = target.join("amdgcn-amd-amdhsa/release/deps")
         .canonicalize().expect("private target-core dependency directory");
-    let mut selected = None;
+    let mut selected: [Option<PathBuf>; 2] = [None, None];
     let mut finished = 0;
     for line in String::from_utf8(output.stdout).expect("Cargo JSON UTF-8").lines() {
         if line.trim().is_empty() { continue; }
@@ -551,34 +553,39 @@ path = "fixture.rs"
             assert_eq!(record["success"].as_bool(), Some(true));
             finished += 1;
         }
-        if record["reason"].as_str() != Some("compiler-artifact")
-            || record["target"]["name"].as_str() != Some("core") { continue; }
-        assert!(selected.is_none(), "duplicate core artifact");
+        if record["reason"].as_str() != Some("compiler-artifact") { continue; }
+        let role = match record["target"]["name"].as_str() {
+            Some("core") => 0,
+            Some("compiler_builtins") => 1,
+            _ => continue,
+        };
+        assert!(selected[role].is_none(), "duplicate target library artifact");
         for field in ["kind", "crate_types"] {
-            let values = record["target"][field].as_array().expect("core target kinds");
+            let values = record["target"][field].as_array().expect("target library kinds");
             assert!(values.len() == 1 && values[0].as_str() == Some("lib"));
         }
         assert_eq!(record["profile"]["test"].as_bool(), Some(false));
         assert_eq!(record["profile"]["opt_level"].as_str(), Some("3"));
-        let source = PathBuf::from(record["target"]["src_path"].as_str().expect("core source path"));
-        assert_eq!(source.canonicalize().expect("core artifact source"), expected_source);
+        let source = PathBuf::from(record["target"]["src_path"].as_str().expect("target library source path"));
+        assert_eq!(source.canonicalize().expect("target library artifact source"), expected_sources[role]);
         let mut metadata = Vec::new();
         let mut libraries = Vec::new();
-        for filename in record["filenames"].as_array().expect("core artifact filenames") {
-            let path = PathBuf::from(filename.as_str().expect("core artifact filename"));
+        for filename in record["filenames"].as_array().expect("target library artifact filenames") {
+            let path = PathBuf::from(filename.as_str().expect("target library artifact filename"));
             let extension = path.extension().and_then(|value| value.to_str());
             if !matches!(extension, Some("rmeta" | "rlib")) { continue; }
-            assert!(fs::symlink_metadata(&path).expect("core artifact metadata").file_type().is_file());
-            let path = path.canonicalize().expect("canonical core artifact");
+            assert!(fs::symlink_metadata(&path).expect("target library artifact metadata").file_type().is_file());
+            let path = path.canonicalize().expect("canonical target library artifact");
             assert_eq!(path.parent(), Some(dependencies.as_path()));
             if extension == Some("rmeta") { metadata.push(path); } else { libraries.push(path); }
         }
-        assert!(metadata.len() <= 1 && libraries.len() <= 1, "unique core metadata/library artifacts");
-        selected = metadata.pop().or_else(|| libraries.pop());
-        assert!(selected.is_some(), "Cargo omitted core metadata/library");
+        assert!(metadata.len() <= 1 && libraries.len() <= 1, "unique target library metadata/artifacts");
+        selected[role] = metadata.pop().or_else(|| libraries.pop());
+        assert!(selected[role].is_some(), "Cargo omitted target library metadata/artifact");
     }
     assert_eq!(finished, 1, "one successful Cargo build-finished message");
-    (selected.expect("Cargo selected actual target core"), dependencies)
+    (selected[0].take().expect("Cargo selected actual target core"),
+     selected[1].take().expect("Cargo selected actual target compiler_builtins"), dependencies)
 }
 
 fn compiler_results() -> Results {
@@ -597,7 +604,7 @@ fn compiler_results() -> Results {
         let sysroot = crate::process_execution::capture_output(&mut command).expect("query rustc sysroot");
         assert!(sysroot.status.success());
         let sysroot = String::from_utf8(sysroot.stdout).expect("UTF-8 sysroot").trim().to_owned();
-        let (core, dependencies) = target_core_metadata(&fixture, std::path::Path::new(&sysroot));
+        let (core, builtins, dependencies) = target_core_metadata(&fixture, std::path::Path::new(&sysroot));
         let args = vec![
             "rustc".to_owned(), "--crate-name".to_owned(), "fe2o3_core_result_fixture".to_owned(),
             "--crate-type=lib".to_owned(), "--edition=2024".to_owned(), "--emit=metadata".to_owned(),
@@ -605,6 +612,7 @@ fn compiler_results() -> Results {
             "--target=amdgcn-amd-amdhsa".to_owned(), "-Ctarget-cpu=gfx942".to_owned(),
             "-Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32".to_owned(),
             "--extern".to_owned(), format!("core={}", core.display()),
+            "--extern".to_owned(), format!("compiler_builtins={}", builtins.display()),
             "-L".to_owned(), format!("dependency={}", dependencies.display()),
             "--sysroot".to_owned(), sysroot, "-o".to_owned(), fixture.0.join("fixture.rmeta").display().to_string(),
             source.display().to_string(),
