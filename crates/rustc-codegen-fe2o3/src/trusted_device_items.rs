@@ -32,6 +32,8 @@ use dialect_amdgcn::{
 use fe2o3_kernel_ir::{NarrowFloatFormat, WidenedFloatBinaryOp};
 use fe2o3_rustc_invocation::CARGO_METADATA_BUILD_OBSERVATION_ENV_V2;
 
+mod core_u32_widening_v1;
+pub(crate) use core_u32_widening_v1::authenticate_reviewed_safe_core_u32_widening_v1;
 mod core_result_control_v1;
 pub(crate) use core_result_control_v1::{
     authenticate_reviewed_safe_core_result_branch_v1,
