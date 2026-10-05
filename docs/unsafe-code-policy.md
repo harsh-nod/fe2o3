@@ -683,6 +683,18 @@ install the compiler filter. This observes pre-exec state only, not personality
 established by ELF exec, complete W^X, immutable backing, descendant confinement,
 source/output enforcement or runtime admission.
 
+The additional `native_compiler_trace_filter.rs` installer has one unsafe
+function and one unsafe block. It synchronously installs a fixed immutable
+classic-BPF program only after the original compiler gate is released; the
+existing pre-READY filters remain in force. The consuming staged mode prepays
+the complete installation work and scratch before clone. Seventeen syscall
+checkpoints include executable-memory operations and descriptor imports;
+`creat`, `openat2`, and replacement `seccomp` calls are denied. Only the same
+retained parent trace may mediate those checkpoints. Staging and filter
+installation alone do not establish runtime enforcement or authorize a gate
+release. The gated production attempt selects this mode, but retains its closed
+gate; original-trace arming and the complete runtime guard are still required.
+
 Twelve diagnostic blocks in `native_compiler_restrictions_exec_tests.rs`
 stage/clone retained inert inputs, query/set/restore isolated creator state,
 inspect initialized scalar buffers and install outer test-only denial filters.

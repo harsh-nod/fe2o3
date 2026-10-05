@@ -56,6 +56,12 @@ pub(crate) use compiler_restrictions::{
     INSTRUCTIONS as COMPILER_RESTRICTION_INSTRUCTIONS, SCRATCH as COMPILER_RESTRICTION_SCRATCH,
 };
 
+#[path = "native_compiler_trace_filter.rs"]
+mod compiler_trace_filter;
+pub(crate) use compiler_trace_filter::{
+    INSTRUCTIONS as COMPILER_TRACE_INSTRUCTIONS, SCRATCH as COMPILER_TRACE_SCRATCH,
+};
+
 #[path = "native_namespace_restrictions.rs"]
 mod namespace_restrictions;
 pub(crate) use namespace_restrictions::{
@@ -134,6 +140,12 @@ struct StagedBindingV1 {
     destination: RawFd,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum CompilerCheckpointMode {
+    Basic,
+    Traced,
+}
+
 pub(crate) struct StagedProtectedServiceExecV1 {
     executable: File,
     bindings: Vec<StagedBindingV1>,
@@ -142,6 +154,7 @@ pub(crate) struct StagedProtectedServiceExecV1 {
     exec_status_writer: OwnedFd,
     compiler: Option<(File, CompilerArguments)>,
     compiler_child_channel_transfer: Option<File>,
+    compiler_checkpoints: CompilerCheckpointMode,
 }
 
 impl StagedProtectedServiceExecV1 {
@@ -242,6 +255,7 @@ impl StagedProtectedServiceExecV1 {
             exec_status_writer: duplicate_above(exec_status_writer, &mut next)?,
             compiler: None,
             compiler_child_channel_transfer: None,
+            compiler_checkpoints: CompilerCheckpointMode::Basic,
         })
     }
 
@@ -257,17 +271,38 @@ impl StagedProtectedServiceExecV1 {
         self.compiler_child_channel_transfer.as_ref()
     }
 
+    pub(crate) fn require_runtime_checkpoints(&mut self) -> bool {
+        if self.compiler.is_none()
+            || self.compiler_child_channel_transfer.is_none()
+            || self.compiler_checkpoints != CompilerCheckpointMode::Basic
+        {
+            return false;
+        }
+        self.compiler_checkpoints = CompilerCheckpointMode::Traced;
+        true
+    }
+
+    pub(crate) fn has_runtime_checkpoints(&self) -> bool {
+        self.compiler_checkpoints == CompilerCheckpointMode::Traced
+    }
+
     pub(crate) fn additional_child_work(&self) -> usize {
         let cwd = if self.compiler.is_some() {
             crate::native_work::COMPILER_CWD_WORK + crate::native_work::COMPILER_RESTRICTION_WORK
         } else {
             0
         };
-        cwd + if self.compiler_child_channel_transfer.is_some() {
+        let channel = if self.compiler_child_channel_transfer.is_some() {
             crate::native_work::COMPILER_CHANNEL_WORK
         } else {
             0
-        }
+        };
+        let checkpoints = if self.has_runtime_checkpoints() {
+            crate::native_work::COMPILER_TRACE_WORK
+        } else {
+            0
+        };
+        cwd + channel + checkpoints
     }
 
     pub(crate) fn descriptor_count(&self) -> usize {
@@ -668,6 +703,11 @@ unsafe fn child_exec(
         };
         if release != PROTECTED_SERVICE_GATE_RELEASE_V1 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 6);
+        }
+        // The original trace is armed before this exact gate is released. Keep
+        // pre-READY filters unchanged; no userspace compiler instruction has run.
+        if staged.has_runtime_checkpoints() && !compiler_trace_filter::install() {
+            child_fail(staged.exec_status_writer.as_raw_fd(), 17);
         }
         if libc::syscall(libc::SYS_close_range, 3_u32, u32::MAX, CLOSE_RANGE_CLOEXEC) != 0 {
             child_fail(staged.exec_status_writer.as_raw_fd(), 7);

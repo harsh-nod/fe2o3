@@ -225,6 +225,9 @@ fn validate(
         .revalidate(b)
         .map_err(ProofHelperBackingError::Compiler)?;
     let invalid = || Failure::Invalid("incomplete original compiler stage");
+    if !stage.has_runtime_checkpoints() {
+        return Err(Failure::Invalid("compiler stage lacks runtime checkpoints"));
+    }
     compiler
         .runtime()
         .validate_rustc_exec_transfer(stage.executable(), b)
@@ -265,7 +268,10 @@ fn validate(
             & (1 << index)
             != 0;
         match (selected, stage.binding(index as i32)) {
-            (true, Some(file)) => same_object(received_fd(received, role)?, file)?,
+            (true, Some(file)) => {
+                same_object(received_fd(received, role)?, file)?;
+                crate::native_runtime_descriptors::inspect(file.as_fd(), b)?;
+            }
             (false, None) => {}
             _ => return Err(invalid()),
         }
@@ -343,6 +349,9 @@ fn stage(
             )
         }?;
         b.reserve_storage(charge.additional_storage())?;
+        // This only selects child setup after the still-closed gate. The gate
+        // remains inaccessible until the original trace has a complete guard.
+        let stage = stage.require_runtime_checkpoints(b)?;
         same_object(
             channels.child.as_fd(),
             stage

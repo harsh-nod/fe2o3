@@ -87,6 +87,7 @@ pub(crate) enum ProofHelperLaunchError {
     Native(NativeError),
     Record(RecordError),
     Inventory(crate::native_runtime_inventory::Error),
+    Descriptor(crate::native_runtime_descriptors::Error),
     Invalid(&'static str),
 }
 macro_rules! errors {
@@ -98,6 +99,7 @@ macro_rules! errors {
 }
 errors!(Resource => Resource, BackingError => Backing, NativeError => Native, RecordError => Record);
 errors!(crate::native_runtime_inventory::Error => Inventory);
+errors!(crate::native_runtime_descriptors::Error => Descriptor);
 impl From<SpawnError> for ProofHelperLaunchError {
     fn from(e: SpawnError) -> Self {
         Self::Native(NativeError::Spawn(e))
@@ -129,6 +131,7 @@ impl fmt::Display for ProofHelperLaunchError {
             Self::Native(e) => e.fmt(f),
             Self::Record(e) => e.fmt(f),
             Self::Inventory(e) => e.fmt(f),
+            Self::Descriptor(e) => e.fmt(f),
             Self::Invalid(message) => f.write_str(message),
         }
     }
@@ -141,6 +144,7 @@ impl std::error::Error for ProofHelperLaunchError {
             Self::Native(e) => Some(e),
             Self::Record(e) => Some(e),
             Self::Inventory(e) => Some(e),
+            Self::Descriptor(e) => Some(e),
             Self::Invalid(_) => None,
         }
     }
