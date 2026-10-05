@@ -57,6 +57,61 @@ impl Stage {
         self.inner.has_runtime_checkpoints()
     }
 
+    /// Bounded validation of the original staged output and consuming transition.
+    pub const OUTPUT_CONFINEMENT_STAGING_WORK: usize = ENTRY + 3 * (1024 + 64);
+    /// Scratch above the complete original stage reservation.
+    pub const OUTPUT_CONFINEMENT_STAGING_SCRATCH: usize =
+        2 * std::mem::size_of::<Self>() + 2 * std::mem::size_of::<rustix::fs::Stat>() + 256;
+    /// Fixed child-side installation work, prepaid by spawn_work before clone.
+    pub const OUTPUT_CONFINEMENT_CHILD_WORK: usize = syscall::COMPILER_FILESYSTEM_WORK;
+
+    /// Restrict future filesystem writes/creation/removal to the actual output
+    /// directory at 197. Only an already checkpointed compiler stage may select
+    /// this irreversible mode. The child requires Landlock ABI3 and installs it
+    /// before READY; unsupported kernels fail through owned child cleanup.
+    ///
+    /// This does not authenticate the directory, rewrite captured argv/env,
+    /// revoke existing descriptors, freeze source files or admit device opens.
+    /// The caller must validate the final binding against its original output
+    /// owner and retain separate runtime/device/descriptor enforcement.
+    pub fn require_output_write_confinement(mut self, b: &mut Budget<'_>) -> Result<Self> {
+        b.with_prepaid_scope(
+            self.retained,
+            ENTRY,
+            Self::OUTPUT_CONFINEMENT_STAGING_WORK,
+            Self::OUTPUT_CONFINEMENT_STAGING_SCRATCH,
+            |_| {
+                let output = self
+                    .inner
+                    .binding(syscall::COMPILER_OUTPUT_DESTINATION)
+                    .ok_or(Error::State("missing original compiler output binding"))?;
+                let stat = rustix::fs::fstat(output)
+                    .map_err(|e| io("inspect staged compiler output directory", e))?;
+                let flags = rustix::fs::fcntl_getfl(output)
+                    .map_err(|e| io("inspect staged compiler output access", e))?;
+                let descriptor = rustix::io::fcntl_getfd(output)
+                    .map_err(|e| io("inspect staged compiler output CLOEXEC", e))?;
+                if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+                    || flags & rustix::fs::OFlags::ACCMODE != rustix::fs::OFlags::RDONLY
+                    || flags.contains(rustix::fs::OFlags::PATH)
+                    || !descriptor.contains(rustix::io::FdFlags::CLOEXEC)
+                    || !self.inner.require_output_write_confinement()
+                {
+                    return Err(Error::State(
+                        "invalid or repeated compiler output confinement stage",
+                    ));
+                }
+                Ok(())
+            },
+        )?;
+        Ok(self)
+    }
+
+    /// Actual stage mode, not proof that installation or compiler exec occurred.
+    pub fn has_output_write_confinement(&self) -> bool {
+        self.inner.has_output_write_confinement()
+    }
+
     /// Maximum compiler argv count admitted by this mechanical exec stage.
     pub const MAX_COMPILER_ARGUMENTS: usize = super::compiler_arguments::MAX_ARGUMENTS;
     /// Maximum complete environment entry count; no inherited entries are added.

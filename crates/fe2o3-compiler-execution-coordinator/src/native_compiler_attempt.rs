@@ -367,6 +367,7 @@ fn stage(
         // This only selects child setup after the still-closed gate. The gate
         // remains inaccessible until the original trace has a complete guard.
         let stage = stage.require_runtime_checkpoints(b)?;
+        let stage = stage.require_output_write_confinement(b)?;
         same_object(
             channels.child.as_fd(),
             stage

@@ -196,6 +196,7 @@ impl StagedProtectedServiceExecV2 {
         + syscall::COMPILER_CHANNEL_SCRATCH
         + syscall::COMPILER_RESTRICTION_SCRATCH
         + syscall::COMPILER_TRACE_SCRATCH
+        + syscall::COMPILER_FILESYSTEM_SCRATCH
         + syscall::NAMESPACE_RESTRICTION_SCRATCH
         + 8192
         + crate::clone_compat::SCRATCH;

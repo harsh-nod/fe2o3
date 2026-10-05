@@ -62,6 +62,13 @@ pub(crate) use compiler_trace_filter::{
     INSTRUCTIONS as COMPILER_TRACE_INSTRUCTIONS, SCRATCH as COMPILER_TRACE_SCRATCH,
 };
 
+#[path = "native_compiler_filesystem.rs"]
+mod compiler_filesystem;
+pub(crate) use compiler_filesystem::{
+    OUTPUT_DESTINATION as COMPILER_OUTPUT_DESTINATION, SCRATCH as COMPILER_FILESYSTEM_SCRATCH,
+    WORK as COMPILER_FILESYSTEM_WORK,
+};
+
 #[path = "native_namespace_restrictions.rs"]
 mod namespace_restrictions;
 pub(crate) use namespace_restrictions::{
@@ -155,6 +162,7 @@ pub(crate) struct StagedProtectedServiceExecV1 {
     compiler: Option<(File, CompilerArguments)>,
     compiler_child_channel_transfer: Option<File>,
     compiler_checkpoints: CompilerCheckpointMode,
+    compiler_output_confinement: bool,
 }
 
 impl StagedProtectedServiceExecV1 {
@@ -256,6 +264,7 @@ impl StagedProtectedServiceExecV1 {
             compiler: None,
             compiler_child_channel_transfer: None,
             compiler_checkpoints: CompilerCheckpointMode::Basic,
+            compiler_output_confinement: false,
         })
     }
 
@@ -286,6 +295,21 @@ impl StagedProtectedServiceExecV1 {
         self.compiler_checkpoints == CompilerCheckpointMode::Traced
     }
 
+    pub(crate) fn require_output_write_confinement(&mut self) -> bool {
+        if !self.has_runtime_checkpoints()
+            || self.compiler_output_confinement
+            || self.binding(COMPILER_OUTPUT_DESTINATION).is_none()
+        {
+            return false;
+        }
+        self.compiler_output_confinement = true;
+        true
+    }
+
+    pub(crate) const fn has_output_write_confinement(&self) -> bool {
+        self.compiler_output_confinement
+    }
+
     pub(crate) fn additional_child_work(&self) -> usize {
         let cwd = if self.compiler.is_some() {
             crate::native_work::COMPILER_CWD_WORK + crate::native_work::COMPILER_RESTRICTION_WORK
@@ -302,7 +326,12 @@ impl StagedProtectedServiceExecV1 {
         } else {
             0
         };
-        cwd + channel + checkpoints
+        let filesystem = if self.has_output_write_confinement() {
+            COMPILER_FILESYSTEM_WORK
+        } else {
+            0
+        };
+        cwd + channel + checkpoints + filesystem
     }
 
     pub(crate) fn descriptor_count(&self) -> usize {
@@ -686,6 +715,15 @@ unsafe fn child_exec(
         if staged.requires_namespace_confinement(mapping_gate) && !namespace_restrictions::install()
         {
             child_fail(staged.exec_status_writer.as_raw_fd(), 14);
+        }
+        if staged.has_output_write_confinement() {
+            let output = match staged.binding(COMPILER_OUTPUT_DESTINATION) {
+                Some(output) => output.as_raw_fd(),
+                None => child_fail(staged.exec_status_writer.as_raw_fd(), 18),
+            };
+            if !compiler_filesystem::install(output) {
+                child_fail(staged.exec_status_writer.as_raw_fd(), 18);
+            }
         }
         let ready = PROTECTED_SERVICE_PROFILE_READY_V1;
         if libc::syscall(

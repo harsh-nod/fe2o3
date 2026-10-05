@@ -1197,6 +1197,13 @@
   "crates/fe2o3-protected-service-spawn/src/native_compiler_exec_tests.rs": {
     "block": 2
   },
+  "crates/fe2o3-protected-service-spawn/src/native_compiler_filesystem.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_compiler_filesystem_tests.rs": {
+    "block": 1
+  },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_personality.rs": {
     "block": 9,
     "function": 6
