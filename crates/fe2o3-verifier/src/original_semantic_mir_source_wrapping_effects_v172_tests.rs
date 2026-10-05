@@ -244,7 +244,17 @@ fn original_wrapping_dispatch_never_interprets_checked_or_unchecked_rvalues() {
                                     continue;
                                 };
                                 reached += 1;
-                                assert!(Operation::derive(&context, assignment, out)?.is_none());
+                                assert!(matches!(
+                                    Operation::derive(
+                                        &context,
+                                        assignment,
+                                        Destination::Local(context.locals.start + 4),
+                                        out,
+                                    ),
+                                    Err(Error::Statement(
+                                        "original MIR typed byte statement is not modeled"
+                                    ))
+                                ));
                                 let scalar = binary.left().ty();
                                 let unchecked = SemanticAssignmentV1::new(
                                     Place::new(SemanticLocalIdV1::from_index(0), vec![], scalar)
@@ -260,7 +270,17 @@ fn original_wrapping_dispatch_never_interprets_checked_or_unchecked_rvalues() {
                                         ),
                                     ),
                                 );
-                                assert!(Operation::derive(&context, &unchecked, out)?.is_none());
+                                assert!(matches!(
+                                    Operation::derive(
+                                        &context,
+                                        &unchecked,
+                                        Destination::Local(context.locals.start),
+                                        out,
+                                    ),
+                                    Err(Error::Statement(
+                                        "original MIR typed byte statement is not modeled"
+                                    ))
+                                ));
                             }
                         }
                     }
