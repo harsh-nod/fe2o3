@@ -136,8 +136,11 @@ impl Callbacks for FixtureCallbacks {
         let mut results = Results::default();
         for name in ["branch_u32", "branch_unit"] {
             let instance = resolved_branch(tcx, name);
-            assert!(branch_signature_v1(tcx, instance).is_some());
-            assert!(branch_body_v1(tcx, instance, tcx.instance_mir(instance.def)));
+            assert!(branch_signature_v1(tcx, instance).is_some(), "branch signature: {instance:?}");
+            let body = tcx.instance_mir(instance.def);
+            assert!(branch_body_v1(tcx, instance, body),
+                "branch body: {instance:?}; arguments={} locals={} blocks={} scopes={}",
+                body.arg_count, body.local_decls.len(), body.basic_blocks.len(), body.source_scopes.len());
             results.genuine += 1;
             // Body safety alone does not admit unselected scalar error types.
             assert!(!authenticate_reviewed_safe_core_result_branch_v1(tcx, instance));
@@ -277,8 +280,11 @@ impl Callbacks for FixtureCallbacks {
 fn inspect_residual_bodies<'tcx>(tcx: TyCtxt<'tcx>, results: &mut Results) {
     for name in ["residual_unit", "residual_u32"] {
         let instance = resolved_call(tcx, name, "from_residual");
-        assert!(residual_signature_v1(tcx, instance).is_some());
-        assert!(residual_body_v1(tcx, instance, tcx.instance_mir(instance.def)));
+        assert!(residual_signature_v1(tcx, instance).is_some(), "residual signature: {instance:?}");
+        let body = tcx.instance_mir(instance.def);
+        assert!(residual_body_v1(tcx, instance, body),
+            "residual body: {instance:?}; arguments={} locals={} blocks={} scopes={}",
+            body.arg_count, body.local_decls.len(), body.basic_blocks.len(), body.source_scopes.len());
         results.residual_genuine += 1;
         assert!(!authenticate_reviewed_safe_core_result_residual_v1(tcx, instance));
         results.residual_nominal_refusals += 1;

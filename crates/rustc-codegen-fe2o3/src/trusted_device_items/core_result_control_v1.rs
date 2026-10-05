@@ -224,10 +224,11 @@ fn branch_signature_v1<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> Opt
     let (empty, residual_error) = result_arguments_v1(tcx, residual)?;
     let TyKind::Adt(infallible, empty_arguments) = *empty.kind() else { return None; };
     // Infallible has no lang/diagnostic item in the pinned core. Its real
-    // definition is anchored to the genuine core crate, path and empty shape.
+    // definition is anchored to the genuine core crate, structural path and
+    // empty shape. Display paths can instead name a visible std re-export.
     if residual_error != error
         || infallible.did().krate != instance.def_id().krate
-        || tcx.def_path_str(infallible.did()) != "core::convert::Infallible"
+        || tcx.def_path(infallible.did()).to_string_no_crate_verbose() != "::convert::Infallible"
         || !infallible.is_enum()
         || !infallible.variants().is_empty()
         || !empty_arguments.is_empty()
@@ -401,7 +402,7 @@ fn residual_signature_v1<'tcx>(
     }
     let TyKind::Adt(infallible, empty_arguments) = *empty.kind() else { return None; };
     if infallible.did().krate != instance.def_id().krate
-        || tcx.def_path_str(infallible.did()) != "core::convert::Infallible"
+        || tcx.def_path(infallible.did()).to_string_no_crate_verbose() != "::convert::Infallible"
         || !infallible.is_enum() || !infallible.variants().is_empty() || !empty_arguments.is_empty()
     {
         return None;
