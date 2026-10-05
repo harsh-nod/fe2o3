@@ -194,6 +194,7 @@ fn public_method_marks_real_empty_owner_quarantined_without_device_access() {
         poisoned: false,
         closed: false,
         shared_full_currentness: false,
+        projection_mlp_scratch: None,
     };
     assert!(group.preflight_additional_allocations_v1(&[]).is_err());
     assert!(group.poisoned);

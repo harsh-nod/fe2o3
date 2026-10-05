@@ -35,8 +35,14 @@ pub use wave_mlp_state_v1::Gfx950EngineeringPeerWaveMlpStateV1;
 #[path = "engineering_gfx950_peer_wave_mlp_tiles_state_v2.rs"]
 mod wave_mlp_tiles_state_v2;
 pub use wave_mlp_tiles_state_v2::Gfx950EngineeringPeerWaveMlpTilesStateV2;
+#[path = "engineering_gfx950_peer_projection_residual_mlp_tiles_v1.rs"]
+mod projection_residual_mlp_tiles_v1;
 #[path = "engineering_gfx950_peer_wave_mlp_tiles_v2.rs"]
 mod wave_mlp_tiles_v2;
+pub use projection_residual_mlp_tiles_v1::{
+    Gfx950EngineeringPeerProjectionResidualMlpTilesDispatchV1,
+    Gfx950EngineeringPeerProjectionResidualMlpTilesRoundV1,
+};
 #[path = "engineering_gfx950_peer_wave_qkv_attention_output_tiles_state_v6.rs"]
 mod wave_qkv_attention_output_tiles_state_v6;
 pub use wave_qkv_attention_output_tiles_state_v6::Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6;
@@ -457,6 +463,7 @@ pub struct Gfx950EngineeringPeerGroupV1 {
     poisoned: bool,
     closed: bool,
     shared_full_currentness: bool,
+    projection_mlp_scratch: Option<projection_residual_mlp_tiles_v1::Scratch>,
 }
 
 impl Gfx950EngineeringPeerGroupV1 {
@@ -506,6 +513,7 @@ impl Gfx950EngineeringPeerGroupV1 {
             poisoned: false,
             closed: false,
             shared_full_currentness: false,
+            projection_mlp_scratch: None,
         };
         let result = (|| {
             for &unique_id in unique_ids {

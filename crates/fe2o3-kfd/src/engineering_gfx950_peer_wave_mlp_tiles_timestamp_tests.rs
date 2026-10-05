@@ -123,6 +123,7 @@ fn timestamp_tiled_join_failure_enters_existing_group_poison_path() {
         poisoned: false,
         closed: false,
         shared_full_currentness: false,
+        projection_mlp_scratch: None,
     };
     assert!(
         group

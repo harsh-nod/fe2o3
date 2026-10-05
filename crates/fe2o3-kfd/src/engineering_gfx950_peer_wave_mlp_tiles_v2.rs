@@ -69,7 +69,7 @@ fn validate_data_record(
     Ok(())
 }
 
-fn validate_pair_regions(regions: &[[profile::OwnedRegion; 11]; 2]) -> Result<()> {
+pub(super) fn validate_pair_regions(regions: &[[profile::OwnedRegion; 11]; 2]) -> Result<()> {
     for roots in regions {
         profile::validate_regions(roots, &profile::fixups(roots))?;
     }
@@ -86,7 +86,7 @@ fn validate_pair_regions(regions: &[[profile::OwnedRegion; 11]; 2]) -> Result<()
     Ok(())
 }
 
-fn dispatch<'a>(
+pub(super) fn dispatch<'a>(
     command: &Gfx950EngineeringPeerWaveMlpTilesDispatchV2<'a>,
 ) -> Gfx950EngineeringPeerDispatchV1<'a> {
     let mut pointers = command
@@ -356,3 +356,12 @@ mod tests;
 #[cfg(test)]
 #[path = "engineering_gfx950_peer_wave_mlp_tiles_timestamp_tests.rs"]
 mod timestamp_tests;
+
+// Reuse typed metadata, allocation and state checks without standalone publication.
+pub(super) fn validate_retained(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    rank: usize,
+    command: &Gfx950EngineeringPeerWaveMlpTilesDispatchV2<'_>,
+) -> Result<[profile::OwnedRegion; 11]> {
+    NativeResident(group, None).validate(rank, command)
+}

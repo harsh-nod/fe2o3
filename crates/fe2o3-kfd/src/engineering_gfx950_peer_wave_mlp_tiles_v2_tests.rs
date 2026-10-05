@@ -97,6 +97,7 @@ fn group() -> Gfx950EngineeringPeerGroupV1 {
         poisoned: false,
         closed: false,
         shared_full_currentness: false,
+        projection_mlp_scratch: None,
     }
 }
 
@@ -489,8 +490,13 @@ fn resident_v2_native_adapter_routes_to_private_guard_not_public_observer() {
     states[0].activation = Activation::Initialized;
     // The public observer would attempt a full fence over this empty context
     // roster. The private adapter must reject the phase before any backend I/O.
-    let error = NativeResident(&mut owner, None).observe(&states[0]).unwrap_err();
-    assert_eq!(error, "MLP tiles V2 private resident observation activation");
+    let error = NativeResident(&mut owner, None)
+        .observe(&states[0])
+        .unwrap_err();
+    assert_eq!(
+        error,
+        "MLP tiles V2 private resident observation activation"
+    );
     assert!(owner.poisoned);
     assert_eq!(
         owner.require_active().unwrap_err(),

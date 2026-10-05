@@ -422,3 +422,14 @@ impl Gfx950EngineeringPeerGroupV1 {
 #[cfg(test)]
 #[path = "engineering_gfx950_peer_round_tests.rs"]
 mod tests;
+
+// Includes every participant even while a previously published queue is busy.
+pub(super) fn fresh_publication_fence(group: &mut Gfx950EngineeringPeerGroupV1) -> Result<()> {
+    run_publication_currentness(&mut NativeRound {
+        group,
+        commands: Vec::new(),
+        next_currentness: Instant::now(),
+        capture: false,
+        observations: [None; 8],
+    })
+}

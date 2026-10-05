@@ -33,6 +33,7 @@ fn group() -> Gfx950EngineeringPeerGroupV1 {
         poisoned: false,
         closed: false,
         shared_full_currentness: false,
+        projection_mlp_scratch: None,
     }
 }
 fn terminal() -> [u32; 548] {
@@ -360,10 +361,8 @@ fn v2_private_resident_read_checks_active_phase_and_owner_before_storage() {
         owner.closed = closed;
         owner.poisoned = poisoned;
         // SAFETY: the negative group guard refuses before any storage access.
-        let error = unsafe {
-            observe_within_resident_fence(&mut owner, &state(Activation::Ready))
-        }
-        .unwrap_err();
+        let error = unsafe { observe_within_resident_fence(&mut owner, &state(Activation::Ready)) }
+            .unwrap_err();
         assert_eq!(error, "peer group is closed or quarantined");
     }
     for activation in [
@@ -375,7 +374,10 @@ fn v2_private_resident_read_checks_active_phase_and_owner_before_storage() {
         let token = state(activation);
         // SAFETY: the negative activation guard refuses before storage access.
         let error = unsafe { observe_within_resident_fence(&mut owner, &token) }.unwrap_err();
-        assert_eq!(error, "MLP tiles V2 private resident observation activation");
+        assert_eq!(
+            error,
+            "MLP tiles V2 private resident observation activation"
+        );
         assert!(owner.poisoned);
         assert_eq!(token.activation, activation);
     }
@@ -413,7 +415,10 @@ fn v2_private_resident_read_keeps_token_kind_extent_and_mapping_refusals() {
         // SAFETY: every corrupted record must refuse before local storage;
         // the empty context roster also prevents accidental native access.
         let error = unsafe { observe_within_resident_fence(&mut owner, &token) }.unwrap_err();
-        assert_ne!(error, "MLP tiles V2 state owner outside group", "change {change}");
+        assert_ne!(
+            error, "MLP tiles V2 state owner outside group",
+            "change {change}"
+        );
         assert!(owner.poisoned, "change {change}");
         assert_eq!(token.activation, Activation::Ready);
         assert_eq!(

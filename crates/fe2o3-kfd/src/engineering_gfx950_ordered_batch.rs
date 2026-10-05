@@ -82,7 +82,7 @@ struct NativeOrdered<'a> {
     count: u32,
 }
 
-struct OrderedPending {
+pub(super) struct OrderedPending {
     unique_id: u64,
     queue_epoch: u64,
     next: u64,
@@ -187,6 +187,18 @@ fn batch_count<const N: usize>() -> Result<u32> {
     u32::try_from(N).map_err(explain)
 }
 
+fn require_stage_shape(
+    count: u32,
+    offset: usize,
+    payload_bytes: usize,
+    prepared: usize,
+) -> Result<()> {
+    if offset != payload_bytes || prepared != count as usize {
+        return Err("ordered batch staged payload or count".into());
+    }
+    Ok(())
+}
+
 impl OrderedBackend for NativeOrdered<'_> {
     type Prepared = PreparedDispatch;
     type Staged = Vec<AqlPreparedKernelDispatchV1>;
@@ -226,9 +238,7 @@ impl OrderedBackend for NativeOrdered<'_> {
     }
 
     fn stage(&mut self, prepared: Vec<PreparedDispatch>) -> Result<Self::Staged> {
-        if self.offset != self.payload.len() || prepared.len() != self.count as usize {
-            return Err("ordered batch staged payload or count".into());
-        }
+        require_stage_shape(self.count, self.offset, self.payload.len(), prepared.len())?;
         self.retain_storage()?;
         let mut packets = Vec::with_capacity(prepared.len());
         for (index, prepared) in prepared.into_iter().enumerate() {
@@ -535,3 +545,69 @@ impl Context {
 #[cfg(test)]
 #[path = "engineering_gfx950_ordered_batch_tests.rs"]
 mod tests;
+
+/// Fixed retained identities; not an admission cache. Callers must fence anew.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PairStorageIdentity {
+    pub(super) arena: (u64, u64, usize, usize),
+    pub(super) signal: (u64, u64, usize, usize),
+}
+
+fn pair_backend(context: &mut Context) -> NativeOrdered<'_> {
+    NativeOrdered {
+        context,
+        commands: Vec::new(),
+        payload: Vec::new(),
+        offset: 0,
+        count: 2,
+    }
+}
+
+pub(super) fn pair_storage_identity(context: &Context) -> Result<PairStorageIdentity> {
+    if context.internal.len() != ORDERED_KERNARG + 1
+        || context.internal[ORDERED_KERNARG].requested != ORDERED_KERNARG_BYTES
+        || context.internal[SIGNAL].requested != PAGE_BYTES
+    {
+        return Err("ordered pair retained storage extent".into());
+    }
+    let identity = |value: &Allocation| (value.va, value.handle, value.requested, value.backing);
+    Ok(PairStorageIdentity {
+        arena: identity(&context.internal[ORDERED_KERNARG]),
+        signal: identity(&context.internal[SIGNAL]),
+    })
+}
+
+pub(super) fn retain_pair_storage(context: &mut Context) -> Result<PairStorageIdentity> {
+    pair_backend(context).retain_storage()?;
+    pair_storage_identity(context)
+}
+
+pub(super) fn stage_pair(
+    context: &mut Context,
+    prepared: [PreparedDispatch; 2],
+) -> Result<[AqlPreparedKernelDispatchV1; 2]> {
+    pair_backend(context)
+        .stage(Vec::from(prepared))?
+        .try_into()
+        .map_err(|_| "ordered pair stage census".into())
+}
+
+pub(super) fn publish_pair(
+    context: &mut Context,
+    packets: [AqlPreparedKernelDispatchV1; 2],
+    deadline: Instant,
+) -> Result<OrderedPending> {
+    pair_backend(context).publish_fixed::<2>(Vec::from(packets), deadline)
+}
+
+pub(super) fn poll_pair(context: &mut Context, pending: &mut OrderedPending) -> Result<bool> {
+    pair_backend(context).poll_final(pending)
+}
+
+pub(super) fn validate_pair_signals(context: &mut Context, pending: &OrderedPending) -> Result<()> {
+    pair_backend(context).validate_all(pending)
+}
+
+pub(super) fn retire_pair(context: &mut Context, pending: OrderedPending) -> Result<()> {
+    pair_backend(context).complete(pending)
+}

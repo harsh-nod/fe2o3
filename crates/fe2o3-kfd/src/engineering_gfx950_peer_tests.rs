@@ -110,6 +110,7 @@ fn every_context_fence_failure_stops_and_quarantines_the_group() {
                     poisoned: false,
                     closed: false,
                     shared_full_currentness: shared,
+                    projection_mlp_scratch: None,
                 };
                 let token = Gfx950EngineeringPeerBufferV1 {
                     group: 7,
@@ -501,6 +502,7 @@ fn group_tokens_are_incarnation_bound_and_failures_poison_without_native_access(
         poisoned: false,
         closed: false,
         shared_full_currentness: false,
+        projection_mlp_scratch: None,
     };
     group.validate_token(token).unwrap();
     for changed in [

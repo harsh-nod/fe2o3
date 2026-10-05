@@ -99,6 +99,7 @@ fn group() -> Gfx950EngineeringPeerGroupV1 {
         poisoned: false,
         closed: false,
         shared_full_currentness: false,
+        projection_mlp_scratch: None,
     }
 }
 

@@ -113,6 +113,7 @@ impl OrderedBackend for Fake {
         self.event("ring_capacity_reservation".into())?;
         match count {
             1 => self.expose::<1>()?,
+            2 => self.expose::<2>()?,
             16 => self.expose::<16>()?,
             _ => panic!("unsupported fake count"),
         }
@@ -437,4 +438,64 @@ fn optional_arena_and_signals_are_reinitialized_after_confirmed_queue_rollover()
     );
     assert!(retain.contains("ORDERED_KERNARG =>"));
     assert!(retain.contains("count if count == ORDERED_KERNARG + 1 => {}"));
+}
+
+#[test]
+fn paired_prepared_adapter_accepts_empty_transport_payload_only_at_exact_two_count() {
+    // stage_pair supplies already prepared bytes, not an unconsumed wire payload.
+    // This is the exact predicate used by NativeOrdered::stage before any reset.
+    require_stage_shape(2, 0, 0, 2).unwrap();
+    assert!(require_stage_shape(2, 0, 1, 2).is_err());
+    assert!(require_stage_shape(2, 1, 0, 2).is_err());
+    assert!(require_stage_shape(2, 0, 0, 1).is_err());
+    assert!(require_stage_shape(2, 0, 0, 3).is_err());
+}
+
+#[test]
+fn paired_ordered_packets_have_distinct_slots_wait_for_prior_and_one_final_doorbell() {
+    let mut fake = Fake::default();
+    run_ordered_batch(&mut fake, 2, 10_000).unwrap();
+    assert_eq!(fake.retained, 2);
+    assert_eq!(
+        fake.events
+            .iter()
+            .filter(|v| v.starts_with("reset:"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        fake.events
+            .iter()
+            .filter(|v| v.starts_with("body:"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        fake.events
+            .iter()
+            .filter(|v| v.starts_with("header:"))
+            .count(),
+        2
+    );
+    assert_eq!(fake.events.iter().filter(|v| *v == "doorbell").count(), 1);
+    assert_eq!(
+        fake.events
+            .iter()
+            .filter(|v| v.starts_with("validate_signal:"))
+            .count(),
+        2
+    );
+    // Fake::write_unpublished checks distinct 64 KiB kernarg and 64-byte signal
+    // slots; publish_release_header asserts the genuine WaitForPrior 0x1502.
+    let last_reset = fake
+        .events
+        .iter()
+        .rposition(|v| v.starts_with("reset:"))
+        .unwrap();
+    let first_body = fake
+        .events
+        .iter()
+        .position(|v| v.starts_with("body:"))
+        .unwrap();
+    assert!(last_reset < first_body);
 }

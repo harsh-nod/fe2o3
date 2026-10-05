@@ -120,6 +120,7 @@ fn every_rearm_failure_is_quarantined_and_corrupt_readback_refused() {
             poisoned: false,
             closed: false,
             shared_full_currentness: false,
+            projection_mlp_scratch: None,
         };
         assert!(
             group
