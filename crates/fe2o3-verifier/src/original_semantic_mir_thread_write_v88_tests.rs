@@ -729,6 +729,10 @@ fn original_thread_write_composition_consumes_opaque_steps_without_store_facts()
 fn scalar_store_support_keeps_modified_bytes_epochs_and_relocations_explicit() {
     let laws = include_str!("original_semantic_mir_scalar_store_laws_v92.vrs");
     assert_eq!(laws.matches("proof fn ").count(), 6);
+    assert_eq!(
+        laws.matches("#[verifier::spinoff_prover]\nproof fn ").count(),
+        6
+    );
     for required in [
         "byte_object_relocations_well_formed_v37(written)",
         "byte_token_well_formed_v37(written.bytes[i])",

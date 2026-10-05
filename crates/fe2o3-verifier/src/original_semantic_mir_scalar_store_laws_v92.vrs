@@ -1,6 +1,7 @@
 // Scalar stores change bytes, initialization, epochs and relocations, not owners.
 // These laws do not assume equal heaps, empty private storage or absent guards.
 
+#[verifier::spinoff_prover]
 proof fn invocation_scalar_store_layout_v92(
     memory: ByteMemoryV30, pointer: MemoryPointerV30, width: int,
     value: int, little_endian: bool,
@@ -24,6 +25,7 @@ proof fn invocation_scalar_store_layout_v92(
     assert(written.live.dom() =~= memory.live.dom());
 }
 
+#[verifier::spinoff_prover]
 proof fn invocation_scalar_store_well_formed_v92(
     memory: ByteMemoryV30, pointer: MemoryPointerV30, width: int,
     value: int, little_endian: bool,
@@ -95,6 +97,7 @@ proof fn invocation_scalar_store_well_formed_v92(
     }
 }
 
+#[verifier::spinoff_prover]
 proof fn invocation_scalar_store_frame_v92(
     source: MemoryStateV30, pointer: MemoryPointerV30, width: int,
     alignment: int, value: MemoryValueV30, little_endian: bool,
@@ -120,6 +123,7 @@ proof fn invocation_scalar_store_frame_v92(
     }
 }
 
+#[verifier::spinoff_prover]
 proof fn invocation_scalar_store_facts_v92()
     ensures forall|s: MemoryStateV30, pointer: MemoryPointerV30, width: int,
         alignment: int, value: MemoryValueV30, little_endian: bool|
@@ -170,6 +174,7 @@ proof fn invocation_scalar_store_facts_v92()
     }
 }
 
+#[verifier::spinoff_prover]
 proof fn invocation_scalar_store_live_domain_frames_v92(
     before: ByteMemoryV30, after: ByteMemoryV30, frames: MemoryFrameRuntimeV30,
     generations: Map<MemoryPrivateSiteV30, int>,
@@ -198,6 +203,7 @@ proof fn invocation_scalar_store_live_domain_frames_v92(
     }
 }
 
+#[verifier::spinoff_prover]
 proof fn invocation_scalar_store_source_well_formed_v92(
     source: InvocationSourceByteStateV36, pointer: MemoryPointerV30, width: int,
     alignment: int, value: MemoryValueV30, little_endian: bool,
