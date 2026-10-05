@@ -36,6 +36,7 @@ fn result_family_table_keeps_exact_source_pairs() {
 }
 
 const FIXTURE: &str = r#"
+#![no_std]
 #![feature(try_trait_v2)]
 use core::convert::Infallible;
 use core::ops::{ControlFlow, FromResidual, Try};
@@ -493,9 +494,96 @@ impl Drop for FixtureDirectory {
     fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
 }
 
+// Host prebuilt core retains unwind Continue even with callback panic=abort.
+// Build genuine target core with the measured matrix's gfx942 release flags;
+// this is a compiler fixture, not gfx950 device qualification.
+fn target_core_metadata(fixture: &FixtureDirectory, sysroot: &std::path::Path) -> (PathBuf, PathBuf) {
+    let manifest = fixture.0.join("Cargo.toml");
+    fs::write(&manifest, r#"[package]
+name = "fe2o3_core_result_fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+[workspace]
+[lib]
+path = "fixture.rs"
+"#).expect("write private target-core fixture manifest");
+    let target = fixture.0.join("target-core");
+    let configure = |command: &mut Command| {
+        command.current_dir(&fixture.0)
+            .env("RUSTC", sysroot.join("bin/rustc"))
+            .env_remove("RUSTC_WRAPPER")
+            .env_remove("RUSTC_WORKSPACE_WRAPPER")
+            .env_remove("RUSTFLAGS")
+            .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env("CARGO_BUILD_JOBS", "2")
+            .env("CARGO_INCREMENTAL", "0")
+            .env("CARGO_CACHE_AUTO_CLEAN_FREQUENCY", "never")
+            .env("CARGO_TARGET_AMDGCN_AMD_AMDHSA_RUSTFLAGS",
+                "-Zalways-encode-mir -Ctarget-cpu=gfx942 -Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32");
+    };
+    let mut lock = Command::new(env!("CARGO"));
+    configure(&mut lock);
+    lock.args(["generate-lockfile", "--offline", "--manifest-path"]).arg(&manifest);
+    let lock = crate::process_execution::capture_output(&mut lock)
+        .expect("generate private target-core fixture lockfile");
+    assert!(lock.stdout.len() <= 4 << 20 && lock.stderr.len() <= 4 << 20);
+    assert!(lock.status.success(), "target-core fixture lockfile failed: {}", String::from_utf8_lossy(&lock.stderr));
+    let mut command = Command::new(env!("CARGO"));
+    configure(&mut command);
+    command.args(["check", "--offline", "--locked", "--release", "-Zbuild-std=core",
+        "--target", "amdgcn-amd-amdhsa", "--message-format=json", "--target-dir"])
+        .arg(&target).args(["--manifest-path"]).arg(&manifest).arg("--lib");
+    let output = crate::process_execution::capture_output(&mut command)
+        .expect("build genuine AMD target core for Result callback");
+    assert!(output.stdout.len() <= 4 << 20 && output.stderr.len() <= 4 << 20);
+    assert!(output.status.success(), "target-core build failed: {}", String::from_utf8_lossy(&output.stderr));
+    let expected_source = sysroot.join("lib/rustlib/src/rust/library/core/src/lib.rs")
+        .canonicalize().expect("pinned rust-src core source");
+    let dependencies = target.join("amdgcn-amd-amdhsa/release/deps")
+        .canonicalize().expect("private target-core dependency directory");
+    let mut selected = None;
+    let mut finished = 0;
+    for line in String::from_utf8(output.stdout).expect("Cargo JSON UTF-8").lines() {
+        if line.trim().is_empty() { continue; }
+        let record: serde_json::Value = serde_json::from_str(line).expect("structured Cargo message");
+        if record["reason"].as_str() == Some("build-finished") {
+            assert_eq!(record["success"].as_bool(), Some(true));
+            finished += 1;
+        }
+        if record["reason"].as_str() != Some("compiler-artifact")
+            || record["target"]["name"].as_str() != Some("core") { continue; }
+        assert!(selected.is_none(), "duplicate core artifact");
+        for field in ["kind", "crate_types"] {
+            let values = record["target"][field].as_array().expect("core target kinds");
+            assert!(values.len() == 1 && values[0].as_str() == Some("lib"));
+        }
+        assert_eq!(record["profile"]["test"].as_bool(), Some(false));
+        assert_eq!(record["profile"]["opt_level"].as_str(), Some("3"));
+        let source = PathBuf::from(record["target"]["src_path"].as_str().expect("core source path"));
+        assert_eq!(source.canonicalize().expect("core artifact source"), expected_source);
+        let mut metadata = Vec::new();
+        let mut libraries = Vec::new();
+        for filename in record["filenames"].as_array().expect("core artifact filenames") {
+            let path = PathBuf::from(filename.as_str().expect("core artifact filename"));
+            let extension = path.extension().and_then(|value| value.to_str());
+            if !matches!(extension, Some("rmeta" | "rlib")) { continue; }
+            assert!(fs::symlink_metadata(&path).expect("core artifact metadata").file_type().is_file());
+            let path = path.canonicalize().expect("canonical core artifact");
+            assert_eq!(path.parent(), Some(dependencies.as_path()));
+            if extension == Some("rmeta") { metadata.push(path); } else { libraries.push(path); }
+        }
+        assert!(metadata.len() <= 1 && libraries.len() <= 1, "unique core metadata/library artifacts");
+        selected = metadata.pop().or_else(|| libraries.pop());
+        assert!(selected.is_some(), "Cargo omitted core metadata/library");
+    }
+    assert_eq!(finished, 1, "one successful Cargo build-finished message");
+    (selected.expect("Cargo selected actual target core"), dependencies)
+}
+
 fn compiler_results() -> Results {
-    static RESULTS: OnceLock<Results> = OnceLock::new();
-    RESULTS.get_or_init(|| {
+    static RESULTS: OnceLock<Result<Results, String>> = OnceLock::new();
+    let result = RESULTS.get_or_init(|| std::panic::catch_unwind(|| {
         static NEXT: AtomicUsize = AtomicUsize::new(0);
         static DRIVER_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         let _guard = DRIVER_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap_or_else(|poison| poison.into_inner());
@@ -509,17 +597,31 @@ fn compiler_results() -> Results {
         let sysroot = crate::process_execution::capture_output(&mut command).expect("query rustc sysroot");
         assert!(sysroot.status.success());
         let sysroot = String::from_utf8(sysroot.stdout).expect("UTF-8 sysroot").trim().to_owned();
+        let (core, dependencies) = target_core_metadata(&fixture, std::path::Path::new(&sysroot));
         let args = vec![
             "rustc".to_owned(), "--crate-name".to_owned(), "fe2o3_core_result_fixture".to_owned(),
             "--crate-type=lib".to_owned(), "--edition=2024".to_owned(), "--emit=metadata".to_owned(),
             "-Zmir-opt-level=0".to_owned(), "-Zinline-mir=no".to_owned(), "-Cpanic=abort".to_owned(),
+            "--target=amdgcn-amd-amdhsa".to_owned(), "-Ctarget-cpu=gfx942".to_owned(),
+            "-Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32".to_owned(),
+            "--extern".to_owned(), format!("core={}", core.display()),
+            "-L".to_owned(), format!("dependency={}", dependencies.display()),
             "--sysroot".to_owned(), sysroot, "-o".to_owned(), fixture.0.join("fixture.rmeta").display().to_string(),
             source.display().to_string(),
         ];
         let mut callbacks = FixtureCallbacks::default();
         rustc_driver::run_compiler(&args, &mut callbacks);
         callbacks.results.expect("core Result callback")
-    }).clone()
+    }).map_err(|payload| {
+        if let Some(message) = payload.downcast_ref::<String>() {
+            message.clone()
+        } else if let Some(message) = payload.downcast_ref::<&str>() {
+            (*message).to_owned()
+        } else {
+            "core Result fixture initialization panicked with a non-string payload".to_owned()
+        }
+    }));
+    result.as_ref().unwrap_or_else(|message| panic!("cached core Result fixture failure: {message}")).clone()
 }
 
 #[test]
