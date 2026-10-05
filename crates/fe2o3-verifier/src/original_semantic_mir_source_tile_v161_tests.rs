@@ -79,7 +79,11 @@ fn diagnostic_complete_original_tile_shared_model_export_without_execution_v161(
     run_model(LIMIT, LIMIT, |text| {
         assert!(text.len() <= 16 * 1024 * 1024);
         let mut output = BufWriter::new(std::io::stdout().lock());
-        write!(output, "{{\"kind\":\"fe2o3-original-tile-shared-model-v161\",\"scope\":\"shared equations only\",\"bytes\":{},\"sha256\":\"{:x}\",\"model_hex\":\"", text.len(), Sha256::digest(text.as_bytes())).unwrap();
+        write!(output, "{{\"kind\":\"fe2o3-original-tile-shared-model-v161\",\"scope\":\"shared equations only\",\"bytes\":{},\"sha256\":\"", text.len()).unwrap();
+        for byte in Sha256::digest(text.as_bytes()) {
+            write!(output, "{byte:02x}").unwrap();
+        }
+        write!(output, "\",\"model_hex\":\"").unwrap();
         for byte in text.as_bytes() {
             write!(output, "{byte:02x}").unwrap();
         }
