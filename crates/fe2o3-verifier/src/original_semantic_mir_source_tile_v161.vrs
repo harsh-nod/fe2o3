@@ -71,6 +71,26 @@ spec fn invocation_source_tile_refused_v161(source: InvocationSourceByteStateV36
             seq![MemoryOperationEffectV30::Refused], source, refused) }
 }
 
+spec fn invocation_source_tile_refused_after_v161(
+    source: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+) -> InvocationSourceTileResultV161 {
+    let refused = invocation_source_tile_refused_v161(source);
+    InvocationSourceTileResultV161 {
+        observations: observations + refused.observations, ..refused }
+}
+
+spec fn invocation_source_tile_installed_v161(
+    before: InvocationSourceByteStateV36, after: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+) -> InvocationSourceTileResultV161 {
+    InvocationSourceTileResultV161 { source: after,
+        observations: observations + if after.machine.valid { seq![] } else {
+            invocation_source_observe_effects_v39(
+                seq![MemoryOperationEffectV30::Refused], before, after)
+        } }
+}
+
 spec fn invocation_source_tile_components_v161(
     source: InvocationSourceByteStateV36, load: InvocationSourceTileLoadV161,
     slice: MemorySliceV30, base: int, lane: int, next: int, little_endian: bool,
@@ -152,15 +172,17 @@ spec fn invocation_source_tile_load_v161(
                     || execution.rank != 1 || execution.workgroup != seq![load.lanes, 1int, 1int]
                     || !(0 <= execution.local[0] < load.lanes)
                     || !(0 <= slice.length < memory_value_modulus_v30(8)) {
-                    invocation_source_tile_refused_v161(evaluated.source)
+                    invocation_source_tile_refused_after_v161(evaluated.source, base_reads)
                 } else {
                     let components = invocation_source_tile_components_v161(
                         evaluated.source, load, slice, base, execution.local[0], 0, little_endian);
-                    if !components.source.machine.valid
-                        || components.values.len() != load.elements
-                        || components.masks.len() != load.elements {
+                    if !components.source.machine.valid {
                         InvocationSourceTileResultV161 { source: components.source,
                             observations: base_reads + components.observations }
+                    } else if components.values.len() != load.elements
+                        || components.masks.len() != load.elements {
+                        invocation_source_tile_refused_after_v161(
+                            components.source, base_reads + components.observations)
                     } else {
                         let leaves = Map::new(
                             |path: Seq<int>| path == seq![2int] || path == seq![3int]
@@ -173,12 +195,12 @@ spec fn invocation_source_tile_load_v161(
                         let after = invocation_source_aggregate_install_v42(
                             components.source, load.destination,
                             InvocationSourceAggregateV42 { source_type: load.source_type, leaves });
-                        InvocationSourceTileResultV161 { source: after,
-                            observations: base_reads + components.observations }
+                        invocation_source_tile_installed_v161(components.source, after,
+                            base_reads + components.observations)
                     }
                 }
             },
-            _ => invocation_source_tile_refused_v161(evaluated.source),
+            _ => invocation_source_tile_refused_after_v161(evaluated.source, base_reads),
         }
     }
 }
@@ -202,6 +224,6 @@ spec fn invocation_source_tile_transport_v161(
         } else { original.leaves };
         let after = invocation_source_aggregate_install_v42(consumed, transfer.destination,
             InvocationSourceAggregateV42 { source_type: transfer.output_type, leaves });
-        InvocationSourceTileResultV161 { source: after, observations: seq![] }
+        invocation_source_tile_installed_v161(consumed, after, seq![])
     }
 }
