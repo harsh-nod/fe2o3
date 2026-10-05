@@ -226,6 +226,78 @@ pub(in super::super) fn call_argument(
     }))
 }
 
+pub(in super::super) fn entry_recipe(
+    slots: &SourceSlots<'_, '_>,
+    plan: &InvocationPlan<'_, '_>,
+    root: usize,
+    instance: usize,
+    local: fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1,
+    out: &mut Writer<'_, '_>,
+) -> Result<Option<Recipe>> {
+    out.budget.charge_work(12)?;
+    let row = plan.instance(root, instance, out)?;
+    let relation = slots.correspondence(out)?;
+    let source = relation.source(out.budget)?;
+    if !std::ptr::eq(source, plan.source(out)?) {
+        return Err(mismatch());
+    }
+    let owner = source.source_ssa(out.budget)?;
+    let function = owner
+        .source_semantic()
+        .functions()
+        .get(row.function.index() as usize)
+        .ok_or_else(mismatch)?;
+    let declaration = function
+        .locals()
+        .get(local.index() as usize)
+        .ok_or_else(mismatch)?;
+    if nominal_reference(owner.source_semantic().types(), declaration.ty())?.is_none() {
+        return Ok(None);
+    }
+    let fe2o3_mir_model::semantic_mir_v1::SemanticLocalRoleV1::Argument(argument) =
+        declaration.role()
+    else {
+        return Err(mismatch());
+    };
+    if instance == 0
+        || !row.active
+        || row.incoming.is_none()
+        || function.abi().source_input_types().get(argument as usize) != Some(&declaration.ty())
+    {
+        return Err(unsupported());
+    }
+    let occurrences = owner
+        .occurrences_v1()
+        .and_then(|all| all.function(row.function))
+        .ok_or_else(mismatch)?;
+    let mut found = None;
+    for entry in occurrences.entry_definitions() {
+        out.budget.charge_work(3)?;
+        if entry.variable().get() == local.index() {
+            if entry.origin()
+                != fe2o3_pliron::ProductionSemanticSsaEntryOriginV1::Argument(argument)
+                || found.replace(entry.value().ok_or_else(mismatch)?).is_some()
+            {
+                return Err(mismatch());
+            }
+        }
+    }
+    let endpoint =
+        relation.ssa_typed_endpoint_v36(root, instance, found.ok_or_else(mismatch)?, out.budget)?;
+    if endpoint.source_function(out.budget)? != row.function
+        || endpoint.source_local(out.budget)? != local
+        || endpoint.source_type(out.budget)? != declaration.ty()
+    {
+        return Err(mismatch());
+    }
+    let (recipe, _) = Recipe::derive(slots, &endpoint, out)?;
+    // Unique helper loans and reference returns remain explicit unsupported paths.
+    if recipe.mutable {
+        return Err(unsupported());
+    }
+    Ok(Some(recipe))
+}
+
 fn recipe_at(
     context: &Context<'_, '_, '_>,
     function: FunctionId,

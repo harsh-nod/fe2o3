@@ -458,6 +458,53 @@ fn generate_actual_tile_source_v168(
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     let mut program = SourceByteProgram::derive(plan, slots, out)?;
+    let mut shared_entries = 0;
+    for instance in 0..program.roots[0].0.len() {
+        let row = plan.instance(0, instance, out)?;
+        let semantic = slots
+            .correspondence(out)?
+            .source(out.budget)?
+            .source_semantic(out.budget)?;
+        let function = &semantic.functions()[row.function.index() as usize];
+        for (local, declaration) in function.locals().iter().enumerate() {
+            let SemanticLocalRoleV1::Argument(argument) = declaration.role() else {
+                continue;
+            };
+            let Some(recipe) = super::super::source_bytes::execution_loans::entry_recipe(
+                slots,
+                plan,
+                0,
+                instance,
+                SemanticLocalIdV1::from_index(local.try_into().unwrap()),
+                out,
+            )?
+            else {
+                continue;
+            };
+            let (parent, block) = row.incoming.unwrap();
+            let operand = super::super::source_bytes::execution_loans::call_argument(
+                slots,
+                plan,
+                0,
+                parent,
+                block.index() as usize,
+                argument as usize,
+                out,
+            )?
+            .unwrap();
+            assert_eq!(
+                recipe, operand.recipe,
+                "helper entry must retain the caller's creation recipe"
+            );
+            assert!(!recipe.mutable);
+            assert_ne!(recipe.instance, instance, "no callee-coordinate retagging");
+            shared_entries += 1;
+        }
+    }
+    assert_eq!(
+        shared_entries, 2,
+        "both real shared Workgroup helper instances"
+    );
     program.emit(out)?;
     for (operation, expected) in [
         ("ContextIssue", 1),
@@ -490,6 +537,18 @@ fn generate_actual_tile_source_v168(
     assert!(
         out.text
             .contains("TileLoad(InvocationSourceExecutionTileLoadV168 { workgroup:")
+    );
+    assert_eq!(
+        out.text
+            .matches("InvocationSourceOperandV36::Execution(")
+            .count(),
+        2
+    );
+    assert_eq!(
+        out.text
+            .matches("=> invocation_source_execution_snapshot_install_v170(entered,")
+            .count(),
+        2
     );
     Ok(())
 }

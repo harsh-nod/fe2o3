@@ -166,6 +166,7 @@ pub(super) enum Value {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OperandKind {
+    Execution(execution_loans::ExecutionOperand),
     Descriptor(descriptor_helpers::DescriptorOperand),
     Enum {
         local: usize,
@@ -768,6 +769,23 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
         argument: usize,
         out: &mut Writer<'_, '_>,
     ) -> Result<TypedOperand> {
+        if let Some(operand) = execution_loans::call_argument(
+            self.slots,
+            plan,
+            self.root,
+            self.instance,
+            block,
+            argument,
+            out,
+        )? {
+            if operand.recipe.mutable {
+                return Err(unsupported());
+            }
+            return Ok(TypedOperand {
+                ty: TypeId::from_index(operand.recipe.reference_type),
+                kind: OperandKind::Execution(operand),
+            });
+        }
         match descriptor_helpers::call_argument(
             self.slots,
             plan,
@@ -1543,6 +1561,11 @@ impl TypedOperand {
     pub(super) fn emit(self, out: &mut Writer<'_, '_>) -> Result<()> {
         out.budget.charge_work(1)?;
         match self.kind {
+            OperandKind::Execution(operand) => {
+                write!(out, "InvocationSourceOperandV36::Execution(").map_err(|_| out.error())?;
+                operand.emit(out)?;
+                write!(out, ")").map_err(|_| out.error())
+            }
             OperandKind::Descriptor(operand) => {
                 write!(out, "InvocationSourceOperandV36::Descriptor {{ local: {}int, recipe: ", operand.local)
                     .map_err(|_| out.error())?;
@@ -1899,6 +1922,7 @@ enum InvocationSourceByteValueV36 {
 }
 
 enum InvocationSourceOperandV36 {
+    Execution(InvocationSourceExecutionOperandV168),
     Descriptor { local: int, recipe: InvocationSourceDescriptorRecipeV51, moved: bool },
     Enum { local: int, source_type: int, moved: bool },
     Aggregate { place: InvocationSourceAggregatePlaceV42, moved: bool },
@@ -2160,7 +2184,7 @@ spec fn invocation_source_operand_evaluate_v36(
 ) -> InvocationSourceByteEvaluationV36 {
     match operand {
         InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }
-        | InvocationSourceOperandV36::Descriptor { .. } => InvocationSourceByteEvaluationV36 {
+        | InvocationSourceOperandV36::Descriptor { .. } | InvocationSourceOperandV36::Execution(_) => InvocationSourceByteEvaluationV36 {
             source: invocation_source_byte_refused_v36(source), value: MemoryValueV30::Undefined },
         InvocationSourceOperandV36::Scalar { value, bits } =>
             invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian),

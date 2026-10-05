@@ -201,6 +201,7 @@ spec fn invocation_source_operands_effects_v36(
                     head.root, head.instance, little_endian),
             InvocationSourceOperandV36::Pointer { .. }
             | InvocationSourceOperandV36::Slice { .. } => seq![],
+            InvocationSourceOperandV36::Execution(_) |
             InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }
             | InvocationSourceOperandV36::Descriptor { .. } => {
                 let evaluated = invocation_source_value_evaluate_v42(head.before, head.operand,

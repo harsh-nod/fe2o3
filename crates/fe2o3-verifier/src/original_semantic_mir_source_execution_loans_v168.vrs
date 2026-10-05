@@ -393,3 +393,43 @@ spec fn invocation_source_execution_tile_transport_v170(
         } else { invocation_source_tile_refused_after_v161(transferred.source, transferred.observations) }
     }
 }
+
+spec fn invocation_source_execution_snapshot_current_v170(
+    source: InvocationSourceByteStateV36, reference: InvocationSourceExecutionReferenceV168,
+    expected: InvocationSourceExecutionRecipeV168,
+) -> bool {
+    !expected.mutable && reference.recipe == expected
+        && invocation_source_execution_record_current_v168(source, reference)
+        && invocation_source_execution_no_conflict_v168(source, reference)
+}
+
+spec fn invocation_source_execution_snapshot_evaluate_v170(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+) -> InvocationSourceValueEvaluationV42 {
+    if operand.recipe.mutable
+        || !invocation_source_execution_reference_current_v168(source, operand.local, operand.recipe) {
+        InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(source),
+            value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+    } else {
+        let reference = source.logical.execution_references[operand.local];
+        let consumed = invocation_source_execution_operand_consume_v168(source, operand);
+        if !invocation_source_execution_snapshot_current_v170(consumed, reference, operand.recipe) {
+            InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(consumed),
+                value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+        } else { InvocationSourceValueEvaluationV42 { source: consumed,
+            value: InvocationSourceValueV42::Execution(reference) } }
+    }
+}
+
+spec fn invocation_source_execution_snapshot_install_v170(
+    source: InvocationSourceByteStateV36, destination: int,
+    expected: InvocationSourceExecutionRecipeV168, reference: InvocationSourceExecutionReferenceV168,
+) -> InvocationSourceByteStateV36 {
+    if !invocation_source_execution_snapshot_current_v170(source, reference, expected) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let after = invocation_source_execution_install_v168(source, destination, reference);
+        if invocation_source_execution_reference_current_v168(after, destination, expected) { after }
+        else { invocation_source_byte_refused_v36(after) }
+    }
+}
