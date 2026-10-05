@@ -115,7 +115,7 @@ fn observable_fixture() -> Module {
 }
 
 #[derive(Default)]
-struct Reads(Vec<(u32, BlockId, usize, usize)>);
+struct Reads(Vec<(u32, BlockId, u32, usize, usize)>);
 
 impl SimulationEventSinkV1 for Reads {
     fn record(
@@ -128,8 +128,19 @@ impl SimulationEventSinkV1 for Reads {
                     detail: "complete tile read bound".into(),
                 });
             }
-            self.0
-                .push((event.invocation.local[0], event.site.block, offset, bytes));
+            let operation = event
+                .site
+                .operation
+                .ok_or_else(|| SimulationEventSinkErrorV1 {
+                    detail: "tile read has no actual operation site".into(),
+                })?;
+            self.0.push((
+                event.invocation.local[0],
+                event.site.block,
+                operation,
+                offset,
+                bytes,
+            ));
         }
         Ok(())
     }
@@ -231,7 +242,7 @@ fn tile_scalar_whole_graph_simulates_values_masks_and_original_discarded_read_si
                             if index <= u128::from(u64::MAX) && index < length as u128 {
                                 lane_values[component] = values[index as usize];
                                 lane_masks[component] = 1;
-                                offsets.push(index as usize * 4);
+                                offsets.push((component as u32, index as usize * 4));
                             }
                         }
                         expected.extend(
@@ -241,10 +252,17 @@ fn tile_scalar_whole_graph_simulates_values_masks_and_original_discarded_read_si
                                 .flat_map(u32::to_le_bytes),
                         );
                         // The discarded load still performs every active read at its original site.
-                        for _ in 0..2 {
-                            expected_reads.extend(
-                                offsets.iter().map(|&offset| (lane, BlockId(7), offset, 4)),
-                            );
+                        for load in 0..2 {
+                            // Two retained lifecycle ops precede two 38-op scalar loads.
+                            expected_reads.extend(offsets.iter().map(|&(component, offset)| {
+                                (
+                                    lane,
+                                    BlockId(7),
+                                    2 + load * 38 + 15 + component * 11,
+                                    offset,
+                                    4,
+                                )
+                            }));
                         }
                     }
                     let output = actual.buffer(3).unwrap();

@@ -1,12 +1,26 @@
 //! Independent complete-graph comparison; never calls the materializer/emitter.
 use super::*;
 
+#[cfg(test)]
 pub(super) fn compare(
     input: &Inventory<'_>,
     output: &Owner,
     plan: &Plan,
     meter: &mut Meter<'_, '_>,
 ) -> Result<()> {
+    compare_projected(input, output, plan, None, meter)
+}
+
+pub(super) fn compare_projected(
+    input: &Inventory<'_>,
+    output: &Owner,
+    plan: &Plan,
+    projections: Option<&[TileScalarOperationProjectionV159]>,
+    meter: &mut Meter<'_, '_>,
+) -> Result<()> {
+    if projections.is_some_and(|rows| rows.len() != input.operations().len()) {
+        return Err(Error::Inconsistent("tile projected operation census"));
+    }
     meter.work(add(
         input.owner().canonical_bytes().len(),
         output.canonical_bytes().len(),
@@ -52,6 +66,7 @@ pub(super) fn compare(
             let mut actual = new.operations.iter();
             for original in &old.operations {
                 meter.work(1)?;
+                let first = new.operations.len() - actual.len();
                 match plan.actions[ordinal] {
                     Action::Retain => {
                         if actual.next() != Some(original) {
@@ -132,6 +147,18 @@ pub(super) fn compare(
                                 "tile scope discarded unrelated roles",
                             ));
                         }
+                    }
+                }
+                if let Some(rows) = projections {
+                    meter.work(4)?;
+                    let row = rows[ordinal];
+                    if row.input != input.operations()[ordinal].coordinate
+                        || row.first as usize != first
+                        || row.end as usize != new.operations.len() - actual.len()
+                    {
+                        return Err(Error::Inconsistent(
+                            "tile operation span differs from actual replay",
+                        ));
                     }
                 }
                 ordinal += 1;

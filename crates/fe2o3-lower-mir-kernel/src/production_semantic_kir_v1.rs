@@ -34531,6 +34531,7 @@ pub use optimized_source_v18::{
     ProductionPrivateMemoryCheckedNativePoliciesV18, ProductionSourceNativeLifecycleDiagnosticV18,
     ProductionSourceNativeLifecycleErrorV18, ProductionSourcePrivateMemoryRootRequestV18,
     ProductionTileScalarFunctionV156, ProductionTileScalarLoadV156,
+    ProductionSourceTileExpansionV159, ProductionSourceTileOperationSpanV159,
 };
 include!("production_source_ranked_relation_v18.rs");
 include!("production_source_optimizer_entry_v18.rs");

@@ -6,10 +6,10 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrReplayAdmissionErrorV18, CanonicalKernelIrReplayStorageV18,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource, CanonicalKirFunctionCoordinateV1,
-    ExecutionOperationV15 as Execution, ExecutionTileLayoutV1, ExecutionTileScalarLoweringV1,
-    ExecutionTileScheduleV1, Module, Operation, OperationKind as Kind, StorageLayoutLimitsV1, Type,
-    ValueDef, ValueId, VerifiedCanonicalKernelIrIdentityV18 as Identity,
-    VerifiedCanonicalKernelIrModuleV18 as Owner,
+    CanonicalKirOperationCoordinateV1, ExecutionOperationV15 as Execution, ExecutionTileLayoutV1,
+    ExecutionTileScalarLoweringV1, ExecutionTileScheduleV1, Module, Operation,
+    OperationKind as Kind, StorageLayoutLimitsV1, Type, ValueDef, ValueId,
+    VerifiedCanonicalKernelIrIdentityV18 as Identity, VerifiedCanonicalKernelIrModuleV18 as Owner,
 };
 use std::{fmt, mem::size_of};
 
@@ -55,7 +55,23 @@ impl From<CanonicalKirInventoryErrorV1> for Error {
 }
 impl From<CanonicalKernelIrReplayAdmissionErrorV18> for Error {
     fn from(error: CanonicalKernelIrReplayAdmissionErrorV18) -> Self {
-        Self::Admission(error)
+        use CanonicalKernelIrReplayAdmissionErrorV18 as Admission;
+        use fe2o3_kernel_ir::{
+            BorrowedKernelIrVerificationErrorV1 as Verification, KernelIrDecodeError as Decode,
+            KernelIrEncodeError as Encode, StorageLayoutErrorV1 as Layout,
+        };
+        match error {
+            Admission::Resource(error)
+            | Admission::Decode(Decode::Resource(error))
+            | Admission::Layout(Layout::Resource(error))
+            | Admission::Verification(Verification::Resource(error)) => Self::Resource(error),
+            Admission::Encode(Encode::WorkLimit(error))
+            | Admission::Decode(Decode::WorkLimit(error))
+            | Admission::Decode(Decode::Encode(Encode::WorkLimit(error))) => {
+                Self::Resource(Resource::Work(error))
+            }
+            other => Self::Admission(other),
+        }
     }
 }
 impl fmt::Display for Error {
@@ -78,6 +94,16 @@ struct Plan {
     roles: Vec<Option<ExecutionTileScalarLoweringV1>>,
 }
 
+/// One actual input operation's complete replacement in the unchanged block.
+/// Empty intervals retain the location of erased fragment transport. These
+/// coordinates are inert; consumers must retain and replay the owning relation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TileScalarOperationProjectionV159 {
+    pub input: CanonicalKirOperationCoordinateV1,
+    pub first: u32,
+    pub end: u32,
+}
+
 /// A freshly admitted candidate with independently checked scalar contents and
 /// complete unchanged CFG/metadata. It grants no source, formal, native, or
 /// launch authority. The selected layout is observable and remains explicit.
@@ -86,6 +112,7 @@ pub struct OwnedTileScalarContinuationV18 {
     output_storage: CanonicalKernelIrReplayStorageV18,
     input_identity: Identity,
     selections: Vec<TileScalarFunctionSelectionV18>,
+    projections: Vec<TileScalarOperationProjectionV159>,
     retained: usize,
 }
 impl OwnedTileScalarContinuationV18 {
@@ -97,6 +124,11 @@ impl OwnedTileScalarContinuationV18 {
     }
     pub fn selections(&self) -> &[TileScalarFunctionSelectionV18] {
         &self.selections
+    }
+    /// Complete input-ordered operation correspondence, including untouched
+    /// operations, erased transports, and adjusted scope exits.
+    pub fn projections_v159(&self) -> &[TileScalarOperationProjectionV159] {
+        &self.projections
     }
     pub const fn retained_storage(&self) -> usize {
         self.retained
@@ -116,14 +148,26 @@ impl OwnedTileScalarContinuationV18 {
             if input.identity() != &self.input_identity {
                 return Err(Error::ForeignInput);
             }
-            if self.retained != retained(self.output_storage, self.selections.capacity())? {
+            if self.retained
+                != retained(
+                    self.output_storage,
+                    self.selections.capacity(),
+                    self.projections.capacity(),
+                )?
+            {
                 return Err(Resource::Accounting.into());
             }
             let (inventory, receipt) =
                 meter.derive(|budget| Ok(Inventory::derive_v18(input, budget)?))?;
             meter.reserve(receipt.retained_storage())?;
             let plan = derive(&inventory, &self.selections, meter)?;
-            check::compare(&inventory, &self.output, &plan, meter)
+            check::compare_projected(
+                &inventory,
+                &self.output,
+                &plan,
+                Some(&self.projections),
+                meter,
+            )
         })
     }
 }
@@ -134,13 +178,20 @@ fn add(a: usize, b: usize) -> Result<usize> {
 fn product(a: usize, b: usize) -> Result<usize> {
     a.checked_mul(b).ok_or_else(|| Resource::Arithmetic.into())
 }
-fn retained(output: CanonicalKernelIrReplayStorageV18, selections: usize) -> Result<usize> {
+fn retained(
+    output: CanonicalKernelIrReplayStorageV18,
+    selections: usize,
+    projections: usize,
+) -> Result<usize> {
     add(
         add(
             size_of::<OwnedTileScalarContinuationV18>() - size_of::<Owner>(),
             output.retained_storage(),
         )?,
-        product(selections, size_of::<TileScalarFunctionSelectionV18>())?,
+        add(
+            product(selections, size_of::<TileScalarFunctionSelectionV18>())?,
+            product(projections, size_of::<TileScalarOperationProjectionV159>())?,
+        )?,
     )
 }
 
@@ -175,6 +226,34 @@ pub fn prepare_owned_tile_scalar_v18(
             meter.derive(|budget| Ok(Inventory::derive_v18(input, budget)?))?;
         meter.reserve(receipt.retained_storage())?;
         let plan = derive(&inventory, &selected, meter)?;
+        let (mut projections, _) = meter.table(inventory.operations().len())?;
+        let mut previous_block = None;
+        let mut next = 0_u32;
+        for (ordinal, operation) in inventory.operations().iter().enumerate() {
+            meter.work(1)?;
+            if previous_block != Some(operation.coordinate.block) {
+                next = 0;
+                previous_block = Some(operation.coordinate.block);
+            }
+            let count = match plan.actions[ordinal] {
+                Action::Retain | Action::Scope => 1,
+                Action::Load(recipe) => recipe.operation_count(),
+                Action::Fragment => 0,
+                Action::Parts(_) => operation.operation.results.len(),
+            };
+            let end = next
+                .checked_add(u32::try_from(count).map_err(|_| Resource::Arithmetic)?)
+                .ok_or(Resource::Arithmetic)?;
+            meter.push(
+                &mut projections,
+                TileScalarOperationProjectionV159 {
+                    input: operation.coordinate,
+                    first: next,
+                    end,
+                },
+            )?;
+            next = end;
+        }
         let (mut candidate, copied) =
             meter.derive(|budget| Ok(input.copy_module_for_transformation_v18(budget)?))?;
         meter.reserve(copied.retained_storage())?;
@@ -185,8 +264,8 @@ pub fn prepare_owned_tile_scalar_v18(
             )?)
         })?;
         meter.reserve(storage.retained_storage())?;
-        check::compare(&inventory, &output, &plan, meter)?;
-        let retained = retained(storage, selected.capacity())?;
+        check::compare_projected(&inventory, &output, &plan, Some(&projections), meter)?;
+        let retained = retained(storage, selected.capacity(), projections.capacity())?;
         drop(candidate);
         drop(plan);
         drop(inventory);
@@ -196,6 +275,7 @@ pub fn prepare_owned_tile_scalar_v18(
             output_storage: storage,
             input_identity: *input.identity(),
             selections: selected,
+            projections,
             retained,
         })
     })

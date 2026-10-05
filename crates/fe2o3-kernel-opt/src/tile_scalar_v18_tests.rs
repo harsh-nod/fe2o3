@@ -15,6 +15,55 @@ const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
     object_bytes: 4096,
 };
 
+#[test]
+fn tile_scalar_whole_graph_checks_complete_operation_spans_independently() {
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    let input = owner(&fixture(), &mut budget);
+    for mutation in 0..5 {
+        let mut output = prepare_owned_tile_scalar_v18(
+            &input,
+            &selection(ExecutionTileLayoutV1::Striped),
+            LAYOUTS,
+            &mut budget,
+        )
+        .unwrap();
+        let retained = output.retained_storage();
+        budget.reserve_storage(retained).unwrap();
+        let spans = output.projections_v159();
+        assert_eq!(
+            spans
+                .iter()
+                .map(|row| (row.first, row.end))
+                .collect::<Vec<_>>(),
+            [
+                (0, 1),
+                (1, 2),
+                (2, 40),
+                (40, 78),
+                (78, 79),
+                (0, 6),
+                (6, 7),
+                (7, 8),
+                (0, 0)
+            ]
+        );
+        output.replay_against(&input, &mut budget).unwrap();
+        match mutation {
+            0 => output.projections[2].first += 1,
+            1 => output.projections[2].end -= 1,
+            2 => output.projections[8].end = 1,
+            3 => output.projections[5].input.operation = 1,
+            _ => {
+                output.projections.pop();
+            }
+        }
+        assert!(output.replay_against(&input, &mut budget).is_err());
+        drop(output);
+        budget.release_storage(retained).unwrap();
+    }
+}
+
 fn execution(id: u32, role: Role, operation: Execution) -> Operation {
     Operation::effect_free(
         ValueDef::new(ValueId(id), Type::Execution(role)),

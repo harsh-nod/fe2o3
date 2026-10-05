@@ -29,6 +29,7 @@ mod tile_schedule;
 pub use tile_schedule::{
     ProductionOptimizedTileLoadScheduleV155, ProductionTileScalarFunctionV156,
     ProductionTileScalarLoadV156,
+    ProductionSourceTileExpansionV159, ProductionSourceTileOperationSpanV159,
 };
 #[path = "production_optimized_source_selection_v30.rs"]
 pub(super) mod selection;
