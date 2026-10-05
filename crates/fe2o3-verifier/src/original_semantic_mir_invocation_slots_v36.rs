@@ -50,6 +50,10 @@ pub(super) use enum_types::EnumFieldV47;
 mod compiler_spills;
 pub(super) use compiler_spills::Spill;
 
+#[path = "original_semantic_mir_tile_allocation_slots_v164.rs"]
+mod tile_allocations;
+pub(super) use tile_allocations::TileAllocationSlotsV164;
+
 pub(super) enum AllocationOrigin<'a> {
     OriginalFrame(&'a Frame),
     CompilerSpill(&'a Spill),
@@ -866,7 +870,7 @@ mod tests {
 
     const LIMIT: usize = 100_000_000;
 
-    fn run_tile_slots(
+    pub(super) fn run_tile_slots(
         layout: fe2o3_kernel_ir::ExecutionTileLayoutV1,
         examine: impl FnOnce(&SourceSlots<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
     ) -> (Result<()>, usize, usize, usize) {
