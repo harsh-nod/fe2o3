@@ -22,6 +22,9 @@ impl Stage {
     pub const RUNTIME_CHECKPOINT_STAGING_WORK: usize = ENTRY;
     /// Scratch for the consuming stage transition, above its complete backing.
     pub const RUNTIME_CHECKPOINT_STAGING_SCRATCH: usize = 2 * std::mem::size_of::<Self>();
+    /// Additional child work included by spawn_work for a checkpoint stage.
+    /// Quota planning may quote this before the consuming transition is selected.
+    pub const RUNTIME_CHECKPOINT_CHILD_WORK: usize = super::native_work::COMPILER_TRACE_WORK;
 
     /// Require additional inherited syscall checkpoints after the original gate.
     /// Only a compiler stage with its original child-channel transfer can opt in;
