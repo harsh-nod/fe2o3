@@ -453,9 +453,10 @@ fn control_values(
         .get(child)
         .and_then(Option::as_ref)
         .ok_or_else(mismatch)?;
+    out.budget.charge_work(1)?;
     emit!(
         out,
-        " let original = invocation_source_block_runtime_{root}_v36(source);\n let actual = invocation_byte_boundary_{root}_v36(target);\n assert(original.returned.is_none());\n assert(actual.returned.len() == 0);\n assert(original.operands.len() == {});\n assert(actual.state.values.len() == target.values.len());\n",
+        " let original = invocation_source_block_runtime_{root}_v36(source);\n let actual = invocation_byte_boundary_{root}_v36(target);\n assert(original.source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n assert(original.returned.is_none());\n assert(actual.returned.len() == 0);\n assert(original.operands.len() == {});\n assert(actual.state.values.len() == target.values.len());\n",
         call.arguments.len()
     );
     for (i, (local, _, _)) in call.arguments.iter().enumerate() {
