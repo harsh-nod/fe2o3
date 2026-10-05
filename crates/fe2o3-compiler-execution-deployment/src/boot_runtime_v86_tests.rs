@@ -29,7 +29,7 @@ fn staged_fixture(parent: &Path) -> (PathBuf, File, (u32, u32)) {
 
 #[test]
 fn machine_runtime_alias_capture_binds_only_exact_owned_staging_and_empty_target() {
-    for mutant in 0..7 {
+    for mutant in 0..11 {
         let scratch = tempfile::tempdir().unwrap();
         let (stage, root, owner) = staged_fixture(scratch.path());
         MachineRuntimeSourceV86::capture(&root, STAGING_NAME, owner).unwrap();
@@ -50,6 +50,21 @@ fn machine_runtime_alias_capture_binds_only_exact_owned_staging_and_empty_target
                 rustix::fs::XattrFlags::CREATE,
             )
             .unwrap(),
+            7 => fs::write(stage.join("state/foreign"), b"x").unwrap(),
+            8 => {
+                fs::set_permissions(stage.join("state"), fs::Permissions::from_mode(0o755)).unwrap()
+            }
+            9 => {
+                fs::remove_dir(stage.join("state")).unwrap();
+                std::os::unix::fs::symlink("evidence", stage.join("state")).unwrap();
+            }
+            10 => rustix::fs::fsetxattr(
+                File::open(stage.join("state")).unwrap(),
+                "user.unexpected",
+                b"x",
+                rustix::fs::XattrFlags::CREATE,
+            )
+            .unwrap(),
             _ => unreachable!(),
         }
         assert!(
@@ -57,6 +72,19 @@ fn machine_runtime_alias_capture_binds_only_exact_owned_staging_and_empty_target
             "mutant {mutant}"
         );
     }
+}
+
+#[test]
+fn machine_image_alias_refuses_mounting_inside_its_captured_parent_namespace() {
+    let scratch = tempfile::tempdir().unwrap();
+    let (stage, root, owner) = staged_fixture(scratch.path());
+    let stage_file = File::open(&stage).unwrap();
+    let state = File::open(stage.join("state")).unwrap();
+    let before = exact_snapshot(&state).unwrap();
+    let source = image_v160::MachineImageSourceV160::capture(&stage_file, owner).unwrap();
+    assert!(source.attach(&stage, &root, owner).is_err());
+    assert_eq!(exact_snapshot(&state).unwrap(), before);
+    assert_eq!(fs::read_dir(stage.join("state")).unwrap().count(), 0);
 }
 
 #[test]
@@ -255,6 +283,9 @@ fn qualification_machine_runtime_bind_survives_child_run_overmount() {
     let runtime = run.join("fe2o3");
     let source = MachineRuntimeSourceV86::capture(&root, STAGING_NAME, owner).unwrap();
     let target_before = source.target_snapshot;
+    let state_before = exact_snapshot(&File::open(stage_path.join("state")).unwrap()).unwrap();
+    let image_path = stage_path.join("state/root");
+    let image_state_path = stage_path.join("state");
     let retained = MachineRuntimeDirectoryV86::open(&root, owner).unwrap();
     let outer_namespace = File::open("/proc/thread-self/ns/mnt").unwrap();
     let enter = || {
@@ -282,6 +313,32 @@ fn qualification_machine_runtime_bind_survives_child_run_overmount() {
     let alias = source.attach(&base, &root, owner).unwrap();
     let alias_path = alias.path().to_owned();
     alias.revalidate().unwrap();
+    assert_eq!(
+        exact_snapshot(alias.image_root()).unwrap(),
+        exact_snapshot(&root).unwrap()
+    );
+    assert_eq!(
+        fs::canonicalize(format!("/proc/self/fd/{}", alias.image_root().as_raw_fd())).unwrap(),
+        image_path,
+    );
+    let lock_path = image_state_path.join(".#root.lck");
+    fs::write(&lock_path, b"").unwrap();
+    assert!(alias.revalidate().is_err());
+    restore(&outer_namespace);
+    assert!(!lock_path.exists());
+    assert!(!image_path.exists());
+    assert_eq!(
+        exact_snapshot(&File::open(&image_state_path).unwrap()).unwrap(),
+        state_before
+    );
+    super::super::super::verify_directory_children(
+        &File::open(&stage_path).unwrap(),
+        STAGING_CHILDREN_V86,
+        "parent staging while image lock exists",
+    )
+    .unwrap();
+    restore(&helper_namespace);
+    assert!(lock_path.is_file());
     let identity = QualificationMachineIdentityV1::from_staging_name(STAGING_NAME).unwrap();
     let plan = pinned_systemd_nspawn_plan_v1(10, 11, &alias_path, &identity).unwrap();
     let bind_option = plan
@@ -363,16 +420,25 @@ fn qualification_machine_runtime_bind_survives_child_run_overmount() {
     unmount(&run, UnmountFlags::empty()).unwrap();
     mounts.0.pop();
     unmount(&alias_path, UnmountFlags::empty()).unwrap();
+    unmount(&image_path, UnmountFlags::empty()).unwrap();
+    unmount(&image_state_path, UnmountFlags::empty()).unwrap();
     unmount(scratch.path(), UnmountFlags::empty()).unwrap();
     restore(&helper_namespace);
     drop(alias);
     unmount(&alias_path, UnmountFlags::empty()).unwrap();
+    unmount(&image_path, UnmountFlags::empty()).unwrap();
+    unmount(&image_state_path, UnmountFlags::empty()).unwrap();
     unmount(scratch.path(), UnmountFlags::empty()).unwrap();
     restore(&outer_namespace);
     let unchanged_target = absolute_directory(&alias_path).unwrap();
     assert_eq!(exact_snapshot(&unchanged_target).unwrap(), target_before);
     super::super::super::verify_directory_children(&unchanged_target, &[], "parent alias target")
         .unwrap();
+    assert_eq!(
+        exact_snapshot(&File::open(&image_state_path).unwrap()).unwrap(),
+        state_before
+    );
+    assert_eq!(fs::read_dir(&image_state_path).unwrap().count(), 0);
     let parent_visible = fs::metadata(runtime.join(socket_name)).unwrap();
     assert_eq!(
         (parent_visible.dev(), parent_visible.ino()),
