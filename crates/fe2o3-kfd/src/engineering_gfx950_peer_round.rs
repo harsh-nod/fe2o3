@@ -78,7 +78,7 @@ fn require_round_timeout(timeouts: impl Iterator<Item = u32>) -> Result<()> {
     Ok(())
 }
 
-fn require_round_independence(arguments: &[&[Gfx950EngineeringPeerPointerV1]]) -> Result<()> {
+pub(super) fn require_round_independence(arguments: &[&[Gfx950EngineeringPeerPointerV1]]) -> Result<()> {
     if arguments.is_empty()
         || arguments.len() > 8
         || arguments

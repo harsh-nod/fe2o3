@@ -34,6 +34,7 @@ mod engineering_gfx950;
     target_arch = "x86_64"
 ))]
 pub use engineering_gfx950::{
+    Gfx950EngineeringPeerDependencyObservationV1,
     Gfx950EngineeringFiniteJoinResultV1, Gfx950EngineeringPeerBufferV1,
     Gfx950EngineeringPeerClockObservationV1, Gfx950EngineeringPeerDispatchV1,
     Gfx950EngineeringPeerGroupV1, Gfx950EngineeringPeerHostDeltaV1,

@@ -23,6 +23,10 @@ pub use host_observation::{
 #[path = "engineering_gfx950_peer_round.rs"]
 mod round;
 
+#[path = "engineering_gfx950_peer_dependency.rs"]
+mod dependency;
+pub use dependency::Gfx950EngineeringPeerDependencyObservationV1;
+
 #[path = "engineering_gfx950_peer_capacity_v1.rs"]
 mod capacity_v1;
 
@@ -231,6 +235,7 @@ impl PeerMapping {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BufferKind {
     PublicVram,
+    PeerDependencyArena,
     WaveOutputStateV5,
     WaveMlpStateV1,
     WaveMlpTilesStateV2,

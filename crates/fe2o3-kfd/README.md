@@ -70,6 +70,30 @@ completion-counter clock-domain relationship, or aligns different devices.
 Successful CPU tests of this API do not establish successful native sampling
 or calibration on MI350.
 
+With `engineering-gfx950`, the unsafe
+`dispatch_peer_dependency_sentinel_unchecked_v1()` entry exercises a fixed
+two-rank dependency graph. Four commands per rank become seven AQL packets:
+`P0 -> wait(both P0) -> C0 -> wait(both C0) -> P1 -> wait(both P1) -> C1`.
+System-scoped barriers order peer visibility and prevent the second producer
+from overwriting an intermediate still used by either first consumer.
+
+Each invocation owns fourteen distinct completion slots and retained private
+peer-mapped signal/kernarg arenas. It initializes signals once, prepares every
+command before reservation, publishes all INVALID bodies before release
+headers, and retires only after every signal and both actual queue frontiers
+complete. Any error poisons the group; no reset or retry is allowed. Arenas
+remain retained until healthy Close, so this one-shot engineering entry is not
+a bounded-storage repeated-decode API or a general graph scheduler.
+
+The `kfd-peer-dependency-sentinel` example requires explicit machine-code
+opt-in and a closed JSON request. It checks an existing BF16 copy object,
+two different input patterns, two outputs per rank, reused intermediates and
+all guards. Optional witness mode delays rank1 publication until rank0's first
+producer completes while every dependent completion remains pending. The
+reported elapsed interval includes host checks and that diagnostic delay; it
+is not GPU duration or a performance benchmark. External device exclusivity,
+process bounds and pre/post audits remain the caller's responsibility.
+
 The public safe API does not expose file descriptors or raw ioctl arguments.
 The R1 composition path consumes an explicitly selected unique ID and returns a
 non-cloneable `CheckedGfx942XnackMinusDevice`. It retains `/dev/kfd` and the

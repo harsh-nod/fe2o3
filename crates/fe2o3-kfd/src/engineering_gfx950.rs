@@ -62,6 +62,7 @@ pub use finite_join::{
     Gfx950EngineeringFiniteJoinResultV1, execute_gfx950_engineering_finite_join_unchecked_v1,
 };
 pub use peer::{
+    Gfx950EngineeringPeerDependencyObservationV1,
     Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerClockObservationV1,
     Gfx950EngineeringPeerDispatchV1, Gfx950EngineeringPeerGroupV1,
     Gfx950EngineeringPeerHostDeltaV1, Gfx950EngineeringPeerHostObservationV1,
