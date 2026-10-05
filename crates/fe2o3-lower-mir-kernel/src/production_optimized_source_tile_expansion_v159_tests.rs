@@ -18,17 +18,22 @@ fn explicit_source_tile_expansion_retains_source_layout_and_complete_operation_s
             let mut loads = 0;
             let mut fragments = 0;
             let mut prefix_rewrites = 0;
+            let mut unreachable = 0;
+            let mut retained = 0;
+            let original_count = view.input_inventory(budget)?.operations().len();
             for row in view.input_inventory(budget)?.operations() {
-                if matches!(
-                    view.operation(row.coordinate, budget)?,
-                    ProductionOptimizedSourceOperationV18::Rewritten { .. }
-                ) {
-                    prefix_rewrites += 1;
-                    continue;
+                match view.operation(row.coordinate, budget)? {
+                    ProductionOptimizedSourceOperationV18::Retained { .. } => retained += 1,
+                    ProductionOptimizedSourceOperationV18::Rewritten { .. } => {
+                        prefix_rewrites += 1;
+                        continue;
+                    }
+                    ProductionOptimizedSourceOperationV18::RemovedUnreachable { .. } => {
+                        unreachable += 1;
+                        continue;
+                    }
                 }
-                let Some(span) = expanded.operation_span(row.coordinate, budget)? else {
-                    continue;
-                };
+                let span = expanded.operation_span(row.coordinate, budget)?.unwrap();
                 assert_eq!(span.original, row.coordinate);
                 let module = expanded.output(budget)?.module();
                 let block = &module.functions[span.expansion.input.block.function.0 as usize]
@@ -64,6 +69,7 @@ fn explicit_source_tile_expansion_retains_source_layout_and_complete_operation_s
             }
             assert!(loads >= 2 && fragments >= 1);
             assert!(prefix_rewrites > 0);
+            assert_eq!(retained + prefix_rewrites + unreachable, original_count);
             assert!(!expanded.grants_artifact_or_launch_authority());
             expanded.discard(budget)?;
             assert_eq!(budget.storage(), floor);
