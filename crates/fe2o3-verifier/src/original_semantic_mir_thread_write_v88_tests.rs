@@ -657,7 +657,12 @@ fn writing_cut_frame_summaries_keep_authentic_coordinates_and_explicit_domains()
     }
     for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
         run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
-            assert_eq!(text.matches(frames).count(), 1);
+            // Optional proof bodies have independent exact-retention coverage below.
+            let predicates = frames
+                .split("// fe2o3_optional_support_v97: ")
+                .next()
+                .unwrap();
+            assert_eq!(text.matches(predicates).count(), 1);
             assert!(!text.contains("proof fn invocation_external_store_"));
             let mut summaries = 0;
             for suffix in text.split("proof fn invocation_cut_source_frame_").skip(1) {
