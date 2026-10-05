@@ -118,6 +118,37 @@ fn token_program_requires_its_exact_diagnostic_flag() {
 }
 
 #[test]
+fn native_token_program_is_a_separate_explicit_noncomposable_mode() {
+    let base = [
+        "--device-unique-id",
+        "7",
+        "--allow-unauthenticated-machine-code",
+        "--diagnostic-token-program-native-v1",
+    ];
+    assert_eq!(
+        parse_args(&args(&base)),
+        Some((7, WorkerMode::NativeTokenProgram))
+    );
+    for extra in [
+        "--diagnostic-token-program-v1",
+        "--diagnostic-active-poll-10ms",
+        "--diagnostic-token-program-native-v1",
+    ] {
+        let mut values = args(&base);
+        values.push(extra.into());
+        assert!(parse_args(&values).is_none());
+    }
+    assert!(
+        parse_args(&args(&[
+            "--device-unique-id",
+            "7",
+            "--diagnostic-token-program-native-v1"
+        ]))
+        .is_none()
+    );
+}
+
+#[test]
 fn token_program_cannot_be_combined_with_active_poll_or_missing_acknowledgement() {
     for flags in [
         args(&[

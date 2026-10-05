@@ -6,6 +6,9 @@ use fe2o3_aql::{
     AqlPreparedKernelDispatchBatchV2, AqlPreparedKernelDispatchV1, AqlRingBatchReservationV1,
 };
 
+#[path = "engineering_gfx950_token_program_native.rs"]
+pub(super) mod native_program;
+
 const ORDERED_KERNARG: usize = CWSR + 1;
 const ORDERED_KERNARG_BYTES: usize =
     MAX_ORDERED_BATCH_DISPATCHES_V1 * MAX_KERNARG_BYTES_V1 as usize;
@@ -140,8 +143,24 @@ fn run_ordered_batch_deadline(
     mode: OrderedMode,
     aggregate_deadline: Option<Instant>,
 ) -> Result<u64> {
+    run_ordered_batch_deadline_bounded(
+        backend,
+        count,
+        timeout_ms,
+        mode.maximum(),
+        aggregate_deadline,
+    )
+}
+
+fn run_ordered_batch_deadline_bounded(
+    backend: &mut impl OrderedBackend,
+    count: usize,
+    timeout_ms: u32,
+    maximum: usize,
+    aggregate_deadline: Option<Instant>,
+) -> Result<u64> {
     let result = (|| {
-        if !(1..=mode.maximum()).contains(&count) || !(1..=600_000).contains(&timeout_ms) {
+        if !(1..=maximum).contains(&count) || !(1..=600_000).contains(&timeout_ms) {
             return Err("ordered batch count or aggregate timeout".into());
         }
         backend.dispatch_fence()?;
@@ -195,6 +214,7 @@ struct NativeOrdered<'a> {
     count: u32,
     active_wait: Option<wait_policy::ActivePollWait>,
     prepared_for_execution: Option<Vec<PreparedDispatch>>,
+    token_group: bool,
 }
 
 struct OrderedPending {
@@ -293,6 +313,10 @@ impl NativeOrdered<'_> {
             &mut self.context.counters.dispatch_publish_ns,
             publish_started,
         )?;
+        if self.token_group && publish_started.is_some() {
+            add_counter(&mut self.context.token_program_counters.publications, 1)?;
+            add_counter(&mut self.context.token_program_counters.final_waits, 1)?;
+        }
         self.active_wait = self
             .context
             .ordered64_wait_policy
@@ -387,6 +411,19 @@ impl OrderedBackend for NativeOrdered<'_> {
             return Err("ordered batch staged payload or count".into());
         }
         self.retain_storage()?;
+        let stage_started = self
+            .token_group
+            .then(|| self.context.profile_started())
+            .flatten();
+        let initialized_bytes = if stage_started.is_some() {
+            prepared.iter().try_fold(0u64, |total, item| {
+                total
+                    .checked_add(u64::from(MAX_KERNARG_BYTES_V1) + item.bytes.len() as u64)
+                    .ok_or("ordered token staging bytes overflow")
+            })?
+        } else {
+            0
+        };
         let mut packets = Vec::with_capacity(prepared.len());
         for (index, prepared) in prepared.into_iter().enumerate() {
             let (offset, signal_offset) = self.mode.slot_offsets(index, prepared.bytes.len())?;
@@ -426,6 +463,19 @@ impl OrderedBackend for NativeOrdered<'_> {
                 u32::try_from(index).map_err(explain)?,
             )
             .map_err(explain)?;
+        }
+        if stage_started.is_some() {
+            record_elapsed(
+                &mut self.context.token_program_counters.staging_ns,
+                stage_started,
+            )?;
+            add_counter(
+                &mut self
+                    .context
+                    .token_program_counters
+                    .kernarg_initialized_bytes,
+                initialized_bytes,
+            )?;
         }
         Ok(packets)
     }
@@ -507,7 +557,14 @@ impl OrderedBackend for NativeOrdered<'_> {
                 .map_err(explain)
             })
             .collect::<Result<Vec<_>>>()?;
-        require_signals_complete(signals)
+        require_signals_complete(signals)?;
+        if self.token_group && pending.wait_started.is_some() {
+            add_counter(
+                &mut self.context.token_program_counters.retirement_signals,
+                u64::from(pending.count),
+            )?;
+        }
+        Ok(())
     }
 
     fn complete(&mut self, pending: OrderedPending) -> Result<()> {
@@ -708,6 +765,7 @@ impl Context {
                 count: u32::try_from(count).map_err(explain)?,
                 active_wait: None,
                 prepared_for_execution: None,
+                token_group: false,
             };
             let elapsed_ns = match mode {
                 OrderedMode::V1 => run_ordered_batch(&mut native, count, timeout_ms)?,
@@ -754,6 +812,7 @@ impl Context {
             count: u32::try_from(count).map_err(explain)?,
             active_wait: None,
             prepared_for_execution: Some(prepared),
+            token_group: true,
         };
         run_ordered_batch_deadline(
             &mut native,
