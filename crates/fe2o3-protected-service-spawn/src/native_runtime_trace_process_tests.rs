@@ -18,6 +18,7 @@ pub(super) fn run(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
     assert_eq!(next(&mut trace, b), Event::TrapStop);
     b.reserve_storage(Runtime::STORAGE_GROWTH).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
+    let mut other_witness = None;
     if mode == "runtime-expired" {
         // SAFETY: no runtime options are installed for an already expired
         // deadline. The same gate/custody is preserved through ordinary cleanup.
@@ -28,13 +29,24 @@ pub(super) fn run(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
         // no descendants and still-closed gate. This bounded fixture NEVER
         // releases the gate or claims a typed compiler/filter. The subprocess
         // is dedicated; outer fixture owns its deadline and retained pidfd.
-        let mut runtime = unsafe { trace.into_runtime_trace(deadline, b) }.unwrap();
+        let runtime = unsafe { trace.into_runtime_trace(deadline, b) }.unwrap();
         assert_eq!(runtime.pid(), pid);
         assert_eq!(
             runtime.retained_storage(),
             retained + Runtime::STORAGE_GROWTH
         );
         assert!(runtime.root_completion().is_none());
+        let (identity, identity_charge) = runtime
+            .with_task_observation(b, |view, b| view.retain_identity(b))
+            .unwrap();
+        b.reserve_storage(identity_charge.additional_storage())
+            .unwrap();
+        let before = b.work();
+        assert!(runtime.matches_original_identity(&identity, b).unwrap());
+        assert_eq!(b.work() - before, Runtime::IDENTITY_COMPARISON_WORK);
+        let mut moved = Some(runtime);
+        let mut runtime = moved.take().unwrap();
+        assert!(runtime.matches_original_identity(&identity, b).unwrap());
         if mode == "runtime-account" {
             let mut foreign_work = Work::new(LIMIT);
             let mut foreign = Budget::new(&mut foreign_work, LIMIT);
@@ -49,6 +61,29 @@ pub(super) fn run(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
             ));
         }
         if mode == "runtime-census" {
+            let slot = service.reserve_launch(b).unwrap().into_slot();
+            let (other_child, other_gate, witness) = spawn(slot);
+            b.reserve_storage(retained).unwrap();
+            let mut other = other_child.into_root_trace(b).unwrap();
+            other.interrupt(b).unwrap();
+            assert_eq!(next(&mut other, b), Event::TrapStop);
+            let (other_identity, other_charge) = other
+                .with_task_observation(b, |view, b| view.retain_identity(b))
+                .unwrap();
+            b.reserve_storage(other_charge.additional_storage())
+                .unwrap();
+            assert!(
+                !runtime
+                    .matches_original_identity(&other_identity, b)
+                    .unwrap()
+            );
+            drop(other_identity);
+            b.release_storage(other_charge.additional_storage())
+                .unwrap();
+            drop(other);
+            drop(other_gate);
+            b.release_storage(retained).unwrap();
+            other_witness = Some(witness);
             assert!(matches!(
                 runtime.with_selected_task_observation::<_, Error>(b, |_, _| Ok(())),
                 Err(Error::State(_))
@@ -108,6 +143,10 @@ pub(super) fn run(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
             );
             std::thread::sleep(Duration::from_millis(1));
         }
+        assert!(runtime.matches_original_identity(&identity, b).unwrap());
+        drop(identity);
+        b.release_storage(identity_charge.additional_storage())
+            .unwrap();
         drop(runtime);
     }
     drop(gate);
@@ -115,6 +154,9 @@ pub(super) fn run(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
     b.release_storage(retained).unwrap();
     drain(service);
     require_reaped(&witness);
+    if let Some(witness) = other_witness {
+        require_reaped(&witness);
+    }
 }
 
 fn lifecycle(service: &mut Service, b: &mut Budget<'_>, cancel_at_birth: bool) {

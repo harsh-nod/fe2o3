@@ -8,6 +8,26 @@ use crate::{
 };
 
 impl RootRuntimeTraceV1<'_> {
+    /// Fixed account/thread validation and original allocation comparison work.
+    pub const IDENTITY_COMPARISON_WORK: usize = ENTRY + 4 * 1088;
+
+    /// Compare the original move-stable root allocation, including after actual
+    /// trace retirement. This inert equality establishes no liveness, execution
+    /// or publication authority and never reconstructs custody from a PID.
+    pub fn matches_original_identity(
+        &self,
+        identity: &super::super::RootTaskIdentityV2,
+        b: &mut Budget<'_>,
+    ) -> Result<bool> {
+        original_identity_scope(self.retained, identity.retained_storage(), b, |b| {
+            self.check_budget(b)?;
+            Ok(std::rc::Rc::ptr_eq(
+                &self.root().identity,
+                &identity.allocation,
+            ))
+        })
+    }
+
     /// Same original root identity, never a new task constructor or wait authority.
     pub fn pid(&self) -> Pid {
         self.root().pid()
@@ -76,5 +96,68 @@ impl RootRuntimeTraceV1<'_> {
         }
         // SAFETY: caller provides the unchanged exact-child/alias closure proof.
         unsafe { self.root_mut().confirm_exec(b) }
+    }
+}
+
+fn original_identity_scope<R>(
+    owner_storage: usize,
+    identity_storage: usize,
+    b: &mut Budget<'_>,
+    operation: impl FnOnce(&mut Budget<'_>) -> Result<R>,
+) -> Result<R> {
+    let floor = owner_storage
+        .checked_add(identity_storage)
+        .ok_or(Resource::Arithmetic)?;
+    b.with_prepaid_scope(
+        floor,
+        ENTRY,
+        RootRuntimeTraceV1::IDENTITY_COMPARISON_WORK,
+        0,
+        operation,
+    )
+}
+
+#[cfg(test)]
+mod identity_budget_tests {
+    use super::*;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+    #[test]
+    fn original_identity_comparison_prepays_exact_work_and_full_storage() {
+        let quote = RootRuntimeTraceV1::IDENTITY_COMPARISON_WORK;
+        for case in 0..3 {
+            let mut work = Work::new(quote - usize::from(case == 1));
+            let mut b = Budget::new(&mut work, 30);
+            b.reserve_storage(30 - usize::from(case == 2)).unwrap();
+            let mut invoked = false;
+            let result = original_identity_scope(10, 20, &mut b, |_| {
+                invoked = true;
+                Ok(17)
+            });
+            match case {
+                0 => {
+                    assert_eq!(result.unwrap(), 17);
+                    assert_eq!(b.work(), quote);
+                    assert_eq!(b.storage(), 30);
+                    assert!(invoked);
+                }
+                1 => {
+                    assert!(matches!(result, Err(Error::Resource(Resource::Work(_)))));
+                    assert!(!invoked);
+                }
+                2 => {
+                    assert!(matches!(result, Err(Error::Resource(Resource::Accounting))));
+                    assert!(!invoked);
+                }
+                _ => unreachable!(),
+            }
+        }
+        let mut work = Work::new(quote);
+        let mut b = Budget::new(&mut work, 30);
+        assert!(matches!(
+            original_identity_scope(usize::MAX, 1, &mut b, |_| Ok(())),
+            Err(Error::Resource(Resource::Arithmetic))
+        ));
+        assert_eq!(b.work(), 0);
     }
 }
