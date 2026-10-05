@@ -147,8 +147,10 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                         assert!(state.contains(&format!(" invocation_source_scalar_copy_valid_identity_v164(copied_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance)));
                                         assert!(state.contains(&format!(" let copied_{} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36()).source;", ordinal + 1, hint.instance)));
                                     }
-                                    assert_eq!(state.matches(&format!("reveal(invocation_source_block_runtime_{root}_v36);")).count(), 1);
+                                    assert_eq!(state.matches(&format!("reveal(invocation_source_block_runtime_{root}_v36);")).count(), 2);
                                     assert_eq!(state.matches(&format!("reveal(invocation_byte_boundary_{root}_v36);")).count(), 1);
+                                    let captured = format!("assert(copied_{}.machine.valid) by {{\n reveal(invocation_source_block_runtime_{root}_v36);\n reveal(invocation_source_enter_{root}_{}_v36);\n }}\n assert(copied_{} == source);", call.arguments.len(), call.child, call.arguments.len());
+                                    assert!(state.find(&captured).unwrap() < state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
                                     let valid = format!("assert(invocation_source_block_runtime_{root}_v36(source).source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}");
                                     assert!(state.find(&valid).unwrap() < state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
                                     let source_projection = state.split_once(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap().1.split_once("\n }\n").unwrap().0;
