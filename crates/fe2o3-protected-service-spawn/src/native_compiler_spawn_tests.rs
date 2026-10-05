@@ -121,7 +121,7 @@ fn runtime_checkpoints_require_original_channel_stage_and_prepay_child_work() {
     assert!(stage.has_runtime_checkpoints());
     assert_eq!(
         stage.spawn_work(63).unwrap(),
-        before + native_work::COMPILER_TRACE_WORK
+        before + Stage::RUNTIME_CHECKPOINT_CHILD_WORK
     );
     assert_eq!(stage.compiler_arguments(), Some(f.arguments.as_slice()));
     assert_eq!(stage.compiler_environment(), Some(f.environment.as_slice()));
