@@ -243,7 +243,14 @@ class SourceCensusTests(unittest.TestCase):
         document["entries"] = [entry]
         # This reduced row component is linked by its real source-driver item;
         # the retained legacy entry belongs to the separate full corpus.
-        document["curriculum"]["lessons"][0]["sourceEntryIds"] = []
+        reduced = document["curriculum"]["lessons"][0]
+        self.assertIsNotNone(reduced["sourceBindingGap"])
+        self.assertEqual(len(reduced["codeTabs"]), 1)
+        self.assertIsNotNone(reduced["codeTabs"][0]["sourceItem"])
+        reduced["sourceEntryIds"] = []
+        reduced["sourceBindingGap"] = None
+        self.assertIsNotNone(next(row for row in original["curriculum"]["lessons"]
+                                 if row["lessonId"] == reduced["lessonId"])["sourceBindingGap"])
         suites = []
         for suite in original["qualification"]["suites"]:
             coverage = [row for row in suite["coverage"] if row["lessonId"] == "gemm-tiling" and fixture_id in row["fixtureIds"]]

@@ -438,7 +438,7 @@ class FixtureDisplayTests(unittest.TestCase):
             ('#[path = "left.rs"] mod renamed;', "selection attribute"),
             ('mod left { #[kernel] fn same() {} }', "nested fixture kernel"),
             ('mod r#left;', "unsupported fixture item"),
-            ('include!("left.rs");', "included fixture source must contain only inert macro definitions or literal includes"),
+            ('include!("left.rs");', "included fixture source must contain only inert macro definitions"),
             ('#[cfg_attr(feature = "left", path = "left.rs")] mod left;', "selection attribute"),
             ('#[unknown_attribute] mod left;', "selection attribute"),
             ('#[cfg(all(feature = "left", unknown))] mod left;', "cfg predicate"),

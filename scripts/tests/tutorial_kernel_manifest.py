@@ -160,7 +160,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "a4039392b4b4f52ee484485d52da641b08156a1449b2ba0861f25a6f08846674")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "e486473f1ca6e050843ad69509227155ab020f759e790159d4b05d5b71e16007")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -640,13 +640,13 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "7504c13866f67b20cfda65fd6f564d75e77ae5e75a12e982efab7bb12c2ec6bc")
+                         "4886d1ebf4b09a0a3e22c9b67635990b8d2f18b11fd0d62ca0bc091531bae0c5")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
-                         {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 19})
+                         {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
                          {"pending": 6, "source-driver-contract": 14, "fixture-source-contract": 63,
-                          "not-applicable": 45})
+                          "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
                  for row in inventory["kernels"] for variant in row["variants"]
@@ -952,11 +952,11 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertIsNone(report["requiredPairCount"])
         self.assertEqual(kernel["variants"][1]["status"], "pending")
 
-    def test_historical_fill_display_does_not_bind_the_migrated_source(self):
+    def test_current_fill_display_binds_source_and_historical_display_refuses(self):
         lesson = self.curriculum_lesson()
         tab = lesson["codeTabs"][0]
-        self.assertEqual(tab["sourceCommit"], "f84c2a59ba34c3e4c12e316cc9b30f14342e36cf")
-        self.assertEqual(tab["displayedUtf8Bytes"], 680)
+        self.assertEqual(tab["sourceCommit"], "b9378bdbee0dd1e284a1c31b25c3614c5c2039fe")
+        self.assertEqual(tab["displayedUtf8Bytes"], 552)
         self.assertEqual(tab["sourceSha256"], tab["displayedSha256"])
         current = (ROOT / "examples/fill/src/lib.rs").read_bytes()
         self.assertEqual(hashlib.sha256(current).hexdigest(), tab["sourceSha256"])

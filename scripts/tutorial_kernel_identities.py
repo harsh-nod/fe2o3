@@ -661,8 +661,10 @@ def _fixture_declarations(
         if inert_macro and kernels:
             _fail("kernel attribute on an inert fixture macro definition")
         include_item = include_paths is not None and re.match(r"include\b", head) is not None
-        if macros_only and not inert_macro and not include_item:
-            _fail("included fixture source must contain only inert macro definitions or literal includes")
+        included_helper = (code[boundary] == "{" and not kernels
+                           and re.match(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+[A-Za-z_][A-Za-z0-9_]*\b", head))
+        if macros_only and not inert_macro and not include_item and not included_helper:
+            _fail("included fixture source must contain only inert macro definitions, non-attributed free functions, or literal includes")
         if inert_macro and enabled and include_scope is not None:
             include_scope.define(inert_macro)
         item_functions = []

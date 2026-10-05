@@ -17,12 +17,12 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 # Independent physical excerpt starts and name coordinates, not a symbol search.
 EXCERPTS = {
-    "gfx950-fp4-gemm": (1622, 1722, 1791),
-    "gfx950-fp8-gemm": (4047, 4147, 4209),
-    "gfx950-fp4-attention": (6469, 6569, 6649),
-    "gfx950-fp8-attention": (16263, 16363, 16443),
+    "gfx950-fp4-gemm": (1349, 1449, 1518),
+    "gfx950-fp8-gemm": (3774, 3874, 3936),
+    "gfx950-fp4-attention": (6196, 6296, 6376),
+    "gfx950-fp8-attention": (15990, 16090, 16170),
 }
-SOURCE_SHA256 = "feebb7e80801c6b5323d19bcdb7908b93a5159c26fe2aa8181fb2de623bf6a5d"
+SOURCE_SHA256 = "37f0c0f9dd28b576e6d8c0ff11426c0874d92e95a21405cd5dd5ff261ef72cd0"
 
 
 class FixtureBindingTests(unittest.TestCase):
@@ -367,6 +367,7 @@ class AttentionCfgSelectionTests(unittest.TestCase):
         cls.cargo = tomllib.loads((package / "Cargo.toml").read_text())
         cls.library = (package / "src/lib.rs").read_text()
         cls.kernel = (package / "src/kernel.rs").read_text()
+        cls.dimensions = (package / "src/dimensions.rs").read_text()
         cls.original = cls.parent.load_manifest(ROOT / "config/tutorial-kernel-manifest-v1.json")
 
     def declarations(self, source, direct=(), budget=None):
@@ -380,7 +381,8 @@ class AttentionCfgSelectionTests(unittest.TestCase):
     def test_real_library_selects_each_single_base_feature(self):
         for feature in self.base_features:
             with self.subTest(feature=feature):
-                self.assertEqual(self.declarations(self.library, [feature]), ([], ["kernel"]))
+                self.assertEqual(self.declarations(self.library, [feature]), ([], ["kernel", "dimensions"]))
+                self.assertEqual(self.declarations(self.dimensions, [feature]), ([], []))
 
     def test_real_library_rejects_zero_and_each_pair_of_base_features(self):
         cases = [(), *itertools.combinations(self.base_features, 2), self.base_features]
@@ -401,7 +403,7 @@ class AttentionCfgSelectionTests(unittest.TestCase):
             "kernel-mhc-sinkhorn-mix-scalar-v1": "ablation",
         }
         for alias, module in aliases.items():
-            expected = [module, "kernel"] if module else ["kernel"]
+            expected = [module, "kernel", "dimensions"] if module else ["kernel", "dimensions"]
             base = self.cargo["features"][alias]
             for direct in ([alias], [alias, *base]):
                 with self.subTest(direct=direct):
@@ -705,14 +707,47 @@ class LiteralIncludeSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(self.identities.KernelInventoryError, "missing fixture module"):
             self.select(self.sources('include!("target/generated.rs");\n'))
 
-    def test_included_items_never_become_functions_modules_or_imports(self):
-        for body in ("fn helper() {}", "#[kernel] fn injected() {}", "mod child;",
+    def test_included_non_attributed_helpers_do_not_add_kernel_selections(self):
+        for body in ("fn helper() {}", "pub fn helper(value: u32) -> u32 { value + 1 }",
+                     "#[cfg(test)] fn disabled() {}", "#[allow(dead_code)] pub(crate) fn helper() {}"):
+            with self.subTest(body=body):
+                selected = self.select(self.sources(body=body))
+                self.assertEqual(set(selected), {"visible"})
+                self.assertEqual(selected["visible"][0], self.library)
+
+    def test_real_included_helper_bytes_remain_part_of_authenticated_closure(self):
+        fixture = next(row for row in self.original["compilerFixtures"]
+                       if row["fixtureId"] == "gfx942-fill-simulation")
+        cache = {}
+        self.parent.validate_compiler_input(ROOT, fixture, "helper closure test", cache)
+        package = cache[fixture["compilerInput"]["packageManifest"]]
+        sources = package["packageSources"]
+        path, source = next(row for row in sources if row[0].name == "reference.rs")
+        self.assertIn("*out = 42.5;", source)
+        changed = [(p, text.replace("*out = 42.5;", "*out = 41.5;") if p == path else text)
+                   for p, text in sources]
+        self.assertNotEqual(self.parent.package_source_closure_sha256(ROOT, changed),
+                            fixture["compilerInput"]["sourceClosureSha256"])
+        with patch.object(self.parent, "package_rust_sources", return_value=changed):
+            with self.assertRaisesRegex(SystemExit, "sourceClosureSha256 is stale"):
+                self.parent.validate_compiler_input(ROOT, fixture, "helper closure test")
+        package["packageSources"] = changed
+        with self.assertRaisesRegex(SystemExit, "physical source differs from its validated closure"):
+            self.parent.validate_kernel_inventory(self.original, None, repo_root=ROOT, package_cache=cache)
+
+    def test_included_items_never_add_kernels_modules_or_imports(self):
+        for body in ("#[kernel] fn injected() {}", "mod child;",
                      "mod child {}", "use crate::helper;", "const VALUE: u32 = 0;",
                      "body!();", '"masked" macro_rules! body {}', "#![no_std]\n" + self.definition,
                      '#[allow(dead_code)] "masked" macro_rules! body {}',
-                     "#[cfg(test)] fn disabled() {}"):
+                     "#[cfg(test)] #[kernel] fn disabled() {}"):
             with self.subTest(body=body), self.assertRaisesRegex(
                     self.identities.KernelInventoryError, "included fixture source"):
+                self.select(self.sources(body=body))
+
+        for body in ("#[unknown_attribute] fn helper() {}", "#[cfg(unknown)] fn helper() {}",
+                     "fn helper() { #[kernel] fn nested() {} }"):
+            with self.subTest(body=body), self.assertRaises(self.identities.KernelInventoryError):
                 self.select(self.sources(body=body))
 
     def test_parent_macro_shadowing_cannot_fake_builtin_include_in_a_child(self):
