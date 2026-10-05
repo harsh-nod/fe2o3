@@ -156,6 +156,28 @@ impl DescriptorCall {
         self.recipe.emit(out)?;
         write!(out, ", {});\n", self.moved).map_err(|_| out.error())
     }
+
+    pub(super) fn emit_wf_proof(self, cursor: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+        out.budget.reserve_storage(
+            size_of::<Self>() + 2 * size_of::<usize>() + size_of::<Result<()>>(),
+        )?;
+        out.budget.charge_work(2)?;
+        write!(
+            out,
+            " invocation_source_descriptor_length_wf_v95(c{cursor}.source, {}, {}, ",
+            self.destination, self.input
+        )
+        .map_err(|_| out.error())?;
+        self.recipe.emit(out)?;
+        write!(out, ", {});\n assert(invocation_source_byte_state_well_formed_v36(invocation_source_byte_pc_v36(invocation_source_descriptor_length_v51(c{cursor}.source, {}, {}, ", self.moved, self.destination, self.input).map_err(|_| out.error())?;
+        self.recipe.emit(out)?;
+        write!(
+            out,
+            ", {}), {}))) by {{ reveal(invocation_source_byte_state_well_formed_v36); }}\n",
+            self.moved, self.continuation
+        )
+        .map_err(|_| out.error())
+    }
 }
 
 fn headers() -> usize {

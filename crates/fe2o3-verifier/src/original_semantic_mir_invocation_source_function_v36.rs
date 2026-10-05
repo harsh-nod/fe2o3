@@ -41,6 +41,9 @@ mod step_hints;
 #[path = "original_semantic_mir_cut_frame_generate_v93.rs"]
 mod cut_frames;
 
+#[path = "original_semantic_mir_source_wf_generate_v95.rs"]
+mod source_wf;
+
 const THREAD_WRITE_NORMAL_V94: &str =
     include_str!("original_semantic_mir_thread_write_normal_laws_v94.vrs");
 
@@ -63,10 +66,19 @@ pub(super) struct SourceCutHintsV85 {
     pub(super) operands: usize,
     pub(super) call: Option<SourceCallHintsV85>,
     pub(super) frame_preserving: bool,
+    descriptor_wf: Option<(usize, descriptor_calls::DescriptorCall)>,
     normalization: Option<thread_write::ThreadWriteCall>,
 }
 
 impl SourceCutHintsV85 {
+    pub(super) fn has_descriptor_wf(&self) -> bool {
+        self.descriptor_wf.is_some()
+    }
+
+    pub(super) fn emit_descriptor_wf(&self, root: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+        source_wf::emit(self, root, out)
+    }
+
     pub(super) fn has_write_normalization(&self) -> bool {
         self.normalization.is_some()
     }

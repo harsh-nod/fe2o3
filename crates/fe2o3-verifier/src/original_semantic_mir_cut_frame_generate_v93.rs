@@ -41,6 +41,7 @@ pub(super) fn emit(
     program.source_slots(out)?;
     out.budget.reserve_storage(headers())?;
     let mut shared = false;
+    let mut wf_shared = false;
     for root in 0..program.roots.len() {
         out.budget.charge_work(1)?;
         let Some(hints) = step_hints::derive(program, root, out)? else {
@@ -73,6 +74,10 @@ pub(super) fn emit(
             if !shared {
                 write!(out, "{SHARED}").map_err(|_| out.error())?;
                 shared = true;
+            }
+            if hint.has_descriptor_wf() && !wf_shared {
+                write!(out, "{}", source_wf::SHARED).map_err(|_| out.error())?;
+                wf_shared = true;
             }
             emit_cut(function, block, out)?;
         }
@@ -122,7 +127,7 @@ fn emit_cut(
 fn headers() -> usize {
     16 * size_of::<usize>()
         + 12 * size_of::<&()>()
-        + 2 * size_of::<bool>()
+        + 3 * size_of::<bool>()
         + size_of::<Event>()
         + size_of::<descriptor_calls::DescriptorCall>()
         + 2 * size_of::<Option<SourceStepHintsV85>>()

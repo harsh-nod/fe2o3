@@ -427,6 +427,10 @@ fn run_write_shape_attempt(
                             );
                             for cut in &hints.cuts {
                                 assert!(hints.fuels[cut.instance] > cut.statements);
+                                if cut.has_descriptor_wf() {
+                                    assert!(cut.frame_preserving);
+                                    assert_ne!(cut.pc, write_pc);
+                                }
                             }
                         }
                         let launches = [ExplicitLaunchExtent::Exact {
@@ -697,6 +701,47 @@ fn writing_cut_support_has_exact_full_model_work_and_storage_limits() {
             assert!(short.is_err());
             assert_eq!(after, floor);
         }
+    }
+}
+
+#[test]
+fn descriptor_wf_composition_uses_authentic_events_and_retains_map_obligations() {
+    let laws = include_str!("original_semantic_mir_source_wf_laws_v95.vrs");
+    assert_eq!(laws.matches("proof fn ").count(), 5);
+    for forbidden in ["assume(", "admit(", "external_body", "Map::empty()"] {
+        assert!(!laws.contains(forbidden), "{forbidden}");
+    }
+    assert!(laws.contains("!source.objects.contains_key(destination)"));
+    assert!(laws.contains("parent: None }).machine.valid"));
+    for (disjoint, copied) in [(false, false), (false, true), (true, false)] {
+        run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            assert_eq!(text.matches(laws).count(), 1);
+            let mut mapped = 0;
+            for proof in text.split("proof fn invocation_paired_cut_").skip(1) {
+                let proof = proof.split("proof fn ").next().unwrap();
+                if !proof.contains(" invocation_source_descriptor_length_wf_v95(") {
+                    continue;
+                }
+                let (header, body) = proof.split_once("\n{\n").unwrap();
+                let (coordinates, _) = header.split_once("_map_v85(").unwrap();
+                let (root, pc) = coordinates.split_once("_pc").unwrap();
+                let (premises, conclusion) = header.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap();
+                assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
+                assert_eq!(conclusion.trim(), format!("invocation_source_byte_map_valid_{root}_v36(invocation_paired_source_step_{root}_v36(source).state, invocation_paired_actual_step_{root}_v36(target).state),"));
+                assert!(body.starts_with(" hide(invocation_source_byte_state_well_formed_v36);\n"));
+                assert!(body.contains(" invocation_source_slice_copy_wf_v95("));
+                assert!(body.contains(" invocation_source_descriptor_borrow_wf_v95("));
+                assert!(body.contains("assert(!c"));
+                assert!(body.contains(".machine.valid) by {"));
+                for event in body.lines().filter_map(|line| line.strip_prefix(" match invocation_source_byte_event_")) {
+                    let event = event.strip_suffix(" {").unwrap();
+                    assert!(text.contains(&format!("let after = match invocation_source_byte_event_{event} {{")), "{event}");
+                }
+                mapped += 1;
+            }
+            assert_eq!(mapped, 2);
+            assert_eq!(text.matches("proof fn invocation_paired_step_").count(), 2);
+        }).0.unwrap();
     }
 }
 

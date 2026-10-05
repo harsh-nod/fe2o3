@@ -97,7 +97,9 @@ pub(super) fn emit(
                         if matches!(goal, Goal::Heap) && hint.has_write_normalization() {
                             emit!(out, " hide(invocation_source_thread_write_v88);\n");
                         }
-                        if constructor.is_some() && matches!(goal, Goal::Map) {
+                        if (constructor.is_some() || hint.has_descriptor_wf())
+                            && matches!(goal, Goal::Map)
+                        {
                             emit!(
                                 out,
                                 " hide(invocation_source_byte_state_well_formed_v36);\n"
@@ -120,6 +122,9 @@ pub(super) fn emit(
                                 " invocation_cut_source_frame_{root}_{}_v93(source);\n",
                                 cut.source
                             );
+                        }
+                        if hint.has_descriptor_wf() && matches!(goal, Goal::Map) {
+                            hint.emit_descriptor_wf(root, out)?;
                         }
                         if let Some((call, entry)) = constructor {
                             if matches!(goal, Goal::Map) {

@@ -274,6 +274,20 @@ pub(super) enum Event {
 }
 
 impl Event {
+    pub(super) fn descriptor_wf_shape_v95(self) -> bool {
+        matches!(
+            self,
+            Self::Descriptor(descriptor_loans::DescriptorEvent::Borrow { parent: None, .. })
+                | Self::Pointer(pointer_events::Event::Copy {
+                    operand: TypedOperand {
+                        kind: OperandKind::Slice { .. },
+                        ..
+                    },
+                    ..
+                })
+        )
+    }
+
     pub(super) fn descriptor_frame_shape_v93(self) -> bool {
         matches!(
             self,
@@ -286,6 +300,52 @@ impl Event {
                     ..
                 })
         )
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn descriptor_wf_selection_excludes_reborrows_transfers_and_noncarrier_events() {
+    let recipe = descriptor_loans::Recipe {
+        origin: 3,
+        source_type: 4,
+        reference_type: 5,
+        generation: 0,
+        instance: 7,
+        block: 11,
+        statement: 2,
+        mutable: false,
+        metadata_bits: 64,
+        width: 4,
+    };
+    assert!(
+        Event::Descriptor(descriptor_loans::DescriptorEvent::Borrow {
+            destination: 13,
+            recipe,
+            parent: None,
+        })
+        .descriptor_wf_shape_v95()
+    );
+    for event in [
+        Event::Descriptor(descriptor_loans::DescriptorEvent::Borrow {
+            destination: 13,
+            recipe,
+            parent: Some((17, recipe)),
+        }),
+        Event::Descriptor(descriptor_loans::DescriptorEvent::Transfer {
+            destination: 13,
+            input: 17,
+            recipe,
+            moved: true,
+        }),
+        Event::Scalar,
+        Event::AggregateReset { local: 13 },
+        Event::StorageDead {
+            descriptor: 3,
+            local: 13,
+        },
+    ] {
+        assert!(!event.descriptor_wf_shape_v95());
     }
 }
 

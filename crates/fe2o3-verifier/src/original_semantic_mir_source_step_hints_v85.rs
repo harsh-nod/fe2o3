@@ -92,6 +92,14 @@ pub(super) fn derive(
                 operands,
                 call,
                 frame_preserving: !conserves_heap && cut_frames::supports(function, block, out)?,
+                descriptor_wf: if !conserves_heap && source_wf::supports(function, block, out)? {
+                    match row.end {
+                        End::Descriptor(call) => Some((block, call)),
+                        _ => return Err(mismatch()),
+                    }
+                } else {
+                    None
+                },
                 normalization: match row.end {
                     End::ThreadWrite(call)
                         if row.statements == 0 && call.normalization_coordinates().is_some() =>
