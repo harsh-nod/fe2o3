@@ -5243,3 +5243,47 @@ impl PrivateBf16DescriptorCompilationV1 {
         false
     }
 }
+
+/// Private boxed V2 handoff custody. This does not invoke a Worker, detach the
+/// descriptor/source chain, or create ordinary/protected publication authority.
+#[allow(dead_code)]
+pub(crate) struct PrivateBf16WorkerHandoffCompilationV1 {
+    handoff: crate::production_ranked_projection_v1::PrivateBf16WorkerHandoffV1,
+    bindings: AuthenticatedProductionBindings,
+}
+impl PrivateBf16DescriptorCompilationV1 {
+    #[allow(dead_code)]
+    fn prepare_private_bf16_worker_handoff_v1(
+        self,
+        requested_return: [u8; 4],
+    ) -> Result<PrivateBf16WorkerHandoffCompilationV1, ProductionPipelineError> {
+        let Self {
+            descriptor,
+            bindings,
+        } = self;
+        let handoff = descriptor.prepare_private_bf16_worker_handoff_v1(
+            requested_return,
+            &bindings.typed_descriptor_roots,
+            bindings.rustc_target.profile(),
+        )?;
+        Ok(PrivateBf16WorkerHandoffCompilationV1 { handoff, bindings })
+    }
+}
+impl PrivateBf16WorkerHandoffCompilationV1 {
+    #[allow(dead_code)]
+    fn revalidate_private_bf16_worker_handoff_v1(
+        &mut self,
+        requested_return: [u8; 4],
+    ) -> Result<(), ProductionPipelineError> {
+        self.handoff.revalidate_private_bf16_worker_handoff_v1(
+            requested_return,
+            &self.bindings.typed_descriptor_roots,
+            self.bindings.rustc_target.profile(),
+        )
+    }
+
+    #[allow(dead_code)]
+    const fn grants_artifact_or_launch_authority(&self) -> bool {
+        false
+    }
+}

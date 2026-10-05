@@ -6867,3 +6867,7 @@ mod private_descriptor_constructor_failure_controls {
         }
     }
 }
+
+#[path = "bf16_private_worker_handoff_v1.rs"]
+mod private_worker_handoff_v1;
+pub(crate) use private_worker_handoff_v1::PrivateBf16WorkerHandoffV1;

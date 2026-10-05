@@ -3268,7 +3268,7 @@ pub(crate) use bf16_nominal_owned_projection_v1::project_private_nominal_materia
 mod bf16_nominal_module_receipt_v1;
 pub(crate) use bf16_nominal_module_receipt_v1::{
     PrivateBf16DescriptorV1, PrivateBf16FormalMemoryV1, PrivateBf16LlvmV1, PrivateBf16OptimizedV1,
-    PrivateBf16TargetBoundV1,
+    PrivateBf16TargetBoundV1, PrivateBf16WorkerHandoffV1,
 };
 
 pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(

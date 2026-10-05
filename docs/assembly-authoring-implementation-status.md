@@ -11,6 +11,57 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 canonical handoff continuation — 2026-10-05
+
+The private continuation now retains a canonical Worker-format handoff under
+the original source, formal, checked optimized-output, LLVM and descriptor
+owners. It keeps the exact gfx942:xnack-/code-object-V6 profile and the already
+descriptor-bound final LLVM text; it does not bind the descriptor twice or
+reconstruct compiler authority from serialized bytes.
+
+Replay checks complete canonical bytes, module text and symbol manifest.
+Actual byte mutation, a self-consistent foreign module, and a self-consistent
+foreign manifest are rejected. Source-first constructor controls reject a
+wrong Return, wrong target profile, empty typed-root roster, changed descriptor
+bytes and changed final LLVM text before payload construction. Restoring the
+actual retained allocation permits clean replay. Work and storage use the
+original ledger and slot; tests cover sticky denials, unwind, overstated
+retention, unknown credit and dropping the payload before known-credit refund.
+The accounting remains selected logical retention, not whole-engine allocation,
+Worker-process memory or RSS accounting.
+
+Four fresh frontend processes (Identity and swapped inputs in debug and
+release) completed the new owning-handoff path. Canonical handoffs are 32,350
+and 32,339 bytes, with 209-byte manifests. Retained handoff storage is 32,374
+and 32,363 bytes, plus a 248-byte observation header. Projection live storage
+is 910,825,220 and 910,825,176 bytes; peaks are 995,235,743 and 995,235,699.
+After the complete owner chain drops, the distinct materialization account
+returns to 816,298,804 bytes. Complete frames and diagnostics agree between
+debug and release, including byte-identical raw stderr for each source order.
+
+Raw optimized-output analysis remains Incomplete: three allocations, nine
+accesses, one 256-byte bounds obligation, two alias obligations, no reported
+conflicts and eight guarded-access reasons. The structural guard and canonical
+handoff do not authenticate runtime allocations, aliases or launch inputs.
+The new route is private and test-only at the frontend boundary. It has not
+invoked the external compiler Worker or produced an admitted GPU artifact.
+
+Validation passed the full backend suite in debug and release: 3,990 library
+tests (237 ignored), 19 export-simulation tests, 73 extractor tests and all
+non-ignored package API/integration tests. The parent validator passed 23
+controls, including exact 63-field observations, complete marker ordering,
+mutation/refusal flags and resource ceilings. Its 56 mandatory source roles
+include all 11 continuation leaves. The tested source census is
+`e393be24ea05817b6a4c8b3559948c45acb702019d4034e3b161edea68382549`.
+The root comparison record is
+`bf16-private-handoff-current-pair-comparison-root-r70-r1/COMPARISON.json`
+(SHA256 `cb16d41deb3f4eac36719c69386426b8e2f2da33e3cc489d458d96e5c668f638`).
+
+This closes the private source-to-canonical-handoff implementation prerequisite,
+not Worker execution, protected or ordinary admission, numerical/hardware
+qualification, runtime bounds/alias duties, public debugger qualification or a
+tutorial. No milestone exit is newly accepted; the count remains **7/18**.
+
 ## Paired debugger completion package and startup — 2026-10-05
 
 The optional, disabled [physical-v9 debugger source layer](../tools/rocgdb-one-stop-native-adapters-v1/physical-v9/README.md)
@@ -51,7 +102,12 @@ The independent startup audit is
 This is startup-only evidence: it loaded no inferior and performed no kernel
 dispatch or physical capture. It does not establish complete import history,
 cache provenance, historical process cleanup or global writer exclusion.
-The fresh native controller, semantic runtime binding, currentness checks and
+The retained startup episode additionally passed 67 source-bound semantic
+controls and produced seven data products covering all 119 record roles. The
+complete raw inputs, retrospective audits, exact tool/environment custody and
+prior failed generator/control runs remain distinct. This validates recorded
+startup evidence, not current runtime state or permission to execute a target.
+The fresh native controller, current runtime binding, currentness checks and
 one-use execution scope remain pending; no expired execution scope is reused.
 
 External compiler-worker execution, artifact/launch admission, GPU/numerical

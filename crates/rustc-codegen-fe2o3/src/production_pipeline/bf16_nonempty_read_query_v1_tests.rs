@@ -7,7 +7,7 @@ use fe2o3_kernel_analysis::{
 use fe2o3_lower_mir_kernel::{
     Bf16NominalCallQueryErrorV1 as QueryError, CheckedBf16CallInstanceV1,
 };
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 fn inventory_error(error: CanonicalKirInventoryErrorV1) -> Error {
     match error {
