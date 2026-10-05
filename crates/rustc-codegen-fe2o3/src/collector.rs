@@ -3024,6 +3024,15 @@ impl<'tcx> DeviceCollector<'tcx> {
                     ) {
                         continue;
                     }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_result_branch_v1(
+                        self.tcx,
+                        instance,
+                    ) || crate::trusted_device_items::authenticate_reviewed_safe_core_result_residual_v1(
+                        self.tcx,
+                        instance,
+                    ) {
+                        continue;
+                    }
                     if crate::production_rustc_intrinsic_v1::authenticate_reviewed_branch_hint_origin_v1(
                         self.tcx, instance,
                     ) {
