@@ -17,6 +17,8 @@ use fe2o3_kernel_ir::{
 };
 use std::{fmt, mem::size_of};
 
+#[path = "canonical_tile_callee_summaries_v167.rs"]
+mod callees;
 #[path = "canonical_tile_reconvergence_v165.rs"]
 mod reconvergence;
 
@@ -246,6 +248,18 @@ fn varying_seed(kind: &Kind, site: Site) -> Result<bool> {
             | Execution::FragmentIntoPartsU32 { .. }
             | Execution::ScopeEnd { .. },
         ) => true,
+        Kind::Storage(operation) => {
+            // Every closed storage step is finite and noncollective on defined
+            // executions. Read results remain varying, even at uniform addresses.
+            let mut reads = false;
+            operation
+                .try_visit_memory_accesses(|_, _, kind| {
+                    reads |= kind == fe2o3_kernel_ir::StorageMemoryAccessKindV1::Read;
+                    Ok::<_, std::convert::Infallible>(())
+                })
+                .unwrap_or_else(|never| match never {});
+            reads
+        }
         // A missing result is not evidence that an opaque operation returns on
         // every lane. Calls, assembly, and physical collectives refuse here.
         _ => return Err(Error::UnsupportedArrival(site)),
@@ -322,12 +336,19 @@ fn analyze(graph: &Graph<'_, '_>, meter: &mut Meter<'_, '_, Error>) -> Result<()
     )?;
     scratch.varying = filled(meter, graph.nodes, false)?;
     scratch.queue = meter.table(graph.nodes)?.0;
+    let callees = callees::Summaries::derive(graph.inventory, meter)?;
     for index in graph.function.operations.clone() {
         meter.work(1)?;
         let operation = &graph.inventory.operations()[index];
-        if scratch.reachable[operation.coordinate.block.block as usize]
-            && varying_seed(&operation.operation.kind, operation.coordinate)?
-        {
+        if !scratch.reachable[operation.coordinate.block.block as usize] {
+            continue;
+        }
+        let varying = if matches!(operation.operation.kind, Kind::Call { .. }) {
+            callees.varying(index, operation.coordinate, meter)?
+        } else {
+            varying_seed(&operation.operation.kind, operation.coordinate)?
+        };
+        if varying {
             let node = graph.operation(index)?;
             scratch.varying[node] = true;
             meter.push(&mut scratch.queue, node)?;
@@ -383,15 +404,20 @@ fn analyze(graph: &Graph<'_, '_>, meter: &mut Meter<'_, '_, Error>) -> Result<()
 
 /// Checks uniform tile descriptors, bases, and workgroup arrival in the actual
 /// borrowed graph. ABI uniformity is assumed only for a declared kernel entry.
-/// Reachable opaque operations refuse. Acyclic arrival reconverges only at exact
-/// postdominators; edge-selected values remain tainted. Cyclic control retains
-/// divergence through joins and backedges. Scratch and work are fully charged
-/// to the continuing ledger, and no result storage or authority is retained.
+/// Reachable opaque operations refuse. Defined helper calls require an acyclic
+/// reachable body and transitive, noncollective finite summaries; their arguments
+/// and any inherently varying helper operation still taint returned values.
+/// Acyclic arrival reconverges only at exact postdominators; edge-selected values
+/// remain tainted. Cyclic root control retains divergence through joins and
+/// backedges. Scratch and work are fully charged to the continuing ledger, and
+/// no result storage or authority is retained.
 ///
 /// Acyclic postdominance costs O((blocks + CFG edges) log blocks); propagation is
 /// linear in definitions, operations, uses, edges, and derived control dependencies.
 /// Enumerating control dependencies can require O(CFG edges * blocks) in the
 /// worst case. Each postdominator-chain visit is charged to the work budget.
+/// Defined-callee summaries add a linear pass over the module's functions,
+/// blocks, CFG edges, operations and call occurrences; recursive SCCs refuse.
 /// Memory validity, undefined arithmetic, and original-source semantics remain
 /// independent obligations; this analysis is conditional on defined execution.
 pub fn check_canonical_tile_convergence_v160(
