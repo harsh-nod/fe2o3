@@ -107,6 +107,14 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 assert_eq!(control.contains("hide(invocation_paired_actual_step_"), has_state);
                                 if has_state {
                                     state_summaries += 1;
+                                    let source_declaration = format!("spec fn invocation_constructor_source_{root}_{pc}_v162(");
+                                    let source_expression = out.text.split_once(&source_declaration).unwrap().1.split_once("\n}\n").unwrap().0;
+                                    assert!(source_expression.contains(&format!(
+                                        " let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));",
+                                        entry.pc, entry.locals.start, entry.locals.end, entry.owner
+                                    )));
+                                    assert_eq!(source_expression.matches("invocation_source_entry_initialize_v166(").count(), 1);
+                                    assert!(!source_expression.contains("Seq::new("));
                                     let target_declaration = format!("spec fn invocation_constructor_target_{root}_{pc}_v162(");
                                     let target_state = out.text.split_once(&target_declaration).unwrap().1.split_once("\n}\n").unwrap().0;
                                     let mut current = row.blocks.start + block;
