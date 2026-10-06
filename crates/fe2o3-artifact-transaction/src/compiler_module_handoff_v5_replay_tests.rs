@@ -62,7 +62,7 @@ fn conditional_receipt_original_account_preserves_exact_replay_and_bounded_join(
             );
             assert_eq!(b.storage(), floor);
             assert_eq!(b.storage_account_identity_v1(), identity);
-            assert_eq!(b.work_ledger_identity_v1(), ledger);
+            assert!(b.work_ledger_identity_v1() == ledger);
             (result, b.work(), b.peak_storage())
         })
     };

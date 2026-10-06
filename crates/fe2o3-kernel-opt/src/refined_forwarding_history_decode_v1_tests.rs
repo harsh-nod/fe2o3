@@ -44,7 +44,7 @@ fn original_account_history_full_chain_exact_one_short_and_legacy_refusal() {
                     Ok(())
                 })();
                 assert_eq!(b.storage_account_identity_v1(), identity);
-                assert_eq!(b.work_ledger_identity_v1(), ledger);
+                assert!(b.work_ledger_identity_v1() == ledger);
                 assert_eq!(b.storage_limit(), storage);
                 assert!(b.storage() >= floor);
                 if result.is_ok() {
