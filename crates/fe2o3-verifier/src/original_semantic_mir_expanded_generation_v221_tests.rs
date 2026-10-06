@@ -53,9 +53,16 @@ fn expanded_generation_support_checks_real_steps_and_runtime_without_live_value_
     for layout in [Layout::Blocked, Layout::Striped] {
         for width in [FormalIndexWidth::Bits32, FormalIndexWidth::Bits64] {
             for endianness in [EndiannessV2::Little, EndiannessV2::Big] {
-                support_only(layout, width, endianness, LIMIT, LIMIT, |_| {})
-                    .0
-                    .unwrap();
+                let result = support_only(layout, width, endianness, LIMIT, LIMIT, |_| {}).0;
+                // This authentic fixture's target casts require a 64-bit INDEX.
+                if width == FormalIndexWidth::Bits32 {
+                    assert!(matches!(
+                        result,
+                        Err(Error::Statement("actual integral byte cast is not modeled"))
+                    ));
+                } else {
+                    result.unwrap();
+                }
             }
         }
     }
@@ -212,7 +219,15 @@ fn expanded_generation_uses_actual_owners_layout_and_runtime() {
     for layout in [Layout::Blocked, Layout::Striped] {
         for width in [FormalIndexWidth::Bits32, FormalIndexWidth::Bits64] {
             for endianness in [EndiannessV2::Little, EndiannessV2::Big] {
-                run(layout, width, endianness, LIMIT, LIMIT).0.unwrap();
+                let result = run(layout, width, endianness, LIMIT, LIMIT).0;
+                if width == FormalIndexWidth::Bits32 {
+                    assert!(matches!(
+                        result,
+                        Err(Error::Statement("actual integral byte cast is not modeled"))
+                    ));
+                } else {
+                    result.unwrap();
+                }
             }
         }
     }
