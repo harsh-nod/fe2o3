@@ -139,8 +139,15 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
     hide(invocation_context_issue_coupled_v211);
     hide(invocation_source_logical_write_v38);
     hide(invocation_source_context_shape_v161);
+    hide(invocation_context_issue_fresh_enabled_v211);
     hide(byte_execution_next_epoch_v178);
     hide(byte_execution_step_v178);
+    assert(source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && 0 <= issue.destination < source.machine.values.len()
+        && !source.objects.contains_key(issue.destination)
+        && invocation_source_context_shape_v161(issue.source_type)) by {
+        reveal(invocation_context_issue_fresh_enabled_v211);
+    }
     invocation_context_issue_fresh_preserves_current_map_v238(
         source, target, execution_map, issue, site, destination);
     invocation_context_issue_fresh_has_exact_updates_v211(
@@ -159,6 +166,7 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
     invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);
     assert(invocation_source_context_issue_v161(source, issue).source
         == invocation_source_aggregate_install_v42(source, issue.destination, aggregate)) by {
+        reveal(invocation_context_issue_fresh_enabled_v211);
         reveal(invocation_source_context_issue_v161);
     }
     let next = invocation_context_issue_coupled_v211(
@@ -188,6 +196,7 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
     assert(next.target == (MemoryStateV30 {
         values: target.values.update(destination, next.target.values[destination]),
         ..target })) by {
+        reveal(invocation_context_issue_fresh_enabled_v211);
         reveal(byte_execution_step_v178);
     }
 }
