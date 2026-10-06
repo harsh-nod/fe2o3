@@ -381,7 +381,18 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 4);
+    assert_eq!(source.matches("proof fn ").count(), 5);
+    let install = source
+        .split_once("proof fn invocation_source_plain_aggregate_install_frame_v260(")
+        .unwrap()
+        .1
+        .split_once("\n{\n")
+        .unwrap()
+        .0;
+    assert_eq!(
+        install.split_once("    requires ").unwrap().1.split_once("    ensures ").unwrap().0,
+        "source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),\n        invocation_source_aggregate_well_formed_v42(aggregate), aggregate.execution_lease.is_none(),\n"
+    );
     let frame = source
         .split_once("proof fn invocation_context_issue_fresh_preserves_frame_v259(")
         .unwrap()
@@ -417,6 +428,8 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "assert(source.logical.aggregates.remove(destination).insert(destination, aggregate)",
         "reveal(invocation_source_byte_put_local_v36);",
         "reveal(invocation_source_aggregate_install_v42);",
+        "invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);",
+        "invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);",
     ] {
         assert!(
             source.contains(exact),

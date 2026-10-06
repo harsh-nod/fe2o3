@@ -91,11 +91,20 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  && after.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}) }}),
 {{
  hide(invocation_source_byte_state_well_formed_v36);
+ hide(invocation_source_checked_v42);
+ hide(invocation_source_byte_step_v36);
  checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
  invocation_source_checked_add_reconstruction_step_v259(source, {destination}, {ty},
  InvocationSourceByteValueV36::Local {{ local: {left}, moved: false }},
  InvocationSourceByteValueV36::Local {{ local: {right}, moved: false }},
  left, right, {root}, {instance}, little_endian);
+ assert(invocation_source_byte_step_v36(source,
+ invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian)
+ == invocation_source_checked_v42(source, {destination}, {ty}, 0, 32, false,
+ InvocationSourceByteValueV36::Local {{ local: {left}, moved: false }},
+ InvocationSourceByteValueV36::Local {{ local: {right}, moved: false }}, {root}, {instance}, little_endian)) by {{
+ reveal(invocation_source_byte_step_v36);
+ }}
 }}
 "#).map_err(|_| out.error())?;
                                 witnesses += 1;
@@ -122,6 +131,8 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
     checked_add_transition_model_v260(|model| {
         assert!(model.contains("proof fn checked_add_actual_schema_"));
         assert!(model.contains("proof fn checked_add_actual_step_"));
+        assert!(model.contains("hide(invocation_source_checked_v42);"));
+        assert!(model.contains("reveal(invocation_source_byte_step_v36);"));
         for forbidden in ["assume(", "admit(", "external_body", "assume_specification"] {
             assert!(!model.contains(forbidden));
         }
