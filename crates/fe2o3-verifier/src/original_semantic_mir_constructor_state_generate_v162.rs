@@ -3,6 +3,9 @@
 use super::*;
 use fe2o3_kernel_ir::Terminator;
 
+#[path = "original_semantic_mir_constructor_record_generate_v181.rs"]
+mod source_record;
+
 pub(super) struct Summary {
     base: usize,
     start: usize,
@@ -272,7 +275,7 @@ fn source_runtime(
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     out.budget.reserve_storage(20 * size_of::<usize>())?;
-    out.budget.charge_work(24)?;
+    out.budget.charge_work(23)?;
     if entry.arguments.len() != call.arguments.len() {
         return Err(mismatch());
     }
@@ -280,6 +283,7 @@ fn source_runtime(
     if fuel > *hints.fuels.get(hint.instance).ok_or_else(mismatch)? {
         return Err(mismatch());
     }
+    source_record::emit(root, pc, hint, call, out)?;
     emit!(
         out,
         "#[verifier::spinoff_prover]\nproof fn invocation_constructor_source_runtime_{root}_{pc}_v167(source: InvocationSourceByteStateV36)\n requires invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},\n ensures\n invocation_source_block_runtime_{root}_v36(source).source == invocation_constructor_source_{root}_{pc}_v162(source),\n invocation_source_block_runtime_{root}_v36(source).returned.is_none(),\n invocation_source_block_runtime_{root}_v36(source).operands.len() == {},\n",
@@ -298,16 +302,15 @@ fn source_runtime(
     );
     emit!(
         out,
-        "{{\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_entry_refuses_{root}_{}_v167);\n hide(invocation_source_entry_body_{root}_{}_v167);\n hide(invocation_source_entry_select_v167);\n hide(invocation_source_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_byte_value_typed_v36);\n hide(invocation_source_entry_initialize_v166);\n hide(invocation_source_byte_put_local_v36);\n reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {fuel});\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}\n",
+        "{{\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_entry_refuses_{root}_{}_v167);\n hide(invocation_source_entry_body_{root}_{}_v167);\n hide(invocation_source_entry_select_v167);\n hide(invocation_source_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_byte_value_typed_v36);\n hide(invocation_source_entry_initialize_v166);\n hide(invocation_source_byte_put_local_v36);\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}\n",
         call.child,
         call.child,
-        call.child,
-        hint.instance
+        call.child
     );
-    out.budget.charge_work(3)?;
+    out.budget.charge_work(4)?;
     emit!(
         out,
-        " assert(invocation_source_block_runtime_{root}_v36(source).source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n"
+        " assert(invocation_source_block_runtime_{root}_v36(source).source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n invocation_constructor_source_record_{root}_{pc}_v181(source);\n"
     );
     out.budget.charge_work(1)?;
     emit!(out, " let copied_0 = source;\n");
@@ -337,10 +340,10 @@ fn source_runtime(
         call.arguments.len(),
         call.child
     );
-    out.budget.charge_work(4)?;
+    out.budget.charge_work(3)?;
     emit!(
         out,
-        " assert(copied_{}.machine.valid) by {{\n reveal(invocation_source_block_runtime_{root}_v36);\n reveal(invocation_source_enter_{root}_{}_v36);\n }}\n assert(copied_{} == source);\n",
+        " assert(copied_{}.machine.valid) by {{\n reveal(invocation_source_enter_{root}_{}_v36);\n }}\n assert(copied_{} == source);\n",
         call.arguments.len(),
         call.child,
         call.arguments.len()
@@ -387,12 +390,23 @@ fn source_runtime(
             " && invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}].value == InvocationSourceValueV42::Carrier(source.machine.values[{local}])\n"
         );
     }
-    out.budget.charge_work(3)?;
+    out.budget.charge_work(5)?;
     emit!(
         out,
-        " && invocation_source_block_runtime_{root}_v36(source).observations.len() == 0\n && (forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() ==> invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i]))) by {{\n reveal(invocation_source_block_runtime_{root}_v36);\n reveal(invocation_source_enter_{root}_{}_v36);\n reveal(invocation_source_entry_body_{root}_{}_v167);\n }}\n invocation_source_local_block_observations_empty_v180(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36());\n",
+        " && invocation_source_block_runtime_{root}_v36(source).observations.len() == 0) by {{\n reveal(invocation_source_enter_{root}_{}_v36);\n reveal(invocation_source_entry_body_{root}_{}_v167);\n }}\n assert forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() implies invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i]) by {{\n",
         call.child,
         call.child
+    );
+    for ordinal in 0..call.arguments.len() {
+        out.budget.charge_work(2)?;
+        emit!(
+            out,
+            " if i == {ordinal} {{ assert(invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}])); }} else"
+        );
+    }
+    emit!(
+        out,
+        " {{ assert(false); }}\n }}\n invocation_source_local_block_observations_empty_v180(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36());\n"
     );
     emit!(out, "}}\n");
     Ok(())
