@@ -459,7 +459,7 @@ fn typed_array_invalid_element_law_is_in_complete_source_model() {
             "    reveal_with_fuel(invocation_source_memory_value_valid_v51, 1);\n",
             "    if invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian) {\n",
             "        assert forall|element_index: int| 0 <= element_index < count implies\n",
-            "            invocation_source_memory_value_valid_v51(source,\n",
+            "            #[trigger] invocation_source_memory_value_valid_v51(source,\n",
             "                MemoryPointerV30 { byte_offset: pointer.byte_offset + element_index * stride, ..pointer },\n",
             "                element, (fuel - 1) as nat, little_endian) by {\n",
             "        }\n",
