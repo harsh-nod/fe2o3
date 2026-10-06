@@ -158,6 +158,26 @@ pub(super) fn configured(budget: &Budget<'_>) -> Result<(), Error> {
         Ok(())
     }
 }
+
+/// Additional work per explicit original-account history operation.
+pub const REFINED_FORWARDING_HISTORY_COMPOSITION_WORK_V1: usize = Budget::STORAGE_WINDOW_WORK_V1;
+/// Additional fixed scratch; each operation ALSO counts its entire actual input.
+pub const REFINED_FORWARDING_HISTORY_COMPOSITION_SCRATCH_V1: usize =
+    Budget::STORAGE_WINDOW_SCRATCH_V1;
+
+pub(super) fn original_account<T, E: From<Resource>>(
+    budget: &mut Budget<'_>,
+    inputs: usize,
+    operation: impl FnOnce(&mut Budget<'_>) -> Result<T, E>,
+) -> Result<T, E> {
+    let floor = budget.storage();
+    let overlap = inputs
+        .checked_add(REFINED_FORWARDING_HISTORY_COMPOSITION_SCRATCH_V1)
+        .ok_or(Resource::Arithmetic)?;
+    budget.with_additional_storage_window_v1(MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1, |b| {
+        b.with_prepaid_scope(floor.max(inputs), 0, 0, overlap, operation)
+    })
+}
 fn lengths(fields: &[&[u8]; 27]) -> Result<usize, Error> {
     let total = fields.iter().try_fold(HEADER, |n, b| add(n, b.len()))?;
     if total > MAX_REFINED_FORWARDING_HISTORY_BYTES_V1 {
@@ -311,6 +331,23 @@ pub fn read_refined_forwarding_history_v1<'w>(
     budget: &mut Budget<'_>,
 ) -> Result<InertRefinedForwardingHistoryRefV1<'w>, Error> {
     configured(budget)?;
+    read_bounded(wire, budget)
+}
+
+/// Same canonical parser on an ORIGINAL owned account. The full borrowed input
+/// is counted again inside an additional <=256 MiB window; caller retains and
+/// prepays its complete backing. No fresh ledger or semantic authority is made.
+pub fn read_refined_forwarding_history_in_original_account_v1<'w>(
+    wire: &'w [u8],
+    budget: &mut Budget<'_>,
+) -> Result<InertRefinedForwardingHistoryRefV1<'w>, Error> {
+    original_account(budget, wire.len(), |b| read_bounded(wire, b))
+}
+
+fn read_bounded<'w>(
+    wire: &'w [u8],
+    budget: &mut Budget<'_>,
+) -> Result<InertRefinedForwardingHistoryRefV1<'w>, Error> {
     if wire.len() > MAX_REFINED_FORWARDING_HISTORY_BYTES_V1 {
         return Err(Error::Limit);
     }
