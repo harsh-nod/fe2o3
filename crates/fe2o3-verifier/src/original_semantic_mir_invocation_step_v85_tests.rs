@@ -168,6 +168,9 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                         assert!(!proof.contains("reveal(invocation_source_entry_initialize_v166);"));
                                     }
                                     assert!(runtime_state.contains("hide(invocation_source_value_evaluate_v42);"));
+                                    assert!(runtime_state.contains("hide(invocation_source_byte_put_local_v36);"));
+                                    assert!(!runtime_state.contains("reveal(invocation_source_byte_put_local_v36);"));
+                                    assert!(!source_state.contains("hide(invocation_source_byte_put_local_v36);"));
                                     assert!(runtime_state.contains("hide(invocation_source_entry_select_v167);"));
                                     assert!(!runtime_state.contains("reveal(invocation_source_entry_select_v167);"));
                                     assert!(runtime_state.contains(&format!("hide(invocation_source_entry_refuses_{root}_{}_v167);", call.child)));
