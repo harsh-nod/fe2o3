@@ -4,6 +4,28 @@ use crate::production_pipeline::source_owned_v29::Error as SourceError;
 use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, ExecutionTileLayoutV1};
 
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_source_child";
+const CASE: &str = "FE2O3_TEST_EXPANDED_SOURCE_CASE_V259";
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum ExpandedCase {
+    Observe,
+    Payload,
+    Refuse,
+    Overreport,
+    Underreport,
+    Refund,
+    Panic,
+}
+
+const CASES: [ExpandedCase; 7] = [
+    ExpandedCase::Observe,
+    ExpandedCase::Payload,
+    ExpandedCase::Refuse,
+    ExpandedCase::Overreport,
+    ExpandedCase::Underreport,
+    ExpandedCase::Refund,
+    ExpandedCase::Panic,
+];
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct ExpandedObservation {
@@ -14,9 +36,9 @@ struct ExpandedObservation {
     refused_consumer: bool,
 }
 
-#[derive(Default)]
 struct ExpandedCallbacks {
-    result: Option<Result<ExpandedObservation, String>>,
+    case: ExpandedCase,
+    result: Option<Result<Option<ExpandedObservation>, String>>,
 }
 
 #[derive(Default)]
@@ -79,72 +101,81 @@ fn expanded_multi_root_child() {
 impl Callbacks for ExpandedCallbacks {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.result = Some((|| {
-            let transaction = || {
-                transaction_in_active_session_v1(
-                    tcx,
-                    crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
-                )
-            };
+            let transaction = transaction_in_active_session_v1(
+                tcx,
+                crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+            )?;
             let mut work = Work::new(500_000_000);
             let mut budget = Budget::new(&mut work, 20_000_000);
-            let mut observation = transaction()?
-                .with_original_source_expanded_v259(
+            if matches!(self.case, ExpandedCase::Observe) {
+                let observation = transaction
+                    .with_original_source_expanded_v259(
+                        &mut budget,
+                        |source, original, tile, roots, target, budget| {
+                            assert_eq!(roots.len(), 1);
+                            assert_eq!(source.root_count(budget)?, 1);
+                            assert!(matches!(
+                                target,
+                                fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942
+                                    | fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950
+                            ));
+                            assert!(std::ptr::eq(original, tile.original_source_v162(budget)?));
+                            assert_eq!(tile.selections(budget)?.len(), 1);
+                            assert_eq!(
+                                tile.selections(budget)?[0].layout,
+                                ExecutionTileLayoutV1::Blocked
+                            );
+                            let neutral = tile.neutral_source_v162(budget)?;
+                            let observation = ExpandedObservation {
+                                original: *source.canonical(budget)?.identity().digest(),
+                                neutral: *neutral.output_inventory(budget)?.identity_v18().digest(),
+                                expanded: *tile.output(budget)?.identity().digest(),
+                                definitions: neutral.output_inventory(budget)?.definitions().len(),
+                                refused_consumer: false,
+                            };
+                            Ok((observation, 0))
+                        },
+                    )
+                    .map_err(|error| format!("ordinary expanded source: {error:?}"))?
+                    .into_observation();
+                return Ok(Some(observation));
+            }
+            if matches!(self.case, ExpandedCase::Payload) {
+                let payload = transaction
+                    .with_original_source_expanded_v259(&mut budget, |_, _, _, _, _, budget| {
+                        budget.reserve_storage(17)?;
+                        Ok((Box::new([9u8; 17]), 17))
+                    })
+                    .map_err(|error| format!("expanded owned payload: {error:?}"))?
+                    .into_observation();
+                assert_eq!(*payload, [9u8; 17]);
+                drop(payload);
+                budget.release_storage(17).unwrap();
+                return Ok(None);
+            }
+            if matches!(self.case, ExpandedCase::Refuse) {
+                let mut calls = 0;
+                let refusal = transaction.with_original_source_expanded_v259::<(), _>(
                     &mut budget,
-                    |source, original, tile, roots, target, budget| {
-                        assert_eq!(roots.len(), 1);
-                        assert_eq!(source.root_count(budget)?, 1);
-                        assert!(matches!(
-                            target,
-                            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942
-                                | fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950
-                        ));
-                        assert!(std::ptr::eq(original, tile.original_source_v162(budget)?));
-                        assert_eq!(tile.selections(budget)?.len(), 1);
-                        assert_eq!(
-                            tile.selections(budget)?[0].layout,
-                            ExecutionTileLayoutV1::Blocked
-                        );
-                        let neutral = tile.neutral_source_v162(budget)?;
-                        let observation = ExpandedObservation {
-                            original: *source.canonical(budget)?.identity().digest(),
-                            neutral: *neutral.output_inventory(budget)?.identity_v18().digest(),
-                            expanded: *tile.output(budget)?.identity().digest(),
-                            definitions: neutral.output_inventory(budget)?.definitions().len(),
-                            refused_consumer: false,
-                        };
-                        Ok((observation, 0))
+                    |_, _, _, _, _, _| {
+                        calls += 1;
+                        Err(SourceError::Unsupported("expanded proof is not admitted"))
                     },
-                )
-                .map_err(|error| format!("ordinary expanded source: {error:?}"))?
-                .into_observation();
-            let mut payload_work = Work::new(500_000_000);
-            let mut payload_budget = Budget::new(&mut payload_work, 20_000_000);
-            let payload = transaction()?
-                .with_original_source_expanded_v259(&mut payload_budget, |_, _, _, _, _, budget| {
-                    budget.reserve_storage(17)?;
-                    Ok((Box::new([9u8; 17]), 17))
-                })
-                .map_err(|error| format!("expanded owned payload: {error:?}"))?
-                .into_observation();
-            assert_eq!(*payload, [9u8; 17]);
-            drop(payload);
-            payload_budget.release_storage(17).unwrap();
-            let mut calls = 0;
-            let refusal = transaction()?.with_original_source_expanded_v259::<(), _>(
-                &mut budget,
-                |_, _, _, _, _, _| {
-                    calls += 1;
-                    Err(SourceError::Unsupported("expanded proof is not admitted"))
-                },
-            );
-            assert!(refusal.is_err());
-            assert_eq!(calls, 1, "the genuine owner must precede consumer refusal");
-            for (reserve, report, refund) in [(0, 1, false), (1, 0, false), (0, 0, true)] {
-                let mut work = Work::new(500_000_000);
-                let mut account = Budget::new(&mut work, 20_000_000);
+                );
+                assert!(refusal.is_err());
+                assert_eq!(calls, 1, "the genuine owner must precede consumer refusal");
+                return Ok(None);
+            }
+            let accounting = match self.case {
+                ExpandedCase::Overreport => Some((0, 1, false)),
+                ExpandedCase::Underreport => Some((1, 0, false)),
+                ExpandedCase::Refund => Some((0, 0, true)),
+                _ => None,
+            };
+            if let Some((reserve, report, refund)) = accounting {
                 let mut called = false;
-                let refused = transaction()?.with_original_source_expanded_v259::<(), _>(
-                    &mut account,
+                let refused = transaction.with_original_source_expanded_v259::<(), _>(
+                    &mut budget,
                     |_, _, _, _, _, budget| {
                         called = true;
                         if refund {
@@ -157,21 +188,19 @@ impl Callbacks for ExpandedCallbacks {
                 );
                 assert!(called);
                 assert!(refused.is_err(), "misreported or refunded owner credit");
+                return Ok(None);
             }
-            let mut work = Work::new(500_000_000);
-            let mut account = Budget::new(&mut work, 20_000_000);
-            let transaction = transaction()?;
+            assert!(matches!(self.case, ExpandedCase::Panic));
             let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                transaction.with_original_source_expanded_v259::<(), _>(
-                    &mut account,
-                    |_, _, _, _, _, _| std::panic::panic_any(259usize),
-                )
+                transaction
+                    .with_original_source_expanded_v259::<(), _>(&mut budget, |_, _, _, _, _, _| {
+                        std::panic::panic_any(259usize)
+                    })
             }))
             .err()
             .expect("expanded consumer unwind must propagate");
             assert_eq!(*panic.downcast::<usize>().unwrap(), 259);
-            observation.refused_consumer = true;
-            Ok(observation)
+            Ok(None)
         })());
         Compilation::Stop
     }
@@ -183,10 +212,52 @@ fn expanded_source_child() {
     let Some(path) = env::var_os(ARGS) else {
         return;
     };
-    let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let mut callbacks = ExpandedCallbacks::default();
-    rustc_driver::run_compiler(&args, &mut callbacks);
-    let result = callbacks.result.expect("ordinary expanded rustc callback");
+    if let Some(case) = env::var_os(CASE) {
+        let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let mut callbacks = ExpandedCallbacks {
+            case: serde_json::from_str(case.to_str().unwrap()).unwrap(),
+            result: None,
+        };
+        rustc_driver::run_compiler(&args, &mut callbacks);
+        let result = callbacks.result.expect("ordinary expanded rustc callback");
+        std::fs::write(
+            env::var_os(RESULT).unwrap(),
+            serde_json::to_vec(&result).unwrap(),
+        )
+        .unwrap();
+        assert!(result.is_ok(), "expanded source: {result:?}");
+        return;
+    }
+    // Producer MIR is one-shot custody. Each independent accounting case must
+    // start a fresh rustc session rather than reacquire the consumed producer.
+    let response = PathBuf::from(env::var_os(RESULT).unwrap());
+    let mut observation = None;
+    for (ordinal, case) in CASES.into_iter().enumerate() {
+        let case_response = response.with_extension(format!("case-{ordinal}.json"));
+        assert!(!case_response.exists());
+        let child = Command::new(env::current_exe().unwrap())
+            .args(["--exact", CHILD, "--ignored", "--nocapture"])
+            .env(CASE, serde_json::to_string(&case).unwrap())
+            .env(RESULT, &case_response)
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "expanded case {case:?}: {}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        let result: Result<Option<ExpandedObservation>, String> =
+            serde_json::from_slice(&std::fs::read(&case_response).unwrap()).unwrap();
+        let result = result.unwrap();
+        assert_eq!(result.is_some(), matches!(case, ExpandedCase::Observe));
+        if let Some(value) = result {
+            assert!(observation.replace(value).is_none());
+        }
+    }
+    let mut observation = observation.unwrap();
+    observation.refused_consumer = true;
+    let result: Result<_, String> = Ok(observation);
     std::fs::write(
         env::var_os(RESULT).unwrap(),
         serde_json::to_vec(&result).unwrap(),
