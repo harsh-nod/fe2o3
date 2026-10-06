@@ -190,7 +190,7 @@ mod tests {
                             assert!(body.contains("effect: MemoryOperationEffectV30::Pure"));
                             let initial_marker = format!("proof fn invocation_context_issue_initial_map_segment_{root}_{instance}_{block}_v232(");
                             assert_eq!(generated.matches(&initial_marker).count(), 1);
-                            let initial = generated.split(&initial_marker).nth(1).unwrap().split("// Exact endpoint replay only.").next().unwrap();
+                            let initial = generated.split(&initial_marker).nth(1).unwrap().split("// Fresh issuance with a current input witness").next().unwrap();
                             let (input, output) = initial.split_once("    ensures").unwrap();
                             assert!(!input.contains("execution_map:"));
                             assert!(!input.contains("invocation_execution_map_current_v205"));
@@ -207,13 +207,35 @@ mod tests {
                             assert!(output.contains("original.source, actual.next.state, coupled.execution_map"));
                             assert!(output.contains("invocation_context_issue_initializes_current_map_v211("));
                             assert!(output.contains("assert forall|key: MemoryExecutionReferenceV178|"));
+                            let current_marker = format!("proof fn invocation_context_issue_current_map_segment_{root}_{instance}_{block}_v240(");
+                            assert_eq!(generated.matches(&current_marker).count(), 1);
+                            let current = generated.split(&current_marker).nth(1).unwrap().split("// Exact endpoint replay only.").next().unwrap();
+                            let (input, output) = current.split_once("    ensures").unwrap();
+                            assert_eq!(input.matches("execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>").count(), 1);
+                            assert_eq!(input.matches("invocation_execution_map_current_v205(source.source, target.state, execution_map)").count(), 1);
+                            assert_eq!(input.matches("invocation_context_issue_fresh_enabled_v211(source.source, target.state,").count(), 1);
+                            assert_eq!(input.matches(&format!("byte_inputs_{root}_v55(target.state, little_endian)")).count(), 1);
+                            assert!(!input.contains("coupled") && !input.contains("original.source") && !input.contains("actual.next"));
+                            assert!(!current.contains("Map::empty()"));
+                            for text in [
+                                format!("source.source.machine.pc == {}", actual.pc),
+                                format!("source.next_statement == {}", actual.statements),
+                                format!("destination: {destination}, source_type: {}", source_type.index()),
+                                format!("invocation_context_issue_segment_{root}_{instance}_{block}_v222(\n        source, target, execution_map, little_endian)"),
+                                format!("invocation_source_micro_finish_{root}_{instance}_v36(source, little_endian)"),
+                                format!("byte_micro_step_{root}_v30(target, little_endian)"),
+                                format!("invocation_source_byte_pc_v36(coupled.source.source, {continuation})"),
+                            ] { assert!(current.contains(&text), "{text}"); }
+                            assert!(output.contains("invocation_context_issue_fresh_preserves_current_map_v238("));
+                            assert!(output.contains("original.source, actual.next.state, coupled.execution_map"));
+                            assert!(output.contains("assert forall|key: MemoryExecutionReferenceV178|"));
                             expected += 1;
                         }
                     }
                 }
                 assert!(expected > 0 && other_controls > 0);
                 assert_eq!(count, expected);
-                assert_eq!(generated.matches("proof fn ").count(), 2 * expected);
+                assert_eq!(generated.matches("proof fn ").count(), 3 * expected);
                 assert!(!generated.contains("assume("));
                 Ok(())
             }).0.unwrap();
