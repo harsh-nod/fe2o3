@@ -300,6 +300,13 @@ impl WrapperAuthenticationCalls<'_> {
 }
 
 fn wrapper_authentication_order(source: &str) -> Result<(), String> {
+    wrapper_authentication_order_with_mutation(source, |_| {})
+}
+
+fn wrapper_authentication_order_with_mutation(
+    source: &str,
+    mutate: impl FnOnce(&mut syn::Block),
+) -> Result<(), String> {
     use syn::visit::Visit;
 
     let file = syn::parse_file(source).map_err(|error| error.to_string())?;
@@ -348,7 +355,9 @@ fn wrapper_authentication_order(source: &str) -> Result<(), String> {
     if arm.guard.is_some() {
         return Err("unexpected compile guard".into());
     }
-    let block = &compile.block;
+    let mut block = compile.block.clone();
+    mutate(&mut block);
+    let block = &block;
 
     let (family_index, family) = wrapper_local(block, "profile_family")?;
     let syn::Expr::Try(family) = family else {
@@ -624,16 +633,16 @@ fn wrapper_authentication_rejects_changed_routes_missing_stages_and_reordering()
             "accepted receive before {before}"
         );
     }
-    let config_statement = "            let build_config = PreparedProductionBuildConfig::from_environment()\n                .map_err(BindingWrapperError::BuildConfiguration)?;\n";
-    assert_eq!(source.matches(config_statement).count(), 1);
-    let duplicate = source.replacen(
-        config_statement,
-        &format!("{config_statement}{config_statement}"),
-        1,
-    );
-    assert!(wrapper_authentication_order(&duplicate).is_err());
-    let missing = source.replacen(config_statement, "", 1);
-    assert!(wrapper_authentication_order(&missing).is_err());
+    let duplicate = wrapper_authentication_order_with_mutation(source, |block| {
+        let (index, _) = wrapper_local(block, "build_config").unwrap();
+        block.stmts.insert(index, block.stmts[index].clone());
+    });
+    assert!(duplicate.is_err());
+    let missing = wrapper_authentication_order_with_mutation(source, |block| {
+        let (index, _) = wrapper_local(block, "build_config").unwrap();
+        block.stmts.remove(index);
+    });
+    assert!(missing.is_err());
 }
 
 #[test]
