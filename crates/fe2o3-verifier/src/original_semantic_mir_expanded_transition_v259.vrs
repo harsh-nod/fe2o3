@@ -165,10 +165,20 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
         source, target, execution_map, issue, site, destination);
     assert(next.source == invocation_source_context_issue_v161(source, issue));
     let after = next.source.source;
+    assert(after == (InvocationSourceByteStateV36 {
+        machine: MemoryStateV30 {
+            values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+            ..source.machine },
+        logical: InvocationSourceLogicalV38 {
+            aggregates: source.logical.aggregates.insert(issue.destination, aggregate),
+            ..invocation_source_logical_write_v38(source.logical, issue.destination) }, ..source }));
     assert(after.machine == (MemoryStateV30 {
         values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
         ..source.machine }));
     assert(after.slots == source.slots && after.objects == source.objects);
+    assert(after.logical.aggregates == source.logical.aggregates.insert(issue.destination, aggregate));
+    assert(after.logical.aggregates.contains_key(issue.destination));
+    assert(after.logical.aggregates[issue.destination] == aggregate);
     assert(after.logical.aggregates =~= source.logical.aggregates.insert(
         issue.destination, after.logical.aggregates[issue.destination]));
     assert(after.logical == (InvocationSourceLogicalV38 {
@@ -333,6 +343,25 @@ proof fn invocation_source_checked_add_reconstruction_step_v259(
             if left + right >= 4294967296 { 1int } else { 0int }));
     let aggregate = InvocationSourceAggregateV42 {
         source_type, execution_lease: None, leaves };
+    assert(invocation_source_aggregate_well_formed_v42(aggregate));
     assert(invocation_source_aggregate_complete_v42(aggregate));
     invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);
+    let installed = invocation_source_aggregate_install_v42(source, destination, aggregate);
+    assert(installed == (InvocationSourceByteStateV36 {
+        machine: MemoryStateV30 {
+            values: source.machine.values.update(destination, MemoryValueV30::Undefined),
+            ..source.machine },
+        logical: InvocationSourceLogicalV38 {
+            aggregates: source.logical.aggregates.insert(destination, aggregate),
+            ..invocation_source_logical_write_v38(source.logical, destination) }, ..source }));
+    let after = invocation_source_checked_v42(source, destination, source_type,
+        0, 32, false, left_operand, right_operand, root, instance, little_endian);
+    assert(after == installed);
+    assert(after.machine == (MemoryStateV30 {
+        values: source.machine.values.update(destination, MemoryValueV30::Undefined),
+        ..source.machine }));
+    assert(after.slots == source.slots && after.objects == source.objects);
+    assert(after.logical == (InvocationSourceLogicalV38 {
+        aggregates: source.logical.aggregates.insert(destination, aggregate),
+        ..invocation_source_logical_write_v38(source.logical, destination) }));
 }
