@@ -54,6 +54,182 @@ pub(super) fn check_four(text: &str, name: &str, root: usize) {
 }
 
 #[test]
+fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_domain() {
+    let text = include_str!("original_semantic_mir_source_entry_observations_v180.vrs");
+    let predicate = text
+        .split_once(") -> bool {\n")
+        .unwrap()
+        .1
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    assert_eq!(
+        predicate,
+        concat!(
+            "    observation.before.machine.valid && observation.after.machine.valid\n",
+            "        && match observation.operand {\n",
+            "            InvocationSourceOperandV36::Scalar {\n",
+            "                value: InvocationSourceByteValueV36::Local { .. }, ..\n",
+            "            } => true,\n",
+            "            _ => false,\n",
+            "        }",
+        )
+    );
+    assert_eq!(text.matches("proof fn ").count(), 8);
+    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 7);
+    assert_eq!(
+        theorem(text, "invocation_source_local_observation_intro_v183")
+            .split_once("\n}\n")
+            .unwrap()
+            .0,
+        concat!(
+            "\n    observation: InvocationSourceOperandObservationV36,\n)",
+            "\n    requires observation.before.machine.valid, observation.after.machine.valid,",
+            "\n        match observation.operand {",
+            "\n            InvocationSourceOperandV36::Scalar {",
+            "\n                value: InvocationSourceByteValueV36::Local { .. }, ..",
+            "\n            } => true,",
+            "\n            _ => false,",
+            "\n        },",
+            "\n    ensures invocation_source_local_observation_v180(observation),",
+            "\n{",
+        )
+    );
+    let conditional = theorem(text, "invocation_source_local_observation_conditional_v184")
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    assert!(!conditional.contains("requires"));
+    assert_eq!(
+        conditional,
+        concat!(
+            "\n    observation: InvocationSourceOperandObservationV36,\n)",
+            "\n    ensures",
+            "\n        observation.before.machine.valid && observation.after.machine.valid",
+            "\n            && (match observation.operand {",
+            "\n                InvocationSourceOperandV36::Scalar {",
+            "\n                    value: InvocationSourceByteValueV36::Local { .. }, ..",
+            "\n                } => true,",
+            "\n                _ => false,",
+            "\n            }) ==> invocation_source_local_observation_v180(observation),",
+            "\n{",
+            "\n    if observation.before.machine.valid && observation.after.machine.valid",
+            "\n        && (match observation.operand {",
+            "\n            InvocationSourceOperandV36::Scalar {",
+            "\n                value: InvocationSourceByteValueV36::Local { .. }, ..",
+            "\n            } => true,",
+            "\n            _ => false,",
+            "\n        })",
+            "\n    {",
+            "\n        invocation_source_local_observation_intro_v183(observation);",
+            "\n    }",
+        )
+    );
+    let copy = theorem(text, "invocation_source_scalar_copy_observation_v185")
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    let (header, body) = copy.split_once("\n{\n").unwrap();
+    assert_eq!(
+        header,
+        concat!(
+            "\n    source: InvocationSourceByteStateV36, observation: InvocationSourceOperandObservationV36,",
+            "\n    local: int, bits: int, root: int, instance: int, little_endian: bool,\n)",
+            "\n    ensures ({",
+            "\n        let operand = InvocationSourceOperandV36::Scalar {",
+            "\n            value: InvocationSourceByteValueV36::Local { local, moved: false }, bits,",
+            "\n        };",
+            "\n        let evaluated = invocation_source_value_evaluate_v42(",
+            "\n            source, operand, root, instance, little_endian);",
+            "\n        evaluated.source.machine.valid && observation.before == source",
+            "\n            && observation.after == evaluated.source && observation.operand == operand",
+            "\n            ==> invocation_source_local_observation_v180(observation)",
+            "\n    }),",
+        )
+    );
+    assert!(!header.contains("requires"));
+    for fact in [
+        "hide(invocation_source_value_evaluate_v42);",
+        "hide(invocation_source_local_observation_v180);",
+        "invocation_source_scalar_copy_valid_identity_v164(\n        source, local, bits, root, instance, little_endian);",
+        "if evaluated.source.machine.valid && observation.before == source\n        && observation.after == evaluated.source && observation.operand == operand",
+        "invocation_source_local_observation_intro_v183(observation);",
+    ] {
+        assert_eq!(body.matches(fact).count(), 1, "{fact}");
+    }
+    let checked = theorem(
+        text,
+        "invocation_source_scalar_copy_observation_checked_v188",
+    )
+    .split_once("\n}\n")
+    .unwrap()
+    .0;
+    let (checked_header, checked_body) = checked.split_once("\n{\n").unwrap();
+    assert_eq!(
+        checked_header,
+        header
+            .replace("\n    ensures ({", "\n    requires ({")
+            .replace(
+                "\n            ==> invocation_source_local_observation_v180(observation)",
+                "",
+            )
+            + "\n    ensures invocation_source_local_observation_v180(observation),"
+    );
+    assert_eq!(
+        checked_body,
+        concat!(
+            "    hide(invocation_source_value_evaluate_v42);",
+            "\n    hide(invocation_source_local_observation_v180);",
+            "\n    invocation_source_scalar_copy_observation_v185(",
+            "\n        source, observation, local, bits, root, instance, little_endian);",
+        )
+    );
+    assert_eq!(
+        theorem(text, "invocation_source_local_observations_extend_v186")
+            .split_once("\n}\n")
+            .unwrap()
+            .0,
+        concat!(
+            "\n    observations: Seq<InvocationSourceOperandObservationV36>, bound: int,\n)",
+            "\n    requires 0 <= bound < observations.len(),",
+            "\n        forall|i: int| 0 <= i < bound ==>",
+            "\n            invocation_source_local_observation_v180(observations[i]),",
+            "\n        invocation_source_local_observation_v180(observations[bound]),",
+            "\n    ensures forall|i: int| 0 <= i < bound + 1 ==>",
+            "\n        invocation_source_local_observation_v180(observations[i]),",
+            "\n{",
+            "\n    hide(invocation_source_local_observation_v180);",
+            "\n    assert forall|i: int| 0 <= i < bound + 1 implies",
+            "\n        invocation_source_local_observation_v180(observations[i]) by {",
+            "\n        if i < bound {",
+            "\n            assert(invocation_source_local_observation_v180(observations[i]));",
+            "\n        } else {",
+            "\n            assert(i == bound);",
+            "\n        }",
+            "\n    }",
+        )
+    );
+    for required in [
+        "decreases observations.len(),",
+        "assert(tail[i] == observations[i + 1]);",
+        "invocation_source_local_observations_empty_v180(tail, little_endian);",
+        "requires result.observations.len() == 0, result.source.machine.pc != -2,",
+        "forall|i: int| 0 <= i < result.operands.len() ==>\n            invocation_source_local_observation_v180(result.operands[i]),",
+        "ensures invocation_source_observations_v39(result, little_endian) == Seq::empty(),",
+        "requires !observation.before.machine.valid || !observation.after.machine.valid",
+        "ensures !invocation_source_local_observation_v180(observation),",
+    ] {
+        assert!(
+            text.contains(required),
+            "missing observation guard: {required}"
+        );
+    }
+    for forbidden in ["assume(", "admit(", "external_body", "assume_specification"] {
+        assert!(!text.contains(forbidden));
+    }
+}
+
+#[test]
 fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coordinates() {
     for roots in [2, 3] {
         super::super::super::invocations::tests::run_root_variant(
@@ -107,6 +283,14 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 assert_eq!(control.contains("hide(invocation_paired_actual_step_"), has_state);
                                 if has_state {
                                     state_summaries += 1;
+                                    let source_declaration = format!("spec fn invocation_constructor_source_{root}_{pc}_v162(");
+                                    let source_expression = out.text.split_once(&source_declaration).unwrap().1.split_once("\n}\n").unwrap().0;
+                                    assert!(source_expression.contains(&format!(
+                                        " let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));",
+                                        entry.pc, entry.locals.start, entry.locals.end, entry.owner
+                                    )));
+                                    assert_eq!(source_expression.matches("invocation_source_entry_initialize_v166(").count(), 1);
+                                    assert!(!source_expression.contains("Seq::new("));
                                     let target_declaration = format!("spec fn invocation_constructor_target_{root}_{pc}_v162(");
                                     let target_state = out.text.split_once(&target_declaration).unwrap().1.split_once("\n}\n").unwrap().0;
                                     let mut current = row.blocks.start + block;
@@ -139,33 +323,166 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert_leading_opacity_headers(state);
                                     assert!(state.contains(&format!("hide(invocation_source_block_runtime_{root}_v36);")));
                                     assert!(state.contains(&format!("hide(invocation_byte_boundary_{root}_v36);")));
-                                    assert!(state.contains("hide(invocation_source_value_evaluate_v42);"));
+                                    assert!(state.contains(&format!("hide(invocation_constructor_source_{root}_{pc}_v162);")));
+                                    let source_name = format!("invocation_constructor_source_state_{root}_{pc}_v165");
+                                    let source_state = theorem(&out.text, &source_name);
+                                    let runtime_name = format!("invocation_constructor_source_runtime_{root}_{pc}_v167");
+                                    let runtime_state = theorem(&out.text, &runtime_name);
+                                    let record_name = format!("invocation_constructor_source_record_{root}_{pc}_v181");
+                                    let record = theorem(&out.text, &record_name);
                                     let call = hint.call.as_ref().unwrap();
-                                    assert_eq!(state.matches(" invocation_source_scalar_copy_valid_identity_v164(").count(), call.arguments.len());
+                                    assert_leading_opacity_headers(source_state);
+                                    assert_leading_opacity_headers(runtime_state);
+                                    assert_eq!(state.matches(&format!(" {source_name}(source);")).count(), 1);
+                                    assert_eq!(source_state.matches(&format!(" {runtime_name}(source);")).count(), 1);
+                                    assert!(!runtime_state.contains(&format!(" {source_name}(source);")));
+                                    assert!(!source_state.contains("copied_"));
+                                    assert!(!source_state.contains("invocation_source_scalar_copy_valid_identity_v164("));
+                                    assert_leading_opacity_headers(record);
+                                    let (record_premises, record_conclusions) = record.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap();
+                                    assert_eq!(record_premises.trim(), format!("source.machine.pc == {pc}, invocation_source_block_runtime_{root}_v36(source).source.machine.valid,"));
+                                    assert!(!record.contains("invocation_paired_source_defined_"));
+                                    assert!(!record.contains("invocation_constructor_source_"));
+                                    assert!(!record.contains("forall|"));
+                                    assert!(record.contains(&format!("hide(invocation_source_enter_{root}_{}_v36);", call.child)));
+                                    assert!(record.contains("hide(invocation_source_value_evaluate_v42);"));
+                                    assert!(!record.contains("reveal(invocation_source_enter_"));
+                                    assert!(!record.contains("invocation_source_entry_initialize_v166"));
+                                    assert!(record_conclusions.contains(&format!("result.source == invocation_source_enter_{root}_{}_v36(copied_{}, entered_arguments, invocation_runtime_little_endian_v36())", call.child, call.arguments.len())));
+                                    assert!(record_conclusions.contains(&format!("result.returned.is_none() && result.observations.len() == 0 && result.operands.len() == {}", call.arguments.len())));
+                                    assert_eq!(runtime_state.matches(&format!(" {record_name}(source);")).count(), 1);
+                                    for proof in [source_state, runtime_state] {
+                                        assert!(!proof.contains("target"));
+                                        assert!(!proof.contains("invocation_paired_related_"));
+                                        assert!(!proof.contains("invocation_paired_source_preserved_"));
+                                        assert!(proof.contains("hide(invocation_source_entry_initialize_v166);"));
+                                        assert!(!proof.contains("reveal(invocation_source_entry_initialize_v166);"));
+                                    }
+                                    assert!(runtime_state.contains("hide(invocation_source_value_evaluate_v42);"));
+                                    assert!(runtime_state.contains("hide(invocation_source_byte_put_local_v36);"));
+                                    assert!(!runtime_state.contains("reveal(invocation_source_byte_put_local_v36);"));
+                                    assert!(!source_state.contains("hide(invocation_source_byte_put_local_v36);"));
+                                    assert!(runtime_state.contains("hide(invocation_source_entry_select_v167);"));
+                                    assert!(!runtime_state.contains("reveal(invocation_source_entry_select_v167);"));
+                                    assert!(runtime_state.contains(&format!("hide(invocation_source_entry_refuses_{root}_{}_v167);", call.child)));
+                                    assert!(!runtime_state.contains(&format!("reveal(invocation_source_entry_refuses_{root}_{}_v167);", call.child)));
+                                    assert!(runtime_state.contains(&format!("hide(invocation_source_entry_body_{root}_{}_v167);", call.child)));
+                                    assert_eq!(runtime_state.matches("invocation_source_entry_select_success_v167(").count(), 1);
+                                    assert!(runtime_state.contains(&format!("invocation_source_entry_select_success_v167(copied_{0}, invocation_source_entry_refuses_{root}_{1}_v167(copied_{0}, entered_arguments, invocation_runtime_little_endian_v36()), invocation_source_entry_body_{root}_{1}_v167(copied_{0}, entered_arguments, invocation_runtime_little_endian_v36()));", call.arguments.len(), call.child)));
+                                    let pc_name = format!("invocation_constructor_source_pc_{root}_{pc}_v182");
+                                    let pc_proof = theorem(&out.text, &pc_name);
+                                    let (pc_contract, pc_body) = pc_proof.split_once("\n{\n").unwrap();
+                                    assert_eq!(pc_contract, format!("source: InvocationSourceByteStateV36)\n ensures invocation_constructor_source_{root}_{pc}_v162(source).machine.pc == {},", entry.pc));
+                                    assert_leading_opacity_headers(pc_proof);
+                                    for forbidden in [" requires ", "invocation_paired_source_defined_", "invocation_source_block_runtime_", "target", "assume(", "admit("] {
+                                        assert!(!pc_proof.contains(forbidden));
+                                    }
+                                    assert_eq!(pc_body.matches("invocation_source_entry_initialize_pc_v166(").count(), 1);
+                                    assert!(pc_body.contains(&format!("invocation_source_entry_initialize_pc_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));", entry.pc, entry.locals.start, entry.locals.end, entry.owner)));
+                                    assert!(pc_body.contains(&format!("let installed_0 = invocation_source_entry_initialize_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));", entry.pc, entry.locals.start, entry.locals.end, entry.owner)));
+                                    assert_eq!(pc_body.matches("invocation_source_entry_put_local_pc_v179(").count(), call.arguments.len());
+                                    for (ordinal, (destination, (local, _, _))) in entry.arguments.iter().zip(&call.arguments).enumerate() {
+                                        assert!(pc_body.contains(&format!("invocation_source_entry_put_local_pc_v179(installed_{ordinal}, {destination}, source.machine.values[{local}]);\n let installed_{} = invocation_source_byte_put_local_v36(installed_{ordinal}, {destination}, source.machine.values[{local}]);", ordinal + 1)));
+                                    }
+                                    let no_trap = format!(" {pc_name}(source);");
+                                    for consumer in [source_state, runtime_state] {
+                                        assert_eq!(consumer.matches(&no_trap).count(), 1);
+                                        assert!(!consumer.contains("invocation_source_entry_initialize_pc_v166("));
+                                        assert!(!consumer.contains("invocation_source_entry_put_local_pc_v179("));
+                                        assert!(!consumer.contains("let installed_"));
+                                    }
+                                    assert!(pc_body.contains(&format!("assert(invocation_constructor_source_{root}_{pc}_v162(source).machine.pc == {});", entry.pc)));
+                                    let observed = format!(" invocation_source_local_block_observations_empty_v180(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36());");
+                                    assert_eq!(runtime_state.matches(&observed).count(), 1);
+                                    assert!(runtime_state.find(&no_trap).unwrap() < runtime_state.find(&observed).unwrap());
+                                    assert!(runtime_state.contains(&format!(" && invocation_source_block_runtime_{root}_v36(source).observations.len() == 0")));
+                                    assert!(!runtime_state.contains("assert forall|i: int|"));
+                                    assert_eq!(runtime_state.matches("hide(invocation_source_local_observation_v180);").count(), 1);
+                                    assert_eq!(runtime_state.matches("reveal(invocation_source_local_observation_v180);").count(), call.arguments.len());
+                                    assert!(!runtime_state.contains("invocation_source_local_observation_intro_v183("));
+                                    assert!(!runtime_state.contains("invocation_source_local_observation_conditional_v184("));
+                                    assert!(!runtime_state.contains("invocation_source_scalar_copy_observation_v185("));
+                                    assert!(!runtime_state.contains("invocation_source_scalar_copy_observation_checked_v188("));
+                                    assert_eq!(runtime_state.matches(" invocation_source_local_observations_extend_v186(").count(), call.arguments.len());
+                                    let observed_at = runtime_state.find(&observed).unwrap();
+                                    let observation_guard = format!(" assert(invocation_source_block_runtime_{root}_v36(source).observations.len() == 0 && invocation_source_block_runtime_{root}_v36(source).source.machine.pc != -2 && (forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() ==> invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i])));");
+                                    assert_eq!(runtime_state.matches(&observation_guard).count(), 1);
+                                    let observation_guard_at = runtime_state.find(&observation_guard).unwrap();
+                                    assert!(observation_guard_at < observed_at);
+                                    assert!(runtime_state.contains(&format!("{observation_guard}\n{observed}")));
+                                    let mut previous_extension = None;
+                                    for ordinal in 0..call.arguments.len() {
+                                        let introduction = format!(" assert(invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}])) by {{\n reveal(invocation_source_local_observation_v180);\n }}");
+                                        assert_eq!(runtime_state.matches(&introduction).count(), 1);
+                                        let extension = format!(" invocation_source_local_observations_extend_v186(invocation_source_block_runtime_{root}_v36(source).operands, {ordinal});");
+                                        assert_eq!(runtime_state.matches(&extension).count(), 1);
+                                        let extension_at = runtime_state.find(&extension).unwrap();
+                                        assert!(runtime_state.find(&introduction).unwrap() < extension_at);
+                                        assert!(extension_at < observation_guard_at);
+                                        if let Some(previous) = previous_extension {
+                                            assert!(previous < extension_at);
+                                        }
+                                        previous_extension = Some(extension_at);
+                                    }
+                                    assert!(!runtime_state.contains("reveal(invocation_source_observations_v39);"));
+                                    assert!(!runtime_state.contains("reveal_with_fuel(invocation_source_operands_observations_v39,"));
+                                    assert!(!runtime_state.contains("reveal_with_fuel(invocation_source_statements_observations_v39,"));
+                                    assert!(source_state.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);")));
+                                    assert!(runtime_state.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}")));
+                                    assert!(record.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
+                                    assert!(!runtime_state.contains("reveal_with_fuel(invocation_source_micro_run_"));
+                                    assert!(!state.contains("reveal_with_fuel(invocation_source_micro_run_"));
+                                    assert!(!state.contains("invocation_source_scalar_copy_valid_identity_v164("));
+                                    assert_eq!(runtime_state.matches(" invocation_source_scalar_copy_valid_identity_v164(").count(), call.arguments.len());
                                     for (ordinal, (local, moved, bits)) in call.arguments.iter().enumerate() {
                                         assert!(!moved);
-                                        assert!(state.contains(&format!(" invocation_source_scalar_copy_valid_identity_v164(copied_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance)));
-                                        assert!(state.contains(&format!(" let copied_{} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36()).source;", ordinal + 1, hint.instance)));
+                                        assert!(runtime_state.contains(&format!(" invocation_source_scalar_copy_valid_identity_v164(copied_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance)));
+                                        assert!(runtime_state.contains(&format!(" let captured_{ordinal} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36());\n let copied_{} = captured_{ordinal}.source;", hint.instance, ordinal + 1)));
+                                        assert!(record.contains(&format!(" let captured_{ordinal} = invocation_source_value_evaluate_v42(copied_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36());\n let copied_{} = captured_{ordinal}.source;", hint.instance, ordinal + 1)));
+                                        assert!(record_conclusions.contains(&format!("result.operands[{ordinal}].before == copied_{ordinal}\n && result.operands[{ordinal}].after == copied_{}\n && result.operands[{ordinal}].value == captured_{ordinal}.value\n && result.operands[{ordinal}].operand == (InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }})", ordinal + 1)));
+                                        assert!(!runtime_state.contains(&format!("if i == {ordinal} {{ assert(invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}])); }} else")));
                                     }
-                                    assert_eq!(state.matches(&format!("reveal(invocation_source_block_runtime_{root}_v36);")).count(), 2);
+                                    let arguments = (0..call.arguments.len()).map(|ordinal| format!("captured_{ordinal}.value,")).collect::<String>();
+                                    assert!(runtime_state.contains(&format!(" let entered_arguments = seq![{arguments}];")));
+                                    assert!(record.contains(&format!(" let entered_arguments = seq![{arguments}];")));
+                                    assert_eq!(runtime_state.matches(&format!("reveal(invocation_source_block_runtime_{root}_v36);")).count(), 0);
+                                    assert!(!source_state.contains(&format!("reveal(invocation_source_block_runtime_{root}_v36);")));
+                                    assert!(!state.contains(&format!("reveal(invocation_source_block_runtime_{root}_v36);")));
                                     assert_eq!(state.matches(&format!("reveal(invocation_byte_boundary_{root}_v36);")).count(), 1);
-                                    let captured = format!("assert(copied_{}.machine.valid) by {{\n reveal(invocation_source_block_runtime_{root}_v36);\n reveal(invocation_source_enter_{root}_{}_v36);\n }}\n assert(copied_{} == source);", call.arguments.len(), call.child, call.arguments.len());
-                                    assert!(state.find(&captured).unwrap() < state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
+                                    let captured = format!("assert(copied_{}.machine.valid) by {{\n reveal(invocation_source_enter_{root}_{}_v36);\n }}\n assert(copied_{} == source);", call.arguments.len(), call.child, call.arguments.len());
+                                    assert!(runtime_state.find(&captured).unwrap() < runtime_state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
                                     let valid = format!("assert(invocation_source_block_runtime_{root}_v36(source).source.machine.valid) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}");
-                                    assert!(state.find(&valid).unwrap() < state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
-                                    let source_projection = state.split_once(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap().1.split_once("\n }\n").unwrap().0;
-                                    assert!(source_projection.contains(&format!("reveal(invocation_source_block_runtime_{root}_v36);")));
+                                    assert!(runtime_state.find(&valid).unwrap() < runtime_state.find(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap());
+                                    assert!(runtime_state.find(&valid).unwrap() < runtime_state.find(&format!(" {record_name}(source);")).unwrap());
+                                    assert!(runtime_state.find(&format!(" {record_name}(source);")).unwrap() < runtime_state.find(&captured).unwrap());
+                                    let source_projection = runtime_state.split_once(&format!(" assert(invocation_source_block_runtime_{root}_v36(source).source ==")).unwrap().1.split_once("\n }\n").unwrap().0;
+                                    assert!(!source_projection.contains(&format!("reveal(invocation_source_block_runtime_{root}_v36);")));
+                                    assert!(!source_projection.contains("forall|"));
+                                    assert!(source_projection.contains(&format!("reveal(invocation_source_entry_body_{root}_{}_v167);", call.child)));
                                     assert!(!source_projection.contains("invocation_byte_boundary_"));
                                     let target_projection = state.split_once(&format!(" assert(invocation_byte_boundary_{root}_v36(target).state ==")).unwrap().1.split_once("\n }\n").unwrap().0;
                                     assert!(target_projection.contains(&format!("reveal(invocation_byte_boundary_{root}_v36);")));
                                     assert!(!target_projection.contains("invocation_source_block_runtime_"));
                                     for side in ["source", "actual"] {
                                         let argument = if side == "source" { "source" } else { "target" };
-                                        assert!(state.contains(&format!("assert(!invocation_paired_{side}_step_{root}_v36({argument}).halted) by {{\n reveal(invocation_paired_{side}_step_{root}_v36);\n }}")));
+                                        let proof = if side == "source" { source_state } else { state };
+                                        assert!(proof.contains(&format!("assert(!invocation_paired_{side}_step_{root}_v36({argument}).halted) by {{\n reveal(invocation_paired_{side}_step_{root}_v36);\n }}")));
                                     }
                                     let (premises, conclusions) = state.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap();
                                     assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},"));
                                     let contract = conclusions.split_once("\n{\n").unwrap().0;
+                                    let (source_premises, source_conclusions) = source_state.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap();
+                                    assert_eq!(source_premises.trim(), format!("invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},"));
+                                    let source_contract = source_conclusions.split_once("\n{\n").unwrap().0;
+                                    let expected_source_contract: Vec<_> = contract.lines().filter(|line| !line.contains("target") && !line.trim().is_empty()).collect();
+                                    assert_eq!(source_contract.lines().filter(|line| !line.trim().is_empty()).collect::<Vec<_>>(), expected_source_contract);
+                                    let (runtime_premises, runtime_conclusions) = runtime_state.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap();
+                                    assert_eq!(runtime_premises, source_premises);
+                                    let runtime_contract = runtime_conclusions.split_once("\n{\n").unwrap().0;
+                                    let observed = format!(" invocation_source_observations_v39(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36()) == Seq::empty(),");
+                                    let mut expected_runtime: Vec<_> = source_contract.lines().filter(|line| line.contains("invocation_source_block_runtime_")).collect();
+                                    expected_runtime.push(&observed);
+                                    assert_eq!(runtime_contract.lines().filter(|line| !line.trim().is_empty()).collect::<Vec<_>>(), expected_runtime);
                                     for (side, argument, value) in [("source", "source", "source"), ("actual", "target", "target")] {
                                         assert!(contract.contains(&format!("invocation_paired_{side}_step_{root}_v36({argument}).state == invocation_constructor_{value}_{root}_{pc}_v162({argument})")));
                                         assert!(contract.contains(&format!("invocation_paired_{side}_step_{root}_v36({argument}).events.len() == 0")));

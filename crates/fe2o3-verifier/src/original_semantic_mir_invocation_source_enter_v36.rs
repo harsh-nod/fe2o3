@@ -413,7 +413,8 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         } else {
             self.owners.len() - 1
         };
-        write!(out, "spec fn invocation_source_enter_{}_{}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, self.arguments.len(), before_depth).map_err(|_| out.error())?;
+        out.budget.charge_work(3)?;
+        write!(out, "spec fn invocation_source_entry_refuses_{}_{}_v167(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> bool {{\n !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, self.arguments.len(), before_depth).map_err(|_| out.error())?;
         write!(
             out,
             " || (exists|local: int| {} <= local < {} && source.objects.contains_key(local))",
@@ -462,7 +463,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
         }
-        write!(out, " {{ invocation_source_byte_refused_v36(source) }} else {{\n let entered = InvocationSourceByteStateV36 {{ machine: MemoryStateV30 {{ pc: {}, values: Seq::new(source.machine.values.len(), |i: int| if {} <= i < {} {{ MemoryValueV30::Undefined }} else {{ source.machine.values[i] }}), memory: source.machine.memory, generations: source.machine.generations, frames: ", self.entry, self.locals.start, self.locals.end).map_err(|_| out.error())?;
+        write!(out, "\n}}\nspec fn invocation_source_entry_body_{}_{}_v167(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, ", self.root, self.instance, self.entry, self.locals.start, self.locals.end).map_err(|_| out.error())?;
         if self.instance == 0 {
             write!(out, "source.machine.frames").map_err(|_| out.error())?;
         } else {
@@ -473,7 +474,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             )
             .map_err(|_| out.error())?;
         }
-        write!(out, ", valid: true }}, logical: invocation_source_logical_clear_v38(source.logical, {}, {}), ..source }};\n", self.locals.start, self.locals.end).map_err(|_| out.error())?;
+        write!(out, ");\n").map_err(|_| out.error())?;
         for slot in &self.allocations {
             out.budget.charge_work(1)?;
             if slot.implicit {
@@ -522,7 +523,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 write!(out, " let entered = invocation_source_byte_put_local_v36(entered, {}, argument_{i});\n", argument.local).map_err(|_| out.error())?;
             }
         }
-        write!(out, " entered\n }}\n}}\n").map_err(|_| out.error())
+        write!(out, " entered\n}}\nspec fn invocation_source_enter_{0}_{1}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n invocation_source_entry_select_v167(source, invocation_source_entry_refuses_{0}_{1}_v167(source, arguments, little_endian), invocation_source_entry_body_{0}_{1}_v167(source, arguments, little_endian))\n}}\n", self.root, self.instance).map_err(|_| out.error())
     }
 }
 
@@ -610,7 +611,21 @@ mod tests {
                     assert_eq!(entry.owners.len(), if instance == 0 { 1 } else { 2 });
                     assert_eq!(entry.arguments.len(), 2);
                     assert_eq!(entry.arguments[0].unwrap().local, row.locals.start + 1);
+                    let before = out.text.len();
                     entry.emit(out)?;
+                    let emitted = &out.text[before..];
+                    let frames = if instance == 0 {
+                        "source.machine.frames".to_owned()
+                    } else {
+                        format!("byte_enter_frame_v30(source.machine.frames, {})", row.function.index())
+                    };
+                    assert!(emitted.contains(&format!(
+                        " let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, {frames});",
+                        entry.entry, row.locals.start, row.locals.end
+                    )));
+                    assert_eq!(emitted.matches("invocation_source_entry_initialize_v166(").count(), 1);
+                    assert_eq!(emitted.matches("byte_enter_frame_v30(").count(), usize::from(instance != 0));
+                    assert!(!emitted.contains("Seq::new("));
                 }
             }
             assert_eq!(
@@ -630,6 +645,67 @@ mod tests {
         })
         .0
         .unwrap();
+    }
+
+    #[test]
+    fn shared_entry_initializer_retains_the_complete_original_record_equation() {
+        let text = include_str!("original_semantic_mir_source_entry_initialize_v166.vrs");
+        let (_, body) = text
+            .split_once(") -> InvocationSourceByteStateV36 {\n")
+            .unwrap();
+        let (body, proof) = body.split_once("\nproof fn ").unwrap();
+        assert_eq!(
+            body,
+            concat!(
+                "    InvocationSourceByteStateV36 {\n",
+                "        machine: MemoryStateV30 {\n",
+                "            pc,\n",
+                "            values: Seq::new(source.machine.values.len(), |i: int|\n",
+                "                if begin <= i < end { MemoryValueV30::Undefined }\n",
+                "                else { source.machine.values[i] }),\n",
+                "            memory: source.machine.memory,\n",
+                "            generations: source.machine.generations,\n",
+                "            frames,\n",
+                "            valid: true,\n",
+                "        },\n",
+                "        logical: invocation_source_logical_clear_v38(source.logical, begin, end),\n",
+                "        ..source\n",
+                "    }\n",
+                "}\n",
+            )
+        );
+        assert!(!text.contains("requires"));
+        assert!(!text.contains("assume("));
+        assert!(!text.contains("external_body"));
+        let (proof, installed_pc) = proof
+            .split_once("\n#[verifier::spinoff_prover]\nproof fn ")
+            .unwrap();
+        assert_eq!(
+            proof,
+            concat!(
+                "invocation_source_entry_initialize_pc_v166(\n",
+                "    source: InvocationSourceByteStateV36, pc: int, begin: int, end: int,\n",
+                "    frames: MemoryFrameRuntimeV30,\n",
+                ")\n",
+                "    ensures invocation_source_entry_initialize_v166(source, pc, begin, end, frames).machine.pc == pc,\n",
+                "{\n",
+                "}\n",
+            )
+        );
+        assert_eq!(
+            installed_pc,
+            concat!(
+                "invocation_source_entry_put_local_pc_v179(\n",
+                "    source: InvocationSourceByteStateV36, local: int, value: MemoryValueV30,\n",
+                ")\n",
+                "    ensures invocation_source_byte_put_local_v36(source, local, value).machine.pc\n",
+                "        == source.machine.pc,\n",
+                "{\n",
+                "    hide(invocation_source_byte_state_well_formed_v36);\n",
+                "    hide(invocation_source_logical_write_v38);\n",
+                "}\n",
+            )
+        );
     }
 
     #[test]

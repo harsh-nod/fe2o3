@@ -4,6 +4,9 @@ use std::fmt::Write as _;
 
 const WRITE_EQUATIONS: &str = include_str!("original_semantic_mir_thread_write_v88_tests.vrs");
 
+#[path = "original_semantic_mir_source_entry_factor_v167_tests.rs"]
+mod entry_factor_tests;
+
 #[derive(Clone, Copy)]
 enum WriteProofShape {
     MovedValue,

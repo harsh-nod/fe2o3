@@ -140,9 +140,20 @@ fn emit_original_objects_v40(
     for root in 0..2 {
         let local = plan.instance(root, 0, out)?.locals.start + 4;
         let entry = slots.object_activation(root, 0, 4, 0, out)?.unwrap();
-        let enter = out
+        let wrapper = out
             .text
             .split_once(&format!("spec fn invocation_source_enter_{root}_0_v36("))
+            .unwrap()
+            .1
+            .split_once("\n}\n")
+            .unwrap()
+            .0;
+        assert!(wrapper.contains(&format!("invocation_source_entry_select_v167(source, invocation_source_entry_refuses_{root}_0_v167(source, arguments, little_endian), invocation_source_entry_body_{root}_0_v167(source, arguments, little_endian))")));
+        let enter = out
+            .text
+            .split_once(&format!(
+                "spec fn invocation_source_entry_body_{root}_0_v167("
+            ))
             .unwrap()
             .1
             .split_once("\n}\n")

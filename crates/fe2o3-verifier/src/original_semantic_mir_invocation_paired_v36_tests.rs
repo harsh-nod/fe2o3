@@ -180,6 +180,16 @@ fn original_mir_paired_trace_joins_every_observation_at_its_own_allocation_gener
                         assert!(!contract.contains(&equality));
                         let premises = contract.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap().0;
                         assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {},", cut.source));
+                        assert!(!body.contains(&equality));
+                        let source_name = format!("invocation_constructor_source_state_{root}_{}_v165", cut.source);
+                        assert_eq!(body.matches(&format!(" {source_name}(source);")).count(), 1);
+                        let source = format!("proof fn {source_name}(");
+                        assert_eq!(out.text.matches(&source).count(), 1);
+                        let theorem = out.text.split_once(&source).unwrap().1.split("proof fn ").next().unwrap();
+                        let (contract, body) = theorem.split_once("\n{\n").unwrap();
+                        assert!(!contract.contains(&equality));
+                        let premises = contract.split_once(" requires ").unwrap().1.split_once(" ensures").unwrap().0;
+                        assert_eq!(premises.trim(), format!("invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {},", cut.source));
                         assert_eq!(body.matches(&assertion).count(), 1);
                         assert_eq!(body.matches(&equality).count(), 1);
                         proved_empty += 1;
