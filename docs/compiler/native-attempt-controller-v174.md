@@ -95,8 +95,10 @@ all nested codecs, and the complete record's overlapping storage.
 
 This request wiring is an unqualified integration candidate, not default
 production activation. The startup/cleanup quota composition is implemented but
-awaits joined qualification. Authenticated parent-side terminal and exact
-publication custody, ordinary failing-compiler
+awaits joined qualification. Authenticated parent-side completion now has a
+candidate same-account bridge to the existing V5 pipeline, described in
+[native-root-parent-completion-v176.md](native-root-parent-completion-v176.md).
+The wrapper's recipe/approval/finalization callback, ordinary failing-compiler
 exit handling, live-sibling exit-group completion and joined native qualification
 remain required. The default selection has not changed. Actual device attachment
 and the joined positive route need an admitted privileged qualification lane.
