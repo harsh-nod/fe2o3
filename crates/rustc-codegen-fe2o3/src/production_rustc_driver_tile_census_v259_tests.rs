@@ -5,6 +5,7 @@ const CENSUS_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct CensusObservation {
+    roots: usize,
     calls: [u64; 3],
     has_tile_operations: bool,
 }
@@ -27,6 +28,7 @@ impl Callbacks for CensusCallbacks {
                 .collected_tile_terminals_v259(&mut budget)
                 .map_err(|error| format!("collected terminal census: {error:?}"))?;
             Ok(CensusObservation {
+                roots: transaction.collected_root_count_for_test_v259(),
                 calls: TILE_KINDS.map(|kind| census.call_occurrences(kind)),
                 has_tile_operations: census.has_tile_operations(),
             })
@@ -107,6 +109,7 @@ pub fn second(ctx: KernelContext<'_>, input: &[u32], base: u64) {
         },
         |_, _, label, observation, observations| {
             if label == "scalar-shared" {
+                assert_eq!(observation.roots, 2);
                 assert_eq!(observation.calls, [0; 3]);
                 assert!(!observation.has_tile_operations);
             } else {
@@ -114,8 +117,11 @@ pub fn second(ctx: KernelContext<'_>, input: &[u32], base: u64) {
                 assert!(observation.has_tile_operations);
                 assert!(observation.calls.into_iter().all(|count| count > 0));
                 if let Some(single_root) = observations.get(label) {
-                    assert_eq!(&observation, single_root);
+                    assert_eq!(single_root.roots, 1);
+                    assert_eq!(observation.roots, 2);
+                    assert_eq!(observation.calls, single_root.calls);
                 } else {
+                    assert_eq!(observation.roots, 1);
                     observations.insert(label.to_owned(), observation);
                 }
             }

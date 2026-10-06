@@ -487,6 +487,11 @@ pub(super) struct CollectedRustStage<'tcx> {
 }
 
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    #[cfg(test)]
+    pub(crate) fn collected_root_count_for_test_v259(&self) -> usize {
+        self.stage.closure.collected_root_count_for_test_v259()
+    }
+
     /// Borrows the single collection's authenticated terminal observation on the
     /// existing account. No MIR query, importer selection, or authority grant.
     pub(crate) fn collected_tile_terminals_v259(
