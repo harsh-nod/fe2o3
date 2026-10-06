@@ -1146,3 +1146,311 @@ fn source_tag_pair_headers_match_independent_retained_fields_and_frames() {
         + size_of::<LocalFrames<'_>>();
     assert_eq!(headers(), expected);
 }
+
+fn run_expanded_v190(
+    fixture: Fixture,
+    layout: fe2o3_kernel_ir::ExecutionTileLayoutV1,
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(
+        &mut SourceTagPairsV40<'_, '_, '_, '_, '_>,
+        &TileTargetV176<'_, '_, '_>,
+        &TargetContracts<'_, '_>,
+        TypeId,
+        TypeId,
+        &mut Writer<'_, '_>,
+    ) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    use fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18 as Optimization;
+    let ids = std::cell::Cell::new(None);
+    super::super::super::super::super::invocations::tests::run_source_transform(
+        work,
+        storage,
+        |types, functions| ids.set(Some(transform(types, functions, fixture))),
+        |plan, out| {
+            let source = plan.source(out)?;
+            let result = source.with_checked_mixed_fixedpoint_optimization_v18(
+                out.budget,
+                |original, optimized, budget| {
+                    let floor = budget.storage();
+                    let tile = optimized.prepare_tile_expansion_v159(0, layout, budget)?;
+                    let tile_floor = budget.storage();
+                    let result = (|| {
+                        let mut writer = Writer::new(budget)?;
+                        let slots = SourceSlots::derive_tile_v162(plan, &tile, &mut writer)?;
+                        slots.check_source(original, &mut writer)?;
+                        let inventory = original.inventory(writer.budget)?;
+                        let old = TargetContracts::derive(
+                            inventory,
+                            FormalIndexWidth::Bits64,
+                            &mut writer,
+                        )?;
+                        let mut pairs = SourceTagPairsV40::derive(&slots, &old, &mut writer)?;
+                        let target = TileTargetV176::derive(&slots, &mut writer)?;
+                        let actual = TargetContracts::derive(
+                            target.inventory(&mut writer)?,
+                            FormalIndexWidth::Bits64,
+                            &mut writer,
+                        )?;
+                        let (enumeration, unrelated) = ids.get().unwrap();
+                        assert!(!pairs.operations.is_empty());
+                        assert!(!std::ptr::eq(
+                            inventory.owner(),
+                            target.inventory(&mut writer)?.owner()
+                        ));
+                        examine(
+                            &mut pairs,
+                            &target,
+                            &actual,
+                            enumeration,
+                            unrelated,
+                            &mut writer,
+                        )
+                    })();
+                    if result.is_ok() {
+                        budget.release_storage(budget.storage() - tile_floor)?;
+                        tile.discard(budget)?;
+                        assert_eq!(budget.storage(), floor);
+                    }
+                    result.map(|()| ((), 0))
+                },
+            );
+            match result {
+                Ok((owner, (), _)) => {
+                    drop(owner);
+                    Ok(())
+                }
+                Err(Optimization::Source(error)) => Err(error.into()),
+                Err(Optimization::Adoption(
+                    fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(error),
+                )) => Err(error),
+                Err(Optimization::Adoption(
+                    fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Resource(error),
+                )) => Err(error.into()),
+                Err(Optimization::Observation(
+                    fe2o3_pliron::KirNeutralOptimizationErrorV18::Execution(
+                        fe2o3_pliron::PlironOptimizationErrorV12::Resources(error),
+                    ),
+                )) => Err(error.into()),
+                Err(error) => panic!("expanded original tag fixture preparation: {error:?}"),
+            }
+        },
+    )
+}
+
+fn emit_expanded_v190(
+    pairs: &mut SourceTagPairsV40<'_, '_, '_, '_, '_>,
+    target: &TileTargetV176<'_, '_, '_>,
+    contracts: &TargetContracts<'_, '_>,
+    enumeration: TypeId,
+    unrelated: TypeId,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    pairs.emit_expanded_v190(target, contracts, FormalIndexWidth::Bits64, 0, 1, out)?;
+    assert!(
+        out.text
+            .contains(&format!("source_type == {}int", enumeration.index()))
+    );
+    assert!(
+        !out.text
+            .contains(&format!("source_type == {}int", unrelated.index()))
+    );
+    assert!(!out.text.contains("invocation_paired_"));
+    Ok(())
+}
+
+#[test]
+fn expanded_source_tag_pairs_keep_nominal_identity_across_actual_owner_and_both_layouts() {
+    for layout in [
+        fe2o3_kernel_ir::ExecutionTileLayoutV1::Blocked,
+        fe2o3_kernel_ir::ExecutionTileLayoutV1::Striped,
+    ] {
+        for fixture in [
+            Fixture::Direct,
+            Fixture::SignedDirect,
+            Fixture::SharedNull,
+            Fixture::MutableSome,
+        ] {
+            run_expanded_v190(fixture, layout, LIMIT, LIMIT, emit_expanded_v190)
+                .0
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn expanded_source_tag_pairs_reject_missing_duplicate_and_swapped_recipe_bindings() {
+    for mutant in 0..4 {
+        let mut reached = false;
+        let result = run_expanded_v190(
+            Fixture::Direct,
+            fe2o3_kernel_ir::ExecutionTileLayoutV1::Blocked,
+            LIMIT,
+            LIMIT,
+            |pairs, target, contracts, _, unrelated, out| {
+                assert!(pairs.operations.len() > 1);
+                match mutant {
+                    0 => {
+                        pairs.operations.pop().unwrap();
+                    }
+                    1 => {
+                        pairs.operations[1].coordinate = pairs.operations[0].coordinate;
+                    }
+                    2 => {
+                        pairs.operations[0].source = Some(unrelated);
+                    }
+                    3 => {
+                        pairs.operations[0].physical = Id(u32::MAX);
+                    }
+                    _ => unreachable!(),
+                }
+                reached = true;
+                pairs.emit_expanded_v190(target, contracts, FormalIndexWidth::Bits64, 0, 1, out)
+            },
+        );
+        assert!(reached);
+        assert!(matches!(
+            result.0,
+            Err(Error::Statement(
+                "original source tag and canonical storage locator differ"
+            ))
+        ));
+    }
+}
+
+#[test]
+fn expanded_source_tag_pairs_reject_original_owner_contracts_and_width_mismatch() {
+    for old_owner in [false, true] {
+        let mut reached = false;
+        let result = run_expanded_v190(
+            Fixture::Direct,
+            fe2o3_kernel_ir::ExecutionTileLayoutV1::Blocked,
+            LIMIT,
+            LIMIT,
+            |pairs, target, contracts, _, _, out| {
+                reached = true;
+                pairs.emit_expanded_v190(
+                    target,
+                    if old_owner {
+                        pairs.contracts
+                    } else {
+                        contracts
+                    },
+                    if old_owner {
+                        FormalIndexWidth::Bits64
+                    } else {
+                        FormalIndexWidth::Bits32
+                    },
+                    0,
+                    1,
+                    out,
+                )
+            },
+        );
+        assert!(reached);
+        assert!(result.0.is_err());
+    }
+}
+
+#[test]
+fn expanded_source_tag_pairs_have_exact_and_one_short_resources() {
+    let layout = fe2o3_kernel_ir::ExecutionTileLayoutV1::Blocked;
+    let baseline = run_expanded_v190(Fixture::Direct, layout, LIMIT, LIMIT, emit_expanded_v190);
+    baseline.0.unwrap();
+    let exact = run_expanded_v190(
+        Fixture::Direct,
+        layout,
+        baseline.1,
+        baseline.3,
+        emit_expanded_v190,
+    );
+    exact.0.unwrap();
+    assert_eq!(
+        (exact.1, exact.2, exact.3),
+        (baseline.1, baseline.2, baseline.3)
+    );
+    for (work, storage, is_work) in [
+        (baseline.1 - 1, baseline.3, true),
+        (baseline.1, baseline.3 - 1, false),
+    ] {
+        let error = run_expanded_v190(Fixture::Direct, layout, work, storage, emit_expanded_v190).0;
+        use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as Source;
+        assert!(if is_work {
+            matches!(error, Err(Error::Resource(Resource::Work(error))) | Err(Error::Source(Source::Resource(Resource::Work(error))))
+                if error.actual() == baseline.1 && error.limit() == work)
+        } else {
+            matches!(error, Err(Error::Resource(Resource::Storage(error))) | Err(Error::Source(Source::Resource(Resource::Storage(error))))
+                if error.actual() == baseline.3 && error.limit() == storage)
+        });
+    }
+}
+
+#[test]
+fn expanded_source_tag_pairs_reject_foreign_and_refunded_accounts() {
+    for foreign in [false, true] {
+        let mut reached = false;
+        let result = run_expanded_v190(
+            Fixture::Direct,
+            fe2o3_kernel_ir::ExecutionTileLayoutV1::Blocked,
+            LIMIT,
+            LIMIT,
+            |pairs, target, contracts, _, _, out| {
+                reached = true;
+                if foreign {
+                    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(LIMIT);
+                    let mut budget = Budget::new(&mut work, LIMIT);
+                    budget.reserve_storage(out.budget.storage())?;
+                    let mut wrong = Writer::new(&mut budget)?;
+                    pairs.emit_expanded_v190(
+                        target,
+                        contracts,
+                        FormalIndexWidth::Bits64,
+                        0,
+                        1,
+                        &mut wrong,
+                    )
+                } else {
+                    out.budget.release_storage(out.budget.storage())?;
+                    pairs.emit_expanded_v190(target, contracts, FormalIndexWidth::Bits64, 0, 1, out)
+                }
+            },
+        );
+        assert!(reached);
+        use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as Source;
+        assert!(matches!(
+            result.0,
+            Err(Error::Resource(Resource::Accounting))
+                | Err(Error::Source(Source::Resource(Resource::Accounting)))
+        ));
+    }
+}
+
+#[test]
+fn expanded_source_tag_tables_compare_all_rows_not_just_selected_enum_geometry() {
+    run(Fixture::Direct, LIMIT, LIMIT, |slots, _, _, out| {
+        let original = slots.correspondence(out)?.inventory(out.budget)?;
+        let rows = &original.owner().module().storage_layouts;
+        same_tables_v190(rows, rows, out)?;
+        assert!(rows.len() > 1);
+        let mut changed = rows.clone();
+        changed[0].alignment = changed[0].alignment.checked_mul(2).unwrap();
+        assert!(matches!(
+            same_tables_v190(rows, &changed, out),
+            Err(Error::Statement(_))
+        ));
+        assert!(matches!(
+            same_tables_v190(rows, &rows[1..], out),
+            Err(Error::Statement(_))
+        ));
+        let mut changed = rows.clone();
+        let different = (1..rows.len()).find(|&i| rows[i] != rows[0]).unwrap();
+        changed.swap(0, different);
+        assert!(matches!(
+            same_tables_v190(rows, &changed, out),
+            Err(Error::Statement(_))
+        ));
+        Ok(())
+    })
+    .0
+    .unwrap();
+}

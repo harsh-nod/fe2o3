@@ -1,6 +1,7 @@
 //! Complete source/physical tag pairs from retained original object endpoints.
 //! Geometry checks refine that provenance; they never create nominal type or
 //! reference-validity authority from equal bytes.
+use super::super::super::tile_target::TileTargetV176;
 use super::*;
 use crate::mixed_optimizer_refinement_v26::semantics::target_view_contracts_v38::{
     TargetByteTagClassV38 as TargetClass, TargetByteViewContractsV38 as TargetContracts,
@@ -686,6 +687,210 @@ impl<'a, 'view, 'source, 'inventory, 'owner>
         }
         result
     }
+
+    /// Rejoins the original nominal pairs to the actual expanded owner before
+    /// emission. This supplies tag correspondence, not value/effect refinement.
+    pub(in super::super::super) fn emit_expanded_v190(
+        &self,
+        target: &TileTargetV176<'_, '_, '_>,
+        contracts: &TargetContracts<'_, '_>,
+        width: fe2o3_kernel_ir::FormalIndexWidth,
+        source_namespace: usize,
+        target_namespace: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.slots.with_source_query_v42(out, |out| {
+            self.check_expanded_v190(target, contracts, width, out)?;
+            self.emit(source_namespace, target_namespace, out)?;
+            contracts.check_owner_width_v39(target.inventory(out)?.owner(), width, out)?;
+            self.check(out)
+        })
+    }
+
+    fn check_expanded_v190(
+        &self,
+        target: &TileTargetV176<'_, '_, '_>,
+        contracts: &TargetContracts<'_, '_>,
+        width: fe2o3_kernel_ir::FormalIndexWidth,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.check(out)?;
+        out.budget.reserve_storage(expanded_headers_v190())?;
+        if !std::ptr::eq(self.slots, target.source_slots(out)?) {
+            return Err(mismatch());
+        }
+        let output = target.inventory(out)?;
+        let original = self.slots.correspondence(out)?.inventory(out.budget)?;
+        self.contracts
+            .check_owner_width_v39(original.owner(), width, out)?;
+        contracts.check_owner_width_v39(output.owner(), width, out)?;
+        same_tables_v190(
+            &original.owner().module().storage_layouts,
+            &output.owner().module().storage_layouts,
+            out,
+        )?;
+        let semantic = self
+            .slots
+            .correspondence(out)?
+            .source(out.budget)?
+            .source_semantic(out.budget)?;
+        let physical = &output.owner().module().storage_layouts;
+        // Equal table bytes alone grant no nominal type authority. Check each
+        // retained source contract against the independently classified target.
+        for pair in &self.pairs {
+            out.budget.charge_work(1)?;
+            let source_contract = self.slots.tag_contract(pair.source, out)?;
+            check_records(
+                semantic.types(),
+                source_contract.declaration(out)?,
+                source_contract.class(out)?,
+                physical,
+                physical
+                    .get(pair.physical.0 as usize)
+                    .ok_or_else(mismatch)?,
+                contracts.row_class(pair.physical, out)?,
+                pair.selected_space,
+                out,
+            )?;
+        }
+        let tile = self.slots.tile_owner_v176(out)?;
+        let neutral = tile
+            .neutral_source_v162(out.budget)?
+            .output_inventory(out.budget)?;
+        let mut seen = vector(output.operations().len(), out)?;
+        out.budget.charge_work(output.operations().len())?;
+        seen.resize(output.operations().len(), false);
+        for row in &self.operations {
+            out.budget.charge_work(1)?;
+            // A prefix rewrite is deliberately not an empty scalar span.
+            let Some(span) = tile.operation_span(row.coordinate, out.budget)? else {
+                continue;
+            };
+            let span = span.expansion;
+            out.budget.charge_work(3)?;
+            if span.end.checked_sub(span.first) != Some(1) {
+                return Err(mismatch());
+            }
+            let coordinate = Operation {
+                block: span.input.block,
+                operation: span.first,
+            };
+            out.budget.charge_work(
+                (usize::BITS - output.operations().len().leading_zeros()) as usize + 1,
+            )?;
+            let at = output
+                .operations()
+                .binary_search_by_key(&coordinate, |row| row.coordinate)
+                .map_err(|_| mismatch())?;
+            out.budget.charge_work(
+                (usize::BITS - neutral.operations().len().leading_zeros()) as usize + 1,
+            )?;
+            let before = neutral
+                .operations()
+                .binary_search_by_key(&span.input, |row| row.coordinate)
+                .map_err(|_| mismatch())?;
+            let actual = &output.operations()[at];
+            let predecessor = &neutral.operations()[before];
+            out.budget.charge_work(6)?;
+            let (OperationKind::Storage(left), OperationKind::Storage(right)) =
+                (predecessor.operation.kind, actual.operation.kind)
+            else {
+                return Err(mismatch());
+            };
+            if !is_tag_operation(left) || left != right || seen[at] {
+                return Err(mismatch());
+            }
+            let first = output
+                .uses()
+                .get(actual.operands.clone())
+                .and_then(|uses| uses.first())
+                .ok_or_else(mismatch)?;
+            let PhysicalType::Pointer(pointer) = output
+                .definitions()
+                .get(first.definition)
+                .ok_or_else(mismatch)?
+                .ty
+            else {
+                return Err(mismatch());
+            };
+            if !matches!(pointer.pointee.as_ref(), PhysicalType::StorageObject(id) if *id == row.physical)
+            {
+                return Err(mismatch());
+            }
+            let source = row.source.ok_or_else(mismatch)?;
+            if !pair_present(&self.pairs, (source, row.physical), out)? {
+                return Err(mismatch());
+            }
+            seen[at] = true;
+        }
+        for (row, bound) in output.operations().iter().zip(&seen) {
+            out.budget.charge_work(1)?;
+            if *bound
+                != matches!(row.operation.kind, OperationKind::Storage(operation) if is_tag_operation(operation))
+            {
+                return Err(mismatch());
+            }
+        }
+        let temporary = seen
+            .capacity()
+            .checked_mul(size_of::<bool>())
+            .ok_or(Resource::Arithmetic)?;
+        drop(seen);
+        out.budget.release_storage(temporary)?;
+        self.check(out)?;
+        contracts.check_owner_width_v39(target.inventory(out)?.owner(), width, out)
+    }
+}
+
+fn same_tables_v190(left: &[Layout], right: &[Layout], out: &mut Writer<'_, '_>) -> Result<()> {
+    out.budget.charge_work(1)?;
+    if left.len() != right.len() {
+        return Err(mismatch());
+    }
+    for (left, right) in left.iter().zip(right) {
+        // Layout children are table IDs, not recursive objects. Charge every
+        // variable-length field before the complete structural comparison.
+        for row in [left, right] {
+            let fields = match &row.kind {
+                Kind::Record(fields) | Kind::Union(fields) => fields.len(),
+                Kind::Variants { variants, .. } => variants.len(),
+                Kind::Scalar(_)
+                | Kind::Vector(_)
+                | Kind::Pointer(_)
+                | Kind::Array { .. }
+                | Kind::Slice { .. } => 0,
+            };
+            out.budget
+                .charge_work(fields.checked_add(8).ok_or(Resource::Arithmetic)?)?;
+        }
+        if left != right {
+            return Err(mismatch());
+        }
+    }
+    Ok(())
+}
+
+fn expanded_headers_v190() -> usize {
+    size_of::<Vec<bool>>()
+        + 2 * size_of::<Result<Vec<bool>>>()
+        + size_of::<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>()
+        + 2 * size_of::<Result<Option<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>>>(
+        )
+        + size_of::<(
+            &SourceTagPairsV40<'_, '_, '_, '_, '_>,
+            &TileTargetV176<'_, '_, '_>,
+            &TargetContracts<'_, '_>,
+            &mut Writer<'_, '_>,
+            [&Layout; 2],
+            &[Layout],
+            &[Layout],
+            std::slice::Iter<'static, TagOperation>,
+            std::slice::Iter<'static, Pair>,
+            [usize; 24],
+            [Operation; 3],
+            [Storage; 2],
+            Option<TypeId>,
+        )>()
 }
 
 pub(super) fn headers() -> usize {
