@@ -106,3 +106,7 @@ The optional [physical-v9](physical-v9/README.md) source layer follows physical-
 ## Disabled owned/legacy query separation successor
 
 The additive [physical-v10](physical-v10/README.md) layer follows physical-v9 and explicitly rejects the simultaneous legacy stopped-wave profile only while the owned profile is selected. It preserves all five real owned queue-health pairs and the original ten-query provider cap. The unselected legacy route and disabled public gates are unchanged; no native completion is qualified by this source-only correction.
+
+## Disabled physical-v11 diagnostic successor
+
+physical-v11/ retains the disabled v10 query-separation layer and adds only a fixed first-denied-budget record and bounded refusal fields. No cap or public authority gate changes; no native success or behavioral fix is claimed. New private products require fresh build, type measurement, startup and one-use readiness authority.

@@ -1,0 +1,20 @@
+{
+  "schema": "fe2o3-disabled-physical-v11-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+  "before": {
+    "bytes": 11662,
+    "sha256": "f5e54f50a48f1728cd78fa8c964d067ed4dbf65a8230dee04d48115116de771d"
+  },
+  "after": {
+    "bytes": 12391,
+    "sha256": "23f80946aeeccc75355d24b06b5e6bba4773ce28240709c04c24f20e82a3586a"
+  },
+  "changes": [
+    {
+      "beforeOffset": 581,
+      "afterOffset": 581,
+      "before": "  if (m_first_resume_site!=resume_site::none)\n",
+      "after": "  if (m_owner.why ()==failure::budget && m_owner.m_budget_failure.present)\n    error (\"fixed owned one-stop native relation refused (%u); commit-site=%u; budget-counter=%u; budget-phase=%u; budget-used=%llu; budget-request=%llu; budget-cap=%llu\",\n           static_cast<unsigned> (m_owner.why ()),\n           static_cast<unsigned> (m_owner.first_commit_site ()),\n           static_cast<unsigned> (m_owner.m_budget_failure.kind),\n           static_cast<unsigned> (m_owner.m_budget_failure.state),\n           static_cast<unsigned long long> (m_owner.m_budget_failure.used),\n           static_cast<unsigned long long> (m_owner.m_budget_failure.requested),\n           static_cast<unsigned long long> (m_owner.m_budget_failure.cap));\n  if (m_first_resume_site!=resume_site::none)\n"
+    }
+  ]
+}

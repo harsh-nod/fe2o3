@@ -11,6 +11,43 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## First budget-denial diagnostics and Worker containment controls — 2026-10-06
+
+The disabled debugger adapter now includes a diagnostic-only physical-v11 layer.
+It preserves the first denied numeric debit's counter, phase, used amount,
+requested amount and cap, and reports them through the existing refusal path.
+All budget limits, charge sites, guards and successful transitions are unchanged.
+The previous hardware run still does not identify its denied counter; this is
+instrumentation for the next measured build, not a resume fix or qualification.
+
+The three changed leaves retain all 63 selected source roles. The package passed
+68 Node tests, its selected-source/API checks and unified-patch applicability
+check. Both packaged C++ fixtures passed normal and UBSan controls. A README
+invocation initially used unsupported option syntax; that failed check is
+retained, the positional invocation passed, and the README and its authenticated
+metadata were corrected. All 68 package tests passed again. Actual new debugger
+type sizes, startup and hardware completion remain pending; no predicted size
+is credited.
+
+The captured-Worker probe also passed the full 217-test finalizer suite with
+one ignored live test in a symbol-stripped build. Its 65,591,120-byte executable
+fits the unchanged 64 MiB containment limit. The disabled process-family owner
+and benign fixture compiled; 35 Rust controls and 12 mock evidence controls
+passed, including bounded post-overflow draining after actual family termination.
+These are CPU/source checks only. Fresh live timeout, descendant/EOF and overflow
+observations, enabled probe bindings and actual Worker execution remain pending.
+
+Retained evidence includes
+`debugger-physical-v11-package-controls-actual-root-r72-r2/MANIFEST.json`
+(`74e83f413efd5a9eb504ff6f2b7a95ca1a8ba0026fa76032ef7a370219370fa4`),
+`debugger-physical-v11-cpp-controls-actual-root-r72-r1/MANIFEST.json`
+(`cb14ce646136be2c8e3bfecb403c736fb5515a8e433ebc25e6475dde81ba8896`),
+`bf16-worker-captured-probe-compact-full-actual-root-r72-r3/MANIFEST.json`
+(`c299531a3af40650d7c0f88a8de87701365aada94e31d970e4dd9a6d91e4b386`),
+and `bf16-worker-captured-scope-cpu-build-actual-root-r72-r3/MANIFEST.json`
+(`561397ce06e3f1f0683419e675b6f376d2c068af49045ea5fbc58c1e99c05ef6`).
+No milestone or tutorial exit changes: **7/18 accepted**.
+
 ## Sealed-image Worker probe test coverage — 2026-10-06
 
 A disabled, ignored Linux test now exercises the intended captured-image
