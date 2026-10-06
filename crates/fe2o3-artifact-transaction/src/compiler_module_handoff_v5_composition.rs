@@ -303,7 +303,7 @@ fn with_overlap<T, E: From<Resource>>(
 
 // Only the closed composition calls this entry. Legacy entry retains its total
 // limit check, even when called inside a kernel storage window.
-fn entry_composed<T>(
+pub(super) fn entry_composed<T>(
     b: &mut Budget<'_>,
     floor: usize,
     f: impl FnOnce(&mut Resources<'_, '_>) -> Result<T>,
