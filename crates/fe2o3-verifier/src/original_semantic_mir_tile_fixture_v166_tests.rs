@@ -920,6 +920,164 @@ fn generate_actual_tile_microcuts_v180(
     Ok(())
 }
 
+fn generate_expanded_private_bindings_v188(
+    slots: &SourceSlots<'_, '_>,
+    _: &TileExpansion<'_, '_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    use super::super::{
+        byte_bindings::SourceByteBindings, slots::AllocationOrigin, tile_target::TileTargetV176,
+    };
+    let target = TileTargetV176::derive(slots, out)?;
+    let inventory = target.inventory(out)?;
+    let original = slots.correspondence(out)?.inventory(out.budget)?;
+    assert!(!std::ptr::eq(inventory.owner(), original.owner()));
+    let bindings = SourceByteBindings::derive_expanded_v188(&target, out)?;
+    bindings.emit(out)?;
+    assert!(out.text.contains(&format!(
+        "target.values.len() == {}",
+        inventory.definitions().len()
+    )));
+    let mut frames = 0usize;
+    for row in inventory.operations() {
+        if !matches!(row.operation.kind, OperationKind::Alloca { .. }) {
+            continue;
+        }
+        let site = target.allocation_site(row.coordinate, out)?;
+        let AllocationOrigin::OriginalFrame(frame) = slots.allocation_origin(site.original, out)?
+        else {
+            continue;
+        };
+        let (descriptor, original) = slots.descriptor_by_source(
+            frame.root(),
+            frame.instance(),
+            frame.local(),
+            frame.source_generation(),
+            out,
+        )?;
+        assert_eq!(original.allocation(), site.original);
+        assert_eq!(row.results.len(), 1);
+        assert!(out.text.contains(&format!(
+            "if source.slots.contains_key({descriptor}) && {} < target.values.len() {{ match target.values[{}]",
+            row.results.start, row.results.start,
+        )));
+        assert!(out.text.contains(&format!(
+            "owner == {} && invocation == 0 && site == slot.site",
+            site.physical_root_owner,
+        )));
+        frames += 1;
+    }
+    assert!(frames > 0);
+    assert_eq!(
+        out.text.matches("private.insert(source.slots[").count(),
+        frames
+    );
+    assert!(!out.text.contains("invocation_paired_"));
+    Ok(())
+}
+
+#[test]
+fn original_execution_tile_private_map_keeps_original_descriptors_and_actual_definitions() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            generate_expanded_private_bindings_v188,
+        )
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
+fn original_execution_tile_private_map_has_exact_and_one_short_resources() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let baseline = run_fixture(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            generate_expanded_private_bindings_v188,
+        );
+        baseline.0.unwrap();
+        let exact = run_fixture(
+            layout,
+            baseline.1,
+            baseline.3,
+            generate_expanded_private_bindings_v188,
+        );
+        exact.0.unwrap();
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (baseline.1, baseline.2, baseline.3)
+        );
+        use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+        for (work, storage, is_work) in [
+            (baseline.1 - 1, baseline.3, true),
+            (baseline.1, baseline.3 - 1, false),
+        ] {
+            let error = run_fixture(
+                layout,
+                work,
+                storage,
+                generate_expanded_private_bindings_v188,
+            )
+            .0;
+            assert!(if is_work {
+                matches!(error, Err(Error::Resource(Resource::Work(error)))
+                    | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+                    if error.actual() == baseline.1 && error.limit() == work)
+            } else {
+                matches!(error, Err(Error::Resource(Resource::Storage(error)))
+                    | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+                    if error.actual() == baseline.3 && error.limit() == storage)
+            });
+        }
+    }
+}
+
+#[test]
+fn original_execution_tile_private_map_rejects_foreign_and_refunded_accounts() {
+    for foreign in [false, true] {
+        let mut reached = false;
+        let result = run_fixture(
+            Layout::Blocked,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            |slots, _, out| {
+                let target = super::super::tile_target::TileTargetV176::derive(slots, out)?;
+                let bindings =
+                    super::super::byte_bindings::SourceByteBindings::derive_expanded_v188(
+                        &target, out,
+                    )?;
+                reached = true;
+                let error = if foreign {
+                    let mut work =
+                        fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(512 * 1024 * 1024);
+                    let mut budget = Budget::new(&mut work, 512 * 1024 * 1024);
+                    budget.reserve_storage(out.budget.storage())?;
+                    let mut other = Writer::new(&mut budget)?;
+                    bindings.emit(&mut other).unwrap_err()
+                } else {
+                    out.budget.release_storage(1)?;
+                    bindings.emit(out).unwrap_err()
+                };
+                Err(error)
+            },
+        );
+        assert!(reached);
+        assert!(matches!(
+            result.0,
+            Err(Error::Resource(Resource::Accounting))
+                | Err(Error::Source(
+                    fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                        Resource::Accounting
+                    )
+                ))
+        ));
+    }
+}
+
 #[test]
 fn original_execution_tile_microcuts_bind_actual_source_and_microstate_boundaries() {
     for layout in [Layout::Blocked, Layout::Striped] {

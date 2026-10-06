@@ -119,6 +119,25 @@ impl<'slots, 'view, 'source> TileTargetV176<'slots, 'view, 'source> {
         Ok(&self.inventory)
     }
 
+    pub(super) fn source_slots(
+        &self,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<&'slots SourceSlots<'view, 'source>> {
+        self.check(out)?;
+        Ok(self.slots)
+    }
+
+    pub(super) fn allocation_site(
+        &self,
+        operation: fe2o3_kernel_ir::CanonicalKirOperationCoordinateV1,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<
+        crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteAllocationSiteV30,
+    > {
+        self.check(out)?;
+        self.allocations.site(operation, out)
+    }
+
     pub(super) fn root_function(&self, root: usize, out: &mut Writer<'_, '_>) -> Result<Function> {
         self.check(out)?;
         out.budget.charge_work(1)?;

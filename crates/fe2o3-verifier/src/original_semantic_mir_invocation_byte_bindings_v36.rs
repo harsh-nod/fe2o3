@@ -65,6 +65,102 @@ fn check_root_census(
 }
 
 impl<'slots, 'view, 'source> SourceByteBindings<'slots, 'view, 'source> {
+    // Descriptor identities remain original. Only the target-side definition
+    // is taken from the checked scalar expansion, never the old inventory.
+    pub(super) fn derive_expanded_v188(
+        target: &super::tile_target::TileTargetV176<'slots, 'view, 'source>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Self> {
+        let slots = target.source_slots(out)?;
+        slots.with_source_query_v42(out, |out| {
+            out.budget.reserve_storage(
+                headers()
+                    + size_of::<crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteAllocationSiteV30>()
+                    + 24 * size_of::<usize>(),
+            )?;
+            let inventory = target.inventory(out)?;
+            let source = slots.correspondence(out)?.source(out.budget)?;
+            let roots = source.root_count(out.budget)?;
+            let mut count = 0usize;
+            for row in inventory.operations() {
+                out.budget.charge_work(1)?;
+                if matches!(row.operation.kind, OperationKind::Alloca { .. }) {
+                    count = count.checked_add(1).ok_or(Resource::Arithmetic)?;
+                }
+            }
+            let mut rows = vector(count, out)?;
+            let mut ranges = vector(roots, out)?;
+            let mut seen = vector(inventory.functions().len(), out)?;
+            out.budget.charge_work(inventory.functions().len())?;
+            seen.resize(inventory.functions().len(), false);
+            let mut accounted = 0usize;
+            for root in 0..roots {
+                let physical = target.root_function(root, out)?.0 as usize;
+                out.budget.charge_work(2)?;
+                if seen.get(physical) != Some(&false) {
+                    return Err(mismatch());
+                }
+                seen[physical] = true;
+                let function = inventory.functions().get(physical).ok_or_else(mismatch)?;
+                let begin = rows.len();
+                for row in inventory.operations().get(function.operations.clone()).ok_or_else(mismatch)? {
+                    out.budget.charge_work(1)?;
+                    if !matches!(row.operation.kind, OperationKind::Alloca { .. }) {
+                        continue;
+                    }
+                    accounted = accounted.checked_add(1).ok_or(Resource::Arithmetic)?;
+                    out.budget.charge_work(1)?;
+                    if row.results.len() != 1 {
+                        return Err(mismatch());
+                    }
+                    let site = target.allocation_site(row.coordinate, out)?;
+                    let frame = match slots.allocation_origin(site.original, out)? {
+                        AllocationOrigin::OriginalFrame(frame) => frame,
+                        AllocationOrigin::CompilerSpill(spill) => {
+                            out.budget.charge_work(3)?;
+                            if spill.root != root
+                                || spill.operation != site.original
+                                || spill.physical_owner != site.physical_root_owner
+                            {
+                                return Err(mismatch());
+                            }
+                            // The checked allocation resolver owns the original
+                            // spill identity; it is not a source allocation.
+                            continue;
+                        }
+                    };
+                    let (descriptor, same) = slots.descriptor_by_source(
+                        frame.root(), frame.instance(), frame.local(), frame.source_generation(), out,
+                    )?;
+                    out.budget.charge_work(3)?;
+                    if frame.root() != root || same.allocation() != site.original
+                        || inventory.definitions().get(row.results.start).is_none()
+                    {
+                        return Err(mismatch());
+                    }
+                    rows.push(Binding {
+                        descriptor,
+                        definition: row.results.start,
+                        physical_owner: site.physical_root_owner,
+                    });
+                }
+                ranges.push(begin..rows.len());
+            }
+            if accounted != count {
+                return Err(mismatch());
+            }
+            check_root_census(inventory.functions(), &seen, out)?;
+            let released = seen.capacity().checked_mul(size_of::<bool>()).ok_or(Resource::Arithmetic)?;
+            drop(seen);
+            out.budget.release_storage(released)?;
+            target.source_slots(out)?;
+            Ok(Self {
+                slots, rows, roots: ranges, definitions: inventory.definitions().len(),
+                required: out.budget.storage(),
+            })
+        })
+    }
+
     pub(super) fn derive(
         slots: &'slots SourceSlots<'view, 'source>,
         out: &mut Writer<'_, '_>,
