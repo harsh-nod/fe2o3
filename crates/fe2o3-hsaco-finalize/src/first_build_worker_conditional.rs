@@ -27,6 +27,10 @@ use std::mem::size_of;
 const ENTRY_WORK: usize = 8192;
 const FRAME: usize = 4 * size_of::<Binding>() + size_of::<Quote>() + 4096;
 
+#[path = "first_build_worker_conditional_resources.rs"]
+mod resources;
+pub use resources::ConditionalFirstBuildWorkerStartupQuoteV2;
+
 /// Additional unreserved storage. Keep source and preflight reservations paid
 /// until the returned evidence drops; this is logical Rust storage, not RSS.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

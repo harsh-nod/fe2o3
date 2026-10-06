@@ -107,6 +107,11 @@ impl AccountMode {
         if !self.is_original() {
             return Ok(crate::ConditionalWorkerOperationQuoteV5::new(0, 0));
         }
+        Self::original_operation_quote(inputs)
+    }
+    pub(crate) fn original_operation_quote(
+        inputs: usize,
+    ) -> Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
         let scratch = inputs
             .checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1)
             .and_then(|n| n.checked_add(4 * size_of::<Self>()))

@@ -37,6 +37,11 @@ pub struct ProtectedCompilerConditionalHandoffBindingV2 {
     identity: [u8; 32],
 }
 impl Binding {
+    pub(crate) fn original_operation_upper_bound()
+    -> Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
+        AccountMode::original_operation_quote(MAX_STORAGE)?
+            .nested(crate::ConditionalWorkerOperationQuoteV5::new(WORK, SCRATCH))
+    }
     pub(crate) fn operation_quote(
         source: &Source,
         account: AccountMode,
