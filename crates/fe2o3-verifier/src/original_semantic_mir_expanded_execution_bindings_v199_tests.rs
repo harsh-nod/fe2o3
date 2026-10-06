@@ -117,6 +117,29 @@ fn exercise(
                     } else {
                         ", lease_recipe: None"
                     }));
+                    if role == SourceRole::Workgroup {
+                        let endpoint = slots
+                            .correspondence(out)?
+                            .ssa_typed_endpoint_v36(0, instance, value, out.budget)?;
+                        let owner = endpoint.execution_owner_v199(out.budget)?.unwrap();
+                        let original = execution_loans::call_argument(
+                            slots,
+                            plan,
+                            0,
+                            owner.identity.instance,
+                            owner.identity.block.index() as usize,
+                            0,
+                            out,
+                        )?
+                        .unwrap();
+                        assert!(original.moved && original.recipe.mutable);
+                        assert_eq!(original.recipe.role, Role::Context);
+                        let recipe = original.recipe;
+                        assert!(out.text[before..].contains(&format!(
+                            ", lease_recipe: Some(InvocationSourceExecutionRecipeV168 {{ reference_type: {}, source_type: {}, role: InvocationSourceExecutionRoleV168::Context, mutable: true, instance: {}, block: {}, statement: {} }})",
+                            recipe.reference_type, recipe.source_type, recipe.instance, recipe.block,
+                            recipe.statement)));
+                    }
                     if !is_borrowed && role == SourceRole::KernelContext {
                         let endpoint = slots
                             .correspondence(out)?
