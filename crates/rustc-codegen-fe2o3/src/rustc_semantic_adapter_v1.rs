@@ -447,7 +447,21 @@ fn canonical_source_provenance_from_origins_v1(
     })
 }
 
-fn canonical_source_origin_v1(
+/// Private, actual expansion identity; callers prepay the complete bounded ExpnData walk.
+pub(crate) fn canonical_expansion_frame_sha256_v1(tcx: TyCtxt<'_>, span: Span) -> [u8; 32] {
+    let data = span.ctxt().outer_expn_data();
+    domain_digest(
+        b"fe2o3/diagnostic/rustc-expansion-frame/v1",
+        &[
+            &stable_fingerprint!(tcx, span),
+            &stable_fingerprint!(tcx, data),
+            &stable_fingerprint!(tcx, data.call_site),
+            &stable_fingerprint!(tcx, data.def_site),
+        ],
+    )
+}
+
+pub(crate) fn canonical_source_origin_v1(
     tcx: TyCtxt<'_>,
     span: Span,
 ) -> Result<SemanticSourceOriginV1, CanonicalSourceErrorV1> {

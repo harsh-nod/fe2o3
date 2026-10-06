@@ -11,6 +11,76 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Source-line emission, macro origins and captured Worker — 2026-10-06
+
+The opt-in V17 lowering API now attributes a whole ordered region to its actual
+source line. The default and None paths retain their old LLVM bytes. Selection
+checks the borrowed canonical owner, identities, exact coordinates, unique
+source span, byte bounds and LLVM column limits. A separate diagnostic producer
+captures real compiler macro-expansion frames without calling them LLVM inline
+frames or per-instruction origins.
+
+The model suite passed 284 tests (five ignored); the focused backend suite
+passed 219 (24 ignored), including the new macro controls. The genuine-source
+export ladder passed with distinct default/edited callbacks, full source
+rechecks and stale-source/KIR refusals. It retained the exact LLVM and expected
+span while the original owner lived. The real macro-fixture run and final
+linked-DWARF line acceptance are still pending. The full backend run timed out;
+it is not counted as a full-suite pass.
+
+The new CPU-only LLVM observer built successfully: five translation units, two
+project archives, 71 selected SDK archives, exact dependency/link commands and
+the full linker map were checked. Configure controls passed 10 tests, build
+controls 37, and the linked-line acceptance parser 32. The larger actual
+configure report required a dedicated 128-KiB report bound; general source,
+I/O, stream and phase limits were unchanged. Building the observer does not
+establish linked line-table acceptance or hardware execution. The observer and
+dwarfdump loader checks subsequently passed all four fixed child commands per
+role, with exact library content and search-directory pre/post checks; neither
+check invoked the selected executable's main function.
+
+The captured Worker probe now passed all seven enclosing checks and its actual
+decoder-refusal session. The earlier attempt had executed the decoder but then
+failed strict post-execution metadata validation: an intentional rejected write
+through a sealed memfd alias changed mtime/ctime. A small actual CPU diagnostic
+reproduced that behavior. Mutation challenges now run only on the separate
+seal-test image; the execution image retains its original full snapshot and
+digest checks. Production validation is unchanged. The finalizer suite passed
+258 tests (one ignored), and the corrected build/loader/decode controls passed
+98. Actual exit/refusal, EOF, child reaping, terminal acknowledgement and empty,
+subsequently absent cgroup all joined. The private source was restored disabled;
+this is not a BF16 engineering, artifact-publication or GPU qualification.
+
+Retained remote evidence:
+
+- `m5-genuine-source-line-export-actual-root-r75-r1/MANIFEST.json`
+  (`48934d3e9d69e7a73c5ca575172becda7395353efaead22b466d84a746d7b07d`).
+- `m5-native-build-actual-root-r75-r2/MANIFEST.json`
+  (`044246c6894fc8b8fa4d2f9352aa1775b1dccc678a6d931baa3df2bb3c42f014`).
+- `bf16-captured-case-decode-probe-root-r75-r2/COMPLETE.json`
+  (`7c8c05f5078f9af5c37bc656485dbce784c7ad749cb1f5e57e1624532a8b413a`).
+- `bf16-captured-decode-probe-actual-actual-root-r75-r2/MANIFEST.json`
+  (`63af6eec813ff22caf329b16e280f349b0cb29a3c85fbb367872ee2140a7a595`).
+
+The debugger's fresh no-inferior startup now passed with the original strict
+credential census unchanged. The earlier failed attempt remains retained: an
+unrelated mixed-credential process had prevented service/GDB creation. That
+process was not killed and the census was not weakened. This startup does not
+qualify capture or resume with a running kernel; a fresh hardware attempt is
+still required.
+
+The program inspector now has opt-in planned-register ASCII and JSON views.
+They derive entry/write versions, reads-before-writes, unused/dead versions,
+overwrite boundaries and final result handoff from the same admitted program.
+Fixed representation storage has a separate compile-time 4-KiB ceiling; output
+retains its 8-KiB bound. The full CLI library suite passed 114 tests, and six
+CLI integration tests passed. These are
+static authored-demand intervals, not physical allocator events or captured
+values; the browser/genuine-source consumer joins remain pending.
+
+No complete milestone exit changes: **M1/M2/V1/V2/U1/U2/U3, 7/18**.
+See [ordered-region line attribution](ordered-region-debug-line-v17.md).
+
 ## Fresh build and combined visualization qualification — 2026-10-06
 
 The physical-v12 private successor now compiles and links successfully. Fresh

@@ -430,3 +430,70 @@ fn text_names_are_ascii_escaped_and_expansion_obeys_the_same_output_bound() {
         Some("bounded inspection text serialization failed")
     );
 }
+
+#[test]
+fn planned_modes_preserve_old_formats_and_two_path_option_names() {
+    for (flag, format) in [
+        ("--planned-registers", OutputFormat::PlannedRegisters),
+        (
+            "--planned-registers-json",
+            OutputFormat::PlannedRegistersJson,
+        ),
+    ] {
+        assert_eq!(
+            parse_arguments([flag, "a", "b"].into_iter().map(OsString::from)).unwrap(),
+            InspectionCommand::Inspect {
+                format,
+                kir: "a".into(),
+                request: "b".into()
+            }
+        );
+        assert_eq!(
+            parse_arguments([flag, "b"].into_iter().map(OsString::from)).unwrap(),
+            InspectionCommand::Inspect {
+                format: OutputFormat::Json,
+                kir: flag.into(),
+                request: "b".into()
+            }
+        );
+        assert!(
+            parse_arguments([flag, "a", "b", "extra"].into_iter().map(OsString::from)).is_err()
+        );
+        assert!(
+            parse_arguments(
+                [flag.to_owned(), "x".repeat(4097), "b".to_owned()]
+                    .into_iter()
+                    .map(OsString::from)
+            )
+            .is_err()
+        );
+    }
+    for case in fixture::cases() {
+        let input = admitted(&fixture::module_with_program(
+            true,
+            fixture::program(&case.descriptors),
+        ));
+        let view = inspect(&input).unwrap();
+        let observed = report(&input, &view);
+        let json_before = render_output(&observed, OutputFormat::Json).unwrap();
+        let text_before = render_output(&observed, OutputFormat::Text).unwrap();
+        for format in [
+            OutputFormat::PlannedRegisters,
+            OutputFormat::PlannedRegistersJson,
+        ] {
+            render_output(&observed, format).unwrap();
+        }
+        assert_eq!(
+            render_output(&observed, OutputFormat::Json)
+                .unwrap()
+                .as_bytes(),
+            json_before.as_bytes()
+        );
+        assert_eq!(
+            render_output(&observed, OutputFormat::Text)
+                .unwrap()
+                .as_bytes(),
+            text_before.as_bytes()
+        );
+    }
+}

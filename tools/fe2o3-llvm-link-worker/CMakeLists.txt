@@ -396,6 +396,19 @@ if(BUILD_TESTING)
     fe2o3-worker-ordered-program-prototype-tests PRIVATE
     fe2o3_worker_pipeline ${FE2O3_LLVM_TEST_LIBS}
     ${FE2O3_ORDERED_PROGRAM_TEST_LIBS})
+  # Explicit CPU-only DWARF observation target; never registered as automatic CTest.
+  add_executable(fe2o3-worker-ordered-debug-line-observation
+    tests/OrderedProgramDebugLineObservation.cpp)
+  target_include_directories(fe2o3-worker-ordered-debug-line-observation SYSTEM PRIVATE
+    ${LLVM_INCLUDE_DIRS} ${LLD_INCLUDE_DIRS})
+  target_compile_definitions(fe2o3-worker-ordered-debug-line-observation PRIVATE
+    FE2O3_LLVM_BUILD_ID="${FE2O3_MEASURED_LLVM_BUILD_ID}"
+    FE2O3_WORKER_BUILD_ID="${FE2O3_WORKER_MEASUREMENT}")
+  target_compile_options(fe2o3-worker-ordered-debug-line-observation PRIVATE
+    -Wall -Wextra -Wpedantic -Werror -Wno-unused-parameter -fno-exceptions -fno-rtti)
+  target_link_libraries(fe2o3-worker-ordered-debug-line-observation PRIVATE
+    fe2o3_worker_pipeline ${FE2O3_LLVM_TEST_LIBS} ${FE2O3_ORDERED_PROGRAM_TEST_LIBS})
+
   add_test(NAME fe2o3-worker-ordered-program-prototype-tests
     COMMAND fe2o3-worker-ordered-program-prototype-tests)
   set_tests_properties(fe2o3-worker-ordered-program-prototype-tests

@@ -8,6 +8,36 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     pub(crate) fn observe_ordered_program_origin_v1(
         self,
     ) -> Result<(OrderedProgramObservationOwnerV32, OrderedOriginReportV1), String> {
+        let (owner, report, _) = self.observe_ordered_origin_inner(false)?;
+        Ok((owner, report))
+    }
+
+    /// Opt-in actual same-session producer; no public exporter or wire changes.
+    pub(crate) fn observe_ordered_program_macro_frames_v1(
+        self,
+    ) -> Result<
+        (
+            OrderedProgramObservationOwnerV32,
+            OrderedOriginReportV1,
+            crate::collector::ordered_origin_v1::macro_frames::OrderedMacroFramesV1,
+        ),
+        String,
+    > {
+        let (owner, report, frames) = self.observe_ordered_origin_inner(true)?;
+        Ok((owner, report, frames.ok_or("macro frame capture missing")?))
+    }
+
+    fn observe_ordered_origin_inner(
+        self,
+        include_macro_frames: bool,
+    ) -> Result<
+        (
+            OrderedProgramObservationOwnerV32,
+            OrderedOriginReportV1,
+            Option<crate::collector::ordered_origin_v1::macro_frames::OrderedMacroFramesV1>,
+        ),
+        String,
+    > {
         let seed = OrderedOriginRootV1::from_collected(&self.stage.closure)?;
         let tcx = self.stage.tcx;
         let owner = self.observe_ordered_program_v32()?;
@@ -43,8 +73,22 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .blocks()
             .get(view.semantic_block().index() as usize)
             .ok_or("origin semantic block missing")?;
-        let captured = seed.capture(tcx, &view, function.identity(), block.identity())?;
+        let (captured, frames) = if include_macro_frames {
+            budget
+                .reserve_storage(
+                    crate::collector::ordered_origin_v1::macro_frames::MACRO_LOGICAL_PREPAY_V1,
+                )
+                .map_err(|_| "origin macro logical storage bound")?;
+            let (captured, frames) =
+                seed.capture_with_macro_frames(tcx, &view, function.identity(), block.identity())?;
+            (captured, Some(frames))
+        } else {
+            (
+                seed.capture(tcx, &view, function.identity(), block.identity())?,
+                None,
+            )
+        };
         let report = OrderedOriginReportV1::from_live_owner(&owner, &view, captured)?;
-        Ok((owner, report))
+        Ok((owner, report, frames))
     }
 }

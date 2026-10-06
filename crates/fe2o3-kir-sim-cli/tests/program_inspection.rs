@@ -308,3 +308,48 @@ fn escaped_name_growth_refuses_without_publishing_partial_text() {
     assert_eq!(fs::read(&kir).unwrap(), owner.canonical_bytes());
     assert_eq!(fs::read(&request).unwrap(), request_bytes);
 }
+
+#[test]
+fn planned_register_modes_use_same_admission_and_leave_inputs_unchanged() {
+    let directory = Directory::new();
+    let kir = directory.file("program.kir");
+    let request = directory.file("request.json");
+    let owner = fixture::owner(&fixture::module_with_program(
+        true,
+        fixture::program(&[8, 585]),
+    ));
+    let rb = fixture::request([19, 23, 42]);
+    fs::write(&kir, owner.canonical_bytes()).unwrap();
+    fs::write(&request, &rb).unwrap();
+    let original = run(&kir, &request);
+    let old_text = run_text(&kir, &request);
+    for flag in ["--planned-registers", "--planned-registers-json"] {
+        let out = command().arg(flag).args([&kir, &request]).output().unwrap();
+        assert!(out.status.success(), "{out:?}");
+        assert!(out.stderr.is_empty());
+        assert!(out.stdout.len() <= 8192);
+        if flag.ends_with("-json") {
+            let j: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+            assert_eq!(j["canonical"]["sha256"], hex(owner.identity().digest()));
+            assert_eq!(j["plan"]["values"][3]["last_use"], 3);
+            assert_eq!(j["plan"]["values"][3]["overwritten"], 4);
+            assert_eq!(j["plan"]["uses"][1]["value"], 3);
+            assert_eq!(j["plan"]["uses"][2]["value"], 3);
+            assert_eq!(j["physical_allocation_observed"], false);
+        } else {
+            assert!(
+                std::str::from_utf8(&out.stdout)
+                    .unwrap()
+                    .contains("not LLVM allocation")
+            );
+        }
+        assert_eq!(fs::read(&kir).unwrap(), owner.canonical_bytes());
+        assert_eq!(fs::read(&request).unwrap(), rb);
+    }
+    assert_eq!(run(&kir, &request).stdout, original.stdout);
+    assert_eq!(run_text(&kir, &request).stdout, old_text.stdout);
+    fs::write(&kir, b"not canonical").unwrap();
+    for flag in ["--planned-registers", "--planned-registers-json"] {
+        refused(command().arg(flag).args([&kir, &request]).output().unwrap());
+    }
+}

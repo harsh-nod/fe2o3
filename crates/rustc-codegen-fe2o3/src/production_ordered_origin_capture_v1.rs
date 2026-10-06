@@ -10,6 +10,9 @@ use rustc_middle::mir::{TerminatorKind, UnwindAction};
 use rustc_middle::ty::{Instance, TyCtxt};
 use rustc_span::{Pos, Span};
 
+#[path = "production_ordered_macro_frames_v1.rs"]
+pub(crate) mod macro_frames;
+
 pub(crate) const MAX_ORIGIN_WORK_V1: usize = 1_048_576;
 pub(crate) const MAX_ORIGIN_EXPANSION_DEPTH_V1: usize = 256;
 const MAX_BODY_ITEMS: usize = 65_536;
@@ -57,6 +60,36 @@ impl<'tcx> OrderedOriginRootV1<'tcx> {
         expected_function: SemanticFunctionIdentityV1,
         expected_block: SemanticBlockIdentityV1,
     ) -> Result<OrderedOriginCaptureV1, &'static str> {
+        self.capture_inner(tcx, view, expected_function, expected_block, false)
+            .map(|(capture, _)| capture)
+    }
+
+    pub(crate) fn capture_with_macro_frames(
+        self,
+        tcx: TyCtxt<'tcx>,
+        view: &ProductionOrderedProgramInspectionV1<'_>,
+        expected_function: SemanticFunctionIdentityV1,
+        expected_block: SemanticBlockIdentityV1,
+    ) -> Result<(OrderedOriginCaptureV1, macro_frames::OrderedMacroFramesV1), &'static str> {
+        let (capture, frames) =
+            self.capture_inner(tcx, view, expected_function, expected_block, true)?;
+        Ok((capture, frames.ok_or("macro frame capture missing")?))
+    }
+
+    fn capture_inner(
+        self,
+        tcx: TyCtxt<'tcx>,
+        view: &ProductionOrderedProgramInspectionV1<'_>,
+        expected_function: SemanticFunctionIdentityV1,
+        expected_block: SemanticBlockIdentityV1,
+        include_macro_frames: bool,
+    ) -> Result<
+        (
+            OrderedOriginCaptureV1,
+            Option<macro_frames::OrderedMacroFramesV1>,
+        ),
+        &'static str,
+    > {
         let identities = canonical_function_identities_v1(tcx, self.instance);
         if identities.function() != expected_function
             || identities.function().as_bytes() != &view.ordered_program().source().function
@@ -140,15 +173,23 @@ impl<'tcx> OrderedOriginRootV1<'tcx> {
         };
         let source = capture_source(tcx, span, &mut meter)?;
         require_provenance(source.provenance(), view.source_provenance())?;
-        Ok(OrderedOriginCaptureV1 {
-            source,
-            function: *identities.function().as_bytes(),
-            monomorphization: *identities.monomorphization().as_bytes(),
-            mir_body,
-            mir_block: raw.as_u32(),
-            block_identity: *expected_block.as_bytes(),
-            work_used: meter.used,
-        })
+        let macro_frames = if include_macro_frames {
+            Some(macro_frames::capture(tcx, span, source, view, &mut meter)?)
+        } else {
+            None
+        };
+        Ok((
+            OrderedOriginCaptureV1 {
+                source,
+                function: *identities.function().as_bytes(),
+                monomorphization: *identities.monomorphization().as_bytes(),
+                mir_body,
+                mir_block: raw.as_u32(),
+                block_identity: *expected_block.as_bytes(),
+                work_used: meter.used,
+            },
+            macro_frames,
+        ))
     }
 }
 
@@ -226,53 +267,58 @@ fn capture_source(
     // Prepay endpoint lookup/prefix/line work before the canonical adapter's
     // source_callsite/lookup_char_pos operations. No source files are opened.
     for origin in [span, cursor] {
-        if origin.is_dummy() || origin.lo() > origin.hi() {
-            return Err("origin source endpoints unavailable");
-        }
-        let mut selected = None;
-        for point in [origin.lo(), origin.hi()] {
-            let files = tcx.sess.source_map().files();
-            meter.passes(files.len(), 2)?;
-            let index = files
-                .partition_point(|file| file.start_pos <= point)
-                .checked_sub(1)
-                .ok_or("origin source file unavailable")?;
-            let file = &files[index];
-            if selected
-                .replace(index)
-                .is_some_and(|previous| previous != index)
-            {
-                return Err("origin source span crosses files");
-            }
-            let relative = point
-                .0
-                .checked_sub(file.start_pos.0)
-                .ok_or("origin source position overflow")?;
-            let length = file.normalized_source_len.to_usize();
-            if relative as usize > length {
-                return Err("origin source endpoint outside file");
-            }
-            meter.passes(file.multibyte_chars.len(), 3)?;
-            let preceding = file
-                .multibyte_chars
-                .partition_point(|character| character.pos.0 < relative);
-            if let Some(character) = preceding
-                .checked_sub(1)
-                .and_then(|i| file.multibyte_chars.get(i))
-                && relative
-                    < character
-                        .pos
-                        .0
-                        .checked_add(u32::from(character.bytes))
-                        .ok_or("origin source position overflow")?
-            {
-                return Err("origin source endpoint inside UTF-8 scalar");
-            }
-            meter.passes(length, 5)?;
-        }
+        prepay_origin(tcx, origin, meter)?;
     }
     canonical_source_provenance_v1(tcx, span, MAX_ORIGIN_EXPANSION_DEPTH_V1)
         .map_err(|_| "origin canonical source provenance unavailable")
+}
+
+fn prepay_origin(tcx: TyCtxt<'_>, origin: Span, meter: &mut Work) -> Result<(), &'static str> {
+    if origin.is_dummy() || origin.lo() > origin.hi() {
+        return Err("origin source endpoints unavailable");
+    }
+    let mut selected = None;
+    for point in [origin.lo(), origin.hi()] {
+        let files = tcx.sess.source_map().files();
+        meter.passes(files.len(), 2)?;
+        let index = files
+            .partition_point(|file| file.start_pos <= point)
+            .checked_sub(1)
+            .ok_or("origin source file unavailable")?;
+        let file = &files[index];
+        if selected
+            .replace(index)
+            .is_some_and(|previous| previous != index)
+        {
+            return Err("origin source span crosses files");
+        }
+        let relative = point
+            .0
+            .checked_sub(file.start_pos.0)
+            .ok_or("origin source position overflow")?;
+        let length = file.normalized_source_len.to_usize();
+        if relative as usize > length {
+            return Err("origin source endpoint outside file");
+        }
+        meter.passes(file.multibyte_chars.len(), 3)?;
+        let preceding = file
+            .multibyte_chars
+            .partition_point(|character| character.pos.0 < relative);
+        if let Some(character) = preceding
+            .checked_sub(1)
+            .and_then(|i| file.multibyte_chars.get(i))
+            && relative
+                < character
+                    .pos
+                    .0
+                    .checked_add(u32::from(character.bytes))
+                    .ok_or("origin source position overflow")?
+        {
+            return Err("origin source endpoint inside UTF-8 scalar");
+        }
+        meter.passes(length, 5)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

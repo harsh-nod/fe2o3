@@ -46,6 +46,9 @@ pub use ordered_region_v16::lower_canonical_v16_compiler_module_to_gfx942_xnack_
 #[path = "lowering/ordered_program_v17.rs"]
 mod ordered_program_v17;
 pub use ordered_program_v17::lower_canonical_v17_compiler_module_to_gfx942_xnack_minus_llvm_ir;
+#[path = "lowering/ordered_program_debug_line_v17.rs"]
+mod ordered_program_debug_line_v17;
+pub use ordered_program_debug_line_v17::*;
 #[path = "lowering/ordered_program_composition_v1.rs"]
 mod ordered_program_composition_v1;
 pub use ordered_program_composition_v1::*;
@@ -1168,7 +1171,43 @@ fn lower_compiler_module_with_ordered_and_bf16_context(
     ordered_owner: Option<OrderedModuleOwner<'_>>,
     bf16_context: Option<&NativeBf16HelperContextV1<'_>>,
 ) -> Result<String, LoweringErrors> {
-    lower_compiler_module_with_retained_contexts(
+    lower_compiler_module_with_debug_line_context(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        ordered_owner,
+        bf16_context,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_compiler_module_with_debug_line_context(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
+    bf16_context: Option<&NativeBf16HelperContextV1<'_>>,
+    debug_line: Option<OrderedProgramDebugLineV17<'_>>,
+) -> Result<String, LoweringErrors> {
+    if let Some(line) = debug_line {
+        if !matches!(ordered_owner, Some(OrderedModuleOwner::ProgramV17(owner)) if line.matches_owner(owner))
+            || semantic_anchor_identity.is_some()
+            || bf16_context.is_some()
+            || target != LoweringTarget::Gfx942XnackMinusV1
+        {
+            return Err(LoweringErrors::one(
+                LoweringLocation::module(module),
+                LoweringDiagnosticCode::SemanticAnchorIdentityMismatch,
+                "debug line requires the exact V17-only lowering context",
+            ));
+        }
+    }
+    lower_compiler_module_with_retained_and_debug_line_contexts(
         module,
         target,
         launch_policies,
@@ -1177,6 +1216,7 @@ fn lower_compiler_module_with_ordered_and_bf16_context(
         ordered_owner,
         None,
         bf16_context,
+        debug_line,
     )
 }
 
@@ -1190,6 +1230,31 @@ fn lower_compiler_module_with_retained_contexts(
     ordered_owner: Option<OrderedModuleOwner<'_>>,
     physical: Option<&CompilerPhysicalLaunchV2<'_>>,
     bf16_context: Option<&NativeBf16HelperContextV1<'_>>,
+) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_retained_and_debug_line_contexts(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        ordered_owner,
+        physical,
+        bf16_context,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_compiler_module_with_retained_and_debug_line_contexts(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
+    physical: Option<&CompilerPhysicalLaunchV2<'_>>,
+    bf16_context: Option<&NativeBf16HelperContextV1<'_>>,
+    debug_line: Option<OrderedProgramDebugLineV17<'_>>,
 ) -> Result<String, LoweringErrors> {
     if let Some(context) = bf16_context {
         if !std::ptr::eq(context.owner.module(), module)
@@ -1501,6 +1566,7 @@ fn lower_compiler_module_with_retained_contexts(
             matches!(ordered_owner, Some(OrderedModuleOwner::RegionV16(_)));
         lowerer.ordered_program_v17 =
             matches!(ordered_owner, Some(OrderedModuleOwner::ProgramV17(_)));
+        lowerer.ordered_debug_line_v17 = debug_line;
         lowerer.ordered_composition_v1 = match ordered_owner {
             Some(OrderedModuleOwner::CompositionV1(owner)) => Some(owner),
             _ => None,
@@ -2842,6 +2908,11 @@ fn emit_compiler_module(
         .any(|lowerer| lowerer.ordered_composition_v1.is_some());
     let mut output = if composition {
         CapacityLimitedText::try_new_composition_v1(module)?
+    } else if kernels
+        .iter()
+        .any(|lowerer| lowerer.ordered_debug_line_v17.is_some())
+    {
+        CapacityLimitedText::try_new(module, MAX_ORDERED_PROGRAM_DEBUG_LINE_LLVM_BYTES_V17)?
     } else {
         CapacityLimitedText::try_new(module, MAX_COMPILER_MODULE_TEXT_BYTES)?
     };
@@ -3019,6 +3090,11 @@ fn emit_compiler_module(
             )
         })?;
         lowerer.emit_semantic_anchor_metadata_v1(&mut output, metadata_index)?;
+    }
+    for lowerer in kernels {
+        if let Some(line) = lowerer.ordered_debug_line_v17 {
+            line.emit_metadata(&mut output, lowerer.symbol);
+        }
     }
     output.finish(module)
 }
@@ -3913,6 +3989,7 @@ struct FunctionLowerer<'a> {
     semantic_anchor_emission: SemanticAnchorEmissionV1,
     ordered_region_v16: bool,
     ordered_program_v17: bool,
+    ordered_debug_line_v17: Option<OrderedProgramDebugLineV17<'a>>,
     ordered_composition_v1: Option<&'a fe2o3_kernel_ir::VerifiedOrderedProgramCompositionV1>,
     native_bf16_helper: Option<&'a NativeBf16HelperContextV1<'a>>,
 }
@@ -4265,6 +4342,7 @@ impl<'a> FunctionLowerer<'a> {
             semantic_anchor_emission,
             ordered_region_v16: false,
             ordered_program_v17: false,
+            ordered_debug_line_v17: None,
             ordered_composition_v1: None,
             native_bf16_helper: None,
         })
@@ -4299,6 +4377,7 @@ impl<'a> FunctionLowerer<'a> {
             semantic_anchor_emission,
             ordered_region_v16: false,
             ordered_program_v17: false,
+            ordered_debug_line_v17: None,
             ordered_composition_v1: None,
             native_bf16_helper: None,
         })
@@ -4328,6 +4407,7 @@ impl<'a> FunctionLowerer<'a> {
             semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
             ordered_region_v16: false,
             ordered_program_v17: false,
+            ordered_debug_line_v17: None,
             ordered_composition_v1: None,
             native_bf16_helper: None,
         })
@@ -6167,8 +6247,15 @@ impl<'a> FunctionLowerer<'a> {
             })?;
             writeln!(
                 output,
-                "define amdgpu_kernel void @{}({parameters}) #{} !reqd_work_group_size !{} {{",
-                self.symbol, kernel_attribute, kernel_metadata,
+                "define amdgpu_kernel void @{}({parameters}) #{} !reqd_work_group_size !{}{} {{",
+                self.symbol,
+                kernel_attribute,
+                kernel_metadata,
+                if self.ordered_debug_line_v17.is_some() {
+                    " !dbg !5"
+                } else {
+                    ""
+                },
             )
             .unwrap();
         } else {
