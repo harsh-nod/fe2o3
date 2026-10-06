@@ -522,6 +522,19 @@ pub fn consume_compiler_module_handoff_with_currentness_v5<T: AsRef<Handoff>>(
     consume(lease, token, budget, &mut NoFaults)
 }
 
+/// Same one-shot durable transition on an original owned resource account.
+/// Counts the complete actual lease and token again inside a <=256 MiB local
+/// window. Additional work is Budget::STORAGE_WINDOW_WORK_V1; additional scratch
+/// is both retained charges plus Budget::STORAGE_WINDOW_SCRATCH_V1. Errors retain
+/// terminal reservations; no caller-selected floor, new account or cap increase.
+pub fn consume_compiler_module_handoff_in_original_account_v5<T: AsRef<Handoff>>(
+    lease: &CompilerModuleHandoffCurrentnessLeaseV5,
+    token: CompilerModuleHandoffConsumptionTokenV5<T>,
+    budget: &mut Budget<'_>,
+) -> Result<ConsumedCompilerModuleHandoffV5<T>> {
+    admission::consume_original(lease, token, budget, &mut NoFaults)
+}
+
 impl From<Resource> for Error {
     fn from(error: Resource) -> Self {
         Self::Resource(error)

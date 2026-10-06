@@ -100,6 +100,7 @@ pub use compiler_module_handoff::conditional_v5::{
     acquire_compiler_module_handoff_currentness_lease_with_quote_v5,
     compiler_module_handoff_custody_quota_for_limit_v5,
     compiler_module_handoff_try_recovery_quota_v5,
+    consume_compiler_module_handoff_in_original_account_v5,
     consume_compiler_module_handoff_with_currentness_v5, publish_compiler_module_handoff_v5,
     publish_compiler_module_handoff_with_currentness_v5,
     quote_compiler_module_handoff_currentness_custody_v5,
