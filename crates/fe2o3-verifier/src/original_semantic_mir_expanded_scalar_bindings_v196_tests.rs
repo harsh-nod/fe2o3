@@ -417,7 +417,10 @@ fn expanded_source_relations_keep_address_observable_scalars_in_explicit_memory(
                         assert!(ssa.entry_definitions().iter().all(|entry| entry.variable().get() != 4));
                         let function = &semantic.functions()[row.function.index() as usize];
                         for block in 0..function.blocks().len() {
-                            for (_, event) in ssa.resolved_events(SsaBlockIdV1::new(block as u32)).unwrap() {
+                            let block = SsaBlockIdV1::new(block as u32);
+                            let events = ssa.resolved_events(block);
+                            assert_eq!(events.is_some(), ssa.is_reachable(block));
+                            for (_, event) in events.into_iter().flatten() {
                                 if let SsaResolvedEventV1::Define { variable, .. } = event {
                                     assert_ne!(variable.get(), 4, "memory must not become a fabricated SSA definition");
                                 }
