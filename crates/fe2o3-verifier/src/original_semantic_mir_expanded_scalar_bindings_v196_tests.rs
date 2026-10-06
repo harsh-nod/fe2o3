@@ -183,19 +183,57 @@ fn exercise_tile_leaves(
         }
         assert_eq!(pairs.tile_leaf(index, &[2], out)?, None);
         assert_eq!(pairs.tile_leaf(index, &[3], out)?, None);
-        for path in [&[][..], &[0][..], &[4][..], &[0, u32::from(*elements)][..]] {
-            match pairs.tile_leaf(index, path, out) {
-                Err(Error::Statement(_) | Error::Source(SourceError::Binding(_))) => {}
-                Err(error) => return Err(error),
-                Ok(_) => panic!("invalid tile field path was admitted"),
-            }
-        }
     }
     assert!(
         leaves > 0,
         "fixture must exercise actual scalarized tile leaves"
     );
     Ok(())
+}
+
+#[test]
+fn expanded_scalar_bindings_keep_invalid_tile_path_refusals_sticky() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        for path in [&[][..], &[0][..], &[4][..], &[0, u32::MAX][..], &[2, 0][..]] {
+            let result = run_fixture(layout, LIMIT, LIMIT, |slots, _, out| {
+                let target = TileTargetV176::derive(slots, out)?;
+                let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+                let original = slots.correspondence(out)?.inventory(out.budget)?;
+                let index = original
+                    .definitions()
+                    .iter()
+                    .position(|row| {
+                        matches!(
+                            row.ty,
+                            Type::Execution(
+                                fe2o3_kernel_ir::ExecutionRoleV15::MaskedTileU32 { .. }
+                                    | fe2o3_kernel_ir::ExecutionRoleV15::LaneFragmentU32 { .. }
+                            )
+                        ) && matches!(row.coordinate, Definition::Result { .. })
+                    })
+                    .expect("fixture must retain a tile definition");
+                let error = pairs.tile_leaf(index, path, out).unwrap_err();
+                assert!(matches!(
+                    error,
+                    Error::Source(SourceError::Binding("source tile leaf field path differs"))
+                ));
+                assert!(matches!(
+                    pairs.definition_counts(out),
+                    Err(Error::Source(SourceError::Binding(
+                        "source tile leaf field path differs"
+                    )))
+                ));
+                Err(error)
+            })
+            .0;
+            assert!(matches!(
+                result,
+                Err(Error::Source(SourceError::Binding(
+                    "source tile leaf field path differs"
+                )))
+            ));
+        }
+    }
 }
 
 #[test]
