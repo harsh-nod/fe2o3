@@ -891,6 +891,23 @@ fn expanded_headers_v190() -> usize {
             [Storage; 2],
             Option<TypeId>,
         )>()
+        + size_of::<(
+            [&fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>; 3],
+            &fe2o3_lower_mir_kernel::ProductionSourceTileExpansionV159<'_, '_>,
+            [&fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'_>; 2],
+            &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+            &fe2o3_kernel_ir::PointerType,
+            SourceTagRecipeV39<'_, '_, '_>,
+            std::iter::Zip<
+                std::slice::Iter<
+                    'static,
+                    fe2o3_kernel_analysis::CanonicalKirOperationRefV1<'static>,
+                >,
+                std::slice::Iter<'static, bool>,
+            >,
+            std::iter::Zip<std::slice::Iter<'static, Layout>, std::slice::Iter<'static, Layout>>,
+            std::array::IntoIter<&'static Layout, 2>,
+        )>()
 }
 
 pub(super) fn headers() -> usize {
