@@ -405,6 +405,11 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(!runtime_state.contains("invocation_source_scalar_copy_observation_checked_v188("));
                                     assert_eq!(runtime_state.matches(" invocation_source_local_observations_extend_v186(").count(), call.arguments.len());
                                     let observed_at = runtime_state.find(&observed).unwrap();
+                                    let observation_guard = format!(" assert(invocation_source_block_runtime_{root}_v36(source).observations.len() == 0 && invocation_source_block_runtime_{root}_v36(source).source.machine.pc != -2 && (forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() ==> invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i])));");
+                                    assert_eq!(runtime_state.matches(&observation_guard).count(), 1);
+                                    let observation_guard_at = runtime_state.find(&observation_guard).unwrap();
+                                    assert!(observation_guard_at < observed_at);
+                                    assert!(runtime_state.contains(&format!("{observation_guard}\n{observed}")));
                                     let mut previous_extension = None;
                                     for ordinal in 0..call.arguments.len() {
                                         let introduction = format!(" assert(invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}])) by {{\n reveal(invocation_source_local_observation_v180);\n }}");
@@ -413,7 +418,7 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                         assert_eq!(runtime_state.matches(&extension).count(), 1);
                                         let extension_at = runtime_state.find(&extension).unwrap();
                                         assert!(runtime_state.find(&introduction).unwrap() < extension_at);
-                                        assert!(extension_at < observed_at);
+                                        assert!(extension_at < observation_guard_at);
                                         if let Some(previous) = previous_extension {
                                             assert!(previous < extension_at);
                                         }

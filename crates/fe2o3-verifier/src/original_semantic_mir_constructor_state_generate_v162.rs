@@ -385,6 +385,11 @@ fn source_runtime(
             " invocation_source_local_observations_extend_v186(invocation_source_block_runtime_{root}_v36(source).operands, {ordinal});\n"
         );
     }
+    out.budget.charge_work(1)?;
+    emit!(
+        out,
+        " assert(invocation_source_block_runtime_{root}_v36(source).observations.len() == 0 && invocation_source_block_runtime_{root}_v36(source).source.machine.pc != -2 && (forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() ==> invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i])));\n"
+    );
     emit!(
         out,
         " invocation_source_local_block_observations_empty_v180(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36());\n"
