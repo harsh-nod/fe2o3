@@ -51,6 +51,10 @@ mod module_tests {
         include!("production_optimized_source_tile_scalar_v156_tests.rs");
         include!("production_optimized_source_tile_graph_v157_tests.rs");
         include!("production_optimized_source_tile_expansion_v159_tests.rs");
+        mod tile_roots_v260_tests {
+            use super::*;
+            include!("production_optimized_source_tile_roots_v260_tests.rs");
+        }
         include!("production_source_execution_borrow_endpoint_v163_tests.rs");
         include!("production_source_execution_owner_endpoint_v199_tests.rs");
         include!("production_optimized_source_native_lifecycle_v18_tests.rs");
