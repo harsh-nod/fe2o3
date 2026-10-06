@@ -90,12 +90,7 @@ impl CompilerExecutionStartupInputV1 {
     pub(crate) fn admit(
         &self,
     ) -> Result<AdmittedProtectedCompilerExecutionV1, ProtectedCompilerExecutionErrorV1> {
-        let inputs = self
-            .0
-            .lock()
-            .map_err(|_| ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed)?
-            .take()
-            .ok_or(ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed)??;
+        let inputs = self.take()?;
         let policy = CompilerExecutionPolicyCapabilityV1::from_file(inputs.policy.into())
             .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
         let client =
@@ -105,6 +100,24 @@ impl CompilerExecutionStartupInputV1 {
             .revalidate()
             .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
         Ok(AdmittedProtectedCompilerExecutionV1 { policy, client })
+    }
+
+    /// Consumes the same one-shot captured inputs as legacy admission. A failed
+    /// family decode cannot retry another family or reacquire the raw slots.
+    pub(crate) fn admit_native<'b, 'w>(
+        &self,
+        budget: &'b mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'w>,
+    ) -> Result<native_v3::Admitted<'b, 'w>, native_v3::Error> {
+        let inputs = self.take().map_err(native_v3::Error::Startup)?;
+        native_v3::Admitted::from_owned(inputs, budget)
+    }
+
+    fn take(&self) -> Result<OwnedExecutionInputs, ProtectedCompilerExecutionErrorV1> {
+        self.0
+            .lock()
+            .map_err(|_| ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed)?
+            .take()
+            .ok_or(ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed)?
     }
 }
 
