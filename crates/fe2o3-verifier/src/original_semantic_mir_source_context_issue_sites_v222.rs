@@ -171,7 +171,7 @@ mod tests {
                                 (function.blocks.start + block, control.statements, destination, source_type, continuation));
                             let marker = format!("proof fn invocation_context_issue_segment_{root}_{instance}_{block}_v222(");
                             assert_eq!(generated.matches(&marker).count(), 1);
-                            let body = generated.split(&marker).nth(1).unwrap().split("// Exact endpoint replay only.").next().unwrap();
+                            let body = generated.split(&marker).nth(1).unwrap().split("// Fresh issuance from an empty witness only").next().unwrap();
                             let requires = body.split("    ensures").next().unwrap();
                             assert_eq!(requires.matches(&format!(
                                 "byte_inputs_{root}_v55(target.state, little_endian)"
@@ -188,13 +188,32 @@ mod tests {
                             assert!(body.contains("source.observations.push(InvocationSourceStatementObservationV36"));
                             assert!(body.contains("target.observations.push(actual.observation)"));
                             assert!(body.contains("effect: MemoryOperationEffectV30::Pure"));
+                            let initial_marker = format!("proof fn invocation_context_issue_initial_map_segment_{root}_{instance}_{block}_v232(");
+                            assert_eq!(generated.matches(&initial_marker).count(), 1);
+                            let initial = generated.split(&initial_marker).nth(1).unwrap().split("// Exact endpoint replay only.").next().unwrap();
+                            let (input, output) = initial.split_once("    ensures").unwrap();
+                            assert!(!input.contains("execution_map:"));
+                            assert!(!input.contains("invocation_execution_map_current_v205"));
+                            assert_eq!(input.matches("invocation_context_issue_fresh_enabled_v211(source.source, target.state,").count(), 1);
+                            assert_eq!(input.matches(&format!("byte_inputs_{root}_v55(target.state, little_endian)")).count(), 1);
+                            for text in [
+                                format!("destination: {destination}, source_type: {}", source_type.index()),
+                                format!("invocation_context_issue_segment_{root}_{instance}_{block}_v222(\n        source, target, Map::empty(), little_endian)"),
+                                format!("invocation_source_micro_finish_{root}_{instance}_v36(source, little_endian)"),
+                                format!("byte_micro_step_{root}_v30(target, little_endian)"),
+                                format!("invocation_source_byte_pc_v36(coupled.source.source, {continuation})"),
+                                format!("assert(coupled.source.source.machine.pc == {})", actual.pc),
+                            ] { assert!(initial.contains(&text), "{text}"); }
+                            assert!(output.contains("original.source, actual.next.state, coupled.execution_map"));
+                            assert!(output.contains("invocation_context_issue_initializes_current_map_v211("));
+                            assert!(output.contains("assert forall|key: MemoryExecutionReferenceV178|"));
                             expected += 1;
                         }
                     }
                 }
                 assert!(expected > 0 && other_controls > 0);
                 assert_eq!(count, expected);
-                assert_eq!(generated.matches("proof fn ").count(), expected);
+                assert_eq!(generated.matches("proof fn ").count(), 2 * expected);
                 assert!(!generated.contains("assume("));
                 Ok(())
             }).0.unwrap();

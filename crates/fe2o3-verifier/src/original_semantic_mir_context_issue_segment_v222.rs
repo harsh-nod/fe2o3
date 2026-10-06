@@ -92,6 +92,65 @@ proof fn invocation_context_issue_segment_{root}_{instance}_{block}_v222(
     }}),
 {{ }}
 "#).map_err(|_| out.error())?;
+            out.budget.charge_work(1)?;
+            write!(out, r#"
+// Fresh issuance from an empty witness only, not live-map preservation.
+proof fn invocation_context_issue_initial_map_segment_{root}_{instance}_{block}_v232(
+    source: InvocationSourceMicroStateV36, target: MemoryMicroStateV30,
+    little_endian: bool,
+)
+    requires invocation_source_active_{root}_{instance}_v36(source.source),
+        source.source.machine.pc == {pc}, source.next_statement == {statements},
+        source.observations.len() == {statements},
+        target.state.pc == {actual_block}, target.next_operation == {operation},
+        target.observations.len() == {prefix},
+        byte_inputs_{root}_v55(target.state, little_endian),
+        invocation_context_issue_fresh_enabled_v211(source.source, target.state,
+            InvocationSourceContextIssueV161 {{ destination: {destination}, source_type: {source_type} }},
+            MemorySourceOperationV30 {{ function: {function}, block: {target_block}, operation: {target_operation} }},
+            {definition}),
+    ensures ({{
+        let issue = InvocationSourceContextIssueV161 {{ destination: {destination}, source_type: {source_type} }};
+        let site = MemorySourceOperationV30 {{ function: {function}, block: {target_block}, operation: {target_operation} }};
+        let coupled = invocation_context_issue_coupled_v211(source.source, target.state, Map::empty(), issue, site, {definition});
+        let original = invocation_source_micro_finish_{root}_{instance}_v36(source, little_endian);
+        let actual = byte_micro_step_{root}_v30(target, little_endian);
+        coupled.updated && invocation_execution_map_current_v205(
+            original.source, actual.next.state, coupled.execution_map)
+    }}),
+{{
+    let issue = InvocationSourceContextIssueV161 {{ destination: {destination}, source_type: {source_type} }};
+    let site = MemorySourceOperationV30 {{ function: {function}, block: {target_block}, operation: {target_operation} }};
+    invocation_context_issue_segment_{root}_{instance}_{block}_v222(
+        source, target, Map::empty(), little_endian);
+    invocation_context_issue_fresh_has_exact_updates_v211(
+        source.source, target.state, Map::empty(), issue, site, {definition});
+    invocation_context_issue_initializes_current_map_v211(
+        source.source, target.state, issue, site, {definition});
+    let coupled = invocation_context_issue_coupled_v211(
+        source.source, target.state, Map::empty(), issue, site, {definition});
+    let identity = MemoryExecutionReferenceV178 {{
+        definition: {definition}, epoch: 0, frame: target.state.frames.active.last() }};
+    assert(coupled.execution_map.contains_key(identity));
+    assert(invocation_execution_map_entry_v205(coupled.source.source, coupled.target,
+        identity, coupled.execution_map[identity]));
+    assert(invocation_source_byte_state_well_formed_v36(coupled.source.source));
+    assert(coupled.source.source.machine.pc == {pc});
+    let continued = invocation_source_byte_pc_v36(coupled.source.source, {continuation});
+    assert(continued.machine == (MemoryStateV30 {{ pc: {continuation}, ..coupled.source.source.machine }}));
+    assert(continued.logical == coupled.source.source.logical
+        && continued.slots == coupled.source.source.slots
+        && continued.objects == coupled.source.source.objects);
+    assert forall|key: MemoryExecutionReferenceV178|
+        #![trigger coupled.execution_map[key]]
+        coupled.execution_map.contains_key(key) implies
+            invocation_execution_map_entry_v205(continued, coupled.target,
+                key, coupled.execution_map[key]) by {{
+        assert(invocation_execution_map_entry_v205(coupled.source.source, coupled.target,
+            key, coupled.execution_map[key]));
+    }}
+}}
+"#).map_err(|_| out.error())?;
             self.check(out)
         })
     }
