@@ -137,6 +137,7 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
     hide(invocation_source_aggregate_install_v42);
     hide(invocation_source_context_issue_v161);
     hide(invocation_context_issue_coupled_v211);
+    hide(invocation_source_logical_write_v38);
     invocation_context_issue_fresh_preserves_current_map_v238(
         source, target, execution_map, issue, site, destination);
     invocation_context_issue_fresh_has_exact_updates_v211(
@@ -256,6 +257,7 @@ proof fn invocation_source_checked_add_reconstruction_step_v259(
     hide(invocation_source_aggregate_leaf_bits_v42);
     hide(invocation_source_checked_pair_v44);
     hide(invocation_source_checked_v42);
+    hide(invocation_source_logical_write_v38);
     invocation_reconstructed_checked_add_u32_v259(left, right);
     invocation_checked_add_aggregate_complete_v260(source_type, left, right);
     let leaves = Map::empty()

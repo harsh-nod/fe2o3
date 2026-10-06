@@ -444,6 +444,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "reveal(invocation_source_byte_put_local_v36);",
         "reveal(invocation_source_aggregate_install_v42);",
         "hide(invocation_source_checked_pair_v44);",
+        "hide(invocation_source_logical_write_v38);",
         "reveal(invocation_source_checked_v42);",
         "invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);",
         "invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);",

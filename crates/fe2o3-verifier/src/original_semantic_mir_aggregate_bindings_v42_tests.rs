@@ -95,6 +95,7 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  hide(invocation_source_aggregate_complete_v42);
  hide(invocation_source_checked_v42);
  hide(invocation_source_byte_step_v36);
+ hide(invocation_source_logical_write_v38);
  checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
  invocation_source_checked_add_reconstruction_step_v259(source, {destination}, {ty},
  InvocationSourceByteValueV36::Local {{ local: {left}, moved: false }},
@@ -117,6 +118,11 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  assert(after.logical.aggregates == source.logical.aggregates.insert({destination}, aggregate));
  assert(after.logical.aggregates.contains_key({destination}));
  assert(after.logical.aggregates[{destination}] == aggregate);
+ let value_path = seq![0int];
+ let overflow_path = seq![1int];
+ assert(value_path[0] == 0);
+ assert(overflow_path[0] == 1);
+ assert(value_path != overflow_path);
  assert(after.logical.aggregates[{destination}].leaves[seq![0int]]
  == MemoryValueV30::Scalar((left + right) % 4294967296));
  assert(after.logical.aggregates[{destination}].leaves[seq![1int]]
@@ -151,6 +157,7 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
         assert!(model.contains("reveal(invocation_source_byte_step_v36);"));
         assert!(model.contains("assert(after.machine == (MemoryStateV30"));
         assert!(model.contains("assert(after.logical.aggregates == source.logical.aggregates.insert("));
+        assert!(model.contains("assert(value_path != overflow_path);"));
         for forbidden in ["assume(", "admit(", "external_body", "assume_specification"] {
             assert!(!model.contains(forbidden));
         }
