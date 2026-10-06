@@ -71,29 +71,12 @@ fn settle_callback<R>(
     }
 }
 
-/// The first production policy supports one kernel root, not one function.
-/// Helper functions remain in the complete retained module. Additional roots
-/// must not disappear behind the lowerer's single-root selection API.
-fn layout(
-    source: &Source<'_>,
-    target: TargetProfile,
-    budget: &mut Budget<'_>,
-) -> Result<ExecutionTileLayoutV1, Error> {
-    budget.charge_work(2)?;
-    selected_layout(source.root_count(budget)?, target)
-}
-
-fn selected_layout(roots: usize, target: TargetProfile) -> Result<ExecutionTileLayoutV1, Error> {
-    if roots != 1 {
-        return Err(Error::Unsupported(
-            "expanded production selection requires one complete kernel root",
-        ));
-    }
+fn selected_layout(target: TargetProfile) -> ExecutionTileLayoutV1 {
     // Both admitted profiles use wave64. A fixed blocked policy is selected
     // here, rather than accepting a provisional layout from the consumer.
-    Ok(match target {
+    match target {
         TargetProfile::Gfx942 | TargetProfile::Gfx950 => ExecutionTileLayoutV1::Blocked,
-    })
+    }
 }
 
 impl<R: 'static, F> SourceHandoffPolicyV29<R, F> for ExpandedSource
@@ -158,16 +141,15 @@ where
         consume: F,
     ) -> Result<R, Error> {
         let target = context.bindings.rustc_target.profile();
-        let selected = layout(source, target, budget)?;
+        budget.charge_work(2)?;
+        let selected = selected_layout(target);
         let mut pending = formal_context_v19::PendingConsumerV19::new(consume);
         let payload_bytes = std::cell::Cell::new(0);
         let mut callback_panic = None;
         let optimized = source.with_checked_mixed_fixedpoint_optimization_v18(
             budget,
             |original, optimized, budget| {
-                #[cfg(test)]
-                inspect_tile_convergence(optimized, budget)?;
-                let tile = optimized.prepare_tile_expansion_v159(0, selected, budget)?;
+                let tile = optimized.prepare_tile_expansion_with_layout_v260(selected, budget)?;
                 let floor = budget.storage();
                 let result = {
                     let consumer = pending.take();
@@ -218,38 +200,6 @@ where
 }
 
 #[cfg(test)]
-fn inspect_tile_convergence(
-    optimized: &fe2o3_lower_mir_kernel::ProductionOptimizedSourceCorrespondenceV18<'_>,
-    budget: &mut Budget<'_>,
-) -> Result<(), Error> {
-    let header = size_of::<fe2o3_lower_mir_kernel::ProductionOptimizedSourceCfgRootV18<'_, '_>>();
-    budget.reserve_storage(header)?;
-    {
-        let cfg = optimized.output_root_cfg_v18(0, budget)?;
-        let inventory = cfg.inventory();
-        let function = cfg.function();
-        let checked = fe2o3_kernel_analysis::check_canonical_tile_convergence_v160(
-            inventory,
-            function.coordinate,
-            budget,
-        );
-        if checked.is_err() {
-            eprintln!("EXPANDED_CONVERGENCE_V259 {checked:?}");
-            if function.operations.len() <= 512 && function.blocks.len() <= 256 {
-                for operation in &inventory.operations()[function.operations.clone()] {
-                    eprintln!("EXPANDED_OPERATION_V259 {operation:?}");
-                }
-                for block in &inventory.blocks()[function.blocks.clone()] {
-                    eprintln!("EXPANDED_BLOCK_V259 {block:?}");
-                }
-            }
-        }
-    }
-    budget.release_storage(header)?;
-    Ok(())
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -258,18 +208,9 @@ mod tests {
     }
 
     #[test]
-    fn expanded_selection_requires_one_kernel_root_for_both_real_targets() {
+    fn expanded_layout_is_fixed_for_both_real_targets() {
         for target in [TargetProfile::Gfx942, TargetProfile::Gfx950] {
-            assert_eq!(
-                selected_layout(1, target).unwrap(),
-                ExecutionTileLayoutV1::Blocked
-            );
-            for roots in [0, 2, usize::MAX] {
-                assert!(matches!(
-                    selected_layout(roots, target),
-                    Err(Error::Unsupported(_))
-                ));
-            }
+            assert_eq!(selected_layout(target), ExecutionTileLayoutV1::Blocked);
         }
     }
 
@@ -449,6 +390,9 @@ mod tests {
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// Imports ordinary rustc source, runs the checked fixed-point prefix and
     /// retains its actual expanded successor on the caller's existing account.
+    /// The lowerer derives a complete original-root policy table from authentic
+    /// operations and expands the module once, retaining scalar roots/helpers.
+    /// Residual tile-bearing helpers still require interprocedural admission.
     /// The consumer returns `(value, dynamic_bytes)`: exactly the storage growth
     /// it reserved for the returned value's owned backing, excluding `size_of::<R>()`
     /// and never including borrowed graph owners. The stage transfers that credit
