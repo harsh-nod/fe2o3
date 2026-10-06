@@ -3042,6 +3042,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                     ) {
                         continue;
                     }
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_kernel_error_identity_v1(
+                        self.tcx,
+                        instance,
+                    ) {
+                        continue;
+                    }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_result_branch_v1(
                         self.tcx,
                         instance,

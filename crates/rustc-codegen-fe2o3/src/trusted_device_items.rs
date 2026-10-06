@@ -36,6 +36,8 @@ mod core_checked_integer_v1;
 pub(crate) use core_checked_integer_v1::authenticate_reviewed_safe_core_checked_integer_v1;
 mod core_u32_widening_v1;
 pub(crate) use core_u32_widening_v1::authenticate_reviewed_safe_core_u32_widening_v1;
+mod core_kernel_error_identity_v1;
+pub(crate) use core_kernel_error_identity_v1::authenticate_reviewed_safe_core_kernel_error_identity_v1;
 mod core_attention_option_v1;
 pub(crate) use core_attention_option_v1::authenticate_reviewed_safe_core_attention_option_v1;
 mod core_result_control_v1;
