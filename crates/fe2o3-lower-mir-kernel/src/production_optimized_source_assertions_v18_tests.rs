@@ -1,4 +1,4 @@
-fn optimizer_dead_helper_source_owner_v18() -> ProductionSemanticSsaOwnerV1 {
+pub(super) fn optimizer_dead_helper_source_owner_v18() -> ProductionSemanticSsaOwnerV1 {
     use fe2o3_mir_model::semantic_mir_v1::{SemanticSwitchTargetV1, SemanticSwitchTargetsV1};
     let base = scalar_payload_owner_v18();
     let semantic = base.source_semantic();

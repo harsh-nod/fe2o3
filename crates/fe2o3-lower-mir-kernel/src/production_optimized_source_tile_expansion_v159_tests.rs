@@ -718,23 +718,26 @@ fn explicit_source_tile_gap_candidates_coincide_across_erased_transport() {
 
 #[test]
 fn explicit_source_tile_gap_candidates_keep_actual_unreachable_omission() {
-    run_optimized_source_v18(optimizer_dead_helper_source_owner_v18, |view, budget| {
-        let floor = budget.storage();
-        let expanded =
-            view.prepare_tile_expansion_v159(0, ExecutionTileLayoutV1::Striped, budget)?;
-        let gap_floor = budget.storage();
-        let gap = expanded
-            .source_block_entry_gap_v177(0, 0, SemanticBlockIdV1::from_index(1), budget)?
-            .unwrap();
-        assert_eq!(
-            gap.prefix_disposition(budget)?,
-            ProductionOptimizedSourceGapV18::Unreachable { placement: None }
-        );
-        assert_eq!(gap.candidate_count(budget)?, 0);
-        drop(gap);
-        budget.release_storage(budget.storage() - gap_floor)?;
-        expanded.discard(budget)?;
-        assert_eq!(budget.storage(), floor);
-        Ok(())
-    });
+    run_optimized_source_v18(
+        consumer_tests::optimizer_dead_helper_source_owner_v18,
+        |view, budget| {
+            let floor = budget.storage();
+            let expanded =
+                view.prepare_tile_expansion_v159(0, ExecutionTileLayoutV1::Striped, budget)?;
+            let gap_floor = budget.storage();
+            let gap = expanded
+                .source_block_entry_gap_v177(0, 0, SemanticBlockIdV1::from_index(1), budget)?
+                .unwrap();
+            assert_eq!(
+                gap.prefix_disposition(budget)?,
+                ProductionOptimizedSourceGapV18::Unreachable { placement: None }
+            );
+            assert_eq!(gap.candidate_count(budget)?, 0);
+            drop(gap);
+            budget.release_storage(budget.storage() - gap_floor)?;
+            expanded.discard(budget)?;
+            assert_eq!(budget.storage(), floor);
+            Ok(())
+        },
+    );
 }
