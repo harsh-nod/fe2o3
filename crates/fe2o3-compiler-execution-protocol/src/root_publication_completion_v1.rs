@@ -207,11 +207,11 @@ impl From<Resource> for Error {
     }
 }
 macro_rules! nested_error {
-    ($kind:ident, $error:ty) => {
+    ($kind:ident, $error:ident) => {
         impl From<$error> for Error {
             fn from(e: $error) -> Self {
                 match e {
-                    <$error>::Resource(e) => Self::Resource(e),
+                    $error::Resource(e) => Self::Resource(e),
                     e => Self::$kind(e),
                 }
             }
