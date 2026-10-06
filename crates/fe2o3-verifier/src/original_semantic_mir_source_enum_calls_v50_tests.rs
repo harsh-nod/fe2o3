@@ -348,7 +348,7 @@ fn call_program(moved: bool, work: usize, storage: usize) -> (Result<()>, usize,
                         for instance in 1..3 {
                             let enter =
                                 format!("spec fn invocation_source_enter_{root}_{instance}_v36(");
-                            let body = out
+                            let wrapper = out
                                 .text
                                 .split(&enter)
                                 .nth(1)
@@ -356,6 +356,24 @@ fn call_program(moved: bool, work: usize, storage: usize) -> (Result<()>, usize,
                                 .split("spec fn ")
                                 .next()
                                 .unwrap();
+                            assert!(wrapper.contains(&format!("invocation_source_entry_select_v167(source, invocation_source_entry_refuses_{root}_{instance}_v167(source, arguments, little_endian), invocation_source_entry_body_{root}_{instance}_v167(source, arguments, little_endian))")));
+                            let refuses = out.text.split_once(&format!("spec fn invocation_source_entry_refuses_{root}_{instance}_v167("))
+                                .unwrap().1.split_once("\n}\n").unwrap().0;
+                            assert!(refuses.contains("InvocationSourceValueV42::Enum(value)"));
+                            assert!(
+                                refuses
+                                    .contains("invocation_source_enum_snapshot_current_v50(source")
+                            );
+                            let body = out
+                                .text
+                                .split_once(&format!(
+                                    "spec fn invocation_source_entry_body_{root}_{instance}_v167("
+                                ))
+                                .unwrap()
+                                .1
+                                .split_once("\n}\n")
+                                .unwrap()
+                                .0;
                             assert!(body.contains("InvocationSourceValueV42::Enum(value)"));
                             assert!(
                                 body.contains(
