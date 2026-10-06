@@ -137,6 +137,7 @@ proof fn invocation_source_context_issue_frame_v262(
     hide(invocation_source_aggregate_leaf_bits_v42);
     hide(invocation_source_aggregate_install_v42);
     hide(invocation_source_context_issue_v161);
+    hide(invocation_source_tile_installed_v161);
     hide(invocation_source_logical_write_v38);
     hide(byte_execution_well_formed_v37);
     let aggregate = InvocationSourceAggregateV42 {
@@ -163,10 +164,14 @@ proof fn invocation_source_context_issue_frame_v262(
     }
     assert(installed.machine.valid);
     assert(invocation_source_context_issue_v161(source, issue)
+        == invocation_source_tile_installed_v161(source, installed, Seq::empty())) by {
+        invocation_source_context_issue_replays_install_v263(source, issue);
+    }
+    assert(invocation_source_tile_installed_v161(source, installed, Seq::empty())
         == (InvocationSourceTileResultV161 {
             source: installed,
             observations: Seq::empty() })) by {
-        reveal(invocation_source_context_issue_v161);
+        reveal(invocation_source_tile_installed_v161);
     }
 }
 
@@ -245,6 +250,40 @@ proof fn invocation_source_checked_add_install_frame_v262(
     }
     assert(aggregate.execution_lease.is_none());
     invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);
+}
+
+proof fn invocation_source_context_issue_replays_install_v263(
+    source: InvocationSourceByteStateV36, issue: InvocationSourceContextIssueV161,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= issue.destination < source.machine.values.len(),
+        !source.objects.contains_key(issue.destination),
+        invocation_source_context_shape_v161(issue.source_type),
+        source.machine.frames.execution.is_some(),
+        byte_execution_well_formed_v37(source.machine.frames.execution.unwrap()),
+    ensures ({ let aggregate = InvocationSourceAggregateV42 {
+        source_type: issue.source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Unit)
+            .insert(seq![1int], MemoryValueV30::Unit)
+            .insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+            .insert(seq![4int], MemoryValueV30::Unit) };
+        invocation_source_context_issue_v161(source, issue)
+            == invocation_source_tile_installed_v161(source,
+                invocation_source_aggregate_install_v42(source, issue.destination, aggregate),
+                Seq::empty()) }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_context_shape_v161);
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_aggregate_install_v42);
+    hide(invocation_source_tile_installed_v161);
+    hide(invocation_source_tile_refused_v161);
+    hide(byte_execution_well_formed_v37);
+    reveal(invocation_source_context_issue_v161);
 }
 
 proof fn invocation_context_issue_fresh_preserves_frame_v259(

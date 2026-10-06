@@ -381,7 +381,7 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 11);
+    assert_eq!(source.matches("proof fn ").count(), 12);
     for name in [
         "invocation_context_marker_aggregate_well_formed_v260",
         "invocation_checked_add_aggregate_complete_v260",
@@ -439,6 +439,10 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
             .0
     };
     assert_eq!(
+        inputs("invocation_source_context_issue_replays_install_v263"),
+        inputs("invocation_source_context_issue_frame_v262"),
+    );
+    assert_eq!(
         inputs("invocation_source_checked_add_replays_install_v260"),
         inputs("invocation_source_checked_add_reconstruction_step_v259").replacen(
             "source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),\n",
@@ -469,6 +473,11 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "hide(invocation_context_issue_fresh_enabled_v211);",
         "reveal(invocation_context_issue_fresh_enabled_v211);",
         "invocation_source_context_issue_frame_v262(source, issue);",
+        "invocation_source_context_issue_replays_install_v263(source, issue);",
+        "hide(invocation_source_tile_installed_v161);",
+        "hide(invocation_source_tile_refused_v161);",
+        "reveal(invocation_source_tile_installed_v161);",
+        "== invocation_source_tile_installed_v161(source, installed, Seq::empty())) by {\n        invocation_source_context_issue_replays_install_v263(source, issue);",
         "invocation_target_context_issue_frame_v262(target, site, destination);",
         "invocation_source_checked_add_install_frame_v262(source, destination, source_type, left, right);",
         "&& !source.objects.contains_key(issue.destination)\n        && invocation_source_context_shape_v161(issue.source_type)",
@@ -544,6 +553,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "invocation_source_context_issue_frame_v262",
         "invocation_target_context_issue_frame_v262",
         "invocation_source_checked_add_install_frame_v262",
+        "invocation_source_context_issue_replays_install_v263",
     ] {
         let header = source
             .split_once(&format!("proof fn {name}("))
