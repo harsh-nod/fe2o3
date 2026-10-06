@@ -412,6 +412,11 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "invocation_source_byte_evaluate_v36(source, left_operand, 32, root, instance, little_endian)",
         "invocation_source_byte_evaluate_v36(source, right_operand, 32, root, instance, little_endian)",
         "invocation_source_aggregate_complete_v42(aggregate)",
+        "hide(invocation_source_byte_state_well_formed_v36);",
+        "assert(after.logical.aggregates =~= source.logical.aggregates.insert(",
+        "assert(source.logical.aggregates.remove(destination).insert(destination, aggregate)",
+        "reveal(invocation_source_byte_put_local_v36);",
+        "reveal(invocation_source_aggregate_install_v42);",
     ] {
         assert!(
             source.contains(exact),
