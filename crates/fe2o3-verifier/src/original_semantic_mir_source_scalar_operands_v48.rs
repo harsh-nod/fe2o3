@@ -16,14 +16,17 @@ enum Operator {
 }
 
 impl Operator {
-    fn code(self) -> u8 {
-        match self {
+    fn code(self) -> Result<u8> {
+        Ok(match self {
             Self::Not => 0,
             Self::Float(code) => code,
             Self::WrappingAdd => 22,
             Self::WrappingSubtract => 23,
             Self::WrappingMultiply => 24,
             Self::Binary(operator) => match operator {
+                OperatorV30::WrappingAdd
+                | OperatorV30::WrappingSubtract
+                | OperatorV30::WrappingMultiply => return Err(unsupported()),
                 OperatorV30::And => 1,
                 OperatorV30::Or => 2,
                 OperatorV30::Xor => 3,
@@ -34,10 +37,11 @@ impl Operator {
                 OperatorV30::Greater => 8,
                 OperatorV30::GreaterEqual => 9,
             },
-        }
+        })
     }
 
     fn result(self, input: ScalarV30) -> Result<ScalarV30> {
+        self.code()?;
         if self.wrapping() {
             return match input {
                 ScalarV30::Integer {
@@ -192,7 +196,7 @@ impl Operation {
         write!(
             out,
             ", operation: {}int, input_bits: {}int, input_signed: {signed}, output_bits: {}int }})",
-            self.operator.code(),
+            self.operator.code()?,
             self.input.width(),
             self.output.width()
         )
