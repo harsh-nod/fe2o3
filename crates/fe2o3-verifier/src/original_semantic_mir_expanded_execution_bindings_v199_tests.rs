@@ -381,7 +381,7 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 8);
+    assert_eq!(source.matches("proof fn ").count(), 11);
     for name in [
         "invocation_context_marker_aggregate_well_formed_v260",
         "invocation_checked_add_aggregate_complete_v260",
@@ -468,8 +468,10 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "hide(invocation_source_context_shape_v161);",
         "hide(invocation_context_issue_fresh_enabled_v211);",
         "reveal(invocation_context_issue_fresh_enabled_v211);",
-        "reveal(invocation_source_context_issue_v161);\n    }\n    invocation_context_issue_fresh_preserves_current_map_v238(",
-        "&& !source.objects.contains_key(issue.destination)\n        && invocation_source_context_shape_v161(issue.source_type)) by {",
+        "invocation_source_context_issue_frame_v262(source, issue);",
+        "invocation_target_context_issue_frame_v262(target, site, destination);",
+        "invocation_source_checked_add_install_frame_v262(source, destination, source_type, left, right);",
+        "&& !source.objects.contains_key(issue.destination)\n        && invocation_source_context_shape_v161(issue.source_type)",
         "hide(byte_execution_next_epoch_v178);",
         "reveal(byte_execution_step_v178);",
         "invocation_source_checked_add_replays_install_v260(source, destination, source_type,",
@@ -500,8 +502,8 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     }
     assert!(!source.contains("reveal(invocation_context_issue_coupled_v211);"));
     for name in [
-        "invocation_context_issue_fresh_preserves_frame_v259",
-        "invocation_source_checked_add_reconstruction_step_v259",
+        "invocation_source_context_issue_frame_v262",
+        "invocation_source_checked_add_install_frame_v262",
     ] {
         let body = source
             .split_once(&format!("proof fn {name}("))
@@ -518,6 +520,41 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         assert!(body.contains(
             "assert(aggregate.execution_lease.is_none());\n    invocation_source_plain_aggregate_install_frame_v260("
         ));
+    }
+    for name in [
+        "invocation_source_context_issue_frame_v262",
+        "invocation_target_context_issue_frame_v262",
+        "invocation_source_checked_add_install_frame_v262",
+    ] {
+        let header = source
+            .split_once(&format!("proof fn {name}("))
+            .unwrap()
+            .1
+            .split_once("\n{\n")
+            .unwrap()
+            .0;
+        assert!(!header.contains("execution_map"));
+        assert!(!header.contains("_current_"));
+        let requires = header
+            .split_once("    requires ")
+            .unwrap()
+            .1
+            .split_once("    ensures ")
+            .unwrap()
+            .0;
+        assert!(!requires.contains("after"));
+        assert!(!requires.contains("_install_"));
+        assert!(!requires.contains("_step_"));
+        assert!(!requires.contains("_evaluate_"));
+        if name == "invocation_target_context_issue_frame_v262" {
+            assert!(!header.contains("InvocationSourceByteStateV36"));
+            assert!(requires.contains("byte_execution_next_epoch_v178"));
+        } else {
+            assert!(!header.contains("target:"));
+            assert!(!header.contains("left_operand"));
+            assert!(!header.contains("right_operand"));
+            assert!(!header.contains("little_endian"));
+        }
     }
 }
 

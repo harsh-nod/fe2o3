@@ -102,6 +102,138 @@ proof fn invocation_checked_add_aggregate_complete_v260(source_type: int, left: 
     }
 }
 
+proof fn invocation_source_context_issue_frame_v262(
+    source: InvocationSourceByteStateV36, issue: InvocationSourceContextIssueV161,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= issue.destination < source.machine.values.len(),
+        !source.objects.contains_key(issue.destination),
+        invocation_source_context_shape_v161(issue.source_type),
+        source.machine.frames.execution.is_some(),
+        byte_execution_well_formed_v37(source.machine.frames.execution.unwrap()),
+    ensures ({ let aggregate = InvocationSourceAggregateV42 {
+        source_type: issue.source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Unit)
+            .insert(seq![1int], MemoryValueV30::Unit)
+            .insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+            .insert(seq![4int], MemoryValueV30::Unit) };
+        let after = invocation_source_context_issue_v161(source, issue);
+        after.observations == Seq::empty()
+            && after.source == (InvocationSourceByteStateV36 {
+                machine: MemoryStateV30 {
+                    values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+                    ..source.machine },
+                logical: InvocationSourceLogicalV38 {
+                    aggregates: source.logical.aggregates.insert(issue.destination, aggregate),
+                    ..invocation_source_logical_write_v38(source.logical, issue.destination) }, ..source }) }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_context_shape_v161);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_install_v42);
+    hide(invocation_source_context_issue_v161);
+    hide(invocation_source_logical_write_v38);
+    hide(byte_execution_well_formed_v37);
+    let aggregate = InvocationSourceAggregateV42 {
+        source_type: issue.source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Unit)
+            .insert(seq![1int], MemoryValueV30::Unit)
+            .insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+            .insert(seq![4int], MemoryValueV30::Unit) };
+    assert(invocation_source_aggregate_well_formed_v42(aggregate)) by {
+        invocation_context_marker_aggregate_well_formed_v260(issue.source_type);
+    }
+    assert(aggregate.execution_lease.is_none());
+    invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);
+    assert(invocation_source_context_issue_v161(source, issue)
+        == (InvocationSourceTileResultV161 {
+            source: invocation_source_aggregate_install_v42(source, issue.destination, aggregate),
+            observations: Seq::empty() })) by {
+        reveal(invocation_source_context_issue_v161);
+    }
+}
+
+proof fn invocation_target_context_issue_frame_v262(
+    target: MemoryStateV30, site: MemorySourceOperationV30, destination: int,
+)
+    requires target.valid && byte_state_memory_well_formed_v30(target),
+        target.frames.active.len() > 0, target.frames.execution.is_some(),
+        byte_execution_well_formed_v37(target.frames.execution.unwrap()),
+        0 <= destination < target.values.len(),
+        byte_execution_next_epoch_v178(target, destination, 0, site) == Some(0),
+    ensures ({ let after = byte_execution_step_v178(target, site, 0, destination, -1);
+        after == (MemoryStateV30 {
+            values: target.values.update(destination, after.values[destination]), ..target }) }),
+{
+    hide(byte_state_memory_well_formed_v30);
+    hide(byte_execution_well_formed_v37);
+    hide(byte_execution_next_epoch_v178);
+    hide(byte_execution_step_v178);
+    let value = MemoryValueV30::Execution(MemoryExecutionCapabilityV178 {
+        identity: MemoryExecutionReferenceV178 {
+            definition: destination, epoch: 0, frame: target.frames.active.last() },
+        site, role: 0, parent: None, child: None, active: true });
+    assert(byte_execution_step_v178(target, site, 0, destination, -1)
+        == (MemoryStateV30 { values: target.values.update(destination, value), ..target })) by {
+        reveal(byte_execution_step_v178);
+    }
+    assert(byte_execution_step_v178(target, site, 0, destination, -1).values[destination] == value);
+}
+
+proof fn invocation_source_checked_add_install_frame_v262(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int,
+    left: int, right: int,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),
+        invocation_source_aggregate_leaf_count_v42(source_type) == 2,
+        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],
+        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],
+        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,
+        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,
+        0 <= left < 4294967296, 0 <= right < 4294967296,
+    ensures ({ let aggregate = InvocationSourceAggregateV42 {
+        source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+            .insert(seq![1int], MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int })) };
+        invocation_source_aggregate_complete_v42(aggregate)
+            && invocation_source_aggregate_install_v42(source, destination, aggregate)
+                == (InvocationSourceByteStateV36 {
+                    machine: MemoryStateV30 {
+                        values: source.machine.values.update(destination, MemoryValueV30::Undefined),
+                        ..source.machine },
+                    logical: InvocationSourceLogicalV38 {
+                        aggregates: source.logical.aggregates.insert(destination, aggregate),
+                        ..invocation_source_logical_write_v38(source.logical, destination) }, ..source }) }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_complete_v42);
+    hide(invocation_source_aggregate_install_v42);
+    hide(invocation_source_logical_write_v38);
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    let aggregate = InvocationSourceAggregateV42 {
+        source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+            .insert(seq![1int], MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int })) };
+    assert(invocation_source_aggregate_well_formed_v42(aggregate)
+        && invocation_source_aggregate_complete_v42(aggregate)) by {
+        invocation_checked_add_aggregate_complete_v260(source_type, left, right);
+    }
+    assert(aggregate.execution_lease.is_none());
+    invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);
+}
+
 proof fn invocation_context_issue_fresh_preserves_frame_v259(
     source: InvocationSourceByteStateV36, target: MemoryStateV30,
     execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
@@ -145,9 +277,18 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
     assert(source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
         && 0 <= issue.destination < source.machine.values.len()
         && !source.objects.contains_key(issue.destination)
-        && invocation_source_context_shape_v161(issue.source_type)) by {
+        && invocation_source_context_shape_v161(issue.source_type)
+        && source.machine.frames.execution.is_some()
+        && byte_execution_well_formed_v37(source.machine.frames.execution.unwrap())
+        && target.valid && byte_state_memory_well_formed_v30(target)
+        && target.frames.active.len() > 0 && target.frames.execution.is_some()
+        && byte_execution_well_formed_v37(target.frames.execution.unwrap())
+        && 0 <= destination < target.values.len()
+        && byte_execution_next_epoch_v178(target, destination, 0, site) == Some(0)) by {
         reveal(invocation_context_issue_fresh_enabled_v211);
     }
+    invocation_source_context_issue_frame_v262(source, issue);
+    invocation_target_context_issue_frame_v262(target, site, destination);
     let aggregate = InvocationSourceAggregateV42 {
         source_type: issue.source_type, execution_lease: None,
         leaves: Map::empty()
@@ -156,16 +297,6 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
             .insert(seq![2int], MemoryValueV30::Unit)
             .insert(seq![3int], MemoryValueV30::Unit)
             .insert(seq![4int], MemoryValueV30::Unit) };
-    assert(invocation_source_aggregate_well_formed_v42(aggregate)) by {
-        invocation_context_marker_aggregate_well_formed_v260(issue.source_type);
-    }
-    assert(aggregate.execution_lease.is_none());
-    invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);
-    assert(invocation_source_context_issue_v161(source, issue).source
-        == invocation_source_aggregate_install_v42(source, issue.destination, aggregate)) by {
-        reveal(invocation_context_issue_fresh_enabled_v211);
-        reveal(invocation_source_context_issue_v161);
-    }
     invocation_context_issue_fresh_preserves_current_map_v238(
         source, target, execution_map, issue, site, destination);
     invocation_context_issue_fresh_has_exact_updates_v211(
@@ -198,10 +329,7 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
         ..invocation_source_logical_write_v38(source.logical, issue.destination) }));
     assert(next.target == (MemoryStateV30 {
         values: target.values.update(destination, next.target.values[destination]),
-        ..target })) by {
-        reveal(invocation_context_issue_fresh_enabled_v211);
-        reveal(byte_execution_step_v178);
-    }
+        ..target }));
 }
 
 // This is an actual operation preservation rule, not an assumed equality of
@@ -346,6 +474,7 @@ proof fn invocation_source_checked_add_reconstruction_step_v259(
     hide(invocation_source_checked_pair_v44);
     hide(invocation_source_checked_v42);
     hide(invocation_source_logical_write_v38);
+    invocation_source_checked_add_install_frame_v262(source, destination, source_type, left, right);
     invocation_source_checked_add_replays_install_v260(source, destination, source_type,
         left_operand, right_operand, left, right, root, instance, little_endian);
     let aggregate = InvocationSourceAggregateV42 {
@@ -354,12 +483,6 @@ proof fn invocation_source_checked_add_reconstruction_step_v259(
             .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
             .insert(seq![1int], MemoryValueV30::Scalar(
                 if left + right >= 4294967296 { 1int } else { 0int })) };
-    assert(invocation_source_aggregate_well_formed_v42(aggregate)
-        && invocation_source_aggregate_complete_v42(aggregate)) by {
-        invocation_checked_add_aggregate_complete_v260(source_type, left, right);
-    }
-    assert(aggregate.execution_lease.is_none());
-    invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);
     let installed = invocation_source_aggregate_install_v42(source, destination, aggregate);
     assert(installed == (InvocationSourceByteStateV36 {
         machine: MemoryStateV30 {
