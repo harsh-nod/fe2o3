@@ -44,6 +44,14 @@ struct Established {
     next_sequence: u64,
 }
 
+impl Established {
+    fn following_sequence(&self) -> Result<u64> {
+        self.next_sequence
+            .checked_add(1)
+            .ok_or_else(|| Resource::Arithmetic.into())
+    }
+}
+
 enum ConnectionState {
     Fresh,
     Established(Established),
@@ -51,16 +59,21 @@ enum ConnectionState {
 }
 
 impl ConnectionState {
-    fn begin_handshake(&mut self) -> Result<()> {
-        if !matches!(self, Self::Fresh) {
+    fn begin_handshake(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        let entry = b.charge_work(ENTRY);
+        let previous = std::mem::replace(self, Self::Failed);
+        entry?;
+        if !matches!(previous, Self::Fresh) {
             return Err(Error::rejected("root control handshake already attempted"));
         }
-        *self = Self::Failed;
         Ok(())
     }
 
-    fn take_established(&mut self) -> Result<Established> {
-        match std::mem::replace(self, Self::Failed) {
+    fn take_established(&mut self, b: &mut Budget<'_>) -> Result<Established> {
+        let entry = b.charge_work(ENTRY);
+        let previous = std::mem::replace(self, Self::Failed);
+        entry?;
+        match previous {
             Self::Established(session) => Ok(session),
             Self::Fresh | Self::Failed => Err(Error::rejected("root control session unavailable")),
         }
@@ -112,12 +125,12 @@ impl<'work> RootEndpoint<'work> {
         deadline: Instant,
         b: &mut Budget<'_>,
     ) -> Result<()> {
-        self.begin_handshake()?;
+        self.begin_handshake(b)?;
         let floor = Self::STORAGE
             .checked_add(a.retained_storage())
             .and_then(|n| n.checked_add(manifest.retained_storage()))
             .ok_or(Resource::Arithmetic)?;
-        let established = b.with_prepaid_scope(floor, ENTRY, GATE_WORK, GATE_FRAME, |b| {
+        let established = b.with_prepaid_scope(floor, 0, GATE_WORK - ENTRY, GATE_FRAME, |b| {
             a.validate_continuity(b)?;
             readiness::check_binding(a, manifest, b)?;
             let mut attempts = 0;
@@ -165,13 +178,13 @@ impl<'work> RootEndpoint<'work> {
         Ok(())
     }
 
-    fn begin_handshake(&self) -> Result<()> {
+    fn begin_handshake(&self, b: &mut Budget<'_>) -> Result<()> {
         let mut state = self
             .state
             .try_borrow_mut()
             .map_err(|_| Error::rejected("root control reentry"))?;
         // Refusal or unwind cannot reopen an unauthenticated startup interval.
-        state.begin_handshake()
+        state.begin_handshake(b)
     }
 
     /// Private authenticated exchange only; decoding its result does not grant
@@ -183,6 +196,7 @@ impl<'work> RootEndpoint<'work> {
     pub(super) fn exchange(
         &self,
         a: &Admission<'_>,
+        manifest: &Manifest,
         kind: Kind,
         payload: &[u8],
         b: &mut Budget<'_>,
@@ -191,18 +205,26 @@ impl<'work> RootEndpoint<'work> {
             .state
             .try_borrow_mut()
             .map_err(|_| Error::rejected("root control reentry"))?;
-        let mut session = state.take_established()?;
+        let mut session = state.take_established(b)?;
         let floor = Self::STORAGE
             .checked_add(a.retained_storage())
+            .and_then(|n| n.checked_add(manifest.retained_storage()))
             .and_then(|n| n.checked_add(payload.len().min(BYTES)))
             .ok_or(Resource::Arithmetic)?;
-        let next = session
-            .next_sequence
-            .checked_add(1)
-            .ok_or(Resource::Arithmetic)?;
-        let result = b.with_prepaid_scope(floor, ENTRY, GATE_WORK, GATE_FRAME, |b| {
+        let next = session.following_sequence()?;
+        let result = b.with_prepaid_scope(floor, 0, GATE_WORK - ENTRY, GATE_FRAME, |b| {
             self.revalidate(session.deadline, b)?;
             a.validate_continuity(b)?;
+            readiness::check_binding(a, manifest, b)?;
+            if !session
+                .gate
+                .matches_launch(&a.policy, manifest, b)
+                .map_err(codec_error)?
+            {
+                return Err(Error::rejected(
+                    "root control exchange changed original admission",
+                ));
+            }
             let (request, charge) = session
                 .gate
                 .request_on_same_connection(session.next_sequence, kind, payload, b)

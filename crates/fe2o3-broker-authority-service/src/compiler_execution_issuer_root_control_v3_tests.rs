@@ -1,34 +1,142 @@
 //! Default tests exercise endpoint prerequisites and accounting, never Admission.
 use super::*;
 
+// An inert record/state fixture. It constructs neither endpoint nor Admission.
+fn established() -> Established {
+    use sha2::Digest;
+    let mut bytes = [0; BYTES];
+    bytes[..8].copy_from_slice(b"F2O3CRC3");
+    bytes[8..10].copy_from_slice(&3u16.to_le_bytes());
+    bytes[10..12].copy_from_slice(&1u16.to_le_bytes());
+    bytes[12..20].copy_from_slice(&(BYTES as u64).to_le_bytes());
+    bytes[24..152].fill(1);
+    bytes[152..160].copy_from_slice(&1u64.to_le_bytes());
+    let mut digest = sha2::Sha256::new();
+    digest.update(b"FE2O3/ROOT-ISSUER-CONTROL/V3\0");
+    digest.update(&bytes[..BYTES - 32]);
+    bytes[BYTES - 32..].copy_from_slice(&digest.finalize());
+    let mut work = Work::new(usize::MAX);
+    let mut b = Budget::new(&mut work, 1_000_000);
+    b.reserve_storage(BYTES).unwrap();
+    let (gate, _) = Record::decode(&bytes, &mut b).unwrap();
+    Established {
+        gate,
+        deadline: Instant::now() + TIMEOUT,
+        attempts: 73,
+        next_sequence: 9,
+    }
+}
+
+#[test]
+fn established_refusal_or_unwind_consumes_state_without_renewing_its_limits() {
+    let mut work = Work::new(usize::MAX);
+    let mut b = Budget::new(&mut work, 1_000_000);
+    let mut state = ConnectionState::Established(established());
+    assert!(state.begin_handshake(&mut b).is_err());
+    assert!(matches!(state, ConnectionState::Failed));
+
+    let value = established();
+    let deadline = value.deadline;
+    let mut state = ConnectionState::Established(value);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let session = state.take_established(&mut b).unwrap();
+        assert_eq!(session.deadline, deadline);
+        assert_eq!((session.attempts, session.next_sequence), (73, 9));
+        assert_eq!(session.following_sequence().unwrap(), 10);
+        panic!("injected exchange failure after state consumption");
+    }));
+    assert!(result.is_err());
+    assert!(matches!(state, ConnectionState::Failed));
+    assert!(state.take_established(&mut b).is_err());
+    assert!(state.begin_handshake(&mut b).is_err());
+    assert_eq!(b.work(), 4 * ENTRY);
+}
+
+#[test]
+fn exhausted_sequence_refuses_after_poisoning_without_wrapping() {
+    let mut work = Work::new(2 * ENTRY);
+    let mut b = Budget::new(&mut work, 1_000_000);
+    let mut value = established();
+    value.next_sequence = u64::MAX;
+    let mut state = ConnectionState::Established(value);
+    let session = state.take_established(&mut b).unwrap();
+    assert_eq!(
+        session.following_sequence().unwrap_err().resource(),
+        Some(Resource::Arithmetic)
+    );
+    assert_eq!(session.next_sequence, u64::MAX);
+    assert!(matches!(state, ConnectionState::Failed));
+    assert!(state.take_established(&mut b).is_err());
+    assert_eq!(b.work(), 2 * ENTRY);
+}
+
 #[test]
 fn handshake_and_exchange_refusals_cannot_reset_the_connection() {
+    let mut work = Work::new(5 * ENTRY);
+    let mut b = Budget::new(&mut work, 1_000_000);
     let mut state = ConnectionState::Fresh;
-    state.begin_handshake().unwrap();
+    state.begin_handshake(&mut b).unwrap();
     assert!(matches!(state, ConnectionState::Failed));
-    assert!(state.begin_handshake().is_err());
-    assert!(state.take_established().is_err());
+    assert!(state.begin_handshake(&mut b).is_err());
+    assert!(state.take_established(&mut b).is_err());
     assert!(matches!(state, ConnectionState::Failed));
 
     // Calling an exchange before the gate consumes the unauthenticated state.
     // This is an inert state test, not successful endpoint/Admission custody.
     let mut state = ConnectionState::Fresh;
-    assert!(state.take_established().is_err());
-    assert!(state.begin_handshake().is_err());
+    assert!(state.take_established(&mut b).is_err());
+    assert!(state.begin_handshake(&mut b).is_err());
     assert!(matches!(state, ConnectionState::Failed));
+    assert_eq!(b.work(), 5 * ENTRY);
 }
 
 #[test]
 fn failed_handshake_unwind_keeps_the_same_terminal_state() {
+    let mut work = Work::new(3 * ENTRY);
+    let mut b = Budget::new(&mut work, 1_000_000);
     let mut state = ConnectionState::Fresh;
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        state.begin_handshake().unwrap();
+        state.begin_handshake(&mut b).unwrap();
         panic!("injected handshake failure after one-use transition");
     }));
     assert!(result.is_err());
     assert!(matches!(state, ConnectionState::Failed));
-    assert!(state.begin_handshake().is_err());
-    assert!(state.take_established().is_err());
+    assert!(state.begin_handshake(&mut b).is_err());
+    assert!(state.take_established(&mut b).is_err());
+    assert_eq!(b.work(), 3 * ENTRY);
+}
+
+#[test]
+fn unpaid_connection_entry_still_poisons_without_refunding_prior_work() {
+    for limit in [0, ENTRY - 1, ENTRY] {
+        for handshake in [false, true] {
+            let mut work = Work::new(17 + limit);
+            let mut b = Budget::new(&mut work, 100);
+            b.charge_work(17).unwrap();
+            b.reserve_storage(23).unwrap();
+            let account = b.work_ledger_identity_v1();
+            let mut state = if handshake {
+                ConnectionState::Fresh
+            } else {
+                ConnectionState::Established(established())
+            };
+            let result = if handshake {
+                state.begin_handshake(&mut b)
+            } else {
+                state.take_established(&mut b).map(drop)
+            };
+            if limit < ENTRY {
+                assert!(result.unwrap_err().resource().is_some());
+                assert_eq!(b.work(), 17);
+            } else {
+                result.unwrap();
+                assert_eq!(b.work(), 17 + ENTRY);
+            }
+            assert!(matches!(state, ConnectionState::Failed));
+            assert_eq!(b.storage(), 23);
+            assert!(account == b.work_ledger_identity_v1());
+        }
+    }
 }
 
 fn pair(kind: net::SocketType, flags: net::SocketFlags) -> (OwnedFd, OwnedFd) {
