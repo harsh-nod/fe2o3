@@ -314,7 +314,7 @@ mod tests {
             }
             .into(),
             worker_executable: ContentIdentityV1::from_parts([42; 32], 4096),
-            target: DeviceTargetV1::parse("amdgcn-amd-amdhsa--gfx942").unwrap(),
+            target: DeviceTargetV1::parse("gfx942:xnack-").unwrap(),
             code_object_version: CodeObjectVersion::V6,
             options: WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true),
             compiler_envelope: WorkerCompilerFfiEnvelopeIdentityV2::from_test_bytes([43; 32]),
