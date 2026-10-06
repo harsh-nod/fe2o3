@@ -20,6 +20,8 @@ use std::{
 };
 
 mod decode;
+mod resources;
+pub use resources::NativeConditionalSourcePacketDecodeQuoteV2;
 #[cfg(test)]
 mod tests;
 mod wire;

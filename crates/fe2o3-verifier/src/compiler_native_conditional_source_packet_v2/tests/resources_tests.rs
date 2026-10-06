@@ -2,6 +2,38 @@ use super::*;
 use std::{cell::Cell, rc::Rc};
 
 #[test]
+fn packet_extent_quote_covers_actual_callback_and_truncated_framing() {
+    let bytes = encoded();
+    for end in [0, 17, bytes.len() / 2, bytes.len() - 1, bytes.len()] {
+        let input = &bytes[..end];
+        let quote = NativeConditionalSourcePacketDecodeQuoteV2::for_length(input.len()).unwrap();
+        let mut work = Work::new(17 + quote.work());
+        let mut budget = Budget::new(&mut work, FLOOR + quote.callback_storage() + 7);
+        budget.charge_work(17).unwrap();
+        budget.reserve_storage(FLOOR).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let called = Cell::new(false);
+        let result =
+            with_decoded_native_conditional_source_packet_v2(input, &mut budget, |view, b| {
+                called.set(true);
+                assert_eq!(view.roots.len(), 2);
+                assert!(b.storage() - FLOOR <= quote.callback_storage());
+                b.reserve_storage(7).unwrap();
+            });
+        assert_eq!(result.is_ok(), end == bytes.len());
+        assert_eq!(called.get(), result.is_ok());
+        assert_eq!(budget.storage(), FLOOR + if called.get() { 7 } else { 0 });
+        assert!(budget.work() - 17 <= quote.work());
+        assert!(budget.peak_storage() <= FLOOR + quote.callback_storage() + 7);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert!(!matches!(result, Err(E::Resource(_))));
+    }
+    assert!(NativeConditionalSourcePacketDecodeQuoteV2::for_length(usize::MAX).is_err());
+    let maximum = NativeConditionalSourcePacketDecodeQuoteV2::for_length(MAX_BYTES).unwrap();
+    assert!(maximum.callback_storage() < 256 * 1024 * 1024);
+}
+
+#[test]
 fn exact_and_one_short_work_storage_preserve_original_floor() {
     let bytes = encoded();
     for decoding in [false, true] {
