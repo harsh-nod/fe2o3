@@ -661,9 +661,9 @@ impl<'work> RootRuntimeTraceV1<'work> {
                 this.inflight = None;
             }
             this.retired = this.root_completion.is_some() && this.tasks.iter().all(Option::is_none);
-            if this.retired {
-                let _ = this.root_mut().cancel();
-            }
+            // A successful terminal wait does not authorize releasing the
+            // original slot's late publication owners. Retain them until the
+            // enclosing completion sends, cancels, or explicitly cleans up.
             Ok(event)
         })
     }
@@ -688,7 +688,9 @@ impl<'work> RootRuntimeTraceV1<'work> {
     }
 
     /// Report the original cleanup mechanism only AFTER every trace obligation
-    /// has a consuming terminal wait. Pending/domain quarantine remain distinct.
+    /// has a consuming terminal wait. This may retire actual late publication
+    /// custody; finish its authenticated completion use before calling. Pending
+    /// domain quarantine remains distinct from trace retirement.
     pub fn cleanup_after_retirement(&mut self) -> Result<super::Poll> {
         if !self.retired {
             return Err(Error::State("runtime trace is not terminally retired"));
