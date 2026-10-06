@@ -462,7 +462,7 @@ fn actual_protocol_success_io_error_and_panic_restore_the_original_ledger() {
 #[test]
 fn preflight_refusal_drops_view_and_preserves_original_account() {
     let files = fixture::Files::new(
-        &fixture::bytes(&fixture::storage_module(true)),
+        &fixture::bytes(&fixture::union_storage_module(true)),
         &fixture::storage_request(),
     );
     let mut work = Work::new(fixture::BOUND);
