@@ -49,7 +49,9 @@ use crate::build_config::{
 use crate::capability_broker;
 use crate::compiler_execution_boundary::{
     ParentCompilerExecutionReadinessCustodyV1, PreparedCompilerExecutionBoundaryV1,
-    admit_compiler_execution_receipt_transport, validate_compiler_execution_receipt_carriage,
+    admit_compiler_execution_receipt_transport,
+    native::ParentCompilerExecutionReadinessCustodyV3 as NativeReadiness,
+    validate_compiler_execution_receipt_carriage,
 };
 use crate::inert_rustc_invocation_capture::{
     InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
@@ -746,13 +748,16 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 )
             })?;
             let capabilities = compiler_capabilities.as_ref().unwrap();
-            capabilities.contact_native_root(parent)?;
-            // Present protocol can return only terminal enforcement refusal;
-            // a future consuming root launch must not fall through to local spawn.
-            return Err(BindingWrapperError::CompilerExecutionBoundary {
-                stage: "original-root compiler intake",
-                primary: "RuntimeEnforcementUnavailable".to_owned(),
-                cleanup: None,
+            return capabilities.with_completed_native_root(parent, |_readiness| {
+                // The authenticated root origin can enter the existing V5
+                // pipeline, but this wrapper's recipe/approval/terminal
+                // continuation still requires joined qualification and wiring.
+                // Never fall through to local spawn or fabricate a Child.
+                Err(BindingWrapperError::CompilerExecutionBoundary {
+                    stage: "original-root artifact continuation",
+                    primary: "native parent artifact continuation is not activated".to_owned(),
+                    cleanup: None,
+                })
             });
         }
         let mut child = match command.spawn() {
@@ -1498,10 +1503,12 @@ fn native_intake_account()
     let work = profile_work
         .checked_add(root_intake::WORK)
         .and_then(|n| n.checked_add(root_intake::CAPTURE_WORK))
+        .and_then(|n| n.checked_add(NativeReadiness::ROOT_ADMISSION_WORK))
         .ok_or_else(overflow)?;
     let storage = profile_storage
         .checked_add(root_intake::SCRATCH)
         .and_then(|n| n.checked_add(root_intake::CAPTURE_SCRATCH))
+        .and_then(|n| n.checked_add(NativeReadiness::ROOT_ADMISSION_SCRATCH))
         .and_then(|n| n.checked_add(root_intake::PARENT_MAX_STORAGE))
         .and_then(|n| n.checked_add(root_intake::OUTPUT_OWNER_STORAGE))
         .and_then(|n| n.checked_add(size_of::<capability_broker::BrokeredInvocationAuthorityV1>()))
@@ -1655,10 +1662,13 @@ impl CompilerCapabilities {
             .map_err(|e| BindingWrapperError::ChildCapability(e.to_string()))
     }
 
-    fn contact_native_root(
+    fn with_completed_native_root<R>(
         &self,
         parent: &ParentRustcInvocationCustody,
-    ) -> Result<(), BindingWrapperError> {
+        operation: impl for<'b, 'work> FnOnce(
+            NativeReadiness<'b, 'work>,
+        ) -> Result<R, BindingWrapperError>,
+    ) -> Result<R, BindingWrapperError> {
         let profile = self.compiler_execution_profile_v3.as_ref().ok_or_else(|| {
             BindingWrapperError::CapabilityBroker("missing authenticated native profile".to_owned())
         })?;
@@ -1672,20 +1682,25 @@ impl CompilerCapabilities {
                 "native parent capture was not prepaid".to_owned(),
             ));
         }
-        profile
-            .with_profile_budget(|profile, b| {
-                parent.contact_original_root(profile, authority, &self.artifact, b)
-            })
-            .map(|_| ())
-            .map_err(
-                |error: crate::protected_compiler_handoff_v3::root_intake::Error| {
-                    BindingWrapperError::CompilerExecutionBoundary {
-                        stage: "authenticated original-root intake",
-                        primary: error.to_string(),
-                        cleanup: None,
-                    }
-                },
-            )
+        profile.with_profile_budget(|profile, b| {
+            let completed = parent
+                .contact_original_root(profile, authority, &self.artifact, b)
+                .map_err(|error| BindingWrapperError::CompilerExecutionBoundary {
+                    stage: "authenticated original-root intake",
+                    primary: error.to_string(),
+                    cleanup: None,
+                })?;
+            let readiness = NativeReadiness::from_original_root(completed).map_err(|error| {
+                BindingWrapperError::CompilerExecutionBoundary {
+                    stage: "original-root publication custody",
+                    primary: error.to_string(),
+                    cleanup: None,
+                }
+            })?;
+            // No owner or budget borrow may escape this original funded callback.
+            // Artifact persistence is outside the transport's refundable scopes.
+            operation(readiness)
+        })
     }
 
     fn take_invocation_authority(

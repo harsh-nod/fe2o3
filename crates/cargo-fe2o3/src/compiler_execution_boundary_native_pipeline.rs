@@ -107,6 +107,10 @@ impl<'a, 'b, 'w> ParentPreparedConditionalArtifact<'a, 'b, 'w> {
     ) -> Result<ParentDurableConditionalArtifact<'a, 'b, 'w>> {
         self.revalidate()?;
         self.custody
+            .readiness
+            .origin
+            .require_output(output_dir, self.custody.readiness.budget)?;
+        self.custody
             .policy_roster
             .require_expected_policies(policy.roots, self.custody.readiness.budget)?;
         let retired = self
@@ -251,7 +255,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
         recipe: PreparedNativeProductionBuildConfig,
         approval: Approval,
     ) -> Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>> {
-        super::require_runtime_enforcement(self.budget)?;
+        self.require_runtime_enforcement(invocation)?;
         self.require_completion()?;
         let (worker, providers, options, output, limits, configuration_storage) =
             recipe.into_worker_parts(self.budget)?;
@@ -388,6 +392,7 @@ fn check_pair(
         .with_prepaid_scope(floor, 0, 0, FRAME, |b| {
             let (subject, storage) = Subject::from_publication(receipt, handoff, b)?;
             b.reserve_storage(storage.retained_storage())?;
+            readiness.origin.require_subject(&subject, b)?;
             validate_receipt(&readiness.profile, &subject, carriage, b)?;
             Ok(())
         })

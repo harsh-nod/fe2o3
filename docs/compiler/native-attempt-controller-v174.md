@@ -93,8 +93,11 @@ successful retirement. The conservative logical storage ceiling is not an RSS
 or elapsed-time guarantee.
 
 This request wiring is an unqualified integration candidate, not default
-production activation. Exact startup/cleanup funding tests, authenticated
-parent-side terminal and exact publication custody, ordinary failing-compiler
+production activation. The startup/cleanup quota composition is implemented but
+awaits joined qualification. Authenticated parent-side completion now has a
+candidate same-account bridge to the existing V5 pipeline, described in
+[native-root-parent-completion-v176.md](native-root-parent-completion-v176.md).
+The wrapper's recipe/approval/finalization callback, ordinary failing-compiler
 exit handling, live-sibling exit-group completion and joined native qualification
 remain required. The default selection has not changed. Actual device attachment
 and the joined positive route need an admitted privileged qualification lane.
