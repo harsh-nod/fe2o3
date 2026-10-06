@@ -52,6 +52,9 @@ pub struct PreparedConditionalFirstBuildWorkerV2 {
     engine: Engine,
     storage: Storage,
     account: AccountMode,
+    // The shared engine's quote excludes caller spare capacities. Keep this
+    // original-mode overlap through moves into its provider/options storage.
+    configuration_storage: usize,
 }
 type Prepared = PreparedConditionalFirstBuildWorkerV2;
 impl Prepared {
@@ -299,17 +302,16 @@ fn preflight_using(
     b: &mut Budget<'_>,
     account: AccountMode,
 ) -> Result<(Prepared, Storage), Error> {
-    let inputs = if account.is_original() {
-        token
-            .storage()
-            .retained_storage()
-            .checked_add(conditional_worker_configuration_storage_v2(
-                worker, &providers, &options, b,
-            )?)
-            .ok_or(Resource::Arithmetic)?
+    let configuration_storage = if account.is_original() {
+        conditional_worker_configuration_storage_v2(worker, &providers, &options, b)?
     } else {
         0
     };
+    let inputs = token
+        .storage()
+        .retained_storage()
+        .checked_add(configuration_storage)
+        .ok_or(Resource::Arithmetic)?;
     account.run(b, inputs, |b| {
         b.with_prepaid_scope(
             token.storage().retained_storage(),
@@ -343,6 +345,7 @@ fn preflight_using(
                     quote
                         .preflight_storage
                         .checked_add(size_of::<Prepared>())
+                        .and_then(|n| n.checked_add(configuration_storage))
                         .ok_or(Resource::Arithmetic)?,
                 );
                 b.reserve_storage(storage.0)?;
@@ -356,6 +359,7 @@ fn preflight_using(
                         engine,
                         storage,
                         account,
+                        configuration_storage,
                     },
                     storage,
                 ))
@@ -412,12 +416,14 @@ pub fn execute_preflighted_conditional_reproducible_first_build_worker_v2(
                 limits,
                 quote,
                 engine,
+                configuration_storage,
                 ..
             } = preflight;
             let storage = Storage(
                 quote
                     .returned_retained_storage()
                     .checked_add(size_of::<Evidence>())
+                    .and_then(|n| n.checked_add(configuration_storage))
                     .ok_or(Resource::Arithmetic)?,
             );
             let scratch = quote
