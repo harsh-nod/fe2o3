@@ -13,7 +13,8 @@ use fe2o3_compiler_ffi::{
     inert_semantic_compiler_module_handoff_decode_work_v5 as decode_work,
 };
 use fe2o3_verifier::{
-    NativeConditionalRootPolicyV2,
+    NativeConditionalRootPolicyV2, native_conditional_root_policy_input_storage_v2,
+    recover_compiler_conditional_native_semantic_handoff_in_original_account_v5 as recover_source_original,
     recover_compiler_conditional_native_semantic_handoff_v5 as recover_source,
 };
 
@@ -216,13 +217,46 @@ pub fn prepare_conditional_worker_hsaco_publication_v5(
     transcript: Transcript,
     b: &mut Budget<'_>,
 ) -> PublicResult<Prepared> {
+    prepare_using(producer, finalized, transcript, b, false)
+}
+
+/// Same preparation on an original owned account. Full actual artifact and
+/// transcript owners are duplicated inside an additional <=256 MiB window.
+/// The original account and ordinary entry's strict cap stay unchanged.
+pub fn prepare_conditional_worker_hsaco_publication_in_original_account_v5(
+    producer: &ProducerIdentity,
+    finalized: Artifact,
+    transcript: Transcript,
+    b: &mut Budget<'_>,
+) -> PublicResult<Prepared> {
+    (|| {
+        let inputs = add(
+            finalized.required_retained_storage(),
+            transcript.storage().retained_storage(),
+        )?;
+        original_terminal(b, inputs, |b| {
+            prepare_using(producer, finalized, transcript, b, true).map_err(|e| e.0)
+        })
+    })()
+    .map_err(ConditionalWorkerHsacoPublicationErrorV5)
+}
+
+fn prepare_using(
+    producer: &ProducerIdentity,
+    finalized: Artifact,
+    transcript: Transcript,
+    b: &mut Budget<'_>,
+    original: bool,
+) -> PublicResult<Prepared> {
     (|| {
         let floor = add(
             finalized.required_retained_storage(),
             transcript.storage().retained_storage(),
         )?;
         b.with_prepaid_scope(floor, 8, ENTRY_WORK, FRAME, |b| {
-            check_storage_cap(b)?;
+            if !original {
+                check_storage_cap(b)?;
+            }
             require_custody(finalized.source().custody(), Custody::ConsumedPublication)?;
             precheck(&finalized, &transcript)?;
             let intent = derive_intent(
@@ -260,7 +294,39 @@ pub fn persist_prepared_conditional_worker_hsaco_publication_v5(
     policy: ConditionalWorkerRecoveryPolicyV5<'_>,
     b: &mut Budget<'_>,
 ) -> PublicResult<Recovered> {
-    terminal(b, prepared.required_retained_storage(), |b| {
+    persist_using(output_dir, producer, prepared, policy, b, false)
+}
+
+/// Same journal, strict source replay and fresh/recovered comparison on the
+/// original owned account. The complete prepared owner and actual policy views
+/// are counted again in a nonrefunding <=256 MiB window. A committed record is
+/// not undone by later refusal, and partial terminal reservations are retained.
+pub fn persist_prepared_conditional_worker_hsaco_publication_in_original_account_v5(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    prepared: Prepared,
+    policy: ConditionalWorkerRecoveryPolicyV5<'_>,
+    b: &mut Budget<'_>,
+) -> PublicResult<Recovered> {
+    (|| {
+        let policies = native_conditional_root_policy_input_storage_v2(policy.roots, b)?;
+        let inputs = add(prepared.required_retained_storage(), policies)?;
+        original_terminal(b, inputs, |b| {
+            persist_using(output_dir, producer, prepared, policy, b, true).map_err(|e| e.0)
+        })
+    })()
+    .map_err(ConditionalWorkerHsacoPublicationErrorV5)
+}
+
+fn persist_using(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    prepared: Prepared,
+    policy: ConditionalWorkerRecoveryPolicyV5<'_>,
+    b: &mut Budget<'_>,
+    original: bool,
+) -> PublicResult<Recovered> {
+    terminal_using(b, prepared.required_retained_storage(), original, |b| {
         if producer_package_identity_v1(producer) != prepared.intent.plan.scope().package() {
             return Err(Error::Mismatch("conditional producer"));
         }
@@ -292,7 +358,8 @@ pub fn persist_prepared_conditional_worker_hsaco_publication_v5(
         )
         .map_err(|e| failure("conditional persist", e))?;
         let expected_record = stored.record();
-        let (recovered, storage) = validate_recovered(producer, attempt, stored, policy, b)?;
+        let (recovered, storage) =
+            validate_recovered_using(producer, attempt, stored, policy, b, original)?;
         compare_fresh(&prepared, expected_record, &recovered, b)?;
         drop(prepared);
         Ok((recovered, storage))
@@ -340,12 +407,44 @@ fn terminal<'w, T>(
     floor: usize,
     run: impl FnOnce(&mut Budget<'w>) -> Result<(T, usize)>,
 ) -> PublicResult<T> {
+    terminal_using(b, floor, false, run)
+}
+
+fn original_terminal<'w, T>(
+    b: &mut Budget<'w>,
+    inputs: usize,
+    run: impl FnOnce(&mut Budget<'w>) -> Result<T>,
+) -> Result<T> {
+    let floor = b.storage();
+    let overlap = add(inputs, Budget::STORAGE_WINDOW_SCRATCH_V1)?;
+    b.with_additional_storage_window_v1(MAX_INERT_REFINED_FORWARDING_STORAGE_V1, |b| {
+        if floor < inputs {
+            return Err(Resource::Accounting.into());
+        }
+        b.reserve_storage(overlap)?;
+        let result = run(b)?;
+        if b.storage() != add(floor, overlap)? {
+            return Err(Resource::Accounting.into());
+        }
+        b.release_storage(overlap)?;
+        Ok(result)
+    })
+}
+
+fn terminal_using<'w, T>(
+    b: &mut Budget<'w>,
+    floor: usize,
+    original_account: bool,
+    run: impl FnOnce(&mut Budget<'w>) -> Result<(T, usize)>,
+) -> PublicResult<T> {
     (|| {
         let original = b.storage();
         let address = b as *const Budget<'_> as usize;
         let ledger = b.work_ledger_identity_v1();
         b.charge_work(ENTRY_WORK)?;
-        check_storage_cap(b)?;
+        if !original_account {
+            check_storage_cap(b)?;
+        }
         if original < floor {
             return Err(Resource::Accounting.into());
         }
@@ -372,6 +471,17 @@ fn validate_recovered(
     policy: ConditionalWorkerRecoveryPolicyV5<'_>,
     b: &mut Budget<'_>,
 ) -> Result<(Recovered, usize)> {
+    validate_recovered_using(producer, attempt, stored, policy, b, false)
+}
+
+fn validate_recovered_using(
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    stored: RecoveredWorkerV3PublicationIntentV1,
+    policy: ConditionalWorkerRecoveryPolicyV5<'_>,
+    b: &mut Budget<'_>,
+    original: bool,
+) -> Result<(Recovered, usize)> {
     check_record_inputs(producer, attempt, &stored)?;
     let outcome = stored.outcome();
     let (record, attachments, exact_output) = stored.into_parts();
@@ -385,9 +495,12 @@ fn validate_recovered(
     let outer = Handoff::decode_owned(outer_bytes)
         .map_err(|e| failure("V5 decode", format_args!("{e:?}")))?;
     // Deliberately outside every ordinary restoring scope.
-    let (source, source_storage) =
+    let (source, source_storage) = if original {
+        recover_source_original(outer, policy.roots, policy.history_limits, policy.target, b)
+    } else {
         recover_source(outer, policy.roots, policy.history_limits, policy.target, b)
-            .map_err(|e| failure("conditional source/F", e))?;
+    }
+    .map_err(|e| failure("conditional source/F", e))?;
     b.reserve_storage(source_storage.retained_storage())?;
     let input_storage = transcript_bytes.capacity();
     b.reserve_storage(input_storage)?;

@@ -34,7 +34,7 @@ const EFFECT_KEY_STORAGE: usize = 1024;
 
 /// Logical full borrowed policy overlap using the same conservative tree-node
 /// model as reconstruction. This is accounting, never provenance or admission.
-pub(crate) fn policy_input_storage(
+pub fn native_conditional_root_policy_input_storage_v2(
     roots: &[NativeConditionalRootPolicyV2<'_>],
     budget: &mut Budget<'_>,
 ) -> Result<usize, Resource> {

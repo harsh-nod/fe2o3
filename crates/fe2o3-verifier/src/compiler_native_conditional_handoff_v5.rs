@@ -228,7 +228,7 @@ pub fn recover_compiler_conditional_native_semantic_handoff_in_original_account_
     profile: Profile,
     budget: &mut Budget<'_>,
 ) -> Result<Output, Error> {
-    let policy = crate::compiler_native_conditional_policy_roster_v1::policy_input_storage(
+    let policy = crate::compiler_native_conditional_policy_roster_v1::native_conditional_root_policy_input_storage_v2(
         accepted, budget,
     )?;
     let inputs = sum(&[handoff.backing_capacity(), METADATA, policy])?;

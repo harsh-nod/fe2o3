@@ -239,8 +239,10 @@ pub use native_worker_publication::{
     NativeWorkerPublicationIntentV1, NativeWorkerPublicationPlanIdentityV1,
     PreparedConditionalWorkerHsacoPublicationV5, PreparedNativeWorkerHsacoPublicationV1,
     RecoveredConditionalWorkerHsacoPublicationV5, RecoveredNativeWorkerHsacoPublicationV1,
+    persist_prepared_conditional_worker_hsaco_publication_in_original_account_v5,
     persist_prepared_conditional_worker_hsaco_publication_v5,
     persist_prepared_native_worker_hsaco_publication_v1,
+    prepare_conditional_worker_hsaco_publication_in_original_account_v5,
     prepare_conditional_worker_hsaco_publication_v5, prepare_native_worker_hsaco_publication_v1,
     recover_conditional_worker_hsaco_publication_v5, recover_native_worker_hsaco_publication_v1,
 };
