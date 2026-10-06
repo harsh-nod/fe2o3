@@ -3,12 +3,89 @@
 fn multi_tile_owner(second_tile: bool) -> ProductionSemanticSsaOwnerV1 {
     let original = super::super::super::fixtures::tile_parts_repeated_owner();
     let semantic = original.source_semantic();
-    let root = &semantic.functions()[0];
-    let mut functions = semantic.functions().to_vec();
-    let mut callables = semantic.callables().to_vec();
+    let original_count = semantic.functions().len();
+    let added_count = 2 + usize::from(second_tile);
+    let function_count = original_count + added_count;
+    let callables: Vec<_> = (0..function_count)
+        .map(|index| {
+            SemanticCallableDeclV1::defined(SemanticFunctionIdV1::from_index(index as u32))
+        })
+        .chain(semantic.callables()[original_count..].iter().cloned())
+        .collect();
+    // Defined callables are an exact function-indexed prefix. Move the intact
+    // intrinsic suffix and its original call sites before injecting new calls.
+    let mut functions: Vec<_> = semantic
+        .functions()
+        .iter()
+        .map(|prior| {
+            let blocks = prior
+                .blocks()
+                .iter()
+                .map(|block| {
+                    let kind = match block.terminator().kind() {
+                        SemanticTerminatorKindV1::Call(call) => {
+                            let rebuild = |callee| {
+                                SemanticDirectCallV1::new_callable(
+                                    callee,
+                                    call.arguments().to_vec(),
+                                    call.destination().cloned(),
+                                    call.unwind(),
+                                )
+                                .unwrap()
+                            };
+                            assert_eq!(
+                                &rebuild(call.callee()),
+                                call,
+                                "fixture calls have no omitted attachments"
+                            );
+                            let old = call.callee().index() as usize;
+                            let new = if old < original_count {
+                                old
+                            } else {
+                                old + added_count
+                            };
+                            assert_eq!(callables[new], semantic.callables()[old]);
+                            SemanticTerminatorKindV1::Call(rebuild(
+                                SemanticCallableIdV1::from_index(new as u32),
+                            ))
+                        }
+                        kind => kind.clone(),
+                    };
+                    SemanticBasicBlockV1::new(
+                        block.identity(),
+                        block.source(),
+                        block.statements().to_vec(),
+                        SemanticTerminatorV1::new(block.terminator().source(), kind),
+                    )
+                    .unwrap()
+                })
+                .collect();
+            let mut replacement = SemanticFunctionDeclV1::new(
+                prior.identity(),
+                prior.role(),
+                prior.item_definition_identity(),
+                prior.monomorphization_identity(),
+                prior.generic_type_arguments_identity(),
+                prior.const_generic_arguments_identity(),
+                prior.source(),
+                prior.abi().clone(),
+                prior.locals().to_vec(),
+                prior.entry(),
+                blocks,
+            )
+            .unwrap();
+            if let Some(entry) = prior.kernel_entry() {
+                replacement = replacement.with_kernel_entry(entry.clone());
+            } else {
+                assert!(prior.export().is_none());
+            }
+            replacement
+        })
+        .collect();
+    let root = functions[0].clone();
     let mut roots = vec![ROOT];
     let shared = SemanticFunctionIdV1::from_index(functions.len() as u32);
-    let shared_call = SemanticCallableIdV1::from_index(callables.len() as u32);
+    let shared_call = SemanticCallableIdV1::from_index(shared.index());
     // Keep identities ordered after the original 80/100/110/130 functions and
     // before the appended 210/220 roots, without changing any function index.
     functions.push(function(
@@ -18,13 +95,36 @@ fn multi_tile_owner(second_tile: bool) -> ProductionSemanticSsaOwnerV1 {
         vec![local(232, UNIT, SemanticLocalRoleV1::Return)],
         vec![block(233, vec![], SemanticTerminatorKindV1::Return)],
     ));
-    callables.push(SemanticCallableDeclV1::defined(shared));
+    assert_eq!(
+        callables[shared.index() as usize],
+        SemanticCallableDeclV1::defined(shared)
+    );
+    assert_eq!(
+        functions[shared.index() as usize]
+            .abi()
+            .source_output_type(),
+        UNIT
+    );
+    assert_eq!(
+        semantic.types()[UNIT.index() as usize]
+            .layout()
+            .size_bytes(),
+        Some(0)
+    );
+    assert!(matches!(
+        functions[shared.index() as usize]
+            .abi()
+            .return_value()
+            .mode(),
+        SemanticAbiPassModeV1::Ignore
+    ));
     let append_shared_call = |mut blocks: Vec<SemanticBasicBlockV1>| {
         let last = blocks.len() - 1;
         assert!(matches!(
             blocks[last].terminator().kind(),
             SemanticTerminatorKindV1::Return
         ));
+        assert!(blocks[last].statements().is_empty());
         let next = SemanticBlockIdV1::from_index(blocks.len() as u32);
         blocks[last] = block(
             234,
@@ -70,7 +170,10 @@ fn multi_tile_owner(second_tile: bool) -> ProductionSemanticSsaOwnerV1 {
                 root.kernel_entry().unwrap().source_contract(),
             )),
         );
-        callables.push(SemanticCallableDeclV1::defined(id));
+        assert_eq!(
+            callables[id.index() as usize],
+            SemanticCallableDeclV1::defined(id)
+        );
         roots.push(id);
     };
     if second_tile {
@@ -80,6 +183,11 @@ fn multi_tile_owner(second_tile: bool) -> ProductionSemanticSsaOwnerV1 {
         220,
         b"scalar_root_v260",
         append_shared_call(vec![block(221, vec![], SemanticTerminatorKindV1::Return)]),
+    );
+    assert_eq!(functions.len(), function_count);
+    assert_eq!(
+        &callables[function_count..],
+        &semantic.callables()[original_count..]
     );
     let admitted = InertSemanticMirRequestV1::new_with_callables(
         semantic.target(),
