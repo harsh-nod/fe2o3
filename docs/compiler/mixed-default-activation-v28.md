@@ -129,8 +129,12 @@ not a constant-time or linear bound on those analyses.
 
 All original roots remain in one module. Scalar roots have no tile-layout or
 tile-launch requirement, and an all-scalar module has an identity expansion.
-Shared scalar helpers remain shared. Aliased tile entry functions must agree
-on layout and launch geometry. A tile-bearing non-root helper currently refuses
+The source importer retains a common scalar helper's original body identity
+and expands its call instances into each root CFG, with per-root source
+correspondence; this does not imply a standalone shared helper in neutral KIR.
+The expansion preserves unselected functions already present in that module.
+Aliased tile entry functions must agree on layout and launch geometry.
+A tile-bearing non-root helper currently refuses
 because interprocedural expansion has not been admitted. No source-name matcher,
 per-root module copy or second rustc collection determines these choices.
 
