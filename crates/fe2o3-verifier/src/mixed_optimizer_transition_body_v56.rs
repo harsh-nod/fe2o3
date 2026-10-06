@@ -14,6 +14,7 @@ pub(super) enum TransitionBodyV56<'a> {
     TaggedSelect(TaggedSelectV55<'a>),
     Index(IndexByteOperationV37),
     Trap,
+    Execution(ExecutionByteOperationV178),
 }
 
 impl<'a> TransitionBodyV56<'a> {
@@ -33,6 +34,7 @@ impl<'a> TransitionBodyV56<'a> {
             ByteOperationV30::TaggedSelect(value) => Self::TaggedSelect(*value),
             ByteOperationV30::Index(value) => Self::Index(*value),
             ByteOperationV30::Trap(_) => Self::Trap,
+            ByteOperationV30::Execution(value) => Self::Execution(*value),
             ByteOperationV30::Scalar(_) => return Ok(None),
         }))
     }
@@ -62,6 +64,7 @@ impl<'a> TransitionBodyV56<'a> {
             }
             (Self::Index(a), TransitionBodyV56::Index(b)) => a == b,
             (Self::Trap, TransitionBodyV56::Trap) => true,
+            (Self::Execution(a), TransitionBodyV56::Execution(b)) => a == b,
             _ => false,
         })
     }

@@ -780,9 +780,44 @@ fn generate_actual_tile_target_v176(
         }
     }
     assert!(retained_contexts > 0 && retained_workgroups > 0);
+    let mut capability_steps = Vec::new();
+    for operation in &inventory.operations()[inventory.functions()[selected.0 as usize]
+        .operations
+        .clone()]
+    {
+        let (code, destination, receiver) = match &operation.operation.kind {
+            OperationKind::Execution(ExecutionOperationV15::ContextIssue) => {
+                (0, operation.results.start as i64, -1)
+            }
+            OperationKind::Execution(ExecutionOperationV15::WorkgroupDerive { .. }) => (
+                1,
+                operation.results.start as i64,
+                inventory.uses()[operation.operands.start].definition as i64,
+            ),
+            OperationKind::Execution(ExecutionOperationV15::ScopeEnd { discarded, .. }) => {
+                assert!(discarded.is_empty());
+                (
+                    2,
+                    -1,
+                    inventory.uses()[operation.operands.start].definition as i64,
+                )
+            }
+            _ => continue,
+        };
+        capability_steps.push(format!(
+            "byte_execution_step_v178(s, operation, {code}, {destination}, {receiver})"
+        ));
+    }
+    assert!(capability_steps.len() >= 3);
     assert_eq!(target.root_function(0, out)?, selected);
     target.emit(fe2o3_kernel_ir::FormalIndexWidth::Bits64, out)?;
     assert!(out.text.contains("spec fn byte_micro_step_0_v30("));
+    for expression in capability_steps {
+        assert!(
+            out.text.contains(&expression),
+            "missing actual capability step: {expression}"
+        );
+    }
     assert_eq!(target.inventory(out)?.operations().len(), actual_operations);
     Ok(())
 }

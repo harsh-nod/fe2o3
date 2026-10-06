@@ -34,6 +34,7 @@ include!("mixed_optimizer_verus_compatibility_v62_tests.rs");
 include!("mixed_optimizer_verus_warning_cleanup_v65_tests.rs");
 include!("mixed_optimizer_guarded_store_v90_tests.rs");
 include!("mixed_optimizer_byte_control_inputs_v99_tests.rs");
+include!("mixed_optimizer_execution_byte_v178_tests.rs");
 
 #[test]
 fn byte_function_integer_switch_reuses_exact_signed_constant_bits() {
@@ -801,6 +802,8 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
     assert_eq!(tagged_select::headers(), tagged_select);
     let trap = trap_header_oracle_v40();
     assert_eq!(trap::headers(), trap);
+    let execution = execution_header_oracle_v178();
+    assert_eq!(execution::headers(), execution);
     assert_eq!(
         headers::<R<'_>>(),
         pointer
@@ -816,6 +819,7 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
             + floating
             + tagged_select
             + trap
+            + execution
             + model
     );
 }
