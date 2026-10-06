@@ -2050,6 +2050,19 @@ analyzeFunction(const SymbolRecord &Function, ArrayRef<SymbolRecord> Symbols,
       continue;
     }
     if (DsCollective) {
+      // BPERMUTE uses the DS/LGKM pipeline but exchanges VGPR lane values; it
+      // does not read or write addressable LDS. Keep its actual MC operands,
+      // implicit EXEC use and following waits in the trace. This classification
+      // alone does not discharge participation or result-readiness obligations.
+      if (Name == "DS_BPERMUTE_B32" || Name == "DS_BPERMUTE_B32_vi") {
+        if (Descriptor.mayLoad() || Descriptor.mayStore())
+          return analysisError(Twine("cross-lane DS opcode has MC memory flags ") +
+                               Name + " in " + Function.Name);
+        InstructionTrace->MemoryAccess = PhysicalMachineMemoryAccess::None;
+        InstructionTrace->MemoryWidth = 0;
+        Result.Instructions.push_back(std::move(*InstructionTrace));
+        continue;
+      }
       auto Width = memoryWidth(Name);
       if (!Width || *Width != 4)
         return analysisError(Twine("unknown collective LDS width for ") + Name);
