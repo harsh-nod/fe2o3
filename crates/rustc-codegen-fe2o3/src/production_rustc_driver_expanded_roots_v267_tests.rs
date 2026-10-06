@@ -21,15 +21,9 @@ struct RootsObservation {
     collected_tile_calls: [u64; 3],
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-enum RootsOutcome {
-    Expanded(RootsObservation),
-    TileHelperRefused,
-}
-
 #[derive(Default)]
 struct RootsCallbacks {
-    result: Option<Result<RootsOutcome, String>>,
+    result: Option<Result<RootsObservation, String>>,
 }
 
 fn original_helper_instances(
@@ -233,28 +227,11 @@ impl Callbacks for RootsCallbacks {
             match result {
                 Ok(value) => {
                     assert_eq!(calls, 1);
-                    Ok(RootsOutcome::Expanded(value.into_observation()))
+                    Ok(value.into_observation())
                 }
-                Err(error) => {
-                    assert_eq!(calls, 0, "refusal must precede the borrowed consumer");
-                    use fe2o3_lower_mir_kernel::{
-                        ProductionSourceOptimizationErrorV18 as OptimizationError,
-                        ProductionSourceOwnedViewErrorV18 as OwnerError,
-                    };
-                    use fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1 as AdoptionError;
-                    if matches!(&error, SourceError::ExpandedSource(error)
-                    if matches!(error.as_ref(), OptimizationError::Adoption(
-                        AdoptionError::Origin(SourceError::Source(OwnerError::Binding(
-                            "source tile helper requires interprocedural expansion"
-                        )))
-                    ))) {
-                        Ok(RootsOutcome::TileHelperRefused)
-                    } else {
-                        Err(format!(
-                            "multi-root refused at a different boundary: {error:?}"
-                        ))
-                    }
-                }
+                Err(error) => Err(format!(
+                    "ordinary multi-root source refused ({calls} consumer calls): {error:?}"
+                )),
             }
         })());
         Compilation::Stop
@@ -324,7 +301,7 @@ fn tile_helper<Kernel>(ctx: &mut KernelContext<'_, Kernel>, input: &[u32], base:
 }
 
 pub(super) fn run_actual_root_matrix() {
-    run_actual_sources::<RootsOutcome>(
+    run_actual_sources::<RootsObservation>(
         &[
             ("two-tile", "two"),
             ("two-tile", "two"),
@@ -337,13 +314,7 @@ pub(super) fn run_actual_root_matrix() {
         "EXPANDED_ROOTS_V267",
         root_source,
         |_, _, label, outcome, observations| {
-            if label == "tile-helper" {
-                assert_eq!(outcome, RootsOutcome::TileHelperRefused);
-                return;
-            }
-            let RootsOutcome::Expanded(observation) = &outcome else {
-                panic!("supported roots refused: {label}");
-            };
+            let observation = &outcome;
             assert_eq!(observation.roots, 2);
             assert!(
                 observation
@@ -354,11 +325,15 @@ pub(super) fn run_actual_root_matrix() {
             assert_eq!(
                 observation.selected,
                 match label {
-                    "two-tile" => 2,
+                    "two-tile" | "tile-helper" => 2,
                     "mixed" => 1,
                     "scalar" => 0,
                     _ => unreachable!(),
                 }
+            );
+            assert_eq!(
+                observation.collected_tile_calls,
+                [observation.selected as u64; 3]
             );
             if label == "scalar" {
                 assert_eq!(observation.collected_tile_calls, [0; 3]);
