@@ -11,6 +11,61 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Measured debugger budget refusal and live Worker cleanup — 2026-10-06
+
+The instrumented private debugger built, passed its ELF/runtime checks and
+completed a fresh supervised no-inferior startup. The measured twenty-primary-
+type reservation is 20,312 bytes, including the two diagnostic auxiliary
+definitions; this replaces the earlier prediction for this private generation.
+
+A new one-use hardware attempt reproduced the failure and recorded its first
+denied debit: work counter 3, phase 10 (awaiting target completion), used
+131,029, requested 128, cap 131,072. Only 43 units remained. The denial occurred
+in the post-commit diagnostic flush, before terminal-maintenance arming.
+The target's completion retirement remains unknown; the secondary success-
+record shape rejection is not the original cause. This remains a failed
+qualification, not a working resume/retirement capability.
+
+The exact inner/outer cleanup records joined child reaping, EOF and an empty,
+subsequently absent cgroup, with no kill attempts. The controller's separate
+unadmitted-inferior limitation remains. The original enclosing command failed
+and has no source postflight. A separate passing check found all original
+selected inputs unchanged and independently rechecked cgroup absence; it does
+not turn the original receipt into a pass. Failed evidence is retained in
+`debugger-first-budget-denial-native-failed-actual-root-r73-r1/MANIFEST.json`
+(SHA256 `5f37e04f51353e34c2e961675476dc3a381cfd496f547252bcbe0a3833b1cab1`).
+
+The compiler-Worker containment fixtures now passed all four live cases:
+normal exit, surviving descendant, timeout and output overflow. Each case had
+a fresh owner build, loader observation, deployment and one-use execution;
+all 20 enclosing checks passed. The overflow case deliberately retains
+`cleanup_complete=false` while proving the expected refusal, terminal
+acknowledgement, outer cleanup and cgroup absence. It is not relabelled as a
+successful workload. Supporting suites passed 39 Rust, 12 mock, 37 launcher
+and 39 loader controls. A stale owner hash in three launcher sites was
+corrected and regression-tested before these runs.
+
+The four-case evidence manifest is
+`bf16-captured-four-benign-qualified-root-r73-r1/MANIFEST.json`
+(SHA256 `7ebafd29708f307ea92dcfccbc1c98562a3212688167fb785d042b05eb43da51`).
+These are trusted same-UID fixtures, not hostile-process isolation. The
+captured compiler-Worker test remains disabled pending its fresh private
+build/loader/launch bindings; no Worker engineering session ran.
+
+A separate disabled [proc-record work candidate](../tools/rocgdb-one-stop-native-adapters-v1/proc-record-work-v1/README.md)
+now charges the numerically admitted returned record extent before parsing,
+instead of always charging the 1,024-byte capacity. The requested-I/O debit,
+read limit, identity/parser guards, work cap and sticky denial remain. This
+explicitly changes logical accounting; it is not measured CPU work. Ten source
+controls and exact-parser C++ fixtures passed normally and under UBSan. It is
+not a fully staged debugger successor or a proven native fix; terminal
+completion still needs fresh build/startup/hardware qualification.
+
+The closed pre-build intent for the future captured Worker passed 22 controls.
+It does not invent the future executable hash or enable the live test.
+
+No milestone or tutorial exit is newly accepted: **7/18**.
+
 ## First budget-denial diagnostics and Worker containment controls — 2026-10-06
 
 The disabled debugger adapter now includes a diagnostic-only physical-v11 layer.

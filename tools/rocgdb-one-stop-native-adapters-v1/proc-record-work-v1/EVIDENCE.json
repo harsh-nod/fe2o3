@@ -1,0 +1,82 @@
+{
+  "schema": "frozen-denial-source-joins-v1",
+  "evidence": [
+    {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-first-budget-denial-native-failed-actual-root-r73-r1/MANIFEST.json",
+      "bytes": 24083,
+      "sha256": "5f37e04f51353e34c2e961675476dc3a381cfd496f547252bcbe0a3833b1cab1"
+    },
+    {
+      "original": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/logs/phase28-resume-r73-debugger-budget-denial-one-stop-native-r1/receipt.json",
+        "bytes": 659543,
+        "sha256": "2e9fde9cbaf088b021dd6ed3a32cd2eb6eb97934301aa785bdb426eac65a0db6"
+      },
+      "frozen": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-first-budget-denial-native-failed-actual-root-r73-r1/files/0-receipt.json",
+        "bytes": 659543,
+        "sha256": "2e9fde9cbaf088b021dd6ed3a32cd2eb6eb97934301aa785bdb426eac65a0db6"
+      }
+    },
+    {
+      "original": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-first-budget-denial-native-qualification-r72-r1/output/audit.json",
+        "bytes": 18643,
+        "sha256": "2ef6836d0a539d357d7108e8861460c814395462e67276cbaa37552177f73aba"
+      },
+      "frozen": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-first-budget-denial-native-failed-actual-root-r73-r1/files/5-audit.json",
+        "bytes": 18643,
+        "sha256": "2ef6836d0a539d357d7108e8861460c814395462e67276cbaa37552177f73aba"
+      }
+    },
+    {
+      "original": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-first-budget-denial-native-qualification-r72-r1/scope-output/one-stop-02c909acf6467a15a56809c8659e6ece/controller.stdout",
+        "bytes": 30007,
+        "sha256": "ce891b2c87fd555f6468ea344bff06f7b44b1dd7d3d42be04b8cb8bfff122cd4"
+      },
+      "frozen": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-first-budget-denial-native-failed-actual-root-r73-r1/files/14-controller.stdout",
+        "bytes": 30007,
+        "sha256": "ce891b2c87fd555f6468ea344bff06f7b44b1dd7d3d42be04b8cb8bfff122cd4"
+      }
+    },
+    {
+      "original": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-first-budget-denial-native-qualification-r72-r1/scope-output/one-stop-02c909acf6467a15a56809c8659e6ece/outer.json",
+        "bytes": 1678,
+        "sha256": "9b327e0fbd92216a96da5a33881911a741c2edab30750b216fa8d6f31388712e"
+      },
+      "frozen": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-first-budget-denial-native-failed-actual-root-r73-r1/files/23-outer.json",
+        "bytes": 1678,
+        "sha256": "9b327e0fbd92216a96da5a33881911a741c2edab30750b216fa8d6f31388712e"
+      }
+    },
+    {
+      "original": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-first-budget-denial-native-qualification-r72-r1/scope-output/one-stop-02c909acf6467a15a56809c8659e6ece/owner-receipt.json",
+        "bytes": 615,
+        "sha256": "48b6101c4d483c4d0fbdc75f4b1bfb2c72bb4185670f9adf19ed59c88daa7743"
+      },
+      "frozen": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-first-budget-denial-native-failed-actual-root-r73-r1/files/24-owner-receipt.json",
+        "bytes": 615,
+        "sha256": "48b6101c4d483c4d0fbdc75f4b1bfb2c72bb4185670f9adf19ed59c88daa7743"
+      }
+    },
+    {
+      "original": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-first-budget-denial-native-qualification-r72-r1/scope-output/one-stop-02c909acf6467a15a56809c8659e6ece/receipt.json",
+        "bytes": 853,
+        "sha256": "8a43ee81c0159bf4d5f20f11a3a48083d6ba63bd8740ff6b10e7f2c3dce675c1"
+      },
+      "frozen": {
+        "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-first-budget-denial-native-failed-actual-root-r73-r1/files/28-receipt.json",
+        "bytes": 853,
+        "sha256": "8a43ee81c0159bf4d5f20f11a3a48083d6ba63bd8740ff6b10e7f2c3dce675c1"
+      }
+    }
+  ]
+}
