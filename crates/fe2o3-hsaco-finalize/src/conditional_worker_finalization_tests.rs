@@ -163,3 +163,36 @@ fn conditional_resource_errors_are_not_reclassified_as_artifact_mismatches() {
         }
     }
 }
+
+#[test]
+fn finalization_quote_composes_source_scope_and_nonoverlapping_descriptor_scratch() {
+    use crate::ConditionalWorkerOperationQuoteV5 as Quote;
+    for source_storage in [0, SCRATCH - 1, SCRATCH, SCRATCH + 1] {
+        let quote = finalization_quote(Quote::new(17, source_storage)).unwrap();
+        assert_eq!(
+            quote.additional_storage(),
+            FRAME + source_storage.max(SCRATCH)
+        );
+        let descriptor = crate::NominalDescriptorWorkBoundsV5::admitted_limits().unwrap();
+        assert_eq!(
+            quote.work(),
+            4096 + 17
+                + descriptor.launch_derivation()
+                + descriptor.finalization()
+                + fe2o3_hsaco::MAX_HSACO_BYTES
+                + fe2o3_kernel_descriptor::MAX_DESCRIPTOR_TABLE_BYTES
+        );
+    }
+    assert!(matches!(
+        finalization_quote(Quote::new(usize::MAX, 0)),
+        Err(Resource::Arithmetic)
+    ));
+    assert!(matches!(
+        finalization_quote(Quote::new(0, usize::MAX)),
+        Err(Resource::Arithmetic)
+    ));
+    assert_eq!(
+        PreparedFinalizedConditionalWorkerHsacoV5::ADDITIONAL_RETAINED_STORAGE,
+        size_of::<PreparedFinalizedConditionalWorkerHsacoV5>()
+    );
+}

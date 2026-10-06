@@ -39,6 +39,9 @@ pub struct PreparedFinalizedConditionalWorkerHsacoV5 {
     retained_storage: usize,
 }
 impl PreparedFinalizedConditionalWorkerHsacoV5 {
+    /// Additional logical owner header returned by the existing finalizer.
+    /// Artifact bytes and parsed ELF metadata retain their separate domain.
+    pub const ADDITIONAL_RETAINED_STORAGE: usize = size_of::<Self>();
     pub const fn source(&self) -> &Evidence {
         &self.source
     }
@@ -73,6 +76,40 @@ impl PreparedFinalizedConditionalWorkerHsacoV5 {
     pub const fn grants_launch_authority(&self) -> bool {
         false
     }
+}
+
+impl Evidence {
+    /// Quote the actual source's existing artifact revalidation and all V5
+    /// descriptor callback work. Input/source custody remains prepaid; ELF and
+    /// Worker-wire inspection keep their separately bounded accounting domain.
+    pub fn finalization_operation_quote(
+        &self,
+    ) -> Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
+        finalization_quote(self.revalidation_quote()?)
+    }
+}
+
+pub(crate) fn finalization_quote(
+    source: crate::ConditionalWorkerOperationQuoteV5,
+) -> Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
+    let descriptor =
+        crate::NominalDescriptorWorkBoundsV5::admitted_limits().ok_or(Resource::Arithmetic)?;
+    let work = [
+        4096,
+        source.work(),
+        descriptor.launch_derivation(),
+        descriptor.finalization(),
+        fe2o3_hsaco::MAX_HSACO_BYTES,
+        fe2o3_kernel_descriptor::MAX_DESCRIPTOR_TABLE_BYTES,
+    ]
+    .into_iter()
+    .try_fold(0usize, |n, part| {
+        n.checked_add(part).ok_or(Resource::Arithmetic)
+    })?;
+    let storage = FRAME
+        .checked_add(source.additional_storage().max(SCRATCH))
+        .ok_or(Resource::Arithmetic)?;
+    Ok(crate::ConditionalWorkerOperationQuoteV5::new(work, storage))
 }
 
 /// Additional unreserved owner headers. Artifact parsing and payloads keep the
@@ -142,9 +179,9 @@ pub fn finalize_conditional_worker_hsaco_v5(
             ContentIdentityV1::calculate(finalized.descriptor_bytes()),
             finalized.digest(),
         );
-        let storage = ConditionalWorkerFinalizationStorageV5(size_of::<
-            PreparedFinalizedConditionalWorkerHsacoV5,
-        >());
+        let storage = ConditionalWorkerFinalizationStorageV5(
+            PreparedFinalizedConditionalWorkerHsacoV5::ADDITIONAL_RETAINED_STORAGE,
+        );
         Ok((
             PreparedFinalizedConditionalWorkerHsacoV5 {
                 source,

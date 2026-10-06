@@ -5,8 +5,8 @@ use fe2o3_artifact_transaction::CompilerModuleHandoffCustodyQuotaV5 as Custody;
 use fe2o3_compiler_ffi::MAX_INERT_REFINED_FORWARDING_STORAGE_V1 as INPUT_CEILING;
 
 /// Finite maxima for the actual original-account preflight/execution adapters.
-/// The caller separately funds source recovery, consumption, finalization and
-/// persistence. Quotes may exceed an operation's unchanged local ceiling; they
+/// The caller separately funds source recovery, consumption and persistence.
+/// Quotes may exceed an operation's unchanged local ceiling; they
 /// neither guarantee admission of maximum-sized inputs nor raise that ceiling.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ConditionalFirstBuildWorkerStartupQuoteV2 {
@@ -14,6 +14,9 @@ pub struct ConditionalFirstBuildWorkerStartupQuoteV2 {
     execution: Operation,
     prepared_retained: usize,
     evidence_additional_retained: usize,
+    evidence_retained: usize,
+    evidence_revalidation: Operation,
+    finalization: Operation,
 }
 
 impl ConditionalFirstBuildWorkerStartupQuoteV2 {
@@ -50,6 +53,16 @@ impl ConditionalFirstBuildWorkerStartupQuoteV2 {
             size_of::<Evidence>(),
             configuration_storage,
         ])?;
+        let evidence_retained = sum(&[
+            INPUT_CEILING,
+            prepared_retained,
+            evidence_additional_retained,
+        ])?;
+        let evidence_revalidation = AccountMode::original_operation_quote(evidence_retained)?
+            .nested(Operation::new(ENTRY_WORK, FRAME))?
+            .nested(binding)?;
+        let finalization =
+            crate::conditional_worker_finalization::finalization_quote(evidence_revalidation)?;
         let preflight_inner_work = sum(&[
             8,                                                    // original account capture
             8 + crate::MAX_LINK_INPUTS + crate::MAX_LINK_OPTIONS, // configuration census
@@ -91,6 +104,9 @@ impl ConditionalFirstBuildWorkerStartupQuoteV2 {
             execution,
             prepared_retained,
             evidence_additional_retained,
+            evidence_retained,
+            evidence_revalidation,
+            finalization,
         })
     }
     pub const fn preflight(self) -> Operation {
@@ -104,6 +120,18 @@ impl ConditionalFirstBuildWorkerStartupQuoteV2 {
     }
     pub const fn evidence_additional_retained_storage(self) -> usize {
         self.evidence_additional_retained
+    }
+    /// Complete retained source/preflight/Worker charge before finalization.
+    pub const fn evidence_retained_storage(self) -> usize {
+        self.evidence_retained
+    }
+    /// One revalidation of that actual source/Worker evidence after execution.
+    pub const fn evidence_revalidation(self) -> Operation {
+        self.evidence_revalidation
+    }
+    /// Source revalidation and all existing descriptor finalization callbacks.
+    pub const fn finalization(self) -> Operation {
+        self.finalization
     }
 }
 
@@ -131,6 +159,17 @@ mod tests {
         assert!(small.preflight().additional_storage() > engine.preflight_storage());
         assert!(small.execution().additional_storage() > engine.execution_storage());
         assert_eq!(
+            small.evidence_retained_storage(),
+            INPUT_CEILING
+                + small.prepared_retained_storage()
+                + small.evidence_additional_retained_storage()
+        );
+        assert!(small.finalization().work() > small.evidence_revalidation().work());
+        assert!(
+            small.finalization().additional_storage()
+                > small.evidence_revalidation().additional_storage()
+        );
+        assert_eq!(
             large.prepared_retained_storage(),
             small.prepared_retained_storage() + 1
         );
@@ -145,6 +184,15 @@ mod tests {
         assert_eq!(
             large.execution().additional_storage(),
             small.execution().additional_storage() + 2
+        );
+        assert_eq!(
+            large.evidence_retained_storage(),
+            small.evidence_retained_storage() + 2
+        );
+        assert_eq!(large.finalization().work(), small.finalization().work());
+        assert_eq!(
+            large.finalization().additional_storage(),
+            small.finalization().additional_storage() + 2
         );
         assert!(matches!(
             ConditionalFirstBuildWorkerStartupQuoteV2::for_original_account(usize::MAX, custody),
