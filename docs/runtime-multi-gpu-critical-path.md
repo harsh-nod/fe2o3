@@ -32,11 +32,23 @@ now implements closed gfx950 model/profile projection, retained queue-target
 binding and a separately branded read-only CWSR planner. The model gate rejects
 cross-target substitution during both admission and invariant replay. CPU tests,
 the independent C oracle and a read-only live planner on all eight MI350 GPUs
-pass; 35 model proof obligations and 22 affected negative controls pass. The
-broader proof run is blocked by an unchanged baseline source pin, and its
-reader-proof mutation requalification timed out. These results do not refine
-the whole Rust adapter or grant native authority. Gfx950 must not enter
-gfx942-named capabilities.
+pass; 35 model proof obligations and 22 affected negative controls pass. That
+broader proof attempt stopped at a baseline reader source pin and its scoped
+requalification timed out. The
+[October 6 parallel checkpoint](evidence/dev-a1-a2-a3-parallel-2026-10-06/README.md)
+now passes the reader's complete two-positive/16-mutation campaign under
+unchanged limits, after isolating two existing solver queries; all 776 source
+checks match after repinning. The broad Verus suite has not been rerun.
+
+That checkpoint also qualifies 1024-pending ordinary-launch accounting and
+cancellation composition on CPU and adds independent gfx950 numeric queue-output
+observations and an inert doorbell-plan join. The join compares the
+caller-retained full GPU ID even when mmap hashes collide, but does not establish
+native device identity, successful syscalls or queue custody. Its C oracle,
+UAPI/KFD regression and target-separation doctests pass. Native gfx950 device,
+memory, CWSR/header/shadow and barrier-only queue custody remain the next gates.
+These results do not refine the whole Rust adapter or grant native authority.
+Gfx950 must not enter gfx942-named capabilities; A1, A2 and A3 remain incomplete.
 
 ### Retained Application Prerequisites
 

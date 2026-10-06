@@ -3,6 +3,10 @@ use fe2o3_resource_accounting::resource_domain_bootstrap_bytes_v1;
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+#[cfg(feature = "scale-qualification")]
+#[path = "tests/scale_settlement.rs"]
+mod scale_settlement;
+
 fn account(bytes: u64, records: usize) -> ResourceCreditAccountV1 {
     ResourceCreditAccountV1::new(
         ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, bytes),

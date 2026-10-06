@@ -56,6 +56,74 @@ fn independent_manifest_digest_is_frozen() {
 }
 
 #[test]
+fn gfx950_doorbell_plan_retains_exact_geometry_identity_and_both_profiles() {
+    use crate::gfx950_queue_outputs::plan_gfx950_aql_doorbell_v1;
+    use fe2o3_kfd_uapi::{
+        KFD_GFX950_QUEUE_OUTPUT_PROFILE_MANIFEST_V1, KFD_GFX950_QUEUE_OUTPUT_PROFILE_SHA256_V1,
+        observe_kfd_gfx950_create_queue_outputs_v1,
+    };
+    let resources = plan_from_facts(facts(), 4096).unwrap();
+    let encoded_base = (3_u64 << 62) | (u64::from(resources.gpu_id()) << 46);
+    for (queue_id, offset) in [(0, 8184), (1023, 0), (7, 4096)] {
+        let outputs = observe_kfd_gfx950_create_queue_outputs_v1(
+            queue_id,
+            encoded_base | offset,
+            resources.gpu_id(),
+        )
+        .unwrap();
+        let plan = plan_gfx950_aql_doorbell_v1(resources, outputs).unwrap();
+        assert_eq!(plan.resource_plan(), resources);
+        assert_eq!(plan.outputs(), outputs);
+        assert_eq!(plan.target(), GfxTarget::Gfx950);
+        assert_eq!(plan.unique_id(), resources.unique_id());
+        assert_eq!(plan.gpu_id(), resources.gpu_id());
+        assert_eq!(plan.topology_generation(), resources.topology_generation());
+        assert_eq!(
+            plan.resource_profile_sha256(),
+            GFX950_QUEUE_RESOURCE_PROFILE_SHA256_V1
+        );
+        assert_eq!(
+            plan.output_profile_sha256(),
+            KFD_GFX950_QUEUE_OUTPUT_PROFILE_SHA256_V1
+        );
+        assert_eq!(plan.mapping_bytes(), 8192);
+        assert_eq!(plan.doorbell_bytes(), 8);
+        assert_eq!(plan.encoded_process_slice_offset(), encoded_base);
+        assert_eq!(plan.in_process_byte_offset(), offset);
+        assert!(offset + plan.doorbell_bytes() <= plan.mapping_bytes());
+    }
+    assert!(
+        KFD_GFX950_QUEUE_OUTPUT_PROFILE_MANIFEST_V1.contains(&format!(
+            "geometry_profile_sha256={}\n",
+            resources.profile_sha256()
+        ))
+    );
+}
+
+#[test]
+fn gfx950_doorbell_plan_rejects_full_gpu_id_substitution_including_hash_collision() {
+    use crate::gfx950_queue_outputs::{Gfx950DoorbellPlanningErrorV1, plan_gfx950_aql_doorbell_v1};
+    use fe2o3_kfd_uapi::observe_kfd_gfx950_create_queue_outputs_v1;
+    let resources = plan_from_facts(facts(), 4096).unwrap();
+    for gpu_id in [
+        0,
+        resources.gpu_id() ^ 1,
+        resources.gpu_id() ^ (1 << 16),
+        u32::MAX,
+    ] {
+        let raw = (3_u64 << 62) | (u64::from(gpu_id & 0xffff) << 46);
+        let output = observe_kfd_gfx950_create_queue_outputs_v1(0, raw, gpu_id).unwrap();
+        assert_eq!(
+            plan_gfx950_aql_doorbell_v1(resources, output),
+            Err(Gfx950DoorbellPlanningErrorV1::GpuIdMismatch {
+                planned: resources.gpu_id(),
+                observed: gpu_id
+            })
+        );
+    }
+}
+
+#[test]
 fn observed_gfx950_dimensions_are_not_gfx942_dimensions() {
     let plan = plan_from_facts(facts(), 4096).unwrap();
     let c = plan.context_save();

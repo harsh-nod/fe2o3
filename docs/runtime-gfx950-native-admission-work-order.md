@@ -1,7 +1,7 @@
 # Gfx950 Native Admission Work Order
 
-Status: **model and read-only planning implemented and scoped-qualified**
-as of 2026-10-06 UTC (October 5 local time). Native gfx950 device, memory, queue and SDMA
+Status: **model, read-only planning and numeric queue-output observations
+implemented and scoped-qualified** as of 2026-10-06 UTC. Native gfx950 device, memory, queue and SDMA
 capabilities remain unimplemented. This document separates the completed code
 boundaries from the next native implementation slices.
 
@@ -13,10 +13,20 @@ manifest identities and evidence scopes must remain unchanged.
 
 The [model/planning checkpoint](evidence/dev-gfx950-model-planning-2026-10-05/README.md)
 records CPU tests, 35 model proof obligations, 22 affected negative controls and
-read-only planning on all eight MI350 GPUs. The broad Verus runner remains
-blocked by an unchanged baseline reader-proof source pin; an attempted
-requalification timed out under unchanged limits. No broad-suite pass or
-whole-adapter refinement is claimed.
+read-only planning on all eight MI350 GPUs. Its broad Verus attempt stopped at
+a baseline reader-proof source-pin mismatch and its requalification timed out.
+The October 6 scoped reader campaign now passes both positives and all 16
+unchanged mutations after isolating two existing proof queries. Its source pin
+is refreshed and all 776 source checks match. The broad proof suite has not been
+rerun; no broad-suite pass or whole-adapter refinement is claimed.
+
+The [parallel A1/A2/A3 checkpoint](evidence/dev-a1-a2-a3-parallel-2026-10-06/README.md)
+adds independent gfx950 queue/doorbell output observations and an inert join to
+the resource plan. The join rejects different caller-retained full GPU IDs,
+including 16-bit mmap-hash collisions, and keeps both profile identities.
+Neither observation nor plan authenticates a live device or a successful queue
+creation. The independent C oracle, UAPI tests, KFD regression, target-separation
+doctests and strict UAPI/KFD lint checks pass. No native queue was created.
 
 ## Retained Facts And Missing Inputs
 
@@ -61,7 +71,7 @@ doorbell, event and gfx950 trap/currentness review before native admission.
 | CWSR layout | [queue_submit.rs](../crates/fe2o3-kfd/src/queue_submit.rs): `gfx942_cwsr_header_bytes` and `initialize_gfx942_cwsr_headers` fix XCC, context and debug offsets. [queue_linux.rs](../crates/fe2o3-kfd/src/queue_linux.rs): `CwsrShadowPlanV1` and shadow ownership independently fix mapping sizes and 24 shadow pages. All must consume the same target-bound geometry; changing only the planner is insufficient. |
 | Native ownership | [memory_linux.rs](../crates/fe2o3-kfd/src/memory_linux.rs) retains `CheckedGfx942XnackMinusDevice`; [shared_memory.rs](../crates/fe2o3-kfd/src/shared_memory.rs) exposes acquisition from that token. [currentness/full.rs](../crates/fe2o3-kfd/src/currentness/full.rs) reobserves through default gfx942 discovery. Add exact-target custody and currentness without converting gfx950 into a gfx942 token. |
 | Queue construction | [construction_primary.rs](../crates/fe2o3-kfd/src/queue_live/construction_primary.rs) consumes `Gfx942AqlQueueResourcePlanV1`; [queue_live.rs](../crates/fe2o3-kfd/src/queue_live.rs) constructs a gfx942 model queue plan. The new path must join matching device, memory, geometry, queue and output profiles before publication. |
-| Queue UAPI outputs | [fe2o3-kfd-uapi/src/lib.rs](../crates/fe2o3-kfd-uapi/src/lib.rs): `admit_kfd_gfx942_create_queue_outputs` produces gfx942-branded queue/doorbell facts. Add separately reviewed gfx950 output admission even if numeric fields coincide. |
+| Queue UAPI outputs | [gfx950_queue_outputs.rs](../crates/fe2o3-kfd-uapi/src/gfx950_queue_outputs.rs): implemented separately branded numeric output observations, independent source/profile manifest and C oracle. [KFD planning join](../crates/fe2o3-kfd/src/gfx950_queue_outputs.rs) retains resource/output profiles and rejects full-GPU-ID mismatch. Native successful-call/input-preservation and device/VM/custody joins remain; numeric observations alone are not admission. |
 
 ## Mandatory Queue-Target Safety Gate
 
@@ -130,7 +140,9 @@ Proposed next swarm split, not implemented in the read-only checkpoint:
 - Queue/UAPI: make private construction, header and shadow ownership consume
   checked geometry; join it to the admitted device, current VM and exact owned
   reservation before any mapping. Review doorbell/PQM/mmap contracts and add
-  distinct gfx950 output/doorbell admission, not gfx942 output relabeling.
+  native admission over the now-separate gfx950 numeric output/doorbell
+  observations, not gfx942 output relabeling. Numeric checks alone do not
+  establish successful syscalls, preserved inputs or exact queue custody.
 - Primary integration: check device/queue/geometry/output target agreement
   before effects; run constructor/currentness/failure-custody controls, then
   qualify one GPU's barrier/completion/destroy before two independent GPUs.

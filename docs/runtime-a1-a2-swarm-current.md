@@ -63,18 +63,26 @@ The [gfx950 model/planning checkpoint](evidence/dev-gfx950-model-planning-2026-1
 adds closed target-bound model admission, projection and queue invariants, plus
 an independent read-only queue/CWSR planner and C oracle. Planning passes on all
 eight MI350 GPUs without device opens or native effects. Its 35 model proof
-obligations and 22 affected negative controls pass. The full Verus runner remains
-blocked by an unchanged baseline reader-proof source-pin mismatch; that proof's
-attempted requalification hit a mutation timeout. Native gfx950
-device/memory/queue authority is still the next implementation gate.
+obligations and 22 affected negative controls pass. Its broad Verus attempt
+stopped at a reader-proof source-pin mismatch; that checkpoint's requalification
+timed out. The [October 6 parallel checkpoint](evidence/dev-a1-a2-a3-parallel-2026-10-06/README.md)
+now requalifies the reader root with two isolated solver queries: both positive
+runs and all 16 unchanged mutations pass under the original limits. The source
+pin is refreshed after complete qualification; all 776 source checks match.
+The broad Verus suite has not been rerun. A1 now adds CPU accounting/cancellation
+composition at 1024 pending ordinary launches over eight streams and three
+reuse rounds. A3 adds separately branded numeric gfx950 queue-output
+observations and a full-GPU-ID-checked inert doorbell join, with an independent
+C oracle and KFD regression. Native gfx950 device/memory/queue authority is
+still the next implementation gate. The three lanes are active, not complete.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
 | Milestone | Status | Remaining exit gates |
 | --- | --- | --- |
 | A0: semantics and ownership | Partial foundations | Complete distributed ownership, protocol, failure and trusted-boundary contracts |
-| A1: single-device async | Parked, incomplete | Ordinary repeat-owner qualification passes; protected generated scale execution, aggregate accounting and production refinement remain |
-| A2: dependencies and overlap | Parked, incomplete | Repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency |
+| A1: single-device async | Active, incomplete | Ordinary repeat-owner and 1024-pending CPU accounting/cancellation composition pass; protected generated scale execution, aggregate accounting and production refinement remain |
+| A2: dependencies and overlap | Active, incomplete | Reader proof requalified and stale source-pin gate cleared; broad proof suite, repeated generated compute/copy graphs, Context completion-reconciliation proofs, physical overlap and bounded residency remain |
 | A3: local multi-GPU | Finite gfx942 compute/native-peer/readback batches on 2/3/5/7 GPUs; directed subranges, pending-compute windows, ordered gathers and prequeued/late gathered-frame consumers; settled-source and pending-compute segment-list frame consumers on two GPUs; ordered destination lists, full-frame consumers and pending-frame scalar/list forwarding on three GPUs; pre-arm host preparation recovery and independent-pair progress on four GPUs; ordinary generated argument API CPU-qualified; gfx950 data/analysis foundations scoped-qualified; incomplete | Application kernel authority, native generated-argument qualification, gfx950 native/proof admission and admitted two-GPU application, eight-GPU coverage and post-arm/native partial-failure qualification remain |
 | A4: distributed control | Open | Authenticated two-host sessions, epochs, publication receipts and interruption-safe terminal classification |
 | A5: distributed data and collectives | Open | Two-host versioned transfers and qualified broadcast, reduce-scatter, all-gather and all-reduce |
@@ -97,7 +105,9 @@ The current MI350 path requires exact-target authority before GPU execution:
 
 1. Preserve the now-qualified separate gfx950 device model and read-only
    queue/CWSR planning, including queue-target/device-profile agreement. These
-   model contracts and inert plans grant no native authority.
+   model contracts and inert plans grant no native authority. The separately
+   branded numeric output/doorbell join is now also scoped-qualified; it
+   compares caller-retained IDs and does not authenticate a successful syscall.
 2. Add native device/memory/queue custody and a bounded barrier-only probe, then
    directional peer/SDMA admission. Preserve the qualified cross-target rejection;
    read-only topology and parsed machine facts do not grant these capabilities.
@@ -398,10 +408,11 @@ cleanup and restored GPU/PID baselines. KFD evidence remains authenticated
 historical reuse. The new adapters have no new formal-refinement or matched
 performance acceptance, and finite compute authority is not application authority.
 
-The user reprioritized the swarm on 2026-10-01. The A1 primary-queue accounting
-campaign and A2 proof-runner campaign below are parked, not abandoned or
-completed. Neither is a prerequisite for the existing multi-device compute
-router's first native qualification.
+The user reprioritized the swarm on 2026-10-01, parking the A1 primary-queue
+accounting and A2 proof-runner campaigns below. The October 6 parallel work
+order resumes bounded A1/A2 qualification alongside A3; it does not qualify the
+historical primary-queue candidate by association. Neither is a prerequisite
+for the existing multi-device compute router's first native qualification.
 
 The [native-subrange checkpoint](evidence/dev-native-peer-subranges-2026-10-02/README.md)
 qualifies checked peer windows over already initialized PUBLIC allocations with
@@ -576,7 +587,7 @@ The expedited practical multi-GPU priority order is:
    those functional gates. Reopen is a separate device/VM ownership redesign;
    never reset process-lifetime admission history. Use eight GPUs only when all
    are free. No timing speedup follows from these correctness runs, and A1/A2
-   remain parked and incomplete.
+   remain incomplete; bounded parallel work resumes on October 6.
 
 Do not reopen already accepted pending-output and gather increments. The
 [pending-compute windows](evidence/dev-pending-compute-windows-2026-10-02/README.md),
@@ -766,6 +777,13 @@ attempts. The fresh `2026-10-02T02:51:48Z` SSH retry still fails DNS before remo
 execution; no shared-host resources were created or admitted.
 
 ## Latest Qualification
+
+The [October 6 parallel checkpoint](evidence/dev-a1-a2-a3-parallel-2026-10-06/README.md)
+adds ordinary 1024-pending accounting/cancellation tests, repairs and fully
+requalifies the scoped reader-invariant proof campaign, and adds separately
+branded gfx950 numeric queue-output planning. Its exact command results and
+limits are recorded in that packet. The earlier candidates below retain their
+own qualification gaps; the new tests and proofs do not qualify them by analogy.
 
 The [receipt-origin ingress](runtime-distributed-receipt-origin-ingress-v1.md)
 is integrated at `ce789b7eb`. Its separate CPU campaign passes all 28 stages,

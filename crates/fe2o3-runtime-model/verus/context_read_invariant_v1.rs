@@ -186,6 +186,7 @@ pub open spec fn acquired_readers_v1(before: ReadContentsV1, requests: Seq<Alloc
         (before.readers@[a] + read_slot_count_v1(requests.take(count as int), a as usize)) as usize)
 }
 
+#[verifier::spinoff_prover]
 pub proof fn acquire_arena_prefix_v1(before: ReadContentsV1, consumer: WriterKeyV1, requests: Seq<AllocationReadV1>, count: nat)
     requires reader_invariant_v1(before), acquire_commit_ready_v1(before, requests), count <= requests.len(),
         consumer.context_generation == before.journal.context_generation, issuable_id_v1(consumer.local),
@@ -603,6 +604,7 @@ pub proof fn reader_trace_never_reissues_v1(states: Seq<ReadContentsV1>, steps: 
 }
 
 // Fixture enrollment is explicit and is not a production enrollment refinement.
+#[verifier::spinoff_prover]
 pub fn reader_nonempty_witness_v1() -> (result: Option<ReadContentsV1>)
     ensures result.is_some(), reader_invariant_v1(result.unwrap()),
         result.unwrap().next_incarnation == 4,
