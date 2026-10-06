@@ -131,6 +131,87 @@ fn both_targets_multi_kernel_queries_retain_exact_v2_contracts() {
 }
 
 #[test]
+fn fixed_work_bounds_cover_actual_v5_decoder_and_borrowed_queries() {
+    macro_rules! bounded {
+        ($bound:expr, $charge:ident => $operation:expr) => {{
+            let mut used = 0usize;
+            let mut $charge = |n: usize| {
+                used = used.checked_add(n).unwrap();
+                Ok::<(), ()>(())
+            };
+            let result = $operation;
+            assert!(used <= $bound, "charged {used}, quoted {}", $bound);
+            result
+        }};
+    }
+    let bounds = DescriptorWorkBoundsV5::admitted_limits().unwrap();
+    for target in ["gfx942:xnack-", "gfx950:xnack-"] {
+        for (entries, inputs) in [(1, 0), (3, 2), (MAX_KERNELS, 0), (1, 63)] {
+            let bytes = fixture::wire(target, entries, inputs);
+            let view = bounded!(bounds.decode(), c =>
+                decode_device_descriptor_table_v5(&bytes, &mut c))
+            .unwrap();
+            for i in 0..entries {
+                let kernel = bounded!(bounds.kernel(), c => view.kernel(i, &mut c)).unwrap();
+                bounded!(bounds.conditional_contract(), c =>
+                    kernel.conditional_contract(&mut c))
+                .unwrap();
+                bounded!(bounds.requirement(), c => view.requirement(i, &mut c)).unwrap();
+                let mut arguments = kernel.arguments();
+                while let Some(argument) = bounded!(bounds.argument_next(), c =>
+                    arguments.next(&mut c))
+                .unwrap()
+                {
+                    bounded!(bounds.source_type(), c =>
+                        view.source_type(argument.source_type(), &mut c))
+                    .unwrap();
+                    bounded!(bounds.device_layout(), c =>
+                        view.device_layout(argument.device_layout(), &mut c))
+                    .unwrap();
+                    for component in 0..argument.component_count() {
+                        bounded!(bounds.component(), c =>
+                            argument.component(component, &mut c))
+                        .unwrap();
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fixed_decoder_bound_covers_refusals_and_keeps_actual_callback_limits() {
+    let bytes = fixture::wire("gfx942:xnack-", 3, 2);
+    let bound = DescriptorWorkBoundsV5::admitted_limits().unwrap().decode();
+    for end in [0, 1, 8, 16, 32, bytes.len() / 2, bytes.len() - 1] {
+        let mut charged = 0usize;
+        let result = decode_device_descriptor_table_v5(&bytes[..end], &mut |n| {
+            charged = charged.checked_add(n).unwrap();
+            Ok::<(), ()>(())
+        });
+        assert!(result.is_err());
+        assert!(charged <= bound);
+    }
+    let mut charged = 0usize;
+    decode_device_descriptor_table_v5(&bytes, &mut |n| {
+        charged = charged.checked_add(n).unwrap();
+        Ok::<(), ()>(())
+    })
+    .unwrap();
+    assert!(charged <= bound);
+    for one_short in [false, true] {
+        let limit = charged - usize::from(one_short);
+        let mut actual = 0usize;
+        let result = decode_device_descriptor_table_v5(&bytes, &mut |n| {
+            actual = actual.checked_add(n).unwrap();
+            if actual > limit { Err(()) } else { Ok(()) }
+        });
+        assert_eq!(result.is_err(), one_short);
+        assert_eq!(actual, charged);
+    }
+}
+
+#[test]
 fn repeated_reads_and_independent_ordinal_spaces_are_not_restricted() {
     for reorder in [false, true] {
         let bytes = fixture::wire_custom("gfx950:xnack-", 1, 1, |f| {
