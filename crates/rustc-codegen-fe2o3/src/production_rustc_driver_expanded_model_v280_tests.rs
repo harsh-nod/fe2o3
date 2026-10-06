@@ -5,6 +5,162 @@ use sha2::{Digest, Sha256};
 
 const MODEL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_child";
 const REFUSAL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_refusal_child";
+const ACCOUNT_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_account_child";
+const ACCOUNT_CASE: &str = "FE2O3_TEST_EXPANDED_MODEL_ACCOUNT_V280";
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum AccountCase {
+    Payload,
+    Overreport,
+    Underreport,
+    Refuse,
+    Panic,
+    Refund,
+    Foreign,
+}
+
+const ACCOUNT_CASES: [AccountCase; 7] = [
+    AccountCase::Payload,
+    AccountCase::Overreport,
+    AccountCase::Underreport,
+    AccountCase::Refuse,
+    AccountCase::Panic,
+    AccountCase::Refund,
+    AccountCase::Foreign,
+];
+
+enum CallbackPayload {
+    Inline,
+    Heap(Box<[u8; 17]>),
+}
+
+fn is_accounting_refusal(error: &(dyn std::error::Error + 'static)) -> bool {
+    matches!(
+        error.downcast_ref::<fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1>(),
+        Some(fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting)
+    ) || error.source().is_some_and(is_accounting_refusal)
+}
+
+fn is_selected_refusal(error: &(dyn std::error::Error + 'static)) -> bool {
+    matches!(
+        error.downcast_ref::<SourceError>(),
+        Some(SourceError::Unsupported(
+            "selected expanded model consumer error"
+        ))
+    ) || error.source().is_some_and(is_selected_refusal)
+}
+
+struct AccountCallbacks {
+    case: AccountCase,
+    result: Option<Result<(), String>>,
+}
+
+impl Callbacks for AccountCallbacks {
+    fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+        self.result = Some((|| {
+            let transaction = transaction_in_active_session_v1(
+                tcx,
+                crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+            )?;
+            let mut work = Work::new(500_000_000);
+            let mut budget = Budget::new(&mut work, 20_000_000);
+            let floor = budget.storage();
+            let ledger = budget.work_ledger_identity_v1();
+            let slot = std::ptr::from_ref(&budget) as usize;
+            let mut called = 0;
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                transaction.with_original_source_expanded_model_v280(
+                    &mut budget,
+                    |source, original, tile, _, _, pair, model, budget| {
+                        called += 1;
+                        pair.check(source, original, tile, budget)?;
+                        assert!(
+                            !model
+                                .generated_source(budget)
+                                .map_err(SourceError::ExpandedModel)?
+                                .is_empty()
+                        );
+                        match self.case {
+                            AccountCase::Payload => {
+                                budget.reserve_storage(17)?;
+                                Ok((CallbackPayload::Heap(Box::new([9; 17])), 17))
+                            }
+                            AccountCase::Overreport => Ok((CallbackPayload::Inline, 1)),
+                            AccountCase::Underreport => {
+                                budget.reserve_storage(1)?;
+                                Ok((CallbackPayload::Inline, 0))
+                            }
+                            AccountCase::Refuse => Err(SourceError::Unsupported(
+                                "selected expanded model consumer error",
+                            )),
+                            AccountCase::Panic => std::panic::panic_any(280usize),
+                            AccountCase::Refund => {
+                                budget.release_storage(1)?;
+                                Ok((CallbackPayload::Inline, 0))
+                            }
+                            AccountCase::Foreign => {
+                                let mut work = Work::new(500_000_000);
+                                let mut foreign = Budget::new(&mut work, 20_000_000);
+                                foreign.reserve_storage(budget.storage())?;
+                                let before = budget.work();
+                                let error = model
+                                    .census(&mut foreign)
+                                    .err()
+                                    .expect("foreign model account must refuse");
+                                assert_eq!(budget.work(), before);
+                                Err(SourceError::ExpandedModel(error))
+                            }
+                        }
+                    },
+                )
+            }));
+            assert_eq!(
+                called, 1,
+                "the actual generated model must precede every callback case"
+            );
+            assert_eq!(slot, std::ptr::from_ref(&budget) as usize);
+            assert_eq!(ledger, budget.work_ledger_identity_v1());
+            match self.case {
+                AccountCase::Panic => {
+                    let payload = outcome
+                        .err()
+                        .expect("original model callback panic must propagate");
+                    assert_eq!(*payload.downcast::<usize>().unwrap(), 280);
+                }
+                AccountCase::Payload => {
+                    let result = outcome
+                        .unwrap()
+                        .map_err(|error| format!("model payload: {error:?}"))?;
+                    let CallbackPayload::Heap(payload) = result.into_observation() else {
+                        panic!("owned payload")
+                    };
+                    assert_eq!(*payload, [9; 17]);
+                    assert_eq!(budget.storage(), floor + 17);
+                    drop(payload);
+                    budget.release_storage(17).unwrap();
+                }
+                AccountCase::Refuse => {
+                    let error = outcome.unwrap().err().expect("selected consumer refusal");
+                    assert!(
+                        is_selected_refusal(&error),
+                        "original error was replaced: {error:?}"
+                    );
+                }
+                _ => {
+                    let error = outcome.unwrap().err().expect("accounting refusal");
+                    assert!(is_accounting_refusal(&error), "wrong refusal: {error:?}");
+                }
+            }
+            assert_eq!(
+                budget.storage(),
+                floor,
+                "actual wrapper must return the original floor"
+            );
+            Ok(())
+        })());
+        Compilation::Stop
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct ModelObservation {
@@ -312,6 +468,66 @@ fn expanded_model_refusal_child() {
 }
 
 #[test]
+#[ignore = "process helper; exact finite source and accounting case supplied by its parent"]
+fn expanded_model_account_case_child() {
+    let Some(path) = env::var_os(ARGS) else {
+        return;
+    };
+    let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let mut callbacks = AccountCallbacks {
+        case: serde_json::from_str(&env::var(ACCOUNT_CASE).unwrap()).unwrap(),
+        result: None,
+    };
+    rustc_driver::run_compiler(&args, &mut callbacks);
+    let result = callbacks.result.expect("actual model accounting callback");
+    std::fs::write(
+        env::var_os(RESULT).unwrap(),
+        serde_json::to_vec(&result).unwrap(),
+    )
+    .unwrap();
+    assert!(result.is_ok(), "model accounting: {result:?}");
+}
+
+#[test]
+#[ignore = "process helper; exact finite source request supplied by its parent"]
+fn expanded_model_account_child() {
+    if env::var_os(ARGS).is_none() {
+        return;
+    }
+    let response = PathBuf::from(env::var_os(RESULT).unwrap());
+    // Each case gets new one-shot MIR custody rather than recollecting a session.
+    for (ordinal, case) in ACCOUNT_CASES.into_iter().enumerate() {
+        let case_response = response.with_extension(format!("model-account-{ordinal}.json"));
+        assert!(!case_response.exists());
+        let child = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &ACCOUNT_CHILD.replace(
+                    "expanded_model_account_child",
+                    "expanded_model_account_case_child",
+                ),
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(ACCOUNT_CASE, serde_json::to_string(&case).unwrap())
+            .env(RESULT, &case_response)
+            .output()
+            .unwrap();
+        assert!(
+            child.status.success(),
+            "model case {case:?}: {}\n{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        let result: Result<(), String> =
+            serde_json::from_slice(&std::fs::read(case_response).unwrap()).unwrap();
+        result.unwrap();
+    }
+    let result: Result<usize, String> = Ok(ACCOUNT_CASES.len());
+    std::fs::write(response, serde_json::to_vec(&result).unwrap()).unwrap();
+}
+
+#[test]
 #[ignore = "requires pinned nightly rust-src and authentic ordinary AMD source compilation"]
 fn actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_overflow() {
     run_actual_sources::<Option<ModelObservation>>(
@@ -356,5 +572,13 @@ fn actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_
             )
         },
         |_, _, _, outcome, _| assert!(outcome.is_none()),
+    );
+    run_actual_sources::<usize>(
+        &[("model-account", "two")],
+        &[(0, 0)],
+        ACCOUNT_CHILD,
+        "EXPANDED_SUPPORT_ACCOUNT_V280",
+        |case| expanded_roots_tests::root_source_with_grid(case, Some(3)),
+        |_, _, _, completed, _| assert_eq!(completed, ACCOUNT_CASES.len()),
     );
 }
