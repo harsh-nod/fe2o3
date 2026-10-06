@@ -317,24 +317,46 @@ fn private_uniformity_volatile_copy_escape_and_loop_are_not_value_receipts() {
 
 #[test]
 fn private_uniformity_exact_and_one_short_budgets() {
-    with_inventory(&spill(), |inventory| {
-        let mut work = Work::new(usize::MAX);
-        let mut budget = Budget::new(&mut work, usize::MAX);
-        budget.reserve_storage(31).unwrap();
-        check_canonical_tile_convergence_v160(inventory, Function(0), &mut budget).unwrap();
-        let used = budget.work();
-        let peak = budget.peak_storage();
-        for (w, s) in [(used, peak), (used - 1, peak), (used, peak - 1)] {
-            let mut work = Work::new(w);
-            let mut budget = Budget::new(&mut work, s);
-            budget.reserve_storage(31).unwrap();
-            let result = check_canonical_tile_convergence_v160(inventory, Function(0), &mut budget);
-            if w == used && s == peak {
-                result.unwrap();
-            } else {
-                assert!(matches!(result, Err(Error::Resource(_))));
-            }
-            assert_eq!(budget.storage(), 31);
-        }
+    let mut chain = spill();
+    let blocks = &mut chain.functions[0].body.as_mut().unwrap().blocks;
+    blocks[2].terminator = Some(Terminator::Branch {
+        target: BlockId(1000),
+        arguments: vec![ValueId(42)],
     });
+    for n in (0..64).rev() {
+        let mut block = BasicBlock::new(BlockId(1000 + n));
+        block.parameters.push(ValueDef::new(
+            ValueId(100 + n),
+            pointer(AccessMode::ReadOnly),
+        ));
+        block.terminator = Some(Terminator::Branch {
+            target: BlockId(if n == 63 { 7 } else { 1001 + n }),
+            arguments: vec![ValueId(100 + n)],
+        });
+        blocks.push(block);
+    }
+    for input in [spill(), chain] {
+        with_inventory(&input, |inventory| {
+            let mut work = Work::new(usize::MAX);
+            let mut budget = Budget::new(&mut work, usize::MAX);
+            budget.reserve_storage(31).unwrap();
+            check_canonical_tile_convergence_v160(inventory, Function(0), &mut budget).unwrap();
+            let used = budget.work();
+            let peak = budget.peak_storage();
+            assert!(used < 1_000_000, "bounded reverse-order phi chain: {used}");
+            for (w, s) in [(used, peak), (used - 1, peak), (used, peak - 1)] {
+                let mut work = Work::new(w);
+                let mut budget = Budget::new(&mut work, s);
+                budget.reserve_storage(31).unwrap();
+                let result =
+                    check_canonical_tile_convergence_v160(inventory, Function(0), &mut budget);
+                if w == used && s == peak {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(result, Err(Error::Resource(_))));
+                }
+                assert_eq!(budget.storage(), 31);
+            }
+        });
+    }
 }
