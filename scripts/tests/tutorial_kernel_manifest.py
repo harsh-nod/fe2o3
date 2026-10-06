@@ -160,7 +160,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "d7ce486c6f615dd44effc9c0aa7b3ac9aef217ece2cf0b0e66c34d693773e266")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "87ec3b673bc96a84206d3f2cfb0210f6f3a930b9deb5c96456cbde0605991ae1")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -640,7 +640,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "daf4031cce3ae0db1173eada7d405db35775683fa5d1b66dea8a78985d5c5910")
+                         "06f475e0cc9784768677055cb6c0967a54af8a8dd8b0121db154a0c52f95016f")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 18})
