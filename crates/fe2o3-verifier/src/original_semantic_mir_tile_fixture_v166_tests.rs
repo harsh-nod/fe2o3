@@ -823,6 +823,53 @@ fn generate_actual_tile_target_v176(
 }
 
 #[test]
+fn original_execution_tile_target_census_admits_actual_index_arithmetic() {
+    use super::super::super::CanonicalByteScalarV30;
+    use super::super::tile_target::TileTargetV176;
+    use fe2o3_kernel_ir::{BinaryOp, FormalIndexWidth, Type as KirType};
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            |slots, _, out| {
+                let target = TileTargetV176::derive(slots, out)?;
+                let inventory = target.inventory(out)?;
+                let (mut adds, mut multiplies) = (0, 0);
+                for (index, row) in inventory.operations().iter().enumerate() {
+                    let OperationKind::Binary { op, .. } = row.operation.kind else {
+                        continue;
+                    };
+                    if !matches!(op, BinaryOp::Add | BinaryOp::Multiply) {
+                        continue;
+                    }
+                    assert_eq!(row.results.len(), 1);
+                    assert_eq!(
+                        inventory.definitions()[row.results.start].ty,
+                        &KirType::INDEX
+                    );
+                    CanonicalByteScalarV30::derive(
+                        inventory,
+                        index,
+                        FormalIndexWidth::Bits64,
+                        out,
+                    )?;
+                    match op {
+                        BinaryOp::Add => adds += 1,
+                        BinaryOp::Multiply => multiplies += 1,
+                        _ => unreachable!(),
+                    }
+                }
+                assert!(adds > 0 && multiplies > 0);
+                Ok(())
+            },
+        )
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
 fn original_execution_tile_target_emits_the_actual_expanded_graph() {
     for layout in [Layout::Blocked, Layout::Striped] {
         run_fixture(

@@ -287,6 +287,9 @@ pub(super) fn operation_expression(
         }
         Kind::Binary { op, .. } if input.len() == 2 => {
             let operation = match op {
+                BinaryOp::Add => OperatorV30::WrappingAdd,
+                BinaryOp::Subtract => OperatorV30::WrappingSubtract,
+                BinaryOp::Multiply => OperatorV30::WrappingMultiply,
                 BinaryOp::BitAnd => OperatorV30::And,
                 BinaryOp::BitOr => OperatorV30::Or,
                 BinaryOp::BitXor => OperatorV30::Xor,
@@ -299,6 +302,19 @@ pub(super) fn operation_expression(
             if nodes[input[0]].scalar != ty || nodes[input[1]].scalar != ty {
                 return Err(Error::Statement(
                     "original MIR target binary scalar types differ",
+                ));
+            }
+            if matches!(op, BinaryOp::Add | BinaryOp::Subtract | BinaryOp::Multiply)
+                && !matches!(
+                    ty,
+                    ScalarV30::Integer {
+                        width: 8 | 16 | 32 | 64,
+                        ..
+                    }
+                )
+            {
+                return Err(Error::Statement(
+                    "original MIR target wrapping arithmetic requires a concrete integer type",
                 ));
             }
             ExpressionV30::Binary {

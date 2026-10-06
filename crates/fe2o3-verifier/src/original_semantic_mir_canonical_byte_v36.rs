@@ -313,6 +313,9 @@ mod tests {
     mod select_v54 {
         include!("original_semantic_mir_canonical_select_v54_tests.rs");
     }
+    mod wrapping_v186 {
+        include!("original_semantic_mir_canonical_wrapping_v186_tests.rs");
+    }
     use fe2o3_kernel_ir::{
         BasicBlock, BinaryOp, BlockId, CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
         CanonicalKernelIrWorkBudgetV1 as Work, ComparePredicate, Constant, Function, Module,
@@ -377,7 +380,7 @@ mod tests {
                     6,
                     ty.clone(),
                     OperationKind::Binary {
-                        op: BinaryOp::Add,
+                        op: BinaryOp::Divide,
                         lhs: ValueId(0),
                         rhs: ValueId(1),
                     },
