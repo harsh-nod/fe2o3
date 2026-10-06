@@ -37,7 +37,11 @@ fn startup_engine_bound_dominates_each_admitted_dimension_without_admitting_it()
         d.handoff = MAX_COMPILER_MODULE_HANDOFF_BYTES_V2;
         match index {
             0 => {}
-            1 => d.module = MAX_COMPILER_MODULE_BYTES_V1,
+            1 => {
+                d.module = MAX_COMPILER_MODULE_BYTES_V1;
+                d.providers = 0;
+                d.provider_count = 0;
+            }
             2 => d.envelope = MAX_COMPILER_FFI_ENVELOPE_BYTES_V1,
             3 => d.manifest = MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1,
             4 => d.providers = MAX_WORKER_TOTAL_INPUT_BYTES - d.module,
@@ -83,6 +87,28 @@ fn startup_engine_bound_dominates_each_admitted_dimension_without_admitting_it()
             ..
         })
     ));
+}
+
+#[test]
+fn aggregate_input_boundary_accepts_exact_and_refuses_one_over() {
+    for module in [dimensions().module, MAX_COMPILER_MODULE_BYTES_V1] {
+        let mut d = dimensions();
+        d.handoff = MAX_COMPILER_MODULE_HANDOFF_BYTES_V2;
+        d.module = module;
+        d.providers = MAX_WORKER_TOTAL_INPUT_BYTES - module;
+        d.provider_count = usize::from(d.providers != 0);
+        assert!(NativeWorkerResourceQuote::from_dimensions(d).is_ok());
+        d.providers += 1;
+        d.provider_count = 1;
+        assert_eq!(
+            NativeWorkerResourceQuote::from_dimensions(d),
+            Err(NativeWorkerResourceQuoteError::HardBound {
+                component: "aggregate input payload",
+                actual: MAX_WORKER_TOTAL_INPUT_BYTES + 1,
+                maximum: MAX_WORKER_TOTAL_INPUT_BYTES,
+            })
+        );
+    }
 }
 
 fn module() -> CompilerModuleHandoffV2 {
