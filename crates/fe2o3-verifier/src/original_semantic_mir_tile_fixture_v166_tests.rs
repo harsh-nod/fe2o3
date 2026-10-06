@@ -763,7 +763,7 @@ fn generate_actual_tile_target_v176(
     let actual_operations = inventory.operations().len();
     assert!(actual_operations > 0);
     for row in inventory.definitions() {
-        assert!(!matches!(row.ty, fe2o3_kernel_ir::Type::ExecutionRole(_)));
+        assert!(!matches!(row.ty, fe2o3_kernel_ir::Type::Execution(_)));
     }
     let selected = tile.root_policy_v162(0, out.budget)?.unwrap().0;
     assert_eq!(target.root_function(0, out)?, selected);
