@@ -208,24 +208,30 @@ impl Callbacks for ExpandedCallbacks {
 
 #[test]
 #[ignore = "process helper; requires an exact actual-source request from its parent"]
-fn expanded_source_child() {
+fn expanded_source_case_child() {
     let Some(path) = env::var_os(ARGS) else {
         return;
     };
-    if let Some(case) = env::var_os(CASE) {
-        let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-        let mut callbacks = ExpandedCallbacks {
-            case: serde_json::from_str(case.to_str().unwrap()).unwrap(),
-            result: None,
-        };
-        rustc_driver::run_compiler(&args, &mut callbacks);
-        let result = callbacks.result.expect("ordinary expanded rustc callback");
-        std::fs::write(
-            env::var_os(RESULT).unwrap(),
-            serde_json::to_vec(&result).unwrap(),
-        )
-        .unwrap();
-        assert!(result.is_ok(), "expanded source: {result:?}");
+    let case = env::var(CASE).expect("the parent selects one explicit case");
+    let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let mut callbacks = ExpandedCallbacks {
+        case: serde_json::from_str(&case).unwrap(),
+        result: None,
+    };
+    rustc_driver::run_compiler(&args, &mut callbacks);
+    let result = callbacks.result.expect("ordinary expanded rustc callback");
+    std::fs::write(
+        env::var_os(RESULT).unwrap(),
+        serde_json::to_vec(&result).unwrap(),
+    )
+    .unwrap();
+    assert!(result.is_ok(), "expanded source: {result:?}");
+}
+
+#[test]
+#[ignore = "process helper; requires an exact actual-source request from its parent"]
+fn expanded_source_child() {
+    if env::var_os(ARGS).is_none() {
         return;
     }
     // Producer MIR is one-shot custody. Each independent accounting case must
@@ -236,7 +242,12 @@ fn expanded_source_child() {
         let case_response = response.with_extension(format!("case-{ordinal}.json"));
         assert!(!case_response.exists());
         let child = Command::new(env::current_exe().unwrap())
-            .args(["--exact", CHILD, "--ignored", "--nocapture"])
+            .args([
+                "--exact",
+                &CHILD.replace("expanded_source_child", "expanded_source_case_child"),
+                "--ignored",
+                "--nocapture",
+            ])
             .env(CASE, serde_json::to_string(&case).unwrap())
             .env(RESULT, &case_response)
             .output()
