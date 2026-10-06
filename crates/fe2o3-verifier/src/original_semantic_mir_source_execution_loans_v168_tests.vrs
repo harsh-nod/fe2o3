@@ -3,7 +3,14 @@ proof fn execution_rank_is_local_x_fastest_not_launch_rank_v168(execution: Memor
         execution.local == seq![2int, 1int, 1int],
     ensures invocation_source_workgroup_size_v168(execution) == 24,
         invocation_source_workgroup_rank_v168(execution) == 18,
-{}
+{
+    assert(execution.workgroup[0] == 4);
+    assert(execution.workgroup[1] == 3);
+    assert(execution.workgroup[2] == 2);
+    assert(execution.local[0] == 2);
+    assert(execution.local[1] == 1);
+    assert(execution.local[2] == 1);
+}
 
 proof fn execution_replacement_invalidates_old_origin_v168(
     source: InvocationSourceByteStateV36, reference: InvocationSourceExecutionReferenceV168,
