@@ -198,28 +198,32 @@ fn immutable_slice_helper_loop_keeps_both_carrier_components_on_the_backedge() {
     }
 }
 
-#[test]
-fn emitted_slice_helper_pairs_and_backedges_pass_llvm_verification() {
+fn assemble(text: &str) {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
+    let mut child = Command::new("llvm-as")
+        .args(["-", "-o", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("llvm-as is required by AMDGPU model integration tests");
+    let written = child.stdin.take().unwrap().write_all(text.as_bytes());
+    let output = child.wait_with_output().expect("wait for llvm-as");
+    assert!(
+        written.is_ok() && output.status.success(),
+        "LLVM rejected emitted slice helper IR: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn emitted_slice_helper_pairs_and_backedges_pass_llvm_verification() {
     for gfx950 in [false, true] {
         for module in [forwarding_module(), loop_module()] {
             let text = llvm(&exact_module(module, gfx950), gfx950).unwrap();
-            let mut child = Command::new("llvm-as")
-                .args(["-", "-o", "-"])
-                .stdin(Stdio::piped())
-                .stdout(Stdio::null())
-                .stderr(Stdio::piped())
-                .spawn()
-                .expect("llvm-as is required by AMDGPU model integration tests");
-            let written = child.stdin.take().unwrap().write_all(text.as_bytes());
-            let output = child.wait_with_output().expect("wait for llvm-as");
-            assert!(
-                written.is_ok() && output.status.success(),
-                "LLVM rejected emitted slice helper IR: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            assemble(&text);
         }
     }
 }
@@ -239,6 +243,48 @@ fn isolated_helper(ty: Type) -> Module {
     module
 }
 
+fn assert_helper_diagnostic(module: &Module, gfx950: bool, code: LoweringDiagnosticCode) {
+    let error = llvm(module, gfx950).unwrap_err();
+    assert_eq!(error.diagnostics().len(), 1, "{error}");
+    let diagnostic = &error.diagnostics()[0];
+    assert_eq!(diagnostic.code, code, "{error}");
+    assert_eq!(diagnostic.location.module, module.id);
+    assert_eq!(
+        diagnostic.location.function,
+        Some(FunctionId::new("helper"))
+    );
+    assert_eq!(diagnostic.location.kernel, None);
+    assert_eq!(diagnostic.location.block, None);
+    assert_eq!(diagnostic.location.operation, None);
+}
+
+#[test]
+fn f64_slice_helper_abi_is_admitted_but_an_uncalled_helper_still_needs_wave_width() {
+    for gfx950 in [false, true] {
+        let mut module = exact_module(
+            isolated_helper(Type::slice(
+                Type::Scalar(ScalarType::F64),
+                AddressSpace::Global,
+                AccessMode::ReadOnly,
+            )),
+            gfx950,
+        );
+        verify_module(&module).unwrap();
+        assert_helper_diagnostic(&module, gfx950, LoweringDiagnosticCode::MissingWaveWidth);
+        module.functions[1]
+            .required_capabilities
+            .insert(TargetCapability::WaveWidth(WaveWidth::Wave64));
+        verify_module(&module).unwrap();
+        let text = llvm(&module, gfx950).unwrap();
+        assert!(
+            text.contains(
+                "define internal void @helper(ptr addrspace(1) %arg0.data, i64 %arg0.len)"
+            )
+        );
+        assemble(&text);
+    }
+}
+
 #[test]
 fn slice_helper_abi_rejects_mutability_address_space_element_and_external_roles() {
     for gfx950 in [false, true] {
@@ -254,37 +300,37 @@ fn slice_helper_abi_rejects_mutability_address_space_element_and_external_roles(
                 AccessMode::ReadOnly,
             ),
             Type::slice(
-                Type::Scalar(ScalarType::F64),
+                Type::Scalar(ScalarType::Bool),
                 AddressSpace::Global,
                 AccessMode::ReadOnly,
             ),
         ] {
             let module = exact_module(isolated_helper(ty), gfx950);
             verify_module(&module).unwrap();
-            assert!(
-                llvm(&module, gfx950)
-                    .unwrap_err()
-                    .contains(LoweringDiagnosticCode::UnsupportedParameter)
+            assert_helper_diagnostic(
+                &module,
+                gfx950,
+                LoweringDiagnosticCode::UnsupportedParameter,
             );
         }
         let mut export = isolated_helper(slice());
         export.functions[1].role = FunctionRole::DeviceFfiExport;
         let export = exact_module(export, gfx950);
         verify_module(&export).unwrap();
-        assert!(
-            llvm(&export, gfx950)
-                .unwrap_err()
-                .contains(LoweringDiagnosticCode::UnsupportedParameter)
+        assert_helper_diagnostic(
+            &export,
+            gfx950,
+            LoweringDiagnosticCode::UnsupportedParameter,
         );
         let mut declaration = isolated_helper(slice());
         declaration.functions[1] =
             Function::declaration("helper", Signature::new(vec![slice()], vec![]));
         let declaration = exact_module(declaration, gfx950);
         verify_module(&declaration).unwrap();
-        assert!(
-            llvm(&declaration, gfx950)
-                .unwrap_err()
-                .contains(LoweringDiagnosticCode::UnsupportedParameter)
+        assert_helper_diagnostic(
+            &declaration,
+            gfx950,
+            LoweringDiagnosticCode::UnsupportedParameter,
         );
     }
 }

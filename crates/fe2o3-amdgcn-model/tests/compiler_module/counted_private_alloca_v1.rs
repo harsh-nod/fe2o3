@@ -283,6 +283,7 @@ fn positive_byte_span_is_checked_without_claiming_device_scratch_capacity() {
         (ScalarType::U8, 1_u64),
         (ScalarType::U32, 4),
         (ScalarType::U64, 8),
+        (ScalarType::F64, 8),
     ] {
         let max_count = (i32::MAX as u64) / bytes;
         let accepted = module_with_count(
@@ -310,6 +311,25 @@ fn positive_byte_span_is_checked_without_claiming_device_scratch_capacity() {
             "positive span within the 32-bit private index range",
         );
     }
+}
+
+#[test]
+fn f64_counted_private_allocations_preserve_width_and_alignment_on_both_targets() {
+    let module = module_with_count(Constant::Index(4), scalar(ScalarType::F64), 8);
+    for profile in [Profile::Gfx942, Profile::Gfx950] {
+        let llvm = lower(&module, profile).unwrap();
+        assert_eq!(llvm.matches(" = alloca ").count(), 1);
+        assert!(llvm.contains("%v1 = alloca double, i64 4, align 8, addrspace(5)"));
+        assemble(&llvm);
+    }
+    assert_refused(
+        &module_with_count(Constant::Index(4), scalar(ScalarType::F64), 4),
+        "requires alignment 8, found 4",
+    );
+    assert_refused(
+        &module_with_count(Constant::Index(0), scalar(ScalarType::F64), 8),
+        "positive span within the 32-bit private index range",
+    );
 }
 
 #[test]
@@ -379,7 +399,6 @@ fn pointer_elements_unsupported_scalars_spaces_and_insufficient_alignment_stay_r
     for element in [
         Type::pointer(Type::Unit, AddressSpace::Global, AccessMode::ReadWrite),
         scalar(ScalarType::Bool),
-        scalar(ScalarType::F64),
     ] {
         let module = module_with_count(Constant::Index(4), element, 8);
         for profile in [Profile::Gfx942, Profile::Gfx950] {
