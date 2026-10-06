@@ -5,6 +5,113 @@ use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
 
 const LIMIT: usize = 512 * 1024 * 1024;
 
+fn support_only(
+    layout: Layout,
+    width: FormalIndexWidth,
+    endianness: EndiannessV2,
+    work: usize,
+    storage: usize,
+    inspect: impl FnOnce(&str),
+) -> (Result<()>, usize, usize, usize) {
+    run_fixture_with_plan(layout, work, storage, |plan, slots, _, out| {
+        let model = ExpandedGenerationV221::derive(plan, slots, width, endianness, out)?;
+        let start = out.text.len();
+        model.emit_support(out)?;
+        model.finish(out)?;
+        let generated = &out.text[start..];
+        for marker in [
+            "spec fn invocation_source_byte_block_0_v36(",
+            "spec fn byte_micro_step_0_v30(",
+            "spec fn invocation_tile_micro_seek_0_v181(",
+        ] {
+            assert_eq!(generated.matches(marker).count(), 1, "{marker}");
+        }
+        assert!(generated.contains("proof fn invocation_context_issue_segment_"));
+        assert!(!generated.contains("spec fn invocation_expanded_live_values_"));
+        assert!(!generated.contains("spec fn expanded_source_component_"));
+        assert!(!generated.contains("proof fn invocation_paired_"));
+        assert!(!generated.contains("assume("));
+        let bytes = match width {
+            FormalIndexWidth::Bits32 => 4,
+            FormalIndexWidth::Bits64 => 8,
+            FormalIndexWidth::Unknown => panic!("support fixture needs a known index width"),
+        };
+        assert!(generated.contains(&format!(
+            "spec fn invocation_runtime_index_bytes_v36() -> int {{ {bytes} }}"
+        )));
+        assert!(generated.contains(&format!(
+            "spec fn invocation_runtime_little_endian_v36() -> bool {{ {} }}",
+            endianness == EndiannessV2::Little
+        )));
+        inspect(generated);
+        Ok(())
+    })
+}
+
+#[test]
+fn expanded_generation_support_checks_real_steps_and_runtime_without_live_value_claims() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        for width in [FormalIndexWidth::Bits32, FormalIndexWidth::Bits64] {
+            for endianness in [EndiannessV2::Little, EndiannessV2::Big] {
+                support_only(layout, width, endianness, LIMIT, LIMIT, |_| {})
+                    .0
+                    .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn expanded_generation_support_has_exact_and_one_short_resources() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let run = |work, storage| {
+            support_only(
+                layout,
+                FormalIndexWidth::Bits64,
+                EndiannessV2::Little,
+                work,
+                storage,
+                |_| {},
+            )
+        };
+        let baseline = run(LIMIT, LIMIT);
+        baseline.0.unwrap();
+        let exact = run(baseline.1, baseline.3);
+        exact.0.unwrap();
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (baseline.1, baseline.2, baseline.3)
+        );
+        assert!(matches!(run(baseline.1 - 1, baseline.3).0,
+            Err(Error::Resource(Resource::Work(error)))
+                | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+            if error.actual() == baseline.1 && error.limit() == baseline.1 - 1));
+        assert!(matches!(run(baseline.1, baseline.3 - 1).0,
+            Err(Error::Resource(Resource::Storage(error)))
+                | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+            if error.actual() == baseline.3 && error.limit() == baseline.3 - 1));
+    }
+}
+
+#[test]
+#[ignore = "complete actual ContextIssue step models; no whole paired refinement authority"]
+fn diagnostic_complete_context_issue_segment_models_export_v224() {
+    use sha2::{Digest, Sha256};
+    use std::io::{BufWriter, Write as _};
+    for (layout, label) in [(Layout::Blocked, "blocked"), (Layout::Striped, "striped")] {
+        support_only(layout, FormalIndexWidth::Bits64, EndiannessV2::Little, LIMIT, LIMIT, |generated| {
+            assert!(generated.len() <= 16 * 1024 * 1024);
+            let mut output = BufWriter::new(std::io::stdout().lock());
+            write!(output, "{{\"kind\":\"fe2o3-context-issue-segment-model-v224\",\"scope\":\"actual ContextIssue endpoint replay only\",\"layout\":\"{label}\",\"bytes\":{},\"sha256\":\"", generated.len()).unwrap();
+            for byte in Sha256::digest(generated.as_bytes()) { write!(output, "{byte:02x}").unwrap(); }
+            write!(output, "\",\"model_hex\":\"").unwrap();
+            for byte in generated.as_bytes() { write!(output, "{byte:02x}").unwrap(); }
+            writeln!(output, "\"}}").unwrap();
+            output.flush().unwrap();
+        }).0.unwrap();
+    }
+}
+
 #[test]
 fn expanded_generation_headers_cover_context_and_runtime_queries() {
     let retained = size_of::<ExpandedGenerationV221<'_, '_, '_, '_>>();
