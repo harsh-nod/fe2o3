@@ -3,6 +3,8 @@
 use super::*;
 use fe2o3_kernel_ir::Terminator;
 
+#[path = "original_semantic_mir_constructor_pc_generate_v182.rs"]
+mod source_pc;
 #[path = "original_semantic_mir_constructor_record_generate_v181.rs"]
 mod source_record;
 
@@ -255,11 +257,7 @@ fn source_state(
     out.budget.charge_work(5)?;
     emit!(
         out,
-        " invocation_source_entry_initialize_pc_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n",
-        entry.pc,
-        entry.locals.start,
-        entry.locals.end,
-        entry.owner
+        " invocation_constructor_source_pc_{root}_{pc}_v182(source);\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n"
     );
     Ok(())
 }
@@ -283,6 +281,7 @@ fn source_runtime(
     if fuel > *hints.fuels.get(hint.instance).ok_or_else(mismatch)? {
         return Err(mismatch());
     }
+    source_pc::emit(root, pc, call, entry, out)?;
     source_record::emit(root, pc, hint, call, out)?;
     emit!(
         out,
@@ -348,35 +347,10 @@ fn source_runtime(
         call.child,
         call.arguments.len()
     );
-    // Empty observations also exclude a trap. Derive that PC fact without
-    // unfolding the state-wide initializer or the installed argument values.
-    out.budget.charge_work(5)?;
+    out.budget.charge_work(1)?;
     emit!(
         out,
-        " invocation_source_entry_initialize_pc_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));\n let installed_0 = invocation_source_entry_initialize_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));\n",
-        entry.pc,
-        entry.locals.start,
-        entry.locals.end,
-        entry.owner,
-        entry.pc,
-        entry.locals.start,
-        entry.locals.end,
-        entry.owner
-    );
-    for (ordinal, (destination, (local, _, _))) in
-        entry.arguments.iter().zip(&call.arguments).enumerate()
-    {
-        out.budget.charge_work(4)?;
-        let next = add(ordinal, 1)?;
-        emit!(
-            out,
-            " invocation_source_entry_put_local_pc_v179(installed_{ordinal}, {destination}, source.machine.values[{local}]);\n let installed_{next} = invocation_source_byte_put_local_v36(installed_{ordinal}, {destination}, source.machine.values[{local}]);\n"
-        );
-    }
-    emit!(
-        out,
-        " assert(invocation_constructor_source_{root}_{pc}_v162(source).machine.pc == {});\n",
-        entry.pc
+        " invocation_constructor_source_pc_{root}_{pc}_v182(source);\n"
     );
     emit!(
         out,
