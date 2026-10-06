@@ -498,6 +498,26 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         assert!(!source.contains(forbidden));
     }
     assert!(!source.contains("reveal(invocation_context_issue_coupled_v211);"));
+    for name in [
+        "invocation_context_issue_fresh_preserves_frame_v259",
+        "invocation_source_checked_add_reconstruction_step_v259",
+    ] {
+        let body = source
+            .split_once(&format!("proof fn {name}("))
+            .unwrap()
+            .1
+            .split_once("\n{\n")
+            .unwrap()
+            .1
+            .split("\nproof fn ")
+            .next()
+            .unwrap();
+        assert!(!body.contains("let leaves ="));
+        assert!(body.contains("assert(invocation_source_aggregate_well_formed_v42(aggregate));"));
+        assert!(body.contains(
+            "assert(aggregate.execution_lease.is_none());\n    invocation_source_plain_aggregate_install_frame_v260("
+        ));
+    }
 }
 
 #[test]

@@ -149,14 +149,16 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
         reveal(invocation_context_issue_fresh_enabled_v211);
     }
     invocation_context_marker_aggregate_well_formed_v260(issue.source_type);
-    let leaves = Map::empty()
-        .insert(seq![0int], MemoryValueV30::Unit)
-        .insert(seq![1int], MemoryValueV30::Unit)
-        .insert(seq![2int], MemoryValueV30::Unit)
-        .insert(seq![3int], MemoryValueV30::Unit)
-        .insert(seq![4int], MemoryValueV30::Unit);
     let aggregate = InvocationSourceAggregateV42 {
-        source_type: issue.source_type, execution_lease: None, leaves };
+        source_type: issue.source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Unit)
+            .insert(seq![1int], MemoryValueV30::Unit)
+            .insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+            .insert(seq![4int], MemoryValueV30::Unit) };
+    assert(invocation_source_aggregate_well_formed_v42(aggregate));
+    assert(aggregate.execution_lease.is_none());
     invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);
     assert(invocation_source_context_issue_v161(source, issue).source
         == invocation_source_aggregate_install_v42(source, issue.destination, aggregate)) by {
@@ -346,14 +348,15 @@ proof fn invocation_source_checked_add_reconstruction_step_v259(
     invocation_source_checked_add_replays_install_v260(source, destination, source_type,
         left_operand, right_operand, left, right, root, instance, little_endian);
     invocation_checked_add_aggregate_complete_v260(source_type, left, right);
-    let leaves = Map::empty()
-        .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
-        .insert(seq![1int], MemoryValueV30::Scalar(
-            if left + right >= 4294967296 { 1int } else { 0int }));
     let aggregate = InvocationSourceAggregateV42 {
-        source_type, execution_lease: None, leaves };
+        source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+            .insert(seq![1int], MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int })) };
     assert(invocation_source_aggregate_well_formed_v42(aggregate));
     assert(invocation_source_aggregate_complete_v42(aggregate));
+    assert(aggregate.execution_lease.is_none());
     invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);
     let installed = invocation_source_aggregate_install_v42(source, destination, aggregate);
     assert(installed == (InvocationSourceByteStateV36 {
