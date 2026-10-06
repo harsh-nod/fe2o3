@@ -154,3 +154,35 @@ cleanup, full toolchain attestation, memory reservation or sandbox guarantees.
 A receipt file alone is not acceptance: require the completed command exit 0.
 No GPU execution, physical register sampling, host admission or milestone
 completion is claimed.
+
+## Actual same-count source ladder — 2026-10-06
+
+The root-owned gate completed fourteen real-rustc sessions: `one`, `registers`
+and the five additional same-count hazards above, each in `observe` and
+`diagnostic` mode. All ten negative sessions matched their specific expected
+hazard diagnostic. Both positive pairs joined canonical, inert LLVM and
+native-observation bytes exactly. All fourteen recorded an actual callback and
+unchanged source. The earlier statement that these new actual results were
+pending is superseded by this dated observation.
+
+The normal outer gate passed with identical source, tool and selected-input
+pre/post records. It selected the historical hazards-target backend test ELF
+(507,446,200 bytes, SHA256
+`297f1e31ec487f2fc761ca13b61880f1e687e063a56188a773fe6c6c45862a4f`).
+Its four selected fixture/test source leaves are byte-identical at public
+commit `a4d8625791f2dddb898fde3235ebbb410133959c`; no whole-commit rebuild
+or later-source execution is inferred from that association.
+
+Retained evidence under the work root:
+
+- `phase28-m3-v22-source-hazard-actual-r75-r1/observation.json`:
+  56,218 bytes, SHA256 `86a87cfe7352e5e02c477ca650d11d8f83701d4e159933afdaf67539e68871e9`.
+- `logs/phase28-resume-r75-m3-v22-actual-source-hazard-ladder-r1/receipt.json`:
+  237,522 bytes, SHA256 `2e0d54f5803c764f364dd1a46cbdd3dea8f338a90e6ad99e319b7bd6d96382c5`.
+- `phase28-drafts/m3-v22-source-hazard-actual-root-r75-r1/MANIFEST.json`:
+  3,537 bytes, SHA256 `eda56d5257ce639c3c544673193d7edc20725b850c2264ce7b50d5d692d14c5b`.
+
+This is pre-ranked source/CPU diagnostic coverage. The masked-suffix case is
+not a general convergence or deadlock proof. No native LLVM or GPU ran, and
+ranked/formal/descriptor continuation, protected finalization and launch remain
+unqualified by this gate. M3 and the overall 7/18 acceptance count are unchanged.
