@@ -67,6 +67,34 @@ struct ParentArtifactCustody<'a, 'b, 'w> {
     readiness: Readiness<'b, 'w>,
     invocation: &'a Invocation,
     configuration_storage: usize,
+    policy_origin: PolicyOrigin,
+}
+
+// These are independent caller limits/target, never values read from a handoff.
+// Only successful original-root admission below records the nominated variant.
+#[derive(Clone, Copy)]
+struct RecoveryParameters {
+    history_limits: fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1,
+    target: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+}
+#[derive(Clone, Copy)]
+enum PolicyOrigin {
+    Independent,
+    OriginalRoot(RecoveryParameters),
+}
+impl PolicyOrigin {
+    fn original_parameters(self) -> Result<RecoveryParameters> {
+        match self {
+            Self::OriginalRoot(parameters) => Ok(parameters),
+            Self::Independent => {
+                Err(Failure::Mismatch("publication has no original-root policy admission").into())
+            }
+        }
+    }
+}
+enum SelectedPolicy<'a, 'r> {
+    Independent(&'a ConditionalRecoveryPolicy<'r>),
+    OriginalRoot(RecoveryParameters),
 }
 impl ParentPreparedConditionalArtifact<'_, '_, '_> {
     const HEADER: usize = size_of::<Self>()
@@ -144,6 +172,73 @@ impl<'a, 'b, 'w> ParentPreparedConditionalArtifact<'a, 'b, 'w> {
         )?;
         // The old publication was dropped by successful exact fresh/recovered
         // comparison. Retire only its known charge and our superseded header.
+        replacement.finish(
+            charge,
+            ParentDurableConditionalArtifact::HEADER,
+            custody.readiness.budget,
+        )?;
+        Ok(ParentDurableConditionalArtifact {
+            publication,
+            custody,
+        })
+    }
+
+    /// Only the original-root path can nominate its retained policies. Approval,
+    /// original completion, exact invocation and signed carriage are revalidated
+    /// before lending those values and again after concrete durable recovery.
+    /// No policy, artifact or account borrow is synthesized by this transition.
+    pub(crate) fn persist_original_root(
+        mut self,
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+    ) -> Result<ParentDurableConditionalArtifact<'a, 'b, 'w>> {
+        self.revalidate()?;
+        self.custody.readiness.origin.require_original_root()?;
+        let parameters = self.custody.policy_origin.original_parameters()?;
+        self.custody
+            .readiness
+            .origin
+            .require_output(output_dir, self.custody.readiness.budget)?;
+        let retired = self
+            .publication
+            .required_retained_storage()
+            .checked_add(Self::HEADER)
+            .ok_or(Resource::Arithmetic)?;
+        let replacement = replacement::Replacement::begin(retired, self.custody.readiness.budget)?;
+        let Self {
+            publication,
+            mut custody,
+        } = self;
+        let (publication, storage) = custody.policy_roster.with_root_policies(
+            custody.readiness.budget,
+            |roots, budget| {
+                let (publication, storage) = persist_publication(
+                    output_dir,
+                    producer,
+                    publication,
+                    ConditionalRecoveryPolicy {
+                        roots,
+                        history_limits: parameters.history_limits,
+                        target: parameters.target,
+                    },
+                    budget,
+                )?;
+                budget.reserve_storage(storage.retained_storage())?;
+                Ok::<_, ContinuationError>((publication, storage))
+            },
+        )??;
+        let charge = storage.retained_storage();
+        if charge != publication.required_retained_storage() {
+            return Err(Resource::Accounting.into());
+        }
+        // The policy-view callback reserved this owner before dropping its view
+        // scratch. finish() later checks the exact original replacement balance.
+        custody.revalidate(
+            publication.finalized(),
+            publication.transcript(),
+            charge,
+            ParentDurableConditionalArtifact::HEADER,
+        )?;
         replacement.finish(
             charge,
             ParentDurableConditionalArtifact::HEADER,
@@ -246,12 +341,65 @@ impl<'b, 'w> Readiness<'b, 'w> {
     /// returned owners are already charged on this custody's original account.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn finalize_current_publication<'a>(
-        mut self,
+        self,
         output_dir: &Path,
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
         invocation: &'a Invocation,
         policy: &ConditionalRecoveryPolicy<'_>,
+        recipe: PreparedNativeProductionBuildConfig,
+        approval: Approval,
+    ) -> Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>> {
+        self.finalize_current_using(
+            output_dir,
+            producer,
+            attempt,
+            invocation,
+            SelectedPolicy::Independent(policy),
+            recipe,
+            approval,
+        )
+    }
+
+    /// Trust compiler-nominated proof keys only after the original root runtime
+    /// completion, fixed-root approved images/profile, exact invocation and
+    /// current signed publication all join. This is not a packet-only provider.
+    /// Independent history limits and target still come from the managed build.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn finalize_original_root_publication<'a>(
+        self,
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        invocation: &'a Invocation,
+        history_limits: fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1,
+        target: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+        recipe: PreparedNativeProductionBuildConfig,
+        approval: Approval,
+    ) -> Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>> {
+        self.origin.require_original_root()?;
+        self.finalize_current_using(
+            output_dir,
+            producer,
+            attempt,
+            invocation,
+            SelectedPolicy::OriginalRoot(RecoveryParameters {
+                history_limits,
+                target,
+            }),
+            recipe,
+            approval,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn finalize_current_using<'a>(
+        mut self,
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        invocation: &'a Invocation,
+        policy: SelectedPolicy<'_, '_>,
         recipe: PreparedNativeProductionBuildConfig,
         approval: Approval,
     ) -> Result<ParentPreparedConditionalArtifact<'a, 'b, 'w>> {
@@ -276,29 +424,66 @@ impl<'b, 'w> Readiness<'b, 'w> {
         require_approved_profile(&approval, &mut self)?;
         let compiler_execution = self.admit_current_receipt(&lease, &token)?;
 
-        // The committed roster must agree with independently supplied policy.
-        // Neither an embedded key nor this receipt alone approves a compiler runtime.
+        // No policy value is lent before ALL original occurrence, approval and
+        // signed-current-publication checks above succeed. The independent path
+        // additionally requires exact equality with its supplied policy backing.
         let (policy_roster, storage) = reconstruct_policies(
             token.handoff().capsule().policy_roster_bytes(),
             token.handoff().capsule().source_packet_bytes(),
             self.budget,
         )?;
         self.budget.reserve_storage(storage.retained_storage())?;
-        policy_roster.require_expected_policies(policy.roots, self.budget)?;
+        if let SelectedPolicy::Independent(policy) = &policy {
+            policy_roster.require_expected_policies(policy.roots, self.budget)?;
+        }
         token.revalidate_locked_currentness(self.budget)?;
 
         // No blanket-refund scope may enclose this concrete terminal recovery.
-        let (token, storage) = token.try_map_handoff(self.budget, |handoff, b| {
-            recover(
-                handoff,
-                policy.roots,
-                policy.history_limits,
-                policy.target,
-                b,
-            )
-            .map(|(source, storage)| (source, storage.retained_storage()))
-        })?;
-        self.budget.reserve_storage(storage.retained_storage())?;
+        let (token, policy_origin) = match policy {
+            SelectedPolicy::Independent(policy) => {
+                let (token, storage) = token.try_map_handoff(self.budget, |handoff, b| {
+                    recover(
+                        handoff,
+                        policy.roots,
+                        policy.history_limits,
+                        policy.target,
+                        b,
+                    )
+                    .map(|(source, storage)| (source, storage.retained_storage()))
+                })?;
+                self.budget.reserve_storage(storage.retained_storage())?;
+                (token, PolicyOrigin::Independent)
+            }
+            SelectedPolicy::OriginalRoot(parameters) => {
+                self.origin.require_original_root()?;
+                approval.require_compiler(closure, self.budget)?;
+                require_approved_profile(&approval, &mut self)?;
+                self.revalidate()?;
+                check_pair(
+                    &mut self,
+                    invocation,
+                    token.receipt(),
+                    token.handoff(),
+                    &compiler_execution,
+                )?;
+                let token = policy_roster.with_root_policies(self.budget, |roots, b| {
+                    let (token, storage) = token.try_map_handoff(b, |handoff, b| {
+                        recover(
+                            handoff,
+                            roots,
+                            parameters.history_limits,
+                            parameters.target,
+                            b,
+                        )
+                        .map(|(source, storage)| (source, storage.retained_storage()))
+                    })?;
+                    b.reserve_storage(storage.retained_storage())?;
+                    Ok::<_, ContinuationError>(token)
+                })??;
+                (token, PolicyOrigin::OriginalRoot(parameters))
+            }
+        };
+        // Each branch retains the mapped owner before any lent policy view dies.
         let receipt = token.receipt();
         let (prepared, storage) = preflight(
             &token,
@@ -351,6 +536,7 @@ impl<'b, 'w> Readiness<'b, 'w> {
                 readiness: self,
                 invocation,
                 configuration_storage,
+                policy_origin,
             },
         };
         prepared.revalidate()?;
@@ -432,6 +618,30 @@ mod tests {
             }
             assert_eq!(b.storage(), storage);
             assert!(b.work_ledger_identity_v1() == ledger);
+        }
+    }
+
+    #[test]
+    fn independent_policy_origin_cannot_use_nominated_persistence() {
+        assert!(PolicyOrigin::Independent.original_parameters().is_err());
+        for target in [
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
+        ] {
+            let parameters = RecoveryParameters {
+                history_limits: fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1 {
+                    refinement: Default::default(),
+                    forwarding: Default::default(),
+                },
+                target,
+            };
+            // This private scalar test constructs no approval, runtime, root
+            // completion or artifact. It only checks the selected policy mode.
+            let retained = PolicyOrigin::OriginalRoot(parameters)
+                .original_parameters()
+                .unwrap();
+            assert_eq!(retained.history_limits, parameters.history_limits);
+            assert_eq!(retained.target, target);
         }
     }
 }

@@ -33,6 +33,15 @@ pub(super) enum Origin<'b> {
     Root(RootEvidence<'b>),
 }
 impl Origin<'_> {
+    pub(super) fn require_original_root(&self) -> Result<()> {
+        match self {
+            Self::Root(_) => Ok(()),
+            Self::Local(_) => Err(Failure::Mismatch(
+                "compiler-nominated policy requires original root custody",
+            )),
+        }
+    }
+
     pub(super) fn manifest(&self) -> &Manifest {
         match self {
             Self::Local(received) => received.manifest(),

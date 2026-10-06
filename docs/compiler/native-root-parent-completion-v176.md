@@ -39,6 +39,29 @@ budget callback. Artifact persistence runs outside the transport's refundable
 scopes. Construction quotas account for nested records and both original input
 owners; downstream recipe and worker schedules must remain on that same account.
 
+## Compiler-Nominated Policies
+
+The private original-root finalizer follows the existing fixed approval rule in
+`compiler_approval_v2.rs`: compiler-nominated proof keys become acceptable only
+after approved immutable code/profile, protected original runtime completion,
+exact parent invocation, current publication Subject and signed carriage all
+join. An inert policy roster, ordinary local child or supplied-policy artifact
+cannot select this path. History limits and target remain independent managed
+build inputs, not values accepted from a handoff.
+
+The original-root variant lends the source-bound roster only after those checks,
+retains its exact policy origin through the artifact, and repeats approval,
+root, invocation, Subject and carriage checks after durable source recovery.
+Returned owners are charged before temporary policy views are destroyed. The
+existing independently supplied-policy API continues to require exact roster
+equality. Neither route creates another compiler receipt or bypasses verifier,
+worker or journal validation.
+
+The component accounting/selection tests do not establish root authenticity.
+Coherent compilation and negative joined tests for stale/mismatched approval,
+Subject and original transport, followed by actual native qualification, remain
+required before activation.
+
 ## Remaining Integration
 
 The wrapper now exposes the consuming continuation, but its selected callback

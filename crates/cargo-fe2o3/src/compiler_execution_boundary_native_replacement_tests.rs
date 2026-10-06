@@ -29,6 +29,38 @@ fn replacement_retires_only_consumed_storage_after_exact_success() {
 }
 
 #[test]
+fn replacement_retains_callback_output_after_only_policy_view_scratch_drops() {
+    const VIEW: usize = 47;
+    for (work_limit, storage_limit) in [(16, PEAK + VIEW), (15, PEAK + VIEW), (16, PEAK + VIEW - 1)]
+    {
+        let mut work = Work::new(work_limit);
+        let mut b = Budget::new(&mut work, storage_limit);
+        b.reserve_storage(INPUT).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        let replacement = Replacement::begin(RETIRED, &mut b).unwrap();
+        b.reserve_storage(VIEW).unwrap();
+        let reserved = b.reserve_storage(OUTPUT);
+        if storage_limit < PEAK + VIEW {
+            assert!(matches!(reserved, Err(Resource::Storage(_))));
+            assert_eq!(b.storage(), INPUT + FRAME + VIEW);
+            continue;
+        }
+        reserved.unwrap();
+        b.release_storage(VIEW).unwrap();
+        assert_eq!(b.storage(), PEAK);
+        let result = replacement.finish(OUTPUT, HEADER, &mut b);
+        if work_limit < 16 {
+            assert!(matches!(result, Err(Resource::Work(_))));
+            assert_eq!(b.storage(), PEAK);
+        } else {
+            result.unwrap();
+            assert_eq!(b.storage(), INPUT - RETIRED + OUTPUT + HEADER);
+        }
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
+}
+
+#[test]
 fn replacement_entry_refuses_short_floor_work_and_storage_before_retirement() {
     for (input, quota, limit) in [
         (RETIRED - 1, 16, PEAK),
