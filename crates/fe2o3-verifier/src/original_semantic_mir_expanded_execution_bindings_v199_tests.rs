@@ -58,6 +58,13 @@ fn exercise(
         + size_of::<Option<execution_loans::ExecutionOperand>>()
         + size_of::<Result<()>>()
         + 12 * size_of::<usize>();
+    let issue_frame = size_of::<fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>>()
+        + size_of::<Owner>()
+        + size_of::<Site>()
+        + size_of::<Definition>()
+        + size_of::<Option<usize>>()
+        + size_of::<Result<()>>()
+        + 10 * size_of::<usize>();
     assert_eq!(
         out.budget.storage() - before,
         retained
@@ -71,6 +78,7 @@ fn exercise(
             + size_of::<&str>()
             + outer_frame
             + payload_frame
+            + issue_frame
     );
     bindings.check_owner(plan, slots, &target, out)?;
     let source = plan.source(out)?;
@@ -78,8 +86,8 @@ fn exercise(
     let archive = source.source_ssa(out.budget)?;
     let root = plan.root(0, out)?;
     let mut seen = BTreeSet::new();
-    let (mut owned, mut borrowed, mut payloads, mut payload_leases) =
-        (0usize, 0usize, 0usize, 0usize);
+    let (mut owned, mut borrowed, mut payloads, mut payload_leases, mut issues) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
     for instance in 0..root.instances.len() {
         let row = plan.instance(0, instance, out)?;
         if !row.active {
@@ -227,6 +235,32 @@ fn exercise(
                         bindings.emit_payload_lease_conjunct_v209(0, instance, value, out),
                     )?;
                     assert_eq!(out.text.len(), end);
+                    if !is_borrowed && role == SourceRole::KernelContext {
+                        let endpoint = slots
+                            .correspondence(out)?
+                            .ssa_typed_endpoint_v36(0, instance, value, out.budget)?;
+                        let owner = endpoint.execution_owner_v199(out.budget)?.unwrap();
+                        let site = bindings.site(0, owner.identity, KirRole::Context, out)?;
+                        bindings.emit_context_issue_step_v211(0, instance, value, out)?;
+                        assert_eq!(
+                            &out.text[end..],
+                            format!(
+                                "invocation_context_issue_coupled_v211(source, target, execution_map, InvocationSourceContextIssueV161 {{ destination: {}, source_type: {} }}, MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }}, {})",
+                                row.locals.start + owner.identity.destination.index() as usize,
+                                owner.identity.source_type.index(),
+                                site.operation.block.function.0,
+                                site.operation.block.block,
+                                site.operation.operation,
+                                site.definition
+                            )
+                        );
+                        issues += 1;
+                    } else {
+                        payload_refusal(
+                            bindings.emit_context_issue_step_v211(0, instance, value, out),
+                        )?;
+                        assert_eq!(out.text.len(), end);
+                    }
                     if is_borrowed {
                         borrowed += 1;
                     } else {
@@ -297,12 +331,26 @@ fn exercise(
             }
         }
     }
-    assert!(owned > 0 && borrowed > 0 && payloads > 0 && payload_leases > 0);
+    assert!(owned > 0 && borrowed > 0 && payloads > 0 && payload_leases > 0 && issues > 0);
     assert!(SHARED.contains("scope.parent == Some(context.identity)"));
     assert!(SHARED.contains("context.child == Some(scope.identity)"));
     assert!(SHARED.contains("invocation_source_execution_lease_current_v170"));
     assert!(SHARED.contains("binding.lease_recipe == Some(lease.recipe)"));
     assert!(!SHARED.contains("origin_version == scope.identity.epoch"));
+    assert!(
+        SHARED.contains("let source_next = invocation_source_context_issue_v161(source, issue);")
+    );
+    assert!(
+        SHARED.contains(
+            "let target_next = byte_execution_step_v178(target, site, 0, destination, -1);"
+        )
+    );
+    assert!(SHARED.contains("version: source_next.source.logical.versions[issue.destination]"));
+    assert!(
+        SHARED
+            .contains("frame: source.machine.frames.active.last(), source_type: issue.source_type")
+    );
+    assert!(SHARED.contains("invocation_context_issue_fresh_has_exact_updates_v211"));
     Ok(())
 }
 

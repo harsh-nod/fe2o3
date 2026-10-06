@@ -30,8 +30,11 @@ pub(super) const SHARED: &str = concat!(
     include_str!("original_semantic_mir_expanded_execution_bindings_v199.vrs"),
     include_str!("original_semantic_mir_execution_correspondence_v205.vrs"),
     include_str!("original_semantic_mir_expanded_payload_lease_v209.vrs"),
+    include_str!("original_semantic_mir_context_issue_coupling_v211.vrs"),
 );
 
+#[path = "original_semantic_mir_context_issue_coupling_v211.rs"]
+mod context_issue;
 #[path = "original_semantic_mir_expanded_payload_lease_v209.rs"]
 mod payload_lease;
 
@@ -77,6 +80,7 @@ impl<'plan, 'target, 'slots, 'view, 'source>
             + size_of::<&mut Writer<'_, '_>>()
             + size_of::<Result<()>>()
             + payload_lease::headers()
+            + context_issue::headers()
     }
 
     pub(super) fn derive(

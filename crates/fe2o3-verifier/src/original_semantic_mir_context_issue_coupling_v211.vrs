@@ -1,0 +1,194 @@
+// Actual operation-level transitions, not a whole-cut simulation. The caller
+// must bind these operands to the original event and retained target operation.
+// Source frames/versions and target frames/epochs remain independent identities.
+struct InvocationContextIssueCoupledV211 {
+    source: InvocationSourceTileResultV161,
+    target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    updated: bool,
+}
+
+spec fn invocation_context_issue_coupled_v211(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    issue: InvocationSourceContextIssueV161, site: MemorySourceOperationV30,
+    destination: int,
+) -> InvocationContextIssueCoupledV211 {
+    let source_next = invocation_source_context_issue_v161(source, issue);
+    let target_next = byte_execution_step_v178(target, site, 0, destination, -1);
+    let unchanged = InvocationContextIssueCoupledV211 {
+        source: source_next, target: target_next, execution_map, updated: false };
+    if !source_next.source.machine.valid || !target_next.valid
+        || source.machine.frames.active.len() == 0
+        || !(0 <= issue.destination < source_next.source.logical.versions.len()) {
+        unchanged
+    } else { match byte_execution_capability_v178(target_next, destination, 0) {
+        Some(capability) => InvocationContextIssueCoupledV211 {
+            execution_map: execution_map.insert(capability.identity, InvocationExecutionOriginV205 {
+                local: issue.destination,
+                version: source_next.source.logical.versions[issue.destination],
+                frame: source.machine.frames.active.last(), source_type: issue.source_type,
+                role: InvocationSourceExecutionRoleV168::Context,
+            }), updated: true, ..unchanged },
+        None => unchanged,
+    } }
+}
+
+// This first rule covers fresh destinations. Retained-slot reissue, map retirement,
+// outstanding execution loans and subsequent frame transitions require their own
+// preservation rules; they are not inferred from a successful map insertion.
+spec fn invocation_context_issue_fresh_enabled_v211(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    issue: InvocationSourceContextIssueV161, site: MemorySourceOperationV30,
+    destination: int,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && source.machine.frames.active.len() > 0
+        && source.machine.frames.execution.is_some()
+        && byte_execution_well_formed_v37(source.machine.frames.execution.unwrap())
+        && invocation_source_context_shape_v161(issue.source_type)
+        && issue.source_type >= 0
+        && 0 <= issue.destination < source.machine.values.len()
+        && !source.objects.contains_key(issue.destination)
+        && !source.logical.aggregates.contains_key(issue.destination)
+        && source.logical.execution_references == Map::empty()
+        && target.valid && byte_state_memory_well_formed_v30(target)
+        && target.frames.active.len() > 0
+        && target.frames.execution == source.machine.frames.execution
+        && 0 <= site.function && 0 <= site.block && 0 <= site.operation
+        && 0 <= destination < target.values.len()
+        && target.values[destination] == MemoryValueV30::Undefined
+        && byte_execution_next_epoch_v178(target, destination, 0, site) == Some(0)
+}
+
+proof fn invocation_context_issue_coupling_replays_both_actual_steps_v211(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    issue: InvocationSourceContextIssueV161, site: MemorySourceOperationV30,
+    destination: int,
+)
+    ensures ({ let next = invocation_context_issue_coupled_v211(
+        source, target, execution_map, issue, site, destination);
+        next.source == invocation_source_context_issue_v161(source, issue)
+            && next.target == byte_execution_step_v178(target, site, 0, destination, -1) }),
+{ }
+
+proof fn invocation_context_issue_refusal_never_updates_witness_v211(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    issue: InvocationSourceContextIssueV161, site: MemorySourceOperationV30,
+    destination: int,
+)
+    requires !invocation_source_context_issue_v161(source, issue).source.machine.valid
+        || !byte_execution_step_v178(target, site, 0, destination, -1).valid,
+    ensures ({ let next = invocation_context_issue_coupled_v211(
+        source, target, execution_map, issue, site, destination);
+        !next.updated && next.execution_map == execution_map }),
+{ }
+
+proof fn invocation_context_issue_fresh_has_exact_updates_v211(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    issue: InvocationSourceContextIssueV161, site: MemorySourceOperationV30,
+    destination: int,
+)
+    requires invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),
+    ensures ({ let next = invocation_context_issue_coupled_v211(
+        source, target, execution_map, issue, site, destination);
+        let identity = MemoryExecutionReferenceV178 {
+            definition: destination, epoch: 0, frame: target.frames.active.last() };
+        let origin = InvocationExecutionOriginV205 {
+            local: issue.destination, version: source.logical.versions[issue.destination] + 1,
+            frame: source.machine.frames.active.last(), source_type: issue.source_type,
+            role: InvocationSourceExecutionRoleV168::Context };
+        next.updated && next.source.source.machine.valid && next.target.valid
+            && next.source.observations == Seq::empty()
+            && next.source.source.machine.memory == source.machine.memory
+            && next.source.source.machine.frames == source.machine.frames
+            && next.source.source.machine.generations == source.machine.generations
+            && next.target.memory == target.memory && next.target.frames == target.frames
+            && next.target.generations == target.generations
+            && next.execution_map == execution_map.insert(identity, origin) }),
+{
+    let leaves = Map::empty()
+        .insert(seq![0int], MemoryValueV30::Unit)
+        .insert(seq![1int], MemoryValueV30::Unit)
+        .insert(seq![2int], MemoryValueV30::Unit)
+        .insert(seq![3int], MemoryValueV30::Unit)
+        .insert(seq![4int], MemoryValueV30::Unit);
+    assert forall|path: Seq<int>| leaves.contains_key(path) implies
+        exists|ordinal: int| 0 <= ordinal < 5
+            && path == invocation_source_aggregate_leaf_path_v42(issue.source_type, ordinal)
+            && invocation_source_byte_value_typed_v36(leaves[path],
+                invocation_source_aggregate_leaf_bits_v42(issue.source_type, ordinal)) by {
+        if path == seq![0int] { assert(invocation_source_aggregate_leaf_path_v42(issue.source_type, 0) == path); }
+        else if path == seq![1int] { assert(invocation_source_aggregate_leaf_path_v42(issue.source_type, 1) == path); }
+        else if path == seq![2int] { assert(invocation_source_aggregate_leaf_path_v42(issue.source_type, 2) == path); }
+        else if path == seq![3int] { assert(invocation_source_aggregate_leaf_path_v42(issue.source_type, 3) == path); }
+        else { assert(path == seq![4int]); assert(invocation_source_aggregate_leaf_path_v42(issue.source_type, 4) == path); }
+    }
+}
+
+// Existing entries are deliberately not discarded by issuance. The full step
+// theorem must prove their currentness is preserved, not assume that insertion
+// alone establishes a history invariant.
+proof fn invocation_context_issue_keeps_distinct_witness_rows_v211(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    issue: InvocationSourceContextIssueV161, site: MemorySourceOperationV30,
+    destination: int, identity: MemoryExecutionReferenceV178,
+)
+    requires invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),
+        identity != (MemoryExecutionReferenceV178 {
+            definition: destination, epoch: 0, frame: target.frames.active.last() }),
+        execution_map.contains_key(identity),
+    ensures ({ let next = invocation_context_issue_coupled_v211(
+        source, target, execution_map, issue, site, destination);
+        next.execution_map.contains_key(identity)
+            && next.execution_map[identity] == execution_map[identity] }),
+{
+    invocation_context_issue_fresh_has_exact_updates_v211(
+        source, target, execution_map, issue, site, destination);
+}
+
+// This is the initial-map rule, not preservation for an arbitrary live map.
+// All preconditions refer to the input states and the real operation's enabled
+// conditions. No desired successor predicate is assumed or runtime-tested.
+proof fn invocation_context_issue_initializes_current_map_v211(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    issue: InvocationSourceContextIssueV161, site: MemorySourceOperationV30,
+    destination: int,
+)
+    requires invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),
+    ensures ({ let next = invocation_context_issue_coupled_v211(
+        source, target, Map::empty(), issue, site, destination);
+        next.updated && invocation_execution_map_current_v205(
+            next.source.source, next.target, next.execution_map) }),
+{
+    invocation_context_issue_fresh_has_exact_updates_v211(
+        source, target, Map::empty(), issue, site, destination);
+    let next = invocation_context_issue_coupled_v211(
+        source, target, Map::empty(), issue, site, destination);
+    let after = next.source.source;
+    assert forall|index: int| 0 <= index < after.logical.versions.len() implies
+        #[trigger] after.logical.versions[index] >= 0 by {
+        assert(source.logical.versions[index] >= 0);
+    }
+    assert(invocation_source_logical_well_formed_v38(
+        after.logical, after.machine.values.len() as int));
+    assert(invocation_source_byte_state_well_formed_v36(after));
+    assert(invocation_source_aggregate_complete_v42(after.logical.aggregates[issue.destination]));
+    let identity = MemoryExecutionReferenceV178 {
+        definition: destination, epoch: 0, frame: target.frames.active.last() };
+    let origin = InvocationExecutionOriginV205 {
+        local: issue.destination, version: source.logical.versions[issue.destination] + 1,
+        frame: source.machine.frames.active.last(), source_type: issue.source_type,
+        role: InvocationSourceExecutionRoleV168::Context };
+    assert(invocation_execution_map_entry_v205(after, next.target, identity, origin));
+    assert forall|key: MemoryExecutionReferenceV178|
+        #![trigger next.execution_map[key]]
+        next.execution_map.contains_key(key) implies
+            invocation_execution_map_entry_v205(after, next.target, key, next.execution_map[key]) by {
+        assert(key == identity);
+    }
+}
