@@ -91,6 +91,8 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  && after.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}) }}),
 {{
  hide(invocation_source_byte_state_well_formed_v36);
+ hide(invocation_source_aggregate_well_formed_v42);
+ hide(invocation_source_aggregate_complete_v42);
  hide(invocation_source_checked_v42);
  hide(invocation_source_byte_step_v36);
  checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
@@ -105,6 +107,20 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  InvocationSourceByteValueV36::Local {{ local: {right}, moved: false }}, {root}, {instance}, little_endian)) by {{
  reveal(invocation_source_byte_step_v36);
  }}
+ let after = invocation_source_byte_step_v36(source,
+ invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian);
+ let aggregate = InvocationSourceAggregateV42 {{ source_type: {ty}, execution_lease: None,
+ leaves: Map::empty().insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+ .insert(seq![1int], MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})) }};
+ assert(after.machine == (MemoryStateV30 {{ values: source.machine.values.update(
+ {destination}, MemoryValueV30::Undefined), ..source.machine }}));
+ assert(after.logical.aggregates == source.logical.aggregates.insert({destination}, aggregate));
+ assert(after.logical.aggregates.contains_key({destination}));
+ assert(after.logical.aggregates[{destination}] == aggregate);
+ assert(after.logical.aggregates[{destination}].leaves[seq![0int]]
+ == MemoryValueV30::Scalar((left + right) % 4294967296));
+ assert(after.logical.aggregates[{destination}].leaves[seq![1int]]
+ == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}));
 }}
 "#).map_err(|_| out.error())?;
                                 witnesses += 1;
@@ -133,6 +149,8 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
         assert!(model.contains("proof fn checked_add_actual_step_"));
         assert!(model.contains("hide(invocation_source_checked_v42);"));
         assert!(model.contains("reveal(invocation_source_byte_step_v36);"));
+        assert!(model.contains("assert(after.machine == (MemoryStateV30"));
+        assert!(model.contains("assert(after.logical.aggregates == source.logical.aggregates.insert("));
         for forbidden in ["assume(", "admit(", "external_body", "assume_specification"] {
             assert!(!model.contains(forbidden));
         }

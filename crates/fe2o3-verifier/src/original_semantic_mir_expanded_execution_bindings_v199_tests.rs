@@ -381,7 +381,22 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 5);
+    assert_eq!(source.matches("proof fn ").count(), 7);
+    for name in [
+        "invocation_context_marker_aggregate_well_formed_v260",
+        "invocation_checked_add_aggregate_complete_v260",
+    ] {
+        let header = source
+            .split_once(&format!("proof fn {name}("))
+            .unwrap()
+            .1
+            .split_once("\n{\n")
+            .unwrap()
+            .0;
+        assert!(!header.contains("InvocationSourceByteStateV36"));
+        assert!(!header.contains("MemoryStateV30"));
+        assert!(!header.contains("execution_map"));
+    }
     let install = source
         .split_once("proof fn invocation_source_plain_aggregate_install_frame_v260(")
         .unwrap()
@@ -432,6 +447,8 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "reveal(invocation_source_checked_v42);",
         "invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);",
         "invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);",
+        "invocation_context_marker_aggregate_well_formed_v260(issue.source_type);",
+        "invocation_checked_add_aggregate_complete_v260(source_type, left, right);",
         "invocation_context_issue_coupling_replays_both_actual_steps_v211(\n        source, target, execution_map, issue, site, destination);",
     ] {
         assert!(

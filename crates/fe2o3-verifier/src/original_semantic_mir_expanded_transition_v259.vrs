@@ -30,6 +30,78 @@ proof fn invocation_source_plain_aggregate_install_frame_v260(
     reveal(invocation_source_aggregate_install_v42);
 }
 
+proof fn invocation_context_marker_aggregate_well_formed_v260(source_type: int)
+    requires invocation_source_context_shape_v161(source_type),
+    ensures invocation_source_aggregate_well_formed_v42(InvocationSourceAggregateV42 {
+        source_type, execution_lease: None, leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Unit)
+            .insert(seq![1int], MemoryValueV30::Unit)
+            .insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+            .insert(seq![4int], MemoryValueV30::Unit) }),
+{
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    let leaves = Map::empty()
+        .insert(seq![0int], MemoryValueV30::Unit)
+        .insert(seq![1int], MemoryValueV30::Unit)
+        .insert(seq![2int], MemoryValueV30::Unit)
+        .insert(seq![3int], MemoryValueV30::Unit)
+        .insert(seq![4int], MemoryValueV30::Unit);
+    assert forall|path: Seq<int>| leaves.contains_key(path) implies
+        exists|ordinal: int| 0 <= ordinal < 5
+            && path == invocation_source_aggregate_leaf_path_v42(source_type, ordinal)
+            && invocation_source_byte_value_typed_v36(leaves[path],
+                invocation_source_aggregate_leaf_bits_v42(source_type, ordinal)) by {
+        if path == seq![0int] { assert(invocation_source_aggregate_leaf_path_v42(source_type, 0) == path); }
+        else if path == seq![1int] { assert(invocation_source_aggregate_leaf_path_v42(source_type, 1) == path); }
+        else if path == seq![2int] { assert(invocation_source_aggregate_leaf_path_v42(source_type, 2) == path); }
+        else if path == seq![3int] { assert(invocation_source_aggregate_leaf_path_v42(source_type, 3) == path); }
+        else { assert(path == seq![4int]); assert(invocation_source_aggregate_leaf_path_v42(source_type, 4) == path); }
+    }
+}
+
+proof fn invocation_checked_add_aggregate_complete_v260(source_type: int, left: int, right: int)
+    requires invocation_source_aggregate_leaf_count_v42(source_type) == 2,
+        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],
+        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],
+        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,
+        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,
+        0 <= left < 4294967296, 0 <= right < 4294967296,
+    ensures ({ let aggregate = InvocationSourceAggregateV42 {
+        source_type, execution_lease: None, leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+            .insert(seq![1int], MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int })) };
+        invocation_source_aggregate_well_formed_v42(aggregate)
+            && invocation_source_aggregate_complete_v42(aggregate) }),
+{
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    let leaves = Map::empty()
+        .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+        .insert(seq![1int], MemoryValueV30::Scalar(
+            if left + right >= 4294967296 { 1int } else { 0int }));
+    assert forall|path: Seq<int>| leaves.contains_key(path) implies
+        exists|ordinal: int| 0 <= ordinal < 2
+            && path == invocation_source_aggregate_leaf_path_v42(source_type, ordinal)
+            && invocation_source_byte_value_typed_v36(leaves[path],
+                invocation_source_aggregate_leaf_bits_v42(source_type, ordinal)) by {
+        if path == seq![0int] {
+            assert(invocation_source_aggregate_leaf_path_v42(source_type, 0) == path);
+        } else {
+            assert(path == seq![1int]);
+            assert(invocation_source_aggregate_leaf_path_v42(source_type, 1) == path);
+        }
+    }
+    assert forall|ordinal: int| 0 <= ordinal < 2 implies
+        leaves.contains_key(invocation_source_aggregate_leaf_path_v42(source_type, ordinal)) by {
+        if ordinal != 0 { assert(ordinal == 1); }
+    }
+}
+
 proof fn invocation_context_issue_fresh_preserves_frame_v259(
     source: InvocationSourceByteStateV36, target: MemoryStateV30,
     execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
@@ -71,28 +143,15 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
         source, target, execution_map, issue, site, destination);
     invocation_context_issue_coupling_replays_both_actual_steps_v211(
         source, target, execution_map, issue, site, destination);
+    invocation_context_marker_aggregate_well_formed_v260(issue.source_type);
     let leaves = Map::empty()
         .insert(seq![0int], MemoryValueV30::Unit)
         .insert(seq![1int], MemoryValueV30::Unit)
         .insert(seq![2int], MemoryValueV30::Unit)
         .insert(seq![3int], MemoryValueV30::Unit)
         .insert(seq![4int], MemoryValueV30::Unit);
-    assert forall|path: Seq<int>| leaves.contains_key(path) implies
-        exists|ordinal: int| 0 <= ordinal < 5
-            && path == invocation_source_aggregate_leaf_path_v42(issue.source_type, ordinal)
-            && invocation_source_byte_value_typed_v36(leaves[path],
-                invocation_source_aggregate_leaf_bits_v42(issue.source_type, ordinal)) by {
-        if path == seq![0int] { assert(invocation_source_aggregate_leaf_path_v42(issue.source_type, 0) == path); }
-        else if path == seq![1int] { assert(invocation_source_aggregate_leaf_path_v42(issue.source_type, 1) == path); }
-        else if path == seq![2int] { assert(invocation_source_aggregate_leaf_path_v42(issue.source_type, 2) == path); }
-        else if path == seq![3int] { assert(invocation_source_aggregate_leaf_path_v42(issue.source_type, 3) == path); }
-        else { assert(path == seq![4int]); assert(invocation_source_aggregate_leaf_path_v42(issue.source_type, 4) == path); }
-    }
     let aggregate = InvocationSourceAggregateV42 {
         source_type: issue.source_type, execution_lease: None, leaves };
-    assert(invocation_source_aggregate_well_formed_v42(aggregate)) by {
-        reveal(invocation_source_aggregate_well_formed_v42);
-    }
     invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);
     assert(invocation_source_context_issue_v161(source, issue).source
         == invocation_source_aggregate_install_v42(source, issue.destination, aggregate)) by {
@@ -188,6 +247,8 @@ proof fn invocation_source_checked_add_reconstruction_step_v259(
 {
     hide(invocation_source_byte_evaluate_v36);
     hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_complete_v42);
     hide(invocation_source_aggregate_install_v42);
     hide(invocation_source_byte_put_local_v36);
     hide(invocation_source_aggregate_leaf_count_v42);
@@ -196,26 +257,11 @@ proof fn invocation_source_checked_add_reconstruction_step_v259(
     hide(invocation_source_checked_pair_v44);
     hide(invocation_source_checked_v42);
     invocation_reconstructed_checked_add_u32_v259(left, right);
+    invocation_checked_add_aggregate_complete_v260(source_type, left, right);
     let leaves = Map::empty()
         .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
         .insert(seq![1int], MemoryValueV30::Scalar(
             if left + right >= 4294967296 { 1int } else { 0int }));
-    assert forall|path: Seq<int>| leaves.contains_key(path) implies
-        exists|ordinal: int| 0 <= ordinal < 2
-            && path == invocation_source_aggregate_leaf_path_v42(source_type, ordinal)
-            && invocation_source_byte_value_typed_v36(leaves[path],
-                invocation_source_aggregate_leaf_bits_v42(source_type, ordinal)) by {
-        if path == seq![0int] {
-            assert(invocation_source_aggregate_leaf_path_v42(source_type, 0) == path);
-        } else {
-            assert(path == seq![1int]);
-            assert(invocation_source_aggregate_leaf_path_v42(source_type, 1) == path);
-        }
-    }
-    assert forall|ordinal: int| 0 <= ordinal < 2 implies
-        leaves.contains_key(invocation_source_aggregate_leaf_path_v42(source_type, ordinal)) by {
-        if ordinal != 0 { assert(ordinal == 1); }
-    }
     let aggregate = InvocationSourceAggregateV42 {
         source_type, execution_lease: None, leaves };
     assert(invocation_source_aggregate_complete_v42(aggregate));
