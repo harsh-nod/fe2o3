@@ -37,6 +37,14 @@ pub struct ProtectedCompilerConditionalHandoffBindingV2 {
     identity: [u8; 32],
 }
 impl Binding {
+    pub(crate) fn operation_quote(
+        source: &Source,
+        account: AccountMode,
+    ) -> Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
+        account
+            .operation_quote(storage_floor(source)?)?
+            .nested(crate::ConditionalWorkerOperationQuoteV5::new(WORK, SCRATCH))
+    }
     pub(crate) fn from_handoff(
         source: &Source,
         receipt: Receipt,

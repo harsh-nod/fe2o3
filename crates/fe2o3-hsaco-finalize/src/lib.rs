@@ -28,6 +28,8 @@ use fe2o3_kernel_descriptor::{
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
 mod conditional_worker_finalization;
+mod conditional_worker_operation_quote;
+pub use conditional_worker_operation_quote::ConditionalWorkerOperationQuoteV5;
 mod conditional_worker_replay;
 mod engineering_hsaco;
 mod first_build_worker_binding;

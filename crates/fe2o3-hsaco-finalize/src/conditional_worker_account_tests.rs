@@ -124,3 +124,36 @@ fn replay_quote_includes_spare_capacities_and_rejects_unbounded_roster() {
     assert!(replay_input_storage(&vec![vec![]; MAX_LINK_INPUTS + 1], &mut b).is_err());
     assert_eq!(b.work(), 8);
 }
+#[test]
+fn original_account_quote_matches_exact_and_one_short_execution() {
+    for (work_short, storage_short) in [(false, false), (true, false), (false, true)] {
+        let inputs = 37;
+        let scratch = inputs + Budget::STORAGE_WINDOW_SCRATCH_V1 + 4 * size_of::<AccountMode>();
+        let mut resources = Owned::new(
+            Work::new(8 + 8 + Budget::STORAGE_WINDOW_WORK_V1 - usize::from(work_short)),
+            inputs + scratch - usize::from(storage_short),
+        );
+        resources.with_budget(|b| {
+            let mode = AccountMode::original(b).unwrap();
+            let quote = mode.operation_quote(inputs).unwrap();
+            assert_eq!(quote.work(), 8 + Budget::STORAGE_WINDOW_WORK_V1);
+            assert_eq!(quote.additional_storage(), scratch);
+            b.reserve_storage(inputs).unwrap();
+            let mut called = false;
+            let result: Result<(), Resource> = mode.run(b, inputs, |_| {
+                called = true;
+                Ok(())
+            });
+            assert_eq!(called, !work_short && !storage_short);
+            assert_eq!(result.is_ok(), called);
+            assert_eq!(b.storage(), inputs);
+        });
+    }
+    assert_eq!(
+        AccountMode::LEGACY
+            .operation_quote(usize::MAX)
+            .unwrap()
+            .work(),
+        0
+    );
+}
