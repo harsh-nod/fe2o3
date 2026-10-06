@@ -180,22 +180,108 @@ mod tests {
     workspace
 }
 
-fn binding_test(workspace: &TestWorkspace) -> Command {
+const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
+    "RUSTC",
+    "CARGO_BUILD_RUSTC",
+    "RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+];
+
+const COMPILER_FLAGS_ENVIRONMENT: &[&str] = &["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"];
+
+fn binding_command(workspace: &TestWorkspace) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    // Keep outer-lane compiler and linker settings out of the independent fixture.
+    for name in COMPILER_SELECTION_ENVIRONMENT
+        .iter()
+        .chain(COMPILER_FLAGS_ENVIRONMENT)
+    {
+        command.env_remove(name);
+    }
+    command.env("CARGO", cargo()).current_dir(&workspace.0);
     command
-        .args(["test", "--locked", "--all-targets", "-p", "managed"])
-        .env("CARGO", cargo())
-        .current_dir(&workspace.0);
+}
+
+fn binding_test(workspace: &TestWorkspace) -> Command {
+    let mut command = binding_command(workspace);
+    command.args(["test", "--locked", "--all-targets", "-p", "managed"]);
     command
 }
 
 fn binding_clippy(workspace: &TestWorkspace) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let mut command = binding_command(workspace);
+    command.args(["clippy", "--locked", "--all-targets", "-p", "managed"]);
     command
-        .args(["clippy", "--locked", "--all-targets", "-p", "managed"])
-        .env("CARGO", cargo())
-        .current_dir(&workspace.0);
-    command
+}
+
+#[test]
+fn binding_fixture_removes_inherited_compiler_selection_without_erasing_explicit_overrides() {
+    let workspace = TestWorkspace::new();
+    for mut command in [
+        binding_test(&workspace),
+        binding_clippy(&workspace),
+        binding_selected_test(&workspace, &["--lib"]),
+    ] {
+        for name in COMPILER_SELECTION_ENVIRONMENT {
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(key, value)| key == std::ffi::OsStr::new(name) && value.is_none())
+            );
+        }
+        assert_eq!(command.get_current_dir(), Some(workspace.0.as_path()));
+        for name in COMPILER_SELECTION_ENVIRONMENT {
+            command.env(name, "/explicit/test/compiler");
+            assert!(command.get_envs().any(|(key, value)| {
+                key == std::ffi::OsStr::new(name)
+                    && value == Some(std::ffi::OsStr::new("/explicit/test/compiler"))
+            }));
+        }
+    }
+}
+
+#[test]
+fn binding_fixture_isolates_outer_flags_and_preserves_explicit_flag_overrides() {
+    let workspace = TestWorkspace::new();
+    for mut command in [
+        binding_test(&workspace),
+        binding_clippy(&workspace),
+        binding_selected_test(&workspace, &["--lib"]),
+    ] {
+        for name in COMPILER_FLAGS_ENVIRONMENT {
+            let key = std::ffi::OsStr::new(name);
+            assert!(
+                command
+                    .get_envs()
+                    .any(|(name, value)| name == key && value.is_none())
+            );
+            command.env(name, "-Copt-level=1");
+            assert!(command.get_envs().any(|(name, value)| {
+                name == key && value == Some(std::ffi::OsStr::new("-Copt-level=1"))
+            }));
+        }
+    }
+}
+
+#[test]
+fn binding_fixture_explicit_compiler_selection_still_reaches_production_refusal() {
+    let workspace = TestWorkspace::new();
+    for name in COMPILER_SELECTION_ENVIRONMENT {
+        let output = binding_test(&workspace)
+            .env(name, "/does/not/exist/explicit-compiler")
+            .output()
+            .expect("run explicit compiler selection refusal");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "explicit {name} was accepted");
+        let expected = if name.ends_with("WRAPPER") {
+            format!("with preexisting {name}=")
+        } else {
+            format!("rejects preexisting compiler selection {name}=")
+        };
+        assert!(stderr.contains(&expected), "{name}: {stderr}");
+    }
 }
 
 #[test]
@@ -395,10 +481,8 @@ fn binding_host_test_rejects_every_runner_and_unstable_config_channel() {
             "managed",
         ],
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        let output = binding_command(&workspace)
             .args(args)
-            .env("CARGO", cargo())
-            .current_dir(&workspace.0)
             .output()
             .expect("run caller config rejection");
         assert!(!output.status.success());
@@ -538,11 +622,9 @@ fn binding_host_test_rejects_nonexecuting_cargo_modes_before_test_spawn() {
         ),
     ] {
         let marker = workspace.0.join(format!("{label}-test-executed"));
-        let output = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"))
+        let output = binding_command(&workspace)
             .args(args)
-            .env("CARGO", cargo())
             .env("BINDING_TEST_EXECUTION_MARKER", &marker)
-            .current_dir(&workspace.0)
             .output()
             .unwrap_or_else(|error| panic!("run {label} rejection: {error}"));
         assert!(!output.status.success(), "{label} was accepted");
@@ -747,13 +829,11 @@ int main(int argc, char **argv) {
 }
 
 fn binding_selected_test(workspace: &TestWorkspace, selector: &[&str]) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+    let mut command = binding_command(workspace);
     command
         .args(["test", "--locked", "--manifest-path"])
         .arg(workspace.0.join("managed/Cargo.toml"))
-        .args(selector)
-        .env("CARGO", cargo())
-        .current_dir(&workspace.0);
+        .args(selector);
     command
 }
 

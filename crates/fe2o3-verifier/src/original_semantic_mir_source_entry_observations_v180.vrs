@@ -1,0 +1,92 @@
+spec fn invocation_source_local_observation_v180(
+    observation: InvocationSourceOperandObservationV36,
+) -> bool {
+    observation.before.machine.valid && observation.after.machine.valid
+        && match observation.operand {
+            InvocationSourceOperandV36::Scalar {
+                value: InvocationSourceByteValueV36::Local { .. }, ..
+            } => true,
+            _ => false,
+        }
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_source_local_observations_extend_v186(
+    observations: Seq<InvocationSourceOperandObservationV36>, bound: int,
+)
+    requires 0 <= bound < observations.len(),
+        forall|i: int| 0 <= i < bound ==>
+            invocation_source_local_observation_v180(observations[i]),
+        invocation_source_local_observation_v180(observations[bound]),
+    ensures forall|i: int| 0 <= i < bound + 1 ==>
+        invocation_source_local_observation_v180(observations[i]),
+{
+    hide(invocation_source_local_observation_v180);
+    assert forall|i: int| 0 <= i < bound + 1 implies
+        invocation_source_local_observation_v180(observations[i]) by {
+        if i < bound {
+            assert(invocation_source_local_observation_v180(observations[i]));
+        } else {
+            assert(i == bound);
+        }
+    }
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_source_local_observations_empty_v180(
+    observations: Seq<InvocationSourceOperandObservationV36>, little_endian: bool,
+)
+    requires forall|i: int| 0 <= i < observations.len() ==>
+        invocation_source_local_observation_v180(observations[i]),
+    ensures invocation_source_operands_observations_v39(observations, little_endian)
+        == Seq::empty(),
+    decreases observations.len(),
+{
+    reveal_with_fuel(invocation_source_operands_observations_v39, 1);
+    if observations.len() > 0 {
+        let head = observations[0];
+        let tail = observations.drop_first();
+        assert(invocation_source_local_observation_v180(head));
+        assert forall|i: int| 0 <= i < tail.len() implies
+            invocation_source_local_observation_v180(tail[i]) by {
+            assert(tail[i] == observations[i + 1]);
+        }
+        invocation_source_local_observations_empty_v180(tail, little_endian);
+        match head.operand {
+            InvocationSourceOperandV36::Scalar { value, bits } => match value {
+                InvocationSourceByteValueV36::Local { .. } => {
+                    assert(invocation_source_read_effect_v36(head.before, value, bits,
+                        head.root, head.instance, little_endian) == Seq::empty());
+                },
+                _ => { assert(false); },
+            },
+            _ => { assert(false); },
+        }
+    }
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_source_local_block_observations_empty_v180(
+    result: InvocationSourceBlockResultV36, little_endian: bool,
+)
+    requires result.observations.len() == 0, result.source.machine.pc != -2,
+        forall|i: int| 0 <= i < result.operands.len() ==>
+            invocation_source_local_observation_v180(result.operands[i]),
+    ensures invocation_source_observations_v39(result, little_endian) == Seq::empty(),
+{
+    invocation_source_local_observations_empty_v180(result.operands, little_endian);
+}
+
+proof fn invocation_source_local_observation_rejects_other_events_v180(
+    observation: InvocationSourceOperandObservationV36,
+)
+    requires !observation.before.machine.valid || !observation.after.machine.valid
+        || (match observation.operand {
+            InvocationSourceOperandV36::Scalar {
+                value: InvocationSourceByteValueV36::Local { .. }, ..
+            } => false,
+            _ => true,
+        }),
+    ensures !invocation_source_local_observation_v180(observation),
+{
+}

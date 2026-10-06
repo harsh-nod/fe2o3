@@ -876,6 +876,7 @@ for core_step in \
   kir-sim-semantic-differential \
   ci-local-test-gate \
   generic-cpu-group-tests \
+  cargo-fe2o3-production-bins \
   cargo-fe2o3-tests \
   cargo-fe2o3-worker-v3-envelope-tests \
   fe2o3-pliron-default-api-ui \
@@ -896,6 +897,9 @@ for core_step in \
   device-copy-derive-ui \
   core-production-runtime-surface-ui \
   kernel-compile-matrix-shell-tests \
+  tutorial-default-cargo-harness-tests \
+  tutorial-production-census-tests \
+  tutorial-current-simulation-tests \
   tutorial-cpu-reference-tests \
   s09-debug-checker; do
   assert_step_count "${core_step}" 1 \
@@ -920,6 +924,10 @@ assert_equals \
   "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --offline --manifest-path examples/tiled_gemm_general_v1/Cargo.toml --no-default-features --features kernel-simt-gemm-general --test paired_contract" \
   "$(step_command cpu-reference-tiled-gemm-paired-simt)" \
   'generic core did not gate the SIMT GEMM paired contract'
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 cargo build --locked --no-default-features -p cargo-fe2o3 --bin cargo-fe2o3 --bin fe2o3-rustc-wrapper" \
+  "$(step_command cargo-fe2o3-production-bins)" \
+  'generic core did not build both production Cargo binaries without dev-dependencies'
 assert_equals \
   "env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p cargo-fe2o3" \
   "$(step_command cargo-fe2o3-tests)" \

@@ -6,7 +6,6 @@
 //! remains a single traversal. V2 revisits affected original users only.
 use super::*;
 use pliron::value::Use;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// The existing caller ledger, with no independent work or storage allowance.
 pub use super::IntegerIdentityBudgetV1 as IntegerIdentityBudgetV2;
@@ -22,17 +21,12 @@ struct Row {
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 struct Key {
-    hash: u64,
+    operation: Ptr<Operation>,
     ordinal: usize,
 }
 
-// Lookup hashes never determine traversal order or identity. Every hit is
-// checked against its genuine pointer; user work is ordered by source ordinal.
-fn pointer_hash(operation: Ptr<Operation>) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    operation.hash(&mut hasher);
-    hasher.finish()
-}
+// Transient exact pointer order is only an index. Queue and observer order use
+// source ordinals; neither arena ordering nor context identity is serialized.
 
 fn grow<T: Copy, B: IntegerIdentityBudgetV1>(
     values: &mut Vec<T>,
@@ -77,17 +71,10 @@ fn grow<T: Copy, B: IntegerIdentityBudgetV1>(
     Ok(())
 }
 
-fn sift<T: Ord, B: IntegerIdentityBudgetV1>(
-    values: &mut [T],
-    mut root: usize,
-    end: usize,
-    scratch: &mut Scratch<'_, B>,
-) -> Result<(), IntegerIdentityErrorV1<B::Error>> {
+fn sift<T: Ord>(values: &mut [T], mut root: usize, end: usize) {
     while root < end / 2 {
-        scratch.work(3)?;
         let mut child = root * 2 + 1;
         if child + 1 < end {
-            scratch.work(1)?;
             if values[child] < values[child + 1] {
                 child += 1;
             }
@@ -95,24 +82,32 @@ fn sift<T: Ord, B: IntegerIdentityBudgetV1>(
         if values[root] >= values[child] {
             break;
         }
-        scratch.work(1)?;
         values.swap(root, child);
         root = child;
     }
-    Ok(())
 }
 
 fn sort<T: Ord, B: IntegerIdentityBudgetV1>(
     values: &mut [T],
     scratch: &mut Scratch<'_, B>,
 ) -> Result<(), IntegerIdentityErrorV1<B::Error>> {
+    // At most two sifts per element, each with at most bit_length(n) levels.
+    // Pay five visits per level plus one per element and a fixed header. This
+    // O(n log n) ceiling is independent of context identity and input order.
+    let levels = (usize::BITS - values.len().leading_zeros()) as usize;
+    let work = levels
+        .checked_mul(10)
+        .and_then(|n| n.checked_add(1))
+        .and_then(|n| n.checked_mul(values.len()))
+        .and_then(|n| n.checked_add(1))
+        .ok_or(IntegerIdentityErrorV1::Overflow)?;
+    scratch.work(work)?;
     for root in (0..values.len() / 2).rev() {
-        sift(values, root, values.len(), scratch)?;
+        sift(values, root, values.len());
     }
     for end in (1..values.len()).rev() {
-        scratch.work(1)?;
         values.swap(0, end);
-        sift(values, 0, end, scratch)?;
+        sift(values, 0, end);
     }
     Ok(())
 }
@@ -123,23 +118,20 @@ fn find<B: IntegerIdentityBudgetV1>(
     keys: &[Key],
     scratch: &mut Scratch<'_, B>,
 ) -> Result<Option<usize>, IntegerIdentityErrorV1<B::Error>> {
-    scratch.work(8)?;
-    let hash = pointer_hash(operation);
+    // Exact ordered keys have no hash collision scan. Pay the complete binary
+    // search bound before lookup, not its context-dependent successful depth.
+    let levels = (usize::BITS - keys.len().leading_zeros()) as usize;
+    scratch.work(2 * levels + 3)?;
     let (mut first, mut end) = (0, keys.len());
     while first < end {
-        scratch.work(2)?;
         let middle = first + (end - first) / 2;
-        if keys[middle].hash < hash {
+        if keys[middle].operation < operation {
             first = middle + 1;
         } else {
             end = middle;
         }
     }
-    for key in &keys[first..] {
-        scratch.work(2)?;
-        if key.hash != hash {
-            break;
-        }
+    if let Some(key) = keys.get(first) {
         if rows[key.ordinal].operation == operation {
             return Ok(Some(key.ordinal));
         }
@@ -186,7 +178,7 @@ fn canonicalize<B: IntegerIdentityBudgetV1>(
             + size_of::<Vec<Use<Value>>>()
             + size_of::<Row>()
             + size_of::<Key>()
-            + size_of::<DefaultHasher>()
+            + size_of::<Ptr<Operation>>()
             + size_of::<IRRewriter<DummyListener>>()
             + size_of::<Scratch<'_, B>>()
             + 10 * size_of::<usize>(),
@@ -236,9 +228,9 @@ fn canonicalize<B: IntegerIdentityBudgetV1>(
     grow(&mut keys, rows.len(), &mut scratch)?;
     grow(&mut queue, rows.len(), &mut scratch)?;
     for (ordinal, row) in rows.iter().enumerate() {
-        scratch.work(10)?;
+        scratch.work(2)?;
         keys.push(Key {
-            hash: pointer_hash(row.operation),
+            operation: row.operation,
             ordinal,
         });
         queue.push(ordinal);

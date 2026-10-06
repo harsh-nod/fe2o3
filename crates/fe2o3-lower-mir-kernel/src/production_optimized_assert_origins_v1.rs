@@ -387,9 +387,9 @@ fn optimized_assert_input_edges_v1(
     }
 }
 
-fn optimized_assert_outcome_v1(
+fn optimized_assert_outcome_v1<O>(
     binding: SemanticKirAssertConditionBindingV1,
-    control: &CheckedCanonicalKirControlIndexV1<'_, '_, '_>,
+    control: &CheckedCanonicalKirControlIndexV1<'_, '_, '_, O>,
     budget: &mut AssertOriginBudgetV1<'_>,
 ) -> Result<SemanticKirOptimizedAssertOutcomeV1, SemanticKirOptimizedAssertOriginErrorV1> {
     use CanonicalKirEdgePlacementV1 as Placement;

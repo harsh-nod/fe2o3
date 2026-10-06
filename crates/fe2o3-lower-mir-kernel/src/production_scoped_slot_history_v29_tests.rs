@@ -5,7 +5,7 @@ fn whole_slot_kills_reset_sparse_cells_and_keep_same_gap_order() {
     let mut p = program(&[(&[W, EventKind::KillSlot, W, R], &[])]);
     p.cells.push(Cell {
         slot: CELL.slot,
-        index: 1 << 40,
+        index: CellIndex::Literal(1 << 40),
     });
     for index in [0, 2, 3] {
         p.events[index].cell = p.cells[1];
@@ -30,7 +30,10 @@ use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1;
 
 const LIMIT: usize = 10_000_000;
 const FLOOR: usize = 31;
-const CELL: Cell = Cell { slot: 19, index: 0 };
+const CELL: Cell = Cell {
+    slot: 19,
+    index: CellIndex::Literal(0),
+};
 const R: EventKind = EventKind::Read;
 const W: EventKind = EventKind::Set(true);
 const K: EventKind = EventKind::Set(false);
@@ -95,33 +98,55 @@ fn evaluate(program: &Program, work: usize, storage: usize) -> (UseResult<()>, u
 // Set(false) is an inert source-kill model here, not a production source anchor.
 fn oracle(program: &Program) -> bool {
     for &cell in &program.cells {
-        let mut pending = vec![(0, 0, false)];
+        let mut pending = vec![(0, 0, false, None)];
         let mut seen = BTreeSet::new();
-        while let Some((block, at, initialized)) = pending.pop() {
-            if !seen.insert((block, at, initialized)) {
+        while let Some((block, at, initialized, failure)) = pending.pop() {
+            if !seen.insert((block, at, initialized, failure)) {
                 continue;
             }
             let row = &program.blocks[block];
             if at == row.events.len() {
                 for &target in &program.successors[row.successors.clone()] {
-                    pending.push((target, 0, initialized));
+                    pending.push((target, 0, initialized, None));
                 }
                 continue;
             }
             let event = program.events[row.events.start + at];
             let mut next = initialized;
-            if event.cell == cell
-                || (event.kind == EventKind::KillSlot && event.cell.slot == cell.slot)
-            {
-                match event.kind {
-                    EventKind::Read if !initialized => return false,
-                    EventKind::Read => {}
-                    EventKind::Set(value) => next = value,
-                    EventKind::KillSlot => next = false,
-                    EventKind::Preserve => pending.push((block, at + 1, true)),
+            let mut failure_next = failure;
+            match event.kind {
+                EventKind::FailureRead
+                | EventKind::FailureKillSlot
+                | EventKind::FailureKillCell => {
+                    // Every diagnostic event begins the same failure branch,
+                    // even when this particular event addresses another cell.
+                    let mut shadow = failure.unwrap_or(initialized);
+                    if event.kind == EventKind::FailureRead && event.cell == cell && !shadow {
+                        return false;
+                    }
+                    if event.kind == EventKind::FailureKillSlot && event.cell.slot == cell.slot {
+                        shadow = false;
+                    }
+                    if event.kind == EventKind::FailureKillCell && event.cell == cell {
+                        shadow = false;
+                    }
+                    failure_next = Some(shadow);
+                }
+                EventKind::Read if event.cell == cell && !initialized => return false,
+                EventKind::Read => {}
+                EventKind::Set(value) if event.cell == cell => next = value,
+                EventKind::Set(_) => {}
+                EventKind::KillSlot if event.cell.slot == cell.slot => next = false,
+                EventKind::KillSlot => {}
+                EventKind::Preserve if event.cell == cell => {
+                    pending.push((block, at + 1, true, failure));
+                }
+                EventKind::Preserve => {}
+                EventKind::ForgetSelector => {
+                    unreachable!("symbolic events are outside the original literal oracle")
                 }
             }
-            pending.push((block, at + 1, next));
+            pending.push((block, at + 1, next, failure_next));
         }
     }
     true
@@ -241,16 +266,16 @@ fn diamonds_empty_paths_and_later_loop_iterations_are_checked() {
 fn sparse_cells_and_slots_do_not_share_initialization() {
     let first = Cell {
         slot: 100,
-        index: 1 << 40,
+        index: CellIndex::Literal(1 << 40),
     };
     for second in [
         Cell {
             slot: 100,
-            index: (1 << 40) + 1,
+            index: CellIndex::Literal((1 << 40) + 1),
         },
         Cell {
             slot: 101,
-            index: 1 << 40,
+            index: CellIndex::Literal(1 << 40),
         },
     ] {
         let mut program = program(&[(&[W, R], &[])]);
@@ -358,7 +383,10 @@ fn independently_counted_history_limits_preserve_the_caller_floor() {
         + 3 * (std::mem::size_of::<OriginStateV1<bool>>()
             + 2 * std::mem::size_of::<usize>()
             + std::mem::size_of::<bool>())
-        + 2 * std::mem::size_of::<usize>();
+        + 2 * std::mem::size_of::<usize>()
+        + std::mem::size_of::<Option<usize>>()
+        + std::mem::size_of::<usize>()
+        + std::mem::size_of::<bool>();
     // Two scratch scopes4 + roster5 + ordering2 + membership4 + event scans6
     // + graph construction3 + independently counted origin-engine work34.
     let exact = evaluate(&program, 58, bytes);
@@ -492,9 +520,12 @@ fn array_fixture(index: u64) -> (Function, Vec<ScopedSourceSlotV29>) {
         kir::load(8, ValueId(7), kir::scalar()),
     ]);
     let mut slots = kir::candidates(&function);
-    slots[0].length = index + 1;
-    slots[0].bytes = (index + 1) * 4;
-    slots[0].count = Some((
+    let ScopedSlotRepresentationV29::ScalarArray(scalar) = &mut slots[0].representation else {
+        panic!("array fixture");
+    };
+    scalar.length = index + 1;
+    scalar.bytes = (index + 1) * 4;
+    scalar.count = Some((
         ValueId(5),
         PrivateArrayPhysicalLocationV1 {
             block_ordinal: 0,
@@ -601,4 +632,230 @@ fn physical_history_adapter_restores_scratch_at_exact_limits() {
         raw_run(&function, &slots, baseline.1, baseline.2 - 1).0,
         false,
     );
+}
+
+const FR: EventKind = EventKind::FailureRead;
+const FK: EventKind = EventKind::FailureKillSlot;
+
+fn differential_failure_history(program: &Program, expected: bool) {
+    assert_eq!(oracle(program), expected);
+    let result = evaluate(program, LIMIT, LIMIT).0;
+    if expected {
+        result.unwrap();
+    } else {
+        assert!(
+            matches!(
+                result,
+                Err(ProductionSemanticKirErrorV1::Unsupported {
+                    detail: "scoped slot read is not initialized in its fresh physical activation",
+                    ..
+                })
+            ),
+            "{result:?}"
+        );
+    }
+}
+
+#[test]
+fn diagnostic_history_reads_are_ordered_and_do_not_kill_success_values() {
+    for (program, expected) in [
+        (program(&[(&[FR], &[])]), false),
+        (program(&[(&[W, FR, FK], &[1]), (&[R], &[])]), true),
+        (program(&[(&[W, FK, FR], &[1]), (&[R], &[])]), false),
+        (program(&[(&[W, EventKind::KillSlot, FR], &[])]), false),
+        (program(&[(&[W, FR, FK, FR], &[])]), false),
+        (program(&[(&[W, FK, FK], &[1]), (&[FR], &[])]), true),
+        (program(&[(&[G, FR], &[])]), false),
+        (program(&[(&[W, G, FR, FK], &[1]), (&[R], &[])]), true),
+    ] {
+        differential_failure_history(&program, expected);
+    }
+}
+
+#[test]
+fn failure_shadows_are_discarded_at_joins_and_every_loop_iteration() {
+    for (program, expected) in [
+        (program(&[(&[W], &[1]), (&[FR, FK], &[1])]), true),
+        (program(&[(&[], &[1]), (&[W, FR, FK], &[1])]), true),
+        (
+            program(&[(&[W], &[1]), (&[FR, FK], &[2]), (&[K], &[1])]),
+            false,
+        ),
+        (
+            program(&[
+                (&[], &[1, 2]),
+                (&[W, FR, FK], &[3]),
+                (&[W, FK], &[3]),
+                (&[R, FR, FK], &[]),
+            ]),
+            true,
+        ),
+        (
+            program(&[
+                (&[], &[1, 2]),
+                (&[W, FR, FK], &[3]),
+                (&[FK], &[3]),
+                (&[R], &[]),
+            ]),
+            false,
+        ),
+        (program(&[(&[W, FK], &[1, 1]), (&[FR, FK], &[])]), true),
+    ] {
+        differential_failure_history(&program, expected);
+    }
+}
+
+#[test]
+fn failure_slot_kills_cover_sparse_siblings_but_preserve_success_and_other_slots() {
+    for high in [1, 1_u64 << 40] {
+        let first = Cell {
+            slot: 40,
+            index: CellIndex::Literal(0),
+        };
+        let second = Cell {
+            slot: 40,
+            index: CellIndex::Literal(high),
+        };
+        let other = Cell {
+            slot: 41,
+            index: CellIndex::Literal(high),
+        };
+        let mut p = program(&[(&[W, W, FR, FK], &[1]), (&[R, R, FR, FK], &[1])]);
+        p.cells = vec![first, second];
+        for (event, cell) in p
+            .events
+            .iter_mut()
+            .zip([first, second, first, first, first, second, second, first])
+        {
+            event.cell = cell;
+        }
+        // Both failure events share a real operation gap but retain source order.
+        p.events[2].operation = 2;
+        p.events[2].sequence = 0;
+        p.events[3].operation = 2;
+        p.events[3].sequence = 1;
+        differential_failure_history(&p, true);
+        p.events[2].kind = FK;
+        p.events[3].kind = FR;
+        p.events[3].cell = second;
+        differential_failure_history(&p, false);
+        p.events[2].cell = other;
+        p.cells.push(other);
+        differential_failure_history(&p, true);
+    }
+}
+
+#[test]
+fn failure_cell_kills_preserve_sparse_siblings_and_success_state() {
+    for high in [1, 1_u64 << 40] {
+        let first = Cell {
+            slot: 40,
+            index: CellIndex::Literal(0),
+        };
+        let sibling = Cell {
+            slot: 40,
+            index: CellIndex::Literal(high),
+        };
+        let other = Cell {
+            slot: 41,
+            index: CellIndex::Literal(0),
+        };
+        let mut p = program(&[
+            (&[W, W, W, EventKind::FailureKillCell, FR, FR], &[1]),
+            (&[R, R, R, FR], &[1]),
+        ]);
+        p.cells = vec![first, sibling, other];
+        for (event, cell) in p.events.iter_mut().zip([
+            first, sibling, other, first, sibling, other, first, sibling, other, first,
+        ]) {
+            event.cell = cell;
+        }
+        differential_failure_history(&p, true);
+        p.events[4].cell = first;
+        differential_failure_history(&p, false);
+        p.events[4].cell = sibling;
+        p.events[3].kind = EventKind::FailureKillSlot;
+        differential_failure_history(&p, false);
+    }
+}
+
+#[test]
+fn every_two_block_failure_tail_matches_concrete_shadow_execution() {
+    let prefixes: [&[EventKind]; 4] = [&[], &[W], &[K], &[G]];
+    let tails: [&[EventKind]; 7] = [
+        &[],
+        &[FR],
+        &[FK],
+        &[FR, FR],
+        &[FR, FK],
+        &[FK, FR],
+        &[FK, FK],
+    ];
+    let sequences: Vec<Vec<EventKind>> = prefixes
+        .iter()
+        .flat_map(|prefix| {
+            tails
+                .iter()
+                .map(move |tail| prefix.iter().chain(tail.iter()).copied().collect())
+        })
+        .collect();
+    let mut cases = 0;
+    for count in 1_usize..=2 {
+        for encoded in 0..28_usize.pow(count as u32) {
+            let mut remaining = encoded;
+            let kinds: Vec<_> = (0..count)
+                .map(|_| {
+                    let row = &sequences[remaining % 28];
+                    remaining /= 28;
+                    row
+                })
+                .collect();
+            for bits in 0..(1_usize << (count * count)) {
+                let targets: Vec<Vec<_>> = (0..count)
+                    .map(|source| {
+                        (0..count)
+                            .filter(|target| bits & (1 << (source * count + target)) != 0)
+                            .collect()
+                    })
+                    .collect();
+                let spec: Vec<_> = kinds
+                    .iter()
+                    .zip(&targets)
+                    .map(|(kind, targets)| (kind.as_slice(), targets.as_slice()))
+                    .collect();
+                let p = program(&spec);
+                let actual = evaluate(&p, LIMIT, LIMIT).0.is_ok();
+                let expected = oracle(&p);
+                assert!(!actual || expected, "{count}/{encoded}/{bits}");
+                if all_reachable(&p) {
+                    assert_eq!(actual, expected, "{count}/{encoded}/{bits}");
+                }
+                cases += 1;
+            }
+        }
+    }
+    assert_eq!(cases, 12_600);
+}
+
+#[test]
+fn independently_counted_failure_history_limits_preserve_the_caller_floor() {
+    let p = program(&[(&[W, FR, FK], &[1]), (&[R], &[])]);
+    assert!(oracle(&p));
+    // Six nodes, three links, and the three named failure-branch scratch fields.
+    let bytes = FLOOR
+        + 6 * (std::mem::size_of::<OriginStateV1<bool>>()
+            + 2 * std::mem::size_of::<usize>()
+            + std::mem::size_of::<bool>())
+        + 6 * std::mem::size_of::<usize>()
+        + std::mem::size_of::<Option<usize>>()
+        + std::mem::size_of::<usize>()
+        + std::mem::size_of::<bool>();
+    // Scratch4 + roster7 + order4 + membership8 + scans12 + graph7 + engine65.
+    let exact = evaluate(&p, 107, bytes);
+    exact.0.unwrap();
+    assert_eq!((exact.1, exact.2), (107, bytes));
+    for work in 0..107 {
+        resource(evaluate(&p, work, bytes).0, true);
+    }
+    resource(evaluate(&p, 107, bytes - 1).0, false);
 }

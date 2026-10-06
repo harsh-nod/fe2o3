@@ -1,0 +1,41 @@
+use vstd::prelude::*;
+
+verus! {
+
+// Only the historical side mentions deprecated finite(); the production model
+// uses finite Set, never ISet. Arbitrary Boolean remainders retain all other gates.
+#[allow(deprecated)]
+proof fn enum_fields_finite_conjunct_v65<V>(fields: Map<int, V>, remaining: bool)
+    ensures (fields.dom().finite() && remaining) == remaining,
+{}
+
+#[allow(deprecated)]
+proof fn aggregate_leaves_finite_conjunct_v65<V>(
+    leaves: Map<Seq<int>, V>, before: bool, after: bool,
+)
+    ensures (before && leaves.dom().finite() && after) == (before && after),
+{}
+
+#[allow(deprecated)]
+proof fn logical_locals_finite_conjuncts_v65<W, R, D, A, E>(
+    witnesses: Map<int, W>, references: Map<int, R>, descriptors: Map<int, D>,
+    aggregates: Map<int, A>, enums: Map<int, E>,
+    before: bool, descriptor_shape: bool, after: bool,
+)
+    ensures
+        (before && witnesses.dom().finite() && references.dom().finite()
+            && descriptors.dom().finite() && descriptor_shape
+            && aggregates.dom().finite() && enums.dom().finite() && after)
+        == (before && descriptor_shape && after),
+{}
+
+#[allow(deprecated)]
+proof fn source_byte_state_finite_conjuncts_v65<S, O>(
+    slots: Map<int, S>, objects: Map<int, O>, before: bool, after: bool,
+)
+    ensures
+        (before && slots.dom().finite() && objects.dom().finite() && after)
+        == (before && after),
+{}
+
+}

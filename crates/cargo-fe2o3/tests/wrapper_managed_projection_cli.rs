@@ -9,6 +9,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
+const COMPILER_SELECTION_ENVIRONMENT: &[&str] = &[
+    "RUSTC",
+    "CARGO_BUILD_RUSTC",
+    "RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+];
+
+const COMPILER_FLAGS_ENVIRONMENT: &[&str] = &["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS"];
+
 struct TestWorkspace(PathBuf);
 
 impl TestWorkspace {
@@ -32,6 +43,19 @@ impl TestWorkspace {
         command
             .env("CARGO_TARGET_DIR", self.0.join("target"))
             .current_dir(&self.0);
+        command
+    }
+
+    fn binding_check_command(&self) -> Command {
+        let mut command = self.command(env!("CARGO_BIN_EXE_cargo-fe2o3"));
+        // Keep outer-lane compiler and linker settings out of the independent fixture.
+        for name in COMPILER_SELECTION_ENVIRONMENT
+            .iter()
+            .chain(COMPILER_FLAGS_ENVIRONMENT)
+        {
+            command.env_remove(name);
+        }
+        command.env("CARGO", cargo());
         command
     }
 }
@@ -133,6 +157,75 @@ fn fixture() -> TestWorkspace {
 }
 
 #[test]
+fn projection_fixture_isolates_compiler_selection_and_keeps_explicit_overrides() {
+    let workspace = TestWorkspace::new();
+    let mut command = workspace.binding_check_command();
+    assert_eq!(command.get_current_dir(), Some(workspace.0.as_path()));
+    assert!(command.get_envs().any(|(key, value)| {
+        key == OsStr::new("CARGO_TARGET_DIR")
+            && value == Some(workspace.0.join("target").as_os_str())
+    }));
+    for name in COMPILER_SELECTION_ENVIRONMENT {
+        assert!(
+            command
+                .get_envs()
+                .any(|(key, value)| key == OsStr::new(name) && value.is_none())
+        );
+        command.env(name, "/explicit/test/compiler");
+        assert!(command.get_envs().any(|(key, value)| {
+            key == OsStr::new(name) && value == Some(OsStr::new("/explicit/test/compiler"))
+        }));
+    }
+    command.env_remove("CARGO_TARGET_DIR");
+    assert!(
+        command
+            .get_envs()
+            .any(|(key, value)| { key == OsStr::new("CARGO_TARGET_DIR") && value.is_none() })
+    );
+}
+
+#[test]
+fn projection_fixture_isolates_outer_flags_and_preserves_explicit_flag_overrides() {
+    let workspace = TestWorkspace::new();
+    let mut command = workspace.binding_check_command();
+    for name in COMPILER_FLAGS_ENVIRONMENT {
+        let key = OsStr::new(name);
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| name == key && value.is_none())
+        );
+        command.env(name, "-Copt-level=1");
+        assert!(
+            command
+                .get_envs()
+                .any(|(name, value)| { name == key && value == Some(OsStr::new("-Copt-level=1")) })
+        );
+    }
+}
+
+#[test]
+fn projection_fixture_explicit_compiler_selection_reaches_production_refusal() {
+    let workspace = TestWorkspace::new();
+    for name in COMPILER_SELECTION_ENVIRONMENT {
+        let output = workspace
+            .binding_check_command()
+            .args(["check", "--workspace", "--all-targets", "--locked"])
+            .env(name, "/does/not/exist/explicit-compiler")
+            .output()
+            .expect("run explicit projection compiler-selection refusal");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "explicit {name} was accepted");
+        let expected = if name.ends_with("WRAPPER") {
+            format!("with preexisting {name}=")
+        } else {
+            format!("rejects preexisting compiler selection {name}=")
+        };
+        assert!(stderr.contains(&expected), "{name}: {stderr}");
+    }
+}
+
+#[test]
 fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
     let workspace = fixture();
     let binary = env!("CARGO_BIN_EXE_cargo-fe2o3");
@@ -212,9 +305,8 @@ fn literal_cli_discovers_and_revalidates_the_real_exact_managed_set() {
         let target = workspace.0.join(format!("target-{case}"));
         std::fs::create_dir(&target).expect("create isolated target");
         let output = workspace
-            .command(binary)
+            .binding_check_command()
             .args(args)
-            .env("CARGO", cargo())
             .env("CARGO_TARGET_DIR", &target)
             .env("CARGO_PRIMARY_PACKAGE", "attacker")
             .env("CARGO_PKG_NAME", "attacker")
@@ -427,13 +519,11 @@ fn nonvirtual_root_package_excludes_its_generated_target_directory_on_repeat() {
         .status()
         .expect("generate root-package lockfile");
     assert!(status.success());
-    let binary = env!("CARGO_BIN_EXE_cargo-fe2o3");
     for attempt in 0..2 {
-        let output = Command::new(binary)
+        let output = workspace
+            .binding_check_command()
             .args(["check", "--workspace", "--all-targets", "--locked"])
-            .env("CARGO", cargo())
             .env_remove("CARGO_TARGET_DIR")
-            .current_dir(&workspace.0)
             .output()
             .expect("run repeated root-package binding check");
         assert!(

@@ -156,16 +156,28 @@ fn table_geometry_rejects_foreign_owner_dynamic_and_invalid_fixed_paths() {
     );
     foreign_root.discard(&mut budget).unwrap();
     other.release(&mut budget).unwrap();
+    // From-end offset zero is rejected before a source projection exists.
+    let counters = (budget.work(), budget.storage(), budget.peak_storage());
+    assert_eq!(
+        SemanticProjectionV1::new(
+            SemanticProjectionKindV1::ConstantIndex {
+                offset: 0,
+                minimum_length: 4,
+                from_end: true,
+            },
+            PAIR,
+        ),
+        Err(fe2o3_mir_model::semantic_mir_v1::SemanticMirErrorV1::InvalidProjectionShape)
+    );
+    assert_eq!(
+        counters,
+        (budget.work(), budget.storage(), budget.peak_storage())
+    );
     for kind in [
         SemanticProjectionKindV1::ConstantIndex {
             offset: 4,
             minimum_length: 5,
             from_end: false,
-        },
-        SemanticProjectionKindV1::ConstantIndex {
-            offset: 0,
-            minimum_length: 4,
-            from_end: true,
         },
         SemanticProjectionKindV1::ConstantIndex {
             offset: 1,

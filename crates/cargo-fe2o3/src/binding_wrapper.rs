@@ -17,13 +17,10 @@ use fe2o3_artifact_transaction::{
 use fe2o3_build_authority::CompilerClosureV2;
 use fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV1;
 use fe2o3_hsaco_finalize::{
-    PublishedProtectedWorkerV3HsacoV1, RecoveredProtectedWorkerV3HsacoPublicationV1,
-    WorkerV3HsacoPublicationErrorV1, finalize_protected_worker_v3_hsaco_v1,
-    inspect_protected_worker_v3_hsaco_v1,
-    persist_prepared_protected_worker_v3_hsaco_publication_v1,
-    prepare_protected_worker_v3_hsaco_publication_v1,
-    publish_recovered_protected_worker_v3_hsaco_v1,
-    recover_protected_worker_v3_hsaco_publication_v1,
+    PublishedMixedWorkerHsacoV89, RecoveredMixedWorkerPublicationV89,
+    WorkerV3HsacoPublicationErrorV1, persist_prepared_mixed_worker_publication_v89,
+    prepare_mixed_worker_publication_v89, publish_recovered_mixed_worker_hsaco_v89,
+    recover_mixed_worker_publication_v89,
 };
 use fe2o3_process_identity::{CapturedStdioV1, PinnedWorkingDirectoryV3};
 use fe2o3_runtime_protocol::{
@@ -52,7 +49,9 @@ use crate::build_config::{
 use crate::capability_broker;
 use crate::compiler_execution_boundary::{
     ParentCompilerExecutionReadinessCustodyV1, PreparedCompilerExecutionBoundaryV1,
-    admit_compiler_execution_receipt_transport, validate_compiler_execution_receipt_carriage,
+    admit_compiler_execution_receipt_transport,
+    native::ParentCompilerExecutionReadinessCustodyV3 as NativeReadiness,
+    validate_compiler_execution_receipt_carriage,
 };
 use crate::inert_rustc_invocation_capture::{
     InertPreparedRustcInvocationCapture, InertRustcInvocationCaptureV2,
@@ -390,8 +389,18 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             // before opening the configuration or any transitive provider input.
             let transferred =
                 receive_validated_compiler_capabilities(capability_binding, profile_family)?;
-            let build_config = PreparedProductionBuildConfig::from_environment()
-                .map_err(BindingWrapperError::BuildConfiguration)?;
+            let build_config = match profile_family {
+                capability_broker::CompilerExecutionProfileFamily::LegacyV1 => {
+                    PreparedProductionBuildConfig::from_environment()
+                }
+                capability_broker::CompilerExecutionProfileFamily::NativeV3 => transferred
+                    .compiler_execution_profile_v3()
+                    .map_err(BindingWrapperError::CapabilityBroker)?
+                    .with_profile_budget(|_, b| {
+                        PreparedProductionBuildConfig::from_environment_with_metered_manifest(b)
+                    }),
+            }
+            .map_err(BindingWrapperError::BuildConfiguration)?;
             validate_expected_build_config_identity(
                 build_config.as_ref(),
                 capability_binding.config_identity(),
@@ -749,19 +758,85 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 )
             })?;
             let capabilities = compiler_capabilities.as_ref().unwrap();
-            capabilities.contact_native_root(parent)?;
-            // Present protocol can return only terminal enforcement refusal;
-            // a future consuming root launch must not fall through to local spawn.
-            return Err(BindingWrapperError::CompilerExecutionBoundary {
-                stage: "original-root compiler intake",
-                primary: "RuntimeEnforcementUnavailable".to_owned(),
-                cleanup: None,
-            });
+            let managed = managed_attempt
+                .as_ref()
+                .ok_or_else(|| native_continuation_error("native root has no managed attempt"))?;
+            let ManagedProductionBuild::Fresh {
+                config,
+                compiler_closure,
+            } = &managed.production_build
+            else {
+                return Err(native_continuation_error(
+                    "native root refuses legacy recovered publication",
+                ));
+            };
+            let target = fe2o3_amd_target::ProductionAmdTargetProfileV1::from_device_target(
+                parent.amd_target(),
+            )
+            .ok_or_else(|| native_continuation_error("native captured AMD target"))?;
+            let history_limits =
+                fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1::production_v1();
+            return capabilities.with_completed_native_root(
+                parent,
+                |b| {
+                    use fe2o3_compiler_closure_capability::{
+                        ApprovedCompilerPolicyV2, RetainedCompilerRuntimeV1,
+                    };
+                    let recipe = crate::build_config::native::PreparedNativeProductionBuildConfig::
+                        from_environment(config, b).map_err(native_continuation_error)?;
+                    let (approval, storage) = ApprovedCompilerPolicyV2::from_production_policy(b)
+                        .map_err(native_continuation_error)?;
+                    b.reserve_storage(storage.retained_storage())
+                        .map_err(native_continuation_error)?;
+                    let (runtime, storage) =
+                        RetainedCompilerRuntimeV1::from_production_runtime(approval, b)
+                            .map_err(native_continuation_error)?;
+                    b.reserve_storage(storage.additional_storage())
+                        .map_err(native_continuation_error)?;
+                    runtime
+                        .require_compiler(*compiler_closure, b)
+                        .map_err(native_continuation_error)?;
+                    Ok((recipe, runtime))
+                },
+                |(recipe, runtime), readiness| {
+                    let prepared = readiness
+                        .finalize_original_root_publication(
+                            &managed.output_dir,
+                            &managed.producer,
+                            managed.attempt,
+                            parent,
+                            history_limits,
+                            target,
+                            recipe,
+                            runtime,
+                        )
+                        .map_err(native_continuation_error)?;
+                    // Persistence can commit a journal before a later check
+                    // fails. Preserve that attempt, including during unwind.
+                    if let Some(guard) = pre_spawn_attempt_guard.as_mut() {
+                        guard.disarm();
+                    }
+                    let durable = prepared
+                        .persist_original_root(&managed.output_dir, &managed.producer)
+                        .map_err(native_continuation_error)?;
+                    let published = durable
+                        .publish_original_root(&managed.output_dir, &managed.producer)
+                        .map_err(native_continuation_error)?;
+                    published
+                        .complete_original_root(&managed.output_dir, &managed.producer)
+                        .map_err(native_continuation_error)?;
+                    Ok(RustcExecutionOutcome::NativeCompleted)
+                },
+            );
         }
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
-                return Ok((Err(error), parent_rustc_invocation_custody, None));
+                return Ok(RustcExecutionOutcome::Local {
+                    status: Err(error),
+                    parent: parent_rustc_invocation_custody,
+                    readiness: None,
+                });
             }
         };
         let compiler_execution_readiness = match compiler_execution_boundary {
@@ -799,11 +874,11 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     cleanup: terminate_spawned_rustc(&mut child),
                 })?;
         }
-        Ok((
-            Ok(status),
-            parent_rustc_invocation_custody,
-            compiler_execution_readiness,
-        ))
+        Ok(RustcExecutionOutcome::Local {
+            status: Ok(status),
+            parent: parent_rustc_invocation_custody,
+            readiness: compiler_execution_readiness,
+        })
     })();
     let (status, parent_rustc_invocation_custody, compiler_execution_readiness) =
         match pre_spawn_result {
@@ -811,7 +886,16 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 if let Some(guard) = pre_spawn_attempt_guard.as_mut() {
                     guard.disarm();
                 }
-                prepared
+                match prepared {
+                    RustcExecutionOutcome::Local {
+                        status,
+                        parent,
+                        readiness,
+                    } => (status, parent, readiness),
+                    // This variant is constructed only after actual root
+                    // completion, durable readiness and managed attempt finish.
+                    RustcExecutionOutcome::NativeCompleted => return Ok(success_exit_status()),
+                }
             }
             Err(primary) => {
                 return Err(pre_spawn_failure(pre_spawn_attempt_guard.as_mut(), primary));
@@ -1476,12 +1560,18 @@ fn validate_expected_build_config_identity(
 
 // The native profile decoder and later intake borrow this ONE wrapper request
 // account. This is not the separate root process's original launch account.
+// Prelude quotes and one fixed continuation allowance establish the initial
+// ceiling. Later stages share it; none may replenish or replace this account.
 fn native_intake_account()
 -> Result<crate::authority_release::profile::ClientProfileAccountV3, BindingWrapperError> {
     use crate::authority_release::profile::{
         FundedClientProfileV3, client_profile_receive_quota_v3,
     };
     use crate::protected_compiler_handoff_v3::root_intake;
+    use fe2o3_compiler_closure_capability::{
+        ApprovedCompilerPolicyV2 as Approval, RetainedCompilerRuntimeV1 as Runtime,
+    };
+    use fe2o3_hsaco_finalize::NativeConditionalContinuationAllowanceV1 as Allowance;
     use fe2o3_kernel_ir::{
         CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account,
         CanonicalKernelIrWorkBudgetV1 as Work,
@@ -1494,22 +1584,42 @@ fn native_intake_account()
         || BindingWrapperError::CapabilityBroker("native intake request quota overflow".to_owned());
     let (profile_work, profile_storage) =
         client_profile_receive_quota_v3().map_err(BindingWrapperError::CapabilityBroker)?;
+    let (configuration_work, configuration_storage) =
+        crate::build_config::native::maximum_preparation_quota()
+            .map_err(|error| BindingWrapperError::CapabilityBroker(error.to_string()))?;
+    let runtime_work = Runtime::maximum_operation_work().map_err(native_continuation_error)?;
+    let runtime_storage =
+        Runtime::maximum_additional_storage().map_err(native_continuation_error)?;
     let header = size_of::<Account>()
         + size_of::<Mutex<Account>>()
         + size_of::<FundedClientProfileV3>()
         + 2 * size_of::<usize>();
     let work = profile_work
-        .checked_add(root_intake::WORK)
+        .checked_add(configuration_work)
+        .and_then(|n| n.checked_add(configuration_work))
+        .and_then(|n| n.checked_add(Approval::MAX_OPERATION_WORK))
+        .and_then(|n| n.checked_add(runtime_work.checked_mul(2)?))
+        .and_then(|n| n.checked_add(root_intake::WORK))
         .and_then(|n| n.checked_add(root_intake::CAPTURE_WORK))
+        .and_then(|n| n.checked_add(NativeReadiness::ROOT_ADMISSION_WORK))
         .ok_or_else(overflow)?;
     let storage = profile_storage
-        .checked_add(root_intake::SCRATCH)
+        .checked_add(configuration_storage)
+        .and_then(|n| n.checked_add(configuration_storage))
+        .and_then(|n| n.checked_add(Approval::MAX_OPERATION_SCRATCH))
+        .and_then(|n| n.checked_add(runtime_storage))
+        .and_then(|n| n.checked_add(Runtime::MAX_OPERATION_SCRATCH))
+        .and_then(|n| n.checked_add(root_intake::SCRATCH))
         .and_then(|n| n.checked_add(root_intake::CAPTURE_SCRATCH))
+        .and_then(|n| n.checked_add(NativeReadiness::ROOT_ADMISSION_SCRATCH))
         .and_then(|n| n.checked_add(root_intake::PARENT_MAX_STORAGE))
         .and_then(|n| n.checked_add(root_intake::OUTPUT_OWNER_STORAGE))
         .and_then(|n| n.checked_add(size_of::<capability_broker::BrokeredInvocationAuthorityV1>()))
         .and_then(|n| n.checked_add(header))
         .ok_or_else(overflow)?;
+    let (work, storage) = Allowance::production_v1()
+        .and_then(|plan| plan.compose_startup(work, storage))
+        .map_err(native_continuation_error)?;
     let mut account = Account::new(Work::new(work), storage);
     account
         .with_budget(|b| b.reserve_storage(header))
@@ -1658,10 +1768,17 @@ impl CompilerCapabilities {
             .map_err(|e| BindingWrapperError::ChildCapability(e.to_string()))
     }
 
-    fn contact_native_root(
+    fn with_completed_native_root<P, R>(
         &self,
         parent: &ParentRustcInvocationCustody,
-    ) -> Result<(), BindingWrapperError> {
+        prepare: impl FnOnce(
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<P, BindingWrapperError>,
+        operation: impl for<'b, 'work> FnOnce(
+            P,
+            NativeReadiness<'b, 'work>,
+        ) -> Result<R, BindingWrapperError>,
+    ) -> Result<R, BindingWrapperError> {
         let profile = self.compiler_execution_profile_v3.as_ref().ok_or_else(|| {
             BindingWrapperError::CapabilityBroker("missing authenticated native profile".to_owned())
         })?;
@@ -1675,20 +1792,28 @@ impl CompilerCapabilities {
                 "native parent capture was not prepaid".to_owned(),
             ));
         }
-        profile
-            .with_profile_budget(|profile, b| {
-                parent.contact_original_root(profile, authority, &self.artifact, b)
-            })
-            .map(|_| ())
-            .map_err(
-                |error: crate::protected_compiler_handoff_v3::root_intake::Error| {
-                    BindingWrapperError::CompilerExecutionBoundary {
-                        stage: "authenticated original-root intake",
-                        primary: error.to_string(),
-                        cleanup: None,
-                    }
-                },
-            )
+        profile.with_profile_budget(|profile, b| {
+            // Address-bound recipe/runtime owners must be created in this exact
+            // view, before contacting the root, and consumed before it closes.
+            let prepared = prepare(b)?;
+            let completed = parent
+                .contact_original_root(profile, authority, &self.artifact, b)
+                .map_err(|error| BindingWrapperError::CompilerExecutionBoundary {
+                    stage: "authenticated original-root intake",
+                    primary: error.to_string(),
+                    cleanup: None,
+                })?;
+            let readiness = NativeReadiness::from_original_root(completed).map_err(|error| {
+                BindingWrapperError::CompilerExecutionBoundary {
+                    stage: "original-root publication custody",
+                    primary: error.to_string(),
+                    cleanup: None,
+                }
+            })?;
+            // No owner or budget borrow may escape this original funded callback.
+            // Artifact persistence is outside the transport's refundable scopes.
+            operation(prepared, readiness)
+        })
     }
 
     fn take_invocation_authority(
@@ -1912,6 +2037,23 @@ struct ManagedAttempt {
     production_build: ManagedProductionBuild,
 }
 
+enum RustcExecutionOutcome {
+    Local {
+        status: std::io::Result<ExitStatus>,
+        parent: Option<ParentRustcInvocationCustody>,
+        readiness: Option<ParentCompilerExecutionReadinessCustodyV1>,
+    },
+    NativeCompleted,
+}
+
+fn native_continuation_error(error: impl fmt::Display) -> BindingWrapperError {
+    BindingWrapperError::CompilerExecutionBoundary {
+        stage: "original-root artifact continuation",
+        primary: error.to_string(),
+        cleanup: None,
+    }
+}
+
 struct ManagedProductionAttempt {
     output_dir: PathBuf,
     producer: ProducerIdentity,
@@ -1988,11 +2130,51 @@ fn report_source_isa_observation_emission(status: SourceIsaObservationEmissionTe
 }
 
 impl SourceIsaObservationEmitterV1 {
+    fn emit_mixed_finalized_v89(
+        &mut self,
+        finalized: &fe2o3_hsaco_finalize::PreparedFinalizedNominalWorkerHsacoV89,
+    ) {
+        if self.kind
+            == crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91
+        {
+            return;
+        }
+        if self.kind == crate::build_config::ProductionSourceIsaObservationKindV1::Characteristic {
+            self.sink.take();
+            report_source_isa_observation_emission(
+                SourceIsaObservationEmissionTelemetryV1::MappingFailed(
+                    "typed V18 source/ISA characteristic projection is not admitted".to_owned(),
+                ),
+            );
+            return;
+        }
+        let status = emit_source_isa_observation_once(
+            &mut self.sink,
+            self.attempt,
+            finalized.attempt(),
+            || {
+                crate::source_isa_observation::finalized_mixed_source_isa_observation_frame_v89(
+                    self.config,
+                    self.unit,
+                    finalized,
+                )
+            },
+            capability_broker::SourceIsaObservationSinkV1::submit,
+        );
+        report_source_isa_observation_emission(status);
+    }
+
     fn emit_finalized(
         &mut self,
         finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
     ) {
         let status = match self.kind {
+            crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91 => {
+                self.sink.take();
+                SourceIsaObservationEmissionTelemetryV1::MappingFailed(
+                    "production census requires the completed V89 managed path".to_owned(),
+                )
+            }
             crate::build_config::ProductionSourceIsaObservationKindV1::Summary => {
                 emit_source_isa_observation_once(
                     &mut self.sink,
@@ -2028,6 +2210,11 @@ impl SourceIsaObservationEmitterV1 {
     }
 
     fn emit_ready(&mut self, attempt: BuildAttempt, finalization: [u8; 32]) {
+        if self.kind
+            == crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91
+        {
+            return;
+        }
         if self.kind == crate::build_config::ProductionSourceIsaObservationKindV1::Characteristic {
             self.sink.take();
             report_source_isa_observation_emission(
@@ -2049,12 +2236,58 @@ impl SourceIsaObservationEmitterV1 {
 }
 
 impl ManagedProductionAttempt {
+    fn prepare_census_v91(
+        &self,
+        wire: &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeWireV2,
+        artifact: &[u8],
+    ) -> Option<Result<crate::production_census_v91::Census, String>> {
+        let observer = self.source_isa_observer.as_ref()?;
+        (observer.kind
+            == crate::build_config::ProductionSourceIsaObservationKindV1::ProductionCensusV91)
+            .then(|| {
+                crate::production_census_v91::snapshot(
+                    observer.config,
+                    observer.unit,
+                    wire,
+                    artifact,
+                )
+            })
+    }
+
+    fn emit_completed_census_v91(
+        &mut self,
+        census: Option<Result<crate::production_census_v91::Census, String>>,
+    ) {
+        let (Some(observer), Some(census)) = (self.source_isa_observer.as_mut(), census) else {
+            return;
+        };
+        let attempt = self.attempt;
+        report_source_isa_observation_emission(emit_source_isa_observation_once(
+            &mut observer.sink,
+            observer.attempt,
+            attempt,
+            || {
+                let census = census?;
+                let frame = ready_source_isa_observation_frame_v1(
+                    observer.config,
+                    observer.unit,
+                    attempt,
+                    census.finalization,
+                )
+                .map_err(|error| error.to_string())?;
+                census.check_frame(&frame)?;
+                Ok::<_, String>((frame, census))
+            },
+            |sink, (frame, census)| sink.submit_census(frame, census),
+        ));
+    }
+
     fn emit_finalized_source_isa_observation(
         &mut self,
-        finalized: &fe2o3_hsaco_finalize::PreparedFinalizedProtectedWorkerV3HsacoV1,
+        finalized: &fe2o3_hsaco_finalize::PreparedFinalizedNominalWorkerHsacoV89,
     ) {
         if let Some(observer) = self.source_isa_observer.as_mut() {
-            observer.emit_finalized(finalized);
+            observer.emit_mixed_finalized_v89(finalized);
         }
     }
 
@@ -2111,6 +2344,9 @@ fn pre_spawn_failure(
     let Some(guard) = guard else {
         return primary;
     };
+    if !guard.armed {
+        return primary;
+    }
     let cleanup = guard.revoke().err();
     BindingWrapperError::ManagedCompletion {
         primary: primary.to_string(),
@@ -2136,7 +2372,7 @@ enum ManagedProductionBuild {
         compiler_closure: CompilerClosureV2,
     },
     Recovered {
-        recovered: Box<RecoveredProtectedWorkerV3HsacoPublicationV1>,
+        recovered: Box<RecoveredMixedWorkerPublicationV89>,
         compiler_closure: CompilerClosureV2,
         compiler_execution: Box<CompilerExecutionReceiptCarriageV1>,
     },
@@ -2212,6 +2448,7 @@ fn prepare_managed_production_build_for_profile(
         }
     };
     if let Some(envelope) = recovered_envelope {
+        check_ready_predicated_artifact(envelope.exact_artifact_bytes())?;
         let compiler_execution_profile = compiler_execution_profile.ok_or_else(|| {
             BindingWrapperError::BuildObservation(
                 "native intake refuses legacy load-readiness recovery".to_owned(),
@@ -2243,7 +2480,7 @@ fn prepare_managed_production_build_for_profile(
             false,
         ));
     }
-    match recover_protected_worker_v3_hsaco_publication_v1(output_dir, producer, attempt) {
+    match recover_mixed_worker_publication_v89(output_dir, producer, attempt) {
         Ok(recovered) => {
             let compiler_execution_profile = compiler_execution_profile.ok_or_else(|| {
                 BindingWrapperError::BuildObservation(
@@ -2297,6 +2534,23 @@ fn prepare_managed_production_build_for_profile(
             "production V3 restart recovery failed closed: {error}"
         ))),
     }
+}
+
+fn check_ready_predicated_artifact(bytes: &[u8]) -> Result<(), BindingWrapperError> {
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        fe2o3_hsaco_finalize::MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89,
+    );
+    let mut budget = fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+        &mut work,
+        fe2o3_hsaco_finalize::MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89,
+    );
+    fe2o3_hsaco_finalize::check_finalized_nominal_hsaco_on_budget_v89(bytes, &mut budget).map_err(
+        |error| {
+            BindingWrapperError::BuildObservation(format!(
+                "production load readiness requires an exact finalized V89 descriptor: {error}"
+            ))
+        },
+    )
 }
 
 fn prepare_production_managed_attempt(
@@ -2569,24 +2823,34 @@ fn complete_fresh_production_artifact(
                 "strict V3 reproducible worker execution failed: {error}"
             ))
         })?;
-    let inspected = inspect_protected_worker_v3_hsaco_v1(evidence).map_err(|error| {
+    // Ordinary production accepts only the complete mixed descriptor. This
+    // performs the same strict Worker/physical checks and rejects every legacy
+    // descriptor instead of choosing another proof or finalization route.
+    let mut finalization_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        fe2o3_hsaco_finalize::MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89,
+    );
+    let mut finalization_budget =
+        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1::new(
+            &mut finalization_work,
+            fe2o3_hsaco_finalize::MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89,
+        );
+    let finalized = fe2o3_hsaco_finalize::finalize_protected_worker_nominal_hsaco_on_budget_v89(
+        evidence,
+        &mut finalization_budget,
+    )
+    .map_err(|error| {
         CompletionFailure::Uncommitted(format!(
-            "independent strict V3 raw-HSACO inspection failed: {error}"
-        ))
-    })?;
-    let finalized = finalize_protected_worker_v3_hsaco_v1(inspected).map_err(|error| {
-        CompletionFailure::Uncommitted(format!(
-            "strict V3 canonical HSACO finalization failed: {error}"
+            "strict mixed V89 canonical HSACO finalization failed: {error}"
         ))
     })?;
     managed.emit_finalized_source_isa_observation(&finalized);
-    let prepared = prepare_protected_worker_v3_hsaco_publication_v1(&managed.producer, finalized)
-        .map_err(|error| {
-        CompletionFailure::Uncommitted(format!(
-            "strict V3 durable publication preparation failed: {error}"
-        ))
-    })?;
-    let recovered = persist_prepared_protected_worker_v3_hsaco_publication_v1(
+    let prepared =
+        prepare_mixed_worker_publication_v89(&managed.producer, finalized).map_err(|error| {
+            CompletionFailure::Uncommitted(format!(
+                "strict V3 durable publication preparation failed: {error}"
+            ))
+        })?;
+    let recovered = persist_prepared_mixed_worker_publication_v89(
         &managed.output_dir,
         &managed.producer,
         prepared,
@@ -2601,12 +2865,12 @@ fn complete_fresh_production_artifact(
 
 fn complete_recovered_production_artifact(
     managed: &mut ManagedProductionAttempt,
-    recovered: RecoveredProtectedWorkerV3HsacoPublicationV1,
+    recovered: RecoveredMixedWorkerPublicationV89,
     compiler_closure: CompilerClosureV2,
     compiler_execution: CompilerExecutionReceiptCarriageV1,
 ) -> Result<(), CompletionFailure> {
     managed.emit_finalized_source_isa_observation(recovered.finalized_evidence());
-    let published = publish_recovered_protected_worker_v3_hsaco_v1(
+    let published = publish_recovered_mixed_worker_hsaco_v89(
         &managed.output_dir,
         &managed.producer,
         compiler_closure,
@@ -2621,17 +2885,18 @@ fn complete_recovered_production_artifact(
 }
 
 fn complete_published_production_artifact(
-    managed: &ManagedProductionAttempt,
-    published: PublishedProtectedWorkerV3HsacoV1,
+    managed: &mut ManagedProductionAttempt,
+    published: PublishedMixedWorkerHsacoV89,
     compiler_execution: CompilerExecutionReceiptCarriageV1,
 ) -> Result<(), CompletionFailure> {
     let intent_identity = published.recovered_evidence().storage_record().identity();
-    let envelope = WorkerV3LoadEnvelopeV2::from_published_hsaco_v1(published, compiler_execution)
-        .map_err(|error| {
-        CompletionFailure::PreserveAttempt(format!(
-            "receipt-bearing strict V3 load-envelope custody construction failed: {error}"
-        ))
-    })?;
+    let envelope =
+        WorkerV3LoadEnvelopeV2::from_published_mixed_hsaco_v89(published, compiler_execution)
+            .map_err(|error| {
+                CompletionFailure::PreserveAttempt(format!(
+                    "receipt-bearing strict V3 load-envelope custody construction failed: {error}"
+                ))
+            })?;
     let readiness = envelope
         .persist_durable_replay_custody_v2(&managed.output_dir)
         .map_err(|error| {
@@ -2651,12 +2916,17 @@ fn complete_published_production_artifact(
             "strict V3 publication-intent retirement failed: {error}"
         ))
     })?;
+    let census = managed.prepare_census_v91(envelope.wire(), envelope.exact_artifact_bytes());
     drop(envelope);
-    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
-        CompletionFailure::PreserveAttempt(format!(
-            "strict V3 build-attempt completion failed: {error}"
-        ))
-    })
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(
+        |error| {
+            CompletionFailure::PreserveAttempt(format!(
+                "strict V3 build-attempt completion failed: {error}"
+            ))
+        },
+    )?;
+    managed.emit_completed_census_v91(census);
+    Ok(())
 }
 
 fn complete_ready_production_artifact(
@@ -2683,12 +2953,17 @@ fn complete_ready_production_artifact(
             )));
         }
     }
+    let census = managed.prepare_census_v91(envelope.wire(), envelope.exact_artifact_bytes());
     drop(envelope);
-    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(|error| {
-        CompletionFailure::PreserveAttempt(format!(
-            "recovered strict V3 build-attempt completion failed: {error}"
-        ))
-    })
+    finish_build_attempt(&managed.output_dir, &managed.producer, managed.attempt).map_err(
+        |error| {
+            CompletionFailure::PreserveAttempt(format!(
+                "recovered strict V3 build-attempt completion failed: {error}"
+            ))
+        },
+    )?;
+    managed.emit_completed_census_v91(census);
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -2794,6 +3069,50 @@ mod lifecycle_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn native_intake_funds_one_continuation_without_resetting_exhausted_account() {
+        use fe2o3_hsaco_finalize::NativeConditionalContinuationAllowanceV1 as Allowance;
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+
+        let allowance = Allowance::production_v1().unwrap();
+        let account = native_intake_account().unwrap();
+        let alias = std::sync::Arc::clone(&account);
+        let mut original = account.lock().unwrap();
+        let work_limit = original.work_limit();
+        let storage_limit = original.storage_limit();
+        assert!(work_limit > allowance.work());
+        assert!(storage_limit > allowance.storage());
+        assert_eq!(original.work(), 0);
+        let floor = original.storage();
+        assert!(floor > 0 && floor < storage_limit);
+        let (ledger, owner) = original.with_budget(|budget| {
+            budget.charge_work(work_limit).unwrap();
+            budget.reserve_storage(storage_limit - floor).unwrap();
+            assert!(matches!(budget.charge_work(1), Err(Resource::Work(_))));
+            assert!(matches!(
+                budget.reserve_storage(1),
+                Err(Resource::Storage(_))
+            ));
+            budget.release_storage(storage_limit - floor).unwrap();
+            (
+                budget.work_ledger_identity_v1(),
+                budget.storage_account_identity_v1(),
+            )
+        });
+        drop(original);
+        alias.lock().unwrap().with_budget(|budget| {
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(budget.storage_account_identity_v1(), owner);
+            assert_eq!((budget.work(), budget.storage()), (work_limit, floor));
+            assert_eq!(budget.peak_storage(), storage_limit);
+            assert_eq!(budget.failed_work(), Some(work_limit + 1));
+            assert_eq!(budget.failed_storage(), Some(storage_limit + 1));
+            assert!(matches!(budget.charge_work(2), Err(Resource::Work(_))));
+            assert_eq!(budget.failed_work(), Some(work_limit + 1));
+        });
+    }
 
     struct TestDirectory(PathBuf);
 
@@ -3021,6 +3340,41 @@ mod lifecycle_tests {
     }
 
     #[test]
+    fn durable_native_continuation_failure_preserves_the_real_managed_attempt() {
+        let temp = TestDirectory::new();
+        let output = temp.0.join("output");
+        let producer = ProducerIdentity::from_codegen(
+            "native_completion_failure",
+            Some(Path::new("/workspace/src/lib.rs")),
+        )
+        .unwrap();
+        let session = BuildSession::from_bytes([0x51; 16]);
+        let invocation = BuildInvocation::from_bytes([0x52; 32]);
+        let attempt = begin_build_attempt(&output, &producer, invocation, session).unwrap();
+        let mut guard = ManagedAttemptRevocationGuard {
+            output_dir: output.clone(),
+            producer: producer.clone(),
+            attempt,
+            armed: true,
+        };
+        guard.disarm();
+        let error = pre_spawn_failure(
+            Some(&mut guard),
+            native_continuation_error("injected post-persistence refusal"),
+        );
+        assert!(matches!(
+            error,
+            BindingWrapperError::CompilerExecutionBoundary { .. }
+        ));
+        drop(guard);
+        assert_eq!(
+            begin_build_attempt(&output, &producer, invocation, session).unwrap(),
+            attempt
+        );
+        fail_build_attempt(&output, &producer, attempt).unwrap();
+    }
+
+    #[test]
     fn observation_emission_is_one_shot_for_repeated_lifecycle_entries() {
         let expected_attempt = attempt(4);
         let expected_observation_attempt =
@@ -3136,5 +3490,65 @@ mod lifecycle_tests {
             SourceIsaObservationEmissionTelemetryV1::SubmissionFailed("submit".to_owned())
         );
         assert!(submission_sink.is_none());
+    }
+
+    #[test]
+    fn ordinary_managed_worker_uses_mixed_v89_on_fresh_and_recovered_paths() {
+        let source = include_str!("binding_wrapper.rs");
+        let production = source
+            .split_once("fn complete_managed_production_build(")
+            .expect("ordinary completion")
+            .1
+            .split_once("#[cfg(test)]")
+            .unwrap()
+            .0;
+        for required in [
+            "finalize_protected_worker_nominal_hsaco_on_budget_v89(",
+            "MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89",
+            "MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89",
+            "prepare_mixed_worker_publication_v89(",
+            "persist_prepared_mixed_worker_publication_v89(",
+            "publish_recovered_mixed_worker_hsaco_v89(",
+            "from_published_mixed_hsaco_v89(",
+        ] {
+            assert!(production.contains(required), "missing {required}");
+        }
+        for old in [
+            "finalize_protected_worker_nominal_hsaco_v89(",
+            "finalize_protected_worker_nominal_hsaco_on_budget_v53(",
+            "prepare_mixed_worker_publication_v53(",
+            "persist_prepared_mixed_worker_publication_v53(",
+            "publish_recovered_mixed_worker_hsaco_v53(",
+            "from_published_mixed_hsaco_v53(",
+            "&mut |_| Ok::<_, std::convert::Infallible>(())",
+            "finalize_protected_worker_v3_hsaco_v1(",
+            "prepare_protected_worker_v3_hsaco_publication_v1(",
+            "from_published_hsaco_v1(",
+        ] {
+            assert!(!production.contains(old), "legacy ordinary fallback {old}");
+        }
+        let recovery = source
+            .split_once("fn prepare_managed_production_build_for_profile(")
+            .unwrap()
+            .1
+            .split_once("fn check_ready_predicated_artifact(")
+            .unwrap()
+            .0;
+        assert!(recovery.contains("recover_mixed_worker_publication_v89("));
+        assert!(!recovery.contains("recover_mixed_worker_publication_v53("));
+        let checked = recovery
+            .find("check_ready_predicated_artifact(envelope.exact_artifact_bytes())?")
+            .unwrap();
+        let ready = recovery.find("ManagedProductionBuild::Ready").unwrap();
+        assert!(checked < ready);
+        assert!(recovery.contains("validate_compiler_execution_receipt_carriage("));
+        assert!(recovery.contains("admit_compiler_execution_receipt_transport("));
+    }
+
+    #[test]
+    fn production_ready_state_does_not_admit_an_unchecked_artifact() {
+        for bytes in [&[][..], b"FE2O3D53\x35\x00", b"FE2O3D89\x59\x00"] {
+            assert!(check_ready_predicated_artifact(bytes).is_err());
+        }
     }
 }

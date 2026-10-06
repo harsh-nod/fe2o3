@@ -1452,7 +1452,11 @@ fn pointer_width_and_address_space_come_from_the_exact_source_target_contract() 
             panic!("missing pointer")
         };
         assert_eq!(
-            (pointer.value_space, pointer.encoded_space, pointer.stored_bits),
+            (
+                pointer.value_space,
+                pointer.encoded_space,
+                pointer.stored_bits
+            ),
             (expected, expected, bits)
         );
         for unsupported in [2, 6, u32::MAX] {
@@ -1518,4 +1522,89 @@ fn a_multiple_root_source_module_uses_one_demand_closure_and_shared_row_ids() {
     assert_eq!(element, word);
     drop(rows);
     layouts.release(&mut budget).unwrap();
+}
+
+#[test]
+fn repeated_array_type_dag_does_not_expand_the_physical_object_tree() {
+    const DEPTH: usize = 48;
+    let mut source = types();
+    let mut element = WORD;
+    let mut size = 8;
+    for index in 0..DEPTH {
+        let ty = SemanticTypeIdV1::from_index(source.len() as u32);
+        source.push(array(201 + index as u8, element, 2, size, 8, true));
+        element = ty;
+        size *= 2;
+    }
+    let source_count = source.len();
+    let owner = owner_with(source);
+    // A deliberately loose source-size bound covers heap sorting, binary row
+    // lookups, sorted memo insertion and fixed per-edge work, not 2^DEPTH bytes.
+    let mut work =
+        CanonicalKernelIrWorkBudgetV1::new(100 * (DEPTH + 1) * (DEPTH + 1) + source_count);
+    let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
+    let layouts = SourceStorageLayoutsV29::new(&owner, &[element], &mut budget).unwrap();
+    assert!(
+        layouts
+            .data_covers(
+                element,
+                SourceStorageRangeV29::new(0, size, size).unwrap(),
+                &mut budget
+            )
+            .unwrap()
+    );
+    assert_eq!(layouts.keys.len(), DEPTH + 1);
+    layouts.release(&mut budget).unwrap();
+}
+
+#[test]
+fn absent_record_initialization_does_not_expand_repeated_type_dags() {
+    const DEPTH: usize = 48;
+    let mut source = types();
+    let mut element = WORD;
+    let mut size = 8;
+    for index in 0..DEPTH {
+        let ty = SemanticTypeIdV1::from_index(source.len() as u32);
+        source.push(aggregate(
+            201 + index as u8,
+            size * 2,
+            8,
+            vec![element, element],
+            vec![0, size],
+            vec![],
+        ));
+        element = ty;
+        size *= 2;
+    }
+    let owner = owner_with(source);
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(100 * (DEPTH + 1) * (DEPTH + 1));
+    let mut budget = Budget::new(&mut work, 64 * 1024 * 1024);
+    production_call_instances_v1::with_production_call_instances_v1(
+        &owner,
+        ROOT,
+        &mut budget,
+        |instances, budget| {
+            let result = (|| -> Result<(), Error> {
+                let floor = budget.storage();
+                let layouts = SourceStorageLayoutsV29::new(&owner, &[element], budget)?;
+                let place = layouts.root_subobject(&owner, element, budget)?;
+                let state = SourceStorageStateV29::new(
+                    &layouts,
+                    instances,
+                    instances.root(),
+                    local_for(element),
+                    budget,
+                )?;
+                assert!(!state.is_initialized(&place, budget)?);
+                state.discard(budget)?;
+                place.discard(budget)?;
+                layouts.release(budget)?;
+                assert_eq!(budget.storage(), floor);
+                Ok(())
+            })();
+            Ok::<_, production_call_instances_v1::ProductionCallInstanceErrorV1>(result)
+        },
+    )
+    .unwrap()
+    .unwrap();
 }

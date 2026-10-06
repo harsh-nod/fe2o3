@@ -1,0 +1,79 @@
+// Native callers cannot mint an identity from any private allocation generation,
+// including one the kernel will create later. Dead, uninitialized fragments are
+// inert; neither a typed read nor a complete relocation can recover them.
+// Runtime allocation generations are u64 (ProvenanceV2 and native allocation
+// keys). Keep the mathematical overapproximation unbounded above, but do not
+// admit negative live generations that the source frame invariant rejects.
+spec fn invocation_native_live_allocation_v77(allocation: MemoryAllocationV30) -> bool {
+    match allocation {
+        MemoryAllocationV30::External { generation, .. } => 0 <= generation,
+        MemoryAllocationV30::Private { .. } => false,
+    }
+}
+
+spec fn invocation_native_value_provenance_v39(value: MemoryValueV30) -> bool {
+    match value {
+        MemoryValueV30::Pointer(pointer) => !invocation_private_allocation_v36(pointer.allocation),
+        MemoryValueV30::Slice(slice) => !invocation_private_allocation_v36(slice.pointer.allocation),
+        MemoryValueV30::Undefined | MemoryValueV30::Unit
+        | MemoryValueV30::Scalar(_) | MemoryValueV30::Vector(_) => true,
+        MemoryValueV30::Execution(_) => false,
+    }
+}
+
+proof fn invocation_native_execution_capability_is_not_an_argument_v178(
+    capability: MemoryExecutionCapabilityV178,
+)
+    ensures !invocation_native_value_provenance_v39(MemoryValueV30::Execution(capability)),
+{}
+
+spec fn invocation_native_provenance_v39(memory: ByteMemoryV30,
+    arguments: Seq<MemoryValueV30>,
+) -> bool {
+    (forall|i: int| 0 <= i < arguments.len() ==>
+        invocation_native_value_provenance_v39(arguments[i]))
+    && (forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) ==>
+        invocation_native_live_allocation_v77(allocation) && ({
+            let object = memory.live[allocation];
+            (forall|i: int| 0 <= i < object.bytes.len() && object.initialized[i] ==>
+                match object.bytes[i] {
+                    MemoryByteV37::Octet(_) => true,
+                    MemoryByteV37::PointerFragment { pointer, .. } =>
+                        !invocation_private_allocation_v36(pointer.allocation),
+                })
+            && (forall|at: int| object.relocations.contains_key(at) ==>
+                !invocation_private_allocation_v36(object.relocations[at].pointer.allocation))
+        }))
+}
+
+proof fn invocation_native_initial_memory_invariants_v77(
+    memory: ByteMemoryV30, arguments: Seq<MemoryValueV30>, frames: MemoryFrameRuntimeV30,
+)
+    requires invocation_native_provenance_v39(memory, arguments),
+    ensures byte_private_frames_live_v30(memory, frames),
+        private_generation_counters_valid_v30(Map::empty(), memory),
+{
+    assert forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) implies
+        match allocation {
+            MemoryAllocationV30::External { generation, .. } => 0 <= generation,
+            MemoryAllocationV30::Private { owner, invocation, site, generation } =>
+                0 <= owner && 0 <= invocation && 0 <= generation
+                && 0 <= site.function && 0 <= site.block && 0 <= site.operation
+                && exists|i: int| 0 <= i < frames.active.len()
+                    && frames.active[i] == (MemoryDynamicFrameV30 { owner, invocation }),
+        } by {
+        assert(invocation_native_live_allocation_v77(allocation));
+    }
+    let generations: Map<MemoryPrivateSiteV30, int> = Map::empty();
+    assert forall|site: MemoryPrivateSiteV30| generations.contains_key(site) implies
+        0 <= generations[site] by {}
+    assert forall|site: MemoryPrivateSiteV30, generation: int|
+        memory.live.contains_key(private_allocation_v30(site, generation)) implies
+            0 <= generation < private_generation_v30(generations, site) by {
+        let allocation = private_allocation_v30(site, generation);
+        assert(invocation_native_live_allocation_v77(allocation));
+        reveal(invocation_native_live_allocation_v77);
+        reveal(private_allocation_v30);
+        assert(!invocation_native_live_allocation_v77(allocation));
+    }
+}

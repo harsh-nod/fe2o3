@@ -188,6 +188,7 @@ def validate_kernel_inventory(
     manifest: dict[str, Any], inventory: dict[str, Any] | None,
     *, max_records: int = MAX_KERNEL_PAIR_RECORDS,
     repo_root: Path | None = None, package_cache: dict[str, dict[str, Any]] | None = None,
+    observe_sources: Any = None,
 ) -> dict[str, Any] | None:
     if "kernelInventory" not in manifest:
         return None
@@ -235,6 +236,7 @@ def validate_kernel_inventory(
             manifest, inventory, ordinary_rust_function_items, max_records=max_records,
             load_fixture_sources=fixture_sources, rust_syntax=rust_syntax,
             load_source_case_sources=source_case_sources,
+            observe_sources=observe_sources,
         )
     except module.KernelInventoryError as error:
         fail(str(error))
@@ -2148,13 +2150,25 @@ def main() -> None:
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--emit-matrix", choices=sorted(ALLOWED_TARGETS))
     output.add_argument("--emit-kernel-pairs", action="store_true")
+    output.add_argument("--emit-source-input-snapshot", type=Path,
+                        help="snapshot one exact registered invocation for the ordinary-source corpus runner")
     parser.add_argument("--require-qualified", action="store_true")
     parser.add_argument("--require-curriculum", action="store_true")
     parser.add_argument("--site-inventory", type=Path)
     parser.add_argument("--ordinary-source-report", type=Path)
+    parser.add_argument("--source-driver-report", type=Path)
     arguments = parser.parse_args()
     if arguments.ordinary_source_report and not arguments.emit_kernel_pairs:
         fail("--ordinary-source-report requires --emit-kernel-pairs")
+    if arguments.source_driver_report and not arguments.emit_kernel_pairs:
+        fail("--source-driver-report requires --emit-kernel-pairs")
+    census_module = None
+    if arguments.emit_source_input_snapshot or arguments.ordinary_source_report or arguments.source_driver_report:
+        specification = importlib.util.spec_from_file_location(
+            "tutorial_source_census", Path(__file__).with_name("tutorial_source_census.py"))
+        assert specification is not None and specification.loader is not None
+        census_module = importlib.util.module_from_spec(specification)
+        specification.loader.exec_module(census_module)
     root = arguments.repo_root.resolve()
     manifest, manifest_sha256 = load_manifest(
         arguments.manifest or root / "config/tutorial-kernel-manifest-v1.json", with_sha256=True,
@@ -2172,11 +2186,37 @@ def main() -> None:
             validate_kernel_inventory(manifest, inventory, repo_root=root)
     if arguments.require_qualified:
         fail("qualification receipts and policy/final-graph evidence are not implemented by source contracts")
-    if arguments.emit_kernel_pairs:
+    if arguments.emit_source_input_snapshot:
+        import sys
+        try:
+            snapshot = census_module.input_snapshot(
+                sys.modules[__name__], root, manifest, manifest_sha256,
+                load_manifest(arguments.emit_source_input_snapshot))
+        except census_module.CensusError as error:
+            fail(str(error))
+        if sha256_file(arguments.manifest or root / "config/tutorial-kernel-manifest-v1.json",
+                       MAX_CARGO_MANIFEST_BYTES, "source census manifest") != manifest_sha256:
+            fail("source census manifest changed during input validation")
+        print(_encode_kernel_pair_report(snapshot))
+    elif arguments.emit_kernel_pairs:
         report = _kernel_pair_report(manifest, fixtures, curriculum_gaps, inventory, repo_root=root)
+        corpus = None
         if arguments.ordinary_source_report:
             corpus = load_manifest(arguments.ordinary_source_report, MAX_SITE_INVENTORY_BYTES)
             _bind_ordinary_source_report(report, fixtures, corpus, manifest_sha256)
+        if arguments.source_driver_report or (corpus is not None and any(
+                "source_census" in case for case in corpus["cases"])):
+            import sys
+            source_drivers = (load_manifest(arguments.source_driver_report, MAX_SITE_INVENTORY_BYTES)
+                              if arguments.source_driver_report else None)
+            if inventory is None or "kernelInventory" not in report:
+                fail("source census corpus joins require --site-inventory and the identity extension")
+            try:
+                report["sourceCensusObservations"] = census_module.join(
+                    sys.modules[__name__], root, manifest, manifest_sha256, inventory,
+                    report["kernelInventory"], [corpus, source_drivers])
+            except census_module.CensusError as error:
+                fail(str(error))
         print(_encode_kernel_pair_report(report))
     elif arguments.emit_matrix:
         records = [fixture for fixture in fixtures.values() if fixture["target"] == arguments.emit_matrix]

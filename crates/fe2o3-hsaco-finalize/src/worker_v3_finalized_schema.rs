@@ -4,7 +4,8 @@ use crate::{
     InspectedProtectedWorkerV3HsacoV1, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V3,
     NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V4, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V5,
     PreparedFinalizedNominalWorkerHsacoV3, PreparedFinalizedNominalWorkerHsacoV4,
-    PreparedFinalizedNominalWorkerHsacoV5, PreparedFinalizedProtectedWorkerV3HsacoV1,
+    PreparedFinalizedNominalWorkerHsacoV5, PreparedFinalizedNominalWorkerHsacoV53,
+    PreparedFinalizedNominalWorkerHsacoV89, PreparedFinalizedProtectedWorkerV3HsacoV1,
     WorkerV3HsacoPublicationErrorV1 as E,
 };
 use fe2o3_kernel_descriptor::{CanonicalCodeObjectDigest, DEVICE_DESCRIPTOR_MAGIC};
@@ -15,11 +16,19 @@ pub(crate) enum DescriptorSchema {
     NominalV3,
     NominalV4,
     NominalV5,
+    MixedV53,
+    MixedV89,
 }
 impl DescriptorSchema {
     pub(crate) fn from_abi(bytes: &[u8]) -> Result<Self, E> {
         // This selects the strict codec only. The finalizer still validates the
         // complete receipt against the actual descriptor and artifact.
+        if bytes.get(..10) == Some(b"FE2O3D89\x59\x00".as_slice()) {
+            return Ok(Self::MixedV89);
+        }
+        if bytes.get(..10) == Some(b"FE2O3D53\x35\x00".as_slice()) {
+            return Ok(Self::MixedV53);
+        }
         if bytes.get(..8) != Some(DEVICE_DESCRIPTOR_MAGIC.as_slice()) {
             return Err(E::DescriptorSchemaMismatch);
         }
@@ -52,6 +61,37 @@ impl DescriptorSchema {
                 &mut |_| Ok::<_, std::convert::Infallible>(()),
             )
             .map_err(E::NominalArtifactV5),
+            Self::MixedV53 => crate::mixed_worker_resources_v53::derive_raw_default(bytes)
+                .map_err(E::MixedArtifactV53),
+            Self::MixedV89 => crate::mixed_worker_resources_v89::derive_raw_default(bytes)
+                .map_err(E::MixedArtifactV89),
+        }
+    }
+
+    pub(crate) fn derive_raw_on_mixed_budget(
+        self,
+        bytes: &[u8],
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<Vec<u8>, E> {
+        match self {
+            Self::MixedV53 => crate::derive_unfinalized_nominal_hsaco_on_budget_v53(bytes, budget)
+                .map_err(E::MixedArtifactV53),
+            Self::MixedV89 => crate::derive_unfinalized_nominal_hsaco_on_budget_v89(bytes, budget)
+                .map_err(E::MixedArtifactV89),
+            _ => self.derive_raw(bytes),
+        }
+    }
+
+    pub(crate) fn mixed_resource_limits(self) -> (usize, usize) {
+        match self {
+            Self::MixedV89 => (
+                crate::MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89,
+                crate::MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89,
+            ),
+            _ => (
+                crate::MIXED_WORKER_FINALIZATION_WORK_LIMIT_V53,
+                crate::MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V53,
+            ),
         }
     }
 
@@ -61,7 +101,9 @@ impl DescriptorSchema {
         match Self::from_abi(bytes)? {
             Self::V1 => Ok(Self::V1),
             Self::NominalV3 => Ok(Self::NominalV3),
-            Self::NominalV4 | Self::NominalV5 => Err(E::DescriptorSchemaMismatch),
+            Self::NominalV4 | Self::NominalV5 | Self::MixedV53 | Self::MixedV89 => {
+                Err(E::DescriptorSchemaMismatch)
+            }
         }
     }
 }
@@ -72,6 +114,8 @@ pub(crate) enum FinalizedOwner {
     NominalV3(PreparedFinalizedNominalWorkerHsacoV3),
     NominalV4(PreparedFinalizedNominalWorkerHsacoV4),
     NominalV5(PreparedFinalizedNominalWorkerHsacoV5),
+    MixedV53(PreparedFinalizedNominalWorkerHsacoV53),
+    MixedV89(PreparedFinalizedNominalWorkerHsacoV89),
 }
 impl FinalizedOwner {
     pub(crate) fn view(&self) -> FinalizedRef<'_> {
@@ -80,6 +124,8 @@ impl FinalizedOwner {
             Self::NominalV3(v) => FinalizedRef::NominalV3(v),
             Self::NominalV4(v) => FinalizedRef::NominalV4(v),
             Self::NominalV5(v) => FinalizedRef::NominalV5(v),
+            Self::MixedV53(v) => FinalizedRef::MixedV53(v),
+            Self::MixedV89(v) => FinalizedRef::MixedV89(v),
         }
     }
     pub(crate) fn into_v1(self) -> Result<PreparedFinalizedProtectedWorkerV3HsacoV1, E> {
@@ -115,6 +161,22 @@ impl FinalizedOwner {
             Self::NominalV3(v) => v.into_compact_replay_parts(),
             Self::NominalV4(v) => v.into_compact_replay_parts(),
             Self::NominalV5(v) => v.into_compact_replay_parts(),
+            Self::MixedV53(v) => v.into_compact_replay_parts(),
+            Self::MixedV89(v) => v.into_compact_replay_parts(),
+        }
+    }
+
+    pub(crate) fn into_mixed_v53(self) -> Result<PreparedFinalizedNominalWorkerHsacoV53, E> {
+        match self {
+            Self::MixedV53(value) => Ok(value),
+            _ => Err(E::DescriptorSchemaMismatch),
+        }
+    }
+
+    pub(crate) fn into_mixed_v89(self) -> Result<PreparedFinalizedNominalWorkerHsacoV89, E> {
+        match self {
+            Self::MixedV89(value) => Ok(value),
+            _ => Err(E::DescriptorSchemaMismatch),
         }
     }
 }
@@ -125,6 +187,8 @@ pub(crate) enum FinalizedRef<'a> {
     NominalV3(&'a PreparedFinalizedNominalWorkerHsacoV3),
     NominalV4(&'a PreparedFinalizedNominalWorkerHsacoV4),
     NominalV5(&'a PreparedFinalizedNominalWorkerHsacoV5),
+    MixedV53(&'a PreparedFinalizedNominalWorkerHsacoV53),
+    MixedV89(&'a PreparedFinalizedNominalWorkerHsacoV89),
 }
 impl<'a> FinalizedRef<'a> {
     pub(crate) fn schema(self) -> DescriptorSchema {
@@ -133,6 +197,8 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(_) => DescriptorSchema::NominalV3,
             Self::NominalV4(_) => DescriptorSchema::NominalV4,
             Self::NominalV5(_) => DescriptorSchema::NominalV5,
+            Self::MixedV53(_) => DescriptorSchema::MixedV53,
+            Self::MixedV89(_) => DescriptorSchema::MixedV89,
         }
     }
     pub(crate) fn raw(self) -> &'a InspectedProtectedWorkerV3HsacoV1 {
@@ -141,6 +207,8 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.raw(),
             Self::NominalV4(v) => v.raw(),
             Self::NominalV5(v) => v.raw(),
+            Self::MixedV53(v) => v.raw(),
+            Self::MixedV89(v) => v.raw(),
         }
     }
     pub(crate) fn identity(self) -> FinalizedProtectedWorkerV3HsacoIdentityV1 {
@@ -149,6 +217,8 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.identity(),
             Self::NominalV4(v) => v.identity(),
             Self::NominalV5(v) => v.identity(),
+            Self::MixedV53(v) => v.identity(),
+            Self::MixedV89(v) => v.identity(),
         }
     }
     pub(crate) fn output_identity(self) -> ContentIdentityV1 {
@@ -157,6 +227,8 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.output_identity(),
             Self::NominalV4(v) => v.output_identity(),
             Self::NominalV5(v) => v.output_identity(),
+            Self::MixedV53(v) => v.output_identity(),
+            Self::MixedV89(v) => v.output_identity(),
         }
     }
     pub(crate) fn descriptor_identity(self) -> ContentIdentityV1 {
@@ -165,6 +237,8 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.descriptor_identity(),
             Self::NominalV4(v) => v.descriptor_identity(),
             Self::NominalV5(v) => v.descriptor_identity(),
+            Self::MixedV53(v) => v.descriptor_identity(),
+            Self::MixedV89(v) => v.descriptor_identity(),
         }
     }
     pub(crate) fn canonical_digest(self) -> CanonicalCodeObjectDigest {
@@ -173,6 +247,8 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.finalized().digest(),
             Self::NominalV4(v) => v.finalized().digest(),
             Self::NominalV5(v) => v.finalized().digest(),
+            Self::MixedV53(v) => v.finalized().digest(),
+            Self::MixedV89(v) => v.finalized().digest(),
         }
     }
     pub(crate) fn bytes(self) -> &'a [u8] {
@@ -181,6 +257,8 @@ impl<'a> FinalizedRef<'a> {
             Self::NominalV3(v) => v.finalized().as_bytes(),
             Self::NominalV4(v) => v.finalized().as_bytes(),
             Self::NominalV5(v) => v.finalized().as_bytes(),
+            Self::MixedV53(v) => v.finalized().as_bytes(),
+            Self::MixedV89(v) => v.finalized().as_bytes(),
         }
     }
 }
@@ -188,6 +266,52 @@ impl<'a> FinalizedRef<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixed_schema_dispatch_cannot_cross_versions_or_widen_native_admission() {
+        for (header, schema) in [
+            (b"FE2O3D53\x35\x00", DescriptorSchema::MixedV53),
+            (b"FE2O3D89\x59\x00", DescriptorSchema::MixedV89),
+        ] {
+            assert_eq!(DescriptorSchema::from_abi(header).unwrap(), schema);
+            assert!(matches!(
+                DescriptorSchema::from_native_abi(header),
+                Err(E::DescriptorSchemaMismatch)
+            ));
+            for mode in [
+                crate::native_worker_finalization::NativeDescriptorMode::Legacy,
+                crate::native_worker_finalization::NativeDescriptorMode::V4,
+            ] {
+                assert!(matches!(
+                    mode.from_abi(header),
+                    Err(E::DescriptorSchemaMismatch)
+                ));
+            }
+            for i in 0..header.len() {
+                assert!(DescriptorSchema::from_abi(&header[..i]).is_err());
+                let mut changed = *header;
+                changed[i] ^= 1;
+                assert!(matches!(
+                    DescriptorSchema::from_abi(&changed),
+                    Err(E::DescriptorSchemaMismatch)
+                ));
+            }
+        }
+        for header in [b"FE2O3D53\x59\x00", b"FE2O3D89\x35\x00"] {
+            assert!(matches!(
+                DescriptorSchema::from_abi(header),
+                Err(E::DescriptorSchemaMismatch)
+            ));
+        }
+        assert!(matches!(
+            DescriptorSchema::MixedV89.derive_raw(&[]),
+            Err(E::MixedArtifactV89(_))
+        ));
+        assert!(matches!(
+            DescriptorSchema::MixedV53.derive_raw(&[]),
+            Err(E::MixedArtifactV53(_))
+        ));
+    }
 
     #[test]
     fn abi_dispatch_is_closed_and_requires_the_exact_magic_and_version() {

@@ -126,6 +126,24 @@ pub struct CompilerExecutionRootControlRecordV3 {
 use CompilerExecutionRootControlRecordV3 as Record;
 
 impl Record {
+    /// Build another inert request with this record's exact connection binding.
+    /// This does not advance a sequence, authenticate the source record, renew a
+    /// deadline, or grant permission to perform the requested operation. A real
+    /// session must retain its authenticated gate and own cumulative ordering.
+    pub fn request_on_same_connection(
+        &self,
+        sequence: u64,
+        kind: Kind,
+        payload: &[u8],
+        b: &mut Budget<'_>,
+    ) -> Result<(Self, Storage)> {
+        metered(b, RETAINED + payload_floor(payload), || {
+            let mut bytes = header(sequence, kind, payload)?;
+            bytes[24..152].copy_from_slice(&self.bytes[24..152]);
+            Ok(finish(bytes))
+        })
+    }
+
     pub fn request(
         binding: &Binding,
         sequence: u64,

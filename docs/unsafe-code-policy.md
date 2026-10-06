@@ -41,6 +41,22 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+The private V53 consuming execution adapter adds one unsafe backend trait and
+one private implementation of the existing gfx942 runtime authority. A safe
+content callback cannot establish protected compiler/proof provenance or native
+semantics, so the extension contract requires an independently approved provider
+for the exact retained source, graph, artifact and actual invocation. No provider
+is installed. The private implementation is constructed only after that contract,
+opaque current-record binding, complete V53 readmission, exact evidence-subject
+comparison and pre-/post-verification currentness checks. It retains the same
+prepared request, checked device, publication, proof artifacts and output borrows
+through the existing runtime completion boundary. Borrowed KFD inspection adds
+no unsafe operation or authority. Root and independent source review found no
+remaining scoped issue; content/accounting fixtures are not native qualification.
+Only this file's `impl: 1, trait: 1` entry is added to the inventory. The ordinary
+inventory gate and adapter compilation remain separate required qualification;
+this scoped update neither refreshes nor claims to audit unrelated allowances.
+
 The 2026-10-05 clone-compatibility follow-up reviews four inventory entries from
 `65468c727` and `0921d0091`; it changes no runtime operation. The closed Linux
 x86-64 ABI helper adds nine unsafe blocks and two functions. Its initialized
@@ -667,6 +683,100 @@ install the compiler filter. This observes pre-exec state only, not personality
 established by ELF exec, complete W^X, immutable backing, descendant confinement,
 source/output enforcement or runtime admission.
 
+The additional `native_compiler_trace_filter.rs` installer has one unsafe
+function and one unsafe block. It synchronously installs a fixed immutable
+classic-BPF program only after the original compiler gate is released; the
+existing pre-READY filters remain in force. The consuming staged mode prepays
+the complete installation work and scratch before clone. Seventeen syscall
+checkpoints include executable-memory operations and descriptor imports;
+`creat`, `openat2`, and replacement `seccomp` calls are denied. Only the same
+retained parent trace may mediate those checkpoints. Staging and filter
+installation alone do not establish runtime enforcement or authorize a gate
+release. The gated production attempt selects this mode, but retains its closed
+gate; original-trace arming and the complete runtime guard are still required.
+
+The original-trace runtime adapter consumes the retained root owner instead of
+creating another tracer or accepting a PID. Its one unsafe constructor requires
+the original closed gate, exclusive same-thread waits, original account and
+absolute deadline, no pre-existing descendants, a dedicated process and an
+independent outside-domain custodian. Before releasing that gate the caller must
+authenticate the actual typed-filter stage and complete runtime policy. Four
+blocks in `native_runtime_trace.rs` initialize the fixed integer register record,
+issue bounded ptrace requests to owned tasks, fail-stop an unresolved dedicated
+process, and drop the original owner once after complete foreground retirement.
+The original root and retained-resource bridges each add one unsafe function and
+block to forward that same consuming contract. There is no public PID constructor,
+second seize, policy-success token or enforcement guard.
+
+Four unsafe functions/blocks in `native_runtime_trace_custody.rs` forward the
+original late-custody and exec-confirmation contracts without exposing mutable
+legacy trace access. Exact root exec observation remains required. The one
+block in `native_runtime_task_observation.rs` compares actual kernel file-table
+sharing with `KCMP_FILES`; unsupported or denied comparisons refuse. Scoped
+observations bind the original task, held stop, census generation, account and
+thread before and after bounded descriptor, maps and personality reads. Returned
+files and bytes are inert, fully charged data, not mapping or compiler admission.
+
+Every acquired child is retained before fallible birth handling. Terminal exit
+and fatal-signal kinds remain distinct; descendant slots are reusable only after
+a consuming terminal wait is explicitly acknowledged. Cancellation remains a
+funded foreground operation until every known task has a terminal wait. A
+budgetless cancellation marker performs no syscall or cleanup-success claim;
+unresolved drop terminates the dedicated process rather than handing traced
+descendants to root-only background cleanup. This does not replace the outside
+custodian's separate whole-domain cleanup obligation.
+
+Three test blocks exercise original takeover in bounded disposable processes.
+Three standalone fixture blocks install NNP and the exact namespace/checkpoint
+filters before bounded thread creation. The fixture is separately compiled and
+explicitly selected, not an admitted compiler image. Component lifecycle evidence
+does not qualify compiler source/output policy, runtime enforcement, deployment,
+proof execution or GPU production activation.
+
+The private compiler channel's consuming runtime transition adds one unsafe
+function and block. It preserves the same channel, original backing and receive
+deadline, and accepts only the original gated trace's held interrupt. Its caller
+must keep the native gate closed and preserve the dedicated process and outside
+custodian contract. The private trace-owner enum adds one unsafe confirmation
+function and block, forwarding the existing exact-exec/alias-closure obligations
+to its actual owner. A runtime event from a descendant cannot confirm root exec.
+Budgetless runtime cancellation only marks refusal and retains foreground
+custody; funded cancellation drives the same task tree to terminal waits before
+reporting the original cleanup disposition. No default selection or compiler
+resume permission follows from these transitions.
+
+Publication forwarding adds four unsafe function sites (two private declarations
+and two macro definitions) and two blocks. Only the original retained trace and
+its consuming runtime successor implement the private trait. Both use the same
+concrete artifact quote, install-before-acquire sequence, Acquire/Validate
+builders and original cleanup slot. No arbitrary observation provider, payload
+owner or mutable root-only trace is exposed. Observation quotes include the
+runtime view's additional entry charge. One additional isolated channel-test
+block exercises closed-gate takeover and funded cancellation; it never executes
+a compiler and does not qualify runtime admission.
+
+Native image-policy preparation uses those same held-task views for bounded
+read-only auxv and memory copies; no proc descriptor escapes. Kernel-image
+metadata is captured only at an actual exec stop from AT_SYSINFO_EHDR, the
+complete RX mapping, its mapped ELF ranges and a SHA256 digest. Later policy
+checks compare actual layout and bytes. The native maps predicate does not
+exempt mappings by `[vdso]` or `[vsyscall]` labels; unsupported legacy vsyscall
+layouts refuse. Original compiler range visits check the actual retained FD
+identities and original account before and after, while full source revalidation
+remains mandatory at ownership transitions. Continuous immutable-backing and
+write-exclusion obligations remain with the owning controller. These private
+policy results are not enforcement tokens or permission to release the gate.
+
+Native descriptor checkpoint preparation likewise returns only bounded data.
+Open results are inspected through the original task view; pre-open pathname,
+creation, truncation and device effects remain a separate controller obligation.
+Credential-only receives validate all payload/header/control non-overlap and
+reject rights, unknown controls and truncation before any task resumes. A late
+ancillary-copy error is not treated as proof that no descriptor was installed.
+The selected IPC role audit and remaining qualification are documented in
+`docs/compiler/native-descriptor-boundary-v161.md`. These additions introduce no
+new unsafe blocks or independent task/descriptor acquisition authority.
+
 Twelve diagnostic blocks in `native_compiler_restrictions_exec_tests.rs`
 stage/clone retained inert inputs, query/set/restore isolated creator state,
 inspect initialized scalar buffers and install outer test-only denial filters.
@@ -836,6 +946,86 @@ GID then UID before exercising the unchanged receiver admission. The test requir
 an exact single-test invocation in a disposable process with CHOWN/SETGID/SETUID;
 it is not a shared-process credential API. The root template remains unchanged,
 and a separate read-only sealed image is assigned the deployment's credentials.
+
+## Original Request And Mixed Handoff Review
+
+The 2026-10-01 static review reconciles fifteen specifically reviewed inventory
+entries, accounting for fifty-one constructs omitted from the previous baseline.
+It changes neither the inventory gate nor the reviewed source implementations.
+The compiler qualification worker reviewed all fifteen files; the integrating
+reviewer also examined the coordinator call boundaries, personality observation,
+namespace filter and mixed host adapter. No blocking safety defect was identified
+under the existing caller contracts. Unreviewed paths receive no new allowance.
+
+The original-request coordinator retains the complete receiver and helper backing
+before fallible launch continuations, uses the original independently funded
+cleanup pool, and keeps the compiler exec gate closed. Dedicated creator-thread,
+exclusive-wait, mutation-exclusion and outside whole-domain custodian obligations
+remain with its unsafe caller. Its tests either check an unsafe function signature
+without calling it or operate through isolated re-exec roles with retained child
+and descriptor ownership.
+
+The child personality reader uses initialized, bounded syscall buffers and
+privately owned procfs descriptors. It binds the same calling task across the
+credential transition, requires an exact record and EOF, and closes each descriptor
+once on both success and failure. The namespace filter passes a fixed native BPF
+program through a live header after child setup; installation failure is terminal.
+Neither reader nor filter authenticates deployment provenance, cgroup exclusion,
+or post-exec compiler behavior. Native test mutations occur only in disposable
+processes with the existing cleanup and restoration contracts. Inert staging tests
+do not create children or grant compiler roles.
+
+The mixed application wrappers preserve the existing one-shot inherited-FD and
+single-threaded startup contract. Their safe continuations prepare a checked
+roster and audit its current record; they grant no native proof, loading or GPU
+dispatch authority. Three private test trait implementations exercise typed
+preparation and malformed-layout refusal without constructing an executable
+receiver. The extra Wave64 unsafe call and lookalike signature are deliberate
+source-rejection fixtures, counted once in the macro template.
+
+This review is not native execution or formal verification. The isolated inventory
+gate must be rerun after integration; protected runtime, installed deployment,
+compiler gate release, GPU execution and end-to-end production qualification remain
+separate obligations.
+
+## Original Request Routing
+
+The added block in `native_root_request.rs` forwards its existing unsafe
+dedicated-creator contract to the private execution state machine. The one
+unsafe function and three blocks in `native_root_request_runtime.rs` delegate
+only original runtime takeover, confirmed first-exec status and consuming issuer
+launch. Each call uses the Attempt already owned by that request; the issuer
+receives its exact original Prepared and cleanup pool. These sites introduce no
+raw syscall, alternate owner or authority constructed from wire data.
+
+The request keeps its original work ledger, budget address, captured input
+owners and absolute deadline through all transitions. Errors leave the request
+failed and retain the original foreground cancellation obligation. Completion
+encoding follows both actual root terminal wait and trace retirement; it grants
+no publication or execution authority. Startup funding, downstream admission,
+live native qualification and default activation remain separate open gates.
+The inventory changes record only these reviewed sites and do not refresh the
+unrelated pre-existing GPU/memory inventory differences.
+
+## Original Root Publication Retirement
+
+The private unsafe function and forwarding block in
+`compiler_execution_root_publication.rs` prepare retirement of the actual
+publication holder in its original runtime cleanup slot. The sole caller block
+in `compiler_execution_root_publication_service.rs` first authenticates the
+original measured issuer, connection binding and runtime identity. That issuer
+sends Retire only after its closed durable Worker/anchor/Ready/ACK join. The
+root then matches the complete canonical policy, Subject and occurrence against
+its still-locked publication. Decoding a carriage alone cannot reach retirement.
+
+The prepared token holds custody on Drop. Complete reply/tombstone preparation
+and the root service's accounting scope precede its infallible commit. The
+session keeps the full carriage independently of the replaceable connection;
+reply sends and exact retirement replays never reacquire locks. Partial
+acquisition, refusal and unwind retain the original funded cleanup obligation.
+Production pumps this channel before runtime steps and requires the same
+retirement tombstone at held exit, rather than allocating a second late holder.
+Native end-to-end qualification and default activation remain separate gates.
 
 ## Initial Reduction
 

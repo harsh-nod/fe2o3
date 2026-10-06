@@ -70,6 +70,25 @@ pub struct CanonicalKirOccurrenceRowsRefV1<'bytes> {
     storage: CanonicalKirOccurrenceRowBytesStorageV1,
 }
 impl<'bytes> CanonicalKirOccurrenceRowsRefV1<'bytes> {
+    /// Bounds the allocation-free reader's logical work for this body extent,
+    /// without trusting encoded counts or admitting syntax. Each row consumes at
+    /// least the smallest existing wire width; block/definition revisits cover
+    /// disjoint subsets of that same body. Input storage remains caller-owned.
+    pub fn read_work_bound_for_length_v1(length: usize) -> Result<usize> {
+        if length > MAX_CANONICAL_KIR_TRANSITION_RECEIPT_BYTES_V1 {
+            return Err(CanonicalKirTransitionReceiptErrorV1::Limit);
+        }
+        let minimum = WIDTHS.into_iter().min().ok_or(Resource::Accounting)?;
+        length
+            .checked_mul(2)
+            .and_then(|n| n.checked_add((length / minimum).checked_mul(2)?))
+            .and_then(|n| n.checked_add(10))
+            .ok_or_else(|| Resource::Arithmetic.into())
+    }
+
+    /// Fixed additional peak and unreserved returned logical view storage.
+    pub const READ_STORAGE_V1: usize = size_of::<Self>();
+
     /// The unchanged borrowed body, not a semantically admitted transition.
     pub const fn canonical_row_bytes(&self) -> &'bytes [u8] {
         self.bytes

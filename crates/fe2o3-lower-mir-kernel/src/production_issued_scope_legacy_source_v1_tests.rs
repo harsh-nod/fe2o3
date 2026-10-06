@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "production_pre_ranked_pipeline_capture_v1_tests.rs"]
+mod pipeline_capture_tests;
+
 // Pure typed AST helpers reused without NativeSource test dependencies.
 const SCOPE: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(4);
 const SCOPE_REF: SemanticTypeIdV1 = SemanticTypeIdV1::from_index(5);
@@ -594,7 +597,7 @@ fn admitted_scope_reborrow_preserves_the_actual_pipeline_consumer() {
         assert_eq!(budget.storage(), FLOOR);
         let retained = source.retained_analysis_storage_v1();
         budget.reserve_storage(retained).unwrap();
-        assert!(source.semantic_ssa().occurrences_v1().is_none());
+        assert!(source.semantic_ssa().occurrences_v1().is_some());
         source.semantic_ssa().verify_replay().unwrap();
         fe2o3_kernel_ir::verify_module(source.executable().module()).unwrap();
 

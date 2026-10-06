@@ -27,6 +27,24 @@ pub(crate) struct Admitted<'b, 'w> {
 impl<'b, 'w> Admitted<'b, 'w> {
     pub(crate) const INPUT_STORAGE: usize = Policy::FILE_STORAGE + Client::PEER_STORAGE;
 
+    /// Consumes the loader's private copies, never its caller-owned raw slots.
+    /// Both inputs must already be charged to this original account. Failure
+    /// closes the owned copies but keeps all terminal charges on that account.
+    pub(super) fn from_owned(
+        inputs: super::OwnedExecutionInputs,
+        b: &'b mut Budget<'w>,
+    ) -> Result<Self, Error> {
+        if b.storage() < Self::INPUT_STORAGE {
+            return Err(Resource::Accounting.into());
+        }
+        b.charge_work(2)?;
+        let (policy, charge) = Policy::from_file(inputs.policy.into(), b)?;
+        b.reserve_storage(charge.additional_storage())?;
+        policy.revalidate(b)?;
+        let client = Client::admit(inputs.service, super::RECEIPT_ACQUISITION_TIMEOUT_V1, b)?;
+        Ok(Self { policy, client })
+    }
+
     /// Consumes both fixed inherited slots, even on resource/admission refusal.
     /// Inputs must be prepaid. Successful policy admission replaces its file
     /// charge with full capability storage; that charge remains caller-owned.
@@ -96,6 +114,7 @@ pub(crate) enum Error {
     Policy(PolicyError),
     Client(ClientError),
     Descriptor(io::Error),
+    Startup(super::ProtectedCompilerExecutionErrorV1),
 }
 macro_rules! causes {
     ($($ty:ty => $variant:ident),+ $(,)?) => {
@@ -108,7 +127,8 @@ macro_rules! causes {
         } }
     };
 }
-causes!(Resource=>Resource, PolicyError=>Policy, ClientError=>Client, io::Error=>Descriptor);
+causes!(Resource=>Resource, PolicyError=>Policy, ClientError=>Client, io::Error=>Descriptor,
+    super::ProtectedCompilerExecutionErrorV1=>Startup);
 
 #[cfg(test)]
 #[path = "protected_compiler_execution_native_v3_tests.rs"]

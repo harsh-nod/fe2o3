@@ -1,5 +1,5 @@
 #[test]
-fn native_switch_preflight_sums_callback_work_and_reuses_scratch_without_admitting_control() {
+fn native_switch_preflight_sums_callback_work_and_reuses_scratch_for_admitted_control() {
     use dialect_gpu::switch_v3::{SwitchEdgeV3, SwitchKeyKindAttrV3, SwitchOpV3};
     use pliron::builtin::types::Signedness;
     let context = &mut Context::new();
@@ -48,15 +48,9 @@ fn native_switch_preflight_sums_callback_work_and_reuses_scratch_without_admitti
     let preflight = preflight_identity_structure_v1(context, &function, hard).unwrap();
     assert_eq!(preflight.native_switch_verification_work, 1845 + 6300);
     assert_eq!(preflight.native_switch_verification_scratch, 376);
-    // Callback census is not a full generic-verifier receipt or a new allowlist.
-    assert!(matches!(
-        prescan(context, &function),
-        Err(PlironIrIdentityErrorV1::UnsupportedOperation { .. })
-    ));
-    assert!(matches!(
-        capture_bound_v1(context, &function, hard),
-        Err(IdentityCaptureFailureV1::Unavailable { .. })
-    ));
+    // The callback census remains separate from actual structural admission.
+    assert!(prescan(context, &function).is_ok());
+    assert!(capture_bound_v1(context, &function, hard).is_ok());
     use crate::production_analysis::pliron_pipeline::invocation_receipt_v1::{
         InvocationReceiptFailureV1, InvocationReceiptV1,
     };
@@ -118,13 +112,14 @@ fn native_switch_preflight_sums_callback_work_and_reuses_scratch_without_admitti
                 Err(InvocationReceiptFailureV1::Denied(error))
             );
         } else {
-            assert!(matches!(
-                result,
-                Err(IdentityCaptureFailureV1::Unavailable {
-                    source_code: "FE2O3-PRESERVE-001",
-                    ..
-                })
-            ));
+            // Switch admission now reaches the next real prefix: closure's
+            // first charge is 32 work with a 64-cell frame. No work remains
+            // after the exact textual bound, so that prefix is denied.
+            let Err(IdentityCaptureFailureV1::ResourceLimit(error)) = result else {
+                panic!("exact textual work must reach the closure admission");
+            };
+            assert_eq!(error.phase, phase_kind);
+            assert_eq!(error.resource, "work upper bound");
             assert_eq!(
                 state.committed.work_upper_bound(),
                 expected.work_upper_bound()
@@ -133,8 +128,11 @@ fn native_switch_preflight_sums_callback_work_and_reuses_scratch_without_admitti
                 state.committed.peak_storage_upper_bound(),
                 expected.peak_storage_upper_bound()
             );
-            assert_eq!(state.first_denial, None);
-            assert_eq!(receipt.complete(), Ok(state.committed));
+            assert_eq!(state.first_denial, Some(error));
+            assert_eq!(
+                receipt.complete(),
+                Err(InvocationReceiptFailureV1::Denied(error))
+            );
         }
     }
     let census = ProductionAnalysisInputCensusV1 {

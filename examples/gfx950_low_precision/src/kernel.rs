@@ -15,14 +15,7 @@ use fe2o3_device::{
     KernelError, KernelResult, Math, StridedReadView2D, Wave64, WaveLane, kernel, thread,
 };
 
-pub const GFX950_WORKGROUP: [u32; 3] = [256, 1, 1];
-pub const GFX950_GRID: [u32; 3] = [4, 1, 1];
-pub const GFX950_BATCHES: usize = 16;
-pub const GEMM_M: usize = 16;
-pub const GEMM_N: usize = 16;
-pub const GEMM_K: usize = 128;
-pub const ATTENTION_TOKENS: usize = 16;
-pub const VALUE_COLUMNS: usize = 16;
+pub use crate::dimensions::*;
 const ATTENTION_SCALE: f32 = 0.088_388_35;
 
 fn decode_fp4_e2m1(bits: u8) -> f32 {

@@ -287,7 +287,23 @@ fn publication_artifact(output: &Path) -> PathBuf {
 #[test]
 fn exact_publication_retry_and_restart_recovery_are_idempotent_and_inert() {
     let state = setup(1);
-    let first = state.publish_readiness();
+    let mut envelope = Vec::with_capacity(state.envelope.len() + 91);
+    envelope.extend_from_slice(&state.envelope);
+    let envelope_capacity = envelope.capacity();
+    let bound = fe2o3_artifact_transaction::WorkerV3LoadReadinessResultV1::
+        publication_retained_rust_storage_bound(&state.output(), envelope_capacity).unwrap();
+    let first = publish_worker_v3_load_readiness_v1(
+        &state.output(),
+        &state.claim,
+        state.authority(),
+        envelope,
+    )
+    .unwrap();
+    assert_eq!(
+        first.retained_rust_storage().unwrap(),
+        std::mem::size_of_val(&first) + envelope_capacity + first.envelope_path().as_os_str().len()
+    );
+    assert_eq!(first.retained_rust_storage(), Some(bound));
     assert_eq!(first.outcome(), WorkerV3LoadReadinessOutcomeV1::Published);
     assert_eq!(fs::read(first.envelope_path()).unwrap(), state.envelope);
     assert!(!first.authenticates_descriptor_source());
@@ -300,7 +316,22 @@ fn exact_publication_retry_and_restart_recovery_are_idempotent_and_inert() {
     assert_eq!(retry.outcome(), WorkerV3LoadReadinessOutcomeV1::Recovered);
     assert_eq!(retry.receipt(), first.receipt());
     let recovered = recover_worker_v3_load_readiness_v1(&state.output(), &state.claim).unwrap();
+    assert!(
+        recovered.retained_rust_storage().unwrap()
+            >= std::mem::size_of_val(&recovered)
+                + recovered.exact_envelope_bytes().len()
+                + recovered.envelope_path().as_os_str().len()
+    );
     assert_eq!(recovered.receipt(), first.receipt());
+    let recovered_storage = recovered.retained_rust_storage().unwrap();
+    let recovered_header = std::mem::size_of_val(&recovered);
+    let recovered_path = recovered.envelope_path().as_os_str().len();
+    let recovered_wire = recovered.into_exact_envelope_bytes();
+    assert_eq!(
+        recovered_storage,
+        recovered_header + recovered_path + recovered_wire.capacity()
+    );
+    assert_eq!(recovered_wire, state.envelope);
     let reconstructed = recover_published_hsaco_claim_for_attempt_v3(
         &state.output(),
         &state.producer,

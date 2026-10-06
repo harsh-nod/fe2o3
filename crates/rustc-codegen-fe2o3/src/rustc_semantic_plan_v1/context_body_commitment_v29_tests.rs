@@ -249,6 +249,7 @@ impl Callbacks for ContextCommitmentCallbacks {
             call_arguments: raw_counts[8],
             switch_targets: raw_counts[9],
             validation_work: raw_counts[10],
+            constant_bytes: 0,
         };
         let [call] = plan.direct_calls.as_ref() else {
             panic!("fixture must retain exactly one root-to-ordinary call")
@@ -260,7 +261,7 @@ impl Callbacks for ContextCommitmentCallbacks {
             callee: ordinary_function,
         }]);
         assert!(plan.terminals.is_empty());
-        let assemble = |entries: &BTreeMap<_, _>| {
+        let assemble_with_counts = |entries: &BTreeMap<_, _>, counts| {
             preflight_plan_identity_and_transcript_v1(
                 target,
                 [7; 32],
@@ -279,8 +280,18 @@ impl Callbacks for ContextCommitmentCallbacks {
                 counts,
                 tcx,
             )
-            .unwrap()
         };
+        let assemble = |entries: &BTreeMap<_, _>| assemble_with_counts(entries, counts).unwrap();
+        assert!(matches!(
+            assemble_with_counts(
+                &BTreeMap::new(),
+                RawMirPreflightCountsV1 {
+                    constant_bytes: 1,
+                    ..counts
+                },
+            ),
+            Err(ProductionSemanticPreflightErrorV1::IdentityTableMismatch)
+        ));
         let ordinary = assemble(&BTreeMap::new());
         assert_eq!(ordinary.0, plan.sha256);
         assert_eq!(ordinary.1, plan.canonical_transcript);

@@ -67,6 +67,9 @@ pub(crate) struct ProductionCallInstanceV1<'s> {
     incoming: Option<usize>,
     calls: Range<usize>,
     exits: Range<usize>,
+    control_blocks: Range<usize>,
+    may_return: bool,
+    reachable: bool,
 }
 
 impl<'s> ProductionCallInstanceV1<'s> {
@@ -190,7 +193,10 @@ pub(crate) struct ProductionCallInstancePlanV1<'s> {
     instances: Rows<ProductionCallInstanceV1<'s>>,
     calls: Rows<ProductionInstanceCallV1<'s>>,
     exits: Rows<ProductionInstanceExitV1>,
+    control_blocks: Rows<ProductionControlBlockV1>,
 }
+
+include!("production_call_control_v1.rs");
 
 impl<'s> ProductionCallInstancePlanV1<'s> {
     pub(crate) const fn owner(&self) -> &'s ProductionSemanticSsaOwnerV1 {
@@ -371,31 +377,54 @@ impl<'s> ProductionCallInstancePlanV1<'s> {
 /// rows before releasing exactly their reservations. Consumer storage is not
 /// rolled back; the consumer must manage any additional retained allocation.
 /// This route does not replace or widen ordinary call lowering.
-pub(crate) fn with_production_call_instances_v1<R, E>(
-    owner: &ProductionSemanticSsaOwnerV1,
+pub(crate) fn with_production_call_instances_v1<'source, 'work, R, E>(
+    owner: &'source ProductionSemanticSsaOwnerV1,
     root: SemanticFunctionIdV1,
-    budget: &mut Budget<'_>,
-    consumer: impl FnOnce(&ProductionCallInstancePlanV1<'_>, &mut Budget<'_>) -> Result<R, E>,
+    budget: &mut Budget<'work>,
+    consumer: impl FnOnce(&ProductionCallInstancePlanV1<'source>, &mut Budget<'work>) -> Result<R, E>,
 ) -> Result<R, E>
 where
     E: From<Error>,
 {
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
     let mut plan = ProductionCallInstancePlanV1 {
         owner,
         instances: Rows::new(),
         calls: Rows::new(),
         exits: Rows::new(),
+        control_blocks: Rows::new(),
     };
-    let mut storage = 0;
-    let outcome = build(&mut plan, root, budget, &mut storage)
-        .map_err(E::from)
-        .and_then(|()| consumer(&plan, budget));
-    drop(plan);
+    let mut storage = size_of::<std::thread::Result<Result<R, E>>>()
+        .checked_add(size_of::<Rows<ProductionControlBlockV1>>())
+        .ok_or(Error::Resource(ResourceError::Arithmetic))
+        .map_err(E::from)?;
     budget
-        .release_storage(storage)
+        .reserve_storage(storage)
         .map_err(Error::from)
         .map_err(E::from)?;
-    outcome
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        build(&mut plan, root, budget, &mut storage)
+            .map_err(E::from)
+            .and_then(|()| consumer(&plan, budget))
+    }));
+    drop(plan);
+    let cleanup = if budget.work_ledger_identity_v1() == ledger
+        && floor
+            .checked_add(storage)
+            .is_some_and(|required| budget.storage() >= required)
+    {
+        budget.release_storage(storage).map_err(Error::from)
+    } else {
+        Err(Error::Resource(ResourceError::Accounting))
+    };
+    // A later cleanup refusal cannot replace an already selected error or panic.
+    // No reservation is released on a substituted ledger or undercut owner floor.
+    match outcome {
+        Ok(Ok(value)) => cleanup.map(|()| value).map_err(E::from),
+        Ok(Err(error)) => Err(error),
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
 }
 
 fn instance_row<'s>(
@@ -426,6 +455,9 @@ fn instance_row<'s>(
         incoming,
         calls: 0..0,
         exits: 0..0,
+        control_blocks: 0..0,
+        may_return: false,
+        reachable: false,
     })
 }
 
@@ -564,7 +596,7 @@ fn build(
         plan.instances.values[cursor].exits = exits_start..plan.exits.values.len();
         cursor += 1;
     }
-    Ok(())
+    build_control(plan, budget, storage)
 }
 
 #[cfg(test)]

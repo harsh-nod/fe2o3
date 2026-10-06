@@ -8,9 +8,10 @@ use std::{error::Error, fmt, path::Path, time::Instant};
 
 use crate::CanonicalGeneratedVerusProofInputV3;
 use crate::retained_functional_refinement_runtime_v1::{
-    RetainedFunctionalRefinementRuntimeErrorV1, RetainedFunctionalRefinementRuntimeOutputV1,
-    RetainedGeneratedVerusRuntimeBackendV1, RuntimeAttemptV1,
-    open_retained_generated_verus_runtime_v1,
+    GeneratedProofProcessPolicyV2, RetainedFunctionalRefinementRuntimeErrorV1,
+    RetainedFunctionalRefinementRuntimeOutputV1, RetainedGeneratedVerusRuntimeBackendV1,
+    RuntimeAttemptV1, open_retained_generated_verus_context_runtime_v2,
+    open_retained_generated_verus_context_runtime_v3, open_retained_generated_verus_runtime_v1,
 };
 
 /// Domain-separated identity of the exact workload-neutral verifier runtime.
@@ -51,6 +52,7 @@ impl fmt::Debug for FunctionalRefinementVerusRuntimeLeaseV1 {
             .debug_struct("FunctionalRefinementVerusRuntimeLeaseV1")
             .field("root", &self.backend.root())
             .field("identity", &self.identity)
+            .field("process_policy", &self.process_policy())
             .finish_non_exhaustive()
     }
 }
@@ -73,6 +75,44 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
             identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
             backend,
         })
+    }
+
+    /// Opens the same exact pinned tools under the explicit bounded V2 context policy.
+    ///
+    /// This permits at most 4,096 authenticated solver lifetimes, with at most two
+    /// live solver groups for the fixed single-threaded Verus invocation. It does
+    /// not grant proof authority, change an accepted receipt policy, or fall back
+    /// to a different process policy. Legacy `open` retains its original behavior.
+    pub fn open_pinned_contexts_v2(
+        root: impl AsRef<Path>,
+    ) -> Result<Self, FunctionalRefinementRuntimeErrorV1> {
+        let backend = open_retained_generated_verus_context_runtime_v2(root.as_ref())
+            .map_err(runtime_error_from_backend)?;
+        Ok(Self {
+            identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
+            backend,
+        })
+    }
+
+    /// Opens the exact pinned tools under the explicit V3 context/stack policy.
+    ///
+    /// V3 retains the V2 solver census and permits the pinned interpreter's at most
+    /// 1 GiB clone3 stack only for authenticated verifier threads. Other thread and
+    /// process stacks retain the 32 MiB limit. No environment or request selects
+    /// these bounds, and this resource policy grants no proof or signer authority.
+    pub fn open_pinned_contexts_v3(
+        root: impl AsRef<Path>,
+    ) -> Result<Self, FunctionalRefinementRuntimeErrorV1> {
+        let backend = open_retained_generated_verus_context_runtime_v3(root.as_ref())
+            .map_err(runtime_error_from_backend)?;
+        Ok(Self {
+            identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
+            backend,
+        })
+    }
+
+    pub(crate) const fn process_policy(&self) -> GeneratedProofProcessPolicyV2 {
+        self.backend.process_policy()
     }
 
     /// Returns the diagnostic path supplied when this lease was opened.
@@ -100,15 +140,31 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
         output_limit: usize,
     ) -> Result<FunctionalRefinementRuntimeProcessOutputV1, FunctionalRefinementRuntimeErrorV1>
     {
-        self.backend
+        let output = self
+            .backend
             .execute_generated_rust_verify(&mut attempt.0, source, deadline, output_limit)
-            .map(FunctionalRefinementRuntimeProcessOutputV1::from)
-            .map_err(runtime_error_from_backend)
+            .map_err(runtime_error_from_backend)?;
+        check_output_policy(self.process_policy(), output.policy)?;
+        Ok(FunctionalRefinementRuntimeProcessOutputV1::from(output))
     }
+}
+
+fn check_output_policy(
+    expected: GeneratedProofProcessPolicyV2,
+    actual: GeneratedProofProcessPolicyV2,
+) -> Result<(), FunctionalRefinementRuntimeErrorV1> {
+    if expected != actual {
+        return Err(runtime_error_from_backend(RetainedFunctionalRefinementRuntimeErrorV1::new(
+            crate::retained_functional_refinement_runtime_v1::RetainedFunctionalRefinementRuntimeErrorKindV1::Process,
+            "generated proof output process policy differs from its immutable runtime lease",
+        )));
+    }
+    Ok(())
 }
 
 /// Bounded output from one retained generated-proof process.
 pub(crate) struct FunctionalRefinementRuntimeProcessOutputV1 {
+    pub(crate) policy: GeneratedProofProcessPolicyV2,
     pub(crate) exit_code: Option<i32>,
     pub(crate) signal: Option<i32>,
     pub(crate) stdout: Vec<u8>,
@@ -120,6 +176,7 @@ impl From<RetainedFunctionalRefinementRuntimeOutputV1>
 {
     fn from(output: RetainedFunctionalRefinementRuntimeOutputV1) -> Self {
         Self {
+            policy: output.policy,
             exit_code: output.exit_code,
             signal: output.signal,
             stdout: output.stdout,
@@ -142,32 +199,36 @@ impl fmt::Display for FunctionalRefinementRuntimeErrorV1 {
 
 impl Error for FunctionalRefinementRuntimeErrorV1 {}
 
+const MAX_BACKEND_DIAGNOSTIC_BYTES: usize = 2048;
+
 fn runtime_error_from_backend(
     error: RetainedFunctionalRefinementRuntimeErrorV1,
 ) -> FunctionalRefinementRuntimeErrorV1 {
-    #[cfg(test)]
-    {
-        // Preserve the production error contract while exposing a bounded,
-        // escaped controller refusal for actual protected-runtime test failures.
-        let diagnostic = error.to_string();
-        let bytes = diagnostic.as_bytes();
-        eprintln!(
-            "retained runtime test diagnostic: {:?}{}",
-            String::from_utf8_lossy(&bytes[..bytes.len().min(2048)]),
-            if bytes.len() > 2048 {
-                " (truncated)"
-            } else {
-                ""
-            },
-        );
+    let mut detail = format!(
+        "retained generated-proof runtime failed: {:?}: \"",
+        error.kind()
+    );
+    let cause_start = detail.len();
+    let mut truncated = false;
+    // Bound both scanning and escaped output without copying the full backend cause.
+    for character in error.detail().chars() {
+        let escaped = character.escape_default();
+        if detail.len() - cause_start + escaped.clone().count() > MAX_BACKEND_DIAGNOSTIC_BYTES {
+            truncated = true;
+            break;
+        }
+        detail.extend(escaped);
     }
-    FunctionalRefinementRuntimeErrorV1 {
-        detail: format!(
-            "retained generated-proof runtime failed: {:?}",
-            error.kind()
-        ),
+    detail.push('"');
+    if truncated {
+        detail.push_str(" (truncated)");
     }
+    FunctionalRefinementRuntimeErrorV1 { detail }
 }
+
+#[cfg(test)]
+#[path = "functional_refinement_runtime_v1_diagnostic_tests.rs"]
+mod diagnostic_tests;
 
 #[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
 mod tests {
@@ -177,6 +238,77 @@ mod tests {
 
     const PROTECTED_RUNTIME_ROOT: &str =
         "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
+
+    #[test]
+    fn immutable_runtime_output_policy_rejects_cross_policy_substitution() {
+        use GeneratedProofProcessPolicyV2::{
+            LegacySingleSolverV1, PinnedSingleThreadContextsV2, PinnedSingleThreadContextsV3,
+        };
+        for expected in [
+            LegacySingleSolverV1,
+            PinnedSingleThreadContextsV2,
+            PinnedSingleThreadContextsV3,
+        ] {
+            for actual in [
+                LegacySingleSolverV1,
+                PinnedSingleThreadContextsV2,
+                PinnedSingleThreadContextsV3,
+            ] {
+                assert_eq!(
+                    check_output_policy(expected, actual).is_ok(),
+                    expected == actual
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires the installed root-owned pinned functional-refinement runtime"]
+    fn protected_pinned_context_policy_accepts_stock_modules_and_spinoffs() {
+        let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open_pinned_contexts_v3(
+            PROTECTED_RUNTIME_ROOT,
+        )
+        .expect("admit exact pinned tools under explicit context policy");
+        let source = CanonicalGeneratedVerusProofInputV3::new(
+            br#"use vstd::prelude::*;
+verus! {
+    pub proof fn ordinary(value: int) { assert(value + 1 > value); }
+    pub proof fn spinoff(value: u32) { assert((value ^ value) == 0u32) by(bit_vector); }
+}
+mod separate_bucket {
+    use vstd::prelude::*;
+    verus! { pub proof fn ordinary(value: int) { assert(value + 2 > value); } }
+}
+"#
+            .to_vec(),
+        )
+        .unwrap();
+        let mut attempt = runtime.begin_attempt().unwrap();
+        let output = runtime
+            .execute_generated_rust_verify(
+                &mut attempt,
+                &source,
+                Instant::now() + Duration::from_secs(120),
+                16 * 1024,
+            )
+            .expect("stock modules and bit-vector spinoff retain every solver terminal");
+        assert_eq!(
+            output.policy,
+            GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV3
+        );
+        crate::functional_refinement_receipt_v2::validate_proved_output(&output).unwrap();
+        let (born, executed, completed, peak) =
+            crate::retained_functional_refinement_runtime_v1::finished_solver_contexts_for_test()
+                .expect("this attempt finished an authenticated context census");
+        assert!(
+            born >= 3,
+            "root, child module and bit-vector contexts: {born}"
+        );
+        assert_eq!((executed, completed), (born, born));
+        assert_eq!(peak, 2);
+        runtime.revalidate().unwrap();
+        attempt.complete().unwrap();
+    }
 
     fn execute_protected_proof(assertion: &str) -> FunctionalRefinementRuntimeProcessOutputV1 {
         let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(PROTECTED_RUNTIME_ROOT)

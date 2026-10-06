@@ -37,14 +37,22 @@ use std::{error::Error, fmt, mem::size_of, path::Path, time::Instant};
 
 type Result<T> = std::result::Result<T, Failure>;
 const LOCAL_WORK: usize = 8192;
-const FRAME: usize = 4 * size_of::<Failure>() + 4096;
+const FRAME: usize =
+    4 * size_of::<Failure>() + 4 * size_of::<artifact::CurrentPublication>() + 4096;
 const SUBJECT_STORAGE: usize = size_of::<(Subject, SubjectStorage)>();
+
+#[path = "compiler_execution_boundary_native_artifact.rs"]
+mod artifact;
 
 #[path = "compiler_execution_boundary_native_pipeline.rs"]
 pub(crate) mod pipeline;
 
 #[path = "compiler_execution_boundary_native_prepare.rs"]
 pub(crate) mod preparation;
+
+#[path = "compiler_execution_boundary_native_root.rs"]
+mod root_completion;
+use root_completion::{Origin, ProfileCustody};
 
 /// The exact selected child, sealed configuration and original account remain
 /// owned together through receipt admission. Neither readiness nor a signed
@@ -54,9 +62,9 @@ pub(crate) mod preparation;
 /// are obligations of the existing broker/child-channel boundary. This does not
 /// admit a caller-selected profile as protected configuration.
 pub(crate) struct ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
-    profile: Profile,
+    profile: ProfileCustody<'b>,
     policy: Policy,
-    received: Received,
+    origin: Origin<'b>,
     child_pid: u32,
     completion: Option<CompletedCompilerChild>,
     budget: &'b mut Budget<'w>,
@@ -101,9 +109,9 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
         })?;
         budget.reserve_storage(storage.additional_storage())?;
         Ok(Self {
-            profile,
+            profile: ProfileCustody::Local(profile),
             policy,
-            received,
+            origin: Origin::Local(received),
             child_pid,
             completion: None,
             budget,
@@ -113,19 +121,20 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
     fn retained_storage(&self) -> usize {
         self.profile.retained_storage()
             + self.policy.retained_storage()
-            + self.received.retained_storage()
+            + self.origin.retained_storage()
             + Self::OWNER_STORAGE
     }
 
     pub(crate) fn revalidate(&mut self) -> Result<()> {
         self.budget
             .with_prepaid_scope(self.retained_storage(), 0, 0, FRAME, |b| {
+                self.origin.revalidate(b)?;
                 validate_readiness(
                     &self.profile,
                     &self.policy,
                     self.child_pid,
-                    self.received.manifest(),
-                    self.received.readiness(),
+                    self.origin.manifest(),
+                    self.origin.readiness(),
                     b,
                 )
             })
@@ -136,11 +145,19 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
         child: &mut std::process::Child,
     ) -> Result<()> {
         self.budget.charge_work(LOCAL_WORK)?;
+        if !matches!(self.origin, Origin::Local(_)) {
+            return Err(Failure::Mismatch(
+                "local child cannot replace original root completion",
+            ));
+        }
         self.completion = Some(CompletedCompilerChild::observe(child, self.child_pid)?);
         Ok(())
     }
 
     fn require_completion(&self) -> Result<()> {
+        if matches!(self.origin, Origin::Root(_)) {
+            return Ok(());
+        }
         self.completion
             .as_ref()
             .map(|_| ())
@@ -160,9 +177,13 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
         output_dir: &Path,
         producer: &ProducerIdentity,
         attempt: BuildAttempt,
-    ) -> Result<(Lease, Token)> {
+    ) -> Result<artifact::CurrentPublication> {
+        if matches!(self.origin, Origin::Root(_)) {
+            return artifact::acquire_original(self, output_dir, producer, attempt);
+        }
         self.require_completion()?;
         self.revalidate()?;
+        self.origin.require_output(output_dir, self.budget)?;
         let (lease, token) =
             self.budget
                 .with_prepaid_scope(self.retained_storage(), 0, 0, FRAME, |b| {
@@ -185,7 +206,11 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
             .checked_add(token.storage().retained_storage())
             .ok_or(Resource::Arithmetic)?;
         self.budget.reserve_storage(storage)?;
-        Ok((lease, token))
+        Ok(artifact::CurrentPublication {
+            lease,
+            token,
+            retirement: None,
+        })
     }
 
     /// Reconstruct the subject from the locked V5 publication, never caller
@@ -201,6 +226,7 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
         token: &Token,
     ) -> Result<Carriage> {
         self.require_completion()?;
+        let original = matches!(self.origin, Origin::Root(_));
         let floor = self
             .retained_storage()
             .checked_add(lease.storage().retained_storage())
@@ -211,15 +237,23 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
                 &self.profile,
                 &self.policy,
                 self.child_pid,
-                self.received.manifest(),
-                self.received.readiness(),
+                self.origin.manifest(),
+                self.origin.readiness(),
                 b,
             )?;
             lease.validate_current_token(token)?;
-            let (subject, storage) =
-                Subject::from_publication(token.receipt(), token.handoff(), b)?;
+            let (subject, storage) = if original {
+                Subject::from_publication_in_original_account_v3(token.receipt(), token.handoff(), b)
+            } else {
+                Subject::from_publication(token.receipt(), token.handoff(), b)
+            }?;
             b.reserve_storage(storage.retained_storage())?;
-            let (transport, storage) = recover(lease, token, &subject, b)?;
+            self.origin.require_subject(&subject, b)?;
+            let (transport, storage) = if original {
+                fe2o3_artifact_transaction::recover_compiler_execution_receipt_transport_in_original_account_v3(lease, token, &subject, b)
+            } else {
+                recover(lease, token, &subject, b)
+            }?;
             b.reserve_storage(storage.retained_storage())?;
             if transport.receipt().subject() != subject.identity()
                 || transport.receipt().length() != transport.exact_bytes().len()
@@ -228,18 +262,22 @@ impl<'b, 'w> ParentCompilerExecutionReadinessCustodyV3<'b, 'w> {
                     "receipt transport differs from the locked subject",
                 ));
             }
-            let (carriage, storage) =
-                decode_receipt(&self.profile, &subject, transport.exact_bytes(), b)?;
+            let (carriage, storage) = decode_receipt_using(&self.profile, &subject, transport.exact_bytes(), b, original)?;
             b.reserve_storage(storage.additional_storage())?;
             validate_readiness(
                 &self.profile,
                 &self.policy,
                 self.child_pid,
-                self.received.manifest(),
-                self.received.readiness(),
+                self.origin.manifest(),
+                self.origin.readiness(),
                 b,
             )?;
-            token.revalidate_locked_currentness(b)?;
+            self.origin.revalidate(b)?;
+            if original {
+                token.revalidate_locked_currentness_in_original_account_v5(b)?;
+            } else {
+                token.revalidate_locked_currentness(b)?;
+            }
             Ok((carriage, storage))
         })?;
         self.budget.reserve_storage(storage.additional_storage())?;
@@ -296,6 +334,16 @@ fn decode_receipt(
     bytes: &[u8],
     b: &mut Budget<'_>,
 ) -> Result<(Carriage, Storage)> {
+    decode_receipt_using(profile, subject, bytes, b, false)
+}
+
+fn decode_receipt_using(
+    profile: &Profile,
+    subject: &Subject,
+    bytes: &[u8],
+    b: &mut Budget<'_>,
+    original: bool,
+) -> Result<(Carriage, Storage)> {
     let floor = profile
         .retained_storage()
         .checked_add(SUBJECT_STORAGE)
@@ -303,7 +351,11 @@ fn decode_receipt(
         .ok_or(Resource::Arithmetic)?;
     b.with_prepaid_scope(floor, 0, LOCAL_WORK, FRAME, |b| {
         profile.revalidate(b)?;
-        let (carriage, storage) = Carriage::decode(bytes, b)?;
+        let (carriage, storage) = if original {
+            Carriage::decode_in_original_account_v3(bytes, b)
+        } else {
+            Carriage::decode(bytes, b)
+        }?;
         b.reserve_storage(storage.additional_storage())?;
         validate_receipt(profile, subject, &carriage, b)?;
         Ok((carriage, storage))
@@ -350,9 +402,11 @@ pub(crate) enum Failure {
     Manifest(ManifestError),
     Ready(ReadyError),
     Handoff(HandoffError),
+    Retirement(fe2o3_artifact_transaction::ArtifactLockRetirementBarrierErrorV1),
     Subject(SubjectError),
     Transport(TransportError),
     Receipt(ReceiptError),
+    RootCompletion(crate::protected_compiler_handoff_v3::root_intake::Error),
     Mismatch(&'static str),
 }
 macro_rules! causes {
@@ -375,11 +429,13 @@ macro_rules! causes {
     };
 }
 causes!(CompletionError=>Completion, Resource=>Resource, CapabilityError=>Capability, SupervisorError=>Supervisor,
+    fe2o3_artifact_transaction::ArtifactLockRetirementBarrierErrorV1=>Retirement,
     fe2o3_compiler_closure_capability::RetainedCompilerRuntimeErrorV1=>Approval,
     fe2o3_compiler_execution_client::CompilerExecutionChildChannelErrorV1=>Child,
     fe2o3_compiler_execution_protocol::CompilerExecutionAttestationErrorV3=>Policy,
     ManifestError=>Manifest, ReadyError=>Ready, HandoffError=>Handoff, SubjectError=>Subject,
-    TransportError=>Transport, ReceiptError=>Receipt);
+    TransportError=>Transport, ReceiptError=>Receipt,
+    crate::protected_compiler_handoff_v3::root_intake::Error=>RootCompletion);
 
 #[cfg(test)]
 #[path = "compiler_execution_boundary_native_tests.rs"]

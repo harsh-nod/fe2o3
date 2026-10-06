@@ -229,6 +229,27 @@ pub fn ready_source_isa_observation_frame_v1(
     ))
 }
 
+/// Preserves the exact finalized subject while reporting the unimplemented V18
+/// source/ISA projection. The V7/V8 replay is not a decoder for typed V90 lineage.
+pub(crate) fn finalized_mixed_source_isa_observation_frame_v89(
+    config: [u8; 32],
+    unit: [u8; 32],
+    finalized: &fe2o3_hsaco_finalize::PreparedFinalizedNominalWorkerHsacoV89,
+) -> Result<SourceIsaObservationFrameV1, SourceIsaObservationFrameErrorV1> {
+    let context = SourceIsaObservationContextV1::new(
+        config,
+        unit,
+        inert_source_isa_attempt_v1(finalized.attempt())?,
+        *finalized.identity().as_bytes(),
+    )?;
+    Ok(SourceIsaObservationFrameV1::new(
+        context,
+        SourceIsaObservationOutcomeV1::Unavailable(
+            SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV18,
+        ),
+    ))
+}
+
 fn map_acceptance_summary(
     summary: ProductionSourceIsaAcceptanceSummaryV1,
 ) -> Result<AdmittedSourceIsaObservationV1, SourceIsaObservationFrameErrorV1> {

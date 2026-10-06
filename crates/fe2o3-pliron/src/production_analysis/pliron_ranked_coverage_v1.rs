@@ -939,6 +939,7 @@ fn total_expression_v1<M: Meter>(
         return Err(Fault::Arithmetic.into());
     }
     Ok(match expression {
+        Expression::GlobalInvocation1d { .. } => false,
         Expression::Constant { .. } | Expression::Symbol { .. } | Expression::Load(_) => true,
         Expression::Binary {
             operation,

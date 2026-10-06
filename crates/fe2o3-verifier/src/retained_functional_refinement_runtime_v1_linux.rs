@@ -31,6 +31,10 @@ use super::{
 #[path = "functional_refinement_process_tree_v1_linux.rs"]
 mod functional_refinement_process_tree_v1;
 pub(crate) use functional_refinement_process_tree_v1::AttemptV1;
+#[cfg(test)]
+pub(super) fn finished_solver_contexts_for_test() -> Option<(usize, usize, usize, usize)> {
+    functional_refinement_process_tree_v1::finished_solver_contexts_for_test()
+}
 pub(super) const MAX_DIRECTORY_ENTRIES: usize = 256;
 pub(super) const MAX_TOTAL_RUNTIME_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -54,7 +58,7 @@ pub(super) const RETAINED_METADATA_STORAGE: usize = {
 };
 
 #[cfg(test)]
-static RUNTIME_CLOSURE_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
+pub(super) static RUNTIME_CLOSURE_PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 const RUST_VERIFY_FD: RawFd = 180;
 const Z3_FD: RawFd = 181;
@@ -547,9 +551,17 @@ pub(super) fn execute_functional_refinement_generated_rust_verify(
     source: &CanonicalGeneratedVerusProofInputV3,
     deadline: Instant,
     output_limit: usize,
+    policy: super::GeneratedProofProcessPolicyV2,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
-    functional_refinement_process_tree_v1::execute(attempt, runtime, source, deadline, output_limit)
+    functional_refinement_process_tree_v1::execute_with_policy(
+        attempt,
+        runtime,
+        source,
+        deadline,
+        output_limit,
+        policy,
+    )
 }
 
 struct SealedGeneratedProofSourceV3 {
@@ -686,11 +698,14 @@ fn retain_interpreter(
         .file
         .try_clone()
         .map_err(|error| io_std_error("duplicate retained interpreter", error))?;
+    let mode = external_interpreter_mode(
+        ObjectSnapshotV2::capture(&file, "system interpreter permissions")?.permissions(),
+    )?;
     let retained = retain_file(
         file,
         &FileSpecV2 {
             path: specification.canonical.clone(),
-            mode: 0o755,
+            mode,
             size: Some(specification.size),
             sha256: specification.sha256,
         },
@@ -714,6 +729,16 @@ fn retain_interpreter(
         file: retained,
         links,
     })
+}
+
+fn external_interpreter_mode(mode: u32) -> Result<u32, RetainedFunctionalRefinementRuntimeErrorV1> {
+    match mode {
+        0o555 | 0o755 => Ok(mode),
+        _ => Err(error(
+            RetainedFunctionalRefinementRuntimeErrorKindV1::Protection,
+            "system interpreter mode is neither 0555 nor 0755",
+        )),
+    }
 }
 
 fn retain_symlink(
@@ -1309,6 +1334,67 @@ mod tests {
 
     static NEXT_TEST: AtomicU64 = AtomicU64::new(0);
     static SYNTHETIC_MANIFEST: &[u8] = b"synthetic-functional-refinement-runtime-v1\n";
+
+    #[test]
+    fn external_interpreter_accepts_only_exact_readonly_or_owner_writable_modes() {
+        for mode in 0..=0o7777 {
+            let result = external_interpreter_mode(mode);
+            if matches!(mode, 0o555 | 0o755) {
+                assert_eq!(result.unwrap(), mode);
+            } else {
+                assert_eq!(
+                    result.unwrap_err().kind(),
+                    RetainedFunctionalRefinementRuntimeErrorKindV1::Protection,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn held_external_interpreter_rejects_switching_between_admitted_modes() {
+        for (initial, changed) in [(0o555, 0o755), (0o755, 0o555)] {
+            let tree = TestClosure::new();
+            let path = tree.root.join("lib/data");
+            fs::set_permissions(&path, fs::Permissions::from_mode(initial)).unwrap();
+            let metadata = fs::metadata(&path).unwrap();
+            let policy = ProtectionPolicyV2 {
+                owner: metadata.uid(),
+                group: metadata.gid(),
+                protect_path_anchors: false,
+            };
+            let anchors = open_file_anchors(&path, &policy).unwrap();
+            let file = anchors.last().unwrap().file.try_clone().unwrap();
+            let mode = external_interpreter_mode(
+                ObjectSnapshotV2::capture(&file, "test interpreter")
+                    .unwrap()
+                    .permissions(),
+            )
+            .unwrap();
+            let file = retain_file(
+                file,
+                &FileSpecV2 {
+                    path: path.clone(),
+                    mode,
+                    size: Some(b"vstd-data-v2".len() as u64),
+                    sha256: Sha256::digest(b"vstd-data-v2").into(),
+                },
+                &policy,
+            )
+            .unwrap();
+            // This is a real held-file snapshot test, not root runtime admission.
+            let retained = RetainedInterpreterV2 {
+                anchors,
+                file,
+                links: Vec::new(),
+            };
+            retained.revalidate().unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(changed)).unwrap();
+            assert_eq!(
+                retained.revalidate().unwrap_err().kind(),
+                RetainedFunctionalRefinementRuntimeErrorKindV1::ClosureChanged,
+            );
+        }
+    }
 
     struct TestClosure {
         root: PathBuf,

@@ -9,13 +9,14 @@ use fe2o3_kernel_analysis::{
 };
 use fe2o3_kernel_ir::{
     BinaryOp, CanonicalKernelIrReplayAdmissionErrorV12 as AdmissionError,
+    CanonicalKernelIrReplayAdmissionErrorV18 as AdmissionError18,
     CanonicalKernelIrReplayStorageV12 as OutputStorage,
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKirBlockCoordinateV1 as Block, CanonicalKirControlFlowScopeErrorV1 as FlowError,
     CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirOperationCoordinateV1 as Site,
-    CanonicalKirUseCoordinateV1 as Use, Module, Operation, OperationKind, ScalarType, Type,
-    UnaryOp, VerifiedCanonicalKernelIrIdentityV12 as Identity,
+    CanonicalKirUseCoordinateV1 as Use, CheckedBinaryOperator, Module, Operation, OperationKind,
+    ScalarType, Type, UnaryOp, VerifiedCanonicalKernelIrIdentityV12 as Identity,
     VerifiedCanonicalKernelIrModuleV12 as Owner, with_canonical_kir_control_flow_v1,
 };
 use std::{fmt, mem::size_of};
@@ -33,6 +34,8 @@ pub enum OwnedLicmErrorV1 {
     ControlFlow(FlowError),
     /// Fresh actual candidate admission failed.
     Admission(AdmissionError),
+    /// Fresh storage/execution-capable candidate admission failed.
+    AdmissionV18(AdmissionError18),
     /// Independent actual-pair checker refused the output.
     Pair(PairError),
     /// Internal coordinate/worklist invariant failed closed.
@@ -73,6 +76,11 @@ impl From<FlowError> for Error {
 impl From<AdmissionError> for Error {
     fn from(v: AdmissionError) -> Self {
         Self::Admission(v)
+    }
+}
+impl From<AdmissionError18> for Error {
+    fn from(v: AdmissionError18) -> Self {
+        Self::AdmissionV18(v)
     }
 }
 impl From<PairError> for Error {
@@ -162,8 +170,10 @@ impl OwnedLicmContinuationV1 {
     }
 }
 
-/// Hoists only total one-result Bool/fixed-width-integer constants, Not,
-/// BitAnd/BitOr/BitXor, comparisons and Select. Index, all arithmetic, shifts,
+/// Hoists total one-result Bool/fixed-width-integer constants, Not,
+/// BitAnd/BitOr/BitXor, comparisons and Select, plus fixed-width checked
+/// Add/Subtract/Multiply with their value and overflow results kept together.
+/// Index, ordinary arithmetic, shifts,
 /// casts, floating point, memory, calls, intrinsics, atomics, barriers and
 /// convergent/unknown operations are not selected. Preserves ValueIds and CFG.
 /// Natural loops use original header order and actual dedicated unconditional
@@ -245,7 +255,15 @@ struct Selection {
     sequence: u32,
 }
 
-fn plan(a: &Inventory<'_>, loops: &Loops<'_, '_>, meter: &mut Meter<'_, '_>) -> Result<Vec<Row>> {
+#[path = "owned_licm_profiles.rs"]
+mod profiles;
+use profiles::Profile;
+
+fn plan<O: Profile>(
+    a: &Inventory<'_, O>,
+    loops: &Loops<'_, '_, O>,
+    meter: &mut Meter<'_, '_>,
+) -> Result<Vec<Row>> {
     let count = a.operations().len();
     let (mut selected, selected_size) = meter.table::<Option<Selection>>(count)?;
     let (mut pending, pending_size) = meter.table(count)?;
@@ -281,12 +299,8 @@ fn plan(a: &Inventory<'_>, loops: &Loops<'_, '_>, meter: &mut Meter<'_, '_>) -> 
             continue;
         }
         meter.derive(|budget| {
-            with_canonical_kir_control_flow_v1(
-                a.owner(),
-                function.coordinate,
-                Default::default(),
-                budget,
-                |flow, budget| {
+            a.owner()
+                .with_flow(function.coordinate, budget, |flow, budget| {
                     for loop_index in 0..loops.loop_count() {
                         let fact = loops.natural_loop(loop_index, budget)?;
                         if fact.header().function != function.coordinate || !fact.is_single_entry()
@@ -452,8 +466,7 @@ fn plan(a: &Inventory<'_>, loops: &Loops<'_, '_>, meter: &mut Meter<'_, '_>) -> 
                         }
                     }
                     Ok(())
-                },
-            )
+                })
         })?;
     }
     let (mut rows, _) = meter.table::<Row>(count)?;
@@ -508,8 +521,8 @@ fn plan(a: &Inventory<'_>, loops: &Loops<'_, '_>, meter: &mut Meter<'_, '_>) -> 
     Ok(rows)
 }
 
-fn materialize(
-    a: &Inventory<'_>,
+fn materialize<O>(
+    a: &Inventory<'_, O>,
     rows: &[Row],
     candidate: &mut Module,
     meter: &mut Meter<'_, '_>,
@@ -647,26 +660,41 @@ fn fixed_scalar(ty: &Type) -> bool {
         )
     )
 }
-fn candidate(a: &Inventory<'_>, at: usize, budget: &mut Budget<'_>) -> Result<bool> {
+fn candidate<O>(a: &Inventory<'_, O>, at: usize, budget: &mut Budget<'_>) -> Result<bool> {
     budget.charge_work(4)?;
     let row = &a.operations()[at];
-    if row.operation.results.len() != 1 || !fixed_scalar(&row.operation.results[0].ty) {
-        return Ok(false);
-    }
-    let selected = match &row.operation.kind {
-        OperationKind::Constant(value) => fixed_scalar(&value.ty()),
-        OperationKind::Unary {
-            op: UnaryOp::Not, ..
+    let selected = if let OperationKind::Binary {
+        op:
+            BinaryOp::Checked(
+                CheckedBinaryOperator::Add
+                | CheckedBinaryOperator::Subtract
+                | CheckedBinaryOperator::Multiply,
+            ),
+        ..
+    } = &row.operation.kind
+    {
+        budget.charge_work(4)?;
+        matches!(row.operation.results.as_slice(), [value, overflow]
+            if fixed_scalar(&value.ty) && value.ty != Type::BOOL && overflow.ty == Type::BOOL)
+    } else {
+        if row.operation.results.len() != 1 || !fixed_scalar(&row.operation.results[0].ty) {
+            return Ok(false);
         }
-        | OperationKind::Binary {
-            op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor,
-            ..
+        match &row.operation.kind {
+            OperationKind::Constant(value) => fixed_scalar(&value.ty()),
+            OperationKind::Unary {
+                op: UnaryOp::Not, ..
+            }
+            | OperationKind::Binary {
+                op: BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor,
+                ..
+            }
+            | OperationKind::Compare { .. }
+            | OperationKind::Select { .. } => true,
+            // Excludes Index/ordinary arithmetic/shifts/casts/float/memory/calls/intrinsics,
+            // atomics/barriers/execution/tile/wave/matrix and every unknown opcode.
+            _ => false,
         }
-        | OperationKind::Compare { .. }
-        | OperationKind::Select { .. } => true,
-        // Excludes Index/arithmetic/shifts/casts/float/memory/calls/intrinsics,
-        // atomics/barriers/execution/tile/wave/matrix and every unknown opcode.
-        _ => false,
     };
     if !selected {
         return Ok(false);
@@ -679,7 +707,7 @@ fn candidate(a: &Inventory<'_>, at: usize, budget: &mut Budget<'_>) -> Result<bo
     }
     Ok(true)
 }
-fn block_index(a: &Inventory<'_>, block: Block) -> Result<usize> {
+fn block_index<O>(a: &Inventory<'_, O>, block: Block) -> Result<usize> {
     let f = a
         .functions()
         .get(block.function.0 as usize)
@@ -690,7 +718,7 @@ fn block_index(a: &Inventory<'_>, block: Block) -> Result<usize> {
         .filter(|at| *at < f.blocks.end && a.blocks()[*at].coordinate == block)
         .ok_or(Error::Recipe("block coordinate"))
 }
-fn operation_index(a: &Inventory<'_>, site: Site) -> Result<usize> {
+fn operation_index<O>(a: &Inventory<'_, O>, site: Site) -> Result<usize> {
     let b = &a.blocks()[block_index(a, site.block)?];
     b.operations
         .start
@@ -709,6 +737,10 @@ fn retained(output: OutputStorage, rows: &Vec<Row>) -> Result<usize> {
         .and_then(|n| n.checked_add(rows.capacity().checked_mul(size_of::<Row>())?))
         .ok_or_else(|| Resource::Arithmetic.into())
 }
+
+#[path = "owned_licm_v18.rs"]
+mod storage_v18;
+pub use storage_v18::{OwnedLicmContinuationV18, prepare_owned_licm_v18};
 
 #[cfg(test)]
 #[path = "owned_licm_v1_tests.rs"]

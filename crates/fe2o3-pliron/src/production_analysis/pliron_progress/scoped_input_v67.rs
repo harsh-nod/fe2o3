@@ -36,6 +36,7 @@ pub(crate) fn run_pliron_progress_with_scoped_input_v1<'scope, const BARRIER: bo
     run_pliron_progress_with_scoped_observation_v1(input, None)
 }
 
+#[cfg(test)]
 pub(crate) fn run_pliron_progress_with_scoped_observation_v1<'scope, const BARRIER: bool>(
     input: crate::production_analysis::pliron_pass_contract::ScopedVerifiedProgressInputV1<
         'scope,
@@ -46,9 +47,28 @@ pub(crate) fn run_pliron_progress_with_scoped_observation_v1<'scope, const BARRI
     ScopedProgressReportV1<'scope>,
     crate::production_analysis::pliron_pass_contract::PlironPassPreservationErrorV1,
 > {
+    run_pliron_progress_with_prepared_graph_v2(input, None, observer)
+}
+
+pub(crate) fn run_pliron_progress_with_prepared_graph_v2<'scope, const BARRIER: bool>(
+    input: crate::production_analysis::pliron_pass_contract::ScopedVerifiedProgressInputV1<
+        'scope,
+        BARRIER,
+    >,
+    prepared: Option<&PreparedProgressGraphV2<'_>>,
+    observer: ProgressObserverV1<'_, '_, '_>,
+) -> Result<
+    ScopedProgressReportV1<'scope>,
+    crate::production_analysis::pliron_pass_contract::PlironPassPreservationErrorV1,
+> {
     let run = || {
         let (context, function) = input.into_endpoints()?;
-        let report = run_scoped_progress_body_v1(context, function, observer);
+        let report = if let Some(prepared) = prepared {
+            prepared.authenticate(context, function)?;
+            catch_progress_panic_v1(observer, || prepared.run(observer))
+        } else {
+            run_scoped_progress_body_v1(context, function, observer)
+        };
         Ok(ScopedProgressReportV1 {
             context,
             function,

@@ -15,6 +15,7 @@ dialect-gpu.workspace = true
 dialect-kernel.workspace = true
 dialect-mir = { workspace = true, features = ["pliron"] }
 fe2o3-amd-target.workspace = true
+fe2o3-amdgcn-model.workspace = true
 fe2o3-artifacts.workspace = true
 fe2o3-artifact-transaction.workspace = true
 fe2o3-build-authority.workspace = true
@@ -24,6 +25,7 @@ fe2o3-compiler-execution-client.workspace = true
 fe2o3-compiler-execution-protocol.workspace = true
 fe2o3-compiler-ffi.workspace = true
 fe2o3-compiler-lineage.workspace = true
+fe2o3-hsaco-finalize.workspace = true
 fe2o3-kernel-descriptor.workspace = true
 fe2o3-kernel-analysis = { workspace = true, features = [
     "authenticated-machine-effect",
@@ -51,10 +53,8 @@ fe2o3-source-isa-observation.workspace = true
 
 [dev-dependencies]
 toml = "1.1.4"
-fe2o3-amdgcn-model.workspace = true
 fe2o3-device.workspace = true
 fe2o3-hsaco.workspace = true
-fe2o3-hsaco-finalize.workspace = true
 fe2o3-host.workspace = true
 fe2o3-kir-debugger.workspace = true
 fe2o3-kir-sim-cli.workspace = true

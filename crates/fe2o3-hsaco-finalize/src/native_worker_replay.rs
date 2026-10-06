@@ -334,10 +334,12 @@ pub(crate) fn reconstruct_raw(
         .from_abi(abi)
         .map_err(|e| failure("raw artifact reconstruction", e))?;
     match schema {
-        DescriptorSchema::NominalV5 => Err(failure(
-            "raw artifact reconstruction",
-            "native V5 is not admitted",
-        )),
+        DescriptorSchema::NominalV5 | DescriptorSchema::MixedV53 | DescriptorSchema::MixedV89 => {
+            Err(failure(
+                "raw artifact reconstruction",
+                "this historical native adapter does not admit conditional descriptors",
+            ))
+        }
         DescriptorSchema::V1 | DescriptorSchema::NominalV3 => schema
             .derive_raw(finalized)
             .map_err(|e| failure("raw artifact reconstruction", e)),

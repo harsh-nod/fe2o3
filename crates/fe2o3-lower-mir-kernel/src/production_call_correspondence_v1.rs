@@ -18,6 +18,11 @@ enum SemanticKirCallReturnKindV1 {
         destination: SemanticKirCallDestinationV1,
         transport: CallComponentSpanV1,
     },
+    NoNormalReturnCall {
+        arguments_first: u32,
+        call_operation: u32,
+        destination: Option<SemanticKirCallDestinationV1>,
+    },
     Return {
         components: CallComponentSpanV1,
     },
@@ -72,6 +77,7 @@ impl SemanticKirCallReturnV1 {
         match self.kind {
             SemanticKirCallReturnKindV1::Call { transport, .. } => transport,
             SemanticKirCallReturnKindV1::Return { components } => components,
+            SemanticKirCallReturnKindV1::NoNormalReturnCall { .. } => CallComponentSpanV1::EMPTY,
         }
     }
 
@@ -79,6 +85,7 @@ impl SemanticKirCallReturnV1 {
         match &mut self.kind {
             SemanticKirCallReturnKindV1::Call { transport, .. } => transport.rebase(offset),
             SemanticKirCallReturnKindV1::Return { components } => components.rebase(offset),
+            SemanticKirCallReturnKindV1::NoNormalReturnCall { .. } => Ok(()),
         }
     }
 }
@@ -167,7 +174,7 @@ fn call_operation_ordinal_v1(
     .map(|(first, _)| first)
 }
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn record_call_return_v1(
         &mut self,
         block: SemanticBlockIdV1,

@@ -4,6 +4,26 @@
 use super::*;
 use crate::native_spawn::RootRuntimeTraceV1 as Runtime;
 
+struct TerminalCustody(Arc<AtomicUsize>);
+impl Drop for TerminalCustody {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+// SAFETY: the complete inert payload owns one bounded Arc; retirement performs
+// only one atomic increment and its bounded deallocation, with no process I/O.
+unsafe impl crate::cleanup_bridge::LateRetainedPayloadV2 for TerminalCustody {
+    type Prepared = ();
+    const RETIRE_WORK: usize = 64;
+    const RETIRE_SCRATCH: usize = 128;
+    fn try_prepare_retirement(&self) -> Option<()> {
+        Some(())
+    }
+    fn retire(self, _: ()) {
+        drop(self);
+    }
+}
+
 pub(super) fn run(mode: &str, service: &mut Service, b: &mut Budget<'_>) {
     if matches!(mode, "runtime-lifecycle" | "runtime-tree-cancel") {
         return lifecycle(service, b, mode == "runtime-tree-cancel");
@@ -184,6 +204,16 @@ fn lifecycle(service: &mut Service, b: &mut Budget<'_>, cancel_at_birth: bool) {
     let root = trace.pid();
     trace.interrupt(b).unwrap();
     assert_eq!(next(&mut trace, b), Event::TrapStop);
+    let terminal_drops = Arc::new(AtomicUsize::new(0));
+    // SAFETY: 1024 bytes cover the complete inert Arc payload and its allocation;
+    // only this original trace installs it in its existing cleanup slot.
+    let (late, late_charge) =
+        unsafe { trace.reserve_late_custody::<TerminalCustody>(service, 1024, b) }.unwrap();
+    b.reserve_storage(late_charge.additional_storage()).unwrap();
+    trace
+        .prepare_late_attachment(&late, b)
+        .unwrap()
+        .commit(TerminalCustody(terminal_drops.clone()));
     b.reserve_storage(Runtime::STORAGE_GROWTH).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     // SAFETY: dedicated bounded fixture with exclusive original custody. The
@@ -328,8 +358,18 @@ fn lifecycle(service: &mut Service, b: &mut Budget<'_>, cancel_at_birth: bool) {
         assert_eq!((births, terminals, later_opens), (2, 2, 2));
         assert!(observed_descendants.iter().all(Option::is_some));
         assert!(signal_sent && signal_observed);
+        assert_eq!(terminal_drops.load(Ordering::SeqCst), 0);
+        // Repeated normal monitor pumping must not retire the original
+        // terminal compiler's actual late payload before explicit cleanup.
+        for _ in 0..3 {
+            service.pump(64).unwrap();
+            assert_eq!(terminal_drops.load(Ordering::SeqCst), 0);
+        }
     }
     assert_eq!(runtime.cleanup_after_retirement().unwrap(), Poll::Reaped);
+    assert_eq!(terminal_drops.load(Ordering::SeqCst), 1);
+    drop(late);
+    b.release_storage(late_charge.additional_storage()).unwrap();
     runtime.check_budget(b).unwrap();
     assert!(runtime.poll(b).is_err());
     assert!(runtime.resume_selected(b).is_err());

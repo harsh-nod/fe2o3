@@ -1,0 +1,245 @@
+// Capability identities are dynamic slot epochs in an active frame. They are
+// neither ordinary Unit values nor a proof premise supplied by a static census.
+spec fn byte_execution_capability_type_v178(value: MemoryValueV30, role: int) -> bool {
+    match value {
+        MemoryValueV30::Execution(capability) => capability.role == role
+            && 0 <= capability.identity.definition && 0 <= capability.identity.epoch
+            && 0 <= capability.site.function && 0 <= capability.site.block
+            && 0 <= capability.site.operation
+            && ((role == 0 && capability.parent.is_none())
+                || (role == 1 && capability.parent.is_some() && capability.child.is_none())),
+        _ => false,
+    }
+}
+
+spec fn byte_execution_capability_v178(state: MemoryStateV30, definition: int, role: int)
+    -> Option<MemoryExecutionCapabilityV178>
+{
+    if !state.valid || definition < 0 || definition >= state.values.len() { None } else {
+        match state.values[definition] {
+            MemoryValueV30::Execution(capability) =>
+                if byte_execution_capability_type_v178(state.values[definition], role)
+                    && capability.identity.definition == definition && capability.active
+                    && state.frames.active.contains(capability.identity.frame) {
+                    Some(capability)
+                } else { None },
+            _ => None,
+        }
+    }
+}
+
+spec fn byte_execution_next_epoch_v178(state: MemoryStateV30, definition: int,
+    role: int, site: MemorySourceOperationV30) -> Option<int>
+{
+    if definition < 0 || definition >= state.values.len() { None } else {
+        match state.values[definition] {
+            MemoryValueV30::Undefined => if state.frames.active.len() > 0
+                && (forall|index: int| #![trigger state.values[index]]
+                    0 <= index < state.values.len() ==>
+                    match state.values[index] {
+                        MemoryValueV30::Execution(resident) =>
+                            !byte_execution_mentions_v178(resident, definition,
+                                state.frames.active.last()),
+                        _ => true,
+                    }) { Some(0) } else { None },
+            MemoryValueV30::Execution(previous) =>
+                if byte_execution_capability_type_v178(state.values[definition], role)
+                    && previous.identity.definition == definition && previous.site == site
+                    && previous.child.is_none() && (role == 0 || !previous.active) {
+                    Some(previous.identity.epoch + 1)
+                } else { None },
+            _ => None,
+        }
+    }
+}
+
+// A cleared authoritative slot cannot reset an epoch while any resident alias
+// or parent/child reference still names that slot in the same dynamic frame.
+spec fn byte_execution_mentions_v178(capability: MemoryExecutionCapabilityV178,
+    definition: int, frame: MemoryDynamicFrameV30) -> bool
+{
+    (capability.identity.definition == definition && capability.identity.frame == frame)
+        || (match capability.parent {
+            Some(parent) => parent.definition == definition && parent.frame == frame,
+            None => false,
+        })
+        || (match capability.child {
+            Some(child) => child.definition == definition && child.frame == frame,
+            None => false,
+        })
+}
+
+spec fn byte_execution_refuse_v178(state: MemoryStateV30) -> MemoryStateV30 {
+    MemoryStateV30 { valid: false, ..state }
+}
+
+// Codes 0/1/2 are ContextIssue/WorkgroupDerive/ScopeEnd. Receiver and result
+// coordinates come from the actual inventory's typed SSA use/definition rows.
+spec fn byte_execution_step_v178(state: MemoryStateV30, site: MemorySourceOperationV30,
+    code: int, destination: int, receiver: int) -> MemoryStateV30
+{
+    if !state.valid || !byte_state_memory_well_formed_v30(state)
+        || state.frames.active.len() == 0
+        || state.frames.execution.is_none()
+        || !byte_execution_well_formed_v37(state.frames.execution.unwrap()) {
+        byte_execution_refuse_v178(state)
+    } else if code == 0 && receiver == -1 {
+        match byte_execution_next_epoch_v178(state, destination, 0, site) {
+            Some(epoch) => {
+                let identity = MemoryExecutionReferenceV178 {
+                    definition: destination, epoch, frame: state.frames.active.last() };
+                let value = MemoryExecutionCapabilityV178 { identity, site, role: 0,
+                    parent: None, child: None, active: true };
+                MemoryStateV30 { values: state.values.update(destination,
+                    MemoryValueV30::Execution(value)), ..state }
+            },
+            None => byte_execution_refuse_v178(state),
+        }
+    } else if code == 1 && destination != receiver {
+        match (byte_execution_capability_v178(state, receiver, 0),
+            byte_execution_next_epoch_v178(state, destination, 1, site)) {
+            (Some(parent), Some(epoch)) => if parent.child.is_none() {
+                let identity = MemoryExecutionReferenceV178 {
+                    definition: destination, epoch, frame: state.frames.active.last() };
+                let value = MemoryExecutionCapabilityV178 { identity, site, role: 1,
+                    parent: Some(parent.identity), child: None, active: true };
+                let suspended = MemoryExecutionCapabilityV178 { child: Some(identity), ..parent };
+                MemoryStateV30 { values: state.values
+                    .update(receiver, MemoryValueV30::Execution(suspended))
+                    .update(destination, MemoryValueV30::Execution(value)), ..state }
+            } else { byte_execution_refuse_v178(state) },
+            _ => byte_execution_refuse_v178(state),
+        }
+    } else if code == 2 && destination == -1 {
+        match byte_execution_capability_v178(state, receiver, 1) {
+            Some(child) => match child.parent {
+                Some(reference) => match byte_execution_capability_v178(
+                    state, reference.definition, 0) {
+                    Some(parent) => if parent.identity == reference
+                        && parent.child == Some(child.identity)
+                        && reference.definition != receiver {
+                        let retired = MemoryExecutionCapabilityV178 { active: false, ..child };
+                        let released = MemoryExecutionCapabilityV178 { child: None, ..parent };
+                        MemoryStateV30 { values: state.values
+                            .update(receiver, MemoryValueV30::Execution(retired))
+                            .update(reference.definition, MemoryValueV30::Execution(released)),
+                            ..state }
+                    } else { byte_execution_refuse_v178(state) },
+                    None => byte_execution_refuse_v178(state),
+                },
+                None => byte_execution_refuse_v178(state),
+            },
+            None => byte_execution_refuse_v178(state),
+        }
+    } else { byte_execution_refuse_v178(state) }
+}
+
+proof fn byte_execution_copied_record_has_no_slot_authority_v178(
+    state: MemoryStateV30, copied: MemoryExecutionCapabilityV178, definition: int, role: int,
+)
+    requires 0 <= definition < state.values.len(),
+        state.values[definition] == MemoryValueV30::Execution(copied),
+        copied.identity.definition != definition,
+    ensures byte_execution_capability_v178(state, definition, role).is_none(),
+{ }
+
+proof fn byte_execution_departed_frame_has_no_authority_v178(
+    state: MemoryStateV30, capability: MemoryExecutionCapabilityV178, definition: int, role: int,
+)
+    requires 0 <= definition < state.values.len(),
+        state.values[definition] == MemoryValueV30::Execution(capability),
+        !state.frames.active.contains(capability.identity.frame),
+    ensures byte_execution_capability_v178(state, definition, role).is_none(),
+{ }
+
+proof fn byte_execution_erased_slot_cannot_revive_resident_reference_v178(
+    state: MemoryStateV30, resident: MemoryExecutionCapabilityV178,
+    definition: int, alias: int, role: int, site: MemorySourceOperationV30,
+)
+    requires 0 <= definition < state.values.len(), 0 <= alias < state.values.len(),
+        state.values[definition] == MemoryValueV30::Undefined,
+        state.values[alias] == MemoryValueV30::Execution(resident),
+        state.frames.active.len() > 0,
+        byte_execution_mentions_v178(resident, definition, state.frames.active.last()),
+    ensures byte_execution_next_epoch_v178(state, definition, role, site).is_none(),
+{
+    assert(!(forall|index: int| #![trigger state.values[index]]
+        0 <= index < state.values.len() ==>
+        match state.values[index] {
+            MemoryValueV30::Execution(value) => !byte_execution_mentions_v178(value,
+                definition, state.frames.active.last()),
+            _ => true,
+        })) by { }
+}
+
+proof fn byte_execution_suspended_context_refuses_second_child_v178(
+    state: MemoryStateV30, parent: MemoryExecutionCapabilityV178,
+    receiver: int, destination: int, site: MemorySourceOperationV30,
+)
+    requires byte_execution_capability_v178(state, receiver, 0) == Some(parent),
+        parent.child.is_some(),
+    ensures byte_execution_step_v178(state, site, 1, destination, receiver)
+        == byte_execution_refuse_v178(state),
+{ }
+
+proof fn byte_execution_scope_end_requires_current_reciprocal_parent_v178(
+    state: MemoryStateV30, child: MemoryExecutionCapabilityV178,
+    parent: MemoryExecutionCapabilityV178, reference: MemoryExecutionReferenceV178,
+    receiver: int, site: MemorySourceOperationV30,
+)
+    requires byte_execution_capability_v178(state, receiver, 1) == Some(child),
+        child.parent == Some(reference),
+        byte_execution_capability_v178(state, reference.definition, 0) == Some(parent),
+        parent.identity != reference || parent.child != Some(child.identity),
+    ensures byte_execution_step_v178(state, site, 2, -1, receiver)
+        == byte_execution_refuse_v178(state),
+{ }
+
+proof fn byte_execution_unknown_operation_is_not_neutral_v178(
+    state: MemoryStateV30, site: MemorySourceOperationV30,
+    code: int, destination: int, receiver: int,
+)
+    requires code < 0 || 2 < code,
+    ensures byte_execution_step_v178(state, site, code, destination, receiver)
+        == byte_execution_refuse_v178(state),
+{ }
+
+proof fn byte_execution_scope_end_never_leaves_receiver_authority_v178(
+    state: MemoryStateV30, site: MemorySourceOperationV30, receiver: int,
+)
+    ensures byte_execution_capability_v178(
+        byte_execution_step_v178(state, site, 2, -1, receiver), receiver, 1).is_none(),
+{ }
+
+proof fn byte_execution_all_steps_preserve_byte_storage_and_dynamic_frames_v178(
+    state: MemoryStateV30, site: MemorySourceOperationV30,
+    code: int, destination: int, receiver: int,
+)
+    ensures ({ let next = byte_execution_step_v178(state, site, code, destination, receiver);
+        next.pc == state.pc && next.memory == state.memory
+            && next.generations == state.generations && next.frames == state.frames }),
+{ }
+
+proof fn byte_execution_reissued_slot_increments_retained_epoch_v178(
+    state: MemoryStateV30, previous: MemoryExecutionCapabilityV178,
+    definition: int, role: int, site: MemorySourceOperationV30,
+)
+    requires 0 <= definition < state.values.len(),
+        state.values[definition] == MemoryValueV30::Execution(previous),
+        byte_execution_capability_type_v178(state.values[definition], role),
+        previous.identity.definition == definition && previous.site == site,
+        previous.child.is_none() && (role == 0 || !previous.active),
+    ensures byte_execution_next_epoch_v178(state, definition, role, site)
+        == Some(previous.identity.epoch + 1),
+{ }
+
+proof fn byte_execution_new_frame_cannot_recreate_old_frame_identity_v178(
+    state: MemoryStateV30, site: MemorySourceOperationV30, destination: int,
+    previous: MemoryExecutionReferenceV178, actual: MemoryExecutionCapabilityV178,
+)
+    requires state.frames.active.len() > 0,
+        state.frames.active.last() != previous.frame,
+        byte_execution_capability_v178(byte_execution_step_v178(
+            state, site, 0, destination, -1), destination, 0) == Some(actual),
+    ensures actual.identity != previous,
+{ }

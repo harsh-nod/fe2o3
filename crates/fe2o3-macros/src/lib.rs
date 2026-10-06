@@ -235,13 +235,19 @@ fn validate_device_copy_repr(attrs: &[syn::Attribute]) -> syn::Result<DeviceCopy
 /// likewise kept behind the separate [`device_import`] and [`device_export`]
 /// attributes rather than weakening ordinary kernels.
 ///
-/// Direct source loops and integer `match` expressions require an ordered
+/// Direct source loops and literal integer `match` expressions require an ordered
 /// `control_flow(loop_bounds(...), integer_switches(...))` declaration. Every
-/// loop receives one nonzero maximum iteration count and every match receives
+/// loop receives one nonzero maximum iteration count and every declared match receives
 /// one fixed-width signed or unsigned discriminant type in lexical order. The
 /// macro emits a separate canonical source-CFG sidecar with exact spans and
 /// structured break/continue targets. The sidecar is descriptive until a
 /// compiler collector authenticates it against MIR.
+/// Without that declaration, constructor/name patterns with bindings and
+/// wildcards are forwarded unchanged to rustc. They emit no guessed integer
+/// sidecar: the compiler-resolved type, variant, discriminant and control flow
+/// must pass the ordinary authenticated MIR pipeline. Guards and nested
+/// constructor/literal tests remain outside this bounded frontend grammar;
+/// bare names are resolved only by rustc, including in payload patterns.
 #[proc_macro_attribute]
 pub fn kernel(attr: TokenStream, item: TokenStream) -> TokenStream {
     let options = match parse_kernel_options(attr.into()) {

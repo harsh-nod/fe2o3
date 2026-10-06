@@ -104,7 +104,7 @@ impl Recorder {
     pub(in super::super) fn record_function(
         &mut self,
         plan: &LoweredFunctionPlanV1,
-        lowering: &SemanticFunctionLoweringV1<'_>,
+        lowering: &SemanticFunctionLoweringV1<'_, '_>,
         blocks: &[BasicBlock],
         spans: &[SemanticKirTerminatorOperationSpanV1],
         budget: &mut Budget<'_>,

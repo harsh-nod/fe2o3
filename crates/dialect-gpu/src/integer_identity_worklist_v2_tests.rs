@@ -280,9 +280,8 @@ fn measured(
     Option<Denied>,
 ) {
     let context = &mut Context::new();
-    // Pointer-key sorting/probing is charged by actual work and can differ
-    // across context identities. One real checked rewrite has a deterministic
-    // cut while still exercising replacement allocation and both result uses.
+    // One checked rewrite exercises replacement allocation and both result
+    // uses. Cascading multi-key cases have separate exact-boundary coverage.
     let ty = IntegerType::get(context, 32, Signedness::Unsigned).into();
     let fixture = make_fixture(
         context,
@@ -325,7 +324,7 @@ fn worklist_exact_and_one_short_work_and_storage_preserve_original_denials() {
 }
 
 #[test]
-fn worklist_observer_order_depends_on_source_ordinals_not_pointer_hashes() {
+fn worklist_observer_order_and_debits_ignore_context_and_arena_noise() {
     let mut previous = None;
     for noise in [0, 7, 29] {
         let context = &mut Context::new();
@@ -339,7 +338,7 @@ fn worklist_observer_order_depends_on_source_ordinals_not_pointer_hashes() {
             .map(|op| op.deref(context).get_result(0))
             .collect();
         let events = Arc::new(Mutex::new(Vec::new()));
-        let mut meter = Ledger::new();
+        let mut meter = Measured::new(2_000_000, 2_000_000);
         assert_eq!(
             integer_identity_canonicalization_with_observer_v2(
                 fixture.fixture.function.get_operation(),
@@ -357,10 +356,56 @@ fn worklist_observer_order_depends_on_source_ordinals_not_pointer_hashes() {
             .map(|(old, _)| original.iter().position(|value| value == old).unwrap())
             .collect();
         assert_eq!(order, (0..18).collect::<Vec<_>>());
-        if let Some(prior) = previous.replace(order.clone()) {
-            assert_eq!(prior, order);
+        let observation = (order, meter.inner.work, meter.peak);
+        if let Some(prior) = previous.replace(observation.clone()) {
+            assert_eq!(prior, observation);
         }
-        assert_eq!(meter.live, 0);
+        assert_eq!(meter.inner.live, 0);
         assert_eq!(retained.len(), noise);
+    }
+}
+
+#[test]
+fn worklist_cascading_index_has_exact_limits_across_fresh_contexts() {
+    let run = |noise: usize, work: usize, storage: usize| {
+        let context = &mut Context::new();
+        let retained: Vec<_> = (0..noise).map(|_| chain(context, 1)).collect();
+        let fixture = chain(context, 17);
+        verify_op(&fixture.fixture.function, context).unwrap();
+        let mut meter = Measured::new(work, storage);
+        meter.inner.live = 73;
+        let result = integer_identity_canonicalization_v2(
+            fixture.fixture.function.get_operation(),
+            context,
+            &mut meter,
+        );
+        assert_eq!(meter.inner.live, 73);
+        assert_eq!(retained.len(), noise);
+        if result.is_ok() {
+            check_replacement(context, &fixture.fixture, false);
+            verify_op(&fixture.fixture.function, context).unwrap();
+        }
+        (result, meter.inner.work, meter.peak, meter.inner.failure)
+    };
+    let (result, work, storage, failure) = run(0, 2_000_000, 2_000_000);
+    assert_eq!(result.unwrap(), IRStatus::Changed);
+    assert!(failure.is_none());
+    for noise in [0, 7, 29] {
+        let (result, actual_work, actual_storage, failure) = run(noise, work, storage);
+        assert_eq!(result.unwrap(), IRStatus::Changed);
+        assert_eq!((actual_work, actual_storage), (work, storage));
+        assert!(failure.is_none());
+        for storage_short in [false, true] {
+            let (result, _, _, failure) = run(
+                noise,
+                work - usize::from(!storage_short),
+                storage - usize::from(storage_short),
+            );
+            let failure = failure.unwrap();
+            assert_eq!(failure.storage, storage_short);
+            assert!(
+                matches!(result, Err(IntegerIdentityErrorV1::Budget(actual)) if actual == failure)
+            );
+        }
     }
 }

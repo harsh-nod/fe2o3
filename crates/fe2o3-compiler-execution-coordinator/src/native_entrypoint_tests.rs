@@ -618,6 +618,7 @@ fn root_intake_terminal_refusal_or_error_cancels_before_original_cleanup_drain()
 
 #[test]
 fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes() {
+    assert!(Deployment::original_root_startup_quota(MONITOR_TURNS, CLEANUP_TURNS).is_ok());
     let old = Deployment::startup_quota(2, 1).unwrap();
     let root = Deployment::original_root_startup_quota(2, 1).unwrap();
     let continuity = Prepared::maximum_revalidation_quota().unwrap();
@@ -626,10 +627,17 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
     let launch = RootCompilerRequest::launch_quota().unwrap();
     let cancellation = RootCompilerRequest::cancellation_quota().unwrap();
     let (cleanup_work, cleanup_storage) = RootCompilerRequest::cleanup_growth().unwrap();
-    assert_eq!(root.cleanup_work(), old.cleanup_work() + cleanup_work);
+    let runtime = RootCompilerRequest::runtime_turn_quota().unwrap();
+    let issuer = RootCompilerRequest::runtime_startup_quota().unwrap();
+    let (runtime_cleanup_work, runtime_cleanup_storage) =
+        RootCompilerRequest::runtime_cleanup_growth(2, 1).unwrap();
+    assert_eq!(
+        root.cleanup_work(),
+        old.cleanup_work() + cleanup_work + runtime_cleanup_work
+    );
     assert_eq!(
         root.cleanup_storage(),
-        old.cleanup_storage() + cleanup_storage
+        old.cleanup_storage() + cleanup_storage + runtime_cleanup_storage
     );
     assert_eq!(
         root.request_work(),
@@ -638,8 +646,9 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
             + fe2o3_compiler_execution_supervisor::ProvisionedProtectedIssuerServiceInputsV2::WORK
             + request.work()
             + launch.work()
+            + issuer.work()
             + 2 * cancellation.work()
-            + 2 * (Receiver::TURN_WORK + continuity.work() + refusal.work())
+            + 2 * (Receiver::TURN_WORK + continuity.work() + refusal.work() + runtime.work())
     );
     assert!(
         root.request_storage()
@@ -652,6 +661,8 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
                 + launch.scratch()
                 + refusal.scratch()
                 + cancellation.scratch()
+                + runtime.scratch()
+                + issuer.scratch()
     );
     assert!(Deployment::original_root_startup_quota(usize::MAX, 1).is_err());
     assert!(Deployment::original_root_startup_quota(1, usize::MAX).is_err());
@@ -673,6 +684,8 @@ fn every_additional_cleanup_turn_funds_one_foreground_step_on_original_request()
     assert_eq!(
         next.cleanup_work() - first.cleanup_work(),
         old_next.cleanup_work() - old_first.cleanup_work()
+            + RootCompilerRequest::runtime_cleanup_growth(1, 2).unwrap().0
+            - RootCompilerRequest::runtime_cleanup_growth(1, 1).unwrap().0
     );
 }
 

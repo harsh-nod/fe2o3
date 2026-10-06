@@ -450,6 +450,54 @@ pub fn recover_compiler_execution_receipt_transport_with_currentness_v3(
     })
 }
 
+/// Same fixed locked sidecar recovery on an original owned account. Duplicates
+/// the complete actual lease/token and subject under an additional <=256 MiB
+/// bound. Exact pair, token-derived subject, sidecar framing and both metadata
+/// checks are unchanged; no caller decoder, proof callback or authority provider.
+pub fn recover_compiler_execution_receipt_transport_in_original_account_v3(
+    lease: &CompilerModuleHandoffCurrentnessLeaseV5,
+    token: &CompilerModuleHandoffConsumptionTokenV5,
+    subject: &Subject,
+    budget: &mut Budget<'_>,
+) -> Result<(
+    RecoveredCompilerExecutionReceiptTransportV3,
+    CompilerExecutionReceiptTransportStorageV3,
+)> {
+    let inputs = token
+        .storage
+        .0
+        .checked_add(lease.storage().0)
+        .and_then(|n| n.checked_add(SUBJECT_STORAGE))
+        .ok_or(Resource::Arithmetic)?;
+    let floor = budget.storage();
+    let overlap = inputs
+        .checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1)
+        .ok_or(Resource::Arithmetic)?;
+    budget.with_additional_storage_window_v1(MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5, |b| {
+        b.with_prepaid_scope(floor.max(inputs), 0, 0, overlap, |b| {
+            composition::entry_composed(b, inputs, |r| {
+                r.reserve(FRAME)?;
+                Ok((|| {
+                    lease.validate_current_token(token)?;
+                    let recovered = native::recover_locked_using::<Subject, Error>(
+                        &token.binding,
+                        &token.content,
+                        subject,
+                        HEADERS,
+                        r,
+                        |receipt, payload, b| {
+                            let (subject, charge) =
+                                Subject::from_publication_in_custody(receipt, payload, b)?;
+                            Ok((subject, charge.retained_storage()))
+                        },
+                    )?;
+                    Ok(finish_recovered(recovered, subject))
+                })())
+            })?
+        })
+    })
+}
+
 fn recovered(
     wire: Vec<u8>,
     subject: &Subject,

@@ -851,6 +851,7 @@ pub enum SourceIsaObservationUnavailableReasonV1 {
     SourceProjectionForKirV9 = 201,
     FinalizedEvidenceUnavailableFromReadyState = 202,
     SourceProjectionForKirV11 = 203,
+    SourceProjectionForKirV18 = 204,
 }
 
 impl SourceIsaObservationUnavailableReasonV1 {
@@ -896,6 +897,7 @@ impl SourceIsaObservationUnavailableReasonV1 {
                 "finalized-evidence-unavailable-from-ready-state"
             }
             Self::SourceProjectionForKirV11 => "source-projection-for-kir-v11",
+            Self::SourceProjectionForKirV18 => "source-projection-for-kir-v18",
         }
     }
 
@@ -923,6 +925,7 @@ impl SourceIsaObservationUnavailableReasonV1 {
             201 => Ok(Self::SourceProjectionForKirV9),
             202 => Ok(Self::FinalizedEvidenceUnavailableFromReadyState),
             203 => Ok(Self::SourceProjectionForKirV11),
+            204 => Ok(Self::SourceProjectionForKirV18),
             _ => Err(SourceIsaObservationFrameErrorV1::InvalidTag),
         }
     }

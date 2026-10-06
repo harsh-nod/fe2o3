@@ -1,0 +1,69 @@
+// Readmit the exact forwarded graph before target and native joins.
+use super::*;
+use fe2o3_compiler_lineage::{InertCanonicalSemanticMirReceiptV3, TargetLineageIdentityV3};
+use fe2o3_kernel_ir::{
+    CanonicalKernelIrReplayAdmissionErrorV18, CanonicalKernelIrReplayStorageV18,
+    StorageLayoutLimitsV1, VerifiedCanonicalKernelIrModuleV18 as Owner,
+};
+
+// Match the production semantic lowerer's finite storage-layout policy. The
+// receiver still enforces its own caller-supplied cumulative work/storage caps.
+const LAYOUT_LIMITS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
+    rows: 1 << 20,
+    edges: 1 << 22,
+    containment_depth: 256,
+    object_bytes: (1u64 << 61) - 1,
+};
+
+pub(super) fn readmit_target_selection<T>(
+    forwarded: &[u8],
+    semantic: &InertCanonicalSemanticMirReceiptV3,
+    invocation: TargetLineageIdentityV3,
+    descriptor: &[u8],
+    profile: ProductionAmdTargetProfileV1,
+    received: &[u8],
+    budget: &mut Budget<'_>,
+    check_native: impl FnOnce(&Owner, &mut Budget<'_>) -> Result<T>,
+) -> Result<T> {
+    budget.check_prior_denials_v1()?;
+    let scratch = [
+        forwarded.len(),
+        semantic.canonical_preimage().len(),
+        descriptor.len(),
+        received.len(),
+        std::mem::size_of_val(&check_native),
+        size_of::<CanonicalKernelIrReplayStorageV18>(),
+        size_of::<TargetSubject<'_>>(),
+        size_of::<
+            std::result::Result<
+                (Owner, CanonicalKernelIrReplayStorageV18),
+                CanonicalKernelIrReplayAdmissionErrorV18,
+            >,
+        >(),
+    ]
+    .into_iter()
+    .try_fold(0usize, |total, next| total.checked_add(next))
+    .ok_or(Resource::Arithmetic)?;
+    codec_on_budget(budget, scratch, |budget| {
+        let (owner, storage) = Owner::from_canonical_bytes_with_verification_budget_v18(
+            forwarded,
+            LAYOUT_LIMITS,
+            budget,
+        )
+        .map_err(codec_error)?;
+        budget.reserve_storage(storage.retained_storage())?;
+        let subject = TargetSubject {
+            owner: &owner,
+            invocation,
+            semantic_mir: semantic,
+            descriptor,
+            profile,
+        };
+        check_target(&subject, received, budget).map_err(codec_error)?;
+        let result = check_native(&owner, budget);
+        // Owner drops before the same ledger's enclosing scope refunds storage,
+        // on success, refusal and unwind. No caller-created owner can substitute.
+        drop(owner);
+        result
+    })
+}

@@ -205,7 +205,10 @@ fn entry_fan_in_has_exact_legacy_idom_work_and_one_under_limit() {
                 &reachable,
                 &reverse_postorder,
                 &mut meter,
-                &mut ControlFlowResourcesV1 { budget: None },
+                &mut ControlFlowResourcesV1 {
+                    budget: None,
+                    storage: ControlFlowStorageV2::LegacyRows,
+                },
             )
             .map_err(|error| match error {
                 MeteredControlFlowErrorV1::ControlFlow(error) => error,
@@ -247,7 +250,10 @@ fn entry_reached_after_intersection_stops_before_later_predecessors() {
             &reachable,
             &reverse_postorder,
             &mut meter,
-            &mut ControlFlowResourcesV1 { budget: None },
+            &mut ControlFlowResourcesV1 {
+                budget: None,
+                storage: ControlFlowStorageV2::LegacyRows,
+            },
         )
         .map_err(|error| match error {
             MeteredControlFlowErrorV1::ControlFlow(error) => error,

@@ -239,3 +239,33 @@ They replace the preceding accepted images; no old-image fallback is added.
 Both manifests and the length-framed hash algorithm are unchanged. Host-side
 release testing checks the store semantics, not GPU execution or native LDS
 admission.
+
+The #271 integration also retains its reviewed wave64 inclusive-scan diagnostic
+item. With both changes, the canonical closure is
+`09d8b1702b59f7d2a6d11f2c687c4bd5e4d172efde7a051e01c8e8ad7fddb01f`
+and the Cargo-vendor closure is
+`542cf2ba9747a6800e23c413fd0c6000ac788e13d40541b9bd6f21cc630cb529`.
+These combined identities are recomputed from the complete 35-file roster,
+not selected from either merge parent. The main-only identities above record
+the narrow repair and are not extra accepted providers in the combined build.
+
+## 2026-10-05 execution-coordinate documentation refresh
+
+The subsequent `465786e175982a2be7eec789db4252e13fb942ff` change adds three
+comments to `src/execution.rs` describing workgroup size and X-fastest linear
+rank. There are no executable, API, layout, marker or ABI changes. The complete
+source closure still contains the same 34 source leaves and canonical manifest.
+
+The newly reviewed canonical closure is
+`b1f821474cc4f1dabd6735e86e152c61a72655e4dd599e881c5308599b6b031d`;
+the Cargo-vendor closure is
+`ad5a497278b75847aa48ccc7369c51e713540cb3952372bb525a5f0a019a914b`.
+Both use the unchanged raw-byte, sorted-path, length-framed algorithm. The
+historical vendor manifest and producer provenance remain unchanged. These two
+pins replace the preceding pair rather than extending the accepted set.
+
+The full backend suite exposed the omitted refresh by rejecting the genuine
+device provider. A regression reconstructs each exact preceding package by
+removing only those comments, checks its historical digest, requires rejection,
+and restores the current bytes to require admission. The pin update itself is
+not proof, native-service, tutorial or GPU qualification.

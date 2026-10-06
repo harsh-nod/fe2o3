@@ -661,9 +661,9 @@ impl<'work> RootRuntimeTraceV1<'work> {
                 this.inflight = None;
             }
             this.retired = this.root_completion.is_some() && this.tasks.iter().all(Option::is_none);
-            if this.retired {
-                let _ = this.root_mut().cancel();
-            }
+            // A successful terminal wait does not authorize releasing the
+            // original slot's late publication owners. Retain them until the
+            // enclosing completion sends, cancels, or explicitly cleans up.
             Ok(event)
         })
     }
@@ -688,7 +688,9 @@ impl<'work> RootRuntimeTraceV1<'work> {
     }
 
     /// Report the original cleanup mechanism only AFTER every trace obligation
-    /// has a consuming terminal wait. Pending/domain quarantine remain distinct.
+    /// has a consuming terminal wait. This may retire actual late publication
+    /// custody; finish its authenticated completion use before calling. Pending
+    /// domain quarantine remains distinct from trace retirement.
     pub fn cleanup_after_retirement(&mut self) -> Result<super::Poll> {
         if !self.retired {
             return Err(Error::State("runtime trace is not terminally retired"));
@@ -997,6 +999,9 @@ impl Drop for RootRuntimeTraceV1<'_> {
     }
 }
 
+// Linux UAPI linux/ptrace.h; libc exposes this request on GNU but not musl.
+const PTRACE_GET_SYSCALL_INFO: u32 = 0x420e;
+
 fn request(request: Request, pid: Pid, address: usize, data: usize) -> Result<usize> {
     // Infer libc's request ABI for both glibc and musl, as the original tracer does.
     let request = match request {
@@ -1007,7 +1012,7 @@ fn request(request: Request, pid: Pid, address: usize, data: usize) -> Result<us
         Request::Listen => libc::PTRACE_LISTEN,
         Request::Interrupt => libc::PTRACE_INTERRUPT,
         Request::Registers => libc::PTRACE_GETREGS,
-        Request::SyscallInfo => libc::PTRACE_GET_SYSCALL_INFO,
+        Request::SyscallInfo => PTRACE_GET_SYSCALL_INFO as _,
     };
     // SAFETY: callers select only a PID retained from original clone custody or
     // an actual owned birth event, and keep every pointed-to output buffer live.

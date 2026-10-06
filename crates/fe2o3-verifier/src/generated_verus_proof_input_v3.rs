@@ -101,6 +101,13 @@ fn source_identity(source: &[u8]) -> GeneratedVerusProofInputIdentityV3 {
     GeneratedVerusProofInputIdentityV3(digest.finalize().into())
 }
 
+pub(crate) fn borrowed_source_identity_v53(
+    source: &[u8],
+) -> Result<GeneratedVerusProofInputIdentityV3, GeneratedVerusProofInputErrorV3> {
+    validate_source(source)?;
+    Ok(source_identity(source))
+}
+
 /// Canonical generated-source admission failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]

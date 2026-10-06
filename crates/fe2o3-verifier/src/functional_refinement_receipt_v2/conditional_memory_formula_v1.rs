@@ -120,7 +120,7 @@ impl ConditionalMemoryFormulaV1<'_> {
             match x {
                 X::Symbol { symbol, .. } => visit(ConditionalMemoryLeafV1::Symbol(*symbol))?,
                 X::Load(load) => visit(ConditionalMemoryLeafV1::Load(load))?,
-                X::Constant { .. } => {}
+                X::Constant { .. } | X::GlobalInvocation1d { .. } => {}
                 X::Unary { operand, .. } | X::Cast { operand, .. } => expression(operand, visit)?,
                 X::Binary { lhs, rhs, .. } | X::Compare { lhs, rhs, .. } => {
                     expression(lhs, visit)?;

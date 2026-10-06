@@ -66,6 +66,14 @@ fn runtime_step_quote_composes_original_owner_helper_and_controller() {
 }
 
 #[test]
+fn completion_quote_preserves_original_issuer_and_outer_attempt_account() {
+    let quote = Attempt::publication_completion_quota().unwrap();
+    let inner = crate::native_v3::NativeAttempt::<Helper>::publication_completion_quota().unwrap();
+    assert_eq!(quote.work(), LOCAL_WORK + inner.work());
+    assert_eq!(quote.scratch(), FRAME + inner.scratch());
+}
+
+#[test]
 fn runtime_arm_and_cancellation_quotes_include_the_outer_attempt() {
     let arm = Attempt::arm_runtime_quota().unwrap();
     let inner = Trace::runtime_takeover_quota().unwrap();
@@ -178,4 +186,29 @@ fn confinement_receipt_quotes_original_identity_and_actual_domain_not_stage_flag
         Controller::CONFINED_IMAGE_SCRATCH,
         Controller::INITIAL_IMAGE_SCRATCH + CompilerConfinement::VALIDATE_SCRATCH
     );
+}
+
+#[test]
+fn publication_quote_includes_fresh_held_entry_and_original_consuming_custody() {
+    let maximum = 4096;
+    let quote = Attempt::publication_observation_quota(maximum).unwrap();
+    let held = Attempt::runtime_step_quota().unwrap();
+    let inner =
+        crate::native_v3::NativeAttempt::<Helper>::publication_observation_quota(maximum).unwrap();
+    assert_eq!(quote.work(), held.work() + LOCAL_WORK + inner.work());
+    assert_eq!(quote.scratch(), held.scratch() + FRAME + inner.scratch());
+}
+
+#[test]
+fn running_publication_and_exit_quotes_reuse_original_root_custody() {
+    type Issued = crate::native_v3::NativeAttempt<'static, Helper>;
+    let rpc = Attempt::publication_service_quota(4096).unwrap();
+    let inner = Issued::publication_service_quota(4096).unwrap();
+    assert_eq!(rpc.work(), LOCAL_WORK + inner.work());
+    assert_eq!(rpc.scratch(), FRAME + inner.scratch());
+    let exit = Attempt::retired_publication_confirmation_quota().unwrap();
+    let step = Attempt::runtime_step_quota().unwrap();
+    let retired = Issued::retired_publication_quota().unwrap();
+    assert_eq!(exit.work(), step.work() + LOCAL_WORK + retired.work());
+    assert_eq!(exit.scratch(), step.scratch() + FRAME + retired.scratch());
 }

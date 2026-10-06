@@ -50,3 +50,15 @@ name = "fe2o3-compiler-execution-provision"
 path = "src/provision_main.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "fe2o3-compiler-execution-coordinator-v1"
+path = "src/main_v1.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-compiler-execution-provision-v1"
+path = "src/provision_main_v1.rs"
+test = false
+bench = false

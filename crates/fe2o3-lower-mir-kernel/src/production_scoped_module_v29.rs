@@ -18,10 +18,13 @@ struct PendingScopedModuleV29 {
 struct ScopedModuleRootV29 {
     function_ordinal: usize,
     sidecars: InstanceRowsV1<PendingInstanceSidecarsV29>,
+    active_instances: PendingActiveInstanceIndexV1,
     coordinates: OwnedInstanceCoordinatesV1,
+    rvalue_results: Option<OwnedSourceRvaluesV30>,
     slot_relocation: Option<scoped_slot_relocation_v29::RelocationV29>,
     source_slots: OwnedScopedSourceSlotsV29,
     insertions: Vec<LifecycleInsertionV29>,
+    terminal_failures: Option<TerminalFailureRelationV18>,
     declarations: Vec<ScopedDeclarationUseV29>,
     // Cumulative through this root, not an independently summable per-root cost.
     private_payload: PrivateArrayPayloadV1,
@@ -322,8 +325,10 @@ fn scoped_module_name_v29(
     Ok(complete)
 }
 
-fn scoped_module_roots_v29(
-    source: &ExecutionLifecycleSourceV29<'_>,
+fn scoped_module_roots_v29<'source>(
+    source: &ExecutionLifecycleSourceV29<'source>,
+    demands: &source_storage_demands_v29::SourceStorageDemandsV29<'source>,
+    layouts: &mut source_storage_v29::SourceStorageLayoutsV29<'source>,
     limits: ProductionSemanticKirLimitsV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<Vec<OwnedLifecycleInsertedRootV29>, ProductionSemanticKirErrorV1> {
@@ -337,6 +342,8 @@ fn scoped_module_roots_v29(
         let pending = emit_pending_source_root_v29(
             source,
             ordinal,
+            demands,
+            layouts,
             limits,
             &mut closure,
             &mut private_work,
@@ -345,7 +352,9 @@ fn scoped_module_roots_v29(
         )?;
         private_payload = pending.private_payload;
         let mut donor = Some(pending);
-        roots.push(insert_pending_lifecycle_v29(&mut donor, limits, budget)?);
+        roots.push(insert_pending_lifecycle_with_failures_v18(
+            &mut donor, limits, budget,
+        )?);
     }
     Ok(roots)
 }
@@ -428,12 +437,17 @@ fn scoped_module_candidate_v29(
     )?;
     budget.charge_work(argument_product_v1(count, 8)?)?;
     for (ordinal, inserted) in emitted.into_iter().enumerate() {
-        let OwnedLifecycleInsertedRootV29 { root, insertions } = inserted;
+        let OwnedLifecycleInsertedRootV29 {
+            root,
+            insertions,
+            terminal_failures,
+        } = inserted;
         let OwnedPendingScopedRootV29 {
             pending,
             kernel,
             private_payload,
             source_slots,
+            terminal_failures: _,
             requires_context_issue,
             ledger: _,
             retained_emission_storage,
@@ -441,7 +455,9 @@ fn scoped_module_candidate_v29(
         let PendingScopedRootEmissionV29 {
             function,
             sidecars,
+            active_instances,
             coordinates,
+            rvalue_results,
             slot_relocation,
             additional_storage_bytes,
         } = pending;
@@ -480,10 +496,13 @@ fn scoped_module_candidate_v29(
         roots.push(ScopedModuleRootV29 {
             function_ordinal: ordinal,
             sidecars,
+            active_instances,
             coordinates,
+            rvalue_results,
             slot_relocation,
             source_slots,
             insertions,
+            terminal_failures,
             declarations: Vec::new(),
             private_payload,
             requires_context_issue,
@@ -496,7 +515,11 @@ fn scoped_module_candidate_v29(
     // per-instance routes. Every other sidecar and its coordinate system stays intact.
     for root in &mut roots {
         budget.charge_work(argument_sum_v1(&[root.sidecars.rows.len(), 1])?)?;
-        for (instance, sidecar) in root.sidecars.rows.iter_mut().enumerate() {
+        for sidecar in &mut root.sidecars.rows {
+            let instance = sidecar
+                .source_call_instance
+                .ok_or_else(scoped_module_error_v29)?
+                .index();
             for (kind, declarations) in [
                 (
                     ScopedDeclarationKindV29::Diagnostic,
@@ -531,6 +554,34 @@ fn scoped_module_candidate_v29(
         limits.max_functions,
     )?;
     Ok((module, roots))
+}
+
+#[cfg(test)]
+fn with_scoped_source_test_layouts_v29<'source, 'work, R>(
+    source: &ExecutionLifecycleSourceV29<'source>,
+    limits: ProductionSemanticKirLimitsV1,
+    budget: &mut ArgumentBudgetV1<'work>,
+    consume: impl FnOnce(
+        &source_storage_demands_v29::SourceStorageDemandsV29<'source>,
+        &mut source_storage_v29::SourceStorageLayoutsV29<'source>,
+        &mut ArgumentBudgetV1<'work>,
+    ) -> Result<R, ProductionSemanticKirErrorV1>,
+) -> Result<R, ProductionSemanticKirErrorV1> {
+    let floor = budget.storage();
+    with_scoped_source_cleanup_v29(budget, floor, |cleanup, budget| {
+        with_scoped_source_layouts_v29(
+            source,
+            limits,
+            cleanup,
+            budget,
+            consume,
+            |value, layouts, demands, budget| {
+                layouts.release(budget)?;
+                demands.discard(budget)?;
+                Ok(value)
+            },
+        )
+    })
 }
 
 /// Success keeps its complete reservation live, like the pending root owner.

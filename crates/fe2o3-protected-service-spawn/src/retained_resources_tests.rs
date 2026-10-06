@@ -189,6 +189,10 @@ fn dependency_funding_is_exact_and_refusal_never_changes_refcounts() {
     let full = handle.retained_storage();
     let charge = payload.storage() + size_of::<(RetainedDependencyV2<DropWitness>, usize)>();
     let quoted = handle.dependency_quota().unwrap();
+    assert_eq!(
+        quoted,
+        Handle::dependency_quota_for_payload(DropWitness::STORAGE).unwrap()
+    );
     assert_eq!(quoted.work(), Handle::DEPENDENCY_WORK);
     assert_eq!(quoted.scratch(), charge + Handle::DEPENDENCY_SCRATCH);
     assert_eq!(quoted.retained_storage(), charge);
@@ -231,6 +235,33 @@ fn dependency_funding_is_exact_and_refusal_never_changes_refcounts() {
         assert_eq!(Arc::strong_count(&handle.owner), 2);
         assert_eq!(drops.load(Ordering::SeqCst), 0);
     }
+}
+
+#[test]
+fn preconstruction_dependency_quote_preserves_dynamic_layout_and_checked_limits() {
+    type Handle = RetainedResourcesV2<[u8; 32]>;
+    type Trace = crate::native_spawn::RootRetainedRuntimeTraceV1<'static, [u8; 32]>;
+    for payload in [32, 4096, 1 << 20] {
+        let (handle, slot) = Handle::pair([0; 32], payload).unwrap();
+        let quote = Handle::dependency_quota_for_payload(payload).unwrap();
+        assert_eq!(quote, handle.dependency_quota().unwrap());
+        let trace = Trace::dependency_quota_for_payload(payload).unwrap();
+        assert_eq!(trace.work(), quote.work() + crate::native_spawn::ENTRY);
+        assert_eq!(trace.scratch(), quote.scratch());
+        assert_eq!(trace.retained_storage(), quote.retained_storage());
+        assert_eq!(Arc::strong_count(&handle.owner), 2);
+        drop((handle, slot));
+    }
+    assert_eq!(
+        Handle::dependency_quota_for_payload(31),
+        Err(Resource::Accounting)
+    );
+    assert_eq!(
+        Handle::dependency_quota_for_payload(usize::MAX),
+        Err(Resource::Arithmetic)
+    );
+    assert!(Trace::dependency_quota_for_payload(31).is_err());
+    assert!(Trace::dependency_quota_for_payload(usize::MAX).is_err());
 }
 
 #[test]

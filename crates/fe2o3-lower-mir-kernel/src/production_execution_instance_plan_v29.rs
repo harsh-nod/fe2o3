@@ -76,6 +76,7 @@ fn execution_parameter_is_nominal_v29(
 fn check_execution_instance_abi_v29(
     semantic: &AdmittedInertSemanticMirV1,
     function_id: SemanticFunctionIdV1,
+    references: Option<(&SourceReferencePlanV29<'_, '_>, ProductionCallInstanceIdV1)>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<(), ProductionSemanticKirErrorV1> {
     let function = &semantic.functions()[function_id.index() as usize];
@@ -120,6 +121,11 @@ fn check_execution_instance_abi_v29(
             }
         }
         for mapped in arguments.adjusted_arguments() {
+            if let Some((references, instance)) = references
+                && check_source_reference_parameter_v29(references, instance, mapped, budget)?
+            {
+                continue;
+            }
             if execution_reference_parameter_v29(semantic.types(), mapped, budget)? {
                 continue;
             }
@@ -148,14 +154,23 @@ fn check_execution_instance_abi_v29(
                 continue;
             }
             prepay_argument_shape_v1(semantic, mapped.abi().ty(), budget)?;
-            let (_, shape) = helper_parameter_shape_with_policy_v1(
+            let shape_builder = if references.is_some() {
+                source_helper_parameter_shape_with_policy_v18
+            } else {
+                helper_parameter_shape_with_policy_v1
+            };
+            let (_, shape) = shape_builder(
                 semantic.types(),
                 function,
                 function_id,
                 mapped,
                 ParameterLeafPolicyV1::ExecutionAbiWords,
             )?;
-            let physical = execution_cfg_types_v29(semantic.types(), mapped.abi().ty(), budget)?;
+            let physical = if references.is_some() {
+                source_execution_cfg_types_v29(semantic.types(), mapped.abi().ty(), budget)?
+            } else {
+                execution_cfg_types_v29(semantic.types(), mapped.abi().ty(), budget)?
+            };
             let mut ordinary = physical.iter();
             for (path, _, expected) in &shape {
                 if !execution_parameter_is_nominal_v29(
@@ -188,14 +203,44 @@ fn execution_instance_plan_v29(
     placement: SemanticEmissionPlacementV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
+    execution_instance_plan_with_references_v29(
+        instances,
+        instance,
+        kernel_ir_function,
+        placement,
+        None,
+        budget,
+    )
+}
+
+fn execution_instance_plan_with_references_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    instance: ProductionCallInstanceIdV1,
+    kernel_ir_function: FunctionId,
+    placement: SemanticEmissionPlacementV1,
+    references: Option<&SourceReferencePlanV29<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
+    if let Some(references) = references {
+        references.check_owner(instances, budget)?;
+    }
     let floor = budget.storage();
+    if let Some(references) = references {
+        source_reference_owned_prepay_v29::<LoweredFunctionPlanV1>(references, budget)?;
+    }
     let result = build_execution_instance_plan_v29(
         instances,
         instance,
         kernel_ir_function,
         placement,
+        references,
         budget,
-    );
+    )
+    .inspect_err(|error| {
+        if let Some(references) = references {
+            source_reference_record_failure_v29(references, error);
+        }
+    });
     if result.is_err() {
         budget.release_storage(budget.storage() - floor)?;
     }
@@ -207,9 +252,28 @@ fn build_execution_instance_plan_v29(
     instance: ProductionCallInstanceIdV1,
     kernel_ir_function: FunctionId,
     placement: SemanticEmissionPlacementV1,
+    references: Option<&SourceReferencePlanV29<'_, '_>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
-    let layout = execution_function_layout_v29(instances, instance, budget)?;
+    let layout = execution_function_layout_v29(instances, instance, references, budget)?;
+    execution_instance_plan_from_layout_v29(
+        instances,
+        instance,
+        kernel_ir_function,
+        placement,
+        layout,
+        budget,
+    )
+}
+
+fn execution_instance_plan_from_layout_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    instance: ProductionCallInstanceIdV1,
+    kernel_ir_function: FunctionId,
+    placement: SemanticEmissionPlacementV1,
+    layout: ExecutionFunctionLayoutV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
     let row = instances
         .instance(instance)
         .ok_or_else(execution_call_error_v29)?;
@@ -252,10 +316,22 @@ struct ExecutionFunctionLayoutV29 {
 fn execution_function_layout_v29(
     instances: &ExecutionInstancesV29<'_>,
     instance: ProductionCallInstanceIdV1,
+    references: Option<&SourceReferencePlanV29<'_, '_>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<ExecutionFunctionLayoutV29, ProductionSemanticKirErrorV1> {
+    if let Some(references) = references {
+        references.check_owner(instances, budget)?;
+    }
     let floor = budget.storage();
-    let result = build_execution_function_layout_v29(instances, instance, budget);
+    if let Some(references) = references {
+        source_reference_owned_prepay_v29::<ExecutionFunctionLayoutV29>(references, budget)?;
+    }
+    let result = build_execution_function_layout_v29(instances, instance, references, budget)
+        .inspect_err(|error| {
+            if let Some(references) = references {
+                source_reference_record_failure_v29(references, error);
+            }
+        });
     if result.is_err() {
         budget.release_storage(budget.storage() - floor)?;
     }
@@ -267,9 +343,24 @@ fn execution_function_signature_v29(
     instance: ProductionCallInstanceIdV1,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<LoweredFunctionSignatureV1, ProductionSemanticKirErrorV1> {
+    execution_function_signature_with_references_v29(instances, instance, None, budget)
+}
+
+fn execution_function_signature_with_references_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    instance: ProductionCallInstanceIdV1,
+    references: Option<&SourceReferencePlanV29<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<LoweredFunctionSignatureV1, ProductionSemanticKirErrorV1> {
+    if let Some(references) = references {
+        references.check_owner(instances, budget)?;
+    }
     let floor = budget.storage();
+    if let Some(references) = references {
+        source_reference_owned_prepay_v29::<LoweredFunctionSignatureV1>(references, budget)?;
+    }
     let result = (|| {
-        let layout = execution_function_layout_v29(instances, instance, budget)?;
+        let layout = execution_function_layout_v29(instances, instance, references, budget)?;
         let function = instances
             .instance(instance)
             .ok_or_else(execution_call_error_v29)?
@@ -294,7 +385,12 @@ fn execution_function_signature_v29(
             result_types: layout.result_types,
             result_semantic_type: function.abi().source_output_type(),
         })
-    })();
+    })()
+    .inspect_err(|error| {
+        if let Some(references) = references {
+            source_reference_record_failure_v29(references, error);
+        }
+    });
     if result.is_err() {
         budget.release_storage(budget.storage() - floor)?;
     }
@@ -304,8 +400,12 @@ fn execution_function_signature_v29(
 fn build_execution_function_layout_v29(
     instances: &ExecutionInstancesV29<'_>,
     instance: ProductionCallInstanceIdV1,
+    references: Option<&SourceReferencePlanV29<'_, '_>>,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> Result<ExecutionFunctionLayoutV29, ProductionSemanticKirErrorV1> {
+    if let Some(references) = references {
+        references.check_owner(instances, budget)?;
+    }
     budget.charge_work(8)?;
     let row = instances
         .instance(instance)
@@ -318,7 +418,12 @@ fn build_execution_function_layout_v29(
     }
     let semantic = instances.owner().source_semantic();
     let function = row.declaration();
-    check_execution_instance_abi_v29(semantic, row.function(), budget)?;
+    check_execution_instance_abi_v29(
+        semantic,
+        row.function(),
+        references.map(|plan| (plan, instance)),
+        budget,
+    )?;
     let mut parameter_declarations = Vec::new();
     let mut parameter_types = Vec::new();
     let mut call_arguments = Vec::new();
@@ -368,7 +473,24 @@ fn build_execution_function_layout_v29(
             )?;
             continue;
         }
-        let physical = execution_cfg_types_v29(semantic.types(), selector.ty, budget)?;
+        let physical = if let Some(references) = references {
+            let node = source_reference_entry_node_v29(
+                references,
+                instance,
+                SemanticLocalIdV1::from_index(
+                    u32::try_from(local).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+                ),
+                None,
+                budget,
+            )?
+            .ok_or_else(execution_call_error_v29)?;
+            if references.nodes[node].ty != selector.ty {
+                return Err(execution_call_error_v29());
+            }
+            source_reference_node_types_v29(references, node, budget)?
+        } else {
+            execution_cfg_types_v29(semantic.types(), selector.ty, budget)?
+        };
         let backing = argument_product_v1(physical.capacity(), std::mem::size_of::<Type>())?;
         for (component, ty) in physical.into_iter().enumerate() {
             emission_push_v1(&mut parameter_types, ty, budget)?;
@@ -384,12 +506,39 @@ fn build_execution_function_layout_v29(
         }
         budget.release_storage(backing)?;
     }
-    if execution_cfg_nominal_count_v29(
+    let nominal_result = execution_cfg_nominal_count_v29(
         semantic.types(),
         function.abi().source_output_type(),
         budget,
-    )? != 0
+    )? != 0;
+    if references.is_none() && nominal_result {
+        return Err(execution_call_error_v29());
+    }
+    if let Some(references) = references
+        && let Some(result_types) = source_reference_return_types_v29(references, instance, budget)?
     {
+        return Ok(ExecutionFunctionLayoutV29 {
+            parameter_declarations,
+            parameter_types,
+            call_arguments,
+            result_types,
+        });
+    }
+    if nominal_result {
+        if let Some(references) = references
+            && instances.instance_reachable(instance) == Some(true)
+            && instances.instance_may_return(instance) == Some(false)
+        {
+            let result_types = source_reference_no_normal_result_types_v29(
+                instances, references, instance, budget,
+            )?;
+            return Ok(ExecutionFunctionLayoutV29 {
+                parameter_declarations,
+                parameter_types,
+                call_arguments,
+                result_types,
+            });
+        }
         return Err(execution_call_error_v29());
     }
     budget.charge_work(function.locals().len())?;

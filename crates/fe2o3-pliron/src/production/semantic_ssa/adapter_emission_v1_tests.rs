@@ -22,6 +22,10 @@ mod projected_call_destination_v1_tests {
     include!("projected_call_destination_v1_tests.rs");
 }
 
+mod assert_failure_v1_tests {
+    include!("assert_failure_v1_tests.rs");
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct Event {
     site: Site,
@@ -61,6 +65,7 @@ struct Trace {
     entry_passes: Vec<(usize, usize)>,
     reject_event: Option<usize>,
     reject_hook: Option<RejectedHook>,
+    failure_boundaries: Vec<(Site, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -89,6 +94,11 @@ impl Trace {
 
 impl SemanticSsaEmissionObserverV1 for Trace {
     type Error = usize;
+
+    fn terminal_failure_begin(&mut self, site: Site, ordinal: usize) -> Result<(), usize> {
+        self.failure_boundaries.push((site, ordinal));
+        Ok(())
+    }
 
     fn block_pass_begin(&mut self, elisions: usize) -> Result<(), usize> {
         self.block_passes.push(elisions);

@@ -310,7 +310,7 @@ impl ConditionalDispatchPremisesV1 {
     }
 }
 
-fn bounded_copy<T: Copy>(values: &[T]) -> Result<Vec<T>> {
+pub(super) fn bounded_copy<T: Copy>(values: &[T]) -> Result<Vec<T>> {
     let mut out = Vec::new();
     out.try_reserve_exact(values.len())
         .map_err(|_| ConditionalDispatchErrorV1::Allocation)?;
@@ -338,10 +338,10 @@ fn domain_count(d: ConditionalDispatchDomainV1, n: u64, g: u64) -> u64 {
         ConditionalDispatchDomainV1::GlobalLaunch => g,
     }
 }
-fn put_usize(hash: &mut Sha256, n: usize) {
+pub(super) fn put_usize(hash: &mut Sha256, n: usize) {
     hash.update((n as u64).to_le_bytes());
 }
-fn read_word(bytes: &[u8], offset: usize) -> Result<u64> {
+pub(super) fn read_word(bytes: &[u8], offset: usize) -> Result<u64> {
     let end = offset
         .checked_add(8)
         .ok_or(ConditionalDispatchErrorV1::Arithmetic)?;
@@ -353,7 +353,10 @@ fn read_word(bytes: &[u8], offset: usize) -> Result<u64> {
             .map_err(|_| ConditionalDispatchErrorV1::Binding)?,
     ))
 }
-fn check_logical_extent(s: &ConditionalDispatchSliceV1, available: usize) -> Result<u64> {
+pub(super) fn check_logical_extent(
+    s: &ConditionalDispatchSliceV1,
+    available: usize,
+) -> Result<u64> {
     let bytes = s
         .length
         .checked_mul(s.element_bytes)
@@ -366,7 +369,7 @@ fn check_logical_extent(s: &ConditionalDispatchSliceV1, available: usize) -> Res
     }
     Ok(bytes)
 }
-fn template_pointer(s: &ConditionalDispatchSliceV1) -> u64 {
+pub(super) fn template_pointer(s: &ConditionalDispatchSliceV1) -> u64 {
     if s.buffer_index.is_some() {
         0
     } else {
@@ -374,7 +377,7 @@ fn template_pointer(s: &ConditionalDispatchSliceV1) -> u64 {
     }
 }
 
-fn live_span(
+pub(super) fn live_span(
     s: &ConditionalDispatchSliceV1,
     facts: &[SharedGttMappedResourceFactsV1],
 ) -> Result<(u64, u64)> {
@@ -396,7 +399,7 @@ fn live_span(
     base.checked_add(bytes).ok_or(E::Arithmetic)?;
     Ok((base, bytes))
 }
-fn overlaps((a, an): (u64, u64), (b, bn): (u64, u64)) -> bool {
+pub(super) fn overlaps((a, an): (u64, u64), (b, bn): (u64, u64)) -> bool {
     // live_span checked the ends, including full logical inputs, not read prefixes.
     an != 0 && bn != 0 && a < b + bn && b < a + an
 }

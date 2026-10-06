@@ -49,7 +49,7 @@ fn check_array_rows(row: &PendingInstanceSidecarsV29, function: SemanticFunction
 fn placed_array_recorder(
     first_block: u32,
     limit: usize,
-) -> PrivateArrayFunctionRecorderV1<'static> {
+) -> PrivateArrayFunctionRecorderV1<'static, 'static> {
     let mut work = PrivateArrayLazyBudgetV1::new(1, limit);
     work.activate().unwrap();
     PrivateArrayFunctionRecorderV1::new(

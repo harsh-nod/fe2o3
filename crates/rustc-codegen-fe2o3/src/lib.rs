@@ -100,6 +100,7 @@ pub use source_local_order_recipe_api_v1::{
     SourceLocalOrderRecipeRetainedStorageV1, SourceLocalOrderRelationV1,
     SourceLocalOrderSourceBindingModeV1, SourceLocalOrderStrengthV1,
 };
+mod production_core_panic_v50;
 mod production_rustc_drop_v1;
 mod production_rustc_intrinsic_v1;
 mod production_rustc_slice_metadata_v1;
@@ -251,9 +252,9 @@ impl BuildAttemptSelection {
         }
     }
 }
-struct RetainedProductionDeviceAdmission {
+struct RetainedProductionDeviceAdmission<'b, 'w> {
     target: production_target_v1::RetainedProductionTargetV1,
-    compiler_execution: protected_compiler_execution::AdmittedProtectedCompilerExecutionV1,
+    compiler_execution: protected_compiler_execution::dispatch::Admitted<'b, 'w>,
     build_attempt: artifact_transaction::BuildAttempt,
 }
 
@@ -355,7 +356,9 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 "[rustc-codegen-fe2o3] production target authentication failed before monomorphization without fallback: {error}"
                                 ))
                             }),
-                        compiler_execution: self.compiler_execution_input.admit()
+                        compiler_execution: self.compiler_execution_input.admit_selected(
+                            target_budget.expect("device roots retain their original target account"),
+                        )
                             .unwrap_or_else(|error| {
                                 tcx.dcx().fatal(format!(
                                     "[rustc-codegen-fe2o3] protected compiler-execution admission failed without fallback: {error}"
@@ -411,8 +414,6 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                         } = production_device_admission.take().expect(
                             "device admission presence was validated after monomorphization",
                         );
-                        let target_budget = target_budget
-                            .expect("device roots retain their original target account");
                         let has_custom_llvm_configuration = has_custom_llvm_configuration(tcx.sess);
                         if let Err(error) = production_pipeline::reject_custom_llvm_configuration(
                             has_custom_llvm_configuration,
@@ -456,10 +457,7 @@ impl CodegenBackend for Fe2o3CodegenBackend {
                                 build_attempt,
                                 invocation,
                             )
-                            .and_then(|transaction| {
-                                transaction.publish_worker_handoff(target_budget, compiler_execution)
-                            })
-                            .map(|subject| subject.outer_handoff().byte_len());
+                            .and_then(|transaction| compiler_execution.publish(transaction));
                         match publication {
                             Ok(publication_length) => {
                                 production_device_transaction_complete = true;
@@ -601,7 +599,7 @@ mod tests {
             .next()
             .expect("bounded production transaction");
         assert!(production.contains("protected_rustc_invocation.take()"));
-        assert!(backend.contains("self.compiler_execution_input.admit()"));
+        assert!(backend.contains("self.compiler_execution_input.admit_selected("));
         assert!(production.contains("from_rustc_invocation_descriptor_v3"));
         assert!(production.contains("invocation.descriptor()"));
         assert!(!production.contains("local_crate_source_file"));
@@ -610,7 +608,7 @@ mod tests {
         assert!(production.contains(".take()"));
         assert!(!production.contains("build_attempt.unwrap_or_else"));
         assert!(production.contains("from_collected_device_closure("));
-        assert!(production.contains("publish_worker_handoff(target_budget, compiler_execution)"));
+        assert!(production.contains("compiler_execution.publish(transaction)"));
         assert!(!device_phase.contains(".with_budget("));
         assert!(!production.contains("from_collected_device_closure_with_protected_invocation_v3"));
         assert!(!production.contains("publish_worker_handoff_v3"));
@@ -631,7 +629,7 @@ mod tests {
             .find("production_target_account::with_device_phase(")
             .unwrap();
         let execution = backend
-            .find("compiler_execution: self.compiler_execution_input.admit()")
+            .find("compiler_execution: self.compiler_execution_input.admit_selected(")
             .unwrap();
         assert!(account < admission && admission < execution && execution < monomorphization);
         let host_codegen = backend

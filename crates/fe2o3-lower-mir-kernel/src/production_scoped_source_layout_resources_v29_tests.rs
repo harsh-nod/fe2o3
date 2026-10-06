@@ -70,13 +70,15 @@ fn scoped_layout_cleanup_callback_and_attempt_frames_are_independent() {
     type E = ScopedModuleErrorV29;
     type F = [u8; 19];
     type RootCapture<'a, 'w> = (
-        F,
-        &'a ScopedSourceCleanupBoundaryV29,
+        &'a mut Option<F>,
+        &'a ScopedSourceCleanupV29,
         &'a mut ArgumentBudgetV1<'w>,
-        Result<(), ArgumentResourceV1>,
+        &'a Result<(), ArgumentResourceV1>,
     );
     let callback = size_of::<F>()
         + std::mem::align_of::<F>()
+        + size_of::<Option<F>>()
+        + std::mem::align_of::<Option<F>>()
         + size_of::<RootCapture<'_, '_>>()
         + size_of::<std::panic::AssertUnwindSafe<RootCapture<'_, '_>>>()
         + size_of::<(F, &ScopedSourceCleanupV29, &mut ArgumentBudgetV1<'_>)>()
@@ -98,13 +100,16 @@ fn scoped_layout_cleanup_callback_and_attempt_frames_are_independent() {
         F,
     );
     type Capture<'a, 'w> = (
-        F,
+        &'a mut Option<F>,
         &'a mut ArgumentBudgetV1<'w>,
-        &'a mut usize,
-        &'a mut usize,
+        &'a Result<(), ArgumentResourceV1>,
+        &'a mut Option<usize>,
+        &'a usize,
     );
     let attempt = size_of::<F>()
         + std::mem::align_of::<F>()
+        + size_of::<Option<F>>()
+        + std::mem::align_of::<Option<F>>()
         + size_of::<Args<'_, '_>>()
         + size_of::<Capture<'_, '_>>()
         + size_of::<std::panic::AssertUnwindSafe<Capture<'_, '_>>>()
@@ -114,10 +119,12 @@ fn scoped_layout_cleanup_callback_and_attempt_frames_are_independent() {
         + size_of::<E>()
         + size_of::<Box<dyn std::any::Any + Send>>()
         + size_of::<fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1>()
-        + 7 * size_of::<usize>()
+        + 8 * size_of::<usize>()
+        + size_of::<Option<usize>>()
         + size_of::<bool>()
         + size_of::<Result<usize, ArgumentResourceV1>>()
-        + size_of::<Result<(), ArgumentResourceV1>>();
+        + size_of::<Result<(), ArgumentResourceV1>>()
+        + source_owned_finish_header_oracle_v26::<T, E>();
     assert_eq!(
         scoped_source_attempt_headers_v29::<T, E, F>().unwrap(),
         attempt
@@ -128,6 +135,7 @@ fn scoped_layout_cleanup_callback_and_attempt_frames_are_independent() {
 fn scoped_layout_callback_first_header_denial_never_enters_consumer() {
     fn size<F>(_: &F) -> usize {
         scoped_source_callback_headers_v29::<(), ScopedModuleErrorV29, F>().unwrap()
+            + source_owned_finish_header_oracle_v26::<(), ScopedModuleErrorV29>()
     }
     for short in [false, true] {
         let entered = std::cell::Cell::new(false);
@@ -139,7 +147,7 @@ fn scoped_layout_callback_first_header_denial_never_enters_consumer() {
         let boundary = size_of::<ScopedSourceCleanupBoundaryV29>()
             + size_of::<std::thread::Result<Result<(), ScopedModuleErrorV29>>>();
         let limit = MODULE_FLOOR + boundary + callback - usize::from(short);
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(0);
+        let mut work = CanonicalKernelIrWorkBudgetV1::new(32 + 2 + 1 + 4);
         let mut budget = ArgumentBudgetV1::new(&mut work, limit);
         budget.reserve_storage(MODULE_FLOOR).unwrap();
         let result = with_scoped_source_cleanup_v29(&mut budget, MODULE_FLOOR, run);
@@ -152,7 +160,10 @@ fn scoped_layout_callback_first_header_denial_never_enters_consumer() {
             result.unwrap();
         }
         assert_eq!(entered.get(), !short);
-        assert_eq!((budget.work(), budget.storage()), (0, MODULE_FLOOR));
+        assert_eq!(
+            (budget.work(), budget.storage()),
+            (32 + 2 + 1 + 4, MODULE_FLOOR)
+        );
     }
 }
 
@@ -192,7 +203,11 @@ fn scoped_layout_adopted_input_first_attempt_header_denial_refunds_only_owned_cr
                 panic!("first adopted-input attempt header did not refuse storage");
             };
             assert!(donor.is_none(), "the genuine input was not adopted");
-            assert_eq!(budget.work(), before.0, "constructor body was entered");
+            assert_eq!(
+                budget.work(),
+                before.0 + 32 + 2 + 1 + 4,
+                "only bounded disposal prepayment precedes the refused constructor header"
+            );
             assert_eq!(error.limit(), MODULE_LIMIT);
             assert_eq!(budget.failed_storage(), Some(error.actual()));
             let header = error.actual() - before.1;
@@ -243,7 +258,7 @@ fn scoped_layout_owned_entry_callback_header_denial_drops_the_original_donor() {
         panic!("owned-entry callback header did not refuse storage");
     };
     assert!(donor.is_none());
-    assert_eq!(budget.work(), before.0);
+    assert_eq!(budget.work(), before.0 + 32 + 7);
     assert_eq!(error.limit(), MODULE_LIMIT);
     assert!(error.actual() > MODULE_LIMIT);
     assert_eq!(budget.failed_storage(), Some(error.actual()));

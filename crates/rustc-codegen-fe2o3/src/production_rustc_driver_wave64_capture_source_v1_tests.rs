@@ -39,13 +39,30 @@ impl Scalar {
 enum Expectation {
     InertCapture,
     UserUnsafe,
-    UnmarkedUnsafeScan,
+    UserUnsafeScan,
     WrongTarget,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+enum Operation {
+    Reduce,
+    Inclusive,
+    Exclusive,
+}
+impl Operation {
+    fn wrapper(self) -> TrustedDeviceItem {
+        match self {
+            Self::Reduce => TrustedDeviceItem::Gfx942Wave64ReduceSum,
+            Self::Inclusive => TrustedDeviceItem::Gfx942Wave64InclusiveScanSum,
+            Self::Exclusive => TrustedDeviceItem::Gfx942Wave64ExclusiveScanSum,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct Case {
     scalar: Scalar,
+    operation: Operation,
     retained: bool,
     expectation: Expectation,
 }
@@ -60,9 +77,20 @@ impl Case {
     fn feature(self) -> &'static str {
         match self.expectation {
             Expectation::UserUnsafe => "wave64-capture-direct-unsafe",
-            Expectation::UnmarkedUnsafeScan => "wave64-capture-inclusive",
-            _ => self.scalar.feature(),
+            Expectation::UserUnsafeScan => "wave64-capture-forged-scan",
+            _ => match self.operation {
+                Operation::Reduce => self.scalar.feature(),
+                Operation::Inclusive => "wave64-capture-inclusive",
+                Operation::Exclusive => "wave64-capture-exclusive",
+            },
         }
+    }
+    fn features(self) -> Vec<String> {
+        let mut features = vec![self.scalar.feature().into()];
+        if self.feature() != self.scalar.feature() {
+            features.push(self.feature().into());
+        }
+        features
     }
 }
 
@@ -71,6 +99,7 @@ struct Report {
     case: Case,
     primitive_calls: usize,
     retained_wrapper_functions: usize,
+    retained_scan_helpers: usize,
     actual_can_unwind: Option<bool>,
     semantic_bytes: usize,
     refusal: String,
@@ -85,11 +114,16 @@ impl Report {
                 || self.actual_can_unwind.is_none()
                 || self.semantic_bytes == 0
                 || (case.retained && self.retained_wrapper_functions != 1)
+                || (case.retained
+                    && case.operation != Operation::Reduce
+                    && self.retained_scan_helpers != 1)
+                || (case.operation == Operation::Reduce && self.retained_scan_helpers != 0)
             {
                 return Err("source report lacks actual inert primitive/body/ABI evidence".into());
             }
         } else if self.primitive_calls != 0
             || self.retained_wrapper_functions != 0
+            || self.retained_scan_helpers != 0
             || self.actual_can_unwind.is_some()
             || self.semantic_bytes != 0
         {
@@ -112,6 +146,7 @@ fn observe_imported(
         trusted_device_items::definition(tcx, TrustedDeviceItem::Gfx942Wave64Shuffle(scalar))
             .ok_or("exact primitive DefId is unavailable")?;
     trusted_device_items::check_actual_sealed_trait_chain_paths_v1(tcx, primitive, scalar);
+    trusted_device_items::check_actual_scan_instances_v1(tcx);
     let instance = Instance::mono(tcx, primitive);
     let identity = canonical_function_identities_v1(tcx, instance).function();
     let actual_fn_abi = tcx
@@ -154,8 +189,8 @@ fn observe_imported(
         .filter(|block| matches!(block.terminator().kind(), SemanticTerminatorKindV1::Call(call)
             if primitive_ids.contains(&(call.callee().index() as usize)) && call.arguments().len() == 3))
         .count();
-    let wrapper = trusted_device_items::definition(tcx, TrustedDeviceItem::Gfx942Wave64ReduceSum)
-        .ok_or("reviewed safe reduce_sum wrapper unavailable")?;
+    let wrapper = trusted_device_items::definition(tcx, case.operation.wrapper())
+        .ok_or("reviewed safe collective wrapper unavailable")?;
     let wrapper_identity = canonical_function_identities_v1(
         tcx,
         Instance::new_raw(wrapper, ty::GenericArgs::identity_for_item(tcx, wrapper)),
@@ -165,6 +200,19 @@ fn observe_imported(
         .functions()
         .iter()
         .filter(|function| function.item_definition_identity() == wrapper_identity)
+        .count();
+    let helper =
+        trusted_device_items::definition(tcx, TrustedDeviceItem::Gfx942Wave64InclusiveScanHelper)
+            .ok_or("reviewed scan helper unavailable")?;
+    let helper_identity = canonical_function_identities_v1(
+        tcx,
+        Instance::new_raw(helper, ty::GenericArgs::identity_for_item(tcx, helper)),
+    )
+    .item_definition();
+    let retained_scan_helpers = semantic
+        .functions()
+        .iter()
+        .filter(|function| function.item_definition_identity() == helper_identity)
         .count();
     let decoded = AdmittedInertSemanticMirV1::decode_exact_v33_canonical(
         semantic.canonical_encoding(),
@@ -181,6 +229,7 @@ fn observe_imported(
         case,
         primitive_calls,
         retained_wrapper_functions,
+        retained_scan_helpers,
         actual_can_unwind: Some(actual_fn_abi.can_unwind),
         semantic_bytes: semantic.canonical_encoding().len(),
         refusal: String::new(),
@@ -241,13 +290,14 @@ fn observe_refusal(tcx: TyCtxt<'_>, case: Case) -> Result<Report, String> {
     };
     let expected = match case.expectation {
         Expectation::UserUnsafe => refusal.contains("user-provided unsafe block"),
-        Expectation::UnmarkedUnsafeScan => {
-            refusal.contains("reaches unsafe function instance")
-                && refusal.contains("wave64_inclusive_scan")
+        Expectation::UserUnsafeScan => {
+            refusal.contains("reaches unsafe function instance") && refusal.contains("forged_scan")
         }
         Expectation::WrongTarget => {
             refusal.contains("reaches unsafe function instance")
-                && refusal.contains("__fe2o3_wave64_shuffle_index")
+                && (refusal.contains("__fe2o3_wave64_shuffle_index")
+                    || (case.operation != Operation::Reduce
+                        && refusal.contains("wave64_inclusive_scan")))
         }
         Expectation::InertCapture => false,
     };
@@ -261,6 +311,7 @@ fn observe_refusal(tcx: TyCtxt<'_>, case: Case) -> Result<Report, String> {
         case,
         primitive_calls: 0,
         retained_wrapper_functions: 0,
+        retained_scan_helpers: 0,
         actual_can_unwind: None,
         semantic_bytes: 0,
         refusal,
@@ -322,9 +373,10 @@ fn fixture(workspace: &Path, case: Case) -> corpus::Fixture {
     };
     corpus::Fixture {
         fixture_id: format!(
-            "{}-{}-retained-{}",
+            "{}-{}-{}-retained-{}",
             case.target(),
             case.feature(),
+            case.scalar.feature(),
             case.retained
         ),
         target: case.target().into(),
@@ -344,9 +396,71 @@ fn fixture(workspace: &Path, case: Case) -> corpus::Fixture {
                 source_path: "src/lib.rs".into(),
             },
             default_features: false,
-            features: vec![case.feature().into()],
+            features: case.features(),
             kernel_symbols: vec!["wave64_capture".into()],
         },
+    }
+}
+
+fn capture_cases() -> Vec<Case> {
+    let mut cases = Vec::new();
+    for operation in [
+        Operation::Reduce,
+        Operation::Inclusive,
+        Operation::Exclusive,
+    ] {
+        for scalar in [Scalar::U32, Scalar::I32, Scalar::F32] {
+            for retained in [false, true] {
+                cases.push(Case {
+                    scalar,
+                    operation,
+                    retained,
+                    expectation: Expectation::InertCapture,
+                });
+            }
+        }
+    }
+    for expectation in [
+        Expectation::UserUnsafe,
+        Expectation::UserUnsafeScan,
+        Expectation::WrongTarget,
+    ] {
+        for retained in [false, true] {
+            cases.push(Case {
+                scalar: Scalar::U32,
+                operation: Operation::Reduce,
+                retained,
+                expectation,
+            });
+        }
+    }
+    for operation in [Operation::Inclusive, Operation::Exclusive] {
+        for retained in [false, true] {
+            cases.push(Case {
+                scalar: Scalar::U32,
+                operation,
+                retained,
+                expectation: Expectation::WrongTarget,
+            });
+        }
+    }
+    cases
+}
+
+#[test]
+fn wave64_capture_cases_keep_scalar_scan_and_hostile_boundaries_distinct() {
+    let cases = capture_cases();
+    assert_eq!(cases.len(), 28);
+    let mut identities = std::collections::BTreeSet::new();
+    for case in cases {
+        assert!(identities.insert(serde_json::to_string(&case).unwrap()));
+        assert!(case.features().contains(&case.scalar.feature().to_owned()));
+        if case.expectation == Expectation::InertCapture {
+            assert_eq!(case.target(), "gfx942");
+        }
+        if case.expectation == Expectation::WrongTarget {
+            assert_eq!(case.target(), "gfx950");
+        }
     }
 }
 
@@ -358,31 +472,7 @@ fn safe_wave64_wrappers_capture_exact_primitives_without_execution_authority() {
         .canonicalize()
         .unwrap();
     let scratch = crate::test_temp_dir::TestTempDir::create("fe2o3-wave64-capture");
-    let mut cases = Vec::new();
-    for scalar in [Scalar::U32, Scalar::I32, Scalar::F32] {
-        for retained in [false, true] {
-            cases.push(Case {
-                scalar,
-                retained,
-                expectation: Expectation::InertCapture,
-            });
-        }
-    }
-    for expectation in [Expectation::UserUnsafe, Expectation::WrongTarget] {
-        for retained in [false, true] {
-            cases.push(Case {
-                scalar: Scalar::U32,
-                retained,
-                expectation,
-            });
-        }
-    }
-    cases.push(Case {
-        scalar: Scalar::U32,
-        retained: true,
-        expectation: Expectation::UnmarkedUnsafeScan,
-    });
-    for case in cases {
+    for case in capture_cases() {
         let fixture = fixture(&workspace, case);
         let directory = scratch.path().join(&fixture.fixture_id);
         std::fs::create_dir(&directory).unwrap();
@@ -421,10 +511,11 @@ fn safe_wave64_wrappers_capture_exact_primitives_without_execution_authority() {
         let report = report.unwrap();
         report.validate(case).unwrap();
         eprintln!(
-            "WAVE64 SOURCE {}: {} primitive calls, {} retained wrappers; {}",
+            "WAVE64 SOURCE {}: {} primitive calls, {} retained wrappers, {} scan helpers; {}",
             fixture.fixture_id,
             report.primitive_calls,
             report.retained_wrapper_functions,
+            report.retained_scan_helpers,
             report.refusal
         );
     }

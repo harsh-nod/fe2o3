@@ -1,0 +1,17 @@
+spec fn invocation_source_entry_select_v167(
+    source: InvocationSourceByteStateV36, refused: bool, body: InvocationSourceByteStateV36,
+) -> InvocationSourceByteStateV36 {
+    if !source.machine.valid || refused {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        body
+    }
+}
+
+proof fn invocation_source_entry_select_success_v167(
+    source: InvocationSourceByteStateV36, refused: bool, body: InvocationSourceByteStateV36,
+)
+    ensures invocation_source_entry_select_v167(source, refused, body).machine.valid ==>
+        source.machine.valid && !refused && invocation_source_entry_select_v167(source, refused, body) == body,
+{
+}

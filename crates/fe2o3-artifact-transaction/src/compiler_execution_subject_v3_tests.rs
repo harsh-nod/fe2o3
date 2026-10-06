@@ -66,6 +66,64 @@ fn inert(subject: &Subject) {
 }
 
 #[test]
+fn original_account_decode_keeps_outside_owners_and_strict_legacy_cap() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    let bytes = wire();
+    const OUTSIDE: usize = LIMIT + 97;
+    let total = OUTSIDE + bytes.len() + Subject::COMPOSED_DECODE_SCRATCH;
+    let mut account = Owned::new(Work::new(Subject::COMPOSED_DECODE_WORK + 8), total);
+    account.with_budget(|budget| {
+        budget.reserve_storage(OUTSIDE + bytes.len()).unwrap();
+        let floor = budget.storage();
+        let ledger = budget.work_ledger_identity_v1();
+        let storage_account = budget.storage_account_identity_v1();
+        assert!(Subject::decode(&bytes, budget).is_err());
+        let (subject, charge) = Subject::decode_in_original_account_v3(&bytes, budget).unwrap();
+        assert_eq!(subject.canonical_bytes(), &bytes);
+        inert(&subject);
+        assert_eq!(charge.retained_storage(), RETAINED);
+        assert_eq!(budget.storage(), floor);
+        assert_eq!(budget.storage_limit(), total);
+        assert_eq!(budget.peak_storage(), total);
+        assert_eq!(budget.work(), Subject::COMPOSED_DECODE_WORK + 8);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.storage_account_identity_v1(), storage_account);
+    });
+}
+
+#[test]
+fn original_account_decode_exact_one_short_and_bad_input_preserve_account() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    let bytes = wire();
+    for case in 0..5 {
+        let quota = Subject::COMPOSED_DECODE_WORK - usize::from(case == 1);
+        let floor = bytes.len() - usize::from(case == 3);
+        let limit = floor + Subject::COMPOSED_DECODE_SCRATCH - usize::from(case == 2);
+        let mut account = Owned::new(Work::new(quota), limit);
+        account.with_budget(|budget| {
+            budget.reserve_storage(floor).unwrap();
+            let input = if case == 4 { &bytes[..689] } else { &bytes[..] };
+            let result = Subject::decode_in_original_account_v3(input, budget);
+            assert_eq!(result.is_ok(), case == 0);
+            assert_eq!(budget.storage(), floor);
+            assert_eq!(budget.storage_limit(), limit);
+            if case == 1 {
+                assert!(budget.failed_work().is_some());
+            }
+            if case == 2 {
+                assert!(budget.failed_storage().is_some());
+            }
+        });
+    }
+    let mut work = Work::new(Subject::COMPOSED_DECODE_WORK);
+    let mut inline = Budget::new(&mut work, LIMIT);
+    inline.reserve_storage(bytes.len()).unwrap();
+    assert!(Subject::decode_in_original_account_v3(&bytes, &mut inline).is_err());
+    assert_eq!(inline.storage(), bytes.len());
+    assert_eq!(inline.work(), Budget::STORAGE_WINDOW_WORK_V1);
+}
+
+#[test]
 fn conditional_subject_v3_same_690_byte_fields_and_old_golden_bytes() {
     let f = fields();
     let subject = Subject::from_fields(fields()).unwrap();
@@ -383,6 +441,42 @@ fn conditional_subject_v3_real_publication_consumption_and_donor_refusal() {
         consumed.receipt().transaction_identity()
     );
     inert(&actual);
+}
+
+#[test]
+fn original_publication_quote_covers_exact_and_one_short_resources() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    let fixture = Fixture::new();
+    let mut setup_work = Work::new(usize::MAX);
+    let mut setup = Budget::new(&mut setup_work, LIMIT);
+    fixture.reserve(&mut setup);
+    let receipt = fixture.publish(&mut setup).unwrap();
+    let inputs =
+        handoff_floor(&fixture.handoff).unwrap() + size_of::<CompilerModuleHandoffReceiptV5>();
+    let scratch = Subject::composed_publication_storage_v3(&fixture.handoff).unwrap();
+    let outside = LIMIT + 17;
+    for (work_short, storage_short) in [(false, false), (true, false), (false, true)] {
+        let total = outside + inputs + scratch;
+        let mut owned = Owned::new(
+            Work::new(Subject::COMPOSED_PUBLICATION_WORK_V3 - usize::from(work_short)),
+            total - usize::from(storage_short),
+        );
+        owned.with_budget(|budget| {
+            budget.reserve_storage(outside + inputs).unwrap();
+            let identity = budget.storage_account_identity_v1();
+            let ledger = budget.work_ledger_identity_v1();
+            let result =
+                Subject::from_publication_in_original_account_v3(receipt, &fixture.handoff, budget);
+            assert_eq!(result.is_ok(), !work_short && !storage_short);
+            if let Ok((subject, _)) = result {
+                assert_eq!(subject.attempt(), receipt.attempt());
+                assert_eq!(budget.peak_storage(), total);
+            }
+            assert_eq!(budget.storage(), outside + inputs);
+            assert_eq!(budget.storage_account_identity_v1(), identity);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+        });
+    }
 }
 
 #[test]

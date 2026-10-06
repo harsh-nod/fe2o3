@@ -57,6 +57,10 @@ use pliron::{
 
 use crate::{HARD_MAX_OPERATION_TREE_ITEMS, OperationHandle, OperationHandleError, PlironSession};
 
+#[path = "kir_bridge_native_switch_v1.rs"]
+mod native_switch_v1;
+pub(crate) use native_switch_v1::source_legacy_representable;
+
 // `ModuleOp::new` creates one operation containing one region and one block.
 const BUILTIN_MODULE_ROOT_TREE_WORK_V1: usize = 3;
 
@@ -1374,6 +1378,12 @@ fn build_terminator(
     values: &BTreeMap<ValueId, Value>,
     blocks: &BTreeMap<BlockId, Ptr<BasicBlock>>,
 ) -> Result<Ptr<Operation>, KirBridgeErrorV1> {
+    if let Some(terminator) = terminator
+        && let Some(native) =
+            native_switch_v1::build(context, function, terminator, values, blocks)?
+    {
+        return Ok(native);
+    }
     match terminator {
         Some(Terminator::Branch { target, arguments }) => Ok(BranchOp::new(
             context,
@@ -2891,6 +2901,9 @@ fn extract_terminator(
     reverse_blocks: &HashMap<Ptr<BasicBlock>, BlockId>,
     origins: &KirBridgeOriginsV1,
 ) -> Result<Terminator, KirBridgeErrorV1> {
+    if let Some(switch) = Operation::get_op::<dialect_gpu::switch_v3::SwitchOpV3>(live, context) {
+        return native_switch_v1::extract(context, switch, reverse_values, reverse_blocks);
+    }
     let raw = live.deref(context);
     if let Some(operation) = Operation::get_op::<BranchOp>(live, context) {
         return Ok(Terminator::Branch {

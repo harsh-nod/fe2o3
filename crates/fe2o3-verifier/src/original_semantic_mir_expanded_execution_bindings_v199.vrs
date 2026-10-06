@@ -1,0 +1,70 @@
+// Static fields are emitted from retained original endpoints and actual target
+// definition spans. The predicate is a necessary conjunct, not an induction
+// hypothesis granted by a census. Coupled steps must separately preserve all
+// source loan histories, target epochs, values, effects and cut progress.
+struct InvocationExecutionBindingV199 {
+    local: int,
+    source_type: int,
+    context_type: int,
+    role: int,
+    source_frame: int,
+    source_owner: int,
+    definition: int,
+    context_definition: int,
+    site: MemorySourceOperationV30,
+    context_site: MemorySourceOperationV30,
+    recipe: Option<InvocationSourceExecutionRecipeV168>,
+    lease_recipe: Option<InvocationSourceExecutionRecipeV168>,
+}
+
+spec fn invocation_execution_origin_v199(
+    source: InvocationSourceByteStateV36, binding: InvocationExecutionBindingV199,
+) -> Option<int> {
+    match binding.recipe {
+        None => Some(binding.local),
+        Some(recipe) => if source.logical.execution_references.contains_key(binding.local) {
+            let reference = source.logical.execution_references[binding.local];
+            if reference.recipe == recipe
+                && invocation_source_execution_record_current_v168(source, reference) {
+                Some(reference.origin)
+            } else { None }
+        } else { None },
+    }
+}
+
+spec fn invocation_execution_related_v199(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    binding: InvocationExecutionBindingV199,
+) -> bool {
+    source.machine.valid && target.valid
+        && invocation_source_byte_state_well_formed_v36(source)
+        && byte_state_memory_well_formed_v30(target)
+        && source.machine.frames.execution == target.frames.execution
+        && 0 <= binding.source_frame < source.machine.frames.active.len()
+        && source.machine.frames.active[binding.source_frame].owner == binding.source_owner
+        && match (invocation_execution_origin_v199(source, binding),
+            byte_execution_capability_v178(target, binding.definition, binding.role),
+            byte_execution_capability_v178(target, binding.context_definition, 0)) {
+            (Some(origin), Some(scope), Some(context)) =>
+                scope.site == binding.site && context.site == binding.context_site
+                    && if binding.role == 0 {
+                        binding.definition == binding.context_definition
+                            && binding.source_type == binding.context_type
+                            && binding.lease_recipe.is_none()
+                            && invocation_source_execution_value_v168(source, origin,
+                                binding.source_type, InvocationSourceExecutionRoleV168::Context)
+                    } else if binding.role == 1 {
+                        invocation_source_execution_value_v168(source, origin,
+                            binding.source_type, InvocationSourceExecutionRoleV168::Workgroup)
+                            && scope.parent == Some(context.identity)
+                            && context.child == Some(scope.identity)
+                            && match source.logical.aggregates[origin].execution_lease {
+                                Some(lease) => lease.recipe.source_type == binding.context_type
+                                    && binding.lease_recipe == Some(lease.recipe)
+                                    && invocation_source_execution_lease_current_v170(source, lease),
+                                None => false,
+                            }
+                    } else { false },
+            _ => false,
+        }
+}

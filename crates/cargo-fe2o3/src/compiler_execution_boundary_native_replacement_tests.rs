@@ -1,6 +1,7 @@
 //! Accounting components only; these do not fabricate compiler/readiness/proof owners.
 use super::super::{
-    ContinuationError, Failure, ParentDurableConditionalArtifact, ParentPreparedConditionalArtifact,
+    ContinuationError, Failure, ParentDurableConditionalArtifact,
+    ParentPreparedConditionalArtifact, ParentPublishedConditionalArtifact,
 };
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
@@ -26,6 +27,38 @@ fn replacement_retires_only_consumed_storage_after_exact_success() {
     assert_eq!(b.peak_storage(), PEAK);
     assert_eq!(b.work(), 16);
     assert!(b.work_ledger_identity_v1() == ledger);
+}
+
+#[test]
+fn replacement_retains_callback_output_after_only_policy_view_scratch_drops() {
+    const VIEW: usize = 47;
+    for (work_limit, storage_limit) in [(16, PEAK + VIEW), (15, PEAK + VIEW), (16, PEAK + VIEW - 1)]
+    {
+        let mut work = Work::new(work_limit);
+        let mut b = Budget::new(&mut work, storage_limit);
+        b.reserve_storage(INPUT).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        let replacement = Replacement::begin(RETIRED, &mut b).unwrap();
+        b.reserve_storage(VIEW).unwrap();
+        let reserved = b.reserve_storage(OUTPUT);
+        if storage_limit < PEAK + VIEW {
+            assert!(matches!(reserved, Err(Resource::Storage(_))));
+            assert_eq!(b.storage(), INPUT + FRAME + VIEW);
+            continue;
+        }
+        reserved.unwrap();
+        b.release_storage(VIEW).unwrap();
+        assert_eq!(b.storage(), PEAK);
+        let result = replacement.finish(OUTPUT, HEADER, &mut b);
+        if work_limit < 16 {
+            assert!(matches!(result, Err(Resource::Work(_))));
+            assert_eq!(b.storage(), PEAK);
+        } else {
+            result.unwrap();
+            assert_eq!(b.storage(), INPUT - RETIRED + OUTPUT + HEADER);
+        }
+        assert!(b.work_ledger_identity_v1() == ledger);
+    }
 }
 
 #[test]
@@ -215,6 +248,14 @@ fn continuation_errors_cannot_expose_nested_refundable_resources() {
     for error in [
         ContinuationError::from(Resource::Accounting),
         ContinuationError::from(Failure::Resource(Resource::Arithmetic)),
+        ContinuationError::from(
+            fe2o3_hsaco_finalize::ConditionalWorkerOutputErrorV5::Resource(Resource::Accounting),
+        ),
+        ContinuationError::from(
+            fe2o3_runtime_protocol::ConditionalWorkerReadinessErrorV5::Resource(
+                Resource::Accounting,
+            ),
+        ),
     ] {
         assert!(std::error::Error::source(&error).is_none());
         assert!(!error.to_string().is_empty());
@@ -222,7 +263,8 @@ fn continuation_errors_cannot_expose_nested_refundable_resources() {
 }
 
 #[test]
-fn replacement_frame_covers_both_actual_parent_headers() {
+fn replacement_frame_covers_actual_parent_headers() {
     assert!(FRAME >= ParentPreparedConditionalArtifact::HEADER);
     assert!(FRAME >= ParentDurableConditionalArtifact::HEADER);
+    assert!(FRAME >= ParentPublishedConditionalArtifact::HEADER);
 }

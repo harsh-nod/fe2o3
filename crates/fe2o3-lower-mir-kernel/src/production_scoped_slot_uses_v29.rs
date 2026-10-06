@@ -10,6 +10,9 @@ mod tests;
 #[path = "production_scoped_slot_history_v29.rs"]
 mod history;
 
+#[path = "production_scoped_slot_selector_history_v29.rs"]
+mod selectors;
+
 type Origin = OriginStateV1<Option<usize>>;
 type UseResult<T> = Result<T, ProductionSemanticKirErrorV1>;
 
@@ -94,10 +97,13 @@ impl<'a> SlotUseGraphV29<'a> {
         function: &'a Function,
         slots: &[ScopedSourceSlotV29],
         first_slot: usize,
+        parts: Option<&ScopedDeferredScalarViewV29<'_, '_, '_>>,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> UseResult<Self> {
         let mut scratch = 0;
-        let index = call_splice_index_v1(function, budget, &mut scratch).map_err(graph_error)?;
+        let index =
+            call_splice_index_with_deferred_parts_v29(function, parts, budget, &mut scratch)
+                .map_err(graph_error)?;
         call_splice_check_body_v1(function, &index, false, budget).map_err(graph_error)?;
         let body = function
             .body
@@ -373,16 +379,21 @@ impl<'a> SlotUseGraphV29<'a> {
         Ok(())
     }
 
-    fn check_uses(&self, budget: &mut ArgumentBudgetV1<'_>) -> UseResult<()> {
+    fn check_uses(
+        &self,
+        cells: Option<(usize, &SourceReferenceCellPointerProofV29<'_, '_, '_>)>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> UseResult<()> {
         for (_, block) in &self.blocks {
             budget.charge_work(argument_sum_v1(&[1, block.operations.len()])?)?;
-            for operation in &block.operations {
+            for (position, operation) in block.operations.iter().enumerate() {
                 let mut ordinal = 0;
                 let mut candidate = false;
                 if let OperationKind::InlineAssembly(assembly) = &operation.kind {
                     budget.charge_work(assembly.operands.len())?;
                 }
                 operation.kind.try_visit_operands(|value| {
+                    let component = ordinal;
                     let allowed = match &operation.kind {
                         OperationKind::GetElementPointer { .. }
                         | OperationKind::Cast {
@@ -400,6 +411,16 @@ impl<'a> SlotUseGraphV29<'a> {
                     };
                     ordinal = argument_sum_v1(&[ordinal, 1])?;
                     if self.exact(value, budget)?.is_some() {
+                        if matches!(operation.kind, OperationKind::Call { .. })
+                            && let Some((instance, proof)) = cells
+                            && proof.operand(
+                                (instance, block.id, Some(position), component),
+                                value,
+                                budget,
+                            )?
+                        {
+                            return Ok(());
+                        }
                         if !allowed {
                             return Err(invalid(
                                 "scoped source-slot address escapes through an unsupported operand",
@@ -420,7 +441,16 @@ impl<'a> SlotUseGraphV29<'a> {
             match term {
                 Terminator::Return { values } => {
                     budget.charge_work(values.len())?;
-                    for &value in values {
+                    for (component, &value) in values.iter().enumerate() {
+                        if let Some((instance, proof)) = cells
+                            && proof.operand(
+                                (instance, block.id, None, component),
+                                value,
+                                budget,
+                            )?
+                        {
+                            continue;
+                        }
                         self.unrelated(value, budget)?;
                     }
                 }
@@ -469,15 +499,48 @@ fn transport_result(operation: &Operation) -> Option<&ValueDef> {
     .then_some(result)
 }
 
+#[cfg(test)]
 fn checked_graph<'a>(
     function: &'a Function,
     slots: &[ScopedSourceSlotV29],
     first_slot: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> UseResult<SlotUseGraphV29<'a>> {
-    let mut graph = SlotUseGraphV29::new(function, slots, first_slot, budget)?;
+    checked_graph_with_parts(function, slots, first_slot, None, budget)
+}
+
+fn checked_graph_with_parts<'a>(
+    function: &'a Function,
+    slots: &[ScopedSourceSlotV29],
+    first_slot: usize,
+    parts: Option<&ScopedDeferredScalarViewV29<'_, '_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<SlotUseGraphV29<'a>> {
+    checked_graph_with_cells(function, slots, first_slot, parts, None, budget)
+}
+
+fn checked_graph_with_cells<'a>(
+    function: &'a Function,
+    slots: &[ScopedSourceSlotV29],
+    first_slot: usize,
+    parts: Option<&ScopedDeferredScalarViewV29<'_, '_, '_>>,
+    cells: Option<(usize, &SourceReferenceCellPointerProofV29<'_, '_, '_>)>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<SlotUseGraphV29<'a>> {
+    let mut graph = SlotUseGraphV29::new(function, slots, first_slot, parts, budget)?;
+    if let Some((instance, proof)) = cells {
+        let end = argument_sum_v1(&[first_slot, slots.len()])?;
+        for (ordinal, (value, _)) in graph.index.values.iter().enumerate() {
+            budget.charge_work(1)?;
+            if let Some(slot) = proof.cell_slot((instance, *value), budget)?
+                && (first_slot..end).contains(&slot)
+            {
+                graph.origins[ordinal] = Origin::Exact(Some(slot));
+            }
+        }
+    }
     graph.solve(budget)?;
-    graph.check_uses(budget)?;
+    graph.check_uses(cells, budget)?;
     Ok(graph)
 }
 
@@ -498,37 +561,99 @@ pub(super) fn check_scoped_source_slot_uses_v29(
     max_elements: usize,
     budget: &mut ArgumentBudgetV1<'_>,
 ) -> UseResult<()> {
-    if slots.ledger != budget.work_ledger_identity_v1() {
-        return Err(ArgumentResourceV1::Accounting.into());
+    check_scoped_source_slot_uses_with_references_v29(
+        instances,
+        emitted,
+        slots,
+        max_elements,
+        None,
+        budget,
+    )
+}
+
+pub(super) fn check_scoped_source_slot_uses_with_references_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    max_elements: usize,
+    references: Option<&SourceReferenceEmissionV29<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<()> {
+    check_scoped_source_slot_uses_with_identities_v1(
+        instances,
+        emitted,
+        slots,
+        max_elements,
+        references,
+        None,
+        budget,
+    )
+}
+
+fn check_source_slot_ledger_v29(
+    slots: &OwnedScopedSourceSlotsV29,
+    references: Option<&SourceReferenceEmissionV29<'_, '_>>,
+    budget: &ArgumentBudgetV1<'_>,
+) -> UseResult<()> {
+    if slots.ledger == budget.work_ledger_identity_v1() {
+        return Ok(());
+    }
+    let error = ProductionSemanticKirErrorV1::from(ArgumentResourceV1::Accounting);
+    if let Some(references) = references {
+        if let Some(first) = references.plan.failure.first_error() {
+            return Err(first);
+        }
+        source_reference_record_failure_v29(references.plan, &error);
+    }
+    Err(error)
+}
+
+pub(super) fn check_scoped_source_slot_uses_with_identities_v1(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    max_elements: usize,
+    references: Option<&SourceReferenceEmissionV29<'_, '_>>,
+    identities: Option<&ExecutionIdentityPlanV1<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<()> {
+    check_source_slot_ledger_v29(slots, references, budget)?;
+    scoped_raw_admission_v29::require_original_zero_raw_v29(
+        instances,
+        references.map(|references| references.plan),
+        budget,
+    )?;
+    if identities.is_some() && references.is_none() {
+        return Err(execution_identity_error_v1());
+    }
+    if let Some(references) = references {
+        references.plan.check_owner(instances, budget)?;
+        references.check(budget)?;
     }
     with_canonical_call_scratch_v1(budget, |budget| {
         // Reuse the complete census against the same live owners, including any
         // changes made by the test-only preassembly observer.
-        let fresh = derive_scoped_source_slots_v29(instances, emitted, max_elements, budget)?;
-        budget.charge_work(argument_sum_v1(&[
-            5,
-            argument_product_v1(slots.instances.len(), 7)?,
-            argument_product_v1(slots.slots.len(), 18)?,
-        ])?)?;
-        let bytes = argument_sum_v1(&[
-            argument_product_v1(
-                slots.instances.capacity(),
-                std::mem::size_of::<ScopedSourceSlotInstanceV29>(),
-            )?,
-            argument_product_v1(
-                slots.slots.capacity(),
-                std::mem::size_of::<ScopedSourceSlotV29>(),
-            )?,
-        ])?;
-        if slots.source != fresh.source
-            || slots.ledger != fresh.ledger
-            || slots.instances != fresh.instances
-            || slots.slots != fresh.slots
-            || slots.retained_storage != bytes
-        {
-            return Err(scoped_slot_error_v29());
-        }
-        check_scoped_defined_call_phases_v29(instances, emitted, budget)?;
+        let fresh = recheck_source_slot_inventory_v29(
+            instances,
+            emitted,
+            slots,
+            max_elements,
+            references,
+            identities,
+            budget,
+        )?;
+        let cells = if let Some(references) = references {
+            // Keep the enclosing optional owner separate from the checked
+            // constructor's own result/local headers; no slot reuse assumption.
+            source_reference_owned_prepay_v29::<
+                Option<SourceReferenceCellPointerProofV29<'_, '_, '_>>,
+            >(references.plan, budget)?;
+            Some(checked_source_reference_cell_pointers_v29(
+                references, emitted, &fresh, budget,
+            )?)
+        } else {
+            None
+        };
         for row in &slots.instances {
             budget.charge_work(1)?;
             let candidates = slots
@@ -544,8 +669,21 @@ pub(super) fn check_scoped_source_slot_uses_v29(
                 if candidates.is_empty() {
                     return Ok(());
                 }
-                let graph = checked_graph(&lowered.function, candidates, row.slots.start, budget)?;
-                history::check_with_source_kills(
+                let parts = ScopedDeferredScalarViewV29::for_instance(
+                    instances,
+                    row.instance,
+                    lowered,
+                    budget,
+                )?;
+                let graph = checked_graph_with_cells(
+                    &lowered.function,
+                    candidates,
+                    row.slots.start,
+                    Some(&parts),
+                    cells.as_ref().map(|proof| (row.instance.index(), proof)),
+                    budget,
+                )?;
+                history::check_with_source_selectors(
                     &lowered.function,
                     &graph,
                     candidates,
@@ -555,6 +693,11 @@ pub(super) fn check_scoped_source_slot_uses_v29(
                         .as_ref()
                         .ok_or_else(scoped_memory_error_v29)?
                         .rows,
+                    cells.as_ref().map(|proof| selectors::Source {
+                        proof,
+                        instance: row.instance.index(),
+                        lowered,
+                    }),
                     budget,
                 )
             })
@@ -567,4 +710,163 @@ pub(super) fn check_scoped_source_slot_uses_v29(
         }
         Ok(())
     })
+    .inspect_err(|error| {
+        if let Some(references) = references {
+            source_reference_record_failure_v29(references.plan, error);
+        }
+    })
+}
+
+fn recheck_source_slot_inventory_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    max_elements: usize,
+    references: Option<&SourceReferenceEmissionV29<'_, '_>>,
+    identities: Option<&ExecutionIdentityPlanV1<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<OwnedScopedSourceSlotsV29> {
+    let fresh = if let Some(references) = references {
+        derive_scoped_source_slots_with_identities_v1(
+            instances,
+            emitted,
+            max_elements,
+            Some(references.plan),
+            identities,
+            budget,
+        )?
+    } else {
+        derive_scoped_source_slots_v29(instances, emitted, max_elements, budget)?
+    };
+    budget.charge_work(argument_sum_v1(&[
+        5,
+        argument_product_v1(slots.instances.len(), 7)?,
+        argument_product_v1(slots.slots.len(), 18)?,
+    ])?)?;
+    let bytes = argument_sum_v1(&[
+        argument_product_v1(
+            slots.instances.capacity(),
+            std::mem::size_of::<ScopedSourceSlotInstanceV29>(),
+        )?,
+        argument_product_v1(
+            slots.slots.capacity(),
+            std::mem::size_of::<ScopedSourceSlotV29>(),
+        )?,
+    ])?;
+    if slots.source != fresh.source
+        || slots.ledger != fresh.ledger
+        || slots.instances != fresh.instances
+        || slots.slots != fresh.slots
+        || slots.retained_storage != bytes
+        || slots.pending_memory.is_some()
+    {
+        return Err(scoped_slot_error_v29());
+    }
+    check_scoped_defined_call_phases_with_references_v29(
+        instances,
+        emitted,
+        references.map(|references| references.plan),
+        budget,
+    )?;
+    Ok(fresh)
+}
+
+// Only original input/receipt correspondence is checked before expansion. No
+// pointer/history permit escapes; the opaque raw transaction still owes the
+// complete all-use, initializedness and currentness census on the actual graph.
+pub(super) fn check_pending_raw_source_inputs_v29(
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &[Option<LoweredFunctionResultV1>],
+    slots: &OwnedScopedSourceSlotsV29,
+    max_elements: usize,
+    references: &SourceReferenceEmissionV29<'_, '_>,
+    identities: Option<&ExecutionIdentityPlanV1<'_, '_>>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<()> {
+    check_source_slot_ledger_v29(slots, Some(references), budget)?;
+    references.plan.check_owner(instances, budget)?;
+    references.check(budget)?;
+    with_canonical_call_scratch_v1(budget, |budget| {
+        let fresh = recheck_source_slot_inventory_v29(
+            instances,
+            emitted,
+            slots,
+            max_elements,
+            Some(references),
+            identities,
+            budget,
+        )?;
+        check_pending_source_reference_claims_v29(references, emitted, &fresh, budget)?;
+        for row in &slots.instances {
+            budget.charge_work(1)?;
+            let candidates = slots
+                .slots
+                .get(row.slots.clone())
+                .ok_or_else(scoped_slot_error_v29)?;
+            let lowered = emitted
+                .get(row.instance.index())
+                .and_then(Option::as_ref)
+                .ok_or_else(scoped_slot_error_v29)?;
+            check_scoped_memory_anchors_v29(instances, row, lowered, candidates, budget)?;
+        }
+        Ok(())
+    })
+    .inspect_err(|error| source_reference_record_failure_v29(references.plan, error))
+}
+
+pub(super) fn check_expanded_scalar_addresses_v29(
+    function: &Function,
+    graph: &SourceAddressMemoryV29<'_>,
+    slots: &[ScopedSourceSlotV29],
+    accesses: &[SourceAddressAccessV29],
+    kills: &[SourceAddressKillV29],
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<()> {
+    history::check_expanded_scalar_addresses_v29(function, graph, slots, accesses, kills, budget)
+}
+
+pub(super) fn check_expanded_scalar_addresses_with_failures_v29(
+    function: &Function,
+    graph: &SourceAddressMemoryV29<'_>,
+    slots: &[ScopedSourceSlotV29],
+    accesses: &[SourceAddressAccessV29],
+    kills: &[SourceAddressKillV29],
+    failures: &[SourceIndexFailureV29],
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    history::check_expanded_scalar_addresses_with_failures_v29(
+        function, graph, slots, accesses, kills, failures, budget,
+    )
+}
+
+pub(super) fn check_expanded_index_addresses_v29<'view, 'inventory, 'graph>(
+    function: &'graph Function,
+    graph: &'view SourceAddressMemoryV29<'graph>,
+    slots: &'view [ScopedSourceSlotV29],
+    accesses: &'view [SourceAddressAccessV29],
+    kills: &[SourceAddressKillV29],
+    lifetimes: &[SourceAddressLifetimeV29],
+    failures: &[SourceIndexFailureV29],
+    selected: &[SourceIndexLocationV29],
+    guards: &[SourceIndexGuardLocationV29],
+    inventory: &'inventory fe2o3_kernel_analysis::CanonicalKirInventoryV18<'graph>,
+    versions: Option<&'view fe2o3_kernel_analysis::CanonicalKirMemorySsaV18<'inventory, 'graph>>,
+    function_coordinate: fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> UseResult<()> {
+    history::check_expanded_indices_v29(
+        function,
+        graph,
+        slots,
+        accesses,
+        kills,
+        lifetimes,
+        failures,
+        selected,
+        guards,
+        inventory,
+        versions,
+        function_coordinate,
+        budget,
+    )
 }

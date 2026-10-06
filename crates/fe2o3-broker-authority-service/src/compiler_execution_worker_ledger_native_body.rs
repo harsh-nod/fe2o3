@@ -249,7 +249,7 @@ impl Ledger {
         key: &Key,
         request: &Request,
         publication: &Publication,
-        guard: &PublicationGuard<'_>,
+        guard: &PublicationGuard<'_, '_>,
         exchange: &mut impl FnMut(&AnchorChallenge, &mut Budget<'_>) -> Result<AnchorReceipt>,
         b: &mut Budget<'_>,
     ) -> Result<(Ack, bool)> {

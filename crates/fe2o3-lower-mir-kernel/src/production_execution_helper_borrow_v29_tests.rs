@@ -500,13 +500,71 @@ fn nominal_helper_sparse_slots_and_closed_round_have_independent_limits() {
     use fe2o3_mir_model::SsaPlannerResourceV1::{StorageWords, WorkUnits};
 
     let limits = ModuleLimits::production();
-    // Three functions, seven source slots, thirteen helper locals and one seed:
-    // setup 114 + two row passes 20 + scan 1709 + closure 1 = 1844 work.
-    // Retained rows 136 + peak scratch 400 = 536 words. Root sizing next costs 4.
+    let source = helper_source(Case::Unused, 2);
+    assert_eq!(source.functions().len(), 3);
+    assert_eq!(
+        source
+            .functions()
+            .iter()
+            .map(|function| function.abi().source_input_types().len())
+            .sum::<usize>(),
+        7
+    );
+    assert_eq!(
+        source
+            .functions()
+            .iter()
+            .filter(|function| function.role() == SemanticFunctionRoleV1::InternalHelper)
+            .map(|function| function.locals().len())
+            .sum::<usize>(),
+        13
+    );
+    let relay = &source.functions()[2];
+    assert_eq!(relay.locals().len(), 6);
+    assert_eq!(relay.abi().source_input_types().len(), 4);
+    assert_eq!(relay.blocks().len(), 1);
+    assert!(relay.blocks()[0].statements().is_empty());
+    assert!(matches!(
+        relay.blocks()[0].terminator().kind(),
+        SemanticTerminatorKindV1::Return
+    ));
+    // Three functions, seven source slots, thirteen helper locals and one seed.
+    // The relay has six locals, four inputs, one block and no statements.
+    let setup = 3 + 7 + 13 * 8;
+    let row_passes = 2 * (3 + 7);
+    let units = 1 + 6 + 4 + 1 + 1;
+    let height = 4;
+    let scan = units + units * 32 * height + 8 * height;
+    // One parameter candidate adds the closed borrow graph's independent scan
+    // and its concurrent completion/grounding/path storage.
+    let graph_work = (1 + 1) * 32 * height + 32;
+    let graph_storage = 64 + 64;
+    let complete_work = setup + row_passes + scan + graph_work + 1;
+    let complete_storage = 3 * 8 + 7 * 16 + 64 + units * 16 + 128 + graph_storage;
+    assert_eq!((complete_work, complete_storage), (2132, 664));
+    // The next root's initial syntax sizing is a separate four-unit charge.
     for (work, storage, resource, required, limit) in [
-        (1843, limits.max_storage_words(), WorkUnits, 1844, 1843),
-        (1844, limits.max_storage_words(), WorkUnits, 1848, 1844),
-        (limits.max_work_units(), 535, StorageWords, 536, 535),
+        (
+            complete_work - 1,
+            limits.max_storage_words(),
+            WorkUnits,
+            complete_work,
+            complete_work - 1,
+        ),
+        (
+            complete_work,
+            limits.max_storage_words(),
+            WorkUnits,
+            complete_work + 4,
+            complete_work,
+        ),
+        (
+            limits.max_work_units(),
+            complete_storage - 1,
+            StorageWords,
+            complete_storage,
+            complete_storage - 1,
+        ),
     ] {
         assert_eq!(
             owner_with_limits(helper_source(Case::Unused, 2), module_limits(work, storage),)

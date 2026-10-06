@@ -3,6 +3,13 @@
 
 use std::{fmt, ops::Range};
 
+pub use worker_v3_hsaco_publication::{
+    ConditionalWorkerOutputErrorV5, ConditionalWorkerOutputStorageV5,
+    ConditionalWorkerReplayPreimagesV5, PublishedConditionalWorkerHsacoV5,
+    publish_recovered_conditional_worker_hsaco_in_original_account_v5,
+    publish_recovered_conditional_worker_hsaco_v5,
+};
+
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES,
     CodeObjectVersion as InspectedCodeObjectVersion, ExplicitArgument, ExplicitValueKind,
@@ -20,18 +27,41 @@ use fe2o3_kernel_descriptor::{
 
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
+mod conditional_native_continuation_allowance_v1;
 mod conditional_worker_finalization;
+pub use conditional_native_continuation_allowance_v1::NativeConditionalContinuationAllowanceV1;
+mod conditional_worker_operation_quote;
+pub use conditional_worker_operation_quote::ConditionalWorkerOperationQuoteV5;
 mod conditional_worker_replay;
 mod engineering_hsaco;
 mod first_build_worker_binding;
 mod first_build_worker_conditional;
+pub use first_build_worker_conditional::ConditionalFirstBuildWorkerStartupQuoteV2;
 mod first_build_worker_conditional_binding;
 mod first_build_worker_engine;
 mod first_build_worker_native;
 mod first_build_worker_native_binding;
 mod first_build_worker_native_resources;
+pub use first_build_worker_native_resources::{
+    NativeWorkerResourceQuote as NativeWorkerEngineResourceQuoteV1,
+    NativeWorkerResourceQuoteError as NativeWorkerEngineResourceQuoteErrorV1,
+};
 mod first_build_worker_v3;
 mod link_plan;
+mod mixed_worker_lineage_v29;
+mod typed_worker_lineage_v50;
+mod typed_worker_lineage_v90;
+pub use typed_worker_lineage_v50::{
+    PreparedFinalizedTypedContentV50, TypedWorkerLineageErrorV50,
+    finalize_protected_worker_typed_content_v50,
+};
+pub use typed_worker_lineage_v90::{
+    PredicatedTypedWorkerLineageErrorV90, PreparedFinalizedPredicatedTypedContentV90,
+    finalize_protected_worker_predicated_typed_content_v90,
+};
+mod mixed_descriptor_finalization_family;
+mod mixed_descriptor_finalization_v53;
+mod mixed_descriptor_finalization_v89;
 mod native_worker_compact_replay;
 mod native_worker_engine;
 mod native_worker_finalization;
@@ -42,11 +72,51 @@ mod nominal_descriptor_common;
 mod nominal_descriptor_finalization_v3;
 mod nominal_descriptor_finalization_v4;
 mod nominal_descriptor_finalization_v5;
+mod nominal_descriptor_resources_v5;
+pub use mixed_descriptor_finalization_v53::{
+    FinalizedNominalHsacoV53, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53,
+    NominalDescriptorInspectionV53, NominalFinalizationErrorV53,
+    derive_unfinalized_nominal_hsaco_v53, finalize_unfinalized_nominal_hsaco_v53,
+    inspect_finalized_nominal_hsaco_v53, inspect_unfinalized_nominal_hsaco_v53,
+};
+pub use mixed_descriptor_finalization_v89::{
+    FinalizedNominalHsacoV89, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V89,
+    NominalDescriptorInspectionV89, NominalFinalizationErrorV89,
+    derive_unfinalized_nominal_hsaco_v89, finalize_unfinalized_nominal_hsaco_v89,
+    inspect_finalized_nominal_hsaco_v89, inspect_unfinalized_nominal_hsaco_v89,
+};
+pub use nominal_descriptor_resources_v5::NominalDescriptorWorkBoundsV5;
+mod mixed_worker_finalization_family;
+mod mixed_worker_finalization_v53;
+mod mixed_worker_finalization_v89;
+pub use mixed_worker_finalization_v89::{
+    NominalWorkerFinalizationErrorV89, PreparedFinalizedNominalWorkerHsacoV89,
+    finalize_protected_worker_nominal_hsaco_v89,
+};
+mod mixed_worker_resources_family;
+mod mixed_worker_resources_v53;
+mod mixed_worker_resources_v89;
+pub use mixed_worker_resources_v53::{
+    MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V53, MIXED_WORKER_FINALIZATION_WORK_LIMIT_V53,
+    MixedWorkerFinalizationBudgetErrorV53, derive_unfinalized_nominal_hsaco_on_budget_v53,
+    finalize_protected_worker_nominal_hsaco_on_budget_v53,
+};
+pub use mixed_worker_resources_v89::{
+    MIXED_WORKER_FINALIZATION_STORAGE_LIMIT_V89, MIXED_WORKER_FINALIZATION_WORK_LIMIT_V89,
+    MixedWorkerFinalizationBudgetErrorV89, check_finalized_nominal_hsaco_on_budget_v89,
+    derive_unfinalized_nominal_hsaco_on_budget_v89,
+    finalize_protected_worker_nominal_hsaco_on_budget_v89,
+};
 mod nominal_descriptor_physical;
 mod nominal_worker_common;
 mod nominal_worker_finalization_v3;
 mod nominal_worker_finalization_v4;
 mod nominal_worker_finalization_v5;
+pub use mixed_worker_finalization_v53::{
+    NominalWorkerFinalizationErrorV53, PreparedFinalizedNominalWorkerHsacoV53,
+    finalize_protected_worker_nominal_hsaco_v53,
+};
+mod mixed_worker_publication_family;
 mod production_kir_v7_structural_bridge_v1;
 mod production_profiler_kir_archive_v1;
 mod production_semantic_anchor_v1;
@@ -64,6 +134,20 @@ mod worker_protocol;
 mod worker_protocol_v2;
 mod worker_v3_compact_finalizer_replay;
 mod worker_v3_finalized_schema;
+pub use worker_v3_compact_finalizer_replay::prepare_mixed_worker_compact_finalizer_replay_v53;
+pub use worker_v3_compact_finalizer_replay::prepare_mixed_worker_compact_finalizer_replay_v89;
+pub use worker_v3_hsaco_publication::{
+    PreparedMixedWorkerPublicationV53, PublishedMixedWorkerHsacoV53,
+    RecoveredMixedWorkerPublicationV53, persist_prepared_mixed_worker_publication_v53,
+    prepare_mixed_worker_publication_v53, publish_recovered_mixed_worker_hsaco_v53,
+    recover_mixed_worker_publication_v53,
+};
+pub use worker_v3_hsaco_publication::{
+    PreparedMixedWorkerPublicationV89, PublishedMixedWorkerHsacoV89,
+    RecoveredMixedWorkerPublicationV89, persist_prepared_mixed_worker_publication_v89,
+    prepare_mixed_worker_publication_v89, publish_recovered_mixed_worker_hsaco_v89,
+    recover_mixed_worker_publication_v89,
+};
 mod worker_v3_hsaco_admission;
 mod worker_v3_hsaco_finalization;
 mod worker_v3_hsaco_publication;
@@ -94,7 +178,10 @@ pub use conditional_worker_finalization::{
     ConditionalWorkerFinalizationStorageV5, PreparedFinalizedConditionalWorkerHsacoV5,
     finalize_conditional_worker_hsaco_v5,
 };
-pub use conditional_worker_replay::revalidate_conditional_worker_finalizer_v5;
+pub use conditional_worker_replay::{
+    revalidate_conditional_worker_finalizer_in_original_account_v5,
+    revalidate_conditional_worker_finalizer_v5,
+};
 pub use engineering_hsaco::{
     EngineeringHsacoErrorV1, EngineeringHsacoObservationV1, EngineeringProviderObservationV1,
     observe_engineering_hsaco_v1,
@@ -118,8 +205,11 @@ pub use first_build_worker_conditional::{
     PreparedConditionalFirstBuildWorkerV2,
     execute_preflighted_conditional_reproducible_first_build_worker_v2,
     preflight_conditional_reproducible_first_build_worker_v2,
+    preflight_conditional_worker_in_original_account_v2,
 };
-pub use first_build_worker_conditional_binding::ProtectedCompilerConditionalHandoffBindingV2;
+pub use first_build_worker_conditional_binding::{
+    ProtectedCompilerConditionalHandoffBindingV2, conditional_worker_configuration_storage_v2,
+};
 pub use first_build_worker_native::{
     InertNativeFirstBuildWorkerEvidenceV1, NativeFirstBuildWorkerErrorV1,
     NativeFirstBuildWorkerIdentityV1, NativeFirstBuildWorkerStorageV1, NativeWorkerDiagnosticV1,
@@ -146,6 +236,10 @@ pub use link_plan::{
     MAX_LINK_INPUTS, MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES, MAX_LINK_OPTIONS,
     MAX_LINK_PROVENANCE_EDGES, MAX_LINK_PROVENANCE_NODES, MultiInputLinkPlanV1, ProvenanceNodeV1,
 };
+pub use mixed_worker_lineage_v29::{
+    MixedWorkerLineageErrorV29, PreparedFinalizedMixedContentV29,
+    finalize_protected_worker_mixed_content_v29,
+};
 pub use native_worker_compact_replay::{
     ConditionalWorkerCompactFinalizerReplayV5, ConditionalWorkerCompactReplayIdentityV5,
     ConditionalWorkerReplayCoordinatesV5, MAX_NATIVE_WORKER_COMPACT_FINALIZER_REPLAY_BYTES_V1,
@@ -169,8 +263,10 @@ pub use native_worker_publication::{
     NativeWorkerPublicationIntentV1, NativeWorkerPublicationPlanIdentityV1,
     PreparedConditionalWorkerHsacoPublicationV5, PreparedNativeWorkerHsacoPublicationV1,
     RecoveredConditionalWorkerHsacoPublicationV5, RecoveredNativeWorkerHsacoPublicationV1,
+    persist_prepared_conditional_worker_hsaco_publication_in_original_account_v5,
     persist_prepared_conditional_worker_hsaco_publication_v5,
     persist_prepared_native_worker_hsaco_publication_v1,
+    prepare_conditional_worker_hsaco_publication_in_original_account_v5,
     prepare_conditional_worker_hsaco_publication_v5, prepare_native_worker_hsaco_publication_v1,
     recover_conditional_worker_hsaco_publication_v5, recover_native_worker_hsaco_publication_v1,
 };

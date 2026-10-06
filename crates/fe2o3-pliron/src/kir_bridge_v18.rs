@@ -10,6 +10,13 @@ use fe2o3_kernel_ir::{
 
 #[path = "kir_bridge_v18_resources.rs"]
 mod resources;
+#[path = "kir_bridge_structural_v18.rs"]
+mod structural;
+pub(crate) use resources::{
+    CLEANUP_ATTEMPTS as BOUNDED_PAYLOAD_CLEANUP_ATTEMPTS_V1,
+    discard_caught_payload as discard_bounded_payload_v1,
+};
+pub(crate) use structural::StructuralBridgeWitnessV18;
 
 #[derive(Debug)]
 pub enum KirBridgeErrorV18 {
@@ -73,6 +80,22 @@ impl KirBridgeStorageV18 {
     }
 }
 
+// Only closed optimizer/native consumers can retain this exact structural
+// witness. Public import and extraction keep their historical admission.
+pub(crate) fn import_structural_native_v30<'input>(
+    input: &'input VerifiedCanonicalKernelIrModuleV18,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        KirPlironGraphV18<'input>,
+        StructuralBridgeWitnessV18,
+        KirBridgeStorageV18,
+    ),
+    KirBridgeErrorV18,
+> {
+    structural::import(input, budget)
+}
+
 /// Inert report. This does not certify memory safety, provenance or optimization.
 #[derive(Debug)]
 pub struct KirBridgeReportV18 {
@@ -130,6 +153,22 @@ type ExportResult = Result<
     KirBridgeErrorV18,
 >;
 
+#[path = "kir_bridge_v18_optimization.rs"]
+mod optimization;
+pub(crate) use optimization::{
+    ExecutedV18Parts, optimize_integer_v18_graph, optimize_integer_worklist_v18_graph,
+    optimize_mixed_fixedpoint_v18_graph, optimize_mixed_pure_cse_v18_graph, optimize_v18_graph,
+};
+#[path = "kir_bridge_private_memory_v18.rs"]
+mod private_policy;
+#[path = "kir_bridge_canonical_ranked_v18.rs"]
+mod ranked_policy;
+pub(crate) use private_policy::NativeCanonicalMixedAdmissionV26;
+pub(crate) use private_policy::NativeCanonicalPrivateAdmissionV18;
+
+#[path = "kir_bridge_global_pending_v18.rs"]
+mod global_pending;
+
 impl<'input> KirPlironGraphV18<'input> {
     /// The returned reservation must be held on the same work ledger while the
     /// session lives. The input's canonical reservation is the caller's custody.
@@ -140,7 +179,7 @@ impl<'input> KirPlironGraphV18<'input> {
         let floor = budget.storage();
         let ledger = budget.work_ledger_identity_v1();
         let mut scope = resources::Scope::enter(budget)?;
-        let result = import_inner(input, scope.budget, floor, ledger);
+        let result = import_inner(input, scope.budget, floor, ledger, None);
         let release = scope.finish();
         match result {
             Err(error) => Err(error),
@@ -190,7 +229,7 @@ impl<'input> KirPlironGraphV18<'input> {
         limits: StorageLayoutLimitsV1,
         budget: &mut Budget<'_>,
     ) -> ExportResult {
-        self.extract(limits, budget, false)
+        self.extract(limits, budget, false, None)
     }
 
     /// Additionally requires exact source coordinates, origins and bytes.
@@ -199,7 +238,16 @@ impl<'input> KirPlironGraphV18<'input> {
         limits: StorageLayoutLimitsV1,
         budget: &mut Budget<'_>,
     ) -> ExportResult {
-        self.extract(limits, budget, true)
+        self.extract(limits, budget, true, None)
+    }
+
+    pub(crate) fn extract_structural_native_v30(
+        &mut self,
+        limits: StorageLayoutLimitsV1,
+        budget: &mut Budget<'_>,
+        witness: &StructuralBridgeWitnessV18,
+    ) -> ExportResult {
+        self.extract(limits, budget, true, Some(witness))
     }
 
     fn extract(
@@ -207,11 +255,12 @@ impl<'input> KirPlironGraphV18<'input> {
         limits: StorageLayoutLimitsV1,
         budget: &mut Budget<'_>,
         exact: bool,
+        structural: Option<&structural::StructuralBridgeWitnessV18>,
     ) -> ExportResult {
         // A foreign ledger must not acquire a cleanup guard for this owner.
         self.validate_custody(budget)?;
         let mut scope = resources::Scope::enter(budget)?;
-        let result = self.extract_inner(limits, scope.budget, exact);
+        let result = self.extract_inner(limits, scope.budget, exact, structural);
         let release = scope.finish();
         match result {
             Err(error) => Err(error),
@@ -227,6 +276,7 @@ impl<'input> KirPlironGraphV18<'input> {
         limits: StorageLayoutLimitsV1,
         budget: &mut Budget<'_>,
         exact: bool,
+        structural: Option<&structural::StructuralBridgeWitnessV18>,
     ) -> ExportResult {
         let charged_tree = self.session.owned_tree_work[&self.root.identity];
         let source = self.profile.owner();
@@ -235,9 +285,15 @@ impl<'input> KirPlironGraphV18<'input> {
             charged_tree,
         )?)?;
         let root = self.session.operations[&self.root.identity];
-        let (tree, slots) = census_live_graph_v12(&self.session.context, root)?;
-        let envelope =
-            resources::envelope(source.canonical_bytes().len(), resources::add(tree, slots)?)?;
+        let (tree, envelope) = if let Some(witness) = structural {
+            structural::extraction_envelope(self, witness, budget)?
+        } else {
+            let (tree, slots) = census_live_graph_v12(&self.session.context, root)?;
+            (
+                tree,
+                resources::envelope(source.canonical_bytes().len(), resources::add(tree, slots)?)?,
+            )
+        };
         if tree != charged_tree {
             return Err(KirBridgeErrorV1::GraphIdentityMismatch.into());
         }
@@ -347,11 +403,15 @@ fn import_inner<'input>(
     budget: &mut Budget<'_>,
     floor: usize,
     ledger: CanonicalKernelIrWorkLedgerIdentityV1,
+    admitted: Option<resources::Envelope>,
 ) -> ImportResult<'input> {
     let profile = storage_v18::ProfileV18::new(input, budget)?;
     budget.charge_work(input.canonical_bytes().len())?;
     let tree = source_tree_work_v12(input.module())?;
-    let envelope = resources::envelope(input.canonical_bytes().len(), tree)?;
+    let envelope = match admitted {
+        Some(envelope) => envelope,
+        None => resources::envelope(input.canonical_bytes().len(), tree)?,
+    };
     let coordinate_envelope = resources::coordinate_envelope(tree)?;
     let import_work = resources::add(envelope.work, coordinate_envelope.work)?;
     let import_storage = resources::add(envelope.storage, coordinate_envelope.storage)?;

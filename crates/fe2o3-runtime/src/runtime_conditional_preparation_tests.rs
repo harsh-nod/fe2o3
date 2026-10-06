@@ -16,6 +16,132 @@ fn output_inputs() -> Gfx942RuntimeDispatchInputsV1 {
     result
 }
 
+fn mixed_premises(
+    input: &Gfx942RuntimeDispatchInputsV1,
+) -> fe2o3_kfd::MixedConditionalDispatchPremisesV26 {
+    use fe2o3_kfd::{
+        MixedConditionalAccessV26 as Access, MixedConditionalDispatchPremisesV26,
+        MixedConditionalIndexDomainV26 as Domain,
+    };
+    MixedConditionalDispatchPremisesV26::new(
+        [4; 32],
+        [5; 32],
+        [6; 32],
+        &input.explicit_kernarg,
+        input.geometry,
+        3,
+        [64, 1, 1],
+        64,
+        &[ConditionalDispatchSliceV1 {
+            generated_field: 0,
+            pointer_offset: 0,
+            length_offset: 8,
+            buffer_index: Some(0),
+            buffer_byte_offset: 0,
+            length: 2,
+            element_bytes: 4,
+            alignment: 4,
+        }],
+        &[
+            Access {
+                slice: 0,
+                writing: true,
+                occurrence_identity: [1; 32],
+                access_domain: Domain::LogicalExtent { slice: 0 },
+                address_domain: Domain::InvocationAxis { axis: 0 },
+                invocation_axis: Some(0),
+            },
+            Access {
+                slice: 0,
+                writing: false,
+                occurrence_identity: [2; 32],
+                access_domain: Domain::LogicalExtent { slice: 0 },
+                address_domain: Domain::InvocationAxis { axis: 0 },
+                invocation_axis: Some(0),
+            },
+        ],
+    )
+    .unwrap()
+}
+
+#[test]
+fn actual_mixed_preparation_preserves_payload_readwrite_completion_and_family_identity() {
+    let hsaco = module_with_resources(0, Some(false));
+    let mut input = output_inputs();
+    input.buffers[0] =
+        Gfx942RuntimeDispatchBufferV1::new(vec![0xa5; 8], Gfx942RuntimeBufferAccessV1::ReadWrite)
+            .unwrap();
+    let payload = mixed_premises(&input);
+    let identity = *payload.identity();
+    let binding = Gfx942RuntimeInvocationBindingV1::ConditionalMixedV26 {
+        contract_identity: [4; 32],
+        premise_identity: identity,
+    };
+    let input = input.with_mixed_conditional_premises_v26(payload).unwrap();
+    assert_eq!(input.invocation_binding(), binding);
+    let prepared = prepare_gfx942_runtime_dispatch_v1(&hsaco, "vecadd", input).unwrap();
+    assert_eq!(prepared.invocation_binding(), binding);
+    let view = prepared.inspection_v1();
+    assert!(view.conditional_premises.is_none());
+    assert_eq!(
+        view.mixed_conditional_premises.unwrap().identity(),
+        &identity
+    );
+    assert!(std::ptr::eq(
+        view.mixed_conditional_premises.unwrap(),
+        prepared.inspection_v1().mixed_conditional_premises.unwrap(),
+    ));
+    assert_eq!(
+        prepared.buffer_policies_v1().collect::<Vec<_>>(),
+        vec![(Gfx942RuntimeBufferAccessV1::ReadWrite, 8)]
+    );
+    let (request, policies) = prepared.into_authorized_execution_parts();
+    assert_eq!(policies.len(), 1);
+    assert_eq!(policies[0].access, Gfx942RuntimeBufferAccessV1::ReadWrite);
+    assert_eq!(policies[0].byte_length, 8);
+    assert_eq!(
+        crate::conditional_transport_v1::request_binding(&request),
+        binding
+    );
+    assert!(request.conditional_premises_v1().is_none());
+    assert_eq!(
+        request.mixed_conditional_premises_v26().unwrap().identity(),
+        &identity
+    );
+    let old_binding = Gfx942RuntimeInvocationBindingV1::ConditionalNominalV4 {
+        contract_identity: [4; 32],
+        premise_identity: identity,
+    };
+    assert_ne!(
+        crate::conditional_transport_v1::dispatch_identity([7; 32], binding),
+        crate::conditional_transport_v1::dispatch_identity([7; 32], old_binding)
+    );
+}
+
+#[test]
+fn mixed_and_single_output_payloads_cannot_replace_one_another() {
+    for mixed_first in [false, true] {
+        let input = output_inputs();
+        let old = premises(&input, 4);
+        let mixed = mixed_premises(&input);
+        let result = if mixed_first {
+            input
+                .with_mixed_conditional_premises_v26(mixed)
+                .unwrap()
+                .with_conditional_premises_v1(old)
+        } else {
+            input
+                .with_conditional_premises_v1(old)
+                .unwrap()
+                .with_mixed_conditional_premises_v26(mixed)
+        };
+        assert!(matches!(
+            result,
+            Err(Gfx942RuntimePreparationErrorV1::ConditionalPremisesAlreadyBound)
+        ));
+    }
+}
+
 fn premises(input: &Gfx942RuntimeDispatchInputsV1, contract: u8) -> ConditionalDispatchPremisesV1 {
     ConditionalDispatchPremisesV1::new(
         [contract; 32],

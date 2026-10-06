@@ -1,4 +1,8 @@
 use super::*;
+#[path = "owned_store_consensus_v45_tests.rs"]
+mod consensus_v45;
+#[path = "owned_storage_scalar_forwarding_v54_tests.rs"]
+mod storage_v54;
 use fe2o3_kernel_ir::{
     BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work, ComparePredicate, Constant,
     Function, Kernel, LaunchDomain, LaunchExtent, Module, Operation, Signature, Terminator,
@@ -214,7 +218,7 @@ fn cross_block_owned_duplicate_edges_missing_initialization_and_equal_store_occu
         0,
         MemoryAccess::new(AddressSpace::Private, 4),
     ));
-    assert_count(module, 0);
+    assert_count(module, 1);
 }
 #[test]
 fn cross_block_owned_function_local_ids_never_cross_functions_and_limits_are_exact() {
@@ -325,7 +329,8 @@ fn cross_block_owned_escaping_volatile_and_unequal_alignment_cells_are_not_selec
     let Kind::Load { access, .. } = &mut blocks(&mut module)[3].operations[0].kind else {
         panic!("load")
     };
-    access.alignment = 1;
+    // Access annotations may differ, but neither may exceed the actual Alloca.
+    access.alignment = 8;
     assert_count(module, 0);
     let mut module = fixture(ScalarType::U32);
     blocks(&mut module)[1].parameters.push(ValueDef::new(
@@ -341,6 +346,27 @@ fn cross_block_owned_escaping_volatile_and_unequal_alignment_cells_are_not_selec
     // A valid pointer use outside the closed direct Load/Store census disqualifies
     // the allocation even if it is unreachable or has no memory effect.
     assert_count(module, 0);
+}
+
+#[test]
+fn cross_block_owned_access_alignments_are_bounded_by_the_actual_allocation() {
+    for store_alignment in [1, 2, 4, 8] {
+        for load_alignment in [1, 2, 4, 8] {
+            let mut module = fixture(ScalarType::U32);
+            let Kind::Store { access, .. } = &mut blocks(&mut module)[0].operations[1].kind else {
+                panic!("store")
+            };
+            access.alignment = store_alignment;
+            let Kind::Load { access, .. } = &mut blocks(&mut module)[3].operations[0].kind else {
+                panic!("load")
+            };
+            access.alignment = load_alignment;
+            assert_count(
+                module,
+                usize::from(store_alignment <= 4 && load_alignment <= 4),
+            );
+        }
+    }
 }
 #[test]
 fn cross_block_owned_replay_requires_actual_input_and_stored_receipt() {
@@ -461,8 +487,9 @@ fn cross_block_owned_exact_work_storage_and_first_denial_preserve_incoming_floor
         .sum::<usize>();
     assert_eq!((blocks, edges, operations), (4, 4, 3));
     // Same final CFG suffix as the pair: interval walk + reducibility, then
-    // 3O checks, one reachable/dominates query pair, and pair/owner transfers.
-    let tail_work = 23 * blocks + 11 * edges + 8 + 3 * operations + 15 + 2;
+    // 3O checks, one reachability query (argument is already available),
+    // and pair/owner transfers. No individual Store need dominate the Load.
+    let tail_work = 23 * blocks + 11 * edges + 8 + 3 * operations + 4 + 2;
     assert_eq!(
         (short.1, short.2, short.3, short.4),
         (full.1 - tail_work, full.2 - 2 * blocks, None, Some(full.2))
@@ -761,7 +788,8 @@ fn cross_block_owned_two_fresh_processes_match_complete_bytes_and_lineage() {
 fn cross_block_owned_prepays_twelve_temporary_headers_and_complete_queue_before_backing() {
     assert_eq!(
         plan_headers().unwrap(),
-        12 * size_of::<Vec<u8>>() + size_of::<Queue>()
+        // Twelve original headers plus the exact actual Store-key cache.
+        13 * size_of::<Vec<u8>>() + size_of::<Queue>()
     );
     with_input(fixture(ScalarType::U32), |input, budget| {
         let (inventory, storage) = Inventory::derive(input, budget).unwrap();

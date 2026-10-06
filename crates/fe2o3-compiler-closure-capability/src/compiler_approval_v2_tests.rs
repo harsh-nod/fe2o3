@@ -248,6 +248,29 @@ fn resource(error: Error) -> Resource {
 }
 
 #[test]
+fn shared_operation_quotes_cover_synthetic_intake_and_revalidation() {
+    let tree = Tree::new();
+    let (result, usage) = observe(
+        2 * Owner::MAX_OPERATION_WORK,
+        FLOOR + 2 * Owner::MAX_OPERATION_SCRATCH,
+        |b| {
+            let owner = tree.retained(b);
+            tree.revalidate(&owner, fixture_immutable, b)?;
+            let retained = owner.required_retained_storage();
+            drop(owner);
+            b.release_storage(retained)?;
+            Ok(())
+        },
+    );
+    result.unwrap();
+    assert_eq!(usage.work, LOAD_WORK + REVALIDATE_WORK);
+    assert_eq!(usage.live, FLOOR);
+    assert!(usage.peak <= FLOOR + 2 * Owner::MAX_OPERATION_SCRATCH);
+    assert_eq!(usage.failed_work, None);
+    assert_eq!(usage.failed_storage, None);
+}
+
+#[test]
 fn synthetic_intake_retains_exact_policy_profile_sources_and_original_account() {
     let tree = Tree::new();
     let mut work = Work::new(LIMIT);

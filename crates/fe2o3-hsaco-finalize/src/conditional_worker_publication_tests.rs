@@ -4,6 +4,68 @@ use fe2o3_artifact_transaction::{BuildInvocation, BuildSession, begin_build_atte
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 
 #[test]
+fn original_publication_terminal_exact_one_short_and_partial_failure_accounting() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    const OUTSIDE: usize = MAX_INERT_REFINED_FORWARDING_STORAGE_V1 + 1;
+    let work = Budget::STORAGE_WINDOW_WORK_V1 + ENTRY_WORK + 5;
+    let peak = OUTSIDE + 7 + Budget::STORAGE_WINDOW_SCRATCH_V1 + FRAME + 19;
+    for (work_limit, storage_limit, mode) in [
+        (work, peak, 0),
+        (work - 1, peak, 1),
+        (work, peak - 1, 2),
+        (work, peak, 3),
+        (work, peak, 4),
+    ] {
+        let mut owned = Owned::new(Work::new(work_limit), storage_limit);
+        owned.with_budget(|b| {
+            b.reserve_storage(OUTSIDE).unwrap();
+            let identity = b.storage_account_identity_v1();
+            let ledger = b.work_ledger_identity_v1();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                original_terminal(b, 7, |b| {
+                    terminal_using(b, 7, true, |b| {
+                        b.charge_work(5)?;
+                        b.reserve_storage(19)?;
+                        if mode == 3 {
+                            return Err(Error::Mismatch("component partial refusal"));
+                        }
+                        if mode == 4 {
+                            panic!("component partial unwind");
+                        }
+                        Ok((23, 19))
+                    })
+                    .map_err(|e| e.0)
+                })
+            }));
+            if mode == 0 {
+                let (owner, charge) = outcome.unwrap().unwrap();
+                assert_eq!(owner, 23);
+                assert_eq!(charge.retained_storage(), 19);
+                assert_eq!(b.storage(), OUTSIDE);
+                assert_eq!((b.work(), b.peak_storage()), (work, peak));
+            } else {
+                assert!(matches!(outcome, Ok(Err(_)) | Err(_)));
+                assert!(b.storage() > OUTSIDE);
+                if mode >= 3 {
+                    assert_eq!(b.storage(), peak);
+                }
+            }
+            assert_eq!(b.storage_account_identity_v1(), identity);
+            assert!(b.work_ledger_identity_v1() == ledger);
+            assert_eq!(b.storage_limit(), storage_limit);
+        });
+    }
+    let mut owned = Owned::new(Work::new(work), peak);
+    owned.with_budget(|b| {
+        b.reserve_storage(OUTSIDE).unwrap();
+        assert!(terminal::<()>(b, 7, |_| panic!("legacy cap bypass")).is_err());
+        assert!(original_terminal::<()>(b, OUTSIDE + 1, |_| panic!("unpaid input")).is_err());
+        assert!(original_terminal::<()>(b, usize::MAX, |_| panic!("overflow")).is_err());
+        assert_eq!(b.storage(), OUTSIDE);
+    });
+}
+
+#[test]
 fn conditional_plan_preserves_storage_coordinates_without_native_domain_aliases() {
     let input = inputs();
     let intent = derive_plan(inputs());

@@ -121,6 +121,74 @@ fn decode_error(bytes: &[u8], expected: &str) {
 }
 
 #[test]
+fn continuation_request_preserves_all_four_bindings_and_owns_no_sequence() {
+    let mut work = Work::new(TOTAL_WORK);
+    let mut b = Budget::new(&mut work, LIMIT);
+    let (p, m, binding) = fixture(&mut b);
+    let request = retain(
+        Record::request(&binding, 7, Kind::Reconcile, &[], &mut b),
+        &mut b,
+    );
+    let reply = retain(Record::reply(&request, &[], &mut b), &mut b);
+    let payload = b"untrusted operation bytes";
+    b.reserve_storage(payload.len()).unwrap();
+    for source in [&request, &reply] {
+        for kind in KINDS {
+            for sequence in [1, 7, 8, u64::MAX] {
+                let next = retain(
+                    source.request_on_same_connection(sequence, kind, payload, &mut b),
+                    &mut b,
+                );
+                assert_eq!(
+                    next.canonical_bytes(),
+                    &wire(&p, &m, kind, sequence, payload, None)
+                );
+                assert!(next.matches_binding(&binding, &mut b).unwrap());
+                assert!(!next.is_reply());
+            }
+        }
+    }
+    assert!(
+        request
+            .request_on_same_connection(0, Kind::Observe, &[], &mut b)
+            .is_err()
+    );
+    assert!(
+        request
+            .request_on_same_connection(1, Kind::Observe, &[0; MAX_PAYLOAD + 1], &mut b)
+            .is_err()
+    );
+}
+
+#[test]
+fn continuation_request_charges_exact_work_and_preserves_input_reservations() {
+    let mut fixture_work = Work::new(TOTAL_WORK);
+    let mut fixture_budget = Budget::new(&mut fixture_work, LIMIT);
+    let (_, _, binding) = fixture(&mut fixture_budget);
+    let source = retain(
+        Record::request(&binding, 1, Kind::Reconcile, &[], &mut fixture_budget),
+        &mut fixture_budget,
+    );
+    for case in 0..4 {
+        let floor = RETAINED + 3 - usize::from(case == 2);
+        let mut work = Work::new(WORK - usize::from(case == 1));
+        let mut b = Budget::new(&mut work, RETAINED + 3 + SCRATCH - usize::from(case == 3));
+        b.reserve_storage(floor).unwrap();
+        let account = b.work_ledger_identity_v1();
+        let result = source.request_on_same_connection(1, Kind::Observe, b"rpc", &mut b);
+        assert_eq!(b.storage(), floor);
+        assert!(account == b.work_ledger_identity_v1());
+        if case == 0 {
+            let (value, charge) = result.unwrap();
+            assert_eq!(charge.additional_storage(), value.retained_storage());
+            assert_eq!(b.work(), WORK);
+        } else {
+            assert!(matches!(result, Err(Error::Resource(_))));
+        }
+    }
+}
+
+#[test]
 fn every_kind_and_direction_roundtrips_empty_carriage_sized_and_max_opaque_payloads() {
     assert_eq!(N, 4096);
     assert_eq!(MAX_PAYLOAD, 3864);

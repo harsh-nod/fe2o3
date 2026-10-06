@@ -255,6 +255,7 @@ impl fmt::Debug for InertProductionSemanticCapsuleIdentityV3 {
 pub struct InertProductionSemanticCapsuleV3 {
     invocation: RustcInvocationDescriptorV3,
     invocation_digest: InvocationDigestV3,
+    invocation_canonical_length: usize,
     target: DeviceTargetV1,
     receipts: OrderedInertSemanticLineageReceiptsV3,
     identity: InertProductionSemanticCapsuleIdentityV3,
@@ -334,6 +335,7 @@ impl InertProductionSemanticCapsuleV3 {
         Ok(Self {
             invocation,
             invocation_digest,
+            invocation_canonical_length: invocation_bytes.len(),
             target,
             receipts,
             identity,
@@ -535,6 +537,7 @@ impl InertProductionSemanticCapsuleV3 {
         Ok(Self {
             invocation,
             invocation_digest,
+            invocation_canonical_length: invocation_len,
             target,
             receipts,
             identity,
@@ -550,6 +553,12 @@ impl InertProductionSemanticCapsuleV3 {
     /// Returns the digest rederived from the exact retained invocation.
     pub const fn invocation_digest(&self) -> InvocationDigestV3 {
         self.invocation_digest
+    }
+
+    /// Length of the exact canonical invocation checked during construction or decoding.
+    /// This content coordinate grants no producer or execution authority.
+    pub const fn invocation_canonical_length(&self) -> usize {
+        self.invocation_canonical_length
     }
 
     /// Returns the compiler closure revalidated by the retained invocation.

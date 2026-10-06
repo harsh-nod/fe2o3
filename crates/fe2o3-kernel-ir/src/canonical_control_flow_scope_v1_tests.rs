@@ -7,6 +7,64 @@ use std::{cell::Cell, rc::Rc};
 
 const LIMIT: usize = 100_000_000;
 const FLOOR: usize = 37;
+
+#[test]
+fn cfg_scope_error_sources_preserve_exact_typed_resources_and_control_failures() {
+    use std::error::Error as _;
+
+    let work = Work::new(17).charge_work(18).unwrap_err();
+    let storage = crate::CanonicalKernelIrVerificationStorageLimitV1::new(42, 41);
+    for resource in [
+        Resource::Work(work),
+        Resource::Storage(storage),
+        Resource::Accounting,
+        Resource::Allocation,
+        Resource::Arithmetic,
+    ] {
+        let error = Error::Resource(resource);
+        let cause = error.source().unwrap();
+        assert_eq!(cause.downcast_ref::<Resource>(), Some(&resource));
+        match resource {
+            Resource::Work(expected) => assert_eq!(
+                cause
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<crate::CanonicalKernelIrWorkLimitV1>(),
+                Some(&expected),
+            ),
+            Resource::Storage(expected) => assert_eq!(
+                cause
+                    .source()
+                    .unwrap()
+                    .downcast_ref::<crate::CanonicalKernelIrVerificationStorageLimitV1>(),
+                Some(&expected),
+            ),
+            Resource::Accounting | Resource::Allocation | Resource::Arithmetic => {
+                assert!(cause.source().is_none());
+            }
+        }
+    }
+    let control = ControlFlowError::EmptyFunction;
+    let error = Error::ControlFlow(control.clone());
+    assert_eq!(
+        error.source().unwrap().downcast_ref::<ControlFlowError>(),
+        Some(&control),
+    );
+}
+
+#[test]
+fn cfg_scope_coordinate_and_panic_errors_do_not_invent_resource_causes() {
+    use std::error::Error as _;
+
+    for error in [
+        Error::InvalidFunction(Function(7)),
+        Error::InvalidBlock(block(8)),
+        Error::Panicked,
+    ] {
+        assert!(error.source().is_none());
+    }
+}
+
 fn block(block: u32) -> Block {
     Block {
         function: Function(0),

@@ -18,6 +18,8 @@ use fe2o3_kernel_descriptor::{
 use rmpv::{Value, encode::write_value};
 use sha2::{Digest, Sha256};
 
+#[path = "public_api/mixed_v89.rs"]
+mod mixed_v89;
 #[path = "public_api/nominal_v3.rs"]
 mod nominal_v3;
 #[path = "public_api/nominal_v4.rs"]

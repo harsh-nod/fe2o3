@@ -259,6 +259,104 @@ fn native_configuration_preserves_both_schema_identities_and_exact_account_limit
 }
 
 #[test]
+fn native_environment_repreparation_keeps_the_admitted_recipe_and_account() {
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use native::PreparedNativeProductionBuildConfig as Native;
+    use std::process::Command;
+    const MARKER: &str = "FE2O3_NATIVE_RECIPE_TEST";
+    const TEST: &str = "build_config::tests::native_environment_repreparation_keeps_the_admitted_recipe_and_account";
+    let Some(version) = std::env::var_os(MARKER) else {
+        let scratch = ScratchDirectory::new();
+        for version in [1, 2] {
+            let (path, _) = native_fixture(&scratch, version);
+            let variable = if version == 1 {
+                PRODUCTION_BUILD_CONFIG_ENV
+            } else {
+                PRODUCTION_BUILD_CONFIG_V2_ENV
+            };
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    TEST,
+                    "--format=json",
+                    "-Zunstable-options",
+                    "--test-threads=1",
+                ])
+                .env_clear()
+                .env(MARKER, version.to_string())
+                .env(variable, path)
+                .env("TMPDIR", &scratch.0)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let records: Vec<Value> = String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(records.len(), 4);
+            assert_eq!(
+                records[0],
+                serde_json::json!({"type": "suite", "event": "started", "test_count": 1})
+            );
+            assert_eq!(records[1]["name"], TEST);
+            assert_eq!(records[1]["event"], "started");
+            assert_eq!(records[2]["name"], TEST);
+            assert_eq!(records[2]["event"], "ok");
+            assert_eq!(records[3]["event"], "ok");
+            assert_eq!(records[3]["passed"], 1);
+            assert_eq!(records[3]["failed"], 0);
+        }
+        return;
+    };
+    let version = if version == "1" { 1 } else { 2 };
+    for case in 0..4 {
+        let mut expected = PreparedProductionBuildConfig::from_environment()
+            .unwrap()
+            .unwrap();
+        if case == 1 {
+            expected.link.identity.0[0] ^= 1;
+        }
+        if case == 2 {
+            expected.version = if version == 1 {
+                ProductionBuildConfigVersion::V2(ProductionSourceIsaObservationKindV1::Summary)
+            } else {
+                ProductionBuildConfigVersion::V1
+            };
+        }
+        let mut work = Work::new(if case == 3 { 0 } else { 30_000_000 });
+        let mut budget = Budget::new(&mut work, 30_000_000);
+        budget.reserve_storage(37).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let result = Native::from_environment(&expected, &mut budget);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        if case == 0 {
+            let recipe = result.unwrap();
+            assert_eq!(recipe.identity(), expected.identity());
+            assert_eq!(recipe.retained_storage(), budget.storage() - 37);
+            recipe.check_account(&mut budget).unwrap();
+            let (_, providers, _, _, _, retained) = recipe.into_worker_parts(&mut budget).unwrap();
+            assert_eq!(providers[0].bytes(), b"native configuration provider");
+            assert_eq!(retained, budget.storage() - 37);
+        } else if case == 3 {
+            assert!(matches!(
+                result,
+                Err(BuildConfigError::Resource(Resource::Work(_)))
+            ));
+            assert_eq!((budget.work(), budget.storage()), (0, 37));
+        } else {
+            assert!(matches!(result, Err(BuildConfigError::Invalid(_))));
+            assert!(budget.work() > 0 && budget.storage() > 37);
+        }
+    }
+}
+
+#[test]
 fn native_recipe_rejects_foreign_ledgers_and_retired_input_storage() {
     use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
     use native::PreparedNativeProductionBuildConfig as Native;
@@ -391,6 +489,47 @@ fn native_configuration_resource_denials_precede_their_io_and_parse_operations()
 }
 
 #[test]
+fn native_configuration_maximum_quote_matches_the_actual_debit_schedule() {
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    let limits = native::maximum_preparation_quota().unwrap();
+    for case in 0..3 {
+        let mut work = Work::new(limits.0 - usize::from(case == 1));
+        let mut b = Budget::new(&mut work, limits.1 - usize::from(case == 2));
+        let result = (|| {
+            native::prepay_preparation(&mut b)?;
+            native::prepay_read(MAX_CONFIG_BYTES, &mut b)?;
+            native::prepay_manifest(MAX_CONFIG_BYTES, &mut b)?;
+            native::prepay_providers(
+                fe2o3_hsaco_finalize::MAX_WORKER_TOTAL_INPUT_BYTES,
+                MAX_LINK_INPUTS - 1,
+                &mut b,
+            )
+        })();
+        if case == 0 {
+            assert_eq!(result, Ok(()));
+            assert_eq!((b.work(), b.storage()), limits);
+        } else {
+            assert!(matches!(
+                result,
+                Err(Resource::Work(_) | Resource::Storage(_))
+            ));
+        }
+    }
+}
+
+#[test]
+fn native_environment_preparation_denies_before_inspecting_configuration() {
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    let mut work = Work::new(0);
+    let mut b = Budget::new(&mut work, 0);
+    assert!(matches!(
+        PreparedProductionBuildConfig::from_environment_with_metered_manifest(&mut b),
+        Err(BuildConfigError::Resource(Resource::Work(_)))
+    ));
+    assert_eq!(b.storage(), 0);
+}
+
+#[test]
 fn native_configuration_quote_overflow_keeps_the_original_account() {
     use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
     let mut work = Work::new(100);
@@ -455,6 +594,32 @@ fn production_v1_schema_identity_and_inert_observer_behavior_are_frozen() {
 }
 
 #[test]
+fn production_v2_identity_matches_tutorial_census_golden_vectors() {
+    let vectors: Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/production_build_identity_v2.json"
+    ))
+    .unwrap();
+    let executable =
+        ContentIdentityV1::calculate(vectors["worker_bytes"].as_str().unwrap().as_bytes());
+    for vector in vectors["cases"].as_array().unwrap() {
+        let measurement = WorkerMeasurementV1::new(
+            executable,
+            vector["worker_build_identity"].as_str().unwrap(),
+            vector["llvm_build_identity"].as_str().unwrap(),
+        )
+        .unwrap();
+        let identity = transitive_identity_from_measurement(
+            PRODUCTION_CONFIG_IDENTITY_DOMAIN_V2,
+            PRODUCTION_CONFIG_PROFILE_ID_V2,
+            vectors["manifest"].as_str().unwrap().as_bytes(),
+            &measurement,
+            &[],
+        );
+        assert_eq!(identity.to_hex(), vector["expected"].as_str().unwrap());
+    }
+}
+
+#[test]
 fn production_v2_observation_is_exact_and_has_a_distinct_identity_domain() {
     assert_ne!(
         PRODUCTION_CONFIG_IDENTITY_DOMAIN_V1,
@@ -471,6 +636,11 @@ fn production_v2_observation_is_exact_and_has_a_distinct_identity_domain() {
         parse_source_isa_observation(&serde_json::json!({"kind": "source-isa-characteristic-v1"}))
             .unwrap(),
         ProductionSourceIsaObservationKindV1::Characteristic
+    );
+    assert_eq!(
+        parse_source_isa_observation(&serde_json::json!({"kind": "production-census-v91"}))
+            .unwrap(),
+        ProductionSourceIsaObservationKindV1::ProductionCensusV91
     );
     for rejected in [
         serde_json::json!({"kind": "source-isa-summary-v2"}),

@@ -25,6 +25,7 @@ impl SemanticTransparentBorrowSiteV1 {
 #[derive(Clone, Copy)]
 enum SemanticBorrowOriginV1 {
     Statement(SemanticTransparentBorrowSiteV1),
+    Copy(SemanticTransparentBorrowSiteV1),
     Parameter(u32),
 }
 
@@ -37,9 +38,10 @@ struct SemanticBorrowCandidateV1 {
     source_type: SemanticTypeIdV1,
     source_reference: Option<u32>,
     parent: Option<usize>,
+    shared: bool,
     valid: bool,
-    consumers: u32,
-    closed_consumer: bool,
+    consumers: usize,
+    closed_consumers: usize,
 }
 
 pub(super) fn transparent_borrow_sites_v1(
@@ -47,6 +49,63 @@ pub(super) fn transparent_borrow_sites_v1(
     callables: &[SemanticCallableDeclV1],
 ) -> BTreeSet<SemanticTransparentBorrowSiteV1> {
     analyze_borrow_uses_v29(function, callables, &[], None).0
+}
+
+pub(super) fn borrow_graph_resources_v41(
+    function: &SemanticFunctionDeclV1,
+    roots: usize,
+) -> Result<SemanticSsaAuxiliaryResourcesV1, ProductionSemanticSsaErrorV1> {
+    let overflow = || ProductionSemanticSsaErrorV1::ResourceOverflow;
+    let mut statements = 0_usize;
+    let mut borrows = roots;
+    let mut copies = 0_usize;
+    for block in function.blocks() {
+        statements = statements
+            .checked_add(block.statements().len())
+            .ok_or_else(overflow)?;
+        for statement in block.statements() {
+            if let SemanticStatementKindV1::Assign(assignment) = statement.kind() {
+                match assignment.value().kind() {
+                    SemanticRvalueKindV1::Borrow { .. } => {
+                        borrows = borrows.checked_add(1).ok_or_else(overflow)?
+                    }
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(_)) => {
+                        copies = copies.checked_add(1).ok_or_else(overflow)?
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    if borrows == 0 {
+        return Ok(SemanticSsaAuxiliaryResourcesV1::default());
+    }
+    let candidates = borrows.checked_add(copies).ok_or_else(overflow)?;
+    let height = (usize::BITS
+        - candidates
+            .checked_add(function.locals().len())
+            .ok_or_else(overflow)?
+            .max(1)
+            .leading_zeros()) as usize
+        + 1;
+    // Includes type nomination, alias/occurrence tree nodes and the concurrent
+    // completion, grounding and path buffers. Every graph edge is visited once
+    // per closure phase; the tree factor is for collection and publication.
+    let work_units = statements
+        .checked_add(function.blocks().len())
+        .and_then(|value| value.checked_add(candidates))
+        .and_then(|value| value.checked_mul(32))
+        .and_then(|value| value.checked_mul(height))
+        .and_then(|value| value.checked_add(candidates.checked_mul(32)?))
+        .ok_or_else(overflow)?;
+    let storage_words = candidates
+        .checked_mul(64)
+        .and_then(|value| value.checked_add(64))
+        .ok_or_else(overflow)?;
+    Ok(SemanticSsaAuxiliaryResourcesV1 {
+        storage_words,
+        work_units,
+    })
 }
 
 pub(super) fn analyze_borrow_uses_v29(
@@ -58,7 +117,9 @@ pub(super) fn analyze_borrow_uses_v29(
     let mut candidates = Vec::new();
     let mut candidate_by_reference = BTreeMap::<u32, usize>::new();
     let mut duplicate_references = BTreeSet::new();
+    let mut reference_types = BTreeSet::new();
     for parameter in parameters.iter().flatten() {
+        reference_types.insert(parameter.reference_type);
         candidate_by_reference.insert(parameter.local, candidates.len());
         candidates.push(SemanticBorrowCandidateV1 {
             origin: SemanticBorrowOriginV1::Parameter(parameter.ordinal),
@@ -68,45 +129,88 @@ pub(super) fn analyze_borrow_uses_v29(
             source_type: parameter.pointee,
             source_reference: None,
             parent: None,
+            shared: function.abi().source_argument_ownership().get(parameter.ordinal as usize)
+                == Some(&fe2o3_mir_model::semantic_mir_v1::SemanticSourceArgumentOwnershipV1::SharedBorrow),
             valid: true,
             consumers: 0,
-            closed_consumer: false,
+            closed_consumers: 0,
         });
     }
     let parameter_count = candidates.len();
+    for block in function.blocks() {
+        for statement in block.statements() {
+            if let SemanticStatementKindV1::Assign(assignment) = statement.kind()
+                && matches!(
+                    assignment.value().kind(),
+                    SemanticRvalueKindV1::Borrow { .. }
+                )
+                && assignment.destination().projections().is_empty()
+            {
+                reference_types.insert(assignment.destination().ty());
+            }
+        }
+    }
+    if reference_types.is_empty() {
+        return (BTreeSet::new(), BTreeSet::new());
+    }
     for (block_index, block) in function.blocks().iter().enumerate() {
         for (statement_index, statement) in block.statements().iter().enumerate() {
             let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
                 continue;
             };
-            let SemanticRvalueKindV1::Borrow { place, .. } = assignment.value().kind() else {
-                continue;
-            };
             if !assignment.destination().projections().is_empty() {
                 continue;
             }
-            let source_reference = match place.projections() {
-                [] => None,
-                [projection] if projection.kind() == SemanticProjectionKindV1::Dereference => {
-                    Some(place.local().index())
+            let site = SemanticTransparentBorrowSiteV1 {
+                block: block_index as u32,
+                statement: statement_index as u32,
+            };
+            let (place, origin, source_reference, shared) = match assignment.value().kind() {
+                SemanticRvalueKindV1::Borrow { kind, place } => {
+                    let source_reference = match place.projections() {
+                        [] => None,
+                        [projection]
+                            if projection.kind() == SemanticProjectionKindV1::Dereference =>
+                        {
+                            Some(place.local().index())
+                        }
+                        _ => continue,
+                    };
+                    (
+                        place,
+                        SemanticBorrowOriginV1::Statement(site),
+                        source_reference,
+                        *kind == fe2o3_mir_model::semantic_mir_v1::SemanticBorrowKindV1::Shared,
+                    )
+                }
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place))
+                    if place.projections().is_empty()
+                        && place.ty() == assignment.destination().ty()
+                        && place.ty() == assignment.value().result_type()
+                        && reference_types.contains(&place.ty()) =>
+                {
+                    (
+                        place,
+                        SemanticBorrowOriginV1::Copy(site),
+                        Some(place.local().index()),
+                        false,
+                    )
                 }
                 _ => continue,
             };
             let reference_local = assignment.destination().local().index();
             let candidate = SemanticBorrowCandidateV1 {
-                origin: SemanticBorrowOriginV1::Statement(SemanticTransparentBorrowSiteV1 {
-                    block: block_index as u32,
-                    statement: statement_index as u32,
-                }),
+                origin,
                 reference_local,
                 reference_type: assignment.destination().ty(),
                 source_local: place.local().index(),
                 source_type: place.ty(),
                 source_reference,
                 parent: None,
+                shared,
                 valid: true,
                 consumers: 0,
-                closed_consumer: false,
+                closed_consumers: 0,
             };
             let index = candidates.len();
             candidates.push(candidate);
@@ -164,7 +268,7 @@ pub(super) fn analyze_borrow_uses_v29(
             let definition = candidates
                 .get(next_candidate)
                 .filter(|candidate| {
-                    matches!(candidate.origin, SemanticBorrowOriginV1::Statement(origin) if origin == site)
+                    matches!(candidate.origin, SemanticBorrowOriginV1::Statement(origin) | SemanticBorrowOriginV1::Copy(origin) if origin == site)
                 })
                 .map(|candidate| candidate.reference_local);
             if let Some(reference) = definition {
@@ -220,42 +324,84 @@ pub(super) fn analyze_borrow_uses_v29(
         }
     }
 
-    let mut accepted = BTreeSet::new();
-    for terminal in 0..candidates.len() {
-        if !candidates[terminal].closed_consumer {
+    // A shared copy may fan out, but every outgoing use must close at an
+    // authenticated consumer. A successful sibling cannot hide an escape.
+    let mut complete = vec![false; candidates.len()];
+    let mut pending = Vec::new();
+    for (index, candidate) in candidates.iter().enumerate() {
+        if candidate.valid
+            && candidate.consumers != 0
+            && (candidate.shared || candidate.consumers == 1)
+            && candidate.closed_consumers == candidate.consumers
+        {
+            pending.push(index);
+        }
+    }
+    while let Some(index) = pending.pop() {
+        if complete[index] {
             continue;
         }
-        let mut chain = Vec::new();
-        let mut visited = BTreeSet::new();
-        let mut current = terminal;
-        loop {
-            let candidate = candidates[current];
-            if !candidate.valid || candidate.consumers != 1 || !visited.insert(current) {
-                break;
+        complete[index] = true;
+        if let Some(parent_index) = candidates[index].parent {
+            let parent = &mut candidates[parent_index];
+            parent.closed_consumers = parent.closed_consumers.saturating_add(1);
+            if parent.valid
+                && parent.consumers != 0
+                && (parent.shared || parent.consumers == 1)
+                && parent.closed_consumers == parent.consumers
+            {
+                pending.push(parent_index);
             }
+        }
+    }
+    // Memoize whether a completed node is grounded at an original borrow or
+    // parameter. Shared ancestors are not re-walked for each fan-out leaf.
+    let mut grounded = vec![0_u8; candidates.len()];
+    let mut chain = Vec::new();
+    for terminal in 0..candidates.len() {
+        if grounded[terminal] != 0 {
+            continue;
+        }
+        chain.clear();
+        let mut current = terminal;
+        let accepted = loop {
+            if grounded[current] != 0 {
+                break grounded[current] == 2;
+            }
+            let candidate = candidates[current];
+            if !complete[current] {
+                break false;
+            }
+            grounded[current] = 1;
             chain.push(current);
             if candidate.source_reference.is_none() {
-                accepted.extend(chain);
-                break;
+                break true;
             }
             let Some(parent) = candidate.parent else {
-                break;
+                break false;
             };
             current = parent;
+        };
+        for index in &chain {
+            grounded[*index] = if accepted { 2 } else { 3 };
         }
     }
     // Parameter roots describe body effects only. They must never become
     // fabricated statement sites or SSA entry definitions.
     let mut sites = BTreeSet::new();
     let mut closed = BTreeSet::new();
-    for candidate in accepted {
-        match candidates[candidate].origin {
+    for (candidate, status) in candidates.iter().zip(grounded) {
+        if status != 2 {
+            continue;
+        }
+        match candidate.origin {
             SemanticBorrowOriginV1::Statement(site) => {
                 sites.insert(site);
             }
             SemanticBorrowOriginV1::Parameter(ordinal) => {
                 closed.insert(ordinal);
             }
+            SemanticBorrowOriginV1::Copy(_) => {}
         }
     }
     for candidate in &candidates[..parameter_count] {
@@ -356,7 +502,7 @@ fn invalidate_reference_uses_in_statement_v1(
                 .get(&assignment.destination().local().index())
                 .copied()
                 .filter(|candidate| {
-                    matches!(candidates[*candidate].origin, SemanticBorrowOriginV1::Statement(origin) if origin == site)
+                    matches!(candidates[*candidate].origin, SemanticBorrowOriginV1::Statement(origin) | SemanticBorrowOriginV1::Copy(origin) if origin == site)
                 });
             if let Some(candidate) = candidate_by_reference
                 .get(&assignment.destination().local().index())
@@ -369,6 +515,25 @@ fn invalidate_reference_uses_in_statement_v1(
                 if let Some(source_reference) = candidates[candidate].source_reference {
                     match candidate_by_reference.get(&source_reference).copied() {
                         Some(parent) if parent != candidate => {
+                            if matches!(
+                                candidates[candidate].origin,
+                                SemanticBorrowOriginV1::Copy(_)
+                            ) {
+                                let defined_before = match candidates[parent].origin {
+                                    SemanticBorrowOriginV1::Statement(origin)
+                                    | SemanticBorrowOriginV1::Copy(origin) => {
+                                        origin.block != site.block
+                                            || origin.statement < site.statement
+                                    }
+                                    SemanticBorrowOriginV1::Parameter(_) => true,
+                                };
+                                candidates[candidate].valid &= candidates[parent].shared
+                                    && defined_before
+                                    && candidates[candidate].reference_type
+                                        == candidates[parent].reference_type;
+                                candidates[candidate].source_type = candidates[parent].source_type;
+                                candidates[candidate].shared = candidates[parent].shared;
+                            }
                             candidates[candidate].parent = Some(parent);
                             candidates[parent].consumers =
                                 candidates[parent].consumers.saturating_add(1);
@@ -479,31 +644,34 @@ fn validate_reference_uses_in_terminator_v1(
                     continue;
                 };
                 let candidate = candidates[candidate_index];
-                let accepted = match callable {
-                    Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) => {
-                        compiler_intrinsic_accepts_transparent_borrow_v1(
-                            operation,
-                            argument_index,
-                            candidate.source_type,
-                        )
-                    }
-                    Some(SemanticCallableDeclV1::Defined { function }) => {
-                        effects.is_some_and(|effects| {
-                            place.ty() == candidate.reference_type
-                                && effects.accepts(
-                                    *function,
-                                    argument_index,
-                                    candidate.reference_type,
-                                    candidate.source_type,
-                                )
-                        })
-                    }
-                    Some(SemanticCallableDeclV1::DeviceFfiImport { .. }) | None => false,
-                };
+                let accepted = place.ty() == candidate.reference_type
+                    && match callable {
+                        Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) => {
+                            compiler_intrinsic_accepts_transparent_borrow_v1(
+                                operation,
+                                argument_index,
+                                candidate.source_type,
+                            )
+                        }
+                        Some(SemanticCallableDeclV1::Defined { function }) => {
+                            effects.is_some_and(|effects| {
+                                place.ty() == candidate.reference_type
+                                    && effects.accepts(
+                                        *function,
+                                        argument_index,
+                                        candidate.reference_type,
+                                        candidate.source_type,
+                                    )
+                            })
+                        }
+                        Some(SemanticCallableDeclV1::DeviceFfiImport { .. }) | None => false,
+                    };
                 if accepted {
                     candidates[candidate_index].consumers =
                         candidates[candidate_index].consumers.saturating_add(1);
-                    candidates[candidate_index].closed_consumer = true;
+                    candidates[candidate_index].closed_consumers = candidates[candidate_index]
+                        .closed_consumers
+                        .saturating_add(1);
                 } else {
                     candidates[candidate_index].valid = false;
                 }
@@ -996,15 +1164,29 @@ pub fn authenticated_ambient_workgroup_lds_scope_zst_v1(
 
 fn classify_storage_observable_locals_v1(
     function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
     transparent_borrows: &BTreeSet<SemanticTransparentBorrowSiteV1>,
     promotable: &mut [bool],
-) {
+) -> (usize, usize) {
+    let mut projection_work = 0;
+    let mut field_updates = 0_usize;
     for (block_index, block) in function.blocks().iter().enumerate() {
         for (statement_index, statement) in block.statements().iter().enumerate() {
             match statement.kind() {
                 SemanticStatementKindV1::Assign(assignment) => {
-                    if !assignment.destination().projections().is_empty() {
-                        mark_local_storage_observable_v1(assignment.destination(), promotable);
+                    if static_field_assignment_v1(
+                        function,
+                        types,
+                        assignment.destination(),
+                        &mut projection_work,
+                    ) {
+                        field_updates = field_updates.saturating_add(1);
+                    } else if !assignment.destination().projections().is_empty() {
+                        mark_local_storage_observable_v1(
+                            assignment.destination(),
+                            promotable,
+                            &mut projection_work,
+                        );
                     }
                     classify_rvalue_storage_v1(
                         assignment.value().kind(),
@@ -1013,26 +1195,55 @@ fn classify_storage_observable_locals_v1(
                             statement: statement_index as u32,
                         }),
                         promotable,
+                        &mut projection_work,
                     );
                 }
                 SemanticStatementKindV1::Store(store) => {
-                    mark_local_storage_observable_v1(store.destination(), promotable);
+                    mark_local_storage_observable_v1(
+                        store.destination(),
+                        promotable,
+                        &mut projection_work,
+                    );
                 }
                 SemanticStatementKindV1::AtomicRmw(operation) => {
                     if !operation.destination().projections().is_empty() {
-                        mark_local_storage_observable_v1(operation.destination(), promotable);
+                        mark_local_storage_observable_v1(
+                            operation.destination(),
+                            promotable,
+                            &mut projection_work,
+                        );
                     }
-                    mark_local_storage_observable_v1(operation.address(), promotable);
+                    mark_local_storage_observable_v1(
+                        operation.address(),
+                        promotable,
+                        &mut projection_work,
+                    );
                 }
                 SemanticStatementKindV1::AtomicCompareExchange(operation) => {
                     if !operation.destination().projections().is_empty() {
-                        mark_local_storage_observable_v1(operation.destination(), promotable);
+                        mark_local_storage_observable_v1(
+                            operation.destination(),
+                            promotable,
+                            &mut projection_work,
+                        );
                     }
-                    mark_local_storage_observable_v1(operation.address(), promotable);
+                    mark_local_storage_observable_v1(
+                        operation.address(),
+                        promotable,
+                        &mut projection_work,
+                    );
+                }
+                SemanticStatementKindV1::Deinitialize(place)
+                    if super::partial_moves::is_static_local_deinitialize_v1(place) =>
+                {
+                    // Removing a logical value does not expose its backing.
+                    // The partial-state certificate validates the exact path
+                    // and every later use, including joins and reinitialization.
+                    projection_work = projection_work.saturating_add(place.projections().len());
                 }
                 SemanticStatementKindV1::SetDiscriminant { place, .. }
                 | SemanticStatementKindV1::Deinitialize(place) => {
-                    mark_local_storage_observable_v1(place, promotable);
+                    mark_local_storage_observable_v1(place, promotable, &mut projection_work);
                 }
                 SemanticStatementKindV1::Assume(_) => {}
                 SemanticStatementKindV1::StorageLive(_)
@@ -1045,12 +1256,16 @@ fn classify_storage_observable_locals_v1(
                 if let Some(destination) = call.destination()
                     && !destination.place().projections().is_empty()
                 {
-                    mark_local_storage_observable_v1(destination.place(), promotable);
+                    mark_local_storage_observable_v1(
+                        destination.place(),
+                        promotable,
+                        &mut projection_work,
+                    );
                 }
             }
             SemanticTerminatorKindV1::TailCall(_) | SemanticTerminatorKindV1::SwitchInt { .. } => {}
             SemanticTerminatorKindV1::Drop { place, .. } => {
-                mark_local_storage_observable_v1(place, promotable);
+                mark_local_storage_observable_v1(place, promotable, &mut projection_work);
             }
             SemanticTerminatorKindV1::Assert { .. } => {}
             SemanticTerminatorKindV1::Goto(_)
@@ -1062,21 +1277,61 @@ fn classify_storage_observable_locals_v1(
             | SemanticTerminatorKindV1::Unreachable => {}
         }
     }
+    (projection_work, field_updates)
+}
+
+fn static_field_assignment_v1(
+    function: &SemanticFunctionDeclV1,
+    types: Option<&[SemanticTypeDeclV1]>,
+    destination: &SemanticPlaceV1,
+    work: &mut usize,
+) -> bool {
+    if destination.projections().is_empty() {
+        return false;
+    }
+    let Some(types) = types else { return false };
+    *work = work.saturating_add(3);
+    let Some(local) = function.locals().get(destination.local().index() as usize) else {
+        return false;
+    };
+    let mut ty = local.ty();
+    for projection in destination.projections() {
+        *work = work.saturating_add(4);
+        let SemanticProjectionKindV1::Field(field) = projection.kind() else {
+            return false;
+        };
+        let Some(SemanticTypeShapeV1::Tuple(fields) | SemanticTypeShapeV1::Aggregate(fields)) =
+            types
+                .get(ty.index() as usize)
+                .map(SemanticTypeDeclV1::shape)
+        else {
+            return false;
+        };
+        let Some(next) = fields.fields().get(field as usize).copied() else {
+            return false;
+        };
+        if next != projection.result_type() {
+            return false;
+        }
+        ty = next;
+    }
+    ty == destination.ty()
 }
 
 fn classify_rvalue_storage_v1(
     value: &SemanticRvalueKindV1,
     transparent_borrow: bool,
     promotable: &mut [bool],
+    projection_work: &mut usize,
 ) {
     match value {
         SemanticRvalueKindV1::Borrow { .. } if transparent_borrow => {}
         SemanticRvalueKindV1::Borrow { place, .. }
         | SemanticRvalueKindV1::AddressOf { place, .. } => {
-            mark_local_storage_observable_v1(place, promotable);
+            mark_local_storage_observable_v1(place, promotable, projection_work);
         }
         SemanticRvalueKindV1::Load(load) => {
-            mark_local_storage_observable_v1(load.source(), promotable);
+            mark_local_storage_observable_v1(load.source(), promotable, projection_work);
         }
         SemanticRvalueKindV1::Use(_)
         | SemanticRvalueKindV1::Unary { .. }
@@ -1090,14 +1345,18 @@ fn classify_rvalue_storage_v1(
     }
 }
 
-fn mark_local_storage_observable_v1(place: &SemanticPlaceV1, promotable: &mut [bool]) {
-    let rooted_behind_pointer = matches!(
-        place
-            .projections()
-            .first()
-            .map(|projection| projection.kind()),
-        Some(SemanticProjectionKindV1::Dereference),
-    );
+fn mark_local_storage_observable_v1(
+    place: &SemanticPlaceV1,
+    promotable: &mut [bool],
+    projection_work: &mut usize,
+) {
+    // A dereference after aggregate projections still crosses the root allocation.
+    // Charge the full possible scan; saturation fails the checked auxiliary sum.
+    *projection_work = projection_work.saturating_add(place.projections().len());
+    let rooted_behind_pointer = place
+        .projections()
+        .iter()
+        .any(|projection| projection.kind() == SemanticProjectionKindV1::Dereference);
     if !rooted_behind_pointer
         && let Some(value) = promotable.get_mut(place.local().index() as usize)
     {

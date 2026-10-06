@@ -3523,18 +3523,31 @@ fn formal_memory_admission_retains_exact_kir_without_authority() {
 }
 
 #[test]
-fn unsupported_statement_and_terminator_fail_closed() {
-    assert!(matches!(
-        ProductionSemanticKirOwnerV1::try_lower(
-            semantic_owner(true, false),
-            ProductionSemanticKirLimitsV1::default(),
+fn uninitialized_deinitialize_and_unsupported_terminator_fail_closed() {
+    // Static Deinitialize is supported, but this exact fixture never defines
+    // return local0 before its block0/event0 use. Reject before materialization.
+    let error = ProductionSemanticKirOwnerV1::try_lower(
+        semantic_owner(true, false),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .err()
+    .expect("uninitialized removal cannot produce executable KIR");
+    assert!(
+        matches!(
+            error,
+            ProductionSemanticKirErrorV1::SemanticSsa(
+                fe2o3_pliron::ProductionSemanticSsaErrorV1::Planner {
+                    function,
+                    error: fe2o3_mir_model::SsaPlannerErrorV1::UndefinedAtUse {
+                        block,
+                        event: 0,
+                        variable,
+                    },
+                }
+            ) if function.index() == 0 && block.get() == 0 && variable.get() == 0
         ),
-        Err(ProductionSemanticKirErrorV1::Unsupported {
-            block: Some(0),
-            statement: Some(0),
-            ..
-        })
-    ));
+        "{error:?}"
+    );
     assert!(matches!(
         ProductionSemanticKirOwnerV1::try_lower(
             semantic_owner(false, true),

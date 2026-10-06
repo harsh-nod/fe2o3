@@ -1,0 +1,341 @@
+struct InvocationSourceReferenceV38 {
+    origin: int,
+    version: int,
+    frame: MemoryDynamicFrameV30,
+    source_type: int,
+    origin_generation: int,
+    borrow_instance: int,
+    borrow_block: int,
+    borrow_statement: int,
+}
+
+struct InvocationSourceLogicalV38 {
+    versions: Seq<int>,
+    // Nominal original source types, never inferred from a scalar payload.
+    witnesses: Map<int, int>,
+    references: Map<int, InvocationSourceReferenceV38>,
+    execution_references: Map<int, InvocationSourceExecutionReferenceV168>,
+    descriptor_references: Map<int, InvocationSourceDescriptorReferenceV51>,
+    aggregates: Map<int, InvocationSourceAggregateV42>,
+    enums: Map<int, InvocationSourceEnumV47>,
+}
+
+spec fn invocation_source_logical_initial_v38(count: nat) -> InvocationSourceLogicalV38 {
+    InvocationSourceLogicalV38 { versions: Seq::new(count, |i: int| 0int),
+        witnesses: Map::empty(), references: Map::empty(), execution_references: Map::empty(),
+        descriptor_references: Map::empty(),
+        aggregates: Map::empty(), enums: Map::empty() }
+}
+
+spec fn invocation_source_logical_well_formed_v38(
+    logical: InvocationSourceLogicalV38, count: int,
+) -> bool {
+    logical.versions.len() == count
+        && (forall|i: int| 0 <= i < count ==> logical.versions[i] >= 0)
+        && invocation_source_execution_ancestry_v168(logical.execution_references)
+        && (forall|i: int| logical.execution_references.contains_key(i) ==>
+            0 <= i < count
+                && invocation_source_execution_reference_shape_v168(logical.execution_references[i], logical.versions)
+                && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i)
+                && !logical.descriptor_references.contains_key(i)
+                && !logical.aggregates.contains_key(i) && !logical.enums.contains_key(i))
+        && (forall|i: int| logical.descriptor_references.contains_key(i) ==>
+            0 <= i < count
+                && invocation_source_descriptor_reference_shape_v51(logical.descriptor_references[i], count)
+                && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i)
+                && !logical.aggregates.contains_key(i) && !logical.enums.contains_key(i))
+        && (forall|i: int| logical.enums.contains_key(i) ==>
+            0 <= i < count && invocation_source_enum_well_formed_v47(logical.enums[i])
+                && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i)
+                && !logical.aggregates.contains_key(i))
+        && (forall|i: int| logical.aggregates.contains_key(i) ==>
+            0 <= i < count && invocation_source_aggregate_well_formed_v42(logical.aggregates[i])
+                && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i))
+        && (forall|i: int| logical.witnesses.contains_key(i) ==>
+            0 <= i < count && logical.witnesses[i] >= 0
+                && !logical.references.contains_key(i))
+        && (forall|i: int| logical.references.contains_key(i) ==>
+            0 <= i < count && 0 <= logical.references[i].origin < count
+                && logical.references[i].version >= 0
+                && logical.references[i].source_type >= 0
+                && logical.references[i].origin_generation >= 0
+                && logical.references[i].borrow_instance >= 0
+                && logical.references[i].borrow_block >= 0
+                && logical.references[i].borrow_statement >= 0)
+}
+
+spec fn invocation_source_logical_write_v38(
+    logical: InvocationSourceLogicalV38, local: int,
+) -> InvocationSourceLogicalV38 {
+    InvocationSourceLogicalV38 {
+        versions: logical.versions.update(local, logical.versions[local] + 1),
+        witnesses: logical.witnesses.remove(local),
+        references: logical.references.remove(local),
+        execution_references: logical.execution_references.remove(local),
+        descriptor_references: logical.descriptor_references.remove(local),
+        aggregates: logical.aggregates.remove(local),
+        enums: logical.enums.remove(local),
+    }
+}
+
+spec fn invocation_source_logical_clear_v38(
+    logical: InvocationSourceLogicalV38, begin: int, end: int,
+) -> InvocationSourceLogicalV38 {
+    InvocationSourceLogicalV38 {
+        versions: Seq::new(logical.versions.len(), |i: int|
+            if begin <= i < end { logical.versions[i] + 1 } else { logical.versions[i] }),
+        witnesses: Map::new(logical.witnesses.dom().filter(|i: int| !(begin <= i < end)),
+            |i: int| logical.witnesses[i]),
+        references: Map::new(logical.references.dom().filter(|i: int| !(begin <= i < end)),
+            |i: int| logical.references[i]),
+        execution_references: Map::new(logical.execution_references.dom().filter(|i: int| !(begin <= i < end)),
+            |i: int| logical.execution_references[i]),
+        descriptor_references: Map::new(logical.descriptor_references.dom().filter(|i: int| !(begin <= i < end)),
+            |i: int| logical.descriptor_references[i]),
+        aggregates: Map::new(logical.aggregates.dom().filter(|i: int| !(begin <= i < end)),
+            |i: int| logical.aggregates[i]),
+        enums: Map::new(logical.enums.dom().filter(|i: int| !(begin <= i < end)),
+            |i: int| logical.enums[i]),
+    }
+}
+
+spec fn invocation_source_witness_current_v38(
+    source: InvocationSourceByteStateV36, local: int, source_type: int,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && 0 <= local < source.machine.values.len()
+        && source.logical.witnesses.contains_key(local)
+        && source.logical.witnesses[local] == source_type
+        && match (source.machine.values[local], source.machine.frames.execution) {
+            (MemoryValueV30::Scalar(value), Some(execution)) =>
+                byte_execution_well_formed_v37(execution)
+                    && execution.rank == 1
+                    && value == byte_execution_index_v37(execution, 0, 0),
+            _ => false,
+        }
+}
+
+spec fn invocation_source_reference_current_v38(
+    source: InvocationSourceByteStateV36, local: int, source_type: int,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && source.logical.references.contains_key(local)
+        && source.logical.references[local].source_type == source_type
+        && ({ let reference = source.logical.references[local];
+            source.logical.versions[reference.origin] == reference.version
+                && invocation_source_witness_current_v38(source, reference.origin, source_type)
+                && source.machine.values[local] == source.machine.values[reference.origin]
+                && exists|i: int| 0 <= i < source.machine.frames.active.len()
+                    && source.machine.frames.active[i] == reference.frame })
+}
+
+spec fn invocation_source_issue_witness_v38(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int, bits: int,
+) -> InvocationSourceByteStateV36 {
+    match source.machine.frames.execution {
+        Some(execution) => {
+            if source_type < 0 || !byte_execution_well_formed_v37(execution) || execution.rank != 1
+                || !(bits == 32 || bits == 64)
+                || byte_execution_index_v37(execution, 0, 0) >= memory_value_modulus_v30(bits / 8) {
+                invocation_source_byte_refused_v36(source)
+            } else {
+                let changed = invocation_source_byte_put_local_v36(source, destination,
+                    MemoryValueV30::Scalar(byte_execution_index_v37(execution, 0, 0)));
+                InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+                    witnesses: changed.logical.witnesses.insert(destination, source_type),
+                    ..changed.logical }, ..changed }
+            }
+        },
+        None => invocation_source_byte_refused_v36(source),
+    }
+}
+
+spec fn invocation_source_borrow_witness_v38(
+    source: InvocationSourceByteStateV36, destination: int, origin: int,
+    source_type: int, origin_generation: int, instance: int, block: int, statement: int,
+) -> InvocationSourceByteStateV36 {
+    if destination == origin || !invocation_source_witness_current_v38(source, origin, source_type)
+        || source.machine.frames.active.len() == 0 || origin_generation < 0
+        || instance < 0 || block < 0 || statement < 0 {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let reference = InvocationSourceReferenceV38 { origin,
+            version: source.logical.versions[origin], frame: source.machine.frames.active.last(),
+            source_type, origin_generation, borrow_instance: instance, borrow_block: block,
+            borrow_statement: statement };
+        let changed = invocation_source_byte_put_local_v36(source, destination, source.machine.values[origin]);
+        InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+            references: changed.logical.references.insert(destination, reference),
+            ..changed.logical }, ..changed }
+    }
+}
+
+struct InvocationSourceWitnessParentV43 {
+    local: int,
+    instance: int,
+    block: int,
+    statement: int,
+}
+
+spec fn invocation_source_reborrow_witness_v43(
+    source: InvocationSourceByteStateV36, destination: int, origin: int,
+    source_type: int, origin_generation: int, instance: int, block: int, statement: int,
+    parent: Option<InvocationSourceWitnessParentV43>,
+) -> InvocationSourceByteStateV36 {
+    match parent {
+        None => invocation_source_borrow_witness_v38(source, destination, origin,
+            source_type, origin_generation, instance, block, statement),
+        Some(parent) => {
+            if destination == origin || !invocation_source_reference_current_v38(source, parent.local, source_type)
+                || source.logical.references[parent.local].origin != origin
+                || source.logical.references[parent.local].origin_generation != origin_generation
+                || source.logical.references[parent.local].borrow_instance != parent.instance
+                || source.logical.references[parent.local].borrow_block != parent.block
+                || source.logical.references[parent.local].borrow_statement != parent.statement
+                || instance < 0 || block < 0 || statement < 0 {
+                invocation_source_byte_refused_v36(source)
+            } else {
+                // Preserve the original dynamic origin frame and version, not
+                // the scalar bits or the current frame as a new authority.
+                let reference = InvocationSourceReferenceV38 {
+                    borrow_instance: instance, borrow_block: block, borrow_statement: statement,
+                    ..source.logical.references[parent.local] };
+                let changed = invocation_source_byte_put_local_v36(source, destination, source.machine.values[parent.local]);
+                InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+                    references: changed.logical.references.insert(destination, reference),
+                    ..changed.logical }, ..changed }
+            }
+        },
+    }
+}
+
+spec fn invocation_source_read_witness_v38(
+    source: InvocationSourceByteStateV36, destination: int, reference: int, source_type: int,
+    origin: int, generation: int, instance: int, block: int, statement: int, moved: bool,
+) -> InvocationSourceByteStateV36 {
+    if !invocation_source_reference_current_v38(source, reference, source_type)
+        || source.logical.references[reference].origin != origin
+        || source.logical.references[reference].origin_generation != generation
+        || source.logical.references[reference].borrow_instance != instance
+        || source.logical.references[reference].borrow_block != block
+        || source.logical.references[reference].borrow_statement != statement {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let value = source.machine.values[reference];
+        let consumed = if moved {
+            invocation_source_byte_put_local_v36(source, reference, MemoryValueV30::Undefined)
+        } else { source };
+        invocation_source_byte_put_local_v36(consumed, destination, value)
+    }
+}
+
+proof fn source_witness_reborrow_requires_current_parent_v43(
+    source: InvocationSourceByteStateV36, destination: int, origin: int,
+    source_type: int, generation: int, instance: int, block: int, statement: int,
+    parent: InvocationSourceWitnessParentV43,
+)
+    requires !invocation_source_reference_current_v38(source, parent.local, source_type),
+    ensures !invocation_source_reborrow_witness_v43(source, destination, origin,
+        source_type, generation, instance, block, statement, Some(parent)).machine.valid,
+{}
+
+proof fn source_witness_reborrow_preserves_original_dynamic_loan_v43(
+    source: InvocationSourceByteStateV36, destination: int, origin: int,
+    source_type: int, generation: int, instance: int, block: int, statement: int,
+    parent: InvocationSourceWitnessParentV43,
+)
+    requires invocation_source_reborrow_witness_v43(source, destination, origin,
+        source_type, generation, instance, block, statement, Some(parent)).machine.valid,
+    ensures ({ let changed = invocation_source_reborrow_witness_v43(source, destination, origin,
+        source_type, generation, instance, block, statement, Some(parent));
+        changed.logical.references[destination].frame == source.logical.references[parent.local].frame
+            && changed.logical.references[destination].version == source.logical.references[parent.local].version
+            && changed.logical.references[destination].origin == source.logical.references[parent.local].origin
+            && changed.logical.references[destination].borrow_instance == instance
+            && changed.logical.references[destination].borrow_block == block
+            && changed.logical.references[destination].borrow_statement == statement }),
+{}
+
+proof fn source_witness_reborrow_rejects_wrong_original_parent_site_v43(
+    source: InvocationSourceByteStateV36, destination: int, origin: int,
+    source_type: int, generation: int, instance: int, block: int, statement: int,
+    parent: InvocationSourceWitnessParentV43,
+)
+    requires source.logical.references.contains_key(parent.local),
+        source.logical.references[parent.local].borrow_instance != parent.instance
+            || source.logical.references[parent.local].borrow_block != parent.block
+            || source.logical.references[parent.local].borrow_statement != parent.statement,
+    ensures !invocation_source_reborrow_witness_v43(source, destination, origin,
+        source_type, generation, instance, block, statement, Some(parent)).machine.valid,
+{}
+
+spec fn invocation_source_convert_witness_v38(
+    source: InvocationSourceByteStateV36, destination: int, input: int,
+    input_type: int, output_type: int, moved: bool,
+) -> InvocationSourceByteStateV36 {
+    if !invocation_source_witness_current_v38(source, input, input_type) || output_type < 0 {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let value = source.machine.values[input];
+        let consumed = if moved {
+            invocation_source_byte_put_local_v36(source, input, MemoryValueV30::Undefined)
+        } else { source };
+        let changed = invocation_source_byte_put_local_v36(consumed, destination, value);
+        InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+            witnesses: changed.logical.witnesses.insert(destination, output_type),
+            ..changed.logical }, ..changed }
+    }
+}
+
+spec fn invocation_source_transfer_witness_v40(
+    source: InvocationSourceByteStateV36, destination: int, input: int,
+    source_type: int, reference: bool, moved: bool,
+) -> InvocationSourceByteStateV36 {
+    if destination < 0 || source.machine.values.len() <= destination {
+        invocation_source_byte_refused_v36(source)
+    } else if reference {
+        if !invocation_source_reference_current_v38(source, input, source_type)
+            || destination == source.logical.references[input].origin {
+            invocation_source_byte_refused_v36(source)
+        } else {
+            // Snapshot before consuming input, including self-moves. The full
+            // original loan record keeps its origin, version and frame identity.
+            let loan = source.logical.references[input];
+            let value = source.machine.values[input];
+            let consumed = if moved {
+                invocation_source_byte_put_local_v36(source, input, MemoryValueV30::Undefined)
+            } else { source };
+            let changed = invocation_source_byte_put_local_v36(consumed, destination, value);
+            InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+                references: changed.logical.references.insert(destination, loan),
+                ..changed.logical }, ..changed }
+        }
+    } else if !moved {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        // The nominal type is unchanged; convert checks currentness, consumes
+        // input and updates destination through the version-invalidating writer.
+        invocation_source_convert_witness_v38(source, destination, input,
+            source_type, source_type, true)
+    }
+}
+
+proof fn invocation_source_same_value_write_invalidates_reference_v38(
+    source: InvocationSourceByteStateV36, reference: int, source_type: int,
+)
+    requires invocation_source_reference_current_v38(source, reference, source_type),
+        reference != source.logical.references[reference].origin,
+    ensures !invocation_source_reference_current_v38(invocation_source_byte_put_local_v36(
+        source, source.logical.references[reference].origin,
+        source.machine.values[source.logical.references[reference].origin]), reference, source_type),
+{ }
+
+proof fn invocation_source_frame_clear_invalidates_reference_v38(
+    source: InvocationSourceByteStateV36, reference: int, source_type: int, begin: int, end: int,
+)
+    requires invocation_source_reference_current_v38(source, reference, source_type),
+        0 <= begin <= source.logical.references[reference].origin < end <= source.machine.values.len(),
+    ensures !invocation_source_reference_current_v38(InvocationSourceByteStateV36 {
+        logical: invocation_source_logical_clear_v38(source.logical, begin, end), ..source },
+        reference, source_type),
+{ }

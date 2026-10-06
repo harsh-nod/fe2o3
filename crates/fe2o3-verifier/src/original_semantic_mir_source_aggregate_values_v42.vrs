@@ -1,0 +1,330 @@
+// Only original field paths and original type identities are stored here.
+// Missing leaves are uninitialized or moved, not zero-valued components.
+struct InvocationSourceAggregateV42 {
+    source_type: int,
+    leaves: Map<Seq<int>, MemoryValueV30>,
+    // Shadow provenance is not a Rust field and cannot be reconstructed from leaves.
+    execution_lease: Option<InvocationSourceExecutionReferenceV168>,
+}
+
+enum InvocationSourceValueV42 {
+    Execution(InvocationSourceExecutionReferenceV168),
+    Carrier(MemoryValueV30),
+    Aggregate(InvocationSourceAggregateV42),
+    Enum(InvocationSourceEnumV47),
+    Descriptor(InvocationSourceDescriptorSnapshotV53),
+}
+
+struct InvocationSourceValueEvaluationV42 {
+    source: InvocationSourceByteStateV36,
+    value: InvocationSourceValueV42,
+}
+
+struct InvocationSourceAggregatePlaceV42 {
+    local: int,
+    root_type: int,
+    result_type: int,
+    first_leaf: int,
+    depth: int,
+}
+
+spec fn invocation_source_aggregate_place_path_v42(place: InvocationSourceAggregatePlaceV42)
+    -> Seq<int>
+{
+    invocation_source_aggregate_leaf_path_v42(place.root_type, place.first_leaf).take(place.depth)
+}
+
+spec fn invocation_source_aggregate_place_valid_v42(place: InvocationSourceAggregatePlaceV42)
+    -> bool
+{
+    0 <= place.first_leaf < invocation_source_aggregate_leaf_count_v42(place.root_type)
+        && 0 <= place.depth <= invocation_source_aggregate_leaf_path_v42(place.root_type, place.first_leaf).len()
+        && invocation_source_aggregate_leaf_count_v42(place.result_type) > 0
+        && invocation_source_aggregate_type_at_v42(place.root_type,
+            invocation_source_aggregate_place_path_v42(place)) == Some(place.result_type)
+}
+
+spec fn invocation_source_path_prefix_v42(prefix: Seq<int>, path: Seq<int>) -> bool {
+    prefix.len() <= path.len()
+        && forall|i: int| 0 <= i < prefix.len() ==> prefix[i] == path[i]
+}
+
+spec fn invocation_source_aggregate_type_at_v42(source_type: int, path: Seq<int>)
+    -> Option<int>
+    decreases path.len(),
+{
+    if path.len() == 0 { Some(source_type) }
+    else { match invocation_source_aggregate_child_v42(source_type, path[0]) {
+        Some(child) => invocation_source_aggregate_type_at_v42(child, path.drop_first()),
+        None => None,
+    } }
+}
+
+spec fn invocation_source_aggregate_well_formed_v42(value: InvocationSourceAggregateV42) -> bool {
+    invocation_source_aggregate_leaf_count_v42(value.source_type) > 0
+        && (forall|path: Seq<int>| value.leaves.contains_key(path) ==>
+            exists|ordinal: int| 0 <= ordinal < invocation_source_aggregate_leaf_count_v42(value.source_type)
+                && path == invocation_source_aggregate_leaf_path_v42(value.source_type, ordinal)
+                && invocation_source_byte_value_typed_v36(value.leaves[path],
+                    invocation_source_aggregate_leaf_bits_v42(value.source_type, ordinal)))
+}
+
+spec fn invocation_source_aggregate_complete_v42(value: InvocationSourceAggregateV42) -> bool {
+    invocation_source_aggregate_well_formed_v42(value)
+        && (forall|ordinal: int| 0 <= ordinal < invocation_source_aggregate_leaf_count_v42(value.source_type) ==>
+            value.leaves.contains_key(invocation_source_aggregate_leaf_path_v42(value.source_type, ordinal)))
+}
+
+spec fn invocation_source_aggregate_leaf_v42(
+    source: InvocationSourceByteStateV36, local: int, source_type: int, path: Seq<int>,
+) -> Option<MemoryValueV30> {
+    if source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && source.logical.aggregates.contains_key(local)
+        && source.logical.aggregates[local].source_type == source_type
+        && invocation_source_aggregate_well_formed_v42(source.logical.aggregates[local])
+        && source.logical.aggregates[local].leaves.contains_key(path) {
+        Some(source.logical.aggregates[local].leaves[path])
+    } else { None }
+}
+
+spec fn invocation_source_aggregate_snapshot_v42(
+    source: InvocationSourceByteStateV36, local: int, source_type: int,
+    path: Seq<int>, result_type: int,
+) -> Option<InvocationSourceAggregateV42> {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !source.logical.aggregates.contains_key(local)
+        || source.logical.aggregates[local].source_type != source_type
+        || !invocation_source_aggregate_well_formed_v42(source.logical.aggregates[local])
+        || (path.len() != 0 && source.logical.aggregates[local].execution_lease.is_some())
+        || invocation_source_aggregate_type_at_v42(source_type, path) != Some(result_type) {
+        None
+    } else {
+        let original = source.logical.aggregates[local];
+        let snapshot = InvocationSourceAggregateV42 { source_type: result_type,
+            execution_lease: if path.len() == 0 { original.execution_lease } else { None },
+            leaves: Map::new(original.leaves.dom()
+                .filter(|key: Seq<int>| invocation_source_path_prefix_v42(path, key))
+                .map(|key: Seq<int>| key.subrange(path.len() as int, key.len() as int)),
+                |suffix: Seq<int>| original.leaves[path + suffix]) };
+        if invocation_source_aggregate_complete_v42(snapshot) { Some(snapshot) } else { None }
+    }
+}
+
+spec fn invocation_source_aggregate_install_v42(
+    source: InvocationSourceByteStateV36, local: int, value: InvocationSourceAggregateV42,
+) -> InvocationSourceByteStateV36 {
+    if source.objects.contains_key(local) || !invocation_source_aggregate_well_formed_v42(value)
+        || match value.execution_lease {
+            Some(lease) => local == lease.origin
+                || !invocation_source_execution_lease_current_v170(source, lease),
+            None => false,
+        } {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let changed = invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined);
+        if !changed.machine.valid { changed }
+        else { InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+            aggregates: changed.logical.aggregates.insert(local, value), ..changed.logical }, ..changed } }
+    }
+}
+
+spec fn invocation_source_aggregate_remove_v42(
+    source: InvocationSourceByteStateV36, local: int, source_type: int, path: Seq<int>,
+) -> InvocationSourceByteStateV36 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !source.logical.aggregates.contains_key(local)
+        || source.logical.aggregates[local].source_type != source_type
+        || (path.len() != 0 && source.logical.aggregates[local].execution_lease.is_some())
+        || invocation_source_aggregate_type_at_v42(source_type, path).is_none() {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let original = source.logical.aggregates[local];
+        let remaining = InvocationSourceAggregateV42 { source_type, execution_lease: None,
+            leaves: Map::new(original.leaves.dom()
+                .filter(|key: Seq<int>| !invocation_source_path_prefix_v42(path, key)),
+                |key: Seq<int>| original.leaves[key]) };
+        invocation_source_aggregate_install_v42(source, local, remaining)
+    }
+}
+
+struct InvocationSourceAggregateEvaluationV42 {
+    source: InvocationSourceByteStateV36,
+    value: Option<InvocationSourceValueV42>,
+}
+
+spec fn invocation_source_aggregate_evaluate_v42(
+    source: InvocationSourceByteStateV36, local: int, source_type: int,
+    path: Seq<int>, result_type: int, moved: bool,
+) -> InvocationSourceAggregateEvaluationV42 {
+    match invocation_source_aggregate_snapshot_v42(source, local, source_type, path, result_type) {
+        Some(value) => InvocationSourceAggregateEvaluationV42 {
+            source: if moved { invocation_source_aggregate_remove_v42(source, local, source_type, path) } else { source },
+            value: Some(InvocationSourceValueV42::Aggregate(value)),
+        },
+        None => InvocationSourceAggregateEvaluationV42 {
+            source: invocation_source_byte_refused_v36(source), value: None },
+    }
+}
+
+spec fn invocation_source_aggregate_leaf_evaluate_v42(
+    source: InvocationSourceByteStateV36, local: int, source_type: int, path: Seq<int>, moved: bool,
+) -> InvocationSourceAggregateEvaluationV42 {
+    match invocation_source_aggregate_leaf_v42(source, local, source_type, path) {
+        Some(value) => InvocationSourceAggregateEvaluationV42 {
+            source: if moved { invocation_source_aggregate_remove_v42(source, local, source_type, path) } else { source },
+            value: Some(InvocationSourceValueV42::Carrier(value)),
+        },
+        None => InvocationSourceAggregateEvaluationV42 {
+            source: invocation_source_byte_refused_v36(source), value: None },
+    }
+}
+
+spec fn invocation_source_aggregate_replace_v42(
+    source: InvocationSourceByteStateV36, local: int, source_type: int,
+    path: Seq<int>, value: InvocationSourceAggregateV42,
+) -> InvocationSourceByteStateV36 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !invocation_source_aggregate_complete_v42(value)
+        || invocation_source_aggregate_type_at_v42(source_type, path) != Some(value.source_type)
+        || (path.len() != 0 && (value.execution_lease.is_some()
+            || source.logical.aggregates.contains_key(local)
+                && source.logical.aggregates[local].execution_lease.is_some()))
+        || (source.logical.aggregates.contains_key(local)
+            && source.logical.aggregates[local].source_type != source_type) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let original = if source.logical.aggregates.contains_key(local) {
+            source.logical.aggregates[local].leaves
+        } else { Map::empty() };
+        let replaced = InvocationSourceAggregateV42 { source_type,
+            execution_lease: if path.len() == 0 { value.execution_lease } else { None },
+            leaves: Map::new(original.dom()
+                .filter(|key: Seq<int>| !invocation_source_path_prefix_v42(path, key))
+                .union(value.leaves.dom().map(|suffix: Seq<int>| path + suffix)),
+                |key: Seq<int>| if invocation_source_path_prefix_v42(path, key) {
+                    value.leaves[key.subrange(path.len() as int, key.len() as int)]
+                } else { original[key] }) };
+        invocation_source_aggregate_install_v42(source, local, replaced)
+    }
+}
+
+spec fn invocation_source_checked_v42(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int,
+    operation: int, bits: int, signed: bool,
+    left: InvocationSourceByteValueV36, right: InvocationSourceByteValueV36,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceByteStateV36 {
+    if !(bits == 8 || bits == 16 || bits == 32 || bits == 64)
+        || matches!(left, InvocationSourceByteValueV36::Read { .. })
+        || matches!(right, InvocationSourceByteValueV36::Read { .. })
+        || !(0 <= operation < 3)
+        || invocation_source_aggregate_leaf_count_v42(source_type) != 2
+        || invocation_source_aggregate_leaf_path_v42(source_type, 0) != seq![0int]
+        || invocation_source_aggregate_leaf_path_v42(source_type, 1) != seq![1int]
+        || invocation_source_aggregate_leaf_bits_v42(source_type, 0) != bits
+        || invocation_source_aggregate_leaf_bits_v42(source_type, 1) != 1 {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let lhs = invocation_source_byte_evaluate_v36(source, left, bits, root, instance, little_endian);
+        let rhs = invocation_source_byte_evaluate_v36(lhs.source, right, bits, root, instance, little_endian);
+        match (lhs.value, rhs.value) {
+            (MemoryValueV30::Scalar(left), MemoryValueV30::Scalar(right)) => {
+                if !lhs.source.machine.valid || !rhs.source.machine.valid {
+                    invocation_source_byte_refused_v36(rhs.source)
+                } else {
+                    match invocation_source_checked_pair_v44(MemoryValueV30::Scalar(left),
+                        MemoryValueV30::Scalar(right), operation, bits, signed) {
+                        Some((value, overflow)) => {
+                            let value = InvocationSourceAggregateV42 { source_type, execution_lease: None,
+                                leaves: Map::empty().insert(seq![0int], value).insert(seq![1int], overflow) };
+                            invocation_source_aggregate_install_v42(rhs.source, destination, value)
+                        },
+                        None => invocation_source_byte_refused_v36(rhs.source),
+                    }
+                }
+            },
+            _ => invocation_source_byte_refused_v36(rhs.source),
+        }
+    }
+}
+
+spec fn invocation_source_aggregate_place_evaluate_v42(
+    source: InvocationSourceByteStateV36, place: InvocationSourceAggregatePlaceV42, moved: bool,
+) -> InvocationSourceValueEvaluationV42 {
+    if !invocation_source_aggregate_place_valid_v42(place) {
+        InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(source),
+            value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+    } else {
+        let evaluated = invocation_source_aggregate_evaluate_v42(source, place.local, place.root_type,
+            invocation_source_aggregate_place_path_v42(place), place.result_type, moved);
+        match evaluated.value {
+            Some(value) => InvocationSourceValueEvaluationV42 { source: evaluated.source, value },
+            None => InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(evaluated.source),
+                value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) },
+        }
+    }
+}
+
+spec fn invocation_source_aggregate_place_replace_v42(
+    source: InvocationSourceByteStateV36, place: InvocationSourceAggregatePlaceV42,
+    value: InvocationSourceAggregateV42,
+) -> InvocationSourceByteStateV36 {
+    if !invocation_source_aggregate_place_valid_v42(place) || value.source_type != place.result_type {
+        invocation_source_byte_refused_v36(source)
+    } else { invocation_source_aggregate_replace_v42(source, place.local, place.root_type,
+        invocation_source_aggregate_place_path_v42(place), value) }
+}
+
+spec fn invocation_source_aggregate_place_deinitialize_v42(
+    source: InvocationSourceByteStateV36, place: InvocationSourceAggregatePlaceV42,
+) -> InvocationSourceByteStateV36 {
+    if !invocation_source_aggregate_place_valid_v42(place)
+        || !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) {
+        invocation_source_byte_refused_v36(source)
+    } else if source.logical.aggregates.contains_key(place.local) {
+        invocation_source_aggregate_remove_v42(source, place.local, place.root_type,
+            invocation_source_aggregate_place_path_v42(place))
+    } else {
+        invocation_source_aggregate_install_v42(source, place.local,
+            InvocationSourceAggregateV42 { source_type: place.root_type, leaves: Map::empty(),
+                execution_lease: None })
+    }
+}
+
+spec fn invocation_source_aggregate_transfer_v42(
+    source: InvocationSourceByteStateV36, destination: InvocationSourceAggregatePlaceV42,
+    input: InvocationSourceAggregatePlaceV42, moved: bool,
+) -> InvocationSourceByteStateV36 {
+    // Snapshot before consuming the source also covers self and overlapping moves.
+    let evaluated = invocation_source_aggregate_place_evaluate_v42(source, input, moved);
+    match evaluated.value {
+        InvocationSourceValueV42::Aggregate(value) =>
+            invocation_source_aggregate_place_replace_v42(evaluated.source, destination, value),
+        InvocationSourceValueV42::Carrier(_) | InvocationSourceValueV42::Enum(_)
+        | InvocationSourceValueV42::Descriptor(_) | InvocationSourceValueV42::Execution(_) =>
+            invocation_source_byte_refused_v36(evaluated.source),
+    }
+}
+
+spec fn invocation_source_value_evaluate_v42(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceOperandV36,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceValueEvaluationV42 {
+    match operand {
+        InvocationSourceOperandV36::Execution(operand) =>
+            invocation_source_execution_snapshot_evaluate_v170(source, operand),
+        InvocationSourceOperandV36::Descriptor { local, recipe, moved } =>
+            invocation_source_descriptor_evaluate_v53(source, local, recipe, moved),
+        InvocationSourceOperandV36::Aggregate { place, moved } =>
+            invocation_source_aggregate_place_evaluate_v42(source, place, moved),
+        InvocationSourceOperandV36::Enum { local, source_type, moved } =>
+            invocation_source_enum_evaluate_v50(source, local, source_type, moved, little_endian),
+        InvocationSourceOperandV36::Scalar { .. }
+        | InvocationSourceOperandV36::Pointer { .. }
+        | InvocationSourceOperandV36::Slice { .. } => {
+            let evaluated = invocation_source_operand_evaluate_v36(source, operand, root, instance, little_endian);
+            InvocationSourceValueEvaluationV42 { source: evaluated.source,
+                value: InvocationSourceValueV42::Carrier(evaluated.value) }
+        },
+    }
+}

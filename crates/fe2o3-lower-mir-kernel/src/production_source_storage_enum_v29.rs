@@ -1,5 +1,350 @@
 // Original enum geometry only; initialization and variant-state consumers remain separate.
+impl<'layout, 'source> SourceStorageStateV29<'layout, 'source> {
+    fn discriminant_is_initialized(
+        &self,
+        place: &SourceStorageSubobjectV29<'layout, 'source>,
+        budget: &mut Budget<'_>,
+    ) -> Result<bool, Error> {
+        self.check_place(place, budget)?;
+        if place.variant.is_some() {
+            return Err(error(
+                "source discriminant read names a payload instead of its enum",
+            ));
+        }
+        self.layouts.enum_parts(place.ty)?;
+        for (depth, step) in place.path.iter().enumerate() {
+            self.layouts.lease.work(1, budget)?;
+            if matches!(step, SubobjectStep::Variant(_))
+                && !self.guard_holds(place, depth, budget)?
+            {
+                return Ok(false);
+            }
+        }
+        let proof = self.initialization_proof(place, true, budget)?;
+        let whole = proof.initialized && self.guards_hold(place, &proof.guards, budget)?;
+        proof.discard(&self.layouts.lease, budget)?;
+        let readable = whole
+            || if let Some(index) = self.enum_entry(place, budget)? {
+                !self.enums[index].readable.is_empty()
+                    && self.guards_hold(place, &self.enums[index].guards, budget)?
+            } else {
+                whole
+            };
+        if !readable {
+            return Ok(false);
+        }
+        match self.layouts.enum_tag_range(place)? {
+            Some(range) => self.bytes_initialized(range, budget),
+            None => Ok(whole || readable),
+        }
+    }
+
+    fn restrict_discriminant(
+        &mut self,
+        place: &SourceStorageSubobjectV29<'layout, 'source>,
+        allowed: &[u32],
+        budget: &mut Budget<'_>,
+    ) -> Result<bool, Error> {
+        if !self.discriminant_is_initialized(place, budget)? {
+            return Err(error(
+                "source discriminator edge has no initialized current tag",
+            ));
+        }
+        for (ordinal, &variant) in allowed.iter().enumerate() {
+            self.layouts.lease.work(1, budget)?;
+            self.check_variant(place, variant)?;
+            if ordinal != 0 && allowed[ordinal - 1] >= variant {
+                return Err(error(
+                    "source discriminator edge repeats or reorders variants",
+                ));
+            }
+        }
+        let existing = match self.enum_entry(place, budget)? {
+            Some(index)
+                if !self.enums[index].readable.is_empty()
+                    && self.guards_hold(place, &self.enums[index].guards, budget)? =>
+            {
+                Some(index)
+            }
+            _ => None,
+        };
+        let mut selected = self.layouts.lease.vector(allowed.len(), budget)?;
+        let mut cursor = 0;
+        for &variant in allowed {
+            self.layouts.lease.work(2, budget)?;
+            let present = if let Some(index) = existing {
+                let readable = &self.enums[index].readable;
+                while cursor < readable.len() && readable[cursor] < variant {
+                    self.layouts.lease.work(2, budget)?;
+                    cursor += 1;
+                }
+                readable.get(cursor) == Some(&variant)
+            } else {
+                true
+            };
+            if present {
+                self.layouts.lease.push(&mut selected, variant, budget)?;
+            }
+        }
+        if selected.is_empty() {
+            self.layouts.lease.discard_vec(selected, budget)?;
+            return Ok(false);
+        }
+        let index = self.enum_state_mut(place, budget)?;
+        if existing.is_none() {
+            self.enums[index].guards.clear();
+        }
+        let old = std::mem::replace(&mut self.enums[index].readable, selected);
+        self.layouts.lease.discard_vec(old, budget)?;
+        // Conditional payload facts stay conditional; guards_hold now evaluates
+        // the narrower readable set. No byte or logical initialization is added.
+        Ok(true)
+    }
+
+    fn enum_state_mut(
+        &mut self,
+        place: &SourceStorageSubobjectV29<'layout, 'source>,
+        budget: &mut Budget<'_>,
+    ) -> Result<usize, Error> {
+        self.check_place(place, budget)?;
+        if place.variant.is_some()
+            || !matches!(
+                self.layouts.declaration(place.ty)?.shape(),
+                SemanticTypeShapeV1::Enum { .. }
+            )
+        {
+            return Err(error(
+                "source enum state must name the original enum object",
+            ));
+        }
+        if let Some(index) = self.enum_entry(place, budget)? {
+            return Ok(index);
+        }
+        let copy = place.copy(budget)?;
+        self.layouts.lease.push(
+            &mut self.enums,
+            EnumState {
+                place: copy,
+                construction: None,
+                readable: Vec::new(),
+                guards: Vec::new(),
+            },
+            budget,
+        )?;
+        Ok(self.enums.len() - 1)
+    }
+
+    fn check_variant(
+        &self,
+        place: &SourceStorageSubobjectV29<'layout, 'source>,
+        variant: u32,
+    ) -> Result<(), Error> {
+        let (_, variants) = self.layouts.enum_parts(place.ty)?;
+        let variant = variants
+            .get(variant as usize)
+            .ok_or_else(|| error("source enum state variant is absent"))?;
+        if variant.is_uninhabited() {
+            return Err(error(
+                "source enum state cannot activate an uninhabited variant",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn begin_variant(
+        &mut self,
+        place: &SourceStorageSubobjectV29<'layout, 'source>,
+        variant: u32,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), Error> {
+        self.check_variant(place, variant)?;
+        self.deinitialize(place, budget)?;
+        let index = self.enum_state_mut(place, budget)?;
+        self.enums[index].construction = Some(variant);
+        self.enums[index].readable.clear();
+        self.enums[index].guards.clear();
+        Ok(())
+    }
+
+    pub(super) fn variant_is_readable(
+        &self,
+        place: &SourceStorageSubobjectV29<'layout, 'source>,
+        variant: u32,
+        budget: &mut Budget<'_>,
+    ) -> Result<bool, Error> {
+        self.check_place(place, budget)?;
+        self.check_variant(place, variant)?;
+        let Some(index) = self.enum_entry(place, budget)? else {
+            return Ok(false);
+        };
+        Ok(self.enums[index].readable.as_slice() == [variant])
+    }
+
+    pub(super) fn set_discriminant(
+        &mut self,
+        place: &SourceStorageSubobjectV29<'layout, 'source>,
+        variant: u32,
+        budget: &mut Budget<'_>,
+    ) -> Result<(), Error> {
+        self.check_place(place, budget)?;
+        self.check_variant(place, variant)?;
+        let snapshot = self.copy(budget)?;
+        let declaration = self.layouts.declaration(place.ty)?;
+        match declaration.layout().variants() {
+            SemanticRustcVariantsV1::Multiple(layout) => {
+                let (offset, primitive) = match layout.encoding() {
+                    SemanticEnumEncodingV1::Direct(tag) => {
+                        self.prepare_tag_assignment(&snapshot, place, variant, budget)?;
+                        (tag.tag_offset_bytes(), tag.tag().primitive())
+                    }
+                    SemanticEnumEncodingV1::Niche(tag) => {
+                        let payload = self.niche_payload(place, tag, budget)?;
+                        if variant == tag.untagged_variant() {
+                            let valid =
+                                snapshot.untagged_payload_is_valid(place, &payload, tag, budget)?;
+                            payload.discard(budget)?;
+                            if !valid {
+                                // This encoding emits no write. A requested variant is
+                                // not evidence that its niche payload became valid.
+                                return snapshot.discard(budget);
+                            }
+                            self.prepare_tag_assignment(&snapshot, place, variant, budget)?;
+                            let index = self.enum_state_mut(place, budget)?;
+                            self.enums[index].readable.clear();
+                            self.enums[index].guards.clear();
+                            self.layouts.lease.push(
+                                &mut self.enums[index].readable,
+                                variant,
+                                budget,
+                            )?;
+                            self.enums[index].construction = None;
+                            return snapshot.discard(budget);
+                        }
+                        self.prepare_tag_assignment(&snapshot, place, variant, budget)?;
+                        let range = self
+                            .layouts
+                            .enum_tag_range(place)?
+                            .ok_or(ArgumentResourceV1::Accounting)?;
+                        self.invalidate_tag_payload(&snapshot, &payload, range, budget)?;
+                        payload.discard(budget)?;
+                        (tag.source().expected_offset_bytes(), tag.tag().primitive())
+                    }
+                };
+                let start = place
+                    .range
+                    .start
+                    .checked_add(offset)
+                    .ok_or(ArgumentResourceV1::Arithmetic)?;
+                let extent = self
+                    .layouts
+                    .declaration(self.ty)?
+                    .layout()
+                    .size_bytes()
+                    .ok_or(ArgumentResourceV1::Arithmetic)?;
+                let range = SourceStorageRangeV29::new(
+                    start,
+                    primitive
+                        .size_bytes()
+                        .ok_or(ArgumentResourceV1::Arithmetic)?,
+                    extent,
+                )?;
+                self.invalidate_tag_aliases(&snapshot, place, range, budget)?;
+                self.update_bytes(range, true, budget)?;
+            }
+            SemanticRustcVariantsV1::Single { index } if *index == variant => {}
+            _ => {
+                return Err(error(
+                    "source discriminant state differs from its source enum layout",
+                ));
+            }
+        }
+        let index = self.enum_state_mut(place, budget)?;
+        self.enums[index].readable.clear();
+        self.enums[index].guards.clear();
+        self.layouts
+            .lease
+            .push(&mut self.enums[index].readable, variant, budget)?;
+        self.enums[index].construction = None;
+        snapshot.discard(budget)
+    }
+}
+
 impl SourceStorageLayoutsV29<'_> {
+    fn preserves_niche_tag(
+        &self,
+        state: &EnumState<'_, '_>,
+        write: &SourceStorageSubobjectV29<'_, '_>,
+        budget: &mut Budget<'_>,
+    ) -> Result<bool, Error> {
+        let SemanticRustcVariantsV1::Multiple(layout) =
+            self.declaration(state.place.ty)?.layout().variants()
+        else {
+            return Ok(false);
+        };
+        let SemanticEnumEncodingV1::Niche(niche) = layout.encoding() else {
+            return Ok(false);
+        };
+        let variant = niche.untagged_variant();
+        if state.readable.as_slice() != [variant] && state.construction != Some(variant) {
+            return Ok(false);
+        }
+        let depth = state.place.path.len();
+        if write.path.len() <= depth + 1
+            || !prefix_path(&state.place.path, &write.path, &self.lease, budget)?
+            || write.path[depth] != SubobjectStep::Variant(variant)
+        {
+            return Ok(false);
+        }
+        let suffix = &write.path[depth + 1..];
+        let source = niche.source().path();
+        if suffix.len() > source.len() {
+            return Ok(false);
+        }
+        for (step, source) in suffix.iter().zip(source) {
+            self.lease.work(1, budget)?;
+            let expected = match source {
+                SemanticNichePathComponentV1::Field(field) => SubobjectStep::Field(*field),
+                SemanticNichePathComponentV1::ArrayElement(index) => SubobjectStep::Element(*index),
+            };
+            if *step != expected {
+                return Ok(false);
+            }
+        }
+        Ok(self
+            .enum_tag_range(&state.place)?
+            .is_some_and(|tag| write.range.contains(tag)))
+    }
+
+    fn enum_tag_range(
+        &self,
+        place: &SourceStorageSubobjectV29<'_, '_>,
+    ) -> Result<Option<SourceStorageRangeV29>, Error> {
+        let SemanticRustcVariantsV1::Multiple(layout) =
+            self.declaration(place.ty)?.layout().variants()
+        else {
+            return Ok(None);
+        };
+        let (offset, primitive) = match layout.encoding() {
+            SemanticEnumEncodingV1::Direct(tag) => (tag.tag_offset_bytes(), tag.tag().primitive()),
+            SemanticEnumEncodingV1::Niche(tag) => {
+                (tag.source().expected_offset_bytes(), tag.tag().primitive())
+            }
+        };
+        Ok(Some(SourceStorageRangeV29::new(
+            place
+                .range
+                .start
+                .checked_add(offset)
+                .ok_or(ArgumentResourceV1::Arithmetic)?,
+            primitive
+                .size_bytes()
+                .ok_or(ArgumentResourceV1::Arithmetic)?,
+            self.declaration(place.root)?
+                .layout()
+                .size_bytes()
+                .ok_or(ArgumentResourceV1::Arithmetic)?,
+        )?))
+    }
     fn enum_parts(
         &self,
         ty: SemanticTypeIdV1,

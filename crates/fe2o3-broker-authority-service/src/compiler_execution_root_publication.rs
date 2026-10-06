@@ -47,7 +47,7 @@ type Result<T> = std::result::Result<T, RootPublicationCustodyErrorV3>;
 ///
 /// This observes a compiler/publication association, not protected proof execution
 /// or durable retirement permission. It grants no publication, load or GPU launch
-/// authority. No explicit retirement API exists until the durable join is wired.
+/// authority. Explicit retirement is private to the authenticated root dispatcher.
 ///
 /// ```compile_fail
 /// use fe2o3_broker_authority_service::RootPublicationCustodyV3 as C;
@@ -64,6 +64,15 @@ pub struct RootPublicationCustodyV3 {
     identity: [u8; 32],
     retained: usize,
     validation: RootPublicationQuotaV3,
+}
+
+pub(crate) struct PreparedRootPublicationRetirementV3<'slot>(
+    fe2o3_protected_service_spawn::PreparedLateRetirementV2<'slot, Owners>,
+);
+impl PreparedRootPublicationRetirementV3<'_> {
+    pub(crate) fn commit(self) {
+        self.0.commit();
+    }
 }
 
 impl RootPublicationCustodyV3 {
@@ -267,6 +276,24 @@ impl RootPublicationCustodyV3 {
     /// Complete work/extra peak above this owner and the full original trace.
     pub const fn revalidation_quota(&self) -> RootPublicationQuotaV3 {
         self.validation
+    }
+
+    /// # Safety
+    /// The closed root dispatcher must first authenticate its measured issuer's
+    /// successful durable Worker/anchor/Ready/ACK join for this exact occurrence.
+    /// An inert carriage or matching digest alone never authorizes this call.
+    /// The returned closure retains custody on Drop; invoke it only after all
+    /// reply/tombstone preparation and accounting have succeeded.
+    #[allow(unsafe_code)]
+    pub(crate) unsafe fn prepare_durable_retirement_runtime<'slot>(
+        &'slot self,
+        trace: &'slot fe2o3_protected_service_spawn::native_spawn::RootRuntimeTraceV1<'_>,
+        b: &mut Budget<'_>,
+    ) -> Result<Option<PreparedRootPublicationRetirementV3<'slot>>> {
+        // SAFETY: this private caller supplies independent exact-occurrence
+        // durable authorization; the trace checks the original slot and account.
+        Ok(unsafe { trace.prepare_late_retirement(&self.owners, b) }?
+            .map(PreparedRootPublicationRetirementV3))
     }
 }
 

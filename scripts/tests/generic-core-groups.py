@@ -27,6 +27,9 @@ POLICY = [
     "run_backend_build",
     "simulation-expectation-tests",
     "tutorial-scalar-gemm-corpus-tests",
+    "tutorial-default-cargo-harness-tests",
+    "tutorial-production-census-tests",
+    "tutorial-current-simulation-tests",
     "quickstart-shell-tests",
     "kernel-compile-matrix-shell-tests",
     "tutorial-cpu-reference-tests",
@@ -117,7 +120,9 @@ class GenericCoreGroupTests(unittest.TestCase):
                 self.assertEqual(result.stdout.splitlines(), expected[:1])
 
     def test_full_core_stops_before_later_groups_after_failure(self) -> None:
-        for failed in [POLICY[-1], "run_cpu_tests", "run_rustc_codegen_lib_tests"]:
+        for failed in ["tutorial-default-cargo-harness-tests", "tutorial-production-census-tests",
+                       "tutorial-current-simulation-tests", POLICY[-1], "run_cpu_tests",
+                       "run_rustc_codegen_lib_tests"]:
             with self.subTest(failed=failed):
                 result = self.invoke("main", "generic-core", failure=failed)
                 self.assertEqual(result.returncode, 29, result.stderr)
@@ -309,13 +314,13 @@ class WorkspaceDependencyBootstrapTests(unittest.TestCase):
         for entry, prefix, after_fetch in [
             ("run_cpu_tests", "cpu", [
                 "stage:standalone-lockfiles",
-                "host-reference-tests", "driver-bootstrap:cpu-tests", "stage:cargo-fe2o3-tests",
+                "host-reference-tests", "driver-bootstrap:cpu-tests", "stage:cargo-fe2o3-production-bins",
             ]),
             ("run_auxiliary_tests", "auxiliary", ["stage:core-doc-tests"]),
         ]:
             with self.subTest(entry=entry):
                 result, calls = self.invoke(entry)
-                # The first test stage is the deliberate mocked stop boundary.
+                # The first post-bootstrap build/test stage is the mocked stop boundary.
                 self.assertEqual(result.returncode, 43, result.stderr)
                 self.assertEqual(result.stdout.splitlines(), [
                     f"stage:{prefix}-workspace-dependencies", *after_fetch,

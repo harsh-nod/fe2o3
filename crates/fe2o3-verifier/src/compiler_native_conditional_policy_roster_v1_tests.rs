@@ -45,6 +45,49 @@ use std::{
 const FLOOR: usize = 37;
 const PREFIX: usize = 17;
 const LIMIT: usize = MAX_NATIVE_CONDITIONAL_STORAGE_V1;
+
+#[test]
+fn original_policy_reconstruction_exact_one_short_and_partial_failure() {
+    use super::reconstruct_inert_native_conditional_policy_roster_in_original_account_v1 as original;
+    let (source, bytes) = fixture();
+    let floor = LIMIT + 1 + bytes.capacity() + source.capacity();
+    let run = |work, storage, bytes: &[u8], source: &[u8]| {
+        let mut owned = Ledger::new(Work::new(work), storage);
+        owned.with_budget(|b| {
+            b.reserve_storage(floor).unwrap();
+            let identity = b.storage_account_identity_v1();
+            let ledger = b.work_ledger_identity_v1();
+            let result = original(bytes, source, b);
+            let success = result.is_ok();
+            if let Ok((owner, charge)) = result {
+                b.reserve_storage(charge.retained_storage()).unwrap();
+                assert!(!owner.grants_authority());
+                drop(owner);
+                b.release_storage(charge.retained_storage()).unwrap();
+                assert_eq!(b.storage(), floor);
+            } else {
+                assert!(b.storage() > floor);
+            }
+            assert_eq!(b.storage_account_identity_v1(), identity);
+            assert!(b.work_ledger_identity_v1() == ledger);
+            assert_eq!(b.storage_limit(), storage);
+            (success, b.work(), b.peak_storage())
+        })
+    };
+    let baseline = run(usize::MAX, floor + LIMIT, &bytes, &source);
+    assert!(baseline.0);
+    assert_eq!(run(baseline.1, baseline.2, &bytes, &source), baseline);
+    assert!(!run(baseline.1 - 1, baseline.2, &bytes, &source).0);
+    assert!(!run(baseline.1, baseline.2 - 1, &bytes, &source).0);
+    let mut changed = source.clone();
+    changed[0] ^= 1;
+    assert!(!run(baseline.1, baseline.2, &bytes, &changed).0);
+    let mut owned = Ledger::new(Work::new(usize::MAX), floor + LIMIT);
+    owned.with_budget(|b| {
+        b.reserve_storage(floor).unwrap();
+        assert!(reconstruct(&bytes, &source, b).is_err());
+    });
+}
 // RFC 8032 public keys only; neither fixture signs or imports a proof.
 const KEYS: [[u8; 32]; 2] = [
     [

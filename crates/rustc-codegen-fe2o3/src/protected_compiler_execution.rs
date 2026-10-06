@@ -1,5 +1,7 @@
 //! Protected rustc custody for one exact compiler-execution receipt session.
 
+#[path = "protected_compiler_execution_dispatch_v236.rs"]
+pub(crate) mod dispatch;
 #[path = "protected_compiler_execution_native_v3.rs"]
 pub(crate) mod native_v3;
 
@@ -34,6 +36,18 @@ pub(crate) struct AdmittedProtectedCompilerExecutionV1 {
 }
 
 impl AdmittedProtectedCompilerExecutionV1 {
+    fn from_owned(inputs: OwnedExecutionInputs) -> Result<Self, ProtectedCompilerExecutionErrorV1> {
+        let policy = CompilerExecutionPolicyCapabilityV1::from_file(inputs.policy.into())
+            .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
+        let client =
+            CompilerExecutionClientV1::admit(inputs.service, RECEIPT_ACQUISITION_TIMEOUT_V1)
+                .map_err(ProtectedCompilerExecutionErrorV1::Client)?;
+        policy
+            .revalidate()
+            .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
+        Ok(Self { policy, client })
+    }
+
     /// Acquires and independently revalidates the receipt for one exact published subject.
     pub(crate) fn acquire(
         self,
@@ -90,21 +104,25 @@ impl CompilerExecutionStartupInputV1 {
     pub(crate) fn admit(
         &self,
     ) -> Result<AdmittedProtectedCompilerExecutionV1, ProtectedCompilerExecutionErrorV1> {
-        let inputs = self
-            .0
+        AdmittedProtectedCompilerExecutionV1::from_owned(self.take()?)
+    }
+
+    /// Consumes the same one-shot captured inputs as legacy admission. A failed
+    /// family decode cannot retry another family or reacquire the raw slots.
+    pub(crate) fn admit_native<'b, 'w>(
+        &self,
+        budget: &'b mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'w>,
+    ) -> Result<native_v3::Admitted<'b, 'w>, native_v3::Error> {
+        let inputs = self.take().map_err(native_v3::Error::Startup)?;
+        native_v3::Admitted::from_owned(inputs, budget)
+    }
+
+    fn take(&self) -> Result<OwnedExecutionInputs, ProtectedCompilerExecutionErrorV1> {
+        self.0
             .lock()
             .map_err(|_| ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed)?
             .take()
-            .ok_or(ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed)??;
-        let policy = CompilerExecutionPolicyCapabilityV1::from_file(inputs.policy.into())
-            .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
-        let client =
-            CompilerExecutionClientV1::admit(inputs.service, RECEIPT_ACQUISITION_TIMEOUT_V1)
-                .map_err(ProtectedCompilerExecutionErrorV1::Client)?;
-        policy
-            .revalidate()
-            .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
-        Ok(AdmittedProtectedCompilerExecutionV1 { policy, client })
+            .ok_or(ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed)?
     }
 }
 

@@ -43,6 +43,9 @@ fn reauthenticate_ordinary_capabilities_from_enum_payload_v1(
             availability: slot, ..
         } => *slot = availability,
         SemanticValueBindingV1::Execution(_)
+        | SemanticValueBindingV1::SourceReference(_)
+        | SemanticValueBindingV1::SourceEnumTag(_)
+        | SemanticValueBindingV1::SourceInactive(_)
         | SemanticValueBindingV1::ExecutionBorrow(_)
         | SemanticValueBindingV1::ExecutionReferent(_)
         | SemanticValueBindingV1::MovedExecution => {

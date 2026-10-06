@@ -14,8 +14,14 @@ mod wrapping_correspondence_v1_tests {
             operation,
             scalar,
             overflow,
-            lhs: Box::new(NormalizedScalarExpressionV1::Symbol { symbol: 1, scalar }),
-            rhs: Box::new(NormalizedScalarExpressionV1::Symbol { symbol: 2, scalar }),
+            lhs: NormalizedScalarNodeV18::legacy(NormalizedScalarExpressionV1::Symbol {
+                symbol: 1,
+                scalar,
+            }),
+            rhs: NormalizedScalarNodeV18::legacy(NormalizedScalarExpressionV1::Symbol {
+                symbol: 2,
+                scalar,
+            }),
         }
     }
 
@@ -36,31 +42,31 @@ mod wrapping_correspondence_v1_tests {
         let u64_type = integer(false, 64);
         NormalizedScalarExpressionV1::Select {
             scalar: u32_type,
-            condition: Box::new(NormalizedScalarExpressionV1::Compare {
+            condition: NormalizedScalarNodeV18::legacy(NormalizedScalarExpressionV1::Compare {
                 operation: ProductionSemanticComparisonV2::LessThan,
                 operand_scalar: u32_type,
-                lhs: Box::new(binary(
+                lhs: NormalizedScalarNodeV18::legacy(binary(
                     ProductionSemanticBinaryOpV2::Add,
                     u32_type,
                     overflow,
                 )),
-                rhs: Box::new(NormalizedScalarExpressionV1::Constant {
+                rhs: NormalizedScalarNodeV18::legacy(NormalizedScalarExpressionV1::Constant {
                     scalar: u32_type,
                     bits: 7,
                 }),
             }),
-            when_true: Box::new(NormalizedScalarExpressionV1::Cast {
+            when_true: NormalizedScalarNodeV18::legacy(NormalizedScalarExpressionV1::Cast {
                 kind: ProductionSemanticCastV2::Integer,
                 source: u64_type,
                 target: u32_type,
-                operand: Box::new(NormalizedScalarExpressionV1::Unary {
+                operand: NormalizedScalarNodeV18::legacy(NormalizedScalarExpressionV1::Unary {
                     operation: ProductionSemanticUnaryOpV2::Not,
                     scalar: u64_type,
-                    operand: Box::new(NormalizedScalarExpressionV1::Cast {
+                    operand: NormalizedScalarNodeV18::legacy(NormalizedScalarExpressionV1::Cast {
                         kind: ProductionSemanticCastV2::Integer,
                         source: u32_type,
                         target: u64_type,
-                        operand: Box::new(binary(
+                        operand: NormalizedScalarNodeV18::legacy(binary(
                             ProductionSemanticBinaryOpV2::Multiply,
                             u32_type,
                             overflow,
@@ -68,7 +74,7 @@ mod wrapping_correspondence_v1_tests {
                     }),
                 }),
             }),
-            when_false: Box::new(binary(
+            when_false: NormalizedScalarNodeV18::legacy(binary(
                 ProductionSemanticBinaryOpV2::Subtract,
                 u32_type,
                 overflow,
@@ -136,8 +142,8 @@ mod wrapping_correspondence_v1_tests {
             match mutation {
                 0 => *operation = ProductionSemanticBinaryOpV2::Subtract,
                 1 => std::mem::swap(lhs, rhs),
-                2 => **lhs = NormalizedScalarExpressionV1::Symbol { symbol: 3, scalar },
-                3 => **rhs = NormalizedScalarExpressionV1::Constant { bits: 2, scalar },
+                2 => lhs.0[0] = NormalizedScalarExpressionV1::Symbol { symbol: 3, scalar },
+                3 => rhs.0[0] = NormalizedScalarExpressionV1::Constant { bits: 2, scalar },
                 _ => unreachable!(),
             }
             assert_eq!(
@@ -196,25 +202,25 @@ mod wrapping_correspondence_v1_tests {
                 1 => std::mem::swap(when_true, when_false),
                 2 => {
                     let NormalizedScalarExpressionV1::Compare { operation, .. } =
-                        condition.as_mut()
+                        &mut condition.0[0]
                     else {
                         unreachable!()
                     };
                     *operation = ProductionSemanticComparisonV2::Equal;
                 }
                 3 => {
-                    let NormalizedScalarExpressionV1::Cast { target, .. } = when_true.as_mut()
+                    let NormalizedScalarExpressionV1::Cast { target, .. } = &mut when_true.0[0]
                     else {
                         unreachable!()
                     };
                     *target = integer(false, 64);
                 }
                 4 => {
-                    let NormalizedScalarExpressionV1::Cast { operand, .. } = when_true.as_mut()
+                    let NormalizedScalarExpressionV1::Cast { operand, .. } = &mut when_true.0[0]
                     else {
                         unreachable!()
                     };
-                    let NormalizedScalarExpressionV1::Unary { operation, .. } = operand.as_mut()
+                    let NormalizedScalarExpressionV1::Unary { operation, .. } = &mut operand.0[0]
                     else {
                         unreachable!()
                     };

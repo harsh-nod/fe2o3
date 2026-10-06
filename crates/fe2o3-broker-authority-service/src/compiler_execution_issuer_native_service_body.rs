@@ -69,18 +69,18 @@ impl<'work> Admission<'work> {
             ready,
             b,
             COMPILER_EXECUTION_SERVICE_SESSION_TIMEOUT_V1,
-            |_, _, _| Ok(()),
+            |_, _, _| Ok(Session::default()),
         )
     }
 
     // Only concrete internal consumers supply this gate. It runs after the
     // readiness writer has closed and before the first client receive/dispatch.
-    fn serve_native_after_readiness(
+    fn serve_native_after_readiness<'budget_work>(
         self,
         ready: Option<(&Manifest, OwnedFd)>,
-        b: &mut Budget<'_>,
+        b: &mut Budget<'budget_work>,
         timeout: std::time::Duration,
-        gate: impl FnOnce(&Self, Instant, &mut Budget<'_>) -> Result<()>,
+        gate: impl FnOnce(&Self, Instant, &mut Budget<'budget_work>) -> Result<Session<'budget_work>>,
     ) -> Result<()> {
         // Reject a foreign ledger before any directory or transport I/O.
         self.validate_continuity(b)?;
@@ -111,7 +111,6 @@ impl<'work> Admission<'work> {
                 .checked_add(timeout)
                 .ok_or_else(|| Error::rejected("native service deadline overflow"))?;
             let mut attempts = 0;
-            let mut session = Session::default();
             if let Some((manifest, writer)) = ready {
                 readiness::publish(manifest, &self.policy, writer, b, |b| {
                     self.validate_continuity(b)?;
@@ -122,7 +121,8 @@ impl<'work> Admission<'work> {
                     Ok(())
                 })?;
             }
-            gate(&self, deadline, b)?;
+            let mut session = gate(&self, deadline, b)?;
+            session.require_context(b)?;
             for _ in 0..MAX_COMPILER_EXECUTION_SERVICE_PACKETS_V1 {
                 let retained = session.retained_storage();
                 let floor = self
@@ -191,7 +191,7 @@ fn dispatch(
     a: &Admission<'_>,
     ledger: &mut Ledger,
     anchor: &mut NativeAnchor<'_>,
-    session: &mut Session,
+    session: &mut Session<'_>,
     packet: &Packet,
     deadline: Instant,
     attempts: &mut usize,
@@ -207,24 +207,24 @@ fn dispatch(
         Kind::Prepare => {
             require_position(ledger, packet)?;
             session.prepare(a, &ledger.record, b)?;
-            let occurrence = session.occurrence()?;
             let nonce = fresh_nonce(b)?;
-            occurrence.revalidate(&a.service, b)?;
+            session.revalidate_occurrence(a, b)?;
+            let occurrence = session.occurrence()?;
             a.validate_continuity(b)?;
             let next = ledger
                 .record
                 .prepare(&a.policy, &a.signing_key, occurrence, nonce, b)?;
             b.reserve_storage(Record::STORAGE)?;
-            occurrence.revalidate(&a.service, b)?;
+            session.revalidate_occurrence(a, b)?;
             a.validate_continuity(b)?;
             ledger.commit(next, b)?;
-            occurrence.revalidate(&a.service, b)?;
+            session.revalidate_occurrence(a, b)?;
         }
         Kind::Issue => {
             require_position(ledger, packet)?;
             let request = retain(packet.decode_request(b)?, b)?;
+            session.revalidate_occurrence(a, b)?;
             let occurrence = session.occurrence()?;
-            occurrence.revalidate(&a.service, b)?;
             a.validate_continuity(b)?;
             if let Body::Issued { request: held, .. } = &ledger.record.body {
                 // Lost-response replay retains the original lock and token; it
@@ -243,11 +243,11 @@ fn dispatch(
                         .record
                         .issue(&a.policy, &a.signing_key, occurrence, request, b)?;
                 b.reserve_storage(Record::STORAGE)?;
-                occurrence.revalidate(&a.service, b)?;
+                session.revalidate_occurrence(a, b)?;
                 a.validate_continuity(b)?;
                 ledger.commit(next, b)?;
             }
-            occurrence.revalidate(&a.service, b)?;
+            session.revalidate_occurrence(a, b)?;
         }
         Kind::Publish => {
             let request = retain(packet.decode_request(b)?, b)?;

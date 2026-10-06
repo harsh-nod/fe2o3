@@ -414,6 +414,19 @@ fn fresh_publish_read_claim_recover_and_reacquire_round_trip() {
         AttemptScopedHsacoPublicationOutcomeV3::Published
     );
     assert_eq!(result.snapshot().artifact().bytes(), bytes);
+    let lease = result.current_publication_lease();
+    assert_eq!(lease.exact_artifact_bytes(), bytes);
+    let full = result.retained_rust_storage().unwrap();
+    let leaf = lease.retained_rust_storage().unwrap();
+    assert_eq!(
+        full - std::mem::size_of_val(&result),
+        leaf - std::mem::size_of_val(lease),
+    );
+    assert!(leaf > bytes.len() + std::mem::size_of_val(lease));
+    let held = lease.acquire_current_token().unwrap();
+    assert_eq!(held.exact_artifact_bytes(), bytes);
+    held.revalidate_locked_currentness().unwrap();
+    drop(held);
     assert_eq!(result.publication_binding(), publication_binding);
     assert!(matches!(
         read_backend_publication_receipt_v3(&output, &owner, attempt).unwrap(),

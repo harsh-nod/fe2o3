@@ -4,12 +4,14 @@ use fe2o3_hsaco::{COV6_IMPLICIT_ARGUMENT_BYTES, InspectedKernelBindings};
 use fe2o3_kernel_descriptor::{
     ArgumentCursorV3, CodeObjectVersion, DescriptorWireErrorV3, DeviceDescriptorTableV3,
     DeviceDescriptorTableV4, DeviceDescriptorTableV5, DeviceTargetV1, KernelAbiLayoutV1,
-    KernelTargetRequirementsV2, LaunchConstraintsV1, RequiredWavefrontWidthV2, RustTypeIdentity,
-    SourceTypeRecordV3,
+    KernelTargetRequirementsV2, LaunchConstraintsV1, MixedDescriptorTableV53,
+    MixedDescriptorTableV89, RequiredWavefrontWidthV2, RustTypeIdentity, SourceTypeRecordV3,
 };
 
 use crate::{
-    FinalizationError, nominal_descriptor_common::Failure,
+    FinalizationError, mixed_descriptor_finalization_v53::NominalFinalizationErrorV53,
+    mixed_descriptor_finalization_v89::NominalFinalizationErrorV89,
+    nominal_descriptor_common::Failure,
     nominal_descriptor_finalization_v3::NominalFinalizationErrorV3,
     nominal_descriptor_finalization_v4::NominalFinalizationErrorV4,
     nominal_descriptor_finalization_v5::NominalFinalizationErrorV5,
@@ -103,6 +105,8 @@ macro_rules! physical_table {
 physical_table!(DeviceDescriptorTableV3, NominalFinalizationErrorV3);
 physical_table!(DeviceDescriptorTableV4, NominalFinalizationErrorV4);
 physical_table!(DeviceDescriptorTableV5, NominalFinalizationErrorV5);
+physical_table!(MixedDescriptorTableV53, NominalFinalizationErrorV53);
+physical_table!(MixedDescriptorTableV89, NominalFinalizationErrorV89);
 
 pub(crate) fn cross_check<'wire, E, T: PhysicalTable<'wire, E>>(
     bindings: &InspectedKernelBindings,

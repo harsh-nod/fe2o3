@@ -275,6 +275,7 @@ mod platform {
         failure: Option<SourceIsaObservationTransportFailureV1>,
         kind: ProductionSourceIsaObservationKindV1,
         characteristic: Option<([u8; 32], Vec<u8>)>,
+        census: Vec<([u8; 32], Vec<u8>)>,
     }
 
     impl SourceIsaObservationCollectorStateV1 {
@@ -298,6 +299,12 @@ mod platform {
                     "cannot allocate the bounded source/ISA expected-unit set".to_owned()
                 })?;
             expected_units.extend_from_slice(expected);
+            let mut census = Vec::new();
+            if kind == ProductionSourceIsaObservationKindV1::ProductionCensusV91 {
+                census
+                    .try_reserve_exact(expected.len())
+                    .map_err(|_| "cannot allocate bounded production census".to_owned())?;
+            }
             Ok(Self {
                 config_identity,
                 session,
@@ -307,6 +314,7 @@ mod platform {
                 failure: None,
                 kind,
                 characteristic: None,
+                census,
             })
         }
 
@@ -328,6 +336,10 @@ mod platform {
                 (ProductionSourceIsaObservationKindV1::Characteristic, Some(bytes))
                     if !bytes.is_empty()
                         && bytes.len() <= MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1 => {}
+                (ProductionSourceIsaObservationKindV1::ProductionCensusV91, Some(bytes))
+                    if crate::production_census_v91::Census::decode(bytes)
+                        .and_then(|row| row.check_frame(&frame))
+                        .is_ok() => {}
                 _ => {
                     self.fail(SourceIsaObservationTransportFailureV1::RejectedFrame);
                     return Err(SourceIsaObservationTransportFailureV1::RejectedFrame);
@@ -341,6 +353,14 @@ mod platform {
                         characteristic.as_ref(),
                     ) {
                         (ProductionSourceIsaObservationKindV1::Summary, None, None) => true,
+                        (
+                            ProductionSourceIsaObservationKindV1::ProductionCensusV91,
+                            None,
+                            Some(candidate),
+                        ) => self
+                            .census
+                            .get(index)
+                            .is_some_and(|(found, bytes)| *found == unit && bytes == candidate),
                         (
                             ProductionSourceIsaObservationKindV1::Characteristic,
                             Some((observed_unit, observed)),
@@ -367,6 +387,9 @@ mod platform {
                 ProductionSourceIsaObservationKindV1::Summary => {
                     MAX_SOURCE_ISA_OBSERVATION_AGGREGATE_BYTES_V1
                 }
+                ProductionSourceIsaObservationKindV1::ProductionCensusV91 => {
+                    crate::production_census_v91::MAX_AGGREGATE
+                }
                 ProductionSourceIsaObservationKindV1::Characteristic => {
                     MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1
                         + SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1
@@ -383,6 +406,11 @@ mod platform {
             };
             self.frames.insert(insertion, (unit, frame));
             if let Some(bytes) = characteristic {
+                if self.kind == ProductionSourceIsaObservationKindV1::ProductionCensusV91 {
+                    self.census.insert(insertion, (unit, bytes));
+                    self.aggregate_bytes = aggregate_bytes;
+                    return Ok(());
+                }
                 if self.characteristic.is_some() {
                     self.fail(SourceIsaObservationTransportFailureV1::ConflictingDuplicate);
                     return Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate);
@@ -417,6 +445,7 @@ mod platform {
                 config: self.config_identity,
                 summary,
                 characteristic: self.characteristic,
+                census: self.census,
             }
         }
     }
@@ -425,6 +454,7 @@ mod platform {
         pub(crate) config: [u8; 32],
         pub(crate) summary: SourceIsaObservationCollectionV1,
         pub(crate) characteristic: Option<([u8; 32], Vec<u8>)>,
+        pub(crate) census: Vec<([u8; 32], Vec<u8>)>,
     }
 
     impl<'profile> BrokerCompilerCapabilities<'profile> {
@@ -1466,6 +1496,15 @@ mod platform {
     }
 
     impl SourceIsaObservationSinkV1 {
+        pub(crate) fn submit_census(
+            mut self,
+            frame: &SourceIsaObservationFrameV1,
+            census: &crate::production_census_v91::Census,
+        ) -> Result<(), String> {
+            census.check_frame(frame)?;
+            self.submit_inner(frame, Some(&census.encode()?))
+        }
+
         pub(crate) fn submit(mut self, frame: &SourceIsaObservationFrameV1) -> Result<(), String> {
             self.submit_inner(frame, None)
         }
@@ -1951,14 +1990,17 @@ mod platform {
                 liveness.read_frame(stream, &mut encoded)?;
                 let characteristic = match observer.kind {
                     ProductionSourceIsaObservationKindV1::Summary => None,
-                    ProductionSourceIsaObservationKindV1::Characteristic => {
+                    ProductionSourceIsaObservationKindV1::Characteristic
+                    | ProductionSourceIsaObservationKindV1::ProductionCensusV91 => {
                         let mut encoded_length = [0; 8];
                         liveness.read_frame(stream, &mut encoded_length)?;
                         let length = usize::try_from(u64::from_le_bytes(encoded_length))
                             .ok()
                             .filter(|length| {
                                 *length != 0
-                                    && *length <= MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1
+                                    && *length <= if observer.kind == ProductionSourceIsaObservationKindV1::ProductionCensusV91 {
+                                        crate::production_census_v91::MAX_BYTES
+                                    } else { MAX_SOURCE_ISA_CHARACTERISTIC_COLLECTION_BYTES_V1 }
                             })
                             .ok_or_else(|| {
                                 io::Error::new(
@@ -1983,7 +2025,13 @@ mod platform {
                     .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
                 validate_source_isa_observer_frame_binding(self.session, request, &frame)?;
                 if let Some(body) = characteristic.as_ref() {
-                    validate_source_isa_characteristic_binding(&frame, body)?;
+                    if observer.kind == ProductionSourceIsaObservationKindV1::ProductionCensusV91 {
+                        crate::production_census_v91::Census::decode(body)
+                            .and_then(|row| row.check_frame(&frame))
+                            .map_err(io::Error::other)?;
+                    } else {
+                        validate_source_isa_characteristic_binding(&frame, body)?;
+                    }
                 }
                 observer.collect(frame, characteristic)
             })();
@@ -2518,6 +2566,92 @@ mod platform {
                 ProductionSourceIsaObservationKindV1::Characteristic,
             )
             .unwrap()
+        }
+
+        #[test]
+        fn production_census_collector_requires_all_units_and_exact_payload_duplicates() {
+            let row = crate::production_census_v91::test_census();
+            let make = |units: &[[u8; 32]]| {
+                SourceIsaObservationCollectorStateV1::with_expected_context(
+                    row.config,
+                    BuildSession::from_bytes(row.session),
+                    units,
+                    ProductionSourceIsaObservationKindV1::ProductionCensusV91,
+                )
+                .unwrap()
+            };
+            let observed = frame(
+                row.unit,
+                SourceIsaObservationOutcomeV1::Unavailable(
+                    SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV18,
+                ),
+            );
+            let bytes = row.encode().unwrap();
+            let mut collector = make(&[row.unit]);
+            collector
+                .insert(observed.clone(), Some(bytes.clone()))
+                .unwrap();
+            collector
+                .insert(observed.clone(), Some(bytes.clone()))
+                .unwrap();
+            let completed = collector.finish();
+            assert!(completed.summary.failure().is_none());
+            assert_eq!(completed.census, vec![(row.unit, bytes.clone())]);
+            assert!(completed.characteristic.is_none());
+            let mut collector = make(&[row.unit, [0x41; 32]]);
+            collector
+                .insert(observed.clone(), Some(bytes.clone()))
+                .unwrap();
+            assert_eq!(
+                collector.finish().summary.failure(),
+                Some(SourceIsaObservationTransportFailureV1::MissingSelectedUnits)
+            );
+            let mut collector = make(&[row.unit]);
+            collector.insert(observed.clone(), Some(bytes)).unwrap();
+            let mut changed = row;
+            changed.artifact[0] ^= 1;
+            assert_eq!(
+                collector.insert(observed, Some(changed.encode().unwrap())),
+                Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
+            );
+            assert_eq!(
+                collector.finish().summary.failure(),
+                Some(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
+            );
+        }
+
+        #[test]
+        fn production_census_transport_does_not_accept_summary_or_characteristic_payloads() {
+            let row = crate::production_census_v91::test_census();
+            let observed = frame(
+                row.unit,
+                SourceIsaObservationOutcomeV1::Unavailable(
+                    SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV18,
+                ),
+            );
+            for body in [
+                None,
+                Some(b"{}".to_vec()),
+                Some(vec![b' '; crate::production_census_v91::MAX_BYTES + 1]),
+            ] {
+                let mut collector = SourceIsaObservationCollectorStateV1::with_expected_context(
+                    row.config,
+                    BuildSession::from_bytes(row.session),
+                    &[row.unit],
+                    ProductionSourceIsaObservationKindV1::ProductionCensusV91,
+                )
+                .unwrap();
+                assert_eq!(
+                    collector.insert(observed.clone(), body),
+                    Err(SourceIsaObservationTransportFailureV1::RejectedFrame)
+                );
+            }
+            let mut legacy = collector(&[row.unit]);
+            assert!(
+                legacy
+                    .insert(observed, Some(row.encode().unwrap()))
+                    .is_err()
+            );
         }
 
         fn observer(units: &[[u8; 32]]) -> BrokerSourceIsaObserverV1 {
@@ -3295,6 +3429,7 @@ mod unsupported {
         pub(crate) config: [u8; 32],
         pub(crate) summary: SourceIsaObservationCollectionV1,
         pub(crate) characteristic: Option<([u8; 32], Vec<u8>)>,
+        pub(crate) census: Vec<([u8; 32], Vec<u8>)>,
     }
 
     impl CapabilityBroker {
@@ -3388,6 +3523,13 @@ mod unsupported {
     pub(crate) struct SourceIsaObservationSinkV1;
 
     impl SourceIsaObservationSinkV1 {
+        pub(crate) fn submit_census(
+            self,
+            _frame: &SourceIsaObservationFrameV1,
+            _census: &crate::production_census_v91::Census,
+        ) -> Result<(), String> {
+            Err("Cargo capability transport requires Linux".to_owned())
+        }
         pub(crate) fn submit(self, _frame: &SourceIsaObservationFrameV1) -> Result<(), String> {
             Err("Cargo capability transport requires Linux".to_owned())
         }
@@ -3412,6 +3554,11 @@ mod unsupported {
     impl BrokeredCapabilities {
         pub(crate) fn authenticated_client_profile_v3_identity(&self) -> Option<[u8; 32]> {
             None
+        }
+        pub(crate) fn compiler_execution_profile_v3(
+            &self,
+        ) -> Result<&FundedClientProfileV3, String> {
+            Err("Cargo capability transport requires Linux x86_64".to_owned())
         }
         pub(crate) fn take_compiler_execution_profile_v3(
             &mut self,

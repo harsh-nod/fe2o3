@@ -12,12 +12,18 @@ use crate::{
     analyze_control_flow, analyze_interprocedural_effects_from_verified_v1, verify_module_ref,
 };
 
+mod actual_owner_v18;
+mod affine_engine_v2;
+mod candidate_pair_bound_v1;
 mod complete_body_v19;
 #[cfg(test)]
 mod distinct_invocation_v1_tests;
+mod exact_origin_v18;
 mod gfx942_inline_u32_v30;
 mod guarded_access_v1;
+mod report_construction_v18;
 pub(crate) use guarded_access_v1::origins::{structural_origins_until_v1, structural_origins_v1};
+mod closed_scalar_v18;
 mod ordered_composition_v1;
 mod physical_entry_v20;
 mod physical_global_copy_v21;
@@ -25,9 +31,44 @@ mod physical_lds_exchange_v22;
 mod pointer_derivation;
 mod private_slots;
 mod receipt_v1;
+mod scalar_cfg_v18;
+mod storage_discriminant_v18;
+pub use actual_owner_v18::*;
+pub use candidate_pair_bound_v1::*;
+pub use closed_scalar_v18::*;
+pub use scalar_cfg_v18::*;
 
 pub use complete_body_v19::derive_complete_body_memory_obligations_v19;
 pub use guarded_access_v1::FormalGuardedMemoryResourceErrorV1;
+pub use guarded_access_v1::{
+    CanonicalConditionalSliceAccessV26, CanonicalConditionalSliceDomainV26,
+    CanonicalConditionalSliceParameterV26, CheckedCanonicalConditionalSliceDomainsV26,
+    with_canonical_conditional_slice_domains_v26,
+    with_canonical_predicated_conditional_slice_domains_v85,
+};
+pub use guarded_access_v1::{
+    CanonicalGuardedGlobalReadErrorV1, CanonicalGuardedGlobalReadFactV1,
+    CanonicalGuardedGlobalReadFactV18, CanonicalGuardedGlobalReadLimitsV1,
+    CanonicalGuardedGlobalReadOutcomeV1, CanonicalGuardedGlobalReadOutcomeV18,
+    CanonicalGuardedGlobalReadReasonV1, CanonicalGuardedNoWrapFactV1,
+    CanonicalGuardedNoWrapFactV18, CanonicalGuardedPredicateFactV1,
+    CanonicalGuardedPredicateFactV18, CanonicalGuardedReadIndexOriginV1,
+    CheckedCanonicalGuardedGlobalReadsV1, CheckedCanonicalGuardedGlobalReadsV18,
+    with_canonical_guarded_global_reads_v1, with_canonical_guarded_global_reads_v18,
+};
+pub use guarded_access_v1::{
+    CanonicalGuardedGlobalStoreDomainV24, CanonicalGuardedGlobalStoreFactV24,
+    CanonicalGuardedGlobalStoreOutcomeV24, CanonicalGuardedGlobalStoreReasonV24,
+    CanonicalGuardedStoreInjectivityV24, CheckedCanonicalGuardedGlobalStoresV24,
+    with_canonical_guarded_global_stores_v24, with_canonical_predicated_global_stores_v84,
+};
+pub use guarded_access_v1::{
+    CanonicalSelectedPointerIncomingV30, CanonicalSelectedPointerNodeV30,
+    CanonicalSelectedPointerStepV30, CanonicalSelectedSliceAccessV30,
+    CanonicalSelectedSliceChoiceV30, CanonicalSelectedSliceDomainV30,
+    CanonicalSelectedSliceInjectionV30, CanonicalSelectedSliceParameterV30,
+    CheckedCanonicalSelectedSliceDomainsV30, with_canonical_selected_slice_domains_v30,
+};
 pub use ordered_composition_v1::*;
 pub use physical_entry_v20::{
     PhysicalEntryKernargAbiRequirementV20, PhysicalEntryKernargReadV20,
@@ -38,6 +79,10 @@ pub use physical_entry_v20::{
 pub use physical_global_copy_v21::*;
 pub use physical_lds_exchange_v22::*;
 pub use receipt_v1::*;
+pub use storage_discriminant_v18::{
+    CanonicalStorageDiscriminantReadErrorV18, CanonicalStorageDiscriminantReadObligationV18,
+    StorageDiscriminantReadRequirementV18, derive_canonical_storage_discriminant_read_v18,
+};
 
 use guarded_access_v1::{GuardedAnalysisV1, GuardedControlV1, GuardedResourceErrorV1};
 use pointer_derivation::{
@@ -813,14 +858,140 @@ fn derive_kernel_memory_obligations_with_composition_context(
     composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
 ) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
     let module = verified.module();
+    let effect_summaries = analyze_interprocedural_effects_from_verified_v1(verified)
+        .expect("verified module remains valid while deriving effect summaries");
+    derive_kernel_memory_obligations_from_authenticated_module(
+        module,
+        kernel_id,
+        launch_extent,
+        index_width,
+        canonical_v19,
+        composition,
+        &effect_summaries,
+    )
+}
+
+#[path = "formal_memory_obligations/effect_reader_v19.rs"]
+mod effect_reader_v19;
+
+#[path = "formal_memory_obligations/body_engine_v19.rs"]
+mod body_engine_v19;
+#[path = "formal_memory_obligations/body_legacy_v19.rs"]
+mod body_legacy_v19;
+
+pub use guarded_access_v1::affine_source_bytes_v18::canonical_owner_report_v19::{
+    CanonicalFormalLaunchInputV19, CanonicalFormalReportErrorV19, CanonicalFormalReportViewV19,
+    CanonicalFormalSourceScopeV20, with_canonical_owner_formal_report_v19,
+};
+
+#[derive(Clone, Copy)]
+enum PhysicalLaunchInterpretationV2 {
+    Exact,
+    Envelope,
+}
+
+#[path = "formal_memory_obligations/physical_launch_envelope_v2.rs"]
+mod physical_launch_envelope_v2;
+pub use physical_launch_envelope_v2::{
+    FormalPhysicalLaunchEnvelopeV2, derive_kernel_memory_obligations_for_physical_envelope_v2,
+    derive_kernel_memory_obligations_from_verified_for_physical_envelope_v2,
+};
+
+fn derive_kernel_memory_obligations_from_authenticated_module(
+    module: &Module,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+    canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
+    composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
+    effect_summaries: &crate::InterproceduralEffectAnalysisV1,
+) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
+    derive_kernel_memory_obligations_with_launch_interpretation(
+        module,
+        kernel_id,
+        launch_extent,
+        index_width,
+        canonical_v19,
+        composition,
+        effect_summaries,
+        PhysicalLaunchInterpretationV2::Exact,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_kernel_memory_obligations_with_launch_interpretation(
+    module: &Module,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+    canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
+    composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
+    effect_summaries: &crate::InterproceduralEffectAnalysisV1,
+    interpretation: PhysicalLaunchInterpretationV2,
+) -> Result<FormalMemoryObligationAnalysis, FormalMemoryObligationError> {
+    let mut reader = effect_reader_v19::LegacyEffectReaderV19(effect_summaries);
+    match derive_kernel_memory_obligations_with_effect_reader_and_launch_v19(
+        module,
+        kernel_id,
+        launch_extent,
+        index_width,
+        canonical_v19,
+        composition,
+        &mut reader,
+        interpretation,
+    ) {
+        Ok(report) => Ok(report),
+        Err(effect_reader_v19::FormalEffectEngineErrorV19::Formal(error)) => Err(error),
+        Err(effect_reader_v19::FormalEffectEngineErrorV19::Reader(never)) => match never {},
+    }
+}
+
+// Only the call-effects query is parameterized. All other phases retain their
+// existing implementation and accounting designation, including legacy scopes.
+fn derive_kernel_memory_obligations_with_effect_reader_v19<
+    R: effect_reader_v19::EffectReaderV19,
+>(
+    module: &Module,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+    canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
+    composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
+    effect_reader: &mut R,
+) -> Result<FormalMemoryObligationAnalysis, effect_reader_v19::FormalEffectEngineErrorV19<R::Error>>
+{
+    derive_kernel_memory_obligations_with_effect_reader_and_launch_v19(
+        module,
+        kernel_id,
+        launch_extent,
+        index_width,
+        canonical_v19,
+        composition,
+        effect_reader,
+        PhysicalLaunchInterpretationV2::Exact,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_kernel_memory_obligations_with_effect_reader_and_launch_v19<
+    R: effect_reader_v19::EffectReaderV19,
+>(
+    module: &Module,
+    kernel_id: &KernelId,
+    launch_extent: ExplicitLaunchExtent,
+    index_width: FormalIndexWidth,
+    canonical_v19: Option<&crate::VerifiedCanonicalKernelIrModuleV19>,
+    composition: Option<&crate::VerifiedOrderedProgramCompositionV1>,
+    effect_reader: &mut R,
+    interpretation: PhysicalLaunchInterpretationV2,
+) -> Result<FormalMemoryObligationAnalysis, effect_reader_v19::FormalEffectEngineErrorV19<R::Error>>
+{
     let ordered_composition =
         composition.is_some_and(|owner| ordered_composition_v1::contains(owner, module, kernel_id));
     let complete_body_v19 = canonical_v19.is_some_and(|owner| {
         std::ptr::eq(module, owner.module())
             && complete_body_v19::contains_verified_complete_body(owner, kernel_id)
     });
-    let effect_summaries = analyze_interprocedural_effects_from_verified_v1(verified)
-        .expect("verified module remains valid while deriving effect summaries");
     let kernel = module
         .kernels
         .iter()
@@ -841,7 +1012,12 @@ fn derive_kernel_memory_obligations_with_composition_context(
     if !index_width_supported {
         reasons.insert(FormalMemoryIncompleteReason::UnsupportedIndexWidth { width: index_width });
     }
-    let invocations = resolve_invocations(&kernel.domain, launch_extent, &mut reasons)?;
+    let invocations = resolve_invocations_with_static_policy(
+        &kernel.domain,
+        launch_extent,
+        &mut reasons,
+        interpretation,
+    )?;
     let access_invocations = index_width_supported.then_some(invocations).flatten();
     let allocations = formal_allocations(function);
     let allocation_by_value: BTreeMap<_, _> = allocations
@@ -873,238 +1049,27 @@ fn derive_kernel_memory_obligations_with_composition_context(
     let mut context = AccessDerivationContext::new(
         &definitions,
         &value_types,
+        &allocations,
         &allocation_by_value,
         &private_load_sources,
         guarded,
     );
     let mut accesses = Vec::new();
 
-    for block in &body.blocks {
-        if !definitions.is_reachable(block.id) {
-            continue;
-        }
-        for (operation_index, operation) in block.operations.iter().enumerate() {
-            let location = FunctionOperationLocation::new(block.id, operation_index);
-            match &operation.kind {
-                OperationKind::Call { callee, .. }
-                    if !ordered_composition
-                        && !operation.has_complete_effect_summary()
-                        && !effect_summaries
-                            .function(callee)
-                            .is_some_and(|summary| summary.is_complete_and_pure()) =>
-                {
-                    reasons.insert(FormalMemoryIncompleteReason::CallEffectsUnavailable {
-                        location,
-                        callee: callee.clone(),
-                    });
-                }
-                OperationKind::Call { .. } => {}
-                OperationKind::Load { access, .. }
-                    if access.address_space == AddressSpace::Private => {}
-                OperationKind::Load { pointer, access } => {
-                    if let Some(invocations) = access_invocations {
-                        match derive_access(
-                            location,
-                            *pointer,
-                            FormalMemoryAccessKind::Read,
-                            *access,
-                            invocations,
-                            None,
-                            &mut context,
-                        ) {
-                            Ok(access) => guarded_access_v1::report_push(
-                                &mut context.guarded,
-                                &mut accesses,
-                                access,
-                            )?,
-                            Err(AccessDerivationError::Incomplete(reason)) => {
-                                reasons.insert(reason);
-                            }
-                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
-                        }
-                    }
-                }
-                OperationKind::Store { access, .. }
-                    if access.address_space == AddressSpace::Private => {}
-                OperationKind::Store {
-                    pointer, access, ..
-                }
-                | OperationKind::GuardedStore {
-                    pointer, access, ..
-                } => {
-                    if let Some(invocations) = access_invocations {
-                        match derive_access(
-                            location,
-                            *pointer,
-                            FormalMemoryAccessKind::Write,
-                            *access,
-                            invocations,
-                            match operation.kind {
-                                OperationKind::GuardedStore { predicate, .. } => Some(predicate),
-                                _ => None,
-                            },
-                            &mut context,
-                        ) {
-                            Ok(access) => guarded_access_v1::report_push(
-                                &mut context.guarded,
-                                &mut accesses,
-                                access,
-                            )?,
-                            Err(AccessDerivationError::Incomplete(reason)) => {
-                                reasons.insert(reason);
-                            }
-                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
-                        }
-                    }
-                }
-                OperationKind::Alloca {
-                    address_space: AddressSpace::Private,
-                    ..
-                } => {}
-                OperationKind::Matrix(matrix) if matrix.memory_effects().is_empty() => {}
-                // The verified gfx950 transpose chain owns its static LDS, accepts only a
-                // read-only global U8 slice, and defines guarded zero-fill for every source
-                // coordinate. It creates no caller-visible write or alias obligation.
-                OperationKind::Gfx950LdsTranspose(_) => {}
-                OperationKind::GuardedLoad { access, .. }
-                    if access.address_space == AddressSpace::Private => {}
-                OperationKind::GuardedLoad {
-                    pointer,
-                    access,
-                    predicate,
-                    ..
-                } => {
-                    let mut checked_guard = false;
-                    if let Some(invocations) = access_invocations {
-                        match derive_access(
-                            location,
-                            *pointer,
-                            FormalMemoryAccessKind::Read,
-                            *access,
-                            invocations,
-                            Some(*predicate),
-                            &mut context,
-                        ) {
-                            Ok(access) => {
-                                checked_guard =
-                                    matches!(access.domain, FormalAccessDomainV1::SliceBounded(_));
-                                guarded_access_v1::report_push(
-                                    &mut context.guarded,
-                                    &mut accesses,
-                                    access,
-                                )?;
-                            }
-                            Err(AccessDerivationError::Incomplete(exact_reason)) => {
-                                match derive_conservative_guarded_access(
-                                    location,
-                                    *pointer,
-                                    *access,
-                                    invocations,
-                                    &mut context,
-                                ) {
-                                    Ok(access) => guarded_access_v1::report_push(
-                                        &mut context.guarded,
-                                        &mut accesses,
-                                        access,
-                                    )?,
-                                    Err(_) => {
-                                        reasons.insert(exact_reason);
-                                    }
-                                }
-                            }
-                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
-                        }
-                    }
-                    if !checked_guard {
-                        reasons.insert(
-                            FormalMemoryIncompleteReason::GuardedAccessRequiresRankedProof {
-                                location,
-                            },
-                        );
-                    }
-                }
-                OperationKind::Atomic(atomic) => {
-                    if let Some(invocations) = access_invocations {
-                        match derive_access(
-                            location,
-                            atomic.pointer,
-                            FormalMemoryAccessKind::Atomic,
-                            atomic.access,
-                            invocations,
-                            None,
-                            &mut context,
-                        ) {
-                            Ok(access) => guarded_access_v1::report_push(
-                                &mut context.guarded,
-                                &mut accesses,
-                                access,
-                            )?,
-                            Err(AccessDerivationError::Incomplete(reason)) => {
-                                reasons.insert(reason);
-                            }
-                            Err(AccessDerivationError::Resource(error)) => return Err(error.into()),
-                        }
-                    }
-                }
-                OperationKind::InlineAssembly(_)
-                    if gfx942_inline_u32_v30::has_closed_memory_effects(
-                        operation,
-                        &value_types,
-                    ) => {}
-                // U32 declaration/steps have no address or memory effect only
-                // in this actual immutable whole-profile V19 context. Their
-                // compiler ordering is unchanged; the real tail is above.
-                OperationKind::Gfx942CompleteBodyDeclaration(_)
-                | OperationKind::Gfx942CompleteBodyStep(_)
-                    if complete_body_v19 => {}
-                OperationKind::Gfx942OrderedProgram(_) if ordered_composition => {}
-                OperationKind::Storage(_)
-                | OperationKind::Execution(_)
-                | OperationKind::Gfx942OrderedRegion(_)
-                | OperationKind::Gfx942OrderedProgram(_)
-                | OperationKind::Gfx942CompleteBodyDeclaration(_)
-                | OperationKind::Gfx942CompleteBodyStep(_)
-                | OperationKind::Gfx942PhysicalEntryDeclaration(_)
-                | OperationKind::Gfx942PhysicalEntryStep(_)
-                | OperationKind::Gfx942PhysicalGlobalCopyDeclaration(_)
-                | OperationKind::Gfx942PhysicalGlobalCopyStep(_)
-                | OperationKind::Gfx942PhysicalLdsExchangeDeclaration(_)
-                | OperationKind::Gfx942PhysicalLdsExchangeStep(_)
-                | OperationKind::VerificationContract(_)
-                | OperationKind::VectorLoad(_)
-                | OperationKind::VectorStore(_)
-                | OperationKind::VectorLayoutConvert(_)
-                | OperationKind::Alloca { .. }
-                | OperationKind::Barrier(_)
-                | OperationKind::Fence(_)
-                | OperationKind::Matrix(_)
-                | OperationKind::InlineAssembly(_)
-                | OperationKind::WorkgroupBarrier(_)
-                | OperationKind::WorkgroupMemory(_) => {
-                    reasons
-                        .insert(FormalMemoryIncompleteReason::UnsupportedMemoryEffect { location });
-                }
-                OperationKind::Constant(_)
-                | OperationKind::Intrinsic(_)
-                | OperationKind::MemoryIntrinsic(_)
-                | OperationKind::Wave(_)
-                | OperationKind::Unary { .. }
-                | OperationKind::Binary { .. }
-                | OperationKind::Compare { .. }
-                | OperationKind::Cast { .. }
-                | OperationKind::Select { .. }
-                | OperationKind::SliceLength { .. }
-                | OperationKind::SliceData { .. }
-                | OperationKind::GetElementPointer { .. } => {
-                    if !operation.memory_effects().is_empty() {
-                        reasons.insert(FormalMemoryIncompleteReason::UnsupportedMemoryEffect {
-                            location,
-                        });
-                    }
-                }
-            }
-        }
-    }
+    body_engine_v19::collect(
+        function,
+        access_invocations,
+        &mut body_legacy_v19::Legacy {
+            definitions: &definitions,
+            value_types: &value_types,
+            context: &mut context,
+            reasons: &mut reasons,
+            accesses: &mut accesses,
+            effects: effect_reader,
+            ordered: ordered_composition,
+            complete: complete_body_v19,
+        },
+    )?;
 
     let bounds_requirements =
         derive_bounds_requirements(&accesses, &mut reasons, &mut context.guarded)?;
@@ -1138,63 +1103,96 @@ fn resolve_invocations(
     launch_extent: ExplicitLaunchExtent,
     reasons: &mut BTreeSet<FormalMemoryIncompleteReason>,
 ) -> Result<Option<InvocationRange1d>, FormalMemoryObligationError> {
+    resolve_invocations_with_static_policy(
+        domain,
+        launch_extent,
+        reasons,
+        PhysicalLaunchInterpretationV2::Exact,
+    )
+}
+
+fn resolve_invocations_with_static_policy(
+    domain: &LaunchDomain,
+    launch_extent: ExplicitLaunchExtent,
+    reasons: &mut BTreeSet<FormalMemoryIncompleteReason>,
+    interpretation: PhysicalLaunchInterpretationV2,
+) -> Result<Option<InvocationRange1d>, FormalMemoryObligationError> {
+    match resolve_invocations_value_v19(domain, launch_extent, interpretation)
+        .map_err(FormalMemoryObligationError::InvalidInvocationRange)?
+    {
+        Ok(invocations) => Ok(Some(invocations)),
+        Err(reason) => {
+            reasons.insert(reason);
+            Ok(None)
+        }
+    }
+}
+
+// The original resolver reports at most one reason. Keep that fixed result
+// independent of the legacy tree or the same-ledger report's paid vector.
+fn resolve_invocations_value_v19(
+    domain: &LaunchDomain,
+    launch_extent: ExplicitLaunchExtent,
+    interpretation: PhysicalLaunchInterpretationV2,
+) -> Result<Result<InvocationRange1d, FormalMemoryIncompleteReason>, RegionValidationError> {
     let ExplicitLaunchExtent::Exact { rank, extents } = launch_extent else {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentUnknown);
-        return Ok(None);
+        return Ok(Err(FormalMemoryIncompleteReason::LaunchExtentUnknown));
     };
     if !(1..=3).contains(&rank) {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchRankUnsupported { rank });
-        return Ok(None);
+        return Ok(Err(FormalMemoryIncompleteReason::LaunchRankUnsupported {
+            rank,
+        }));
     }
     if domain.rank() != rank {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchRankMismatch {
+        return Ok(Err(FormalMemoryIncompleteReason::LaunchRankMismatch {
             domain_rank: domain.rank(),
             extent_rank: rank,
-        });
-        return Ok(None);
+        }));
     }
     if (rank < 2 && extents[1] != 1) || (rank < 3 && extents[2] != 1) {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentShapeMismatch { rank, extents });
-        return Ok(None);
+        return Ok(Err(
+            FormalMemoryIncompleteReason::LaunchExtentShapeMismatch { rank, extents },
+        ));
     }
     if extents.contains(&0) {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentZero);
-        return Ok(None);
+        return Ok(Err(FormalMemoryIncompleteReason::LaunchExtentZero));
     }
     for (index, expected) in domain.extents().enumerate() {
         let LaunchExtent::Static(expected) = expected else {
             continue;
         };
         let actual = extents[index];
-        if u64::from(expected) == actual {
+        let covered = match interpretation {
+            PhysicalLaunchInterpretationV2::Exact => u64::from(expected) == actual,
+            PhysicalLaunchInterpretationV2::Envelope => u64::from(expected) <= actual,
+        };
+        if covered {
             continue;
         }
         if rank == 1 {
-            reasons.insert(FormalMemoryIncompleteReason::StaticLaunchExtentMismatch {
-                expected,
-                actual,
-            });
+            return Ok(Err(
+                FormalMemoryIncompleteReason::StaticLaunchExtentMismatch { expected, actual },
+            ));
         } else {
-            reasons.insert(
+            return Ok(Err(
                 FormalMemoryIncompleteReason::StaticLaunchAxisExtentMismatch {
                     axis: [Axis::X, Axis::Y, Axis::Z][index],
                     expected,
                     actual,
                 },
-            );
+            ));
         }
-        return Ok(None);
     }
     let Some(count) = extents[..usize::from(rank)]
         .iter()
         .try_fold(1_u64, |count, extent| count.checked_mul(*extent))
     else {
-        reasons.insert(FormalMemoryIncompleteReason::LaunchExtentOverflow { rank, extents });
-        return Ok(None);
+        return Ok(Err(FormalMemoryIncompleteReason::LaunchExtentOverflow {
+            rank,
+            extents,
+        }));
     };
-    InvocationRange1d::from_count(count)
-        .map(Some)
-        .map_err(FormalMemoryObligationError::InvalidInvocationRange)
+    InvocationRange1d::from_count(count).map(Ok)
 }
 
 fn formal_allocations(function: &Function) -> Vec<FormalAllocationParameter> {
@@ -1208,31 +1206,39 @@ fn formal_allocations(function: &Function) -> Vec<FormalAllocationParameter> {
         .zip(&function.signature.parameters)
         .enumerate()
         .filter_map(|(parameter_index, (value, ty))| {
-            let (kind, address_space, access) = match ty {
-                Type::Pointer(pointer) => (
-                    FormalParameterKind::Pointer,
-                    pointer.address_space,
-                    pointer.access,
-                ),
-                Type::Slice(slice) => (
-                    FormalParameterKind::Slice,
-                    slice.address_space,
-                    slice.access,
-                ),
-                _ => return None,
-            };
-            Some(FormalAllocationParameter {
-                identity: FormalAllocationIdentity {
-                    parameter_index: u32::try_from(parameter_index)
-                        .expect("verified body length fits ValueId space"),
-                },
-                value,
-                kind,
-                address_space,
-                access,
-            })
+            formal_allocation_parameter(parameter_index, value, ty)
         })
         .collect()
+}
+
+fn formal_allocation_parameter(
+    parameter_index: usize,
+    value: ValueId,
+    ty: &Type,
+) -> Option<FormalAllocationParameter> {
+    let (kind, address_space, access) = match ty {
+        Type::Pointer(pointer) => (
+            FormalParameterKind::Pointer,
+            pointer.address_space,
+            pointer.access,
+        ),
+        Type::Slice(slice) => (
+            FormalParameterKind::Slice,
+            slice.address_space,
+            slice.access,
+        ),
+        _ => return None,
+    };
+    Some(FormalAllocationParameter {
+        identity: FormalAllocationIdentity {
+            parameter_index: u32::try_from(parameter_index)
+                .expect("verified body length fits ValueId space"),
+        },
+        value,
+        kind,
+        address_space,
+        access,
+    })
 }
 
 struct Definitions<'module> {
@@ -1332,46 +1338,32 @@ impl Definitions<'_> {
         value: ValueId,
         value_types: &BTreeMap<ValueId, Type>,
     ) -> Option<ValueId> {
-        let mut current = value;
-        let mut visited = BTreeSet::new();
-        loop {
-            if !visited.insert(current) {
-                return None;
-            }
-            let origin = self.unique_ssa_origin(current)?;
-            if origin != current {
-                if value_types.get(&current) != value_types.get(&origin) {
-                    return None;
-                }
-                current = origin;
-                continue;
-            }
-            let Some((operation, _)) = self.operations.get(&current) else {
-                return Some(current);
-            };
-            let OperationKind::Cast {
-                kind: CastKind::RestrictPointerAccess,
-                value: source,
-                to,
-            } = &operation.kind
-            else {
-                return Some(current);
-            };
-            let (Some(Type::Pointer(from)), Type::Pointer(to_pointer)) =
-                (value_types.get(source), to)
-            else {
-                return None;
-            };
-            if from.pointee != to_pointer.pointee
-                || from.address_space != to_pointer.address_space
-                || from.access != AccessMode::ReadWrite
-                || to_pointer.access != AccessMode::ReadOnly
-            {
-                return None;
-            }
-            current = *source;
-        }
+        exact_origin_v18::legacy(self, value, value_types)
     }
+}
+
+fn checked_address_cast_source_v18(operation: &Operation, from: &Type) -> Option<ValueId> {
+    exact_origin_v18::infallible(exact_origin_v18::address(
+        operation,
+        from,
+        &mut exact_origin_v18::LegacyCompare,
+    ))
+}
+
+fn checked_slice_cast_source_v18(operation: &Operation, from: &Type) -> Option<ValueId> {
+    exact_origin_v18::infallible(exact_origin_v18::slice(
+        operation,
+        from,
+        &mut exact_origin_v18::LegacyCompare,
+    ))
+}
+
+fn checked_pointer_cast_source_v18(operation: &Operation, from: &Type) -> Option<ValueId> {
+    exact_origin_v18::infallible(exact_origin_v18::pointer(
+        operation,
+        from,
+        &mut exact_origin_v18::LegacyCompare,
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -1422,170 +1414,7 @@ fn compute_affine_expressions(
     operations: &BTreeMap<ValueId, (&Operation, FunctionOperationLocation)>,
     block_parameter_origins: &BTreeMap<ValueId, Option<ValueId>>,
 ) -> BTreeMap<ValueId, Result<AffineExpression, IndexExpressionError>> {
-    let mut expressions = BTreeMap::new();
-    let mut visiting = BTreeSet::new();
-    let roots = operations
-        .iter()
-        .filter_map(|(value, (operation, _))| {
-            affine_result_is_supported(operation).then_some(*value)
-        })
-        .collect::<Vec<_>>();
-
-    for root in roots {
-        if expressions.contains_key(&root) {
-            continue;
-        }
-        let mut work = vec![AffineWork::Enter(root)];
-        while let Some(item) = work.pop() {
-            match item {
-                AffineWork::Enter(value) => {
-                    let Some(value) = block_parameter_origins
-                        .get(&value)
-                        .copied()
-                        .unwrap_or(Some(value))
-                    else {
-                        continue;
-                    };
-                    if expressions.contains_key(&value) {
-                        continue;
-                    }
-                    if !visiting.insert(value) {
-                        expressions.insert(value, Err(IndexExpressionError::Unsupported));
-                        continue;
-                    }
-                    work.push(AffineWork::Finish(value));
-                    let Some((operation, _)) = operations.get(&value) else {
-                        continue;
-                    };
-                    if !affine_result_is_supported(operation) {
-                        continue;
-                    }
-                    let dependencies = match &operation.kind {
-                        OperationKind::Binary { lhs, rhs, .. } => [Some(*rhs), Some(*lhs)],
-                        OperationKind::Cast {
-                            kind: CastKind::Bitcast,
-                            value,
-                            to,
-                        } if *to == Type::INDEX => [Some(*value), None],
-                        _ => [None, None],
-                    };
-                    for dependency in dependencies.into_iter().flatten() {
-                        if let Some(dependency) = block_parameter_origins
-                            .get(&dependency)
-                            .copied()
-                            .unwrap_or(Some(dependency))
-                        {
-                            work.push(AffineWork::Enter(dependency));
-                        }
-                    }
-                }
-                AffineWork::Finish(value) => {
-                    visiting.remove(&value);
-                    if expressions.contains_key(&value) {
-                        continue;
-                    }
-                    let expression = operations
-                        .get(&value)
-                        .and_then(|(operation, _)| {
-                            affine_result_is_supported(operation).then_some(*operation)
-                        })
-                        .map_or(
-                            Err(IndexExpressionError::Unsupported),
-                            |operation| match &operation.kind {
-                                OperationKind::Constant(Constant::Index(value))
-                                    if operation.results[0].ty == Type::INDEX =>
-                                {
-                                    Ok(AffineExpression::constant(*value))
-                                }
-                                OperationKind::Constant(Constant::U64(value))
-                                    if operation.results[0].ty == Type::Scalar(ScalarType::U64) =>
-                                {
-                                    Ok(AffineExpression::constant(*value))
-                                }
-                                OperationKind::Cast {
-                                    kind: CastKind::Bitcast,
-                                    value,
-                                    to,
-                                } if *to == Type::INDEX => {
-                                    let origin = block_parameter_origins
-                                        .get(value)
-                                        .copied()
-                                        .unwrap_or(Some(*value))
-                                        .ok_or(IndexExpressionError::Unsupported)?;
-                                    let (source, _) = operations
-                                        .get(&origin)
-                                        .ok_or(IndexExpressionError::Unsupported)?;
-                                    if !matches!(source.results.as_slice(), [result]
-                                        if result.ty == Type::Scalar(ScalarType::U64))
-                                        || !matches!(
-                                            source.kind,
-                                            OperationKind::Constant(Constant::U64(_))
-                                        )
-                                    {
-                                        return Err(IndexExpressionError::Unsupported);
-                                    }
-                                    let literal: AffineExpression = expressions
-                                        .get(&origin)
-                                        .copied()
-                                        .unwrap_or(Err(IndexExpressionError::Unsupported))?;
-                                    if literal.invocation_coefficient != 0 {
-                                        return Err(IndexExpressionError::Unsupported);
-                                    }
-                                    Ok(literal)
-                                }
-                                OperationKind::Intrinsic(intrinsic)
-                                    if intrinsic.kind
-                                        == (IntrinsicKind::InvocationIndex {
-                                            kind: IndexKind::Global,
-                                            axis: Axis::X,
-                                        }) =>
-                                {
-                                    Ok(AffineExpression::INVOCATION)
-                                }
-                                OperationKind::Binary { op, lhs, rhs } => {
-                                    let operand = |value: ValueId| -> Result<
-                                        AffineExpression,
-                                        IndexExpressionError,
-                                    > {
-                                        let value = block_parameter_origins
-                                            .get(&value)
-                                            .copied()
-                                            .unwrap_or(Some(value))
-                                            .ok_or(IndexExpressionError::Unsupported)?;
-                                        expressions
-                                            .get(&value)
-                                            .copied()
-                                            .unwrap_or(Err(IndexExpressionError::Unsupported))
-                                    };
-                                    let lhs = operand(*lhs)?;
-                                    let rhs = operand(*rhs)?;
-                                    match op {
-                                        BinaryOp::Add => lhs
-                                            .checked_add(rhs)
-                                            .ok_or(IndexExpressionError::Overflow),
-                                        BinaryOp::Multiply if lhs.invocation_coefficient == 0 => {
-                                            rhs.checked_multiply_constant(lhs.constant)
-                                                .ok_or(IndexExpressionError::Overflow)
-                                        }
-                                        BinaryOp::Multiply if rhs.invocation_coefficient == 0 => {
-                                            lhs.checked_multiply_constant(rhs.constant)
-                                                .ok_or(IndexExpressionError::Overflow)
-                                        }
-                                        BinaryOp::Multiply => {
-                                            Err(IndexExpressionError::Unsupported)
-                                        }
-                                        _ => Err(IndexExpressionError::Unsupported),
-                                    }
-                                }
-                                _ => Err(IndexExpressionError::Unsupported),
-                            },
-                        );
-                    expressions.insert(value, expression);
-                }
-            }
-        }
-    }
-    expressions
+    affine_engine_v2::legacy(operations, block_parameter_origins)
 }
 
 fn collect_types(function: &Function) -> BTreeMap<ValueId, Type> {
@@ -1610,7 +1439,7 @@ fn collect_types(function: &Function) -> BTreeMap<ValueId, Type> {
     types
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct AffineExpression {
     constant: u64,
     invocation_coefficient: u64,
@@ -1661,7 +1490,7 @@ impl AffineExpression {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum IndexExpressionError {
     Unsupported,
     Overflow,
@@ -1698,11 +1527,17 @@ fn derive_bounds_requirements(
     reasons: &mut BTreeSet<FormalMemoryIncompleteReason>,
     guarded: &mut Option<GuardedAnalysisV1<'_>>,
 ) -> Result<Vec<FormalBoundsRequirement>, GuardedResourceErrorV1> {
+    derive_bounds_requirements_with_meter(accesses, reasons, guarded)
+}
+
+fn derive_bounds_requirements_with_meter(
+    accesses: &[FormalMemoryAccess],
+    reasons: &mut impl report_construction_v18::BoundsReasonSinkV18,
+    meter: &mut impl report_construction_v18::ReportMeterV18,
+) -> Result<Vec<FormalBoundsRequirement>, GuardedResourceErrorV1> {
     let mut bounds = Vec::new();
     for access in accesses {
-        if let Some(guarded) = guarded.as_mut() {
-            guarded.bounds_work()?;
-        }
+        meter.bounds_work()?;
         let kind = match access.domain {
             FormalAccessDomainV1::SliceBounded(domain) => {
                 FormalBoundsKindV1::SliceElementAtGuardedIndex(domain)
@@ -1719,11 +1554,7 @@ fn derive_bounds_requirements(
                     ByteExpression::Affine { .. } => match access_envelope(access) {
                         Some(range) => range,
                         None => {
-                            reasons.insert(
-                                FormalMemoryIncompleteReason::AddressArithmeticOverflow {
-                                    location: access.location,
-                                },
-                            );
+                            reasons.overflow(access.location, meter)?;
                             continue;
                         }
                     },
@@ -1731,8 +1562,7 @@ fn derive_bounds_requirements(
                 FormalBoundsKindV1::FixedMinimumBytes(range.end_exclusive)
             }
         };
-        guarded_access_v1::report_push(
-            guarded,
+        meter.push(
             &mut bounds,
             FormalBoundsRequirement {
                 location: access.location,
@@ -1779,9 +1609,16 @@ fn derive_alias_requirements(
     accesses: &[FormalMemoryAccess],
     guarded: &mut Option<GuardedAnalysisV1<'_>>,
 ) -> Result<Vec<RuntimeAliasRequirement>, GuardedResourceErrorV1> {
+    derive_alias_requirements_with_meter(accesses, guarded)
+}
+
+fn derive_alias_requirements_with_meter(
+    accesses: &[FormalMemoryAccess],
+    meter: &mut impl report_construction_v18::ReportMeterV18,
+) -> Result<Vec<RuntimeAliasRequirement>, GuardedResourceErrorV1> {
     let mut entries = Vec::<(FormalAllocationIdentity, AllocationEnvelope)>::new();
     for access in accesses {
-        guarded_access_v1::report_work(guarded, 8)?;
+        meter.charge(8)?;
         let range = if access.domain != FormalAccessDomainV1::LaunchEnvelope {
             FormalAliasRegionV1::WholeFormalAllocation
         } else {
@@ -1798,8 +1635,7 @@ fn derive_alias_requirements(
                 }
             }
         };
-        guarded_access_v1::report_push(
-            guarded,
+        meter.push(
             &mut entries,
             (
                 access.allocation,
@@ -1811,14 +1647,10 @@ fn derive_alias_requirements(
             ),
         )?;
     }
-    if let Some(guarded) = guarded.as_mut() {
-        guarded.ledger.sort(&mut entries, 1, |a, b| a.0.cmp(&b.0))?;
-    } else {
-        entries.sort_unstable_by_key(|row| row.0);
-    }
+    meter.sort(&mut entries, |a, b| a.0.cmp(&b.0))?;
     let mut count = 0_usize;
     for index in 0..entries.len() {
-        guarded_access_v1::report_work(guarded, 8)?;
+        meter.charge(8)?;
         let (allocation, next) = entries[index];
         if count != 0 && entries[count - 1].0 == allocation {
             let envelope = &mut entries[count - 1].1;
@@ -1833,12 +1665,11 @@ fn derive_alias_requirements(
     let mut requirements = Vec::new();
     for (left_index, (left, left_envelope)) in entries.iter().enumerate() {
         for (right, right_envelope) in &entries[left_index + 1..] {
-            guarded_access_v1::report_work(guarded, 8)?;
+            meter.charge(8)?;
             if address_spaces_may_alias(left_envelope.address_space, right_envelope.address_space)
                 && (left_envelope.writes || right_envelope.writes)
             {
-                guarded_access_v1::report_push(
-                    guarded,
+                meter.push(
                     &mut requirements,
                     RuntimeAliasRequirement {
                         left: *left,
@@ -1850,6 +1681,7 @@ fn derive_alias_requirements(
             }
         }
     }
+    meter.retire(entries)?;
     Ok(requirements)
 }
 
@@ -1868,10 +1700,17 @@ fn derive_inter_invocation_conflicts(
     accesses: &[FormalMemoryAccess],
     guarded: &mut Option<GuardedAnalysisV1<'_>>,
 ) -> Result<Vec<InterInvocationConflictRequirement>, GuardedResourceErrorV1> {
+    derive_inter_invocation_conflicts_with_meter(accesses, guarded)
+}
+
+fn derive_inter_invocation_conflicts_with_meter(
+    accesses: &[FormalMemoryAccess],
+    meter: &mut impl report_construction_v18::ReportMeterV18,
+) -> Result<Vec<InterInvocationConflictRequirement>, GuardedResourceErrorV1> {
     let mut requirements = Vec::new();
     for (left_index, left) in accesses.iter().enumerate() {
         for right in &accesses[left_index..] {
-            guarded_access_v1::report_work(guarded, 32)?;
+            meter.charge(32)?;
             if left.allocation != right.allocation
                 || (left.kind == FormalMemoryAccessKind::Read
                     && right.kind == FormalMemoryAccessKind::Read)
@@ -1881,8 +1720,7 @@ fn derive_inter_invocation_conflicts(
             {
                 continue;
             }
-            guarded_access_v1::report_push(
-                guarded,
+            meter.push(
                 &mut requirements,
                 InterInvocationConflictRequirement {
                     left: left.location,

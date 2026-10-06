@@ -11,7 +11,7 @@ use crate::{
     refined_forwarding_history_rows_v1 as rows,
     refined_forwarding_history_wire_v1::{
         Error, InertRefinedForwardingHistoryRefV1 as Frame, RefinedForwardingHistoryRoleV1 as Role,
-        RefinedForwardingHistoryWireStorageV1 as Storage, add, configured,
+        RefinedForwardingHistoryWireStorageV1 as Storage, add, configured, original_account,
     },
 };
 use fe2o3_kernel_analysis::{
@@ -191,16 +191,38 @@ impl<'frame, 'wire> DecodedRefinedForwardingHistoryV1<'frame, 'wire> {
         &'a self,
         budget: &mut Budget<'_>,
     ) -> Result<Checked<'a>, SemanticError> {
-        let required = self
-            .storage
+        if budget.storage_limit()
+            > super::refined_forwarding_history_wire_v1::MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1
+        {
+            return Err(Resource::Accounting.into());
+        }
+        self.check_semantics_bounded(budget)
+    }
+
+    /// Same semantic relation on an original owned account. Counts the complete
+    /// decoded owner, borrowed frame and wire AGAIN inside the unchanged local
+    /// <=256 MiB bound. The ordinary method keeps its strict total-cap contract.
+    pub fn check_semantics_in_original_account_v1<'a>(
+        &'a self,
+        budget: &mut Budget<'_>,
+    ) -> Result<Checked<'a>, SemanticError> {
+        let required = self.semantic_inputs_storage()?;
+        original_account(budget, required, |b| self.check_semantics_bounded(b))
+    }
+
+    fn semantic_inputs_storage(&self) -> Result<usize, Resource> {
+        self.storage
             .retained_storage()
             .checked_add(self.frame.storage().retained_storage())
             .and_then(|n| n.checked_add(self.frame.canonical_bytes().len()))
-            .ok_or(Resource::Arithmetic)?;
-        if budget.storage_limit()
-            > super::refined_forwarding_history_wire_v1::MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1
-            || budget.storage() < required
-        {
+            .ok_or(Resource::Arithmetic)
+    }
+
+    fn check_semantics_bounded<'a>(
+        &'a self,
+        budget: &mut Budget<'_>,
+    ) -> Result<Checked<'a>, SemanticError> {
+        if budget.storage() < self.semantic_inputs_storage()? {
             return Err(Resource::Accounting.into());
         }
         budget.charge_work(256)?;
@@ -221,6 +243,30 @@ pub fn materialize_refined_forwarding_history_v1<'frame, 'wire>(
     budget: &mut Budget<'_>,
 ) -> Result<DecodedRefinedForwardingHistoryV1<'frame, 'wire>, Error> {
     configured(budget)?;
+    materialize_bounded(frame, budget)
+}
+
+/// Same complete decoder with the entire frame and wire charged again inside
+/// a <=256 MiB local window on the original owned account. Returned new storage
+/// is still unreserved; caller retains the full original input reservation.
+pub fn materialize_refined_forwarding_history_in_original_account_v1<'frame, 'wire>(
+    frame: &'frame Frame<'wire>,
+    budget: &mut Budget<'_>,
+) -> Result<DecodedRefinedForwardingHistoryV1<'frame, 'wire>, Error> {
+    original_account(
+        budget,
+        add(
+            frame.storage().retained_storage(),
+            frame.canonical_bytes().len(),
+        )?,
+        |b| materialize_bounded(frame, b),
+    )
+}
+
+fn materialize_bounded<'frame, 'wire>(
+    frame: &'frame Frame<'wire>,
+    budget: &mut Budget<'_>,
+) -> Result<DecodedRefinedForwardingHistoryV1<'frame, 'wire>, Error> {
     if budget.storage()
         < add(
             frame.storage().retained_storage(),

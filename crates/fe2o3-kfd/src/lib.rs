@@ -90,6 +90,14 @@ pub use conditional_dispatch_v1::{
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod mixed_conditional_dispatch_v26;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use mixed_conditional_dispatch_v26::{
+    MixedConditionalAccessV26, MixedConditionalDispatchPremisesV26, MixedConditionalIndexDomainV26,
+    MixedConditionalUnusedSliceV26,
+};
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod persistent_allocation;
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -179,19 +187,20 @@ pub use queue::{
     Gfx942DispatchProgressV1, Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1,
     Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1, Gfx942KfdDebugTargetDispatchErrorV2,
     Gfx942KfdDebugTargetDispatchResultV2, Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1,
-    Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
-    Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
-    Gfx942PromotedSdmaDestinationV1, Gfx942RecycledDispatchResourcesV1,
-    Gfx942RecycledDispatchWriteRequestV1, Gfx942RepeatedByteContentV1,
-    Gfx942SdmaBatchExecutionFailureV1, Gfx942SdmaBatchExecutionRecoveryV1,
-    Gfx942SdmaBatchSubmissionFailureV1, Gfx942SdmaBufferTransitionFailureV1,
-    Gfx942SdmaCompletedPromotionFailureV1, Gfx942SdmaDispatchDataBridgeV1,
-    Gfx942SdmaDispatchDataDemotionFailureV1, Gfx942SdmaMultiQueueFailureCustodyV1,
-    Gfx942SdmaMultiQueueFailureDispositionV1, Gfx942SdmaMultiQueueSubmissionFailureV1,
-    Gfx942SdmaMultiQueueTerminalCustodyV1, Gfx942SdmaSubmissionFailureV1,
-    Gfx942SdmaTerminalShardObservationV1, Gfx942TimeoutExecutionObservationV1,
-    Gfx942TimeoutSignalObservationV1, KfdTargetRuntimeDebugQueueTeardownV1,
-    KfdTargetRuntimeDebugQueueV1, NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
+    Gfx942KfdDispatchInspectionV1, Gfx942KfdDispatchPointerFixupV1,
+    Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1,
+    Gfx942KfdQueueExceptionObservationV1, Gfx942PromotedSdmaDestinationV1,
+    Gfx942RecycledDispatchResourcesV1, Gfx942RecycledDispatchWriteRequestV1,
+    Gfx942RepeatedByteContentV1, Gfx942SdmaBatchExecutionFailureV1,
+    Gfx942SdmaBatchExecutionRecoveryV1, Gfx942SdmaBatchSubmissionFailureV1,
+    Gfx942SdmaBufferTransitionFailureV1, Gfx942SdmaCompletedPromotionFailureV1,
+    Gfx942SdmaDispatchDataBridgeV1, Gfx942SdmaDispatchDataDemotionFailureV1,
+    Gfx942SdmaMultiQueueFailureCustodyV1, Gfx942SdmaMultiQueueFailureDispositionV1,
+    Gfx942SdmaMultiQueueSubmissionFailureV1, Gfx942SdmaMultiQueueTerminalCustodyV1,
+    Gfx942SdmaSubmissionFailureV1, Gfx942SdmaTerminalShardObservationV1,
+    Gfx942TimeoutExecutionObservationV1, Gfx942TimeoutSignalObservationV1,
+    KfdTargetRuntimeDebugQueueTeardownV1, KfdTargetRuntimeDebugQueueV1,
+    NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1,
     NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1, QuarantinedGfx942BarrierProbeV1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,

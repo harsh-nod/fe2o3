@@ -530,7 +530,10 @@ fn dead_calls_and_literals<'tcx>(tcx: TyCtxt<'tcx>, actual: CheckedPrimitiveFrom
             ..
         })
     ));
-    crate::collector::primitive_from_stage_tests::reject_original_panic(tcx, probe);
+    crate::collector::primitive_from_stage_tests::reject_original_panic(
+        tcx,
+        function(tcx, "panic_dynamic_probe"),
+    );
 }
 
 fn actual_constants_and_raw_calls<'tcx>(tcx: TyCtxt<'tcx>, actual: CheckedPrimitiveFromV1<'tcx>) {
@@ -1042,6 +1045,21 @@ impl Callbacks for Capture {
             count += 1;
         }
         assert_eq!(count, 30);
+        let panic = function(tcx, "panic_probe");
+        let (panic_block, _) = call(tcx, panic);
+        crate::production_core_panic_v50::tests::original_calls(
+            tcx,
+            panic,
+            panic_block,
+            function(tcx, "panic_dynamic_probe"),
+            function(tcx, "local_panic_probe"),
+        );
+        let panic_work = crate::collector::primitive_from_stage_tests::collect_literal_panic(
+            tcx,
+            panic,
+            panic_block,
+        );
+        crate::production_semantic_body_v1::primitive_from_stage_tests::preflight_and_construct_literal_panic(tcx, panic, panic_work);
         for name in ["identity_probe", "bool_probe", "fake_probe"] {
             let callee = call(tcx, function(tcx, name)).1;
             assert!(
@@ -1079,6 +1097,9 @@ fn primitive_from_actual_rustc_all_endpoints_four_stages_and_hostile_raw_bodies(
     let mut text = String::from(
         "#![no_std]\n#![feature(panic_internals)]\n\
         #[inline(never)] pub fn panic_probe() -> ! { core::panicking::panic(\"primitive From audit literal\") }\n\
+        #[inline(never)] pub fn panic_dynamic_probe(message: &'static str) -> ! { core::panicking::panic(message) }\n\
+        mod local { #[inline(never)] pub fn panic(_: &str) -> ! { loop {} } }\n\
+        #[inline(never)] pub fn local_panic_probe() -> ! { local::panic(\"not core authority\") }\n\
         #[inline(never)] pub fn spin_probe() { core::hint::spin_loop() }\n\
         #[inline(never)] pub unsafe fn unsafe_probe() -> ! { unsafe { core::hint::unreachable_unchecked() } }\n\
         #[inline(never)] pub fn shift_probe(x:u32)->u32 { x.wrapping_shl(5) }\n\

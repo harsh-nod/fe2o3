@@ -1,0 +1,39 @@
+// Keep runtime entry and its state equation on the same local-clearing function.
+spec fn invocation_source_entry_initialize_v166(
+    source: InvocationSourceByteStateV36, pc: int, begin: int, end: int,
+    frames: MemoryFrameRuntimeV30,
+) -> InvocationSourceByteStateV36 {
+    InvocationSourceByteStateV36 {
+        machine: MemoryStateV30 {
+            pc,
+            values: Seq::new(source.machine.values.len(), |i: int|
+                if begin <= i < end { MemoryValueV30::Undefined }
+                else { source.machine.values[i] }),
+            memory: source.machine.memory,
+            generations: source.machine.generations,
+            frames,
+            valid: true,
+        },
+        logical: invocation_source_logical_clear_v38(source.logical, begin, end),
+        ..source
+    }
+}
+
+proof fn invocation_source_entry_initialize_pc_v166(
+    source: InvocationSourceByteStateV36, pc: int, begin: int, end: int,
+    frames: MemoryFrameRuntimeV30,
+)
+    ensures invocation_source_entry_initialize_v166(source, pc, begin, end, frames).machine.pc == pc,
+{
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_source_entry_put_local_pc_v179(
+    source: InvocationSourceByteStateV36, local: int, value: MemoryValueV30,
+)
+    ensures invocation_source_byte_put_local_v36(source, local, value).machine.pc
+        == source.machine.pc,
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_logical_write_v38);
+}

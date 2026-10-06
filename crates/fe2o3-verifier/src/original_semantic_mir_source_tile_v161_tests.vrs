@@ -1,0 +1,167 @@
+proof fn source_tile_blocked_coordinates_v161(lanes: int, elements: int, lane: int, item: int)
+    ensures invocation_source_tile_offset_v161(
+        InvocationSourceTileLayoutV161::Blocked, lanes, elements, lane, item) == lane * elements + item,
+{
+    reveal(invocation_source_tile_offset_v161);
+}
+
+proof fn source_tile_striped_coordinates_v161(lanes: int, elements: int, lane: int, item: int)
+    ensures invocation_source_tile_offset_v161(
+        InvocationSourceTileLayoutV161::Striped, lanes, elements, lane, item) == item * lanes + lane,
+{
+    reveal(invocation_source_tile_offset_v161);
+}
+
+proof fn source_tile_refusal_keeps_all_prior_observations_v161(
+    source: InvocationSourceByteStateV36,
+    prior: Seq<InvocationSourceEffectObservationV39>,
+)
+    ensures ({
+        let result = invocation_source_tile_refused_after_v161(source, prior);
+        let refused = invocation_source_tile_refused_v161(source);
+        result.source == refused.source
+            && result.observations == prior + refused.observations
+    }),
+{
+    reveal(invocation_source_tile_refused_after_v161);
+}
+
+proof fn source_tile_install_refusal_is_observable_v161(
+    before: InvocationSourceByteStateV36, after: InvocationSourceByteStateV36,
+    prior: Seq<InvocationSourceEffectObservationV39>,
+)
+    requires !after.machine.valid,
+    ensures ({
+        let result = invocation_source_tile_installed_v161(before, after, prior);
+        result.source == after && result.observations == prior
+            + invocation_source_observe_effects_v39(
+                seq![MemoryOperationEffectV30::Refused], before, after)
+    }),
+{
+    reveal(invocation_source_tile_installed_v161);
+}
+
+proof fn source_context_requires_actual_execution_v161(
+    source: InvocationSourceByteStateV36, issue: InvocationSourceContextIssueV161,
+)
+    requires source.machine.frames.execution.is_none(),
+    ensures invocation_source_context_issue_v161(source, issue)
+        == invocation_source_tile_refused_v161(source),
+{
+    reveal(invocation_source_context_issue_v161);
+}
+
+proof fn source_tile_non_slice_input_keeps_base_evaluation_reads_v161(
+    source: InvocationSourceByteStateV36, load: InvocationSourceTileLoadV161,
+    root: int, instance: int, little_endian: bool,
+)
+    requires source.machine.valid, invocation_source_byte_state_well_formed_v36(source),
+        1 <= load.lanes <= 256,
+        invocation_source_tile_shape_v161(load.source_type, load.elements, false),
+        0 <= load.input < source.machine.values.len(),
+        0 <= load.destination < source.machine.values.len(),
+        !source.objects.contains_key(load.destination),
+        source.machine.values[load.input] == MemoryValueV30::Unit,
+    ensures ({
+        let consumed = if load.moved_input {
+            invocation_source_byte_put_local_v36(source, load.input, MemoryValueV30::Undefined)
+        } else { source };
+        let evaluated = invocation_source_byte_evaluate_v36(
+            consumed, load.base, 64, root, instance, little_endian);
+        let reads = invocation_source_observe_effects_v39(
+            invocation_source_read_effect_v36(consumed, load.base, 64,
+                root, instance, little_endian), consumed, evaluated.source);
+        invocation_source_tile_load_v161(source, load, root, instance, little_endian)
+            == invocation_source_tile_refused_after_v161(evaluated.source, reads)
+    }),
+{
+    reveal(invocation_source_tile_load_v161);
+}
+
+proof fn source_tile_transport_install_failure_keeps_refusal_v161(
+    source: InvocationSourceByteStateV36, transfer: InvocationSourceTileTransportV161,
+)
+    requires source.machine.valid, invocation_source_byte_state_well_formed_v36(source),
+        invocation_source_tile_shape_v161(transfer.input_type, transfer.elements, false),
+        invocation_source_tile_shape_v161(transfer.output_type, transfer.elements, transfer.parts),
+        source.logical.aggregates.contains_key(transfer.input),
+        source.logical.aggregates[transfer.input].source_type == transfer.input_type,
+        invocation_source_aggregate_complete_v42(source.logical.aggregates[transfer.input]),
+        ({
+            let original = source.logical.aggregates[transfer.input];
+            let consumed = invocation_source_byte_put_local_v36(
+                source, transfer.input, MemoryValueV30::Undefined);
+            let leaves = if transfer.parts {
+                original.leaves.remove(seq![2int]).remove(seq![3int])
+            } else { original.leaves };
+            !invocation_source_aggregate_install_v42(consumed, transfer.destination,
+                InvocationSourceAggregateV42 { source_type: transfer.output_type, leaves,
+                    execution_lease: if transfer.parts { None } else { original.execution_lease } }).machine.valid
+        }),
+    ensures ({
+        let consumed = invocation_source_byte_put_local_v36(
+            source, transfer.input, MemoryValueV30::Undefined);
+        let result = invocation_source_tile_transport_v161(source, transfer);
+        !result.source.machine.valid
+            && result.observations == invocation_source_observe_effects_v39(
+                seq![MemoryOperationEffectV30::Refused], consumed, result.source)
+    }),
+{
+    reveal(invocation_source_tile_transport_v161);
+    reveal(invocation_source_tile_installed_v161);
+}
+
+proof fn source_tile_inactive_item_has_no_read_v161(
+    source: InvocationSourceByteStateV36, load: InvocationSourceTileLoadV161,
+    slice: MemorySliceV30, base: int, lane: int, item: int, little_endian: bool,
+)
+    requires source.machine.valid, 0 <= item < load.elements,
+        !((0 <= base + invocation_source_tile_offset_v161(load.layout, load.lanes,
+            load.elements, lane, item) < memory_value_modulus_v30(8))
+            && base + invocation_source_tile_offset_v161(load.layout, load.lanes,
+                load.elements, lane, item) < slice.length),
+    ensures ({
+        let result = invocation_source_tile_components_v161(
+            source, load, slice, base, lane, item, little_endian);
+        let tail = invocation_source_tile_components_v161(
+            source, load, slice, base, lane, item + 1, little_endian);
+        result.values == seq![MemoryValueV30::Scalar(0)] + tail.values
+            && result.masks == seq![MemoryValueV30::Scalar(0)] + tail.masks
+            && result.source == tail.source && result.observations == tail.observations
+    }),
+{
+    reveal(invocation_source_tile_components_v161);
+}
+
+proof fn source_tile_active_item_preserves_read_before_tail_v161(
+    source: InvocationSourceByteStateV36, load: InvocationSourceTileLoadV161,
+    slice: MemorySliceV30, base: int, lane: int, item: int, little_endian: bool,
+)
+    requires source.machine.valid, 0 <= item < load.elements,
+        0 <= base + invocation_source_tile_offset_v161(load.layout, load.lanes,
+            load.elements, lane, item) < memory_value_modulus_v30(8),
+        base + invocation_source_tile_offset_v161(load.layout, load.lanes,
+            load.elements, lane, item) < slice.length,
+        byte_range_aligned_v30(source.machine.memory, slice.pointer, 4 * slice.length, 4),
+        slice.pointer.byte_offset + 4 * slice.length < memory_value_modulus_v30(8),
+        invocation_source_read_enabled_v36(source.machine, MemoryPointerV30 {
+            byte_offset: slice.pointer.byte_offset + 4 * (base + invocation_source_tile_offset_v161(
+                load.layout, load.lanes, load.elements, lane, item)), ..slice.pointer }, 4, 4),
+    ensures ({
+        let pointer = MemoryPointerV30 {
+            byte_offset: slice.pointer.byte_offset + 4 * (base + invocation_source_tile_offset_v161(
+                load.layout, load.lanes, load.elements, lane, item)), ..slice.pointer };
+        let value = MemoryValueV30::Scalar(byte_load_v30(source.machine.memory, pointer, 4, little_endian));
+        let result = invocation_source_tile_components_v161(
+            source, load, slice, base, lane, item, little_endian);
+        let tail = invocation_source_tile_components_v161(
+            source, load, slice, base, lane, item + 1, little_endian);
+        result.values == seq![value] + tail.values
+            && result.masks == seq![MemoryValueV30::Scalar(1)] + tail.masks
+            && result.observations == invocation_source_observe_effects_v39(
+                seq![MemoryOperationEffectV30::Read { address: MemoryValueV30::Pointer(pointer),
+                    width: 4, alignment: 4, value }], source, source) + tail.observations
+    }),
+{
+    reveal(invocation_source_tile_components_v161);
+}

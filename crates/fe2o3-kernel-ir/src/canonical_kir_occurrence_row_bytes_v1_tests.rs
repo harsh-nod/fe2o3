@@ -63,6 +63,38 @@ fn set_word(bytes: &mut [u8], index: usize, value: u32) {
 }
 
 #[test]
+fn neutral_reader_extent_quote_covers_actual_body_and_empty_view() {
+    for (bytes, counts) in [(vec![], [0; 9]), (body(), COUNTS)] {
+        let bound =
+            CanonicalKirOccurrenceRowsRefV1::read_work_bound_for_length_v1(bytes.len()).unwrap();
+        let mut work = Work::new(7 + bound);
+        let floor = 19 + bytes.capacity();
+        let mut b = Budget::new(
+            &mut work,
+            floor + CanonicalKirOccurrenceRowsRefV1::READ_STORAGE_V1,
+        );
+        b.charge_work(7).unwrap();
+        b.reserve_storage(floor).unwrap();
+        let view = read_canonical_kir_occurrence_row_bytes_v1(&bytes, counts, &mut b).unwrap();
+        assert!(b.work() - 7 <= bound);
+        assert_eq!(b.storage(), floor);
+        assert_eq!(
+            b.peak_storage(),
+            floor + CanonicalKirOccurrenceRowsRefV1::READ_STORAGE_V1
+        );
+        assert_eq!(
+            view.storage().retained_storage(),
+            CanonicalKirOccurrenceRowsRefV1::READ_STORAGE_V1
+        );
+    }
+    assert_eq!(
+        CanonicalKirOccurrenceRowsRefV1::read_work_bound_for_length_v1(0).unwrap(),
+        10
+    );
+    assert!(CanonicalKirOccurrenceRowsRefV1::read_work_bound_for_length_v1(usize::MAX).is_err());
+}
+
+#[test]
 fn neutral_body_is_exact_historical_nine_axis_grammar_without_a_frame() {
     let wire = historical();
     let mut work = Work::new(WORK);

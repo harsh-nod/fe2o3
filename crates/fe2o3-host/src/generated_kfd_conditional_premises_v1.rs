@@ -24,12 +24,16 @@ use fe2o3_kfd::{
 };
 
 #[path = "generated_kfd_conditional_abi_v1.rs"]
-mod abi;
+pub(super) mod abi;
 
 #[derive(Debug)]
 pub(crate) enum GeneratedConditionalPremiseErrorV1 {
     Resource(Resource),
     Contract(ConditionalInvocationWireErrorV1<Resource>),
+    MixedContract(fe2o3_kernel_descriptor::mixed_conditional_v26::MixedContractErrorV26<Resource>),
+    PredicatedMixedContract(
+        fe2o3_kernel_descriptor::mixed_conditional_v86::MixedContractErrorV86<Resource>,
+    ),
     Descriptor(DescriptorWireErrorV4<Resource>),
     Binding(&'static str),
     Runtime(ConditionalDispatchErrorV1),
@@ -40,7 +44,20 @@ impl fmt::Display for GeneratedConditionalPremiseErrorV1 {
         write!(f, "{self:?}")
     }
 }
-impl std::error::Error for GeneratedConditionalPremiseErrorV1 {}
+impl std::error::Error for GeneratedConditionalPremiseErrorV1 {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::Contract(error) => Some(error),
+            Self::MixedContract(error) => Some(error),
+            Self::PredicatedMixedContract(error) => Some(error),
+            Self::Descriptor(error) => Some(error),
+            Self::Runtime(error) => Some(error),
+            Self::Packing(error) => Some(error),
+            Self::Binding(_) => None,
+        }
+    }
+}
 impl From<Resource> for GeneratedConditionalPremiseErrorV1 {
     fn from(e: Resource) -> Self {
         Self::Resource(e)
@@ -66,6 +83,24 @@ impl From<fe2o3_kernel_descriptor::DescriptorWireErrorV3<Resource>>
 impl From<ConditionalDispatchErrorV1> for GeneratedConditionalPremiseErrorV1 {
     fn from(e: ConditionalDispatchErrorV1) -> Self {
         Self::Runtime(e)
+    }
+}
+impl From<fe2o3_kernel_descriptor::mixed_conditional_v26::MixedContractErrorV26<Resource>>
+    for GeneratedConditionalPremiseErrorV1
+{
+    fn from(
+        error: fe2o3_kernel_descriptor::mixed_conditional_v26::MixedContractErrorV26<Resource>,
+    ) -> Self {
+        Self::MixedContract(error)
+    }
+}
+impl From<fe2o3_kernel_descriptor::mixed_conditional_v86::MixedContractErrorV86<Resource>>
+    for GeneratedConditionalPremiseErrorV1
+{
+    fn from(
+        error: fe2o3_kernel_descriptor::mixed_conditional_v86::MixedContractErrorV86<Resource>,
+    ) -> Self {
+        Self::PredicatedMixedContract(error)
     }
 }
 pub(super) type Result<T> = std::result::Result<T, GeneratedConditionalPremiseErrorV1>;
@@ -468,7 +503,7 @@ fn prepare_rows(
     )?)
 }
 
-fn exact_row_storage<T>(rows: Vec<T>, count: usize) -> Result<Vec<T>> {
+pub(super) fn exact_row_storage<T>(rows: Vec<T>, count: usize) -> Result<Vec<T>> {
     // The enclosing scope prepaid count * size_of::<T>(); Vec may expose more
     // than requested even after try_reserve_exact. Never use that unpaid storage.
     if !rows.is_empty() || rows.capacity() != count {
@@ -484,7 +519,7 @@ fn domain(value: ConditionalAddressDomainV1) -> Domain {
     }
 }
 
-fn word(bytes: &[u8], offset: usize) -> Result<u64> {
+pub(super) fn word(bytes: &[u8], offset: usize) -> Result<u64> {
     let end = offset.checked_add(8).ok_or(Resource::Arithmetic)?;
     Ok(u64::from_le_bytes(
         bytes

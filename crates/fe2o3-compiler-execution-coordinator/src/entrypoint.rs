@@ -276,6 +276,35 @@ mod tests {
     const TEST_NOTIFY_SOCKET_V1: &str = "/run/systemd/notify";
 
     #[test]
+    fn v1_unit_reserves_namespace_inspection_for_root_coordinator() {
+        let unit = include_str!("../../../deployment/systemd/fe2o3-compiler-execution-v1.service");
+        for (key, expected) in [
+            ("User", "root"),
+            ("Group", "root"),
+            (
+                "CapabilityBoundingSet",
+                "CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE",
+            ),
+            ("AmbientCapabilities", ""),
+            ("RestrictNamespaces", "yes"),
+            ("ProtectProc", ""),
+        ] {
+            let assignments: Vec<_> = unit
+                .lines()
+                .filter_map(|line| line.split_once('='))
+                .filter(|(name, _)| name.trim() == key)
+                .map(|(_, value)| value.trim())
+                .collect();
+            if key == "ProtectProc" {
+                assert!(assignments.is_empty(), "proc custody must stay observable");
+            } else {
+                assert_eq!(assignments, [expected], "V1 unit directive {key}");
+            }
+        }
+        assert_eq!(LAUNCH_TIMEOUT_V1, Duration::from_secs(120));
+    }
+
+    #[test]
     fn activation_environment_requires_exact_pid_count_and_names() {
         let pid = 1234;
         let pid_text = pid.to_string();

@@ -28,6 +28,10 @@ use std::{os::fd::OwnedFd, time::Instant};
 #[path = "compiler_execution_issuer_native_readiness.rs"]
 mod readiness;
 
+#[path = "compiler_execution_issuer_occurrence_context_v2.rs"]
+mod occurrence_context;
+use occurrence_context::OccurrenceContext;
+
 #[path = "compiler_execution_issuer_native_error.rs"]
 mod error;
 #[path = "compiler_execution_issuer_native_ledger.rs"]

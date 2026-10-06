@@ -226,9 +226,14 @@ impl NominalReferenceEffectsV29 {
             product(product(units, 32)?, tree_height)?,
             product(product(product(candidates, candidates)?, 8)?, tree_height)?,
         )?)?;
+        let graph = adapter::borrow_graph_resources_v41(function, roots)?;
+        meter.work(graph.work_units)?;
         // Conservative logical words include geometric Vec growth, tree nodes,
         // maximum source-node event scratch, and concurrent chain/result sets.
-        let scratch = sum(64, sum(product(units, 16)?, product(candidates, 128)?)?)?;
+        let scratch = sum(
+            sum(64, sum(product(units, 16)?, product(candidates, 128)?)?)?,
+            graph.storage_words,
+        )?;
         if scratch > self.scratch_peak {
             meter.storage(scratch - self.scratch_peak)?;
             self.scratch_peak = scratch;

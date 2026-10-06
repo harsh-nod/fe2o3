@@ -66,6 +66,9 @@ pub(crate) struct StructuralCensus {
     pub(crate) declaration_parameters: usize,
     pub(crate) conditional_branches: usize,
     pub(crate) conditional_operands: usize,
+    pub(crate) max_definition_arity: usize,
+    pub(crate) max_operands: usize,
+    pub(crate) max_successors: usize,
 }
 
 impl Limits {
@@ -127,6 +130,15 @@ impl Limits {
         source: &Module,
         budget: &mut Budget<'_>,
     ) -> Result<Self> {
+        Self::for_structure(Self::census_graph(ctx, root, source, budget, false)?)
+    }
+    fn census_graph(
+        ctx: &Context,
+        root: Ptr<Operation>,
+        source: &Module,
+        budget: &mut Budget<'_>,
+        include_native_switches: bool,
+    ) -> Result<StructuralCensus> {
         use pliron::builtin::ops::{FuncOp, ModuleOp};
         budget.charge_work(4)?;
         if !Operation::is_op::<ModuleOp>(root, ctx) || root.deref(ctx).num_regions() != 1 {
@@ -166,6 +178,8 @@ impl Limits {
                 budget.charge_work(1)?;
                 census.blocks = census.blocks.checked_add(1).ok_or(E::Arithmetic)?;
                 let block = block.deref(ctx);
+                census.max_definition_arity =
+                    census.max_definition_arity.max(block.get_num_arguments());
                 census.values = census
                     .values
                     .checked_add(block.get_num_arguments())
@@ -173,6 +187,10 @@ impl Limits {
                 for operation in block.iter(ctx) {
                     budget.charge_work(1)?;
                     let op = operation.deref(ctx);
+                    census.max_definition_arity =
+                        census.max_definition_arity.max(op.get_num_results());
+                    census.max_operands = census.max_operands.max(op.get_num_operands());
+                    census.max_successors = census.max_successors.max(op.get_num_successors());
                     if op.num_regions() != 0 {
                         return Err(E::UnsupportedMutation);
                     }
@@ -195,7 +213,9 @@ impl Limits {
                         .ok_or(E::Arithmetic)?;
                     if Operation::is_op::<dialect_gpu::optimization_v1::CondBranchOp>(
                         operation, ctx,
-                    ) {
+                    ) || (include_native_switches
+                        && Operation::is_op::<dialect_gpu::switch_v3::SwitchOpV3>(operation, ctx))
+                    {
                         census.conditional_branches = census
                             .conditional_branches
                             .checked_add(1)
@@ -211,7 +231,7 @@ impl Limits {
         if functions.next().is_some() {
             return Err(E::Coverage);
         }
-        Self::for_structure(census)
+        Ok(census)
     }
     pub(crate) fn work(self) -> Result<usize> {
         self.nodes
@@ -404,6 +424,8 @@ struct State {
     events: usize,
     work: Cell<usize>,
     work_limit: usize,
+    admission_v18: Option<ObserverAdmissionV18>,
+    growth_v18: GrowthV18,
     current: Option<(usize, u64)>,
     completed: usize,
     epoch: Option<u64>,
@@ -524,6 +546,12 @@ impl State {
         let op = raw.deref(ctx);
         if op.num_regions() != 0 {
             return Err(E::UnsupportedMutation);
+        }
+        if let Some(admission) = self.admission_v18 {
+            admission.operation_shape(ctx, raw)?;
+            if input.is_none() {
+                admission.register_growth(ctx, raw, &mut self.growth_v18)?;
+            }
         }
         let parent = self.block(op.get_parent_block().ok_or(E::Coverage)?)?;
         self.claim(
@@ -717,6 +745,17 @@ impl State {
         limits: Limits,
         roster_work: usize,
     ) -> Result<Self> {
+        Self::new_admitted(ctx, root, source, roster, limits, roster_work, None)
+    }
+    fn new_admitted(
+        ctx: &Context,
+        root: Ptr<Operation>,
+        source: &Module,
+        roster: &LiveRosterV12,
+        limits: Limits,
+        roster_work: usize,
+        admission_v18: Option<ObserverAdmissionV18>,
+    ) -> Result<Self> {
         let mut state = Self {
             root,
             functions: Vec::new(),
@@ -731,7 +770,10 @@ impl State {
             claimed: 0,
             events: 0,
             work: Cell::new(0),
-            work_limit: limits.work()?,
+            work_limit: admission_v18
+                .map_or_else(|| limits.work(), |profile| profile.work(limits))?,
+            admission_v18,
+            growth_v18: GrowthV18::default(),
             current: None,
             completed: 0,
             epoch: None,
@@ -856,6 +898,9 @@ impl State {
                 }
                 self.blocks.rows[block].seen = generation;
                 let bb = raw_block.deref(ctx);
+                if let Some(admission) = self.admission_v18 {
+                    admission.definition_arity(bb.get_num_arguments())?;
+                }
                 if bi == 0 && bb.get_num_arguments() < self.functions[fi].parameters {
                     return Err(E::Coverage);
                 }
@@ -869,6 +914,9 @@ impl State {
                 for raw in bb.iter(ctx) {
                     let id = self.op(raw)?;
                     let op = raw.deref(ctx);
+                    if let Some(admission) = self.admission_v18 {
+                        admission.operation_shape(ctx, raw)?;
+                    }
                     self.step(
                         op.get_num_operands()
                             .checked_add(op.get_num_successors())
@@ -989,15 +1037,19 @@ impl State {
 
     fn value_definition_arity(&self, ctx: &Context, value: Value) -> Result<usize> {
         self.step(1)?;
-        if let Some(op) = value.defining_op() {
-            Ok(op.deref(ctx).get_num_results())
+        let arity = if let Some(op) = value.defining_op() {
+            op.deref(ctx).get_num_results()
         } else {
-            Ok(value
+            value
                 .defining_block()
                 .ok_or(E::Coverage)?
                 .deref(ctx)
-                .get_num_arguments())
+                .get_num_arguments()
+        };
+        if let Some(admission) = self.admission_v18 {
+            admission.definition_arity(arity)?;
         }
+        Ok(arity)
     }
     fn value_use_count(&self, ctx: &Context, value: Value) -> Result<usize> {
         let arity = self.value_definition_arity(ctx, value)?;
@@ -1018,6 +1070,9 @@ impl State {
         let id = self.op(raw)?;
         if self.operations.rows[id].validated_event == self.events {
             return Ok(());
+        }
+        if let Some(admission) = self.admission_v18 {
+            admission.operation_shape(ctx, raw)?;
         }
         let op = raw.deref(ctx);
         self.step(
@@ -1244,7 +1299,14 @@ impl State {
                         .get(argument_index)
                         .ok_or(E::Coverage)?;
                     let op = self.edges.rows[edge].op;
-                    self.step(self.operations.rows[op].operands.len())?;
+                    let scans = if self.admission_v18.is_some() { 3 } else { 1 };
+                    self.step(
+                        self.operations.rows[op]
+                            .operands
+                            .len()
+                            .checked_mul(scans)
+                            .ok_or(E::Arithmetic)?,
+                    )?;
                     let position = self.operations.rows[op]
                         .operands
                         .iter()
@@ -1268,7 +1330,8 @@ impl State {
                 self.validate_occurrences(ctx, new)?;
                 let old_id = self.op(old)?;
                 let new_id = self.op(new)?;
-                if !Operation::is_op::<dialect_gpu::optimization_v1::CondBranchOp>(old, ctx)
+                if !(Operation::is_op::<dialect_gpu::optimization_v1::CondBranchOp>(old, ctx)
+                    || Operation::is_op::<dialect_gpu::switch_v3::SwitchOpV3>(old, ctx))
                     || !Operation::is_op::<dialect_gpu::optimization_v1::BranchOp>(new, ctx)
                     || self.operations.rows[old_id].selected_replacement.is_some()
                     || self.operations.rows[new_id].input.is_some()
@@ -1447,8 +1510,7 @@ impl Capture {
     ) -> bool {
         self.apply(|s| {
             if s.current.is_some()
-                || s.completed >= self.0.policy.passes().len()
-                || self.0.policy.passes()[s.completed] != pass
+                || self.0.policy.pass_at(s.completed) != Some(pass)
                 || s.epoch.is_some_and(|last| last != epoch.sequence())
             {
                 return Err(E::Passes);
@@ -1469,6 +1531,31 @@ impl Capture {
             s.epoch = Some(epoch.sequence());
             Ok(())
         })
+    }
+    pub(crate) fn admit_fixedpoint_round(&self, paid_work: usize) -> Result<()> {
+        if self.apply(|state| {
+            if self.0.policy != FixedPolicy::MixedFixedpoint11
+                || state.current.is_some()
+                || !self.0.policy.complete_pass_count(state.completed)
+                || state.completed == self.0.policy.max_passes()
+                || state
+                    .admission_v18
+                    .ok_or(E::Coverage)?
+                    .additional_pass_work(state.limits, self.0.policy.passes().len())?
+                    != paid_work
+            {
+                return Err(E::Passes);
+            }
+            state.work_limit = state
+                .work_limit
+                .checked_add(paid_work)
+                .ok_or(E::Arithmetic)?;
+            Ok(())
+        }) {
+            Ok(())
+        } else {
+            Err(self.failure().unwrap_or(E::Lifecycle))
+        }
     }
     pub(crate) fn with_roster_meter<T>(
         &self,
@@ -1491,6 +1578,19 @@ impl Capture {
         }
         impl RewriteObserver for Combined {
             fn observe(&mut self, ctx: &Context, event: RewriteEvent) {
+                let admitted_v18 = self
+                    .occurrences
+                    .0
+                    .state
+                    .try_lock()
+                    .map_or(true, |state| state.admission_v18.is_some());
+                if admitted_v18
+                    && !self
+                        .occurrences
+                        .apply(|s| s.admission_v18.ok_or(E::Coverage)?.precheck(ctx, event))
+                {
+                    return;
+                }
                 self.legacy.observe(ctx, event);
                 self.occurrences.apply(|s| s.observe(ctx, event));
             }
@@ -1604,13 +1704,142 @@ impl Capture {
             FixedPolicy::Integer6,
         )
     }
-    fn finish_data(
+    pub(crate) fn finish_policy3_v18(
         &self,
         ctx: &Context,
         roster: &LiveRosterV12,
-        map: &crate::kir_optimization_map_v12::MapData,
+        map: &crate::KirOptimizationMapPolicy3V18,
+        output: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_admitted_v18(
+            ctx,
+            roster,
+            map.neutral_data_v18(),
+            output,
+            FixedPolicy::Checked3,
+            budget,
+        )
+    }
+
+    pub(crate) fn finish_integer_v18(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::KirOptimizationMapIntegerContinuationV18,
+        output: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_admitted_v18(
+            ctx,
+            roster,
+            map.neutral_data_v18(),
+            output,
+            FixedPolicy::Integer6,
+            budget,
+        )
+    }
+
+    pub(crate) fn finish_integer_worklist_v18(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::KirOptimizationMapIntegerWorklistV18,
+        output: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_admitted_v18(
+            ctx,
+            roster,
+            map.neutral_data_v18(),
+            output,
+            FixedPolicy::IntegerWorklist9,
+            budget,
+        )
+    }
+
+    pub(crate) fn finish_mixed_pure_cse_v18(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::KirOptimizationMapMixedPureCseV18,
+        output: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_admitted_v18(
+            ctx,
+            roster,
+            map.neutral_data_v18(),
+            output,
+            FixedPolicy::MixedPureCse10,
+            budget,
+        )
+    }
+
+    pub(crate) fn finish_mixed_fixedpoint_v18(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::KirOptimizationMapMixedFixedpointV18,
+        output: &Module,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_admitted_v18(
+            ctx,
+            roster,
+            map.neutral_data_v18(),
+            output,
+            FixedPolicy::MixedFixedpoint11,
+            budget,
+        )
+    }
+
+    fn finish_admitted_v18<I>(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map_data: &crate::kir_optimization_map_v12::MapData<I>,
         output: &Module,
         policy: FixedPolicy,
+        budget: &mut Budget<'_>,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        // Fixed allocation initialization and immutable witness scans, before
+        // the variable suffix/search/descendant work reaches its direct meter.
+        budget.charge_work(admission_mul_v18(
+            8,
+            admission_sum_v18(&[
+                map_data.neutral_node_count_v1(),
+                map_data.neutral_event_count_v1(),
+                1,
+            ])?,
+        )?)?;
+        self.finish_data_with_meter(ctx, roster, map_data, output, policy, &mut |_, units| {
+            budget.charge_work(units)?;
+            Ok(())
+        })
+    }
+
+    fn finish_data<I>(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::kir_optimization_map_v12::MapData<I>,
+        output: &Module,
+        policy: FixedPolicy,
+    ) -> Result<KirNeutralOccurrenceRowsV1> {
+        self.finish_data_with_meter(ctx, roster, map, output, policy, &mut |state, units| {
+            state.step(units)
+        })
+    }
+
+    fn finish_data_with_meter<I>(
+        &self,
+        ctx: &Context,
+        roster: &LiveRosterV12,
+        map: &crate::kir_optimization_map_v12::MapData<I>,
+        output: &Module,
+        policy: FixedPolicy,
+        meter: &mut dyn FnMut(&State, usize) -> Result<()>,
     ) -> Result<KirNeutralOccurrenceRowsV1> {
         if let Some(error) = self.failure() {
             return Err(error);
@@ -1618,23 +1847,22 @@ impl Capture {
         let mut state = self.0.state.try_lock().map_err(|_| E::Lifecycle)?;
         let result = (|| {
             if self.0.policy != policy
-                || state.completed != policy.passes().len()
+                || !policy.complete_pass_count(state.completed)
+                || state.completed != map.neutral_pass_count_v1()
                 || state.current.is_some()
                 || output.functions.len() != state.functions.len()
             {
                 return Err(E::Passes);
             }
-            state.census(
-                ctx,
-                u8::try_from(policy.passes().len() + 2).map_err(|_| E::Arithmetic)?,
-            )?;
+            let final_pass = u8::try_from(state.completed + 2).map_err(|_| E::Arithmetic)?;
+            state.census(ctx, final_pass)?;
             assemble_occurrence_rows(
                 &mut state,
                 ctx,
                 roster,
                 output,
                 &mut RowAllocation::legacy(),
-                |state, rows, _| derive_definition_rows(state, map, rows),
+                |state, rows, _| derive_definition_rows_with_meter(state, map, rows, meter),
             )
         })();
         if let Err(error) = &result {
@@ -1767,18 +1995,29 @@ fn assemble_occurrence_rows(
 }
 
 include!("kir_commutative_capture_v1.rs");
+include!("kir_occurrence_admission_v18.rs");
 /// Values use the already retained, independently lifecycle-checked old-map
 /// witness. This does not infer operands from that map or alter its wire bytes.
-fn derive_definition_rows(
+fn derive_definition_rows<I>(
     state: &mut State,
-    map: &crate::kir_optimization_map_v12::MapData,
+    map: &crate::kir_optimization_map_v12::MapData<I>,
     rows: &mut KirNeutralOccurrenceRowsV1,
+) -> Result<()> {
+    derive_definition_rows_with_meter(state, map, rows, &mut |state, units| state.step(units))
+}
+
+fn derive_definition_rows_with_meter<I>(
+    state: &mut State,
+    map: &crate::kir_optimization_map_v12::MapData<I>,
+    rows: &mut KirNeutralOccurrenceRowsV1,
+    meter: &mut dyn FnMut(&State, usize) -> Result<()>,
 ) -> Result<()> {
     let count = map.neutral_node_count_v1();
     if count > state.limits.nodes {
         return Err(E::Limit);
     }
-    state.step(
+    meter(
+        state,
         count
             .checked_add(map.neutral_event_count_v1())
             .ok_or(E::Arithmetic)?,
@@ -1795,7 +2034,7 @@ fn derive_definition_rows(
         .map_err(|_| E::Allocation)?;
     for (id, input, output) in map.neutral_value_nodes_v1() {
         if let Some(input) = input {
-            state.step(1)?;
+            meter(state, 1)?;
             if sources.insert(definition(input)?, id).is_some() {
                 return Err(E::Coverage);
             }
@@ -1804,7 +2043,7 @@ fn derive_definition_rows(
     }
     let mut edge_count = 0usize;
     for (source, target) in map.neutral_value_edges_v1() {
-        state.step(1)?;
+        meter(state, 1)?;
         edge_count = edge_count.checked_add(1).ok_or(E::Arithmetic)?;
         if edge_count > state.limits.events || source >= count || target >= count {
             return Err(E::Limit);
@@ -1823,7 +2062,7 @@ fn derive_definition_rows(
     while consumed < order.len() {
         let node = order[consumed];
         consumed += 1;
-        state.step(outgoing[node].len())?;
+        meter(state, outgoing[node].len())?;
         for &target in &outgoing[node] {
             indegree[target] -= 1;
             if indegree[target] == 0 {
@@ -1839,7 +2078,10 @@ fn derive_definition_rows(
     let mut suffix = indegree;
     suffix.fill(empty);
     for &node in order.iter().rev() {
-        state.step(outgoing[node].len().checked_add(1).ok_or(E::Arithmetic)?)?;
+        meter(
+            state,
+            outgoing[node].len().checked_add(1).ok_or(E::Arithmetic)?,
+        )?;
         let mut summary = if terminal[node].is_some() {
             node
         } else {
@@ -1862,14 +2104,14 @@ fn derive_definition_rows(
     seen.resize(count, 0usize);
     let mut stack = vector(edge_count.checked_add(1).ok_or(E::Arithmetic)?)?;
     for ordinal in 0..state.inputs.len() {
-        state.step(1)?;
+        meter(state, 1)?;
         let input = state.inputs[ordinal];
         let start = rows.definition_outputs.len();
         if let Some(&source) = sources.get(&input) {
             let generation = ordinal.checked_add(1).ok_or(E::Arithmetic)?;
             stack.push(source);
             while let Some(node) = stack.pop() {
-                state.step(1)?;
+                meter(state, 1)?;
                 if seen[node] == generation {
                     continue;
                 }
@@ -1880,9 +2122,10 @@ fn derive_definition_rows(
                 if suffix[node] != multiple {
                     let end = suffix[node];
                     if seen[end] != generation {
-                        append_descendant(
+                        append_descendant_with_meter(
                             state,
                             rows,
+                            meter,
                             terminal[end].ok_or(E::Relation)?,
                             end == source,
                         )?;
@@ -1893,9 +2136,9 @@ fn derive_definition_rows(
                 }
                 seen[node] = generation;
                 if let Some(output) = terminal[node] {
-                    append_descendant(state, rows, output, node == source)?;
+                    append_descendant_with_meter(state, rows, meter, output, node == source)?;
                 }
-                state.step(outgoing[node].len())?;
+                meter(state, outgoing[node].len())?;
                 if stack
                     .len()
                     .checked_add(outgoing[node].len())
@@ -1917,7 +2160,7 @@ fn derive_definition_rows(
             if function.live.is_some() || argument as usize >= function.parameters {
                 return Err(E::Coverage);
             }
-            append_descendant(state, rows, input, true)?;
+            append_descendant_with_meter(state, rows, meter, input, true)?;
         }
         let len = rows.definition_outputs.len() - start;
         // Comparisons are admitted before sorting. Duplicate output coordinates
@@ -1927,7 +2170,8 @@ fn derive_definition_rows(
         } else {
             usize::BITS as usize - (len - 1).leading_zeros() as usize
         };
-        state.step(
+        meter(
+            state,
             len.checked_mul(log.checked_add(1).ok_or(E::Arithmetic)?)
                 .ok_or(E::Arithmetic)?,
         )?;
@@ -1948,13 +2192,14 @@ fn derive_definition_rows(
     }
     Ok(())
 }
-fn append_descendant(
+fn append_descendant_with_meter(
     state: &mut State,
     rows: &mut KirNeutralOccurrenceRowsV1,
+    meter: &mut dyn FnMut(&State, usize) -> Result<()>,
     output: Definition,
     retained: bool,
 ) -> Result<()> {
-    state.step(1)?;
+    meter(state, 1)?;
     if rows.definition_outputs.len() == state.limits.targets {
         return Err(E::Limit);
     }

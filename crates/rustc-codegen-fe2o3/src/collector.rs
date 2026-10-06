@@ -62,7 +62,8 @@ pub(crate) use production_importer_v1::{
     ProductionSemanticImportErrorV1, construct_production_semantic_mir_bf16_inspection_v1,
     construct_production_semantic_mir_bf16_tile_values_v1,
     construct_production_semantic_mir_nominal_v35,
-    construct_production_semantic_mir_ordered_composition_v1, construct_production_semantic_mir_v1,
+    construct_production_semantic_mir_ordered_composition_v1,
+    construct_production_semantic_mir_source_owned_v29, construct_production_semantic_mir_v1,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -3135,6 +3136,11 @@ impl<'tcx> DeviceCollector<'tcx> {
                         self.tcx,
                         function.instance,
                     )
+                    && !crate::trusted_device_items::is_authenticated_gfx942_wave64_scan_instance_v1(
+                        self.tcx,
+                        function.instance,
+                        &self.expected_target,
+                    )
                 {
                     return Err(CollectError {
                         message: format!(
@@ -3177,6 +3183,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                     continue;
                 }
                 let Some(local_def_id) = function.instance.def_id().as_local() else {
+                    if crate::trusted_device_items::authenticate_reviewed_safe_core_slice_metadata_helper_v1(
+                        self.tcx,
+                        function.instance,
+                    ) {
+                        continue;
+                    }
                     if crate::trusted_device_items::authenticate_reviewed_safe_core_scalar_bitcast_helper_v1(
                         self.tcx,
                         function.instance,
@@ -3332,6 +3344,29 @@ impl<'tcx> DeviceCollector<'tcx> {
             ));
         }
         let callee_path = self.tcx.def_path_str(*def_id);
+        if crate::production_core_panic_v50::is_candidate(self.tcx, func) {
+            let checked = crate::production_core_panic_v50::observe(
+                self.tcx,
+                *caller,
+                body,
+                block,
+                &mut |amount| self.closure_work.charge(amount),
+            );
+            return match checked {
+                Ok(Some(_)) => Ok(()),
+                Ok(None) => Err(self.reachable_error(
+                    caller,
+                    "core panic candidate lost its exact original call",
+                    Some(callee_path),
+                )),
+                Err(crate::production_core_panic_v50::CorePanicErrorV50::Work(error)) => {
+                    Err(self.reachable_error(caller, &error.to_string(), Some(callee_path)))
+                }
+                Err(crate::production_core_panic_v50::CorePanicErrorV50::Refused(reason)) => {
+                    Err(self.reachable_error(caller, reason, Some(callee_path)))
+                }
+            };
+        }
         if callee_path.contains("::panicking::")
             || callee_path.contains("::panic_fmt")
             || callee_path.contains("::begin_panic")
@@ -3399,6 +3434,11 @@ impl<'tcx> DeviceCollector<'tcx> {
                 self.tcx, resolved,
             )
             && !crate::trusted_device_items::is_authenticated_gfx942_wave64_shuffle_instance_v1(
+                self.tcx,
+                resolved,
+                &self.expected_target,
+            )
+            && !crate::trusted_device_items::is_authenticated_gfx942_wave64_scan_instance_v1(
                 self.tcx,
                 resolved,
                 &self.expected_target,

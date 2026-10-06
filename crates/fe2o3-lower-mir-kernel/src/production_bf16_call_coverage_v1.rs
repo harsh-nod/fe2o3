@@ -213,6 +213,9 @@ fn bf16_complete_source_coverage_v1(
                 }
                 calls += 1;
             }
+            SemanticKirCallReturnKindV1::NoNormalReturnCall { .. } => {
+                return Err(bf16_emission_refusal_v1("BF16 exact Call emission anchor"));
+            }
             SemanticKirCallReturnKindV1::Return { .. } => {
                 if !matches!(term, SemanticTerminatorKindV1::Return) {
                     return Err(bf16_emission_refusal_v1("BF16 Return source anchor"));

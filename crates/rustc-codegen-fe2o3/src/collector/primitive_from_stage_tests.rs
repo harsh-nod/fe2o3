@@ -49,10 +49,38 @@ pub(crate) fn reject_original_panic<'tcx>(tcx: TyCtxt<'tcx>, caller: Instance<'t
             assert!(
                 error
                     .to_string()
-                    .contains("device code reaches a panic path")
+                    .contains("core panic message requires retained argument evaluation")
             );
             calls += 1;
         }
     }
     assert_eq!(calls, 1);
+}
+
+pub(crate) fn collect_literal_panic<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: Instance<'tcx>,
+    block: BasicBlock,
+) -> crate::rustc_semantic_plan_v1::SourceClosureWorkV1 {
+    let mut collector = DeviceCollector::new(
+        tcx,
+        false,
+        Vec::new(),
+        "host-test-no-launch".into(),
+        capture_context_producers_v1(tcx).unwrap(),
+    );
+    collector.closure_work.charge(17).unwrap();
+    let body = tcx.instance_mir(caller.def);
+    let TerminatorKind::Call { func, .. } = &body.basic_blocks[block].terminator().kind else {
+        unreachable!()
+    };
+    collector
+        .process_call_operand(func, &caller, body, block)
+        .unwrap();
+    assert!(collector.closure_work.validation_work_for_test() > 17);
+    assert!(collector.result.is_empty());
+    assert!(collector.worklist.is_empty());
+    assert!(collector.reachable_unsafe_calls.is_empty());
+    assert!(collector.ffi_declarations.is_empty());
+    collector.closure_work
 }

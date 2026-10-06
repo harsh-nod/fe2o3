@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 #[cfg(test)]
 use std::sync::atomic::{AtomicI32, Ordering};
 
+use fe2o3_protected_service_spawn::trace_runtime as runtime_policy;
 use rustix::fs::OFlags;
 
 use super::{
@@ -98,9 +99,6 @@ const OPENAT_SYSCALL: u32 = 257;
 const PROT_WRITE: u64 = 2;
 const PROT_EXEC: u64 = 4;
 const MAP_ANONYMOUS: u64 = 0x20;
-const READ_IMPLIES_EXEC: u32 = 0x0040_0000;
-// x86-64 O_ACCMODE, O_CREAT, O_TRUNC and __O_TMPFILE; O_DIRECTORY stays allowed.
-const WRITABLE_OPEN_FLAGS: u64 = 3 | 0x40 | 0x200 | 0x0040_0000;
 const CLONE3_SYSCALL: u32 = 435;
 const CLONE3_ARGUMENT_BYTES: u64 = 88;
 const RUST_THREAD_CLONE3_FLAGS: u64 = 0x003d_0f00;
@@ -108,11 +106,7 @@ const RUST_PROCESS_CLONE3_FLAGS: u64 = 0x0000_0001_0000_4100;
 const SIGCHLD: u64 = 17;
 const MAX_CLONE_STACK_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_TRACEES: usize = 32;
-const ELF_HEADER_BYTES: usize = 64;
-const ELF_PROGRAM_HEADER_BYTES: usize = 56;
-const MAX_ELF_PROGRAM_HEADERS: usize = 256;
-const ELF_LOAD_SEGMENT: u32 = 1;
-const ELF_EXECUTABLE_FLAG: u32 = 1;
+#[cfg(test)]
 const SYSTEM_PAGE_BYTES: u64 = 4096;
 const PRCTL_SYSCALL: u32 = 157;
 const PR_SET_NAME: u64 = 15;
@@ -162,6 +156,21 @@ const FILTER_LEN: usize = DENIED_FILTER_START + DENIED_SYSCALLS.len() * 2 + 1;
 static LAST_TEST_DESCENDANT: AtomicI32 = AtomicI32::new(0);
 #[cfg(test)]
 static FIRST_TEST_DESCENDANT: AtomicI32 = AtomicI32::new(0);
+#[cfg(test)]
+std::thread_local! {
+    static PEAK_TEST_EXECUTED_SOLVER_GROUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static FINISHED_TEST_SOLVER_CONTEXTS: std::cell::Cell<Option<(usize, usize, usize, usize)>> = const { std::cell::Cell::new(None) };
+}
+#[cfg(test)]
+pub(super) fn finished_solver_contexts_for_test() -> Option<(usize, usize, usize, usize)> {
+    FINISHED_TEST_SOLVER_CONTEXTS.get()
+}
+
+#[cfg(test)]
+fn reset_solver_context_observation() {
+    PEAK_TEST_EXECUTED_SOLVER_GROUPS.set(0);
+    FINISHED_TEST_SOLVER_CONTEXTS.set(None);
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct SockFilter {
@@ -328,8 +337,13 @@ impl Tracee {
 
 #[path = "functional_refinement_process_tree_v1_custody.rs"]
 mod custody;
+use super::super::GeneratedProofProcessPolicyV2;
 pub(crate) use custody::AttemptV1;
 use custody::{Run, Tracees};
+
+#[path = "functional_refinement_solver_contexts_v2.rs"]
+mod solver_contexts;
+use solver_contexts::SolverContextsV2;
 
 #[path = "functional_refinement_process_tree_v1_spawn.rs"]
 mod seized_spawn;
@@ -344,6 +358,25 @@ struct Capture {
     eof: bool,
 }
 
+#[derive(Clone, Copy)]
+enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+impl OutputStream {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "functional_refinement_process_tree_v1_output_tests.rs"]
+mod output_tests;
+
 #[derive(Clone, Debug)]
 pub(super) struct AllowedRuntimeExecutableV1 {
     identity: ObjectIdentityV2,
@@ -355,103 +388,50 @@ pub(super) fn allowed_runtime_executable(
     identity: ObjectIdentityV2,
     path: &Path,
 ) -> Result<Option<AllowedRuntimeExecutableV1>, RetainedFunctionalRefinementRuntimeErrorV1> {
+    use fe2o3_protected_service_spawn::trace_runtime::elf;
     let retained_file_bytes = rustix::fs::fstat(file)
         .map_err(|error| io_error("inspect runtime ELF length", error))?
         .st_size;
     let retained_file_bytes = u64::try_from(retained_file_bytes)
         .map_err(|_| process_failure("runtime ELF has a negative length"))?;
-    let mut header = [0_u8; ELF_HEADER_BYTES];
+    let mut header = [0_u8; elf::HEADER_BYTES];
     let count = rustix::io::pread(file, &mut header, 0).map_err(|error| {
         io_error(
             &format!("read runtime ELF header {}", path.display()),
             error,
         )
     })?;
-    if count < 7 || header[..7] != [0x7f, b'E', b'L', b'F', 2, 1, 1] {
+    // The generic reader keeps the existing I/O error type and original file;
+    // the shared parser is only a bounded byte/range calculation.
+    enum ReadError {
+        Policy(fe2o3_protected_service_spawn::trace_runtime::PolicyError),
+        Io(RetainedFunctionalRefinementRuntimeErrorV1),
+    }
+    impl From<fe2o3_protected_service_spawn::trace_runtime::PolicyError> for ReadError {
+        fn from(error: fe2o3_protected_service_spawn::trace_runtime::PolicyError) -> Self {
+            Self::Policy(error)
+        }
+    }
+    let ranges = elf::executable_file_ranges::<ReadError>(
+        retained_file_bytes,
+        &header[..count],
+        |offset, program| {
+            rustix::io::pread(file, program, offset)
+                .map_err(|error| ReadError::Io(io_error("read runtime ELF program header", error)))
+        },
+    )
+    .map_err(|error| match error {
+        ReadError::Policy(error) => process_failure(error.message()),
+        ReadError::Io(error) => error,
+    })?;
+    let Some(ranges) = ranges else {
         return Ok(None);
-    }
-    if count != header.len() {
-        return Err(process_failure(format!(
-            "runtime ELF header {} is truncated",
-            path.display()
-        )));
-    }
-    let file_type = u16::from_le_bytes(header[16..18].try_into().expect("two-byte field"));
-    let machine = u16::from_le_bytes(header[18..20].try_into().expect("two-byte field"));
-    if !matches!(file_type, 2 | 3) || machine != 62 {
-        return Ok(None);
-    }
-    let program_offset = u64::from_le_bytes(header[32..40].try_into().expect("eight-byte field"));
-    let program_entry_bytes =
-        u16::from_le_bytes(header[54..56].try_into().expect("two-byte field")) as usize;
-    let program_count =
-        u16::from_le_bytes(header[56..58].try_into().expect("two-byte field")) as usize;
-    if program_entry_bytes != ELF_PROGRAM_HEADER_BYTES
-        || !(1..=MAX_ELF_PROGRAM_HEADERS).contains(&program_count)
-    {
-        return Err(process_failure(format!(
-            "runtime ELF program-header table {} is outside the pinned x86-64 ABI",
-            path.display()
-        )));
-    }
-    let mut ranges = Vec::new();
-    for index in 0..program_count {
-        let offset = program_offset
-            .checked_add((index * ELF_PROGRAM_HEADER_BYTES) as u64)
-            .ok_or_else(|| process_failure("runtime ELF program-header offset overflow"))?;
-        let mut program = [0_u8; ELF_PROGRAM_HEADER_BYTES];
-        let count = rustix::io::pread(file, &mut program, offset)
-            .map_err(|error| io_error("read runtime ELF program header", error))?;
-        if count != program.len() {
-            return Err(process_failure(format!(
-                "runtime ELF program-header table {} is truncated",
-                path.display()
-            )));
-        }
-        let segment_type = u32::from_le_bytes(program[0..4].try_into().expect("four-byte field"));
-        let flags = u32::from_le_bytes(program[4..8].try_into().expect("four-byte field"));
-        if segment_type != ELF_LOAD_SEGMENT || flags & ELF_EXECUTABLE_FLAG == 0 {
-            continue;
-        }
-        let file_offset = u64::from_le_bytes(program[8..16].try_into().expect("eight-byte field"));
-        let segment_file_bytes =
-            u64::from_le_bytes(program[32..40].try_into().expect("eight-byte field"));
-        if segment_file_bytes == 0 {
-            continue;
-        }
-        let segment_file_end = file_offset
-            .checked_add(segment_file_bytes)
-            .ok_or_else(|| process_failure("runtime ELF executable range overflow"))?;
-        if segment_file_end > retained_file_bytes {
-            return Err(process_failure(format!(
-                "runtime ELF executable segment {} exceeds the retained file",
-                path.display()
-            )));
-        }
-        let start = file_offset & !(SYSTEM_PAGE_BYTES - 1);
-        let end = segment_file_end
-            .checked_add(SYSTEM_PAGE_BYTES - 1)
-            .map(|value| value & !(SYSTEM_PAGE_BYTES - 1))
-            .ok_or_else(|| process_failure("runtime ELF executable range overflow"))?;
-        ranges.push((start, end));
-    }
-    if ranges.is_empty() {
-        return Err(process_failure(format!(
-            "runtime ELF image {} has no executable load segment",
-            path.display()
-        )));
-    }
-    ranges.sort_unstable();
-    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
-    for (start, end) in ranges {
-        if let Some((_, previous_end)) = merged.last_mut()
-            && start <= *previous_end
-        {
-            *previous_end = (*previous_end).max(end);
-        } else {
-            merged.push((start, end));
-        }
-    }
+    };
+    let mut merged = Vec::new();
+    merged
+        .try_reserve_exact(ranges.as_slice().len())
+        .map_err(|_| process_failure("runtime ELF range allocation failed"))?;
+    merged.extend_from_slice(ranges.as_slice());
     Ok(Some(AllowedRuntimeExecutableV1 {
         identity,
         executable_file_ranges: merged,
@@ -466,6 +446,27 @@ pub(super) fn execute(
     output_limit: usize,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
+    execute_with_policy(
+        attempt,
+        runtime,
+        source,
+        deadline,
+        output_limit,
+        GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+    )
+}
+
+pub(super) fn execute_with_policy(
+    attempt: &mut AttemptV1,
+    runtime: std::sync::Arc<RetainedRuntimeClosureV2>,
+    source: &CanonicalGeneratedVerusProofInputV3,
+    deadline: Instant,
+    output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
+    #[cfg(test)]
+    reset_solver_context_observation();
     crate::authenticated_verus_execution_v2::validate_controller_security_v2().map_err(
         |error| {
             controller_error(
@@ -580,7 +581,7 @@ pub(super) fn execute(
         run.descriptors = duplicates;
     }
     seized_spawn::spawn_in(attempt, command, bindings.clone(), cpu_seconds, deadline)?;
-    let result = supervise(
+    let result = supervise_with_policy(
         attempt,
         &bindings,
         bindings[0].identity,
@@ -590,6 +591,7 @@ pub(super) fn execute(
         true,
         deadline,
         output_limit,
+        policy,
     );
     attempt
         .run()?
@@ -737,6 +739,36 @@ fn supervise(
     output_limit: usize,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
+    supervise_with_policy(
+        attempt,
+        bindings,
+        verifier_identity,
+        solver_identity,
+        allowed_mappings,
+        validate_mappings,
+        require_auxiliary_verifier,
+        deadline,
+        output_limit,
+        GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn supervise_with_policy(
+    attempt: &mut AttemptV1,
+    bindings: &[DescriptorBinding],
+    verifier_identity: ObjectIdentityV2,
+    solver_identity: ObjectIdentityV2,
+    allowed_mappings: &[AllowedRuntimeExecutableV1],
+    validate_mappings: bool,
+    require_auxiliary_verifier: bool,
+    deadline: Instant,
+    output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
+    #[cfg(test)]
+    reset_solver_context_observation();
     let run = attempt.run()?;
     run.check_thread()?;
     let result = supervise_run(
@@ -749,6 +781,7 @@ fn supervise(
         require_auxiliary_verifier,
         deadline,
         output_limit,
+        policy,
     );
     run.release_spawn_after_terminal();
     result
@@ -765,6 +798,7 @@ fn supervise_run(
     require_auxiliary_verifier: bool,
     deadline: Instant,
     output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
     let Run {
@@ -810,11 +844,13 @@ fn supervise_run(
         let mut process_descendants_created = 0_usize;
         let mut auxiliary_started = false;
         let mut solver_started = false;
+        let mut contexts = (!policy.is_legacy())
+            .then(|| SolverContextsV2::with_policy(policy, require_auxiliary_verifier));
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
         let mut idle_interval = ACTIVE_TREE_POLL_INTERVAL;
         while !tracees.is_empty() {
-            drain(stdout, stdout_capture, output_limit)?;
-            drain(stderr, stderr_capture, output_limit)?;
+            drain(stdout, stdout_capture, output_limit, OutputStream::Stdout)?;
+            drain(stderr, stderr_capture, output_limit, OutputStream::Stderr)?;
             if Instant::now() >= deadline {
                 return Err(controller_error(
                     RetainedFunctionalRefinementRuntimeErrorKindV1::TimedOut,
@@ -824,6 +860,11 @@ fn supervise_run(
             let mut progressed = false;
             let processes = tracees.pids();
             for process in processes {
+                // A stable birth checkpoint may already have authenticated and
+                // retired a queued terminal from this outer census snapshot.
+                if contexts.is_some() && !tracees.contains_key(&process) {
+                    continue;
+                }
                 let Some(status) = stable::next_status(tracees, process)? else {
                     continue;
                 };
@@ -833,8 +874,8 @@ fn supervise_run(
                     let signal = stop_signal(status);
                     let inspection_deadline = if event == PTRACE_EVENT_EXEC {
                         Some(stable::park_for_inspection(tracees, deadline, &mut || {
-                            drain(stdout, stdout_capture, output_limit)?;
-                            drain(stderr, stderr_capture, output_limit)
+                            drain(stdout, stdout_capture, output_limit, OutputStream::Stdout)?;
+                            drain(stderr, stderr_capture, output_limit, OutputStream::Stderr)
                         })?)
                     } else {
                         None
@@ -854,7 +895,27 @@ fn supervise_run(
                                 ));
                             }
                             let observed = executable_identity(process)?;
-                            let role = if require_auxiliary_verifier
+                            let role = if let Some(contexts) = &mut contexts {
+                                let role = contexts.expected_exec(process)?;
+                                let (identity, name) = match role {
+                                    TraceeRole::AuxiliaryVerifier => {
+                                        (verifier_identity, "auxiliary rust_verify")
+                                    }
+                                    TraceeRole::Solver => (solver_identity, "Z3"),
+                                    _ => {
+                                        return Err(process_failure(
+                                            "unexpected admitted context role",
+                                        ));
+                                    }
+                                };
+                                if observed != identity {
+                                    return Err(process_failure(
+                                        "traced context executable differs from its admitted role",
+                                    ));
+                                }
+                                validate_exact_descriptor_closure(process, bindings, name)?;
+                                role
+                            } else if require_auxiliary_verifier
                                 && !auxiliary_started
                                 && observed == verifier_identity
                             {
@@ -884,27 +945,42 @@ fn supervise_run(
                             if validate_mappings {
                                 validate_executable_mappings(process, allowed_mappings)?;
                             }
+                            if let Some(contexts) = &mut contexts {
+                                contexts.executed(process, role)?;
+                            }
                             stable::check_before_release(
                                 inspection_deadline.expect("exec inspection deadline"),
                                 &mut || {
-                                    drain(stdout, stdout_capture, output_limit)?;
-                                    drain(stderr, stderr_capture, output_limit)
+                                    drain(
+                                        stdout,
+                                        stdout_capture,
+                                        output_limit,
+                                        OutputStream::Stdout,
+                                    )?;
+                                    drain(
+                                        stderr,
+                                        stderr_capture,
+                                        output_limit,
+                                        OutputStream::Stderr,
+                                    )
                                 },
                             )?;
                             resume_tracee(tracees, process, 0)?;
                         }
                         PTRACE_EVENT_SECCOMP => {
                             let mut progress = || {
-                                drain(stdout, stdout_capture, output_limit)?;
-                                drain(stderr, stderr_capture, output_limit)
+                                drain(stdout, stdout_capture, output_limit, OutputStream::Stdout)?;
+                                drain(stderr, stderr_capture, output_limit, OutputStream::Stderr)
                             };
                             stable::complete_request(
                                 tracees,
                                 process,
+                                policy,
                                 allowed_mappings,
                                 validate_mappings,
                                 &mut process_descendants_created,
                                 expected_process_descendants,
+                                &mut contexts,
                                 deadline,
                                 &mut progress,
                             )?;
@@ -936,6 +1012,17 @@ fn supervise_run(
                         stable::release_interrupts(tracees, inspection_deadline)?;
                     }
                 } else {
+                    if let Some(contexts) = &mut contexts
+                        && matches!(
+                            tracees[&process].role,
+                            TraceeRole::Solver
+                                | TraceeRole::AuxiliaryVerifier
+                                | TraceeRole::PendingExecutable
+                        )
+                    {
+                        contexts.retire_terminal(tracees, process, status)?;
+                        continue;
+                    }
                     let tracee = tracees.remove_terminal(&process)?;
                     if !tracee
                         .exit_boundary
@@ -968,6 +1055,17 @@ fn supervise_run(
         }
         let verifier_terminal = verifier_terminal
             .ok_or_else(|| process_failure("verifier terminal status is missing"))?;
+        if let Some(contexts) = &mut contexts {
+            contexts.finish().map_err(|error| {
+                context_terminal_failure(
+                    error,
+                    verifier_terminal,
+                    &stdout_capture.bytes,
+                    &stderr_capture.bytes,
+                )
+            })?;
+            return Ok(verifier_terminal);
+        }
         let solver_terminal = solver_terminal.ok_or_else(|| {
             process_failure(format!(
                 "Z3 descendant was not observed; verifier={verifier_terminal:?} auxiliary={auxiliary_terminal:?} stdout={:?} stderr={:?}",
@@ -998,6 +1096,7 @@ fn supervise_run(
         deadline,
     )?;
     Ok(RetainedFunctionalRefinementRuntimeOutputV1 {
+        policy,
         exit_code: terminal.0,
         signal: terminal.1,
         stdout: std::mem::take(&mut stdout_capture.bytes),
@@ -1090,9 +1189,14 @@ fn ptrace(
     process: i32,
     data: usize,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    ptrace_result(request, process, data)
+        .map_err(|error| process_failure(format!("operate on traced proof process: {error}")))
+}
+
+fn ptrace_result(request: u32, process: i32, data: usize) -> io::Result<()> {
     // SAFETY: ptrace interprets null address and the scalar data according to the request.
     if unsafe { linux_ptrace(request, process, std::ptr::null_mut(), data as *mut c_void) } < 0 {
-        Err(io_process_failure("operate on traced proof process"))
+        Err(io::Error::last_os_error())
     } else {
         Ok(())
     }
@@ -1245,69 +1349,92 @@ fn descriptor_numbers(
     Ok(result)
 }
 
+#[cfg(test)]
 fn validate_sensitive_registers(
     process: i32,
     registers: &UserRegistersX86_64,
     allowed: &[AllowedRuntimeExecutableV1],
     validate_mappings: bool,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    validate_sensitive_registers_with_policy(
+        process,
+        registers,
+        allowed,
+        validate_mappings,
+        GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+        TraceeRole::Verifier,
+    )
+}
+
+fn validate_sensitive_registers_with_policy(
+    process: i32,
+    registers: &UserRegistersX86_64,
+    allowed: &[AllowedRuntimeExecutableV1],
+    validate_mappings: bool,
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     match u32::try_from(registers.orig_rax) {
-        Ok(CLONE3_SYSCALL) => validate_clone3_request(process, registers),
+        Ok(CLONE3_SYSCALL) => validate_clone3_request(process, registers, policy, role),
         Ok(OPEN_SYSCALL) => validate_read_only_open(registers.rsi),
         Ok(OPENAT_SYSCALL) => validate_read_only_open(registers.rdx),
         Ok(PRCTL_SYSCALL) if registers.rdi == PR_SET_NAME && registers.rsi != 0 => Ok(()),
         Ok(PRCTL_SYSCALL) => Err(process_failure(
             "prctl request is outside exact Rust thread naming",
         )),
-        Ok(MMAP_SYSCALL) => {
+        Ok(MMAP_SYSCALL) if !validate_mappings => {
             if registers.rdx & PROT_EXEC == 0 {
                 return Ok(());
             }
             if registers.rdx & PROT_WRITE != 0 {
                 return Err(process_failure("writable executable mmap is not admitted"));
             }
-            if !validate_mappings {
-                return Ok(());
-            }
-            if registers.r10 & MAP_ANONYMOUS != 0 || registers.r8 as i64 == -1 {
-                return Err(process_failure(
-                    "anonymous executable mmap is outside the retained runtime closure",
-                ));
-            }
-            let descriptor = i32::try_from(registers.r8)
-                .map_err(|_| process_failure("executable mmap uses a noncanonical descriptor"))?;
-            let file = File::open(format!("/proc/{process}/fd/{descriptor}"))
-                .map_err(|_| io_process_failure("open executable mmap descriptor"))?;
-            let identity =
-                ObjectSnapshotV2::capture(&file, "executable mmap descriptor")?.object_identity();
-            if !executable_object_range_is_allowed(identity, registers.r9, registers.rsi, allowed)?
-            {
-                return Err(process_failure(
-                    "executable mmap object or file range is outside the retained runtime closure",
-                ));
-            }
             Ok(())
         }
-        Ok(MPROTECT_SYSCALL) | Ok(PKEY_MPROTECT_SYSCALL) => {
-            if registers.rdx & PROT_EXEC == 0 {
-                return Ok(());
+        Ok(MREMAP_SYSCALL | REMAP_FILE_PAGES_SYSCALL) if !validate_mappings => Ok(()),
+        Ok(
+            MMAP_SYSCALL
+            | MPROTECT_SYSCALL
+            | PKEY_MPROTECT_SYSCALL
+            | MREMAP_SYSCALL
+            | REMAP_FILE_PAGES_SYSCALL,
+        ) => {
+            use runtime_policy::memory::{MappingRequirement, mapping_requirement};
+            match mapping_requirement(
+                registers.orig_rax,
+                [
+                    registers.rdi,
+                    registers.rsi,
+                    registers.rdx,
+                    registers.r10,
+                    registers.r8,
+                    registers.r9,
+                ],
+            )
+            .map_err(|error| process_failure(error.message()))?
+            {
+                MappingRequirement::NoAddedExecution => Ok(()),
+                MappingRequirement::ExecutableFile {
+                    descriptor,
+                    offset,
+                    length,
+                } => {
+                    let file = File::open(format!("/proc/{process}/fd/{descriptor}"))
+                        .map_err(|_| io_process_failure("open executable mmap descriptor"))?;
+                    let identity = ObjectSnapshotV2::capture(&file, "executable mmap descriptor")?
+                        .object_identity();
+                    if !executable_object_range_is_allowed(identity, offset, length, allowed)? {
+                        return Err(process_failure(
+                            "executable mmap object or file range is outside the retained runtime closure",
+                        ));
+                    }
+                    Ok(())
+                }
+                MappingRequirement::NonExecutableRegion { start, length } => {
+                    validate_nonexecutable_mapping_range(process, start, length)
+                }
             }
-            // File identity cannot authenticate privately dirtied pages. The supported
-            // loader must map text RX initially, never add or restore EXEC with mprotect.
-            Err(process_failure("executable mprotect is not admitted"))
         }
-        Ok(MREMAP_SYSCALL) if validate_mappings => {
-            validate_nonexecutable_mapping_range(process, registers.rdi, registers.rsi)
-        }
-        Ok(REMAP_FILE_PAGES_SYSCALL) if validate_mappings => {
-            if registers.rdx != 0 || registers.r8 != 0 {
-                return Err(process_failure(
-                    "remap_file_pages uses noncanonical protection or flags",
-                ));
-            }
-            validate_nonexecutable_mapping_range(process, registers.rdi, registers.rsi)
-        }
-        Ok(MREMAP_SYSCALL) | Ok(REMAP_FILE_PAGES_SYSCALL) => Ok(()),
         _ => Err(process_failure(
             "unexpected syscall reached the sensitive-syscall admission checkpoint",
         )),
@@ -1317,15 +1444,14 @@ fn validate_sensitive_registers(
 fn validate_read_only_open(flags: u64) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     // Scalar flags avoid a pathname race and cover /proc/self/mem, thread-self,
     // numeric PIDs and procfd aliases alike. Existing inherited output pipes remain usable.
-    if flags & WRITABLE_OPEN_FLAGS != 0 {
-        return Err(process_failure("write-capable file open is not admitted"));
-    }
-    Ok(())
+    runtime_policy::validate_read_only_open(flags).map_err(|error| process_failure(error.message()))
 }
 
 fn validate_clone3_request(
     process: i32,
     registers: &UserRegistersX86_64,
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     if registers.rsi != CLONE3_ARGUMENT_BYTES || registers.rdi == 0 {
         return Err(process_failure(
@@ -1344,6 +1470,14 @@ fn validate_clone3_request(
     for (index, chunk) in bytes.chunks_exact(8).enumerate() {
         arguments[index] = u64::from_ne_bytes(chunk.try_into().expect("eight-byte chunk"));
     }
+    validate_clone3_arguments(arguments, policy, role)
+}
+
+fn validate_clone3_arguments(
+    arguments: [u64; 11],
+    policy: GeneratedProofProcessPolicyV2,
+    role: TraceeRole,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let [
         flags,
         pidfd,
@@ -1361,7 +1495,6 @@ fn validate_clone3_request(
         && set_tid_size == 0
         && cgroup == 0
         && stack != 0
-        && (1..=MAX_CLONE_STACK_BYTES).contains(&stack_size)
         && stack.checked_add(stack_size).is_some();
     let rust_thread = flags == RUST_THREAD_CLONE3_FLAGS
         && exit_signal == 0
@@ -1376,7 +1509,15 @@ fn validate_clone3_request(
         && child_tid == 0
         && parent_tid == 0
         && tls == 0;
-    if common && (rust_thread || rust_process) {
+    // Only roles established by the retained executable checks can use V3's
+    // pinned interpreter stack. The pending child and solver never inherit it.
+    let stack_limit =
+        if rust_thread && matches!(role, TraceeRole::Verifier | TraceeRole::AuxiliaryVerifier) {
+            policy.verifier_thread_stack_bytes()
+        } else {
+            MAX_CLONE_STACK_BYTES
+        };
+    if common && (1..=stack_limit).contains(&stack_size) && (rust_thread || rust_process) {
         Ok(())
     } else {
         Err(process_failure(format!(
@@ -1416,7 +1557,7 @@ fn validate_nonexecutable_mapping_range(
             "zero-length mapping remap request is not admitted",
         ));
     }
-    let end = start
+    let _end = start
         .checked_add(length)
         .ok_or_else(|| process_failure("mapping remap range overflow"))?;
     let maps = std::fs::read_to_string(format!("/proc/{process}/maps"))
@@ -1426,62 +1567,15 @@ fn validate_nonexecutable_mapping_range(
             "remapped process map inventory is oversized",
         ));
     }
-    let mut cursor = start;
-    for line in maps.lines() {
-        let mut fields = line.split_whitespace();
-        let range = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed remapped process map"))?;
-        let permissions = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed remapped process map"))?;
-        let (mapping_start, mapping_end) = parse_mapping_range(range)?;
-        if mapping_end <= cursor {
-            continue;
-        }
-        if mapping_start > cursor {
-            break;
-        }
-        if permissions
-            .as_bytes()
-            .get(2)
-            .is_some_and(|value| *value == b'x')
-        {
-            return Err(process_failure(
-                "mapping remap covers an executable source range",
-            ));
-        }
-        cursor = mapping_end.min(end);
-        if cursor == end {
-            return Ok(());
-        }
-    }
-    Err(process_failure(
-        "mapping remap source range is not fully mapped",
-    ))
+    runtime_policy::validate_nonexecutable_mapping_rows(&maps, start, length)
+        .map_err(|error| process_failure(error.message()))
 }
 
+#[cfg(test)]
 fn parse_mapping_range(
     range: &str,
 ) -> Result<(u64, u64), RetainedFunctionalRefinementRuntimeErrorV1> {
-    let (start, end) = range
-        .split_once('-')
-        .ok_or_else(|| process_failure("malformed process mapping range"))?;
-    let start = u64::from_str_radix(start, 16)
-        .map_err(|_| process_failure("noncanonical process mapping start"))?;
-    let end = u64::from_str_radix(end, 16)
-        .map_err(|_| process_failure("noncanonical process mapping end"))?;
-    if start >= end {
-        return Err(process_failure("empty or inverted process mapping range"));
-    }
-    Ok((start, end))
-}
-
-fn parse_mapping_file_offset(
-    offset: &str,
-) -> Result<u64, RetainedFunctionalRefinementRuntimeErrorV1> {
-    u64::from_str_radix(offset, 16)
-        .map_err(|_| process_failure("noncanonical process mapping file offset"))
+    runtime_policy::parse_mapping_range(range).map_err(|error| process_failure(error.message()))
 }
 
 fn executable_object_range_is_allowed(
@@ -1490,56 +1584,17 @@ fn executable_object_range_is_allowed(
     length: u64,
     allowed: &[AllowedRuntimeExecutableV1],
 ) -> Result<bool, RetainedFunctionalRefinementRuntimeErrorV1> {
-    let end = offset
-        .checked_add(length)
-        .ok_or_else(|| process_failure("executable mapping file range overflow"))?;
-    if length == 0 {
-        return Ok(false);
+    // Preserve overflow refusal even when no retained object matches.
+    runtime_policy::contains_file_range(offset, length, &[])
+        .map_err(|error| process_failure(error.message()))?;
+    for executable in allowed.iter().filter(|entry| entry.identity == identity) {
+        if runtime_policy::contains_file_range(offset, length, &executable.executable_file_ranges)
+            .map_err(|error| process_failure(error.message()))?
+        {
+            return Ok(true);
+        }
     }
-    Ok(allowed.iter().any(|executable| {
-        executable.identity == identity
-            && executable
-                .executable_file_ranges
-                .iter()
-                .any(|(start, admitted_end)| *start <= offset && end <= *admitted_end)
-    }))
-}
-
-fn mapping_file_range_is_allowed(
-    device: &str,
-    inode: &str,
-    offset: u64,
-    length: u64,
-    allowed: &[AllowedRuntimeExecutableV1],
-) -> Result<bool, RetainedFunctionalRefinementRuntimeErrorV1> {
-    let (major, minor) = device
-        .split_once(':')
-        .ok_or_else(|| process_failure("malformed process mapping device"))?;
-    let major = u32::from_str_radix(major, 16)
-        .map_err(|_| process_failure("noncanonical process mapping device major"))?;
-    let minor = u32::from_str_radix(minor, 16)
-        .map_err(|_| process_failure("noncanonical process mapping device minor"))?;
-    let inode = inode
-        .parse::<u64>()
-        .map_err(|_| process_failure("noncanonical process mapping inode"))?;
-    if inode == 0 {
-        return Ok(false);
-    }
-    let end = offset
-        .checked_add(length)
-        .ok_or_else(|| process_failure("executable mapping file range overflow"))?;
-    if length == 0 {
-        return Ok(false);
-    }
-    Ok(allowed.iter().any(|executable| {
-        executable.identity.inode == inode
-            && rustix::fs::major(executable.identity.device) == major
-            && rustix::fs::minor(executable.identity.device) == minor
-            && executable
-                .executable_file_ranges
-                .iter()
-                .any(|(start, admitted_end)| *start <= offset && end <= *admitted_end)
-    }))
+    Ok(false)
 }
 
 fn validate_executable_mappings(
@@ -1562,111 +1617,25 @@ fn validate_executable_mappings(
 fn validate_personality(
     personality: &str,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
-    let value = u32::from_str_radix(personality.trim(), 16)
-        .map_err(|_| process_failure("malformed traced process personality"))?;
-    if value & READ_IMPLIES_EXEC != 0 {
-        return Err(process_failure("READ_IMPLIES_EXEC is not admitted"));
-    }
-    Ok(())
+    runtime_policy::validate_personality(personality)
+        .map_err(|error| process_failure(error.message()))
 }
 
 fn validate_executable_mapping_rows(
     maps: &str,
     allowed: &[AllowedRuntimeExecutableV1],
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
-    let mut executable_count = 0_usize;
-    for line in maps.lines() {
-        let mut fields = line.split_whitespace();
-        let range = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed process map"))?;
-        let (mapping_start, mapping_end) = parse_mapping_range(range)?;
-        let permissions = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed process map"))?;
-        if permissions
-            .as_bytes()
-            .get(2)
-            .is_none_or(|value| *value != b'x')
-        {
-            continue;
-        }
-        if permissions.as_bytes().get(1) == Some(&b'w') {
-            return Err(process_failure(
-                "writable executable mapping is not admitted",
-            ));
-        }
-        executable_count += 1;
-        if executable_count > 256 {
-            return Err(process_failure("too many executable mappings"));
-        }
-        let file_offset = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed process map"))?;
-        let file_offset = parse_mapping_file_offset(file_offset)?;
-        let device = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed process map"))?;
-        let inode = fields
-            .next()
-            .ok_or_else(|| process_failure("malformed process map"))?;
-        let path = fields.next().unwrap_or("");
-        if matches!(path, "[vdso]" | "[vsyscall]") {
-            continue;
-        }
-        if path.is_empty() || path.starts_with('[') {
-            return Err(process_failure(
-                "anonymous executable mapping is not admitted",
-            ));
-        }
-        if !mapping_file_range_is_allowed(
-            device,
-            inode,
-            file_offset,
-            mapping_end - mapping_start,
-            allowed,
-        )? {
-            #[cfg(test)]
-            {
-                // Diagnostic only: the original closed identity/range predicate
-                // above and its refusal below remain unchanged.
-                let parsed_inode = inode.parse::<u64>().ok();
-                let parsed_device = device.split_once(':').and_then(|(major, minor)| {
-                    Some((
-                        u32::from_str_radix(major, 16).ok()?,
-                        u32::from_str_radix(minor, 16).ok()?,
-                    ))
-                });
-                let same_inode = allowed
-                    .iter()
-                    .filter(|entry| Some(entry.identity.inode) == parsed_inode)
-                    .count();
-                let same_device = allowed
-                    .iter()
-                    .filter(|entry| {
-                        Some((
-                            rustix::fs::major(entry.identity.device),
-                            rustix::fs::minor(entry.identity.device),
-                        )) == parsed_device
-                    })
-                    .count();
-                let inventory = format!("{allowed:?}");
-                let inventory = inventory.as_bytes();
-                eprintln!(
-                    "runtime maps test diagnostic: line={:?}, same_inode={same_inode}, same_device={same_device}, retained_prefix={:?}",
-                    String::from_utf8_lossy(&line.as_bytes()[..line.len().min(512)]),
-                    String::from_utf8_lossy(&inventory[..inventory.len().min(2048)]),
-                );
-            }
-            return Err(process_failure(
-                "executable mapping object or file range is outside retained runtime closure",
-            ));
-        }
-    }
-    if executable_count == 0 {
-        return Err(process_failure("traced process has no executable mappings"));
-    }
-    Ok(())
+    runtime_policy::validate_executable_mapping_rows(
+        maps,
+        allowed.iter().map(|entry| {
+            runtime_policy::ExecutableObjectRanges::new(
+                entry.identity.device,
+                entry.identity.inode,
+                &entry.executable_file_ranges,
+            )
+        }),
+    )
+    .map_err(|error| process_failure(error.message()))
 }
 
 fn terminate_tree(tracees: &mut Tracees) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
@@ -1914,6 +1883,7 @@ fn drain(
     pipe: &mut impl Read,
     capture: &mut Capture,
     limit: usize,
+    stream: OutputStream,
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let mut buffer = [0_u8; 4096];
     loop {
@@ -1924,9 +1894,11 @@ fn drain(
             }
             Ok(count) => {
                 if count > limit.saturating_sub(capture.bytes.len()) {
-                    return Err(controller_error(
-                        RetainedFunctionalRefinementRuntimeErrorKindV1::OutputTooLarge,
-                        "functional-refinement process exceeded its output bound",
+                    return Err(output_too_large(
+                        stream,
+                        &capture.bytes,
+                        &buffer[..count],
+                        limit,
                     ));
                 }
                 capture.bytes.extend_from_slice(&buffer[..count]);
@@ -1935,6 +1907,76 @@ fn drain(
             Err(_) => return Err(io_process_failure("read traced proof output")),
         }
     }
+}
+
+fn output_too_large(
+    stream: OutputStream,
+    retained: &[u8],
+    incoming: &[u8],
+    limit: usize,
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    let (prefix, truncated) = bounded_output_prefix(retained, incoming);
+    let detail = format!(
+        "functional-refinement process exceeded its output bound: stream={} limit={limit} retained={} observed_at_least={} prefix=\"{prefix}\"{}",
+        stream.name(),
+        retained.len(),
+        retained.len().saturating_add(incoming.len()),
+        if truncated { " (truncated)" } else { "" },
+    );
+    controller_error(
+        RetainedFunctionalRefinementRuntimeErrorKindV1::OutputTooLarge,
+        detail,
+    )
+}
+
+const MAX_ESCAPED_OUTPUT_PREFIX_BYTES: usize = 1024;
+
+fn bounded_output_prefix(retained: &[u8], incoming: &[u8]) -> (String, bool) {
+    bounded_output_prefix_with_limit(retained, incoming, MAX_ESCAPED_OUTPUT_PREFIX_BYTES)
+}
+
+fn bounded_output_prefix_with_limit(
+    retained: &[u8],
+    incoming: &[u8],
+    limit: usize,
+) -> (String, bool) {
+    let mut prefix = String::with_capacity(limit);
+    for byte in retained.iter().chain(incoming) {
+        let escaped = std::ascii::escape_default(*byte);
+        if escaped.len() > limit - prefix.len() {
+            return (prefix, true);
+        }
+        prefix.extend(escaped.map(char::from));
+    }
+    (prefix, false)
+}
+
+const MAX_CENSUS_DIAGNOSTIC_PREFIX_BYTES: usize = 512;
+
+fn context_terminal_failure(
+    error: RetainedFunctionalRefinementRuntimeErrorV1,
+    verifier: (Option<i32>, Option<i32>),
+    stdout: &[u8],
+    stderr: &[u8],
+) -> RetainedFunctionalRefinementRuntimeErrorV1 {
+    let prefix = |bytes: &[u8]| {
+        bounded_output_prefix_with_limit(bytes, &[], MAX_CENSUS_DIAGNOSTIC_PREFIX_BYTES)
+    };
+    let (cause, cause_truncated) = prefix(error.detail().as_bytes());
+    let (out, out_truncated) = prefix(stdout);
+    let (err, err_truncated) = prefix(stderr);
+    let marker = |truncated| if truncated { " (truncated)" } else { "" };
+    RetainedFunctionalRefinementRuntimeErrorV1::new(
+        error.kind(),
+        format!(
+            "{cause}{}; verifier={verifier:?}; stderr_bytes={} stderr=\"{err}\"{}; stdout_bytes={} stdout=\"{out}\"{}",
+            marker(cause_truncated),
+            stderr.len(),
+            marker(err_truncated),
+            stdout.len(),
+            marker(out_truncated),
+        ),
+    )
 }
 
 fn drain_to_eof(
@@ -1947,8 +1989,8 @@ fn drain_to_eof(
 ) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
     let grace = deadline.min(Instant::now() + Duration::from_millis(200));
     while (!stdout_capture.eof || !stderr_capture.eof) && Instant::now() < grace {
-        drain(stdout, stdout_capture, limit)?;
-        drain(stderr, stderr_capture, limit)?;
+        drain(stdout, stdout_capture, limit, OutputStream::Stdout)?;
+        drain(stderr, stderr_capture, limit, OutputStream::Stderr)?;
         if !stdout_capture.eof || !stderr_capture.eof {
             thread::sleep(POLL_INTERVAL);
         }
@@ -2010,12 +2052,17 @@ mod memory_tests;
 mod stable_tests;
 
 #[cfg(test)]
+#[path = "functional_refinement_clone3_stack_v3_tests.rs"]
+mod clone3_stack_v3_tests;
+
+#[cfg(test)]
 #[path = "functional_refinement_process_tree_v1_quarantine_tests.rs"]
 mod quarantine_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("functional_refinement_solver_process_v2_tests.rs");
 
     #[test]
     fn tree_poll_interval_backs_off_caps_and_resets_after_progress() {
@@ -2038,6 +2085,7 @@ mod tests {
         >,
         first_descendant: i32,
         last_descendant: i32,
+        peak_executed_solver_groups: usize,
     }
 
     pub(super) fn identity(path: &str) -> ObjectIdentityV2 {
@@ -2115,11 +2163,45 @@ mod tests {
         allowed_mappings: &[AllowedRuntimeExecutableV1],
         validate_mappings: bool,
     ) -> HostileRun {
+        run_hostile_with_policy(
+            script,
+            expected_solver,
+            deadline_after,
+            leaked,
+            allowed_mappings,
+            validate_mappings,
+            GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+        )
+    }
+
+    fn run_contexts(script: &str, expected_solver: &str, leaked: Option<&File>) -> HostileRun {
+        run_hostile_with_policy(
+            script,
+            expected_solver,
+            Duration::from_secs(3),
+            leaked,
+            &[],
+            false,
+            GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV2,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_hostile_with_policy(
+        script: &str,
+        expected_solver: &str,
+        deadline_after: Duration,
+        leaked: Option<&File>,
+        allowed_mappings: &[AllowedRuntimeExecutableV1],
+        validate_mappings: bool,
+        policy: GeneratedProofProcessPolicyV2,
+    ) -> HostileRun {
         let _guard = super::super::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         FIRST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
         LAST_TEST_DESCENDANT.store(0, Ordering::SeqCst);
+        PEAK_TEST_EXECUTED_SOLVER_GROUPS.set(0);
         let mut duplicates = Vec::new();
         let mut child_bindings = Vec::new();
         if let Some(leaked) = leaked {
@@ -2143,7 +2225,7 @@ mod tests {
             .stderr(Stdio::piped());
         let deadline = Instant::now() + deadline_after;
         let mut child = seized_spawn::spawn(command, child_bindings, 2, deadline).unwrap();
-        let result = supervise(
+        let result = supervise_with_policy(
             &mut child,
             &[],
             identity("/bin/sh"),
@@ -2153,12 +2235,14 @@ mod tests {
             false,
             deadline,
             4096,
+            policy,
         );
         drop(duplicates);
         HostileRun {
             result,
             first_descendant: FIRST_TEST_DESCENDANT.load(Ordering::SeqCst),
             last_descendant: LAST_TEST_DESCENDANT.load(Ordering::SeqCst),
+            peak_executed_solver_groups: PEAK_TEST_EXECUTED_SOLVER_GROUPS.get(),
         }
     }
 

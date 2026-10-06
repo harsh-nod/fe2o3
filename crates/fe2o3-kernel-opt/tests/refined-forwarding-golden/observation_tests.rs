@@ -32,7 +32,7 @@ pub const CASES: [Case; 13] = [
     case!("global-clobber", 1, 0),
     case!("trap-cut", 1, 0),
     case!("volatile", 1, 0),
-    case!("alignment", 1, 0),
+    case!("alignment", 1, 1),
     case!("noop", 0, 0),
     case!("different-stores", 1, 0),
 ];

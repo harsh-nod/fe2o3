@@ -57,6 +57,7 @@ use function_commitments_v29::{
     PendingFunctionCommitmentsV29, charge_construction_total_v1, construction_resource_error_v1,
 };
 use receiver_materialization_v1::{ReceiverLocalV1, ReceiverMaterializationV1};
+mod core_panic_materialization_v50;
 mod primitive_from_materialization_v1;
 #[cfg(test)]
 pub(crate) mod primitive_from_stage_tests;
@@ -1566,6 +1567,10 @@ impl<'a, 'owner, 'tcx> BodyProducerV1<'a, 'owner, 'tcx> {
                     statement,
                 ));
                 terminator
+            } else if normalized_call
+                .is_some_and(|call| matches!(call.operation, NormalizedCallV1::CorePanic(_)))
+            {
+                self.construct_core_panic_v50(raw_block)?
             } else if normalized_call.is_some() {
                 let (statement, terminator) =
                     self.construct_normalized_intrinsic(raw_block, &terminator.kind)?;

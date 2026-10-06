@@ -23,7 +23,8 @@ impl RankedRefinedForwardingWireStorageV1 {
 }
 
 fn limits() -> (RefineLimits, ForwardLimits) {
-    (RefineLimits::default(), ForwardLimits::default())
+    let limits = fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1::production_v1();
+    (limits.refinement, limits.forwarding)
 }
 
 fn entry(budget: &mut Budget<'_>) -> R<()> {

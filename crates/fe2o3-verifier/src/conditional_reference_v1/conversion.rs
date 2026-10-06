@@ -346,6 +346,7 @@ pub fn collect_semantic_loads_v2<'a>(
     match expression {
         ProductionSemanticExpressionV2::Load(load) => loads.push(load),
         ProductionSemanticExpressionV2::Symbol { .. }
+        | ProductionSemanticExpressionV2::GlobalInvocation1d { .. }
         | ProductionSemanticExpressionV2::Constant { .. } => {}
         ProductionSemanticExpressionV2::Unary { operand, .. }
         | ProductionSemanticExpressionV2::Cast { operand, .. } => {

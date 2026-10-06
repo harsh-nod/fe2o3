@@ -139,6 +139,8 @@ use fe2o3_device::{Wave64, WaveLane};
     feature = "slice_metadata_arguments",
     feature = "rust_call",
     feature = "dynamic_local_array",
+    feature = "private_array_cross_block",
+    feature = "private_array_loop",
     feature = "provider_context",
     feature = "provider_context_entry",
     feature = "provider_context_entry_result",
@@ -1016,3 +1018,6 @@ pub fn entry_packing_three_u32(_first: u32, _second: u32, _third: u32) {}
 #[cfg(feature = "entry_packing_scalars")]
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
 pub fn entry_packing_mixed(_byte: u8, _half: u16, _word: u32, _wide: u64) {}
+
+#[cfg(any(feature = "private_array_cross_block", feature = "private_array_loop"))]
+mod private_array_cfg;

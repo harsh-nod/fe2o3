@@ -12,6 +12,7 @@ python3 -I -B "${REPO_ROOT}/scripts/tests/issue272_m0_contract.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_occurrences.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_identities.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_fixture_bindings.py"
+python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_source_census.py"
 
 # Keep the interpreter that passed the manifest checks when isolating Cargo and
 # ROCm through FAKE_BIN. /usr/bin/python3 may be older than the required Python.

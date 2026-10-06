@@ -592,7 +592,7 @@ pub struct WorkerV3LoadReadinessResultV1 {
     receipt: WorkerV3LoadReadinessReceiptV1,
     claim: DurablePublishedHsacoClaimV3,
     exact_envelope: Vec<u8>,
-    envelope_path: PathBuf,
+    envelope_path: Box<Path>,
 }
 
 impl fmt::Debug for WorkerV3LoadReadinessResultV1 {
@@ -615,6 +615,34 @@ impl fmt::Debug for WorkerV3LoadReadinessResultV1 {
 }
 
 impl WorkerV3LoadReadinessResultV1 {
+    /// Complete retained Rust backing, including spare wire capacity. The
+    /// diagnostic path has no retained spare capacity.
+    /// Descriptor state, bounded transaction I/O and kernel memory remain in
+    /// the existing artifact domain. This inert quote grants no admission.
+    pub fn retained_rust_storage(&self) -> Option<usize> {
+        std::mem::size_of::<Self>()
+            .checked_add(self.exact_envelope.capacity())?
+            .checked_add(self.envelope_path.as_os_str().len())
+    }
+
+    /// Checked upper bound for a publication result retaining the supplied
+    /// envelope allocation. The diagnostic path is the original output path
+    /// joined with the fixed canonical filename; one separator is conservative
+    /// even for an empty path or a path already ending in a separator.
+    /// This does not fund transaction I/O or confer readiness authority.
+    pub fn publication_retained_rust_storage_bound(
+        output_dir: &Path,
+        envelope_capacity: usize,
+    ) -> Option<usize> {
+        std::mem::size_of::<Self>()
+            .checked_add(envelope_capacity)?
+            .checked_add(output_dir.as_os_str().len())?
+            .checked_add(1)?
+            .checked_add(FILE_PREFIX_V1.len())?
+            .checked_add(64)?
+            .checked_add(ENVELOPE_SUFFIX_V1.len())
+    }
+
     pub const fn outcome(&self) -> WorkerV3LoadReadinessOutcomeV1 {
         self.outcome
     }
@@ -1976,7 +2004,7 @@ fn result(
         receipt,
         claim,
         exact_envelope,
-        envelope_path: output.display_path.join(&names.envelope),
+        envelope_path: output.display_path.join(&names.envelope).into_boxed_path(),
     })
 }
 
@@ -1994,7 +2022,7 @@ fn result_from_exact_envelope(
         receipt,
         claim,
         exact_envelope,
-        envelope_path: output.display_path.join(&names.envelope),
+        envelope_path: output.display_path.join(&names.envelope).into_boxed_path(),
     })
 }
 
@@ -2192,6 +2220,40 @@ mod tests {
     use crate::WorkerV3PublicationBindingV1;
     use crate::attempt::{AttemptRegistry, BackendReceiptV1, StartAttemptOutcome};
     use fe2o3_build_authority::CompilerClosureV2;
+
+    #[test]
+    fn retained_result_bound_covers_exact_join_bytes_and_rejects_overflow() {
+        let names = ReadinessNames::new(backend_receipt()).unwrap();
+        for bytes in [
+            b"".as_slice(),
+            b"/",
+            b"out",
+            b"out/",
+            b"a//b",
+            b"nonutf8-\xff",
+        ] {
+            let output = PathBuf::from(std::ffi::OsString::from_vec(bytes.to_vec()));
+            let joined = output.join(&names.envelope).into_boxed_path();
+            let capacity = 123;
+            let exact = std::mem::size_of::<WorkerV3LoadReadinessResultV1>()
+                + capacity
+                + joined.as_os_str().len();
+            let bound = WorkerV3LoadReadinessResultV1::publication_retained_rust_storage_bound(
+                &output, capacity,
+            )
+            .unwrap();
+            assert!(exact <= bound);
+            assert!(bound - exact <= 1);
+            assert_eq!(joined.as_ref(), output.join(&names.envelope));
+        }
+        assert_eq!(
+            WorkerV3LoadReadinessResultV1::publication_retained_rust_storage_bound(
+                Path::new("out"),
+                usize::MAX
+            ),
+            None
+        );
+    }
 
     fn attempt() -> BuildAttempt {
         BuildAttempt::new(

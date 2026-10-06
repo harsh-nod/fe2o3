@@ -22,6 +22,7 @@ use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
 };
+pub(crate) const PREFLIGHT_ENTRY_WORK: usize = 2048;
 
 /// The enclosing typed adapter retains and prepays its source. The returned
 /// engine/quote are unreserved; reserve quote.preflight_storage + owner_header
@@ -45,7 +46,7 @@ pub(crate) fn prepare_native_engine(
             "provider or option count exceeds the shared bound",
         ));
     }
-    budget.charge_work(2048)?;
+    budget.charge_work(PREFLIGHT_ENTRY_WORK)?;
     enforce_worker_working_set_budget(outer_len, module, &providers, &options)
         .map_err(|e| failure("working set", e))?;
     let quote = Quote::new(module, &providers, &options, &output, limits)

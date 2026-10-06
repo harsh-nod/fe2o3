@@ -12,6 +12,9 @@ const ROOTS: usize = 34;
 #[path = "production_rustc_driver_checked_output_source_driver_corpus_v1_tests.rs"]
 mod source_driver_corpus;
 
+#[path = "production_rustc_driver_checked_output_source_census_v1_tests.rs"]
+mod source_census;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct CargoTarget {
@@ -57,6 +60,8 @@ struct CaseReport {
     case_elapsed_millis: u64,
     callback_progress: Option<progress::Snapshot>,
     callback_progress_error: Option<String>,
+    source_census: Option<serde_json::Value>,
+    source_census_error: Option<String>,
 }
 
 impl CaseReport {
@@ -73,6 +78,8 @@ impl CaseReport {
             case_elapsed_millis: 0,
             callback_progress: None,
             callback_progress_error: None,
+            source_census: None,
+            source_census_error: None,
         }
     }
 
@@ -291,9 +298,11 @@ fn run_case_with_simulation(
     let prepared = (|| {
         check_input_files(workspace, fixture)?;
         std::fs::create_dir_all(case).map_err(|e| fail(SourceStage::Invocation, e))?;
-        corpus_cargo::capture(workspace, fixture, case, target)
+        let census = source_census::Pending::prepare(workspace, fixture, case)?;
+        let captured = corpus_cargo::capture(workspace, fixture, case, target)?;
+        Ok((captured, census))
     })();
-    let captured = match prepared {
+    let (captured, census) = match prepared {
         Ok(captured) => captured,
         Err(error) => {
             let mut report = CaseReport::blocked(fixture, error);
@@ -333,6 +342,7 @@ fn run_case_with_simulation(
             command.env(CUSTODY_TRACE, value);
         }
         simulation::configure_child(&mut command, simulation_case);
+        census.configure(&mut command);
         snapshots::configure_child(&mut command, &fixture.fixture_id);
         eprintln!(
             "P4 CORPUS {} callback-progress={}",
@@ -341,6 +351,13 @@ fn run_case_with_simulation(
         );
         let output = command.output().map_err(|e| fail(SourceStage::Rustc, e))?;
         report.rustc_diagnostics = corpus_cargo::diagnostics(&output);
+        match census.finish(workspace, fixture, &captured.args, &captured.cwd) {
+            Ok(observation) => report.source_census = Some(observation),
+            Err(error) => {
+                report.source_census_error = Some(error.detail.clone());
+                return Err(error);
+            }
+        }
         let bytes = std::fs::read(response).map_err(|e| {
             fail(
                 SourceStage::Rustc,

@@ -661,8 +661,10 @@ def _fixture_declarations(
         if inert_macro and kernels:
             _fail("kernel attribute on an inert fixture macro definition")
         include_item = include_paths is not None and re.match(r"include\b", head) is not None
-        if macros_only and not inert_macro and not include_item:
-            _fail("included fixture source must contain only inert macro definitions or literal includes")
+        included_helper = (code[boundary] == "{" and not kernels
+                           and re.match(r"\s*(?:pub(?:\s*\([^)]*\))?\s+)?fn\s+[A-Za-z_][A-Za-z0-9_]*\b", head))
+        if macros_only and not inert_macro and not include_item and not included_helper:
+            _fail("included fixture source must contain only inert macro definitions, non-attributed free functions, or literal includes")
         if inert_macro and enabled and include_scope is not None:
             include_scope.define(inert_macro)
         item_functions = []
@@ -767,6 +769,7 @@ def validate_kernel_inventory(
     scan_functions: Callable[[str], list[dict[str, Any]]], *, max_records: int = 4096,
     load_fixture_sources: Callable | None = None, rust_syntax: Callable | None = None,
     load_source_case_sources: Callable | None = None,
+    observe_sources: Callable | None = None,
 ) -> dict[str, Any]:
     """Validate the optional sibling and return only bounded validated fields.
 
@@ -1141,7 +1144,7 @@ def validate_kernel_inventory(
     if runtime_inventory is None:
         unresolved.append({"reason": "The live runtime function census and source/display joins have not been validated."})
     complete = runtime_inventory is not None and not unresolved
-    return {
+    result = {
         "inventoryComplete": complete, "requiredPairCount": len(kernels) if complete else None,
         "knownKernelIdentityCount": len(kernels), "displayItemCount": len(displays),
         "knownVariantObligationCount": variant_count,
@@ -1156,3 +1159,6 @@ def validate_kernel_inventory(
         "unresolvedBindings": unresolved, "kernelIdentities": kernels,
         "negativeCases": negative_refs, "displayItems": displays,
     }
+    if observe_sources is not None:
+        observe_sources(selections, selected_source, result)
+    return result

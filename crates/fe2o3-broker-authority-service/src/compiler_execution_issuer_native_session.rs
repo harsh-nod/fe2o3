@@ -2,26 +2,41 @@
 use super::*;
 
 #[derive(Default)]
-pub(super) struct Session {
+pub(super) struct Session<'work> {
     occurrence: Option<NativeOccurrence>,
+    context: OccurrenceContext<'work>,
 }
 
-impl Session {
+impl<'work> Session<'work> {
+    pub(super) fn with_context(context: OccurrenceContext<'work>) -> Self {
+        Self {
+            occurrence: None,
+            context,
+        }
+    }
+
+    pub(super) fn require_context(&self, b: &mut Budget<'_>) -> Result<()> {
+        b.charge_work(8)?;
+        self.context.require_available()
+    }
     pub fn publication_guard<'a>(
         &'a self,
         admission: &'a Admission<'a>,
         record: &Record,
-    ) -> Result<PublicationGuard<'a>> {
+    ) -> Result<PublicationGuard<'a, 'work>> {
         self.check_record(record)?;
         Ok(PublicationGuard {
             admission,
             occurrence: self.occurrence.as_ref(),
+            context: &self.context,
         })
     }
     pub fn retained_storage(&self) -> usize {
-        self.occurrence
-            .as_ref()
-            .map_or(0, NativeOccurrence::retained_storage)
+        self.context.retained_storage()
+            + self
+                .occurrence
+                .as_ref()
+                .map_or(0, NativeOccurrence::retained_storage)
     }
 
     pub fn occurrence(&self) -> Result<&NativeOccurrence> {
@@ -40,7 +55,7 @@ impl Session {
         if !matches!(record.body, Body::Ready) {
             return Err(Error::rejected("prepare requires a ready native journal"));
         }
-        let (occurrence, charge) = NativeOccurrence::observe(&a.service, b)?;
+        let (occurrence, charge) = self.context.observe(a, b)?;
         b.reserve_storage(charge)?;
         self.occurrence = Some(occurrence);
         Ok(())
@@ -49,9 +64,17 @@ impl Session {
     pub fn validate(&self, a: &Admission<'_>, record: &Record, b: &mut Budget<'_>) -> Result<()> {
         self.check_record(record)?;
         if let Some(occurrence) = &self.occurrence {
-            occurrence.revalidate(&a.service, b)?;
+            self.context.validate(a, occurrence, b)?;
         }
         Ok(())
+    }
+
+    pub(super) fn revalidate_occurrence(
+        &self,
+        a: &Admission<'_>,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.context.validate(a, self.occurrence()?, b)
     }
 
     fn check_record(&self, record: &Record) -> Result<()> {
@@ -87,9 +110,11 @@ impl Session {
             {
                 return Err(Error::rejected("native retirement changed occurrence"));
             }
-            occurrence.revalidate(&a.service, b)?;
+            self.context.validate(a, occurrence, b)?;
         }
         a.validate_continuity(b)?;
+        self.context
+            .retire(a, self.occurrence.as_ref(), &carriage, b)?;
         // Packet scopes retain their entry reservation. The outer loop retires
         // this charge only after that scope completes, so its frame stays intact.
         drop(self.occurrence.take());
@@ -99,15 +124,16 @@ impl Session {
 
 /// Only the dispatcher can borrow this guard from its actual live session.
 /// The journal layer may revalidate it but cannot construct substitute custody.
-pub(super) struct PublicationGuard<'a> {
+pub(super) struct PublicationGuard<'a, 'work> {
     admission: &'a Admission<'a>,
     occurrence: Option<&'a NativeOccurrence>,
+    context: &'a OccurrenceContext<'work>,
 }
-impl PublicationGuard<'_> {
+impl PublicationGuard<'_, '_> {
     pub fn validate(&self, b: &mut Budget<'_>) -> Result<()> {
         self.admission.validate_continuity(b)?;
         if let Some(occurrence) = self.occurrence {
-            occurrence.revalidate(&self.admission.service, b)?;
+            self.context.validate(self.admission, occurrence, b)?;
         }
         Ok(())
     }

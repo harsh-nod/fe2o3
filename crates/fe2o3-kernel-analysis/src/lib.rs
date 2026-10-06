@@ -31,7 +31,9 @@ mod canonical_kir_sparse_scalar_v1;
 mod canonical_kir_sparse_v1;
 mod canonical_kir_store_forwarding_v1;
 mod canonical_kir_transition_v1;
+mod canonical_tile_convergence_v160;
 mod control_flow;
+mod formal_path_conflicts_v1;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_atomic_collective_structure;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -78,6 +80,7 @@ pub use canonical_kir_redundant_store_v1::*;
 pub use canonical_kir_sparse_v1::*;
 pub use canonical_kir_store_forwarding_v1::*;
 pub use canonical_kir_transition_v1::*;
+pub use canonical_tile_convergence_v160::*;
 pub use control_flow::{
     ControlFlowAnalysis, ControlFlowDiagnostic, ControlFlowDiagnosticV2, ControlFlowEdge,
     ControlFlowErrors, ControlFlowResource, ControlFlowResourceUsage, MAX_CONTROL_FLOW_BLOCKS,
@@ -86,6 +89,7 @@ pub use control_flow::{
     MAX_CONTROL_FLOW_NATURAL_LOOPS, MAX_CONTROL_FLOW_STORAGE_ITEMS, MAX_CONTROL_FLOW_WORK_UNITS,
     MAX_SSA_PLACEMENT_OUTPUT_ITEMS, analyze_control_flow,
 };
+pub use formal_path_conflicts_v1::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_atomic_collective_structure::*;
 #[cfg(feature = "authenticated-machine-effect")]
@@ -108,7 +112,10 @@ pub use ssa::{
     SsaPlacement, SsaPlacementDiagnostic, SsaPlacementErrors, SsaVariable, SsaVariablePlacement,
     place_pruned_ssa_parameters,
 };
-pub use uniformity::{analyze_function, analyze_kernel_entry};
+pub use uniformity::{
+    UniformityPhysicalLaunchErrorV2, UniformityPhysicalLaunchV2, analyze_function,
+    analyze_kernel_entry,
+};
 
 use fe2o3_kernel_ir::{BlockId, FunctionId, SynchronizationScope, ValueId};
 use std::collections::BTreeMap;
@@ -257,3 +264,11 @@ mod tests {
         assert!(!Variation::WorkgroupUniform.is_uniform_for(SynchronizationScope::Device));
     }
 }
+
+mod canonical_ranked_view_v1;
+pub use canonical_ranked_view_v1::*;
+
+mod canonical_kir_aggregate_ssa_v18;
+pub use canonical_kir_aggregate_ssa_v18::*;
+mod source_ssa_boundaries_v31;
+pub use source_ssa_boundaries_v31::*;

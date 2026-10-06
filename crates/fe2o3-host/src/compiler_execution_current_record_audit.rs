@@ -434,6 +434,57 @@ impl InheritedWorkerV3CompilerCurrentRecordAuditorV1 {
         )
     }
 
+    /// Audits the exact V53 publication under its retained current artifact token.
+    /// The result authenticates the compiler current record only, not the
+    /// separate native proof, protected-key custody, load, or launch gates.
+    pub fn audit_mixed_v53<R>(
+        &mut self,
+        request: &crate::MixedWorkerV53VerificationRequest<'_, R>,
+    ) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
+    where
+        R: CompilerGeneratedKernelExpectationRosterV1,
+    {
+        if let Err(error) = request.revalidate_currentness() {
+            self.client.take();
+            return Err(WorkerV3CompilerCurrentRecordAuditErrorV1::MixedCurrentness(
+                error,
+            ));
+        }
+        let result = self.audit_exact(
+            request.admission().compiler_execution_subject(),
+            request.admission().compiler_execution_receipt(),
+        );
+        request
+            .revalidate_currentness()
+            .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::MixedCurrentness)?;
+        result
+    }
+
+    /// Audits the exact V89 publication under its retained current artifact token.
+    /// This authenticates the current record only, not proof or execution authority.
+    pub fn audit_mixed_v89<R>(
+        &mut self,
+        request: &crate::MixedWorkerV89VerificationRequest<'_, R>,
+    ) -> Result<WorkerV3CompilerCurrentRecordAuditV1, WorkerV3CompilerCurrentRecordAuditErrorV1>
+    where
+        R: CompilerGeneratedKernelExpectationRosterV1,
+    {
+        if let Err(error) = request.revalidate_currentness() {
+            self.client.take();
+            return Err(WorkerV3CompilerCurrentRecordAuditErrorV1::MixedCurrentness(
+                error,
+            ));
+        }
+        let result = self.audit_exact(
+            request.admission().compiler_execution_subject(),
+            request.admission().compiler_execution_receipt(),
+        );
+        request
+            .revalidate_currentness()
+            .map_err(WorkerV3CompilerCurrentRecordAuditErrorV1::MixedCurrentness)?;
+        result
+    }
+
     /// Audits one aggregate request using a caller-owned expected challenge.
     ///
     /// The challenge is consumed with the one-use FD195 endpoint. Its caller remains responsible
@@ -539,6 +590,7 @@ pub enum WorkerV3CompilerCurrentRecordAuditErrorV1 {
     AlreadyConsumed,
     RequestMismatch,
     Client(CompilerExecutionClientErrorV1),
+    MixedCurrentness(crate::RecoveredWorkerV3AdmissionErrorV1),
 }
 
 /// Failure to admit canonical current-record evidence into the Worker V3 host lane.
@@ -613,6 +665,12 @@ impl fmt::Display for WorkerV3CompilerCurrentRecordAuditErrorV1 {
             Self::Client(error) => {
                 write!(formatter, "compiler current-record service failed: {error}")
             }
+            Self::MixedCurrentness(error) => {
+                write!(
+                    formatter,
+                    "mixed Worker current publication changed: {error}"
+                )
+            }
         }
     }
 }
@@ -621,6 +679,7 @@ impl Error for WorkerV3CompilerCurrentRecordAuditErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Client(error) => Some(error),
+            Self::MixedCurrentness(error) => Some(error),
             Self::AlreadyConsumed | Self::RequestMismatch => None,
         }
     }

@@ -1,10 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 || -z "$1" ]]; then
-  printf 'usage: %s OUTPUT_DIRECTORY\n' "$0" >&2
+family=v3
+if [[ ${1-} == --v1 || ${1-} == --v3 ]]; then
+  family="${1#--}"
+  shift
+fi
+if [[ $# -ne 1 || -z "$1" || "$1" == --* ]]; then
+  printf 'usage: %s [--v1|--v3] OUTPUT_DIRECTORY\n' "$0" >&2
   exit 2
 fi
+readonly family
+# The whole family is selected together; no individual image or schema override.
+if [[ ${family} == v1 ]]; then
+  schema_version=1
+  content_file_count=13
+  entrypoint_suffix=-v1
+  service_suffix=-v1
+  image_suffix=""
+  issuer_suffix=""
+  issuer_arguments=()
+  manifest_arguments=()
+  cache_suffix=-v1
+else
+  schema_version=3
+  content_file_count=12
+  entrypoint_suffix=""
+  service_suffix=""
+  image_suffix=-v3
+  issuer_suffix=-conditional
+  issuer_arguments=(--conditional)
+  manifest_arguments=(--v3)
+  cache_suffix=""
+fi
+readonly schema_version content_file_count entrypoint_suffix service_suffix
+readonly image_suffix issuer_suffix issuer_arguments manifest_arguments cache_suffix
 
 readonly jobs="${CARGO_BUILD_JOBS-1}"
 if [[ ! "${jobs}" =~ ^([1-9]|1[0-6])$ ]]; then
@@ -19,7 +49,7 @@ umask 077
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly repo_root
-readonly target_root="${FE2O3_STATIC_DEPLOYMENT_TARGET_DIR:-${repo_root}/target/static-deployment}"
+readonly target_root="${FE2O3_STATIC_DEPLOYMENT_TARGET_DIR:-${repo_root}/target/static-deployment${cache_suffix}}"
 readonly target="x86_64-unknown-linux-musl"
 
 output="$(realpath -m -- "$1")"
@@ -72,17 +102,22 @@ mkdir -p -- "${target_root}"
 chmod 0700 -- "${target_root}"
 
 FE2O3_STATIC_COORDINATOR_TARGET_DIR="${target_root}/coordinator" \
-  "${repo_root}/scripts/build-static-compiler-execution-coordinator.sh"
+  "${repo_root}/scripts/build-static-compiler-execution-coordinator.sh" "${family}"
+if [[ ${family} == v1 ]]; then
+  FE2O3_STATIC_CLIENT_CHECK_TARGET_DIR="${target_root}/client-check" \
+    "${repo_root}/scripts/build-static-compiler-execution-client-check.sh"
+fi
 FE2O3_STATIC_SUPERVISOR_TARGET_DIR="${target_root}/supervisor" \
-  "${repo_root}/scripts/build-static-compiler-execution-supervisor.sh" v3
+  "${repo_root}/scripts/build-static-compiler-execution-supervisor.sh" "${family}"
+FE2O3_STATIC_ISSUER_TARGET_DIR="${target_root}/issuer" \
 FE2O3_STATIC_CONDITIONAL_ISSUER_TARGET_DIR="${target_root}/issuer" \
-  "${repo_root}/scripts/build-static-compiler-execution-issuer.sh" --conditional
+  "${repo_root}/scripts/build-static-compiler-execution-issuer.sh" "${issuer_arguments[@]}"
 FE2O3_STATIC_ANCHOR_HELPER_TARGET_DIR="${target_root}/anchor-helper" \
-  "${repo_root}/scripts/build-static-external-anchor-provisioning-helper.sh" v3
+  "${repo_root}/scripts/build-static-external-anchor-provisioning-helper.sh" "${family}"
 FE2O3_STATIC_ANCHOR_TARGET_DIR="${target_root}/anchor" \
-  "${repo_root}/scripts/build-static-external-anchor-service.sh" v3
+  "${repo_root}/scripts/build-static-external-anchor-service.sh" "${family}"
 FE2O3_STATIC_PROVISIONER_TARGET_DIR="${target_root}/provisioner" \
-  "${repo_root}/scripts/build-static-compiler-execution-provisioner.sh"
+  "${repo_root}/scripts/build-static-compiler-execution-provisioner.sh" "${family}"
 FE2O3_STATIC_DEPLOYMENT_VERIFIER_TARGET_DIR="${target_root}/deployment-verifier" \
   "${repo_root}/scripts/build-static-compiler-execution-deployment-verifier.sh"
 
@@ -111,29 +146,34 @@ install -d -m 0700 -- \
   "${tmpfiles_dir}"
 
 install -m 0555 -- \
-  "${target_root}/coordinator/${target}/release/fe2o3-compiler-execution-coordinator" \
+  "${target_root}/coordinator/${target}/release/fe2o3-compiler-execution-coordinator${entrypoint_suffix}" \
   "${image_dir}/fe2o3-compiler-execution-coordinator"
+if [[ ${family} == v1 ]]; then
+  install -m 0555 -- \
+    "${target_root}/client-check/${target}/release/fe2o3-compiler-execution-client-check" \
+    "${image_dir}/fe2o3-compiler-execution-client-check"
+fi
 install -m 0555 -- \
-  "${target_root}/supervisor/${target}/release/fe2o3-compiler-execution-supervisor-v3" \
-  "${image_dir}/fe2o3-compiler-execution-supervisor-v3"
+  "${target_root}/supervisor/${target}/release/fe2o3-compiler-execution-supervisor${image_suffix}" \
+  "${image_dir}/fe2o3-compiler-execution-supervisor${image_suffix}"
 install -m 0555 -- \
   "${target_root}/launcher/fe2o3-static-preexec-launcher" \
   "${image_dir}/fe2o3-static-preexec-launcher"
 install -m 0555 -- \
-  "${target_root}/issuer/${target}/release/fe2o3-compiler-execution-issuer-conditional" \
-  "${image_dir}/fe2o3-compiler-execution-issuer-conditional"
+  "${target_root}/issuer/${target}/release/fe2o3-compiler-execution-issuer${issuer_suffix}" \
+  "${image_dir}/fe2o3-compiler-execution-issuer${issuer_suffix}"
 install -m 0555 -- \
-  "${target_root}/anchor-helper/${target}/release/fe2o3-external-anchor-provisioning-helper-v3" \
-  "${image_dir}/fe2o3-external-anchor-provisioning-helper-v3"
+  "${target_root}/anchor-helper/${target}/release/fe2o3-external-anchor-provisioning-helper${image_suffix}" \
+  "${image_dir}/fe2o3-external-anchor-provisioning-helper${image_suffix}"
 install -m 0555 -- \
-  "${target_root}/anchor/${target}/release/fe2o3-external-anchor-service-v3" \
-  "${image_dir}/fe2o3-external-anchor-service-v3"
+  "${target_root}/anchor/${target}/release/fe2o3-external-anchor-service${image_suffix}" \
+  "${image_dir}/fe2o3-external-anchor-service${image_suffix}"
 install -m 0555 -- \
-  "${target_root}/provisioner/${target}/release/fe2o3-compiler-execution-provision" \
+  "${target_root}/provisioner/${target}/release/fe2o3-compiler-execution-provision${entrypoint_suffix}" \
   "${image_dir}/fe2o3-compiler-execution-provision"
 
 install -m 0444 -- \
-  "${repo_root}/deployment/systemd/fe2o3-compiler-execution.service" \
+  "${repo_root}/deployment/systemd/fe2o3-compiler-execution${service_suffix}.service" \
   "${systemd_dir}/fe2o3-compiler-execution.service"
 install -m 0444 -- \
   "${repo_root}/deployment/sysusers.d/fe2o3-compiler-execution.conf" \
@@ -142,8 +182,8 @@ install -m 0444 -- \
   "${repo_root}/deployment/tmpfiles.d/fe2o3-compiler-execution.conf" \
   "${tmpfiles_dir}/fe2o3-compiler-execution.conf"
 
-printf 'schema_version=3\ngit_commit=%s\nsource_date_epoch=%s\ntarget=%s\n' \
-  "${commit}" "${source_epoch}" "${target}" >"${partial}/BUILD-INFO"
+printf 'schema_version=%s\ngit_commit=%s\nsource_date_epoch=%s\ntarget=%s\n' \
+  "${schema_version}" "${commit}" "${source_epoch}" "${target}" >"${partial}/BUILD-INFO"
 chmod 0444 "${partial}/BUILD-INFO"
 
 (
@@ -159,7 +199,7 @@ chmod 0444 "${partial}/SHA256SUMS"
   sha256sum --check --strict SHA256SUMS
 )
 
-manifest_report="$("${manifest_generator}" --v3 "${partial}" "${commit}" "${target}")"
+manifest_report="$("${manifest_generator}" "${manifest_arguments[@]}" "${partial}" "${commit}" "${target}")"
 readonly manifest_report
 manifest_sha256="$(
   printf '%s\n' "${manifest_report}" \
@@ -177,11 +217,11 @@ if [[ -z "${manifest_sha256}" || -z "${manifest_byte_len}" \
   exit 1
 fi
 
-verification_report="$("${deployment_verifier}" --v3 "${partial}" "${manifest_sha256}" "${commit}")"
+verification_report="$("${deployment_verifier}" "${manifest_arguments[@]}" "${partial}" "${manifest_sha256}" "${commit}")"
 readonly verification_report
 expected_verification_report="$(
-  printf 'verified_git_commit=%s\nverified_target=%s\nverified_manifest_sha256=%s\nverified_file_count=12' \
-    "${commit}" "${target}" "${manifest_sha256}"
+  printf 'verified_git_commit=%s\nverified_target=%s\nverified_manifest_sha256=%s\nverified_file_count=%s' \
+    "${commit}" "${target}" "${manifest_sha256}" "${content_file_count}"
 )"
 readonly expected_verification_report
 if [[ "${verification_report}" != "${expected_verification_report}" ]]; then

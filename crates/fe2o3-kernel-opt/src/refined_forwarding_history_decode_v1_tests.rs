@@ -2,6 +2,112 @@ use super::*;
 use crate::materialize_refined_forwarding_history_v1 as materialize;
 
 #[test]
+fn history_frame_quote_covers_actual_original_account_reader() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    for nonempty in [false, true] {
+        let wire = with_history(nonempty, |inputs, floor| encode(inputs, floor));
+        let quote = RefinedForwardingHistoryReadQuoteV1::in_original_account_for_length(
+            wire.canonical_bytes().len(),
+        )
+        .unwrap();
+        let floor =
+            MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1 + 19 + wire.storage().retained_storage();
+        let mut owned = Owned::new(
+            Work::new(7 + quote.work()),
+            floor + quote.additional_storage(),
+        );
+        owned.with_budget(|b| {
+            b.charge_work(7).unwrap();
+            b.reserve_storage(floor).unwrap();
+            let identity = b.storage_account_identity_v1();
+            let ledger = b.work_ledger_identity_v1();
+            let frame =
+                read_refined_forwarding_history_in_original_account_v1(wire.canonical_bytes(), b)
+                    .unwrap();
+            assert_eq!(frame.storage().retained_storage(), quote.retained_storage());
+            assert_eq!(b.storage(), floor);
+            assert!(b.work() - 7 <= quote.work());
+            assert!(b.peak_storage() - floor <= quote.additional_storage());
+            assert_eq!(b.storage_account_identity_v1(), identity);
+            assert!(b.work_ledger_identity_v1() == ledger);
+        });
+    }
+    assert!(RefinedForwardingHistoryReadQuoteV1::for_length(HEADER - 1).is_err());
+    assert!(RefinedForwardingHistoryReadQuoteV1::for_length(usize::MAX).is_err());
+    let max = RefinedForwardingHistoryReadQuoteV1::in_original_account_for_length(
+        MAX_REFINED_FORWARDING_HISTORY_BYTES_V1,
+    )
+    .unwrap();
+    assert!(max.additional_storage() < MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1);
+}
+
+#[test]
+fn original_account_history_full_chain_exact_one_short_and_legacy_refusal() {
+    use crate::{
+        materialize_refined_forwarding_history_in_original_account_v1 as materialize_original,
+        read_refined_forwarding_history_in_original_account_v1 as read_original,
+    };
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    const OUTSIDE: usize = MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1 + 1;
+    for nonempty in [false, true] {
+        let wire = with_history(nonempty, |inputs, floor| encode(inputs, floor));
+        let floor = OUTSIDE + wire.storage().retained_storage();
+        let run = |work, storage| {
+            let mut owned = Owned::new(Work::new(work), storage);
+            owned.with_budget(|b| {
+                b.reserve_storage(floor).unwrap();
+                let identity = b.storage_account_identity_v1();
+                let ledger = b.work_ledger_identity_v1();
+                let result = (|| -> Result<(), ()> {
+                    assert!(read_refined_forwarding_history_v1(wire.canonical_bytes(), b).is_err());
+                    let frame = read_original(wire.canonical_bytes(), b).map_err(|_| ())?;
+                    let frame_storage = frame.storage().retained_storage();
+                    b.reserve_storage(frame_storage).map_err(|_| ())?;
+                    assert!(materialize(&frame, b).is_err());
+                    let decoded = materialize_original(&frame, b).map_err(|_| ())?;
+                    let decoded_storage = decoded.storage().retained_storage();
+                    b.reserve_storage(decoded_storage).map_err(|_| ())?;
+                    assert!(decoded.check_semantics(b).is_err());
+                    let checked = decoded
+                        .check_semantics_in_original_account_v1(b)
+                        .map_err(|_| ())?;
+                    assert!(std::ptr::eq(
+                        checked.output(),
+                        decoded.graph(RefinedForwardingHistoryRoleV1::F)
+                    ));
+                    assert!(!checked.grants_authority());
+                    drop(checked);
+                    drop(decoded);
+                    b.release_storage(decoded_storage).unwrap();
+                    drop(frame);
+                    b.release_storage(frame_storage).unwrap();
+                    Ok(())
+                })();
+                assert_eq!(b.storage_account_identity_v1(), identity);
+                assert!(b.work_ledger_identity_v1() == ledger);
+                assert_eq!(b.storage_limit(), storage);
+                assert!(b.storage() >= floor);
+                if result.is_ok() {
+                    assert_eq!(b.storage(), floor);
+                }
+                (result.is_ok(), b.work(), b.peak_storage())
+            })
+        };
+        let baseline = run(WORK, floor + STORAGE);
+        assert!(baseline.0);
+        assert_eq!(run(baseline.1, baseline.2), baseline);
+        assert!(!run(baseline.1 - 1, baseline.2).0);
+        assert!(!run(baseline.1, baseline.2 - 1).0);
+        let mut inline_work = Work::new(WORK);
+        let mut inline = Budget::new(&mut inline_work, STORAGE);
+        inline
+            .reserve_storage(wire.storage().retained_storage())
+            .unwrap();
+        assert!(read_original(wire.canonical_bytes(), &mut inline).is_err());
+    }
+}
+
+#[test]
 fn history_final_graph_transfer_preserves_actual_allocation_and_admission_receipt() {
     for nonempty in [false, true] {
         let (wire, expected) = with_history(nonempty, |inputs, floor| {

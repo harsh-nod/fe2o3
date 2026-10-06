@@ -168,6 +168,11 @@ struct Tree {
 }
 impl Tree {
     fn new() -> Self {
+        // Match the retained-closure fixture's writer/fork coordination. A child
+        // must not inherit a setup writer and close it after the journal starts.
+        let _process_guard = linux::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let root = std::env::temp_dir().join(format!(
             "fe2o3-retained-runtime-account-{}-{}",
             std::process::id(),
@@ -324,17 +329,88 @@ fn unwind_drops_local_custody_before_releasing_the_admission_scope() {
     let mut work = Work::new(usize::MAX);
     let mut b = Budget::new(&mut work, usize::MAX);
     b.reserve_storage(FLOOR).unwrap();
+    let callback_entered = std::cell::Cell::new(false);
+    let retained_opened = std::cell::Cell::new(false);
+    let refusal_detail = std::cell::RefCell::new(None);
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         quota.admit::<()>(&mut b, |_| {
+            callback_entered.set(true);
             let _retained =
-                linux::RetainedRuntimeClosureV2::open_for_test(&tree.root, &tree.manifest)?;
+                linux::RetainedRuntimeClosureV2::open_for_test(&tree.root, &tree.manifest)
+                    .map_err(|error| {
+                        *refusal_detail.borrow_mut() = Some(error.to_string());
+                        error
+                    })?;
+            retained_opened.set(true);
             panic!("local admission unwind");
         })
     }));
-    assert!(outcome.is_err());
+    match outcome {
+        Err(payload) => assert_eq!(
+            payload.downcast_ref::<&str>().copied(),
+            Some("local admission unwind"),
+            "only the intentional post-retention panic exercises this cleanup path",
+        ),
+        Ok(Err(error)) => panic!(
+            "admission returned before intended unwind: {error:?}; callback_entered={}, retained_opened={}, detail={:?}",
+            callback_entered.get(),
+            retained_opened.get(),
+            refusal_detail.borrow(),
+        ),
+        Ok(Ok(())) => panic!("admission unexpectedly returned without the intended unwind"),
+    }
+    assert!(callback_entered.get());
+    assert!(retained_opened.get());
     assert_eq!(b.storage(), FLOOR);
     assert_eq!(b.peak_storage(), FLOOR + quota.scratch);
     assert_eq!(b.work(), quota.work);
+}
+
+#[test]
+fn accounting_fixture_parallel_setup_preserves_clean_admission_and_mutation_refusal() {
+    const REPETITIONS: usize = 32;
+    let start = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            start.wait();
+            for _ in 0..REPETITIONS {
+                let _process_guard = linux::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut command = std::process::Command::new("/bin/true");
+                assert!(
+                    crate::executor::status_artifact_coordinated_child(&mut command)
+                        .unwrap()
+                        .success()
+                );
+            }
+        });
+        start.wait();
+        for _ in 0..REPETITIONS {
+            let tree = Tree::new();
+            let mut work = Work::new(usize::MAX);
+            let mut b = Budget::new(&mut work, usize::MAX);
+            b.reserve_storage(FLOOR).unwrap();
+            let (retained, account) = tree.open(&mut b).unwrap();
+            assert_eq!(b.storage(), FLOOR);
+            b.reserve_storage(account.storage).unwrap();
+            account
+                .revalidate(&mut b, || retained.revalidate().map_err(Error::from))
+                .unwrap();
+
+            let path = tree.root.join("data");
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            fs::write(&path, LOCAL_FILE).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+            assert_eq!(
+                account.revalidate(&mut b, || retained.revalidate().map_err(Error::from)),
+                Err(Error::Runtime(RuntimeKind::ClosureChanged)),
+            );
+            drop(retained);
+            b.release_storage(account.storage).unwrap();
+            assert_eq!(b.storage(), FLOOR);
+        }
+    });
 }
 
 #[test]

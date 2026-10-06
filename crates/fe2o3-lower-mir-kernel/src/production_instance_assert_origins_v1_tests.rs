@@ -14,9 +14,11 @@ fn repeated_assertion_collector_failure_drops_partial_rows_before_refund() {
                     functions,
                     function_ordinal: 0,
                     sidecars: &pending.sidecars,
+                    active_instances: &pending.active_instances,
                     coordinates: &pending.coordinates,
                     slot_relocation: pending.slot_relocation.as_ref(),
                     insertions: &[],
+                    terminal_failures: None,
                 },
                 instances,
                 &graph,
@@ -61,9 +63,11 @@ fn repeated_assertion_collection_keeps_instance_qualified_bindings() {
                         functions,
                         function_ordinal: 0,
                         sidecars: &pending.sidecars,
+                        active_instances: &pending.active_instances,
                         coordinates: &pending.coordinates,
                         slot_relocation: pending.slot_relocation.as_ref(),
                         insertions: &[],
+                        terminal_failures: None,
                     },
                     instances,
                     &graph,
@@ -249,11 +253,32 @@ fn with_assert_pending(
         assertion_calls_owner(expected, diamond),
         |instances, budget| {
             let floor = budget.storage();
+            let before_settlement = CAPABILITY_ORIGIN_SETTLEMENT_V29.with(|row| row.get());
             let lowered = lower_scalar_instances(instances, budget);
+            let after_settlement = CAPABILITY_ORIGIN_SETTLEMENT_V29.with(|row| row.get());
+            let retired_queries: usize = (0..lowered.len())
+                .map(|index| {
+                    scalar_transport_planning_credits_v29(
+                        instances,
+                        instances.id_at(index).unwrap(),
+                    )
+                    .1
+                })
+                .sum();
+            assert_eq!(after_settlement[0] - before_settlement[0], lowered.len());
+            // The fixed header has its own independent equation/cut tests.
+            // Query/map bytes here come from the source-only oracle, not the
+            // measured credit or production capability resolver.
+            assert_eq!(
+                after_settlement[1] - before_settlement[1],
+                lowered.len() * capability_origin_storage_headers_v29().unwrap() + retired_queries,
+            );
             let input_storage: usize = lowered
                 .iter()
-                .map(|row| {
+                .enumerate()
+                .map(|(index, row)| {
                     row.call_returns.requested_bytes().unwrap()
+                        + scalar_lowering_scratch_storage_v29(row)
                         + row.scoped_initialization.as_ref().unwrap().retained_storage
                         + row
                             .scoped_memory_anchors
@@ -262,6 +287,12 @@ fn with_assert_pending(
                             .retained_storage()
                             .unwrap()
                         + row.instance_assert_origins.as_ref().unwrap().storage
+                        + scalar_archive_storage_v1(
+                            row,
+                            instances,
+                            instances.id_at(index).unwrap(),
+                            budget,
+                        )
                 })
                 .sum();
             let pointers: Vec<_> = lowered
@@ -296,6 +327,44 @@ fn with_assert_pending(
             assert_eq!(budget.storage(), floor);
         },
     );
+}
+
+#[test]
+fn scalar_capability_queries_are_paid_even_without_phi_transport() {
+    with_assert_pending(false, false, |_pending, instances, _budget| {
+        let mut without_transport = 0;
+        for index in 0..instances.instances().len() {
+            let id = instances.id_at(index).unwrap();
+            let plan = instances.instance(id).unwrap().ssa().plan();
+            if !plan.promoted_variables().is_empty()
+                && plan
+                    .reverse_postorder()
+                    .iter()
+                    .all(|block| plan.transport_variables(*block).unwrap().is_empty())
+            {
+                let (retained, settled) = scalar_transport_planning_credits_v29(instances, id);
+                assert_eq!(retained, 0);
+                assert!(settled > 0);
+                without_transport += 1;
+            }
+        }
+        assert!(without_transport > 0);
+    });
+}
+
+#[test]
+fn assertion_output_credit_excludes_only_settled_capability_query_scratch() {
+    for expected in [false, true] {
+        for diamond in [false, true] {
+            with_assert_pending(expected, diamond, |pending, _, _| {
+                assert!(pending.sidecars.rows.iter().any(|row| {
+                    row.instance_assert_origins
+                        .as_ref()
+                        .is_some_and(|capture| !capture.records.is_empty())
+                }));
+            });
+        }
+    }
 }
 
 fn capture(pending: &PendingScopedRootEmissionV29, index: usize) -> &InstanceAssertCaptureV1 {

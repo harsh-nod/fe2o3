@@ -397,18 +397,40 @@ fn silent_unit_deletion_does_not_admit_source_use_after_kill() {
         ScalarKill::Storage,
         ScalarKill::Deinitialize,
     ] {
+        // No deletion candidate exists for the source rejected during SSA.
+        if matches!(kind, ScalarKill::Deinitialize) {
+            assert_eq!(
+                try_unit_source(UnitCase::Killed(kind), &[1]).unwrap_err(),
+                fe2o3_pliron::ProductionSemanticSsaErrorV1::PartialMove {
+                    function: SemanticFunctionIdV1::from_index(1),
+                    block: 0,
+                    statement: Some(2),
+                    local: 2,
+                    violation: fe2o3_pliron::SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
+                }
+            );
+            continue;
+        }
         let (ssa, launch) = unit_source(UnitCase::Killed(kind), &[1]);
         let mut work = CanonicalKernelIrWorkBudgetV1::new(WORK);
         let mut budget = ArgumentBudgetV1::new(&mut work, STORAGE);
         budget.reserve_storage(FLOOR).unwrap();
+        let error = ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+            ssa,
+            launch,
+            ProductionSemanticKirLimitsV1::default(),
+            &mut budget,
+        )
+        .unwrap_err();
         assert!(
-            ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-                ssa,
-                launch,
-                ProductionSemanticKirLimitsV1::default(),
-                &mut budget
-            )
-            .is_err()
+            matches!(error,
+                ProductionPreRankedKirErrorV1::Lowering(
+                    ProductionSemanticKirErrorV1::MissingLocalDefinition {
+                        function: 1, block: 0, statement: Some(statement), local: 2,
+                    }
+                ) if statement == if matches!(kind, ScalarKill::Storage) { 3 } else { 2 }
+            ),
+            "{error:?}"
         );
         assert_eq!(budget.storage(), FLOOR);
     }

@@ -1,0 +1,307 @@
+// Shared constructor laws. These do not assert that an arbitrary program preserves its heap.
+
+// fe2o3_optional_support_v97: invocation_private_free_frame_end_identity_v77
+proof fn invocation_private_free_frame_end_identity_v77(memory: ByteMemoryV30, frame: MemoryDynamicFrameV30)
+ requires forall|allocation: MemoryAllocationV30| #[trigger] memory.live.contains_key(allocation) ==> !invocation_private_allocation_v36(allocation),
+ ensures byte_end_frame_v30(memory, frame) == memory,
+{
+ let ended = byte_end_frame_v30(memory, frame);
+ assert forall|allocation: MemoryAllocationV30| ended.live.contains_key(allocation) <==> memory.live.contains_key(allocation) by {
+  if memory.live.contains_key(allocation) { assert(!byte_allocation_in_frame_v30(allocation, frame)); }
+ }
+ assert forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) implies ended.live[allocation] == memory.live[allocation] by { }
+ assert(ended.live =~= memory.live);
+}
+
+// fe2o3_optional_support_v97: invocation_source_put_local_preserves_heap_v78
+#[verifier::spinoff_prover]
+proof fn invocation_source_put_local_preserves_heap_v78(
+    source: InvocationSourceByteStateV36, local: int, value: MemoryValueV30,
+)
+    ensures
+        invocation_source_byte_put_local_v36(source, local, value).machine.memory == source.machine.memory,
+        invocation_source_byte_put_local_v36(source, local, value).machine.generations == source.machine.generations,
+        invocation_source_byte_put_local_v36(source, local, value).machine.frames == source.machine.frames,
+        invocation_source_byte_put_local_v36(source, local, value).machine.values.len() == source.machine.values.len(),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_logical_write_v38);
+}
+
+// fe2o3_optional_support_v97: invocation_source_local_evaluate_preserves_heap_v78
+#[verifier::spinoff_prover]
+proof fn invocation_source_local_evaluate_preserves_heap_v78(
+    source: InvocationSourceByteStateV36, local: int, moved: bool,
+    bits: int, root: int, instance: int, little_endian: bool,
+)
+    ensures
+        invocation_source_byte_evaluate_v36(source, InvocationSourceByteValueV36::Local { local, moved }, bits, root, instance, little_endian).source.machine.memory == source.machine.memory,
+        invocation_source_byte_evaluate_v36(source, InvocationSourceByteValueV36::Local { local, moved }, bits, root, instance, little_endian).source.machine.generations == source.machine.generations,
+        invocation_source_byte_evaluate_v36(source, InvocationSourceByteValueV36::Local { local, moved }, bits, root, instance, little_endian).source.machine.frames == source.machine.frames,
+        invocation_source_byte_evaluate_v36(source, InvocationSourceByteValueV36::Local { local, moved }, bits, root, instance, little_endian).source.machine.values.len() == source.machine.values.len(),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_byte_value_typed_v36);
+    hide(invocation_source_byte_put_local_v36);
+    invocation_source_put_local_preserves_heap_v78(source, local, MemoryValueV30::Undefined);
+}
+
+// fe2o3_optional_support_v97: invocation_source_carrier_evaluate_preserves_heap_v78
+#[verifier::spinoff_prover]
+proof fn invocation_source_carrier_evaluate_preserves_heap_v78(
+    source: InvocationSourceByteStateV36, local: int, moved: bool, metadata_bits: int,
+)
+    ensures
+        invocation_source_carrier_evaluate_v36(source, local, moved, metadata_bits).source.machine.memory == source.machine.memory,
+        invocation_source_carrier_evaluate_v36(source, local, moved, metadata_bits).source.machine.generations == source.machine.generations,
+        invocation_source_carrier_evaluate_v36(source, local, moved, metadata_bits).source.machine.frames == source.machine.frames,
+        invocation_source_carrier_evaluate_v36(source, local, moved, metadata_bits).source.machine.values.len() == source.machine.values.len(),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_byte_put_local_v36);
+    invocation_source_put_local_preserves_heap_v78(source, local, MemoryValueV30::Undefined);
+}
+
+// fe2o3_optional_support_v97: invocation_source_scalar_local_preserves_heap_v78
+#[verifier::spinoff_prover]
+proof fn invocation_source_scalar_local_preserves_heap_v78(
+    source: InvocationSourceByteStateV36, local: int, moved: bool,
+    bits: int, root: int, instance: int, little_endian: bool,
+)
+    ensures
+        invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved }, bits }, root, instance, little_endian).source.machine.memory == source.machine.memory,
+        invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved }, bits }, root, instance, little_endian).source.machine.generations == source.machine.generations,
+        invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved }, bits }, root, instance, little_endian).source.machine.frames == source.machine.frames,
+        invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved }, bits }, root, instance, little_endian).source.machine.values.len() == source.machine.values.len(),
+{
+    hide(invocation_source_byte_evaluate_v36);
+    invocation_source_local_evaluate_preserves_heap_v78(source, local, moved, bits, root, instance, little_endian);
+}
+
+// fe2o3_optional_support_v97: invocation_source_scalar_copy_valid_identity_v164
+#[verifier::spinoff_prover]
+proof fn invocation_source_scalar_copy_valid_identity_v164(
+    source: InvocationSourceByteStateV36, local: int,
+    bits: int, root: int, instance: int, little_endian: bool,
+)
+    ensures
+        invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved: false }, bits }, root, instance, little_endian).source.machine.valid ==>
+            invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved: false }, bits }, root, instance, little_endian).source == source,
+        invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved: false }, bits }, root, instance, little_endian).source.machine.valid ==>
+            invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Scalar { value: InvocationSourceByteValueV36::Local { local, moved: false }, bits }, root, instance, little_endian).value == InvocationSourceValueV42::Carrier(source.machine.values[local]),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_byte_value_typed_v36);
+}
+
+// fe2o3_optional_support_v97: invocation_source_plain_return_install_preserves_heap_v78
+#[verifier::spinoff_prover]
+proof fn invocation_source_plain_return_install_preserves_heap_v78(
+    source: InvocationSourceByteStateV36, local: int, value: MemoryValueV30, little_endian: bool,
+)
+    ensures
+        invocation_source_return_install_v42(source, InvocationSourceReturnDestinationV42 { local, component: None, memory: None, descriptor: None }, InvocationSourceValueV42::Carrier(value), little_endian).machine.memory == source.machine.memory,
+        invocation_source_return_install_v42(source, InvocationSourceReturnDestinationV42 { local, component: None, memory: None, descriptor: None }, InvocationSourceValueV42::Carrier(value), little_endian).machine.generations == source.machine.generations,
+        invocation_source_return_install_v42(source, InvocationSourceReturnDestinationV42 { local, component: None, memory: None, descriptor: None }, InvocationSourceValueV42::Carrier(value), little_endian).machine.frames == source.machine.frames,
+        invocation_source_return_install_v42(source, InvocationSourceReturnDestinationV42 { local, component: None, memory: None, descriptor: None }, InvocationSourceValueV42::Carrier(value), little_endian).machine.values.len() == source.machine.values.len(),
+{
+    hide(invocation_source_byte_put_local_v36);
+    invocation_source_put_local_preserves_heap_v78(source, local, value);
+}
+
+// fe2o3_optional_support_v97: invocation_source_constant_evaluate_preserves_heap_v78
+#[verifier::spinoff_prover]
+proof fn invocation_source_constant_evaluate_preserves_heap_v78(
+    source: InvocationSourceByteStateV36, value: int, bits: int,
+    root: int, instance: int, little_endian: bool,
+)
+    ensures
+        invocation_source_byte_evaluate_v36(source, InvocationSourceByteValueV36::Constant(value), bits, root, instance, little_endian).source.machine.memory == source.machine.memory,
+        invocation_source_byte_evaluate_v36(source, InvocationSourceByteValueV36::Constant(value), bits, root, instance, little_endian).source.machine.generations == source.machine.generations,
+        invocation_source_byte_evaluate_v36(source, InvocationSourceByteValueV36::Constant(value), bits, root, instance, little_endian).source.machine.frames == source.machine.frames,
+        invocation_source_byte_evaluate_v36(source, InvocationSourceByteValueV36::Constant(value), bits, root, instance, little_endian).source.machine.values.len() == source.machine.values.len(),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_byte_value_typed_v36);
+}
+
+// fe2o3_optional_support_v97: invocation_source_constant_transfer_preserves_heap_v78
+#[verifier::spinoff_prover]
+proof fn invocation_source_constant_transfer_preserves_heap_v78(
+    source: InvocationSourceByteStateV36, local: int, value: int, bits: int,
+    root: int, instance: int, little_endian: bool,
+)
+    ensures
+        invocation_source_byte_step_v36(source, InvocationSourceByteEventV36::Transfer { destination: InvocationSourceByteDestinationV36::Local(local), value: InvocationSourceByteValueV36::Constant(value), bits }, root, instance, little_endian).machine.memory == source.machine.memory,
+        invocation_source_byte_step_v36(source, InvocationSourceByteEventV36::Transfer { destination: InvocationSourceByteDestinationV36::Local(local), value: InvocationSourceByteValueV36::Constant(value), bits }, root, instance, little_endian).machine.generations == source.machine.generations,
+        invocation_source_byte_step_v36(source, InvocationSourceByteEventV36::Transfer { destination: InvocationSourceByteDestinationV36::Local(local), value: InvocationSourceByteValueV36::Constant(value), bits }, root, instance, little_endian).machine.frames == source.machine.frames,
+        invocation_source_byte_step_v36(source, InvocationSourceByteEventV36::Transfer { destination: InvocationSourceByteDestinationV36::Local(local), value: InvocationSourceByteValueV36::Constant(value), bits }, root, instance, little_endian).machine.values.len() == source.machine.values.len(),
+{
+    hide(invocation_source_byte_evaluate_v36);
+    hide(invocation_source_byte_put_local_v36);
+    invocation_source_constant_evaluate_preserves_heap_v78(source, value, bits, root, instance, little_endian);
+    let evaluated = invocation_source_byte_evaluate_v36(source, InvocationSourceByteValueV36::Constant(value), bits, root, instance, little_endian);
+    invocation_source_put_local_preserves_heap_v78(evaluated.source, local, evaluated.value);
+}
+
+// fe2o3_optional_support_v97: invocation_source_plain_return_preserves_heap_v78
+#[verifier::spinoff_prover]
+proof fn invocation_source_plain_return_preserves_heap_v78(
+    source: InvocationSourceByteStateV36, begin: int, end: int,
+    value: MemoryValueV30, destination: Option<InvocationSourceReturnDestinationV42>,
+    continuation: int, little_endian: bool,
+)
+    requires
+        forall|allocation: MemoryAllocationV30| #[trigger] source.machine.memory.live.contains_key(allocation)
+            ==> !invocation_private_allocation_v36(allocation),
+        match destination {
+            None => true,
+            Some(destination) => destination.component.is_none()
+                && destination.memory.is_none() && destination.descriptor.is_none(),
+        },
+    ensures
+        invocation_source_return_v36(source, begin, end, InvocationSourceValueV42::Carrier(value), destination, continuation, little_endian).source.machine.memory == source.machine.memory,
+        invocation_source_return_v36(source, begin, end, InvocationSourceValueV42::Carrier(value), destination, continuation, little_endian).source.machine.generations == source.machine.generations,
+        invocation_source_return_v36(source, begin, end, InvocationSourceValueV42::Carrier(value), destination, continuation, little_endian).source.machine.values.len() == source.machine.values.len(),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_return_value_defined_v42);
+    hide(invocation_source_snapshot_escapes_frame_v42);
+    hide(invocation_source_value_escapes_frame_v36);
+    hide(invocation_source_memory_escapes_frame_v37);
+    hide(invocation_source_logical_clear_v38);
+    hide(invocation_source_return_install_v42);
+    hide(byte_end_frame_v30);
+    if source.machine.frames.active.len() > 0 {
+        let frame = source.machine.frames.active.last();
+        invocation_private_free_frame_end_identity_v77(source.machine.memory, frame);
+        let values = Seq::new(source.machine.values.len(), |i: int|
+            if begin <= i < end { MemoryValueV30::Undefined } else { source.machine.values[i] });
+        let cleaned = InvocationSourceByteStateV36 {
+            machine: MemoryStateV30 { pc: continuation, values,
+                memory: byte_end_frame_v30(source.machine.memory, frame),
+                generations: source.machine.generations,
+                frames: byte_pop_frame_v30(source.machine.frames), valid: true },
+            slots: Map::new(source.slots.dom().filter(|descriptor: int|
+                !byte_allocation_in_frame_v30(source.slots[descriptor].allocation, frame)),
+                |descriptor: int| source.slots[descriptor]),
+            objects: Map::new(source.objects.dom().filter(|local: int|
+                !byte_allocation_in_frame_v30(source.slots[source.objects[local].descriptor].allocation, frame)),
+                |local: int| source.objects[local]),
+            logical: invocation_source_logical_clear_v38(source.logical, begin, end),
+        };
+        if let Some(destination) = destination {
+            invocation_source_plain_return_install_preserves_heap_v78(cleaned, destination.local, value, little_endian);
+        }
+    }
+}
+
+// fe2o3_optional_support_v97: invocation_empty_private_map_has_no_private_source_v78
+#[verifier::spinoff_prover]
+proof fn invocation_empty_private_map_has_no_private_source_v78(
+    source: ByteMemoryV30, target: ByteMemoryV30, map: InvocationByteMapV36,
+)
+    requires invocation_byte_heaps_related_v36(source, target, map),
+        map.private == Map::<MemoryAllocationV30, InvocationByteBindingV36>::empty(),
+    ensures forall|allocation: MemoryAllocationV30| #[trigger] source.live.contains_key(allocation)
+        ==> !invocation_private_allocation_v36(allocation),
+{
+    hide(byte_memory_well_formed_v30);
+    hide(invocation_view_registries_related_v40);
+    hide(invocation_external_bytes_related_v38);
+    hide(invocation_private_allocation_v36);
+    hide(invocation_binding_disjoint_v36);
+    assert forall|allocation: MemoryAllocationV30| source.live.contains_key(allocation)
+        implies !invocation_private_allocation_v36(allocation) by {
+        assert(!map.private.contains_key(allocation));
+    }
+}
+
+// fe2o3_optional_support_v97: invocation_source_logical_write_well_formed_v78
+#[verifier::spinoff_prover]
+proof fn invocation_source_logical_write_well_formed_v78(
+    logical: InvocationSourceLogicalV38, local: int, count: int,
+)
+    requires invocation_source_logical_well_formed_v38(logical, count), 0 <= local < count,
+    ensures invocation_source_logical_well_formed_v38(invocation_source_logical_write_v38(logical, local), count),
+{
+    hide(invocation_source_descriptor_reference_shape_v51);
+    hide(invocation_source_enum_well_formed_v47);
+    hide(invocation_source_aggregate_well_formed_v42);
+    let written = invocation_source_logical_write_v38(logical, local);
+    assert forall|i: int| 0 <= i < count implies written.versions[i] >= 0 by {
+        assert(logical.versions[i] >= 0);
+    }
+    assert forall|i: int| written.descriptor_references.contains_key(i) implies
+        0 <= i < count
+            && invocation_source_descriptor_reference_shape_v51(written.descriptor_references[i], count)
+            && !written.witnesses.contains_key(i) && !written.references.contains_key(i)
+            && !written.aggregates.contains_key(i) && !written.enums.contains_key(i) by {
+        assert(logical.descriptor_references.contains_key(i));
+    }
+    assert forall|i: int| written.enums.contains_key(i) implies
+        0 <= i < count && invocation_source_enum_well_formed_v47(written.enums[i])
+            && !written.witnesses.contains_key(i) && !written.references.contains_key(i)
+            && !written.aggregates.contains_key(i) by {
+        assert(logical.enums.contains_key(i));
+    }
+    assert forall|i: int| written.aggregates.contains_key(i) implies
+        0 <= i < count && invocation_source_aggregate_well_formed_v42(written.aggregates[i])
+            && !written.witnesses.contains_key(i) && !written.references.contains_key(i) by {
+        assert(logical.aggregates.contains_key(i));
+    }
+    assert forall|i: int| written.witnesses.contains_key(i) implies
+        0 <= i < count && written.witnesses[i] >= 0 && !written.references.contains_key(i) by {
+        assert(logical.witnesses.contains_key(i));
+    }
+    assert forall|i: int| written.references.contains_key(i) implies
+        0 <= i < count && 0 <= written.references[i].origin < count
+            && written.references[i].version >= 0
+            && written.references[i].source_type >= 0
+            && written.references[i].origin_generation >= 0
+            && written.references[i].borrow_instance >= 0
+            && written.references[i].borrow_block >= 0
+            && written.references[i].borrow_statement >= 0 by {
+        assert(logical.references.contains_key(i));
+    }
+}
+
+// fe2o3_optional_support_v97: invocation_source_put_local_well_formed_v78
+#[verifier::spinoff_prover]
+proof fn invocation_source_put_local_well_formed_v78(
+    source: InvocationSourceByteStateV36, local: int, value: MemoryValueV30,
+)
+    requires invocation_source_byte_state_well_formed_v36(source),
+    ensures invocation_source_byte_state_well_formed_v36(invocation_source_byte_put_local_v36(source, local, value)),
+{
+    hide(byte_memory_well_formed_v30);
+    hide(byte_frame_runtime_well_formed_v30);
+    hide(byte_private_frames_live_v30);
+    hide(private_generation_counters_valid_v30);
+    hide(invocation_source_object_binding_v40);
+    hide(invocation_source_logical_well_formed_v38);
+    if source.machine.valid && 0 <= local < source.machine.values.len() {
+        invocation_source_logical_write_well_formed_v78(source.logical, local, source.machine.values.len() as int);
+        let written = invocation_source_byte_put_local_v36(source, local, value);
+        assert forall|i: int| written.logical.descriptor_references.contains_key(i) implies
+            !written.objects.contains_key(i)
+                && match written.machine.values[i] {
+                    MemoryValueV30::Slice(_) => true,
+                    _ => false,
+                } by {
+            assert(source.logical.descriptor_references.contains_key(i));
+            assert(i != local);
+        }
+        assert forall|i: int| written.logical.aggregates.contains_key(i) implies
+            written.machine.values[i] == MemoryValueV30::Undefined && !written.objects.contains_key(i) by {
+            assert(source.logical.aggregates.contains_key(i));
+            assert(i != local);
+        }
+        assert forall|i: int| written.logical.enums.contains_key(i) implies
+            written.machine.values[i] == MemoryValueV30::Undefined && !written.objects.contains_key(i) by {
+            assert(source.logical.enums.contains_key(i));
+            assert(i != local);
+        }
+    }
+}
+// fe2o3_optional_support_v97: END

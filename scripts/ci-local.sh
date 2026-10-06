@@ -857,6 +857,10 @@ run_cpu_tests() {
   done
   # Keep the generic test lane independent of whether the host happens to have
   # ROCm installed. The raw HIP crate supplies a fail-closed no-runtime ABI.
+  # Unit-test builds expose dev-dependencies to production modules.
+  run_step cargo-fe2o3-production-bins env FE2O3_HIP_SYS_DISABLE=1 \
+    cargo build --locked --no-default-features -p cargo-fe2o3 \
+      --bin cargo-fe2o3 --bin fe2o3-rustc-wrapper
   run_step cargo-fe2o3-tests env FE2O3_HIP_SYS_DISABLE=1 \
     cargo test --locked -p cargo-fe2o3
   run_step cargo-fe2o3-worker-v3-envelope-tests env FE2O3_HIP_SYS_DISABLE=1 \
@@ -1439,6 +1443,12 @@ run_generic_core() {
     python3 -I -B scripts/tests/simulation_expectation.py
   run_step tutorial-scalar-gemm-corpus-tests \
     python3 -I -B scripts/tests/tutorial_scalar_gemm_corpus.py
+  run_step tutorial-default-cargo-harness-tests \
+    python3 -I -B scripts/tests/tutorial_default_cargo.py
+  run_step tutorial-production-census-tests \
+    python3 -I -B scripts/tests/tutorial_production_census_v91.py
+  run_step tutorial-current-simulation-tests \
+    python3 -I -B scripts/tests/tutorial_simulation_v92.py
   run_step quickstart-shell-tests bash scripts/tests/quickstart.sh
   run_step kernel-compile-matrix-shell-tests \
     bash scripts/tests/kernel-compile-matrix.sh

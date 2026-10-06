@@ -1315,6 +1315,7 @@ fn scan_reachable(
         let complete_body_profile = launch_profiles.complete_body
             && crate::complete_body_v19::scope_profile_matches(&function.required_capabilities);
         scan_signature(
+            module,
             function,
             target,
             &mut findings,
@@ -1684,18 +1685,26 @@ fn try_preflight_filled<T: Clone>(
 }
 
 fn scan_signature(
+    module: &Module,
     function: &Function,
     target: SimulationTargetV1,
     findings: &mut UnsupportedCollectorV1,
     allow_generic: bool,
 ) {
     let identifier_bytes = function.id.retained_capacity_bytes();
-    for ty in function
+    for (ty, parameter) in function
         .signature
         .parameters
         .iter()
-        .chain(&function.signature.results)
+        .map(|ty| (ty, true))
+        .chain(function.signature.results.iter().map(|ty| (ty, false)))
     {
+        if allow_generic
+            && parameter
+            && crate::storage_scalar_v18::private_storage_pointer(module, ty, target).is_some()
+        {
+            continue;
+        }
         if let Some(feature) = unsupported_type_with_generic(ty, target, allow_generic) {
             findings.push(identifier_bytes, || signature_finding(function, feature));
         }
@@ -1819,7 +1828,8 @@ fn scan_operation(
             continue;
         }
         if ordered_profiles.storage_scalar
-            && crate::storage_scalar_v18::private_pointer(module, &result.ty, target).is_some()
+            && crate::storage_scalar_v18::private_storage_pointer(module, &result.ty, target)
+                .is_some()
         {
             continue;
         }
@@ -1976,7 +1986,8 @@ fn scan_operation(
             }
             if !matches!(element, Type::Scalar(scalar) if target.scalar_bits(*scalar).is_some())
                 && !(ordered_profiles.storage_scalar
-                    && crate::storage_scalar_v18::scalar_layout(module, element, target).is_some())
+                    && crate::storage_scalar_v18::allocation_layout(module, element, target)
+                        .is_some())
             {
                 reject!(UnsupportedFeatureV1::NonScalarMemory);
             }

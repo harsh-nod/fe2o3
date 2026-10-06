@@ -9,6 +9,7 @@ use crate::{
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
     CanonicalKernelIrWorkLedgerIdentityV1, CanonicalKirBlockCoordinateV1 as Block,
     CanonicalKirFunctionCoordinateV1 as Function, VerifiedCanonicalKernelIrModuleV12 as Owner,
+    VerifiedCanonicalKernelIrModuleV18 as Owner18,
 };
 use std::{
     fmt,
@@ -35,7 +36,15 @@ impl fmt::Display for Error {
         write!(f, "canonical CFG scope: {self:?}")
     }
 }
-impl std::error::Error for Error {}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resource(error) => Some(error),
+            Self::ControlFlow(error) => Some(error),
+            Self::InvalidFunction(_) | Self::InvalidBlock(_) | Self::Panicked => None,
+        }
+    }
+}
 
 struct Accounting {
     slot: usize,
@@ -73,14 +82,18 @@ impl Accounting {
 /// Read-only CFG queries for exactly one function of an actual verified owner.
 /// No CFG, allocation-owning facade, or fabricated owner/graph pair can escape.
 /// Coordinates are stored ordinals, not raw block IDs. Queries debit before use.
-pub struct CanonicalKirControlFlowViewV1<'scope, 'graph> {
-    owner: &'graph Owner,
+pub struct CanonicalKirControlFlowViewV1<'scope, 'graph, O = Owner> {
+    owner: &'graph O,
     function: Function,
     flow: &'scope MeteredIndexedControlFlowV1,
     accounting: &'scope mut Accounting,
 }
-impl<'graph> CanonicalKirControlFlowViewV1<'_, 'graph> {
-    pub fn owner(&self) -> &'graph Owner {
+/// CFG facts borrowing the actual storage-capable graph, without V12 erasure.
+pub type CanonicalKirControlFlowViewV18<'scope, 'graph> =
+    CanonicalKirControlFlowViewV1<'scope, 'graph, Owner18>;
+
+impl<'graph, O> CanonicalKirControlFlowViewV1<'_, 'graph, O> {
+    pub fn owner(&self) -> &'graph O {
         self.owner
     }
     pub fn function(&self) -> Function {
@@ -162,6 +175,44 @@ pub fn with_canonical_kir_control_flow_v1<'graph, 'work, T, E>(
 where
     E: From<Error>,
 {
+    with_owner_control_flow(owner, owner.module(), function, limits, budget, run)
+}
+
+/// Reuses the same exact-edge, owner-bound CFG algorithm on an actual V18 owner.
+/// Storage/execution operations are neither re-encoded nor erased. Facts are
+/// invalidated by graph replacement: the scoped view cannot outlive this owner
+/// borrow or be rebound to another canonical owner, even at identical bytes.
+pub fn with_canonical_kir_control_flow_v18<'graph, 'work, T, E>(
+    owner: &'graph Owner18,
+    function: Function,
+    limits: ControlFlowLimits,
+    budget: &mut Budget<'work>,
+    run: impl for<'scope> FnOnce(
+        &mut CanonicalKirControlFlowViewV18<'scope, 'graph>,
+        &mut Budget<'work>,
+    ) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<Error>,
+{
+    with_owner_control_flow(owner, owner.module(), function, limits, budget, run)
+}
+
+// Only the two connected-owner adapters above may pair a graph and owner.
+fn with_owner_control_flow<'graph, 'work, O, T, E>(
+    owner: &'graph O,
+    module: &'graph crate::Module,
+    function: Function,
+    limits: ControlFlowLimits,
+    budget: &mut Budget<'work>,
+    run: impl for<'scope> FnOnce(
+        &mut CanonicalKirControlFlowViewV1<'scope, 'graph, O>,
+        &mut Budget<'work>,
+    ) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<Error>,
+{
     let mut accounting = Accounting {
         slot: budget as *const Budget<'_> as usize,
         ledger: budget.work_ledger_identity_v1(),
@@ -175,8 +226,7 @@ where
     let mut constructing = true;
     let protected = catch_unwind(AssertUnwindSafe(|| -> Result<Result<T, E>, Error> {
         accounting.charge(budget, 3)?;
-        let actual = owner
-            .module()
+        let actual = module
             .functions
             .get(function.0 as usize)
             .filter(|f| f.body.is_some())

@@ -234,6 +234,7 @@ fn entry_dom_high_fan_in_has_literal_work_storage_and_failure_prefixes() {
                 &mut meter,
                 &mut ControlFlowResourcesV1 {
                     budget: Some(&mut budget),
+                    storage: ControlFlowStorageV2::LegacyRows,
                 },
             );
             assert_eq!(budget.work(), accepted, "chain={chain}, limit={limit}");
@@ -261,6 +262,7 @@ fn entry_dom_high_fan_in_has_literal_work_storage_and_failure_prefixes() {
                 assert_eq!(budget.storage(), FLOOR + 2 * blocks);
                 ControlFlowResourcesV1 {
                     budget: Some(&mut budget),
+                    storage: ControlFlowStorageV2::LegacyRows,
                 }
                 .free(dominators, blocks, 2)
                 .unwrap();
@@ -278,6 +280,7 @@ fn entry_dom_high_fan_in_has_literal_work_storage_and_failure_prefixes() {
             &mut WorkMeter::new(ControlFlowLimits::DEFAULT.analysis_work),
             &mut ControlFlowResourcesV1 {
                 budget: Some(&mut budget),
+                storage: ControlFlowStorageV2::LegacyRows,
             },
         )
         .unwrap_err();

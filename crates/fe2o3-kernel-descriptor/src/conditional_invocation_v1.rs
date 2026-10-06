@@ -228,7 +228,15 @@ impl<E: fmt::Display> fmt::Display for ConditionalInvocationWireErrorV1<E> {
         }
     }
 }
-impl<E: Error + 'static> Error for ConditionalInvocationWireErrorV1<E> {}
+impl<E: Error + 'static> Error for ConditionalInvocationWireErrorV1<E> {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Contract(error) => Some(error),
+            Self::Work(error) => Some(error),
+            Self::OutputLength { .. } => None,
+        }
+    }
+}
 
 pub(crate) type FormatResult<T> = Result<T, ConditionalInvocationContractErrorV1>;
 pub(crate) fn invalid(field: &'static str) -> ConditionalInvocationContractErrorV1 {

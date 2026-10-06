@@ -13,8 +13,10 @@ fn with_emitted(
         let lowered = lower_scalar_instances(instances, budget);
         let call_storage: usize = lowered
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(index, row)| {
                 row.call_returns.requested_bytes().unwrap()
+                    + scalar_lowering_scratch_storage_v29(row)
                     + row.scoped_initialization.as_ref().unwrap().retained_storage
                     + row
                         .scoped_memory_anchors
@@ -22,6 +24,12 @@ fn with_emitted(
                         .unwrap()
                         .retained_storage()
                         .unwrap()
+                    + scalar_archive_storage_v1(
+                        row,
+                        instances,
+                        instances.id_at(index).unwrap(),
+                        budget,
+                    )
             })
             .sum();
         let mut slots = lowered.into_iter().map(Some).collect();

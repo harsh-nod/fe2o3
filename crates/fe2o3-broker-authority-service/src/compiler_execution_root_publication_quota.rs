@@ -48,6 +48,30 @@ fn late(bounds: CustodyBounds) -> Result<LateRetainedQuotaV2> {
 }
 
 impl RootPublicationCustodyV3 {
+    /// Exact-slot retirement preparation bound. This is only resource planning;
+    /// the closed root dispatcher must independently establish durable authority.
+    pub fn maximum_retirement_quota(
+        maximum_handoff_bytes: usize,
+    ) -> Result<RootPublicationQuotaV3> {
+        let late = late(custody_bounds(maximum_handoff_bytes)?)?;
+        Ok(RootPublicationQuotaV3 {
+            work: late.retirement_work(),
+            scratch: Holder::<Owners>::retirement_scratch()?,
+        })
+    }
+
+    /// Inert ceiling for revalidating a publication admitted under this same
+    /// byte limit. Actual observation still captures its exact retained quote.
+    pub fn maximum_revalidation_quota(
+        maximum_handoff_bytes: usize,
+    ) -> Result<RootPublicationQuotaV3> {
+        let bounds = custody_bounds(maximum_handoff_bytes)?;
+        revalidation(
+            bounds.currentness_revalidation_quota(),
+            bounds.retained_storage(),
+        )
+    }
+
     /// Complete conservative request schedule for observe_with_limit, including
     /// two live revalidations, both artifact owners and the returned handle.
     /// Invalid or unaffordable ceilings must refuse on the original Budget.
@@ -158,6 +182,15 @@ mod tests {
         let q = RootPublicationCustodyV3::observation_quota(1024 * 1024).unwrap();
         let late = RootPublicationCustodyV3::observation_cleanup_quota(1024 * 1024).unwrap();
         let bounds = custody_bounds(1024 * 1024).unwrap();
+        let validation = RootPublicationCustodyV3::maximum_revalidation_quota(1024 * 1024).unwrap();
+        assert_eq!(
+            validation,
+            revalidation(
+                bounds.currentness_revalidation_quota(),
+                bounds.retained_storage()
+            )
+            .unwrap()
+        );
         // The enclosing request retains its Holder while the local window pays
         // the full quoted owners again and both constructor outputs accumulate.
         // Its aggregate peak is not the artifact-local 256 MiB ceiling.
@@ -183,6 +216,7 @@ mod tests {
         for length in [0, usize::MAX] {
             assert!(RootPublicationCustodyV3::observation_quota(length).is_err());
             assert!(RootPublicationCustodyV3::observation_cleanup_quota(length).is_err());
+            assert!(RootPublicationCustodyV3::maximum_revalidation_quota(length).is_err());
         }
         assert!(sum(&[usize::MAX, 1]).is_err());
     }

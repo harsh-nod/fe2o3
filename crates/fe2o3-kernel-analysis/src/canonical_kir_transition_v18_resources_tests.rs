@@ -7,12 +7,12 @@ use fe2o3_kernel_ir::{
 use std::mem::size_of;
 
 fn scratch(a: &Inventory<'_>, b: &Inventory<'_>) -> usize {
-    // Two function maps; four input-block maps; two output-block maps;
+    // Two function maps; five input-block maps; two output-block maps;
     // bidirectional operation maps; input parents and output anchors;
     // three input-edge maps; literals and two one-byte flag rosters.
     let words = a.functions().len()
         + b.functions().len()
-        + 4 * a.blocks().len()
+        + 5 * a.blocks().len()
         + 2 * b.blocks().len()
         + a.operations().len()
         + b.operations().len()
@@ -30,10 +30,10 @@ fn scratch(a: &Inventory<'_>, b: &Inventory<'_>) -> usize {
 fn independent_empty_and_unit_work_preserve_the_legacy_schedule_plus_table_header() {
     // Legacy empty "x": entry + state = 2; metadata = 1+2+1;
     // fixed-point visit = 1. V18 adds the table header: 8.
-    // Unit "f" adds 9 initialized cells, 7 signature work, 8 block install,
+    // Unit "f" adds 10 initialized cells, 7 signature work, 8 block install,
     // output parameter roster 1, reachability 3, phi block 1, connector 2,
-    // coverage 1, terminator 1, ordered roster 1: 42.
-    for (original, required) in [(Module::new("x"), 8), (unit_module(), 42)] {
+    // coverage 1, terminator 1, ordered roster 1, selected-edge refresh 1: 44.
+    for (original, required) in [(Module::new("x"), 8), (unit_module(), 44)] {
         inspect(
             original.clone(),
             original,

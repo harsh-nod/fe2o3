@@ -182,3 +182,26 @@ provisions an approved release, runs Verus or launches a GPU kernel.
 
 The existing fixed-origin production approval/runtime constructors remain the
 only admission path. `RuntimeEnforcementUnavailable` is not removed by packaging.
+
+The separately pinned proof runtime accepts its external system interpreter in
+exact mode `0555` or `0755`. It retains the observed mode, so switching between
+those modes after admission still refuses. Root ownership, one link, complete
+hash, canonical symlink chain and no-cross-device final-file lookup remain
+mandatory. This compatibility does not permit a bind-file alias, change the
+compiler inventory's `0555` role mode, or solve deployment path/inode joins.
+
+## Observe The Canonical Rustc Library Tree
+
+`cargo fe2o3 engineering rustc-runtime --lib-tree /absolute/toolchain/lib`
+prints a single `RustcLibTreeObservationV1` JSON record with the canonical
+library-tree SHA-256 used by the production Cargo pinning path. The directory
+must be an absolute, lexically canonical UTF-8 path with no symlink components.
+The command uses the existing `PinnedRustcLibTree` content transcript, mutation
+journal, limits, and final revalidation; it does not run rustc or alter the tree.
+
+The record has `authority: false` and `complete_elf_closure: false`. It measures
+the supplied library tree only, not the rustc executable, dynamic loader, system
+libraries, compiler closure approval, or an installed execution profile. A later
+production invocation still independently pins and validates its actual tree
+against the declared digest. This observation does not construct an admitted
+profile, provision a service, or authorize compilation, publication, or launch.

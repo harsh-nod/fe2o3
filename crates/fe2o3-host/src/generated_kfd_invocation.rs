@@ -1107,7 +1107,8 @@ fn require_ordinary_runtime_family(
 ) -> Result<(), GeneratedWorkerV3KfdInvocationError> {
     match binding {
         fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::OrdinaryV1 => Ok(()),
-        fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalNominalV4 { .. } => {
+        fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalNominalV4 { .. }
+        | fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalMixedV26 { .. } => {
             Err(GeneratedWorkerV3KfdInvocationError::ConditionalAdmissionUnavailable)
         }
     }
@@ -1248,6 +1249,13 @@ mod tests {
         assert!(super::require_ordinary_runtime_family(Binding::OrdinaryV1).is_ok());
         assert!(matches!(
             super::require_ordinary_runtime_family(Binding::ConditionalNominalV4 {
+                contract_identity: [1; 32],
+                premise_identity: [2; 32],
+            }),
+            Err(super::GeneratedWorkerV3KfdInvocationError::ConditionalAdmissionUnavailable)
+        ));
+        assert!(matches!(
+            super::require_ordinary_runtime_family(Binding::ConditionalMixedV26 {
                 contract_identity: [1; 32],
                 premise_identity: [2; 32],
             }),

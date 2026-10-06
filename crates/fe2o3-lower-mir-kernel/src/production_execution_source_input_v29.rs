@@ -211,12 +211,48 @@ fn check_census(
     input: ProductionExecutionSourceInputV29<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<(), Error> {
+    check_census_with_policy_v18(
+        ssa,
+        launch,
+        input,
+        budget,
+        SourceCensusPolicyV18::ExecutionV29,
+    )
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum SourceCensusPolicyV18 {
+    ExecutionV29,
+    OrdinarySource,
+}
+
+fn check_census_with_policy_v18(
+    ssa: &ProductionSemanticSsaOwnerV1,
+    launch: &ProductionSourceLaunchRosterV1,
+    input: ProductionExecutionSourceInputV29<'_>,
+    budget: &mut Budget<'_>,
+    policy: SourceCensusPolicyV18,
+) -> Result<(), Error> {
     budget.charge_work(32)?;
     let semantic = ssa.source_semantic();
-    if semantic.wire_version() != SemanticMirWireVersionV1::V29
+    if (policy == SourceCensusPolicyV18::ExecutionV29
+        && semantic.wire_version() != SemanticMirWireVersionV1::V29)
         || input.semantic_sha256 != ssa.source_semantic_sha256()
     {
         return Err(Error::Source);
+    }
+    if policy == SourceCensusPolicyV18::OrdinarySource {
+        if !input.roots.is_empty() || !input.events.is_empty() {
+            return Err(Error::Source);
+        }
+        // Empty projected rows cannot conceal nominal content in the actual
+        // owner. Preserve its admitted profile instead of converting to V29.
+        for ty in semantic.types() {
+            budget.charge_work(1)?;
+            if matches!(ty.rust_type_kind(), SemanticRustTypeKindV1::Execution(_)) {
+                return Err(Error::Source);
+            }
+        }
     }
     if input.classes.len() != semantic.callables().len() {
         return Err(Error::CallableCensus);
@@ -252,6 +288,18 @@ fn check_census(
     }
     for (index, class) in input.classes.iter().copied().enumerate() {
         budget.charge_work(12)?;
+        if policy == SourceCensusPolicyV18::OrdinarySource
+            && (!matches!(class, ProductionScopeCallableCandidateV29::Ordinary)
+                || matches!(
+                    semantic.callables()[index],
+                    SemanticCallableDeclV1::CompilerIntrinsic {
+                        operation: SemanticCompilerIntrinsicOperationV1::Execution(_),
+                        ..
+                    }
+                ))
+        {
+            return Err(Error::Source);
+        }
         check_class(class, index, semantic)?;
     }
     let mut next_root = 0;
@@ -351,3 +399,39 @@ pub fn with_checked_execution_source_v29(
     }
     Ok(())
 }
+
+// Private source reconstruction preflight. Unit success is census agreement,
+// not a context, launch, ABI or executable receipt. V29 keeps its original
+// context-root checks; every other admitted profile must be execution-free.
+pub(crate) fn check_source_owned_census_v18(
+    ssa: &ProductionSemanticSsaOwnerV1,
+    launch: &ProductionSourceLaunchRosterV1,
+    input: ProductionExecutionSourceInputV29<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), Error> {
+    if ssa.source_semantic().wire_version() == SemanticMirWireVersionV1::V29 {
+        return with_checked_execution_source_v29(ssa, launch, input, budget, |_, _| Ok(()));
+    }
+    check_original_ordinary_census_v18(ssa, launch, input, budget)
+}
+
+// This private unit-valued check deliberately excludes all execution content,
+// even when its caller supplies an already admitted V29 owner.
+pub(crate) fn check_original_ordinary_census_v18(
+    ssa: &ProductionSemanticSsaOwnerV1,
+    launch: &ProductionSourceLaunchRosterV1,
+    input: ProductionExecutionSourceInputV29<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), Error> {
+    check_census_with_policy_v18(
+        ssa,
+        launch,
+        input,
+        budget,
+        SourceCensusPolicyV18::OrdinarySource,
+    )
+}
+
+#[cfg(test)]
+#[path = "production_original_source_census_v1767_tests.rs"]
+mod original_source_tests;

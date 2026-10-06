@@ -2,7 +2,7 @@
 // repeats immutable-call/type/register checks; source authentication and target,
 // launch and CFG qualification remain independent admission responsibilities.
 
-impl SemanticFunctionLoweringV1<'_> {
+impl SemanticFunctionLoweringV1<'_, '_> {
     fn lower_gfx942_ordered_region_v31(
         &mut self,
         block: SemanticBlockIdV1,

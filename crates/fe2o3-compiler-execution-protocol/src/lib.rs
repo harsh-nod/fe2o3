@@ -48,6 +48,8 @@ pub use external_anchor_transaction_v3::{
 };
 mod issuer_policy_adapter;
 mod issuer_policy_codec;
+mod issuer_policy_family_v1;
+pub use issuer_policy_family_v1::CompilerExecutionPolicyFamilyV1;
 mod issuer_policy_v2;
 mod issuer_policy_v3;
 mod launch_manifest;
@@ -90,6 +92,22 @@ pub use root_intake_v3::{
     COMPILER_EXECUTION_ROOT_INTAKE_WORK_V3, CompilerExecutionRootIntakeErrorV3,
     CompilerExecutionRootIntakeKindV3, CompilerExecutionRootIntakeRecordV3,
     CompilerExecutionRootIntakeRoleV3,
+};
+mod root_completion_v1;
+mod root_publication_completion_v1;
+pub use root_completion_v1::{
+    COMPILER_EXECUTION_ROOT_COMPLETION_BYTES_V1, COMPILER_EXECUTION_ROOT_COMPLETION_STORAGE_V1,
+    COMPILER_EXECUTION_ROOT_COMPLETION_WORK_V1, CompilerExecutionRootCompletionErrorV1,
+    CompilerExecutionRootCompletionRecordV1, CompilerExecutionRootTerminationV1,
+};
+pub use root_publication_completion_v1::{
+    COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_BYTES_V1,
+    COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_DECODE_WORK_V1,
+    COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_MATCH_WORK_V1,
+    COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_NEW_WORK_V1,
+    COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_STORAGE_V1,
+    CompilerExecutionRootPublicationCompletionErrorV1,
+    CompilerExecutionRootPublicationCompletionV1,
 };
 mod root_intake_v4;
 pub use root_intake_v4::{

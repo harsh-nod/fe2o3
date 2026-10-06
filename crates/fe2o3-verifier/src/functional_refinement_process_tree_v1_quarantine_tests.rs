@@ -100,11 +100,13 @@ impl DiagnosticDomain {
             child.stdout.as_mut().expect("fixture stdout"),
             &mut self.out,
             65536,
+            OutputStream::Stdout,
         )?;
         drain(
             child.stderr.as_mut().expect("fixture stderr"),
             &mut self.err,
             65536,
+            OutputStream::Stderr,
         )
     }
 }
@@ -795,7 +797,7 @@ fn exercise_kill_refusal(case: &str) -> Vec<i32> {
             bytes: Vec::new(),
             eof: false,
         };
-        drain(&mut pipe, &mut output, 4096).unwrap();
+        drain(&mut pipe, &mut output, 4096, OutputStream::Stdout).unwrap();
         assert!(output.bytes.is_empty());
         assert!(!output.eof);
     });

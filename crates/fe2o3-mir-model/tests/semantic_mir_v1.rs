@@ -5,6 +5,9 @@ use sha2::{Digest, Sha256};
 #[path = "semantic_mir_v1/slice_reborrow_v1.rs"]
 mod slice_reborrow_v1;
 
+#[path = "semantic_mir_v1/slice_length_v1.rs"]
+mod slice_length_v1;
+
 fn bytes(tag: u8) -> [u8; 32] {
     [tag; 32]
 }
@@ -6178,4 +6181,49 @@ fn fn_abi_argument_cardinality_and_types_are_checked() {
         missing_argument.admit(SemanticMirLimitsV1::default()),
         Err(SemanticMirErrorV1::InvalidLocalRoles { .. })
     ));
+}
+
+#[path = "semantic_mir_v1/union_projection_v1.rs"]
+mod union_projection_v1;
+
+#[test]
+fn constant_index_constructor_agrees_with_exact_forward_and_backward_positions() {
+    let ty = SemanticTypeIdV1::from_index(3);
+    let cases = (0..=16_u64)
+        .flat_map(|minimum_length| (0..=18).map(move |offset| (minimum_length, offset)))
+        .chain(
+            [0, 1, u64::MAX - 1, u64::MAX]
+                .into_iter()
+                .flat_map(|minimum_length| {
+                    [0, 1, u64::MAX - 1, u64::MAX]
+                        .into_iter()
+                        .map(move |offset| (minimum_length, offset))
+                }),
+        );
+    for (minimum_length, offset) in cases {
+        for from_end in [false, true] {
+            let position = if from_end {
+                minimum_length.checked_sub(offset)
+            } else {
+                Some(offset)
+            };
+            let valid = position.is_some_and(|index| index < minimum_length);
+            let kind = SemanticProjectionKindV1::ConstantIndex {
+                offset,
+                minimum_length,
+                from_end,
+            };
+            match SemanticProjectionV1::new(kind, ty) {
+                Ok(projection) => {
+                    assert!(valid, "{kind:?}");
+                    assert_eq!(projection.kind(), kind);
+                    assert_eq!(projection.result_type(), ty);
+                }
+                Err(error) => {
+                    assert!(!valid, "{kind:?}: {error:?}");
+                    assert!(matches!(error, SemanticMirErrorV1::InvalidProjectionShape));
+                }
+            }
+        }
+    }
 }

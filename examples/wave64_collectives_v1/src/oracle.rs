@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use crate::contract::{MAX_EXACT_INPUT_MAGNITUDE_V1, WAVE64_LANES_V1, lane_is_active_v1};
+use super::contract::{MAX_EXACT_INPUT_MAGNITUDE_V1, WAVE64_LANES_V1, lane_is_active_v1};
 
 /// One of the three independent output allocations.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

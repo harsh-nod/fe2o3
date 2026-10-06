@@ -104,10 +104,68 @@ fn terminal_storage<T, E, F>() -> std::result::Result<usize, Resource> {
         .ok_or(Resource::Arithmetic)
 }
 
+#[derive(Clone, Copy)]
+enum TerminalAccount {
+    Legacy,
+    Original,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned,
+        CanonicalKernelIrWorkBudgetV1 as Work,
+    };
+
+    #[test]
+    fn original_terminal_exact_one_short_overflow_and_input_floor() {
+        const OUTSIDE: usize = MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5 + 1;
+        fn run(
+            work: usize,
+            limit: usize,
+            inherited: usize,
+            borrowed: usize,
+        ) -> (bool, usize, usize) {
+            let fixture = super::super::tests::fixture::Fixture::new();
+            let output = PinnedOutput::open(&fixture.path).unwrap();
+            let lock = output.try_lock().unwrap().unwrap();
+            let mut owned = Owned::new(Work::new(work), limit);
+            owned.with_budget(|b| {
+                b.reserve_storage(OUTSIDE).unwrap();
+                let identity = b.storage_account_identity_v1();
+                let ledger = b.work_ledger_identity_v1();
+                let result = terminal::<_, Infallible, _>(
+                    b,
+                    inherited,
+                    borrowed,
+                    lock,
+                    TerminalAccount::Original,
+                    |b| {
+                        b.charge_work(17)?;
+                        b.reserve_storage(37)?;
+                        Ok(())
+                    },
+                );
+                assert_eq!(b.storage_account_identity_v1(), identity);
+                assert!(b.work_ledger_identity_v1() == ledger);
+                assert_eq!(b.storage_limit(), limit);
+                assert!(b.storage() >= OUTSIDE);
+                if result.is_ok() {
+                    assert_eq!(b.storage(), OUTSIDE);
+                }
+                (result.is_ok(), b.work(), b.peak_storage())
+            })
+        }
+        let baseline = run(usize::MAX, OUTSIDE + 65536, 41, 43);
+        assert!(baseline.0);
+        assert_eq!(baseline.1, 8 + Budget::STORAGE_WINDOW_WORK_V1 + 17);
+        assert_eq!(run(baseline.1, baseline.2, 41, 43), baseline);
+        assert!(!run(baseline.1 - 1, baseline.2, 41, 43).0);
+        assert!(!run(baseline.1, baseline.2 - 1, 41, 43).0);
+        assert!(!run(baseline.1, baseline.2, OUTSIDE + 1, 0).0);
+        assert!(!run(baseline.1, baseline.2, usize::MAX, 1).0);
+    }
 
     #[test]
     fn conditional_transaction_v5_account_rejects_address_ledger_and_floor_substitution() {
@@ -146,7 +204,9 @@ mod tests {
 fn terminal<T, E, F>(
     budget: &mut Budget<'_>,
     inherited: usize,
+    borrowed: usize,
     lock: crate::OutputLock,
+    mode: TerminalAccount,
     f: F,
 ) -> std::result::Result<(T, crate::OutputLock), CompilerModuleHandoffAdmissionErrorV5<E>>
 where
@@ -156,13 +216,38 @@ where
     let result = catch_unwind(AssertUnwindSafe(|| {
         let result = (|| {
             budget.charge_work(8)?;
-            if budget.storage_limit() > MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5
-                || account.floor < inherited
-            {
+            let inherited = inherited
+                .checked_add(borrowed)
+                .ok_or(Resource::Arithmetic)?;
+            if account.floor < inherited {
                 return Err(Resource::Accounting.into());
             }
-            budget.reserve_storage(terminal_storage::<T, E, F>()?)?;
-            f(budget)
+            let run = |budget: &mut Budget<'_>| {
+                budget.reserve_storage(terminal_storage::<T, E, F>()?)?;
+                f(budget)
+            };
+            match mode {
+                TerminalAccount::Legacy => {
+                    if budget.storage_limit() > MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5 {
+                        return Err(Resource::Accounting.into());
+                    }
+                    run(budget)
+                }
+                TerminalAccount::Original => {
+                    // Count the full actual token AGAIN inside the local bound.
+                    // The window itself refunds nothing on refusal or unwind.
+                    let overlap = inherited
+                        .checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1)
+                        .ok_or(Resource::Arithmetic)?;
+                    budget.with_additional_storage_window_v1(
+                        MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5,
+                        |budget| {
+                            budget.reserve_storage(overlap)?;
+                            run(budget)
+                        },
+                    )
+                }
+            }
         })();
         // A failed callback may retain arbitrary additional storage; only a
         // damaged original account/floor overrides that terminal cause here.
@@ -202,6 +287,44 @@ impl CompilerModuleHandoffConsumptionTokenV5 {
         ),
         CompilerModuleHandoffAdmissionErrorV5<E>,
     > {
+        self.try_map_handoff_using(budget, TerminalAccount::Legacy, admit)
+    }
+
+    /// Same terminal transfer on an ORIGINAL owned resource account. The full
+    /// actual token charge is counted again within an additional <=256 MiB
+    /// window; the original total ceiling, address and ledger never change.
+    /// Callback refusal/unwind keeps ALL reservations and the actual output
+    /// lock, just like the ordinary entry. This grants no admission authority.
+    ///
+    /// Additional work above the ordinary transfer is STORAGE_WINDOW_WORK_V1;
+    /// additional scratch is the actual token storage plus
+    /// STORAGE_WINDOW_SCRATCH_V1. Callback work/retained storage remain additional.
+    pub fn try_map_handoff_in_original_account_v5<T: AsRef<Handoff>, E>(
+        self,
+        budget: &mut Budget<'_>,
+        admit: impl FnOnce(Handoff, &mut Budget<'_>) -> std::result::Result<(T, usize), E>,
+    ) -> std::result::Result<
+        (
+            CompilerModuleHandoffConsumptionTokenV5<T>,
+            CompilerModuleHandoffStorageV5,
+        ),
+        CompilerModuleHandoffAdmissionErrorV5<E>,
+    > {
+        self.try_map_handoff_using(budget, TerminalAccount::Original, admit)
+    }
+
+    fn try_map_handoff_using<T: AsRef<Handoff>, E>(
+        self,
+        budget: &mut Budget<'_>,
+        mode: TerminalAccount,
+        admit: impl FnOnce(Handoff, &mut Budget<'_>) -> std::result::Result<(T, usize), E>,
+    ) -> std::result::Result<
+        (
+            CompilerModuleHandoffConsumptionTokenV5<T>,
+            CompilerModuleHandoffStorageV5,
+        ),
+        CompilerModuleHandoffAdmissionErrorV5<E>,
+    > {
         let Self {
             binding,
             backing,
@@ -209,41 +332,42 @@ impl CompilerModuleHandoffConsumptionTokenV5 {
             storage,
             _lock,
         } = self;
-        let ((content, additional, total), lock) = terminal(budget, storage.0, _lock, |budget| {
-            let identity = content.identity();
-            let headers = token_headers::<T>();
-            budget.reserve_storage(headers)?;
-            let account = Account::new(budget);
-            let admitted = admit(content, budget);
-            account.check(budget, account.floor)?;
-            let admitted = match admitted {
-                Ok((owner, additional)) => {
-                    if budget.storage() != account.floor {
-                        return Err(Resource::Accounting.into());
+        let ((content, additional, total), lock) =
+            terminal(budget, storage.0, 0, _lock, mode, |budget| {
+                let identity = content.identity();
+                let headers = token_headers::<T>();
+                budget.reserve_storage(headers)?;
+                let account = Account::new(budget);
+                let admitted = admit(content, budget);
+                account.check(budget, account.floor)?;
+                let admitted = match admitted {
+                    Ok((owner, additional)) => {
+                        if budget.storage() != account.floor {
+                            return Err(Resource::Accounting.into());
+                        }
+                        // Inspect no opaque owner until its returned storage is paid.
+                        budget.reserve_storage(additional)?;
+                        let handoff = owner.as_ref();
+                        if handoff.identity() != identity || backing_snapshot(handoff) != backing {
+                            return Err(Error::HandoffIdentityMismatch.into());
+                        }
+                        let additional = additional
+                            .checked_add(headers)
+                            .ok_or(Resource::Arithmetic)?;
+                        let total = storage
+                            .0
+                            .checked_add(additional)
+                            .ok_or(Resource::Arithmetic)?;
+                        Ok((owner, additional, total))
                     }
-                    // Inspect no opaque owner until its returned storage is paid.
-                    budget.reserve_storage(additional)?;
-                    let handoff = owner.as_ref();
-                    if handoff.identity() != identity || backing_snapshot(handoff) != backing {
-                        return Err(Error::HandoffIdentityMismatch.into());
-                    }
-                    let additional = additional
-                        .checked_add(headers)
-                        .ok_or(Resource::Arithmetic)?;
-                    let total = storage
-                        .0
-                        .checked_add(additional)
-                        .ok_or(Resource::Arithmetic)?;
-                    Ok((owner, additional, total))
-                }
-                Err(error) => Err(Cause::Admission(error)),
-            };
-            // Stream scratch has a known local lifetime and starts above every
-            // terminal callback reservation. It never encloses admission itself.
-            currentness::stream(&binding, &mut Resources::Metered(budget))?;
-            account.check(budget, account.floor)?;
-            admitted
-        })?;
+                    Err(error) => Err(Cause::Admission(error)),
+                };
+                // Stream scratch has a known local lifetime and starts above every
+                // terminal callback reservation. It never encloses admission itself.
+                currentness::stream(&binding, &mut Resources::Metered(budget))?;
+                account.check(budget, account.floor)?;
+                admitted
+            })?;
         Ok((
             CompilerModuleHandoffConsumptionTokenV5 {
                 binding,
@@ -263,6 +387,25 @@ pub(super) fn consume<T: AsRef<Handoff>>(
     budget: &mut Budget<'_>,
     hooks: &mut impl HandoffHooks,
 ) -> Result<ConsumedCompilerModuleHandoffV5<T>> {
+    consume_using(lease, token, budget, hooks, TerminalAccount::Legacy)
+}
+
+pub(super) fn consume_original<T: AsRef<Handoff>>(
+    lease: &CompilerModuleHandoffCurrentnessLeaseV5,
+    token: CompilerModuleHandoffConsumptionTokenV5<T>,
+    budget: &mut Budget<'_>,
+    hooks: &mut impl HandoffHooks,
+) -> Result<ConsumedCompilerModuleHandoffV5<T>> {
+    consume_using(lease, token, budget, hooks, TerminalAccount::Original)
+}
+
+fn consume_using<T: AsRef<Handoff>>(
+    lease: &CompilerModuleHandoffCurrentnessLeaseV5,
+    token: CompilerModuleHandoffConsumptionTokenV5<T>,
+    budget: &mut Budget<'_>,
+    hooks: &mut impl HandoffHooks,
+    mode: TerminalAccount,
+) -> Result<ConsumedCompilerModuleHandoffV5<T>> {
     let CompilerModuleHandoffConsumptionTokenV5 {
         binding,
         backing,
@@ -270,7 +413,11 @@ pub(super) fn consume<T: AsRef<Handoff>>(
         storage,
         _lock,
     } = token;
-    let result = terminal::<_, Infallible, _>(budget, storage.0, _lock, |budget| {
+    let borrowed = match mode {
+        TerminalAccount::Legacy => 0,
+        TerminalAccount::Original => lease.storage.0,
+    };
+    let result = terminal::<_, Infallible, _>(budget, storage.0, borrowed, _lock, mode, |budget| {
         if !Arc::ptr_eq(&lease.binding, &binding) {
             return Err(Error::MismatchedCurrentnessToken.into());
         }

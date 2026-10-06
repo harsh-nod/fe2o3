@@ -361,6 +361,21 @@ fn physical_initialization_cannot_resurrect_a_source_cell_after_any_source_only_
         ScalarKill::Storage,
         ScalarKill::Deinitialize,
     ] {
+        // Static Deinitialize activates the source partial-move check. The
+        // whole-local Move and storage cases still exercise retained memory.
+        if matches!(kill, ScalarKill::Deinitialize) {
+            assert_eq!(
+                try_unit_source(UnitCase::Killed(kill), &[1]).unwrap_err(),
+                fe2o3_pliron::ProductionSemanticSsaErrorV1::PartialMove {
+                    function: SemanticFunctionIdV1::from_index(1),
+                    block: 0,
+                    statement: Some(2),
+                    local: 2,
+                    violation: fe2o3_pliron::SemanticPartialMoveViolationV1::MaybeMovedValueUsed,
+                }
+            );
+            continue;
+        }
         with_pending_candidate(
             UnitCase::Killed(kill),
             |_| {},

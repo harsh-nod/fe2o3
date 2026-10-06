@@ -37,6 +37,9 @@ const VERIFIER_WORK: usize =
 const BEFORE_HASH: usize = BEFORE_INVERSE_SCRATCH + INVERSE_COMPARE_WORK + VERIFIER_WORK + WIRE;
 const HASH_WORK: usize = 4 + 39 + 2 + 8 + WIRE;
 const COMPLETE_WORK: usize = BEFORE_HASH + HASH_WORK;
+// Before origin sealing, the occurrence-demand scan visits one function and
+// one original block. Its Return terminator creates no pipeline demand.
+const OCCURRENCE_DEMAND_WORK: usize = 1 + 1;
 // Sealing: identity1; function/block index6; root roster3; function association9;
 // borrowed source-span index3; per-function seen counts3; exact span checks5;
 // function coverage1; assertion coverage1. No assertions means no definition scan.
@@ -46,7 +49,7 @@ const ORIGIN_WORK: usize = 1 + 6 + 3 + 9 + 3 + 3 + 5 + 1 + 1;
 const HELPER_WORK: usize = 4 + 2 + 2 + 2 + 4;
 const CAPTURE_PREFLIGHT_WORK: usize = 2;
 const MATERIALIZATION_WORK: usize =
-    CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK + ORIGIN_WORK + HELPER_WORK;
+    CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK + OCCURRENCE_DEMAND_WORK + ORIGIN_WORK + HELPER_WORK;
 
 fn nominal_relation_header() -> usize {
     // The private relation is boxed only for nominal owners. Its optional
@@ -252,7 +255,8 @@ fn pre_ranked_exact_canonical_envelope_preserves_nonzero_prefixes() {
     assert_eq!(ORIGIN_WORK, 32);
     assert_eq!(HELPER_WORK, 14);
     assert_eq!(CAPTURE_PREFLIGHT_WORK, 2);
-    assert_eq!(MATERIALIZATION_WORK, 1_576);
+    assert_eq!(OCCURRENCE_DEMAND_WORK, 2);
+    assert_eq!(MATERIALIZATION_WORK, 1_578);
     let exact = admit(MATERIALIZATION_WORK, complete_storage());
     let owner = exact
         .result
@@ -339,7 +343,8 @@ fn pre_ranked_one_under_storage_denies_inverse_comparison_scratch() {
 
 #[test]
 fn pre_ranked_one_under_complete_work_denies_origin_coverage_without_resetting_history() {
-    let origin_complete = CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK + ORIGIN_WORK;
+    let origin_complete =
+        CAPTURE_PREFLIGHT_WORK + COMPLETE_WORK + OCCURRENCE_DEMAND_WORK + ORIGIN_WORK;
     let short = admit(origin_complete - 1, canonical_storage());
     assert!(
         matches!(short.result, Err(ProductionPreRankedKirErrorV1::Lowering(

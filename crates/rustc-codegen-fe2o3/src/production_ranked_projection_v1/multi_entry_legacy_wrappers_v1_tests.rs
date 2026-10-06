@@ -23,6 +23,7 @@ fn project_intrinsic_contracts(
         next_value,
         ranked_ir,
         None,
+        None,
     )
 }
 

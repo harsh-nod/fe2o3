@@ -465,7 +465,7 @@ fn storage_pointer_casts_and_ordinary_scalar_loads_remain_refused() {
 }
 
 #[test]
-fn scalar_storage_does_not_admit_projection_or_readonly_writes() {
+fn scalar_storage_projects_record_fields_but_does_not_admit_readonly_writes() {
     let target = SimulationTargetV1::amdgpu_64();
     let mut raw = scalar_module(ScalarType::U32, target);
     raw.storage_layouts.push(StorageLayoutV1 {
@@ -500,15 +500,17 @@ fn scalar_storage_does_not_admit_projection_or_readonly_writes() {
     }
     refresh(&mut raw);
     with_view(&raw, |admitted| {
-        unsupported(
-            admitted
-                .preflight(
+        output(
+            &admitted
+                .simulate(
                     &scalar_request(ScalarType::U32, 37, 1, target),
                     target,
                     SimulationLimitsV1::default(),
                 )
-                .unwrap_err(),
-            UnsupportedFeatureV1::InertStorage,
+                .unwrap(),
+            ScalarType::U32,
+            37,
+            target,
         );
     });
     let mut raw = scalar_module(ScalarType::U32, target);

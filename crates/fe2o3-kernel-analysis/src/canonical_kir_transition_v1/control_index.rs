@@ -1,14 +1,13 @@
 //! Queryable control and occurrence facts from the fixed checked transition.
 
 use super::{
-    Budget, CheckedCanonicalKirTransitionV1, Error, INTERNAL, Inventory, Literal, NONE, Resource,
-    Result, State, allocate, index,
+    Budget, CheckedCanonicalKirTransitionV1, Error, INTERNAL, Inventory, NONE, Resource, Result,
+    State, allocate, index,
 };
 use fe2o3_kernel_ir::{
     CanonicalKirBlockCoordinateV1 as Block, CanonicalKirDefinitionCoordinateV1 as Definition,
     CanonicalKirEdgeArgumentCoordinateV1 as EdgeArgument, CanonicalKirEdgeCoordinateV1 as Edge,
-    CanonicalKirUseCoordinateV1 as Use, Module, ScalarType, Terminator,
-    VerifiedCanonicalKernelIrModuleV12,
+    CanonicalKirUseCoordinateV1 as Use, Module, VerifiedCanonicalKernelIrModuleV12,
 };
 use std::mem::size_of;
 
@@ -32,7 +31,7 @@ pub enum CanonicalKirEdgePlacementV1 {
 pub struct CanonicalKirBlockControlV1 {
     pub reachable: bool,
     pub placement: Option<CanonicalKirBlockPlacementV1>,
-    /// Independently derived Boolean selection, not inferred from missing rows.
+    /// Independently derived exact selection, not inferred from missing rows.
     pub selected_successor: Option<Edge>,
 }
 
@@ -167,29 +166,7 @@ impl<'a, 'input, 'output, O> CheckedCanonicalKirControlIndexV1<'a, 'input, 'outp
                         .map_err(|_| Error::Arithmetic)?,
                 })
             };
-            let selected_successor =
-                if matches!(block.terminator, Terminator::ConditionalBranch { .. }) {
-                    let definition = input.uses()[block.terminator_uses.start].definition;
-                    match state.literal(definition, budget)? {
-                        Some(Literal {
-                            ty: ScalarType::Bool,
-                            bits: 0,
-                        }) => Some(Edge {
-                            source: block.coordinate,
-                            successor: 1,
-                        }),
-                        Some(Literal {
-                            ty: ScalarType::Bool,
-                            bits: 1,
-                        }) => Some(Edge {
-                            source: block.coordinate,
-                            successor: 0,
-                        }),
-                        _ => None,
-                    }
-                } else {
-                    None
-                };
+            let selected_successor = state.selected_successor(ordinal, budget)?;
             result.blocks[ordinal] = CanonicalKirBlockControlV1 {
                 reachable: state.reachable[ordinal] != 0,
                 placement,

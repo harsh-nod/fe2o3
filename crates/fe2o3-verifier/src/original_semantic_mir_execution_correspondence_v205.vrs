@@ -1,0 +1,168 @@
+// This is a relational witness, not a capability factory. A final simulation
+// must initialize it from both initial states and preserve it across coupled
+// issuance, transport, derivation, scope retirement and frame transitions.
+// Source local versions and frames are never identified with target epochs.
+struct InvocationExecutionOriginV205 {
+    local: int,
+    version: int,
+    frame: MemoryDynamicFrameV30,
+    source_type: int,
+    role: InvocationSourceExecutionRoleV168,
+}
+
+spec fn invocation_execution_reference_origin_v205(
+    reference: InvocationSourceExecutionReferenceV168,
+) -> InvocationExecutionOriginV205 {
+    InvocationExecutionOriginV205 {
+        local: reference.origin, version: reference.origin_version,
+        frame: reference.frame, source_type: reference.recipe.source_type,
+        role: reference.recipe.role,
+    }
+}
+
+spec fn invocation_execution_origin_current_v205(
+    source: InvocationSourceByteStateV36, origin: InvocationExecutionOriginV205,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && 0 <= origin.local < source.logical.versions.len()
+        && source.logical.versions[origin.local] == origin.version
+        && source.machine.frames.active.contains(origin.frame)
+        && invocation_source_execution_value_v168(source, origin.local,
+            origin.source_type, origin.role)
+}
+
+spec fn invocation_execution_binding_origin_v205(
+    source: InvocationSourceByteStateV36, binding: InvocationExecutionBindingV199,
+) -> Option<InvocationExecutionOriginV205> {
+    match binding.recipe {
+        Some(recipe) => if source.logical.execution_references.contains_key(binding.local) {
+            let reference = source.logical.execution_references[binding.local];
+            if reference.recipe == recipe
+                && invocation_source_execution_record_current_v168(source, reference) {
+                Some(invocation_execution_reference_origin_v205(reference))
+            } else { None }
+        } else { None },
+        None => if 0 <= binding.local < source.logical.versions.len()
+            && 0 <= binding.source_frame < source.machine.frames.active.len()
+            && (binding.role == 0 || binding.role == 1) {
+            Some(InvocationExecutionOriginV205 { local: binding.local,
+                version: source.logical.versions[binding.local],
+                frame: source.machine.frames.active[binding.source_frame],
+                source_type: binding.source_type,
+                role: if binding.role == 0 { InvocationSourceExecutionRoleV168::Context }
+                    else { InvocationSourceExecutionRoleV168::Workgroup },
+            })
+        } else { None },
+    }
+}
+
+spec fn invocation_execution_map_entry_v205(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    identity: MemoryExecutionReferenceV178, origin: InvocationExecutionOriginV205,
+) -> bool {
+    invocation_execution_origin_current_v205(source, origin)
+        && match byte_execution_capability_v178(target, identity.definition,
+            if origin.role == InvocationSourceExecutionRoleV168::Context { 0 } else { 1 }) {
+            Some(capability) => capability.identity == identity,
+            None => false,
+        }
+}
+
+// Only live entries are admitted. A coupled transition must remove or replace
+// retired entries; absence never authorizes a fresh capability or a new epoch.
+spec fn invocation_execution_map_current_v205(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+) -> bool {
+    (forall|identity: MemoryExecutionReferenceV178|
+        #![trigger execution_map[identity]]
+        execution_map.contains_key(identity) ==>
+            invocation_execution_map_entry_v205(source, target, identity, execution_map[identity]))
+        && (forall|left: MemoryExecutionReferenceV178, right: MemoryExecutionReferenceV178|
+            #![trigger execution_map[left], execution_map[right]]
+            execution_map.contains_key(left) && execution_map.contains_key(right)
+                && execution_map[left].local == execution_map[right].local
+                && execution_map[left].version == execution_map[right].version
+                && execution_map[left].frame == execution_map[right].frame ==> left == right)
+}
+
+spec fn invocation_execution_mapped_v205(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    binding: InvocationExecutionBindingV199,
+) -> bool {
+    invocation_execution_related_v199(source, target, binding)
+        && invocation_execution_map_current_v205(source, target, execution_map)
+        && match (invocation_execution_binding_origin_v205(source, binding),
+            byte_execution_capability_v178(target, binding.definition, binding.role),
+            byte_execution_capability_v178(target, binding.context_definition, 0)) {
+            (Some(origin), Some(scope), Some(context)) =>
+                execution_map.contains_key(scope.identity)
+                    && execution_map[scope.identity] == origin
+                    && if binding.role == 0 { true }
+                    else { match source.logical.aggregates[origin.local].execution_lease {
+                        Some(lease) => execution_map.contains_key(context.identity)
+                            && execution_map[context.identity]
+                                == invocation_execution_reference_origin_v205(lease),
+                        None => false,
+                    } },
+            _ => false,
+        }
+}
+
+proof fn invocation_execution_empty_map_grants_no_binding_v205(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    binding: InvocationExecutionBindingV199,
+)
+    ensures !invocation_execution_mapped_v205(source, target, Map::empty(), binding),
+{ }
+
+proof fn invocation_execution_stale_source_version_is_not_current_v205(
+    source: InvocationSourceByteStateV36, origin: InvocationExecutionOriginV205,
+)
+    requires 0 <= origin.local < source.logical.versions.len(),
+        source.logical.versions[origin.local] != origin.version,
+    ensures !invocation_execution_origin_current_v205(source, origin),
+{ }
+
+proof fn invocation_execution_departed_source_frame_is_not_current_v205(
+    source: InvocationSourceByteStateV36, origin: InvocationExecutionOriginV205,
+)
+    requires !source.machine.frames.active.contains(origin.frame),
+    ensures !invocation_execution_origin_current_v205(source, origin),
+{ }
+
+proof fn invocation_execution_stale_target_identity_is_not_an_entry_v205(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    identity: MemoryExecutionReferenceV178, origin: InvocationExecutionOriginV205,
+    capability: MemoryExecutionCapabilityV178,
+)
+    requires byte_execution_capability_v178(target, identity.definition,
+        if origin.role == InvocationSourceExecutionRoleV168::Context { 0 } else { 1 })
+            == Some(capability), capability.identity != identity,
+    ensures !invocation_execution_map_entry_v205(source, target, identity, origin),
+{ }
+
+proof fn invocation_execution_wrong_context_lease_is_not_related_v205(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    binding: InvocationExecutionBindingV199, origin: InvocationExecutionOriginV205,
+    context: MemoryExecutionCapabilityV178, lease: InvocationSourceExecutionReferenceV168,
+)
+    requires binding.role == 1,
+        invocation_execution_binding_origin_v205(source, binding) == Some(origin),
+        source.logical.aggregates[origin.local].execution_lease == Some(lease),
+        byte_execution_capability_v178(target, binding.context_definition, 0) == Some(context),
+        execution_map.contains_key(context.identity),
+        execution_map[context.identity] != invocation_execution_reference_origin_v205(lease),
+    ensures !invocation_execution_mapped_v205(source, target, execution_map, binding),
+{ }
+
+proof fn invocation_execution_mapped_binding_keeps_original_conjunct_v205(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    binding: InvocationExecutionBindingV199,
+)
+    requires invocation_execution_mapped_v205(source, target, execution_map, binding),
+    ensures invocation_execution_related_v199(source, target, binding),
+{ }

@@ -32,8 +32,8 @@ const ONE_FILL: usize = ONE_COUNT + 7;
 const ENTRY_COUNT: usize = 3 + 2 + 1 + 1;
 const ENTRY_FILL: usize = 3 + 2 + 2 + 1 + 7;
 // Join: take/function/initial blocks checks, per-block visit/ranges/lengths/
-// reachability/cursor, three final ranges, entry length/cursor, outer push.
-const ONE_JOIN: usize = 1 + 1 + 1 + (1 + 7 + 2 + 1 + 1) + 3 + 1 + 1 + 1;
+// failure-boundary/reachability/cursor, final ranges, entry cursor, outer push.
+const ONE_JOIN: usize = 1 + 1 + 1 + (1 + 7 + 3 + 1 + 1) + 3 + 1 + 1 + 1;
 const ONE_FUNCTION: usize = INPUT + ONE_COUNT + 1 + ONE_FILL + ENTRY_COUNT + ENTRY_FILL + ONE_JOIN;
 const ONE_WORK: usize = START + ONE_FUNCTION + FINISH;
 // The second root has two blocks and one Goto edge. Each pass adds two
@@ -41,7 +41,7 @@ const ONE_WORK: usize = START + ONE_FUNCTION + FINISH;
 // one block plus edge visit1/keys7/length1/reachability1/cursor1.
 const TWO_COUNT: usize = ONE_COUNT + 2 + 4 + 1 + 2 + 1;
 const TWO_FILL: usize = TWO_COUNT + 7;
-const TWO_JOIN: usize = ONE_JOIN + (1 + 7 + 2 + 1 + 1) + (1 + 7 + 1 + 1 + 1);
+const TWO_JOIN: usize = ONE_JOIN + (1 + 7 + 3 + 1 + 1) + (1 + 7 + 1 + 1 + 1);
 const SECOND_FUNCTION: usize =
     INPUT + TWO_COUNT + 2 + TWO_FILL + ENTRY_COUNT + ENTRY_FILL + TWO_JOIN;
 const TWO_WORK: usize = START + ONE_FUNCTION + SECOND_FUNCTION + FINISH;
@@ -50,6 +50,7 @@ const TWO_WORK: usize = START + ONE_FUNCTION + SECOND_FUNCTION + FINISH;
 struct Layout {
     header: usize,
     function: usize,
+    boundary_headers: usize,
     block: usize,
     successor: usize,
 }
@@ -57,9 +58,12 @@ struct Layout {
 impl Layout {
     fn receipt(self, two: bool) -> usize {
         if two {
-            self.header + 2 * self.function + 3 * self.block + self.successor
+            self.header
+                + 2 * (self.function + self.boundary_headers)
+                + 3 * self.block
+                + self.successor
         } else {
-            self.header + self.function + self.block
+            self.header + self.function + self.boundary_headers + self.block
         }
     }
 }
@@ -78,14 +82,18 @@ fn independent_layout() -> Layout {
     );
     // Attachment is Vec + one-word receipt; its Option uses the Vec niche.
     // FunctionRows is its exact function ID + seven complete Vec headers.
-    // BlockRows is its exact block ID + two usize ranges, including padding.
+    // BlockRows is its exact block ID, two usize ranges and the optional
+    // terminal-failure boundary, including padding.
     let header = vector + size_of::<ProductionSemanticSsaOccurrenceStorageV1>();
     let function = aligned(
         size_of::<SemanticFunctionIdV1>() + 7 * vector,
         vector_alignment,
     );
+    // Each function runs four observer passes, each paired with an adapter
+    // boundary slot. These eight Option headers remain charged through capture.
+    let boundary_headers = (4 + 4) * size_of::<Option<usize>>();
     let block = aligned(
-        size_of::<SsaBlockIdV1>() + 2 * size_of::<Range<usize>>(),
+        size_of::<SsaBlockIdV1>() + 2 * size_of::<Range<usize>>() + size_of::<Option<usize>>(),
         align_of::<Range<usize>>(),
     );
     assert_eq!(
@@ -106,6 +114,7 @@ fn independent_layout() -> Layout {
     Layout {
         header,
         function,
+        boundary_headers,
         block,
         successor,
     }
@@ -199,7 +208,7 @@ fn seed_history(budget: &mut Budget<'_>, work_limit: usize, scratch: usize) -> (
 #[test]
 fn capture_exact_work_and_logical_storage_are_independently_derived() {
     let layout = independent_layout();
-    assert_eq!((ONE_WORK, TWO_WORK), (81, 201));
+    assert_eq!((ONE_WORK, TWO_WORK), (82, 204));
     for two in [false, true] {
         // Existing MIR, planner and fixture allocations precede this ledger.
         let mut owner = source_owner(two);
@@ -268,16 +277,21 @@ fn capture_one_under_final_work_drops_all_pending_rows() {
 fn capture_each_known_allocation_is_denied_before_its_buffer() {
     let l = independent_layout();
     let outer = l.header + 2 * l.function;
-    let first_blocks = outer + l.block;
-    let second_blocks = outer + 3 * l.block;
+    let first_boundary = outer + l.boundary_headers;
+    let first_blocks = first_boundary + l.block;
+    let second_boundary = first_blocks + l.boundary_headers;
+    let second_blocks = second_boundary + 2 * l.block;
     // Attempted payload, prior admitted payload, accepted work at reservation.
     let phases = [
         (l.header, 0, 1),
         (outer, l.header, START),
-        (first_blocks, outer, START + INPUT + ONE_COUNT + 1),
+        // Boundary reserve follows input's two checks, before its Function visit.
+        (first_boundary, outer, START + 2),
+        (first_blocks, first_boundary, START + INPUT + ONE_COUNT + 1),
+        (second_boundary, first_blocks, START + ONE_FUNCTION + 2),
         (
             second_blocks,
-            first_blocks,
+            second_boundary,
             START + ONE_FUNCTION + INPUT + TWO_COUNT + 1,
         ),
         (
@@ -286,7 +300,7 @@ fn capture_each_known_allocation_is_denied_before_its_buffer() {
             START + ONE_FUNCTION + INPUT + TWO_COUNT + 2,
         ),
     ];
-    assert_eq!(phases.map(|(_, _, work)| work), [1, 2, 17, 103, 104]);
+    assert_eq!(phases.map(|(_, _, work)| work), [1, 2, 4, 17, 81, 104, 105]);
     for (attempt, previous, accepted_work) in phases {
         let mut owner = source_owner(true);
         let mut work = Work::new(PREFIX + TWO_WORK);

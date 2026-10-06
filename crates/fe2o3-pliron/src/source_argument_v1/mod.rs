@@ -86,3 +86,6 @@ pub mod complete_body_parameter_vnext;
 pub mod physical_entry_parameter_v20;
 pub mod physical_global_copy_parameter_v21;
 pub mod physical_lds_exchange_parameter_v22;
+
+/// Scoped inert V18 entry correspondence with linked resource custody.
+pub mod scoped_v18;

@@ -295,6 +295,74 @@ impl Meter for NativeValueMeter<'_, '_> {
     }
 }
 
+struct SourceValueMeterV18<'q, 'b, 'w, 'c> {
+    ledger: &'q CorrelationLedgerV18<'b, 'w, 'c>,
+}
+
+impl Meter for SourceValueMeterV18<'_, '_, '_, '_> {
+    fn work(&mut self, amount: usize) -> Result<(), &'static str> {
+        self.ledger
+            .with_budget(|budget| budget.charge_work(amount))
+            .map_err(|_| "source translation caller work ledger refused")
+    }
+    fn reserve(&mut self, amount: usize) -> Result<(), &'static str> {
+        self.ledger
+            .with_budget(|budget| budget.reserve_storage(amount))
+            .map_err(|_| "source translation caller storage ledger refused")
+    }
+    fn release(&mut self, amount: usize) -> Result<(), &'static str> {
+        self.ledger
+            .with_budget(|budget| budget.release_storage(amount))
+            .map_err(|_| "source translation caller storage custody refused")
+    }
+    fn exhausted(&self) -> bool {
+        self.ledger.failure.get().is_some() || self.ledger.inconsistent_inventory.get()
+    }
+    fn storage(&self) -> Result<usize, &'static str> {
+        self.ledger
+            .with_budget(|budget| Ok(budget.storage()))
+            .map_err(|_| "source translation caller storage custody refused")
+    }
+    fn identity(&mut self) -> Result<Ledger, &'static str> {
+        self.ledger
+            .with_budget(|budget| {
+                Ok(Ledger {
+                    slot: budget as *const ArgumentBudgetV1<'_> as usize,
+                    work: budget.work_ledger_identity_v1(),
+                })
+            })
+            .map_err(|_| "source translation caller ledger custody refused")
+    }
+}
+
+// The source-owned root has already expanded each original defined call into
+// its exact retained instance. This supplies accounting, not a legacy helper
+// certificate; retained executable calls still need their own source relation.
+pub(super) fn with_source_value_expansion_v18<T>(
+    ledger: &CorrelationLedgerV18<'_, '_, '_>,
+    action: impl FnOnce(
+        &mut NativeValueExpansion<'_, '_>,
+    ) -> Result<T, ProductionMirPlironTranslationErrorV1>,
+) -> Result<T, ProductionMirPlironTranslationErrorV1> {
+    let headers = std::mem::size_of::<SourceValueMeterV18<'_, '_, '_, '_>>()
+        .checked_add(std::mem::size_of::<NativeValueExpansion<'_, '_>>())
+        .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+    ledger
+        .with_budget(|budget| budget.reserve_storage(headers))
+        .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+    let result = {
+        let mut meter = SourceValueMeterV18 { ledger };
+        run(ValueSource::None, &mut meter, |expansion| {
+            expansion.with_argument_allowance(action)
+        })
+    };
+    let value = result?;
+    ledger
+        .with_budget(|budget| budget.release_storage(headers))
+        .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+    Ok(value)
+}
+
 #[derive(Clone, Copy)]
 enum ValueSource<'a> {
     None,
@@ -374,15 +442,15 @@ impl NativeValueExpansion<'_, '_> {
     fn argument(
         &mut self,
         function: &Function,
-        kir: &KirCorrelationIndexV1<'_>,
-        sites: &BTreeMap<(FunctionOperationLocation, u32), SemanticAccessSiteV1>,
+        kir: &dyn KirCorrelationGraphV18,
+        sites: &dyn SemanticAccessQueriesV18,
         value: ValueId,
         depth: usize,
-        visiting: &mut BTreeSet<ValueId>,
-        budget: &mut UnsupportedIndexCorrelationBudgetV1,
+        visiting: &mut dyn ScalarValueVisitingV18,
+        budget: &mut dyn CorrelationChargeV18,
     ) -> Option<NormalizedScalarExpressionV1> {
         self.with_argument_allowance(|expansion| {
-            normalize_kir_expression_v1(
+            normalize_kir_expression_with_visiting_v18(
                 function, kir, sites, value, depth, visiting, budget, expansion,
             )
         })
@@ -395,14 +463,14 @@ impl NativeValueExpansion<'_, '_> {
     pub(super) fn call(
         &mut self,
         function: &Function,
-        kir: &KirCorrelationIndexV1<'_>,
-        sites: &BTreeMap<(FunctionOperationLocation, u32), SemanticAccessSiteV1>,
+        kir: &dyn KirCorrelationGraphV18,
+        sites: &dyn SemanticAccessQueriesV18,
         location: FunctionOperationLocation,
         operation: &Operation,
         arguments: &[ValueId],
         depth: usize,
-        visiting: &mut BTreeSet<ValueId>,
-        budget: &mut UnsupportedIndexCorrelationBudgetV1,
+        visiting: &mut dyn ScalarValueVisitingV18,
+        budget: &mut dyn CorrelationChargeV18,
     ) -> Option<NormalizedScalarExpressionV1> {
         let context = match self.source {
             ValueSource::Native(context) => context,
@@ -471,16 +539,13 @@ impl NativeValueExpansion<'_, '_> {
     }
 }
 
-fn run<'a>(
+fn run<'a, T>(
     source: ValueSource<'a>,
     meter: &mut dyn Meter,
     action: impl FnOnce(
         &mut NativeValueExpansion<'_, '_>,
-    ) -> Result<
-        ProductionMirPlironTranslationValidationV1,
-        ProductionMirPlironTranslationErrorV1,
-    >,
-) -> Result<ProductionMirPlironTranslationValidationV1, ProductionMirPlironTranslationErrorV1> {
+    ) -> Result<T, ProductionMirPlironTranslationErrorV1>,
+) -> Result<T, ProductionMirPlironTranslationErrorV1> {
     let ledger = meter
         .identity()
         .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?;

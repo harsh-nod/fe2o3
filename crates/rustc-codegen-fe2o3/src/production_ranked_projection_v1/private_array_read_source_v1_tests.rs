@@ -85,7 +85,8 @@ fn private_array_copy_read_attaches_and_resets_each_statement_ordinal() {
 #[test]
 fn private_array_read_requires_independent_initialization() {
     use fe2o3_lower_mir_kernel::{
-        ProductionMirPlironTranslationErrorV1, ProductionSemanticKirErrorV1,
+        ProductionMirPlironTranslationErrorV1, ProductionPreRankedKirErrorV1,
+        ProductionSemanticKirErrorV1,
     };
     for binary in [false, true] {
         for legacy in [false, true] {
@@ -127,33 +128,91 @@ fn private_array_read_requires_independent_initialization() {
             )
             .unwrap()
             .with_kernel_entry(old.kernel_entry().unwrap().clone());
-            let result = attach_private_write_fixture_v1(function, legacy, |materialized, root| {
-                assert_eq!(root.access_sources.len(), if binary { 9 } else { 10 });
-                with_canonical_assertions_v1(materialized, |session| {
-                    assert_eq!(
-                        session
-                            .for_source(ROOT, ROOT)
-                            .private_array_access_index_v1(
-                                ProjectedSemanticAccessSiteV1 {
-                                    block: 1,
-                                    statement: Some(0)
-                                },
-                                fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::RvalueOperand(
-                                    u32::from(binary)
-                                ),
-                            )?,
-                        Some(u64::from(!binary))
-                    );
-                    Ok(())
-                })
-                .unwrap();
-            });
-            assert!(matches!(
-                result,
-                Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
-                    ProductionMirPlironTranslationErrorV1::AllocationOriginMismatch { .. }
-                ))
-            ));
+            // A genuine all-path initializer in the predecessor is sufficient;
+            // the final relation no longer imposes the old same-block shortcut.
+            let read_completed = std::cell::Cell::new(false);
+            let result =
+                attach_private_write_fixture_v1(function.clone(), legacy, |materialized, root| {
+                    assert_eq!(root.access_sources.len(), if binary { 9 } else { 10 });
+                    with_canonical_assertions_v1(materialized, |session| {
+                        assert_eq!(
+                            session
+                                .for_source(ROOT, ROOT)
+                                .private_array_access_index_v1(
+                                    ProjectedSemanticAccessSiteV1 {
+                                        block: 1,
+                                        statement: Some(0)
+                                    },
+                                    fe2o3_pliron::ProductionSemanticSsaOperandRoleV1::RvalueOperand(
+                                        u32::from(binary)
+                                    ),
+                                )?,
+                            Some(u64::from(!binary))
+                        );
+                        Ok(())
+                    })
+                    .unwrap();
+                    read_completed.set(true);
+                });
+            assert!(read_completed.get());
+            if binary {
+                // This fixture also writes the arithmetic result into the
+                // array. Proving its read does not prove that destination value.
+                assert!(matches!(
+                    result,
+                    Err(ProductionSemanticKirErrorV1::MirPlironTranslation(
+                        ProductionMirPlironTranslationErrorV1::MissingRankedEffect {
+                            semantic_block: 1,
+                            semantic_statement: Some(0),
+                            semantic_access_ordinal: 1,
+                        }
+                    ))
+                ));
+            } else {
+                let owner = result.unwrap_or_else(|error| panic!("legacy={legacy}: {error:?}"));
+                assert!(!owner.grants_artifact_or_launch_authority());
+            }
+
+            // Remove the whole-array initializer without changing the observed
+            // read or its independent indexed write. This source is rejected
+            // before a final ranked relation can be constructed.
+            let mut entry = function.blocks()[0].statements().to_vec();
+            entry.remove(1);
+            let uninitialized = private_write_statements_v1(&function, entry);
+            let source = assertion_ssa_functions(assertion_types(), vec![uninitialized]);
+            let launch = source_launch_roster_for_ranked_inputs_v1(
+                &source,
+                &[ranked_root_input_1d(A_NAME, 247, 64)],
+            )
+            .unwrap();
+            let mut work = Work::new(
+                usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT).unwrap(),
+            );
+            let mut budget = Budget::new(
+                &mut work,
+                crate::production_canonical_phase_policy_v1::STORAGE_LIMIT,
+            );
+            let refused =
+                fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+                    source,
+                    launch,
+                    fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(),
+                    &mut budget,
+                );
+            assert!(
+                matches!(
+                    refused,
+                    Err(ProductionPreRankedKirErrorV1::Lowering(
+                        ProductionSemanticKirErrorV1::Unsupported {
+                            function: 0,
+                            block: Some(1),
+                            statement: Some(0),
+                            detail: "retained array read requires whole-array initialization",
+                        }
+                    ))
+                ),
+                "binary={binary} legacy={legacy}: {refused:?}"
+            );
         }
     }
 }

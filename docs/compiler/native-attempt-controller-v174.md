@@ -50,9 +50,58 @@ Trace retirement, issuer cleanup, publication observation, and aggregate pool
 emptiness are distinct. A consuming transition that cannot preserve unresolved
 runtime custody must fail-stop under the dedicated-process contract.
 
-These private transitions do not change the production request's refusal
-selection. Actual device attachment and the joined positive native route still
-need an admitted privileged qualification lane. Ordinary
-compilation, exact/one-short joined controller accounting, actual first-exec/EOF
-ordering, issuer readiness and end-to-end native compilation still require
-qualification; source and mechanical quote tests do not establish those results.
+The controller holds the original root's exit syscall before stepping it and
+reports `RootExitHeld`. Repeated steps cannot release that stop. The current
+completion path requires all descendant terminal waits to have been consumed
+first; live-sibling `exit_group` remains an explicit unsupported case, not a
+claim that all Rust compiler thread lifecycles are admitted.
+
+While that original root remains stopped, the Attempt rechecks its exact task,
+observation epoch and all syscall arguments, then acquires the existing original
+issuer's publication custody. Only the Attempt's separate release transition,
+after actual publication revalidation and another exact held-entry/image/census
+check, steps the terminal syscall. Terminal status, full trace retirement and
+downstream publication acceptance are still separate checks; holding an exit or
+observing publication cannot manufacture successful compiler completion.
+
+The original request now routes these transitions through its retained Attempt,
+including transfer of the original Prepared into the issuer, held-exit
+publication observation, actual root wait and separate complete trace retirement.
+The distinct `CompilerExecutionRootCompletionRecordV1` binds the final original
+input transcript; it never reinterprets a V4 refusal ACK as success. Its public
+codec is inert. An authenticated terminal zero alone is not publication, proof,
+load or launch authority. The request now sends the distinct structured
+`CompilerExecutionRootPublicationCompletionV1`: the original issued owner reads
+its acknowledged successful root wait and whole-tree retirement through its
+funded backing accessor, then copies its retained publication Subject and actual
+issuer Manifest/Ready records. No supplied status or publication ID can select
+that constructor. The original publication stays retained; the structured
+record is inert and cannot replace the parent's locked V5 transaction or signed
+carriage checks. The startup schedule includes both retained owner accesses,
+all nested codecs, and the complete record's overlapping storage.
+
+The startup schedule now composes these phases on the two original accounts.
+Shared inert dependency and issuer quota queries use the same checked formulas
+as the live owners; they neither create owners nor authenticate declared payload
+sizes. Issuer launch/readiness is funded once. Each bounded runtime turn funds
+the maximum phase work plus original policy and continuity checks, while the
+sum of construction peaks preserves overlapping retained outputs. The original
+cleanup account separately covers issuer backing and the publication's late
+lease/token holder, including all monitor and cleanup pump turns plus direct
+terminal retirement. No phase constructs a new budget, renews the deadline, or turns exhausted cleanup into a
+successful retirement. The conservative logical storage ceiling is not an RSS
+or elapsed-time guarantee.
+
+This request wiring is an unqualified integration candidate, not default
+production activation. The startup/cleanup quota composition is implemented but
+awaits joined qualification. Authenticated parent-side completion now has a
+candidate same-account bridge to the existing V5 pipeline, described in
+[native-root-parent-completion-v176.md](native-root-parent-completion-v176.md).
+The wrapper's recipe/approval/finalization callback and one-account continuation
+funding are wired but still require joined qualification. Ordinary failing-compiler
+exit handling, live-sibling exit-group completion and joined native qualification
+remain required. The default selection has not changed. Actual device attachment
+and the joined positive route need an admitted privileged qualification lane.
+Ordinary compilation, exact/one-short joined accounting, actual first-exec/EOF
+ordering, issuer readiness and end-to-end native compilation must be tested;
+source and mechanical quote tests do not establish those results.

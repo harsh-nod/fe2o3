@@ -111,51 +111,192 @@ pub(in super::super) fn check_reconstructed_owner(
     assert_eq!(&parameters.values[1].ty, ty);
 }
 
+thread_local! {
+    static OWNER_LIFECYCLE_INPUT_V29: std::cell::RefCell<Option<Vec<usize>>> = const { std::cell::RefCell::new(None) };
+    static OWNER_LIFECYCLE_OBSERVED_V29: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static OWNER_LIFECYCLE_ASSEMBLED_V29: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn inspect_original_owner_v29(
+    _source: &ExecutionLifecycleSourceV29<'_>,
+    instances: &ExecutionInstancesV29<'_>,
+    emitted: &mut [Option<LoweredFunctionResultV1>],
+    _slots: &OwnedScopedSourceSlotsV29,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    assert_eq!(emitted.len(), 3);
+    let helper = (0..instances.instances().len())
+        .find(|&index| {
+            instances
+                .instance(instances.id_at(index).unwrap())
+                .unwrap()
+                .function()
+                == HELPER
+        })
+        .unwrap();
+    let id = instances.id_at(helper).unwrap();
+    let callee = emitted[helper].as_ref().unwrap();
+    let incoming = instances.incoming(id).unwrap().occurrence();
+    let caller = emitted[incoming.caller.index()].as_ref().unwrap();
+    let mut calls = caller
+        .function
+        .body
+        .as_ref()
+        .unwrap()
+        .blocks
+        .iter()
+        .flat_map(|block| &block.operations)
+        .filter_map(|operation| match &operation.kind {
+            OperationKind::Call {
+                callee: target,
+                arguments,
+            } if target == &callee.function.id => Some(arguments),
+            _ => None,
+        });
+    let arguments = calls.next().expect("one actual owner transport call");
+    assert!(calls.next().is_none());
+    let signature = execution_function_signature_v29(instances, id, budget)?;
+    assert_eq!(
+        selectors(&signature.call_arguments),
+        [(2, None, Some(0)), (1, None, None)]
+    );
+    let body = callee.function.body.as_ref().unwrap();
+    assert_eq!(
+        (
+            arguments.len(),
+            body.parameters.len(),
+            callee.function.signature.parameters.len()
+        ),
+        (2, 2, 2)
+    );
+    let archive = callee
+        .execution_observation
+        .as_ref()
+        .expect("original helper entry archive");
+    let SemanticValueBindingV1::Value { id: value, ty } = archive.locals[6].as_ref().unwrap()
+    else {
+        panic!("whole owner must survive the original helper entry");
+    };
+    assert_ne!(*value, arguments[1]);
+    assert_eq!(*value, body.parameters[1]);
+    assert_eq!(ty, &callee.function.signature.parameters[1]);
+    assert_eq!(
+        *ty,
+        Type::pointer(
+            Type::Scalar(ScalarType::U32),
+            AddressSpace::Global,
+            AccessMode::ReadWrite
+        )
+    );
+    let rows = emitted
+        .iter()
+        .map(|row| {
+            row.as_ref()
+                .unwrap()
+                .lifecycle_events
+                .as_ref()
+                .unwrap()
+                .rows
+                .as_ptr() as usize
+        })
+        .collect();
+    assert!(OWNER_LIFECYCLE_INPUT_V29.replace(Some(rows)).is_none());
+    OWNER_LIFECYCLE_OBSERVED_V29.set(OWNER_LIFECYCLE_OBSERVED_V29.get() + 1);
+    Ok(())
+}
+
+fn inspect_original_owner_assembly_v29(
+    pending: &mut PendingScopedRootEmissionV29,
+    _instances: &ExecutionInstancesV29<'_>,
+    _plan: &SourceReferencePlanV29<'_, '_>,
+    _budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<(), ProductionSemanticKirErrorV1> {
+    let before = OWNER_LIFECYCLE_INPUT_V29
+        .take()
+        .expect("this original candidate's lifecycle rows");
+    assert_eq!(pending.sidecars.rows.len(), before.len());
+    let mut events = 0;
+    for (sidecar, before) in pending.sidecars.rows.iter().zip(before) {
+        let rows = sidecar.lifecycle_events.as_ref().unwrap();
+        assert_eq!(rows.rows.as_ptr() as usize, before);
+        assert_eq!(
+            rows.retained_storage,
+            rows.rows.capacity() * std::mem::size_of::<DeferredLifecycleEventV29>()
+        );
+        events += rows.rows.len();
+    }
+    assert_eq!(events, 3);
+    OWNER_LIFECYCLE_ASSEMBLED_V29.set(OWNER_LIFECYCLE_ASSEMBLED_V29.get() + 1);
+    Ok(())
+}
+
+fn run_original_owner_v29(
+    work: usize,
+    storage: usize,
+) -> (SourceOwnedResultV18<()>, usize, usize, bool) {
+    struct Restore(Option<RootExecutionArchiveObserverV29>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ROOT_EXECUTION_ARCHIVE_OBSERVER_V29.set(self.0);
+            OWNER_LIFECYCLE_INPUT_V29.take();
+        }
+    }
+    OWNER_LIFECYCLE_OBSERVED_V29.set(0);
+    OWNER_LIFECYCLE_ASSEMBLED_V29.set(0);
+    assert!(OWNER_LIFECYCLE_INPUT_V29.take().is_none());
+    let _restore = Restore(
+        ROOT_EXECUTION_ARCHIVE_OBSERVER_V29.replace(Some(inspect_original_owner_assembly_v29)),
+    );
+    super::super::scoped_root_tests::source_slot_tests::run_original_source_fixture_v29(
+        || owner_parameter_fixture(OwnerParameterCase::Valid).0,
+        false,
+        false,
+        0,
+        inspect_original_owner_v29,
+        work,
+        storage,
+    )
+}
+
 #[test]
 fn owner_parameter_crosses_the_real_source_lifecycle_boundary() {
-    let (result, work, peak) = run_lifecycle(
-        false,
-        Fault::OwnerParameter(OwnerTransportFault::None),
-        10_000_000,
-        10_000_000,
+    let (result, work, peak, completed) = run_original_owner_v29(10_000_000, 10_000_000);
+    result.unwrap();
+    assert!(completed);
+    assert_eq!(
+        (
+            OWNER_LIFECYCLE_OBSERVED_V29.get(),
+            OWNER_LIFECYCLE_ASSEMBLED_V29.get()
+        ),
+        (3, 3)
     );
-    assert_eq!(result.unwrap().len(), 3);
-    assert!(
-        run_lifecycle(
-            false,
-            Fault::OwnerParameter(OwnerTransportFault::None),
-            work,
-            peak
-        )
-        .0
-        .is_ok()
+    let (result, exact_work, exact_peak, completed) = run_original_owner_v29(work, peak);
+    result.unwrap();
+    assert!(completed);
+    assert_eq!((exact_work, exact_peak), (work, peak));
+    assert_eq!(
+        (
+            OWNER_LIFECYCLE_OBSERVED_V29.get(),
+            OWNER_LIFECYCLE_ASSEMBLED_V29.get()
+        ),
+        (3, 3)
     );
+    let (result, _, _, completed) = run_original_owner_v29(work - 1, peak);
+    assert!(!completed);
     assert!(matches!(
-        run_lifecycle(
-            false,
-            Fault::OwnerParameter(OwnerTransportFault::None),
-            work - 1,
-            peak
-        )
-        .0,
-        Err(
-            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(ArgumentResourceV1::Work(
-                _
-            ))
-        )
+        super::super::scoped_root_tests::source_slot_tests::original_repeated_source_resource_v29(
+            result.unwrap_err()
+        ),
+        ArgumentResourceV1::Work(_)
     ));
-    let short_storage = run_lifecycle(
-        false,
-        Fault::OwnerParameter(OwnerTransportFault::None),
-        work,
-        peak - 1,
-    )
-    .0;
-    let Err(ProductionSemanticKirErrorV1::AssertOrigin(SemanticKirAssertOriginErrorV1::Resource(
-        ArgumentResourceV1::Storage(limit),
-    ))) = short_storage
+    let (result, _, _, completed) = run_original_owner_v29(work, peak - 1);
+    assert!(!completed);
+    let ArgumentResourceV1::Storage(limit) =
+        super::super::scoped_root_tests::source_slot_tests::original_repeated_source_resource_v29(
+            result.unwrap_err(),
+        )
     else {
-        panic!("{short_storage:?}");
+        panic!("exact original-owner storage refusal required");
     };
     assert_eq!(limit.actual(), peak);
     assert_eq!(limit.limit(), peak - 1);
@@ -185,4 +326,21 @@ fn owner_parameter_rejects_actual_caller_and_callee_substitutions() {
             "{fault:?}: {result:?}"
         );
     }
+}
+
+#[test]
+fn owner_parameter_borrowed_assembly_keeps_the_consuming_physical_gate() {
+    let (result, _, _) = run_lifecycle(
+        false,
+        Fault::OwnerParameter(OwnerTransportFault::None),
+        10_000_000,
+        10_000_000,
+    );
+    assert!(matches!(
+        result,
+        Err(ProductionSemanticKirErrorV1::Unsupported {
+            detail: "original raw source requires consuming expanded physical admission",
+            ..
+        })
+    ));
 }

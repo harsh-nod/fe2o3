@@ -85,6 +85,8 @@ pub(crate) const fn disposition(device_candidate_count: usize) -> ProductionDisp
 
 #[derive(Debug)]
 pub(crate) enum ProductionPipelineError {
+    MixedSourcePublication(Box<source_owned_v29::Error>),
+    MixedRuntime(fe2o3_verifier::FunctionalRefinementRuntimeErrorV1),
     CustomLlvmConfiguration,
     EmptyCollectedDeviceClosure,
     SemanticImport(crate::collector::ProductionSemanticImportErrorV1),
@@ -207,6 +209,8 @@ impl fmt::Display for ProductionPipelineError {
             Self::EmptyCollectedDeviceClosure => formatter.write_str(
                 "production compilation requires a nonempty collector-sealed device closure",
             ),
+            Self::MixedSourcePublication(error) => write!(formatter, "mandatory mixed source publication failed: {error}"),
+            Self::MixedRuntime(error) => write!(formatter, "mandatory mixed refinement runtime unavailable: {error}"),
             Self::SemanticImport(error) => write!(formatter, "production compilation {error}"),
             Self::SemanticMiddleEnd(error) => {
                 write!(formatter, "production compilation exact semantic middle end failed: {error}")
@@ -382,6 +386,8 @@ impl std::error::Error for ProductionPipelineError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::ScalarEmissionCapture(error) => Some(error.as_ref()),
+            Self::MixedSourcePublication(error) => Some(error.as_ref()),
+            Self::MixedRuntime(error) => Some(error),
             Self::SemanticImport(error) => Some(error),
             Self::SemanticMiddleEnd(error) => Some(error),
             Self::SemanticSsa(error) => Some(error),
@@ -556,6 +562,12 @@ struct AuthenticatedProductionBindings {
     typed_descriptor_roots: Vec<crate::compiler_descriptor::TypedDescriptorRootV1>,
     transaction: ProductionTransactionBindings,
 }
+
+#[path = "production_pipeline/formal_envelope_preflight_v2.rs"]
+mod formal_envelope_preflight_v2;
+
+#[path = "production_pipeline/physical_target_context_v2.rs"]
+mod physical_target_context_v2;
 
 pub(super) struct AdmittedSemanticMirStage {
     semantic_mir: fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
@@ -1141,10 +1153,12 @@ impl TargetNeutralProductionCompilation {
             ranked_verification,
             bindings,
         } = self;
+        let envelopes = formal_envelope_preflight_v2::authenticated_envelopes(&lowered, &bindings)?;
         let admitted = match budget {
             Some(budget) => fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::
-                try_admit_with_bounded_translation_budget_v1(lowered, budget),
-            None => fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::try_admit(lowered),
+                try_admit_for_launch_envelopes_with_bounded_translation_budget_v2(lowered, &envelopes, budget),
+            None => fe2o3_lower_mir_kernel::ProductionFormalMemoryOwnerV1::
+                try_admit_for_launch_envelopes_v2(lowered, &envelopes),
         }.map_err(ProductionPipelineError::FormalMemoryAdmission)?;
         Ok(FormalMemoryAdmittedProductionCompilation {
             admitted,
@@ -1174,6 +1188,7 @@ impl FormalMemoryAdmittedProductionCompilation {
                 crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure,
             ));
         }
+        let mut physical_geometry = Vec::with_capacity(semantic.roots().len());
         for (((typed_root, semantic_root), kernel), formal) in bindings
             .typed_descriptor_roots
             .iter()
@@ -1209,7 +1224,7 @@ impl FormalMemoryAdmittedProductionCompilation {
                     crate::production_geometry_v1::ProductionGeometryErrorV1::NonExactDescriptorWorkgroup,
                 ),
             )?;
-            crate::production_geometry_v1::derive_production_geometry_v1(
+            let geometry = crate::production_geometry_v1::derive_production_geometry_v1(
                 admitted.semantic_kir().module(),
                 typed_root.entry_symbol(),
                 semantic_function,
@@ -1217,9 +1232,16 @@ impl FormalMemoryAdmittedProductionCompilation {
                 target_profile.device_target(),
             )
             .map_err(ProductionPipelineError::Geometry)?;
+            physical_geometry.push(geometry);
         }
         let optimized = RetainedProductionTargetV30::try_lower(&admitted, target_profile)?;
         let target_module = optimized.module();
+        let physical_context = physical_target_context_v2::bind(
+            admitted.semantic_kir().module(),
+            target_module,
+            target_profile,
+            &physical_geometry,
+        )?;
         let workgroups = exact_target_workgroup_roster_v1(target_module)?;
         let target_kir_identity = match admitted
             .semantic_kir()
@@ -1248,20 +1270,12 @@ impl FormalMemoryAdmittedProductionCompilation {
                 dialect_amdgcn::ProductionSemanticAnchorKirIdentityV1::from_v11(&owner)
             }
         };
-        let lowering = match target_profile {
-            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 => {
-                dialect_amdgcn::lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                    target_module,
-                    target_kir_identity,
-                )
-            }
-            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950 => {
-                dialect_amdgcn::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_semantic_anchors_v1(
-                    target_module,
-                    target_kir_identity,
-                )
-            }
-        };
+        let lowering =
+            dialect_amdgcn::lower_compiler_module_to_xnack_minus_llvm_ir_with_physical_launch_v2(
+                target_module,
+                target_kir_identity,
+                &physical_context,
+            );
         let dialect_llvm_ir = lowering.map_err(ProductionPipelineError::TargetLowering)?;
         let llvm_ir = dialect_amdgcn::bind_production_llvm22_worker_layout_v1(&dialect_llvm_ir)
             .map_err(ProductionPipelineError::UpstreamLlvmLayoutBinding)?;
@@ -3403,6 +3417,18 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         nominal: bool,
     ) -> Result<ProductionCompilation<'tcx, AdmittedSemanticMirStage>, ProductionPipelineError>
     {
+        self.import_semantic_mir_with_profile_v29(if nominal {
+            source_owned_v29::ImportProfile::NominalV35
+        } else {
+            source_owned_v29::ImportProfile::Current
+        })
+    }
+
+    fn import_semantic_mir_with_profile_v29(
+        self,
+        profile: source_owned_v29::ImportProfile,
+    ) -> Result<ProductionCompilation<'tcx, AdmittedSemanticMirStage>, ProductionPipelineError>
+    {
         let CollectedRustStage {
             tcx,
             closure,
@@ -3410,18 +3436,28 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             debug_source_capture,
             transaction,
         } = self.stage;
-        let constructed = if nominal {
-            crate::collector::construct_production_semantic_mir_nominal_v35(
-                tcx,
-                closure,
-                debug_source_capture,
-            )
-        } else {
-            crate::collector::construct_production_semantic_mir_v1(
-                tcx,
-                closure,
-                debug_source_capture,
-            )
+        let constructed = match profile {
+            source_owned_v29::ImportProfile::NominalV35 => {
+                crate::collector::construct_production_semantic_mir_nominal_v35(
+                    tcx,
+                    closure,
+                    debug_source_capture,
+                )
+            }
+            source_owned_v29::ImportProfile::Current => {
+                crate::collector::construct_production_semantic_mir_v1(
+                    tcx,
+                    closure,
+                    debug_source_capture,
+                )
+            }
+            source_owned_v29::ImportProfile::SourceOwnedV29 => {
+                crate::collector::construct_production_semantic_mir_source_owned_v29(
+                    tcx,
+                    closure,
+                    debug_source_capture,
+                )
+            }
         }
         .map_err(ProductionPipelineError::SemanticImport)?;
         let crate::collector::ConstructedProductionSemanticMirV1 {
@@ -3609,8 +3645,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         compiler_execution: AdmittedProtectedCompilerExecutionV1,
     ) -> Result<fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1, ProductionPipelineError>
     {
-        self.lower_production_target(target_budget)?
-            .publish_worker_handoff(compiler_execution)
+        self.publish_predicated_worker_handoff_v90(target_budget, compiler_execution)
     }
 
     /// Retains the original extraction milestone while consuming the same
@@ -4133,6 +4168,8 @@ pub(crate) mod physical_entry_diagnostic_v20;
 pub(crate) mod physical_entry_target_v20;
 pub(crate) mod physical_global_copy_diagnostic_v21;
 pub(crate) mod physical_lds_exchange_diagnostic_v22;
+#[path = "production_pipeline_source_owned_v29.rs"]
+pub(crate) mod source_owned_v29;
 pub(crate) use complete_body_vnext::AuthenticatedCompleteBodyTargetModuleV19;
 pub(crate) use physical_entry_target_v20::AuthenticatedPhysicalEntryTargetModuleV20;
 pub(crate) mod ordered_composition_target_v1;
@@ -4368,7 +4405,7 @@ mod tests {
             .find("RetainedProductionTargetV30::try_lower(")
             .unwrap();
         let lower = transaction
-            .find("lower_compiler_module_to_gfx942_xnack_minus_llvm_ir_with_semantic_anchors_v1(")
+            .find("lower_compiler_module_to_xnack_minus_llvm_ir_with_physical_launch_v2(")
             .unwrap();
         assert!(retain < lower);
         assert!(!retained.contains("optimize_kernel_ir_module_v"));
@@ -4518,7 +4555,12 @@ mod tests {
             .unwrap()
             .0;
         assert!(publication.contains("compiler_execution: AdmittedProtectedCompilerExecutionV1"));
-        assert!(publication.contains(".publish_worker_handoff(compiler_execution)"));
+        assert!(
+            publication.contains(
+                ".publish_predicated_worker_handoff_v90(target_budget, compiler_execution)"
+            )
+        );
+        assert!(!publication.contains("lower_production_target("));
         assert!(pipeline.contains(concat!("publish_compiler_module_handoff", "_v3")));
         assert!(pipeline.contains(concat!(
             "publish_compiler_execution_receipt_transport",

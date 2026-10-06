@@ -243,3 +243,84 @@ fn formal_first_semantic_replay_refusal_is_not_formal_admission() {
     assert_eq!(budget.work(), 0);
     assert_eq!(budget.storage(), floor);
 }
+
+#[test]
+fn envelope_admission_preserves_both_paid_replays_and_original_reports() {
+    let (owner, floor) = attached();
+    let extents = [[128, 1, 1]];
+    let mut work = Work::new(WORK);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    budget.reserve_storage(floor).unwrap();
+    let identity = budget.work_ledger_identity_v1();
+    owner
+        .verify_equivalence_with_bounded_translation_budget_v1(&mut budget)
+        .unwrap();
+    let one = budget.work();
+    assert!(one > 0);
+    let paid = Formal::try_admit_for_launch_envelopes_with_bounded_translation_budget_v2(
+        owner,
+        &extents,
+        &mut budget,
+    )
+    .unwrap();
+    assert_eq!(budget.work(), one.checked_mul(3).unwrap());
+    assert_eq!(budget.storage(), floor);
+    assert!(budget.work_ledger_identity_v1() == identity);
+    let (original, _) = attached();
+    let original = Formal::try_admit_for_launch_envelopes_v2(original, &extents).unwrap();
+    assert_eq!(paid.kernels(), original.kernels());
+    assert_eq!(paid.launch_envelopes_v2(), original.launch_envelopes_v2());
+    assert_eq!(paid.launch_envelopes_v2().unwrap()[0].extents(), extents[0]);
+    assert_eq!(
+        paid.semantic_kir().module(),
+        original.semantic_kir().module()
+    );
+    assert!(!paid.grants_artifact_or_launch_authority());
+    paid.verify_equivalence().unwrap();
+    assert_eq!(budget.work(), one.checked_mul(3).unwrap());
+    drop(paid);
+}
+
+fn envelope_run(limit: usize, extents: &[[u64; 3]]) -> (bool, usize, bool) {
+    let (owner, floor) = attached();
+    let mut work = Work::new(limit);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    budget.reserve_storage(floor).unwrap();
+    let identity = budget.work_ledger_identity_v1();
+    let result = Formal::try_admit_for_launch_envelopes_with_bounded_translation_budget_v2(
+        owner,
+        extents,
+        &mut budget,
+    );
+    let ok = result.is_ok();
+    drop(result);
+    assert_eq!(budget.storage(), floor);
+    assert!(budget.work_ledger_identity_v1() == identity);
+    (ok, budget.work(), budget.failed_work().is_some())
+}
+
+#[test]
+fn envelope_admission_exact_and_short_work_preserve_the_original_floor() {
+    let extents = [[128, 1, 1]];
+    let full = envelope_run(WORK, &extents);
+    assert!(full.0 && full.1 > 0 && !full.2);
+    assert_eq!(envelope_run(full.1, &extents), full);
+    let short = envelope_run(full.1 - 1, &extents);
+    assert!(!short.0 && short.2);
+    assert!(short.1 < full.1);
+    assert_eq!(envelope_run(0, &extents), (false, 0, true));
+}
+
+#[test]
+fn paid_envelope_admission_still_rejects_missing_or_invalid_envelopes() {
+    for extents in [
+        vec![],
+        vec![[128, 1, 1]; 2],
+        vec![[63, 1, 1]],
+        vec![[0, 1, 1]],
+        vec![[128, 2, 1]],
+    ] {
+        let result = envelope_run(WORK, &extents);
+        assert!(!result.0 && result.1 > 0 && !result.2);
+    }
+}

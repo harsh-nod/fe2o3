@@ -118,6 +118,46 @@ pub(crate) fn validate_native_conditional_source_through_f_using_v2<Failure>(
 where
     Failure: From<Error> + From<SourceError> + From<Resource>,
 {
+    validate_using(packet_bytes, accepted, inputs, budget, false, join)
+}
+
+/// Selected only by the concrete original-account V5 recovery window. Nested
+/// history composition counts its complete original owners again; no source
+/// reconstruction, callback or terminal account rule is replaced here.
+pub(crate) fn validate_native_conditional_source_through_f_using_original_account_v2<Failure>(
+    packet_bytes: &[u8],
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    inputs: Inputs<'_, '_, '_>,
+    budget: &mut Budget<'_>,
+    join: impl FnOnce(
+        &ReplayedNativeSourceV1,
+        &DecodedHistory<'_, '_>,
+        &Relation<'_, '_, '_, '_, '_>,
+        &mut Budget<'_>,
+    ) -> Result<(), Failure>,
+) -> Result<Output, Failure>
+where
+    Failure: From<Error> + From<SourceError> + From<Resource>,
+{
+    validate_using(packet_bytes, accepted, inputs, budget, true, join)
+}
+
+fn validate_using<Failure>(
+    packet_bytes: &[u8],
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    inputs: Inputs<'_, '_, '_>,
+    budget: &mut Budget<'_>,
+    original_history: bool,
+    join: impl FnOnce(
+        &ReplayedNativeSourceV1,
+        &DecodedHistory<'_, '_>,
+        &Relation<'_, '_, '_, '_, '_>,
+        &mut Budget<'_>,
+    ) -> Result<(), Failure>,
+) -> Result<Output, Failure>
+where
+    Failure: From<Error> + From<SourceError> + From<Resource>,
+{
     let header = header::<Failure>(std::mem::size_of_val(&join))?;
     account::transfer_using(budget, |budget| {
         require_backing(packet_bytes, &inputs, budget)?;
@@ -127,10 +167,14 @@ where
                 inputs.expected_limits,
                 budget,
             )?;
-            let history = inputs
-                .decoded_history
-                .check_semantics(budget)
-                .map_err(|error| Error(Cause::History(error)))?;
+            let history = if original_history {
+                inputs
+                    .decoded_history
+                    .check_semantics_in_original_account_v1(budget)
+            } else {
+                inputs.decoded_history.check_semantics(budget)
+            }
+            .map_err(|error| Error(Cause::History(error)))?;
             let storage = history.storage().retained_storage();
             account::temporary_using(budget, storage, move |budget| {
                 let result = with_decoded_native_conditional_source_packet_v2(

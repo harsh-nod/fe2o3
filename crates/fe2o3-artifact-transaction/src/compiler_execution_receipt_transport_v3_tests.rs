@@ -8,6 +8,63 @@ use std::os::unix::fs::PermissionsExt;
 const LIMIT: usize = MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5;
 const BODY: &[u8] = b"opaque\0receipt\xff";
 
+#[test]
+fn original_locked_transport_and_subject_exact_one_short_preserve_pair() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    // Fixture production is a separate inert setup, not a runtime-account reset.
+    let mut fixture_work = Work::new(usize::MAX);
+    let mut fixture_budget = Budget::new(&mut fixture_work, LIMIT);
+    let (f, receipt, expected) = setup(&mut fixture_budget);
+    let expected_receipt = publish_body(&f, &expected, &mut fixture_budget).unwrap();
+    let lease = f.lease(receipt, &mut fixture_budget);
+    let token = token(&lease, &mut fixture_budget);
+    let floor = LIMIT + 1 + fixture_budget.storage();
+    let run = |work, storage| {
+        let mut owned = Owned::new(Work::new(work), storage);
+        owned.with_budget(|b| {
+            b.reserve_storage(floor).unwrap();
+            let identity = b.storage_account_identity_v1();
+            let ledger = b.work_ledger_identity_v1();
+            let result = (|| -> Result<()> {
+                assert!(Subject::from_publication(receipt, token.handoff(), b).is_err());
+                assert!(
+                    recover_compiler_execution_receipt_transport_with_currentness_v3(
+                        &lease, &token, &expected, b
+                    )
+                    .is_err()
+                );
+                let (subject, charge) =
+                    Subject::from_publication_in_original_account_v3(receipt, token.handoff(), b)?;
+                b.reserve_storage(charge.retained_storage())?;
+                assert_eq!(subject.canonical_bytes(), expected.canonical_bytes());
+                let (owner, storage) =
+                    recover_compiler_execution_receipt_transport_in_original_account_v3(
+                        &lease, &token, &subject, b,
+                    )?;
+                check_owner(owner, storage, expected_receipt, b);
+                drop(subject);
+                b.release_storage(charge.retained_storage())?;
+                Ok(())
+            })();
+            assert_eq!(b.storage_account_identity_v1(), identity);
+            assert!(b.work_ledger_identity_v1() == ledger);
+            assert_eq!(b.storage_limit(), storage);
+            assert!(b.storage() >= floor);
+            if result.is_ok() {
+                assert_eq!(b.storage(), floor);
+            }
+            lease.validate_current_token(&token).unwrap();
+            f.ready();
+            (result.is_ok(), b.work(), b.peak_storage())
+        })
+    };
+    let baseline = run(usize::MAX, floor + LIMIT);
+    assert!(baseline.0);
+    assert_eq!(run(baseline.1, baseline.2), baseline);
+    assert!(!run(baseline.1 - 1, baseline.2).0);
+    assert!(!run(baseline.1, baseline.2 - 1).0);
+}
+
 fn setup(budget: &mut Budget<'_>) -> (Fixture, CompilerModuleHandoffReceiptV5, Subject) {
     setup_profile(false, budget)
 }

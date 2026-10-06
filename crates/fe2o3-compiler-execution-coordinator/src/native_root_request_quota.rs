@@ -5,25 +5,14 @@ use crate::compiler_invocation_staging::StagedRustcInvocationV1 as Staging;
 use crate::native_launch::{self as native, CompilerExecutionLaunchErrorV2 as NativeError};
 use crate::native_runtime_inventory::NativeCompilerExecutableInventory as Executables;
 use fe2o3_build_authority::{
-    COMPILER_APPROVAL_POLICY_BYTES_V2 as POLICY_BYTES,
-    COMPILER_APPROVAL_POLICY_WORK_V2 as POLICY_WORK,
     COMPILER_RUNTIME_MANIFEST_MAX_BYTES_V1 as MANIFEST_BYTES,
     COMPILER_RUNTIME_MANIFEST_MAX_ENTRIES_V1 as ENTRIES,
     COMPILER_RUNTIME_MANIFEST_MAX_TOTAL_BYTES_V1 as CODE_BYTES,
-    COMPILER_RUNTIME_MANIFEST_STORAGE_V1 as CODEC_SCRATCH,
-    COMPILER_RUNTIME_MANIFEST_WORK_V1 as CODEC_WORK,
 };
 use fe2o3_compiler_closure_capability::{
-    CompilerApprovalStorageV2 as ApprovalCharge,
-    CompilerExecutionClientProfileCapabilityV3 as Profile,
     RetainedCompilerRuntimeExecTransferChargeV1 as TransferCharge,
     RetainedCompilerRuntimeInventoryTransferV1 as Transfer,
     RetainedCompilerRuntimeStorageV1 as RuntimeCharge,
-};
-use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V3 as PROFILE_BYTES,
-    COMPILER_EXECUTION_CLIENT_PROFILE_STORAGE_V3 as PROFILE_SCRATCH,
-    COMPILER_EXECUTION_CLIENT_PROFILE_WORK_V3 as PROFILE_WORK,
 };
 use fe2o3_protected_service_spawn::{
     RetainedResourcesV2 as Resources, launch_io,
@@ -37,27 +26,12 @@ use fe2o3_protected_static_executable::{
 };
 use root::{CompilerExecutionRootAdmissionQuotaV2 as Quota, repeated, sum};
 
-// Mirrors the closed local I/O allowance of compiler_approval_v2 and
-// retained_compiler_runtime_v1. Nested codecs, hashing and scopes are separate.
-const ORIGIN_WORK: usize = 256 * 1024;
 const CHUNK: usize = 64 * 1024;
-const APPROVAL_WORK: usize = 8
-    + ORIGIN_WORK
-    + POLICY_WORK
-    + PROFILE_WORK
-    + 2 * Profile::IO_WORK
-    + POLICY_BYTES
-    + PROFILE_BYTES
-    + 1024;
+const APPROVAL_WORK: usize = Approval::MAX_OPERATION_WORK;
 const INVENTORY_WORK: usize = 8 + 32 * 1024 + 4 * MANIFEST_BYTES + ENTRIES * 1088;
 const SINGLE_TRANSFER_WORK: usize = 16 + 32 * 1024 + 4 * MANIFEST_BYTES;
-const APPROVAL_SCRATCH: usize = 16 * 1024
-    + PROFILE_SCRATCH
-    + 2 * Profile::IO_STORAGE
-    + size_of::<(Approval, ApprovalCharge)>()
-    + POLICY_BYTES
-    + PROFILE_BYTES;
-const RUNTIME_SCRATCH: usize = 2 * CODEC_SCRATCH + 2 * size_of::<Runtime>() + 2 * CHUNK + 16 * 1024;
+const APPROVAL_SCRATCH: usize = Approval::MAX_OPERATION_SCRATCH;
+const RUNTIME_SCRATCH: usize = Runtime::MAX_OPERATION_SCRATCH;
 // Runtime includes the private inventory snapshots; using its size bounds each
 // private transfer frame without exporting their layouts or inventing an API.
 const TRANSFER_SCRATCH: usize = 2 * CHUNK
@@ -67,24 +41,13 @@ const TRANSFER_SCRATCH: usize = 2 * CHUNK
     + 8192;
 
 fn file_pass() -> Result<usize> {
-    sum(&[
-        repeated(ENTRIES, ORIGIN_WORK)?,
-        repeated(root::length(CODE_BYTES)?, 8)?,
-    ])
+    Ok(Runtime::maximum_file_pass_work()?)
 }
 
 // Covers either admission or revalidation: approval before/after, one complete
 // code hash pass, both manifest decodes and the complete fixed-origin walk.
 fn runtime_pass() -> Result<usize> {
-    sum(&[
-        3 * APPROVAL_WORK,
-        ORIGIN_WORK,
-        2048,
-        2 * CODEC_WORK,
-        MANIFEST_BYTES,
-        repeated(ENTRIES, ORIGIN_WORK)?,
-        file_pass()?,
-    ])
+    Ok(Runtime::maximum_operation_work()?)
 }
 
 pub(super) fn preparation() -> Result<Quota> {
@@ -378,4 +341,131 @@ pub(super) fn cleanup_growth() -> Result<(usize, usize)> {
             Resources::<ManagedProofHelper>::payload_storage(compiler)?,
         ])?,
     ))
+}
+
+const MAX_HANDOFF: usize = fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_BYTES_V5;
+
+impl RootCompilerRequest<'_> {
+    /// One closed runtime turn, including both original-policy queries and
+    /// original-owner continuity. No budget or admitted owner is constructed.
+    pub(crate) fn runtime_turn_quota() -> Result<Quota> {
+        use compiler_attempt::Attempt;
+        use fe2o3_compiler_execution_protocol::{
+            COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_MATCH_WORK_V1 as COMPLETION_WORK,
+            COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_STORAGE_V1 as COMPLETION_SCRATCH,
+        };
+        let policy = Attempt::original_policy_identity_quota().map_err(helper_error)?;
+        let continuity = Attempt::maximum_continuity_quota().map_err(helper_error)?;
+        let validation = refusal()?;
+        let gate = Attempt::runtime_gate_quota().map_err(helper_error)?;
+        let terminal = Attempt::runtime_step_quota().map_err(helper_error)?;
+        let publication_rpc =
+            Attempt::publication_service_quota(MAX_HANDOFF).map_err(helper_error)?;
+        let completion = Attempt::publication_completion_quota().map_err(helper_error)?;
+        let phases = [
+            runtime_interrupt()?,
+            from_native(Attempt::runtime_poll_quota().map_err(helper_error)?),
+            from_native(Attempt::arm_runtime_quota().map_err(helper_error)?),
+            Quota {
+                work: sum(&[validation.work(), gate.work()])?,
+                scratch: sum(&[validation.scratch(), gate.scratch()])?,
+            },
+            from_native(Attempt::first_exec_poll_quota().map_err(helper_error)?),
+            runtime_capture()?,
+            from_native(Attempt::runtime_confirmation_quota().map_err(helper_error)?),
+            Quota {
+                work: sum(&[terminal.work(), publication_rpc.work()])?,
+                scratch: sum(&[terminal.scratch(), publication_rpc.scratch()])?,
+            },
+            from_native(Attempt::retired_publication_confirmation_quota().map_err(helper_error)?),
+            from_native(
+                Attempt::maximum_root_exit_release_quota(MAX_HANDOFF).map_err(helper_error)?,
+            ),
+            Quota {
+                work: sum(&[terminal.work(), completion.work()])?,
+                scratch: sum(&[terminal.scratch(), completion.scratch()])?,
+            },
+            Quota {
+                work: sum(&[EXCHANGE_WORK, COMPLETION_WORK])?,
+                scratch: sum(&[FRAME, io::packet_receive_scratch(N), COMPLETION_SCRATCH])?,
+            },
+        ];
+        Ok(Quota {
+            work: sum(&[
+                Self::LOCAL_WORK,
+                repeated(2, policy.work())?,
+                repeated(2, continuity.work())?,
+                phases.iter().map(|q| q.work()).max().unwrap_or(0),
+            ])?,
+            // Outputs from different phases remain retained together. Summing
+            // their full construction peaks also covers that persistent overlap;
+            // only work, never these storage ceilings, is multiplied by turns.
+            scratch: sum(&[
+                repeated(2, policy.scratch())?,
+                repeated(2, continuity.scratch())?,
+                phases
+                    .iter()
+                    .try_fold(0usize, |n, q| sum(&[n, q.scratch()]))?,
+            ])?,
+        })
+    }
+
+    /// The issuer is launched once. Its readiness, exact original cleanup-guard
+    /// validation and complete overlapping owners are not charged per syscall.
+    pub(crate) fn runtime_startup_quota() -> Result<Quota> {
+        let (_, compiler) = payloads()?;
+        let issuer = compiler_attempt::Attempt::maximum_runtime_issuer_quota(compiler)
+            .map_err(helper_error)?;
+        let guard = Prepared::maximum_cleanup_guard_quota()?;
+        Ok(Quota {
+            work: sum(&[issuer.work(), guard.work()])?,
+            scratch: sum(&[issuer.scratch(), guard.scratch()])?,
+        })
+    }
+
+    /// Additional funding on the ORIGINAL cleanup account for issuer backing
+    /// and the publication's late-held lease/token. An exhausted finite cleanup
+    /// schedule never authorizes dropping unresolved custody.
+    pub(crate) fn runtime_cleanup_growth(
+        monitor_turns: usize,
+        cleanup_turns: usize,
+    ) -> Result<(usize, usize)> {
+        if monitor_turns == 0 {
+            return Err(rejected("runtime cleanup requires positive monitor turns"));
+        }
+        let (_, compiler) = payloads()?;
+        let issuer =
+            Prepared::maximum_issuer_cleanup_quota::<ManagedProofHelper>(compiler, cleanup_turns)
+                .map_err(NativeError::from)?;
+        let publication =
+            fe2o3_broker_authority_service::RootPublicationCustodyV3::observation_cleanup_quota(
+                MAX_HANDOFF,
+            )
+            .map_err(NativeError::from)?;
+        Ok((
+            sum(&[
+                issuer.work(),
+                publication.work(),
+                // A late holder may be visited while the request is still
+                // monitored, not only after cancellation. Also fund one direct
+                // terminal retirement outside the pump loop. Shutdown itself
+                // checks empty slots and does not call late retirement.
+                repeated(
+                    sum(&[monitor_turns, cleanup_turns, 1])?,
+                    publication.retirement_work(),
+                )?,
+            ])?,
+            sum(&[
+                issuer.additional_storage(),
+                publication.persistent_storage(),
+            ])?,
+        ))
+    }
+}
+
+fn from_native(quota: native::CompilerExecutionLaunchQuotaV2) -> Quota {
+    Quota {
+        work: quota.work(),
+        scratch: quota.scratch(),
+    }
 }

@@ -520,6 +520,8 @@ pub(super) fn pure(kind: &OperationKind) -> bool {
             }
             | OperationKind::Cast {
                 kind: CastKind::RestrictPointerAccess
+                    | CastKind::PointerToGeneric
+                    | CastKind::SliceToGeneric
                     | CastKind::Truncate
                     | CastKind::ZeroExtend
                     | CastKind::SignExtend

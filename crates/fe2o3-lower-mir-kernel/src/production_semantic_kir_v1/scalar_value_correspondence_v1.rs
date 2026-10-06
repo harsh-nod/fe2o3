@@ -11,7 +11,7 @@ fn scalar_value_expressions_correspond_v1(
     expected: &NormalizedScalarExpressionV1,
     actual: &NormalizedScalarExpressionV1,
     depth: usize,
-    budget: &mut UnsupportedIndexCorrelationBudgetV1,
+    budget: &mut dyn CorrelationChargeV18,
 ) -> Option<bool> {
     use NormalizedScalarExpressionV1 as E;
     budget.charge()?;
@@ -19,10 +19,13 @@ fn scalar_value_expressions_correspond_v1(
         return None;
     }
     let next = depth.checked_add(1)?;
-    let compare = |expected, actual, budget: &mut UnsupportedIndexCorrelationBudgetV1| {
+    let compare = |expected, actual, budget: &mut dyn CorrelationChargeV18| {
         scalar_value_expressions_correspond_v1(expected, actual, next, budget)
     };
     Some(match (expected, actual) {
+        (E::GlobalInvocation1d { scalar }, E::GlobalInvocation1d { scalar: other }) => {
+            scalar == other
+        }
         (
             E::Symbol {
                 symbol: left,

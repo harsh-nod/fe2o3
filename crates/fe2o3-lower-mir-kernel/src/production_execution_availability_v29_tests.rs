@@ -15,6 +15,10 @@ mod call_parameter_tests {
     include!("production_execution_call_parameters_v29_tests.rs");
 }
 
+mod consumed_operand_tests {
+    include!("production_execution_consumed_operands_v46_tests.rs");
+}
+
 #[derive(Clone, Copy)]
 enum Flow {
     Linear,

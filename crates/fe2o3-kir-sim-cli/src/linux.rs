@@ -546,6 +546,7 @@ enum ProgramInput {
     DiagnosticKirV16(OsString),
     DiagnosticKirV17(OsString),
     DiagnosticKirV18(OsString),
+    DiagnosticKirV18Target(OsString, SimulationTargetV1),
     DiagnosticKirV19(OsString),
     Bundle(OsString),
     BundleV5(OsString),
@@ -1280,6 +1281,12 @@ fn run(arguments: impl Iterator<Item = OsString>) -> Result<(), Failure> {
         ProgramInput::DiagnosticKirV18(path) => {
             diagnostic_kir_v18::run(Path::new(&path), Path::new(&request), policy)
         }
+        ProgramInput::DiagnosticKirV18Target(path, target) => diagnostic_kir_v18::run_for_target(
+            Path::new(&path),
+            Path::new(&request),
+            policy,
+            target,
+        ),
         ProgramInput::Bundle(path) => {
             let admitted = load_admitted_bundle(Path::new(&path), Path::new(&request))?;
             run_with_admitted_input(admitted.input, policy)
@@ -2431,6 +2438,7 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
     let mut diagnostic_kir_v16 = None;
     let mut diagnostic_kir_v17 = None;
     let mut diagnostic_kir_v18 = None;
+    let mut diagnostic_target = None;
     let mut diagnostic_kir_v19 = None;
     let mut bundle = None;
     let mut bundle_v5 = None;
@@ -2483,6 +2491,8 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             (&mut diagnostic_kir_v17, "--diagnostic-kir-v17")
         } else if argument == OsStr::new("--diagnostic-kir-v18") {
             (&mut diagnostic_kir_v18, "--diagnostic-kir-v18")
+        } else if argument == OsStr::new("--diagnostic-target") {
+            (&mut diagnostic_target, "--diagnostic-target")
         } else if argument == OsStr::new("--bundle") {
             (&mut bundle, "--bundle")
         } else if argument == OsStr::new("--bundle-v5") {
@@ -2584,11 +2594,35 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
             ));
         }
     };
+    let program = match (program, diagnostic_target) {
+        (ProgramInput::DiagnosticKirV18(path), Some(name)) => {
+            let target = name
+                .to_str()
+                .and_then(SimulationTargetV1::amdgpu_from_device_target)
+                .ok_or_else(|| {
+                    Failure::new(
+                        Stage::Arguments,
+                        ErrorKind::InvalidCommandLine,
+                        "--diagnostic-target requires an exact supported AMD target",
+                    )
+                })?;
+            ProgramInput::DiagnosticKirV18Target(path, target)
+        }
+        (program, None) => program,
+        (_, Some(_)) => {
+            return Err(Failure::new(
+                Stage::Arguments,
+                ErrorKind::InvalidCommandLine,
+                "--diagnostic-target is supported only with --diagnostic-kir-v18",
+            ));
+        }
+    };
     if matches!(
         &program,
         ProgramInput::DiagnosticKirV16(_)
             | ProgramInput::DiagnosticKirV17(_)
             | ProgramInput::DiagnosticKirV18(_)
+            | ProgramInput::DiagnosticKirV18Target(_, _)
             | ProgramInput::DiagnosticKirV19(_)
     ) && (record_canonical_schedule.is_some()
         || record_seeded_schedule.is_some()
@@ -2603,7 +2637,10 @@ fn parse_options(arguments: impl Iterator<Item = OsString>) -> Result<Options, F
         return Err(Failure::new(
             Stage::Arguments,
             ErrorKind::ScheduleInputUnsupported,
-            if matches!(&program, ProgramInput::DiagnosticKirV18(_)) {
+            if matches!(
+                &program,
+                ProgramInput::DiagnosticKirV18(_) | ProgramInput::DiagnosticKirV18Target(_, _)
+            ) {
                 "diagnostic KIR V18 does not support persisted schedules, exploration, reduction, or schedule controls"
             } else if matches!(&program, ProgramInput::DiagnosticKirV19(_)) {
                 "diagnostic KIR V19 does not support persisted schedules, exploration, reduction, or schedule controls"
@@ -3494,6 +3531,9 @@ fn execution_kind(error: &SimulationExecutionErrorKindV1) -> ErrorKind {
         SimulationExecutionErrorKindV1::IntegerOutOfRange => ErrorKind::ExecutionIntegerOutOfRange,
         SimulationExecutionErrorKindV1::PointerOffsetOverflow => {
             ErrorKind::ExecutionPointerOffsetOverflow
+        }
+        SimulationExecutionErrorKindV1::StorageArrayIndexOutOfBounds { .. } => {
+            ErrorKind::ExecutionStorageArrayIndexOutOfBounds
         }
         SimulationExecutionErrorKindV1::PointerDistanceDifferentAllocation { .. } => {
             ErrorKind::ExecutionPointerDistanceDifferentAllocation

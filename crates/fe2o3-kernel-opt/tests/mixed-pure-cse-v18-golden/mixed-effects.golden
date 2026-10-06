@@ -1,0 +1,42 @@
+CASE: mixed-effects
+CHECK-BEFORE: module policy10-golden kernels=1 layouts=1
+CHECK-BEFORE: f0 f params=[v0:U32,v1:U32,v2:Ptr<U32,Global,ReadWrite>] results=[]
+CHECK-BEFORE: f0:b0 block-id=90 params=[]
+CHECK-BEFORE: f0:b0:o0 [v20:Execution<Context>] ContextIssue
+CHECK-BEFORE: f0:b0:o1 [v21:Execution<Workgroup>] WorkgroupDerive v20
+CHECK-BEFORE: f0:b0:o2 [v10:Ptr<Object<0>,Private,ReadWrite>] Alloca Object<0> Private align=4
+CHECK-BEFORE: f0:b0:o3 [v30:U32] BitXor v0,v1
+CHECK-BEFORE: f0:b0:o4 [v31:U32] BitXor v0,v1
+CHECK-BEFORE: f0:b0:o5 [] StorageWrite v10 <- v30 Private align=4 volatile=false
+CHECK-BEFORE: f0:b0:o6 [v40:U32] StorageRead v10 Private align=4 volatile=false
+CHECK-BEFORE: f0:b0:o7 [v41:U32] StorageRead v10 Private align=4 volatile=false
+CHECK-BEFORE: f0:b0:o8 [v42:U32] Load v2 Global align=4 volatile=false
+CHECK-BEFORE: f0:b0:o9 [v43:U32] Load v2 Global align=4 volatile=false
+CHECK-BEFORE: f0:b0:o10 [] StorageWrite v10 <- v40 Private align=4 volatile=false
+CHECK-BEFORE: f0:b0:o11 [] StorageWrite v10 <- v41 Private align=4 volatile=false
+CHECK-BEFORE: f0:b0:o12 [] StorageWrite v10 <- v42 Private align=4 volatile=false
+CHECK-BEFORE: f0:b0:o13 [] StorageWrite v10 <- v43 Private align=4 volatile=false
+CHECK-BEFORE: f0:b0:o14 [] Store v2 <- v31 Global align=4 volatile=false
+CHECK-BEFORE: f0:b0:o15 [] ScopeEnd v21
+CHECK-BEFORE: f0:b0:term Return []
+CHECK-AFTER: module policy10-golden kernels=1 layouts=1
+CHECK-AFTER: f0 f params=[v0:U32,v1:U32,v2:Ptr<U32,Global,ReadWrite>] results=[]
+CHECK-AFTER: f0:b0 block-id=90 params=[]
+CHECK-AFTER: f0:b0:o0 [v20:Execution<Context>] ContextIssue
+CHECK-AFTER: f0:b0:o1 [v21:Execution<Workgroup>] WorkgroupDerive v20
+CHECK-AFTER: f0:b0:o2 [v10:Ptr<Object<0>,Private,ReadWrite>] Alloca Object<0> Private align=4
+CHECK-AFTER: f0:b0:o3 [v30:U32] BitXor v0,v1
+CHECK-AFTER: f0:b0:o4 [] StorageWrite v10 <- v30 Private align=4 volatile=false
+CHECK-AFTER: f0:b0:o5 [v40:U32] StorageRead v10 Private align=4 volatile=false
+CHECK-AFTER: f0:b0:o6 [v41:U32] StorageRead v10 Private align=4 volatile=false
+CHECK-AFTER: f0:b0:o7 [v42:U32] Load v2 Global align=4 volatile=false
+CHECK-AFTER: f0:b0:o8 [v43:U32] Load v2 Global align=4 volatile=false
+CHECK-AFTER: f0:b0:o9 [] StorageWrite v10 <- v40 Private align=4 volatile=false
+CHECK-AFTER: f0:b0:o10 [] StorageWrite v10 <- v41 Private align=4 volatile=false
+CHECK-AFTER: f0:b0:o11 [] StorageWrite v10 <- v42 Private align=4 volatile=false
+CHECK-AFTER: f0:b0:o12 [] StorageWrite v10 <- v43 Private align=4 volatile=false
+CHECK-AFTER: f0:b0:o13 [] Store v2 <- v30 Global align=4 volatile=false
+CHECK-AFTER: f0:b0:o14 [] ScopeEnd v21
+CHECK-AFTER: f0:b0:term Return []
+CHECK-REMARK: policy=10 schema=18 passes=integer-neutral-worklist,local-pure-cse,dominance-pure-cse,dce
+CHECK-REMARK: changed=true independently-checked=true authority=false

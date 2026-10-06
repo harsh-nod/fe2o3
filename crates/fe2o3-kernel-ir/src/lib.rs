@@ -88,6 +88,7 @@ mod canonical_kir_v6;
 mod canonical_kir_v7;
 mod canonical_kir_v8;
 mod canonical_kir_v9;
+mod canonical_phase_resource_policy_v1;
 mod canonical_work_budget_v1;
 mod conditional_total_view_v1;
 mod contract_catalog_v1;
@@ -96,6 +97,8 @@ mod debug_source_map_v1;
 mod debug_source_map_v2;
 mod effect_extraction;
 mod execution_operations_v15;
+mod execution_tile_scalar_lowering_v1;
+mod execution_tile_schedule_v1;
 mod formal_memory_obligations;
 mod gfx942_complete_body_canonical_vnext;
 mod gfx942_complete_body_packing_v1;
@@ -180,6 +183,7 @@ mod verification_storage_operation_v1;
 mod verification_storage_v1;
 mod verification_terminator_v1;
 mod verification_type_comparison_v1;
+mod verification_typed_storage_v2;
 mod verification_wave_operation_v1;
 mod verify;
 mod wave_operations;
@@ -205,6 +209,9 @@ pub use canonical_kir_v19::*;
 pub use canonical_kir_v20::*;
 pub use canonical_kir_v21::*;
 pub use canonical_kir_v22::*;
+pub use canonical_phase_resource_policy_v1::{
+    CANONICAL_PHASE_STORAGE_LIMIT_V1, CANONICAL_PHASE_WORK_LIMIT_V1,
+};
 pub use canonical_work_budget_v1::*;
 pub use conditional_total_view_v1::*;
 pub use contract_catalog_v1::*;
@@ -213,6 +220,8 @@ pub use debug_source_map_v1::*;
 pub use debug_source_map_v2::*;
 pub use effect_extraction::*;
 pub use execution_operations_v15::*;
+pub use execution_tile_scalar_lowering_v1::*;
+pub use execution_tile_schedule_v1::*;
 pub use formal_memory_obligations::*;
 pub use gfx942_complete_body_canonical_vnext::*;
 pub use gfx942_complete_body_packing_v1::*;
@@ -227,10 +236,11 @@ pub use gfx942_physical_lds_exchange_profile_v22::gfx942_physical_lds_exchange_d
 pub use gfx942_physical_lds_exchange_v22::*;
 pub use integer_semantic_oracle_v1::*;
 pub use interprocedural_effects::{
-    InterproceduralEffectAnalysisV1, InterproceduralEffectDecisionV1,
+    CanonicalEffectDecisionV19, CanonicalEffectErrorV19, CanonicalEffectReasonV19,
+    CanonicalEffectScopeV19, InterproceduralEffectAnalysisV1, InterproceduralEffectDecisionV1,
     InterproceduralEffectIncompleteReasonV1, MAX_INTERPROCEDURAL_EFFECT_CALL_EDGES_V1,
     MAX_INTERPROCEDURAL_EFFECT_FUNCTIONS_V1, analyze_interprocedural_effects_from_verified_v1,
-    analyze_interprocedural_effects_v1,
+    analyze_interprocedural_effects_v1, with_canonical_effects_v19,
 };
 pub use ir::*;
 #[doc(hidden)]

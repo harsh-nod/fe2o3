@@ -104,9 +104,29 @@ pub(in crate::compiler_module_handoff) fn recover_locked<T: NativeSubject, E>(
 where
     E: envelope::Error + From<Failure<T::Error>> + From<T::Error>,
 {
+    recover_locked_using(binding, payload, expected, headers, r, T::from_receipt)
+}
+
+// Only fixed internal subject codecs select this adapter. No opaque proof or
+// currentness callback enters the refundable native transport scope.
+pub(in crate::compiler_module_handoff) fn recover_locked_using<T: NativeSubject, E>(
+    binding: &currentness::Current<T::Schema>,
+    payload: &<T::Schema as HandoffSchema>::Payload,
+    expected: &T,
+    headers: usize,
+    r: &mut Resources<'_, '_>,
+    reconstruct: impl FnOnce(
+        <T::Schema as currentness::Schema>::Receipt,
+        &<T::Schema as HandoffSchema>::Payload,
+        &mut Budget<'_>,
+    ) -> std::result::Result<(T, usize), T::Error>,
+) -> std::result::Result<Recovered, E>
+where
+    E: envelope::Error + From<Failure<T::Error>> + From<T::Error>,
+{
     currentness::metadata(binding, r)?;
     // Derive the actual occurrence from the token, never from the expectation.
-    let (actual, storage) = T::from_receipt(binding.receipt, payload, r.budget()?)?;
+    let (actual, storage) = reconstruct(binding.receipt, payload, r.budget()?)?;
     r.reserve(storage)?;
     compare(expected, &actual, r)?;
     let wire =

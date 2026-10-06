@@ -24,11 +24,14 @@ pub use compiler_native_conditional_handoff_v5::{
     CompilerConditionalNativeSemanticHandoffErrorV5,
     RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
     RecoveredCompilerConditionalNativeSemanticHandoffV5,
+    recover_compiler_conditional_native_semantic_handoff_in_original_account_v5,
     recover_compiler_conditional_native_semantic_handoff_v5,
 };
 pub use compiler_native_conditional_policy_roster_v1::{
     InertNativeConditionalPolicyRosterV1, NativeConditionalPolicyReconstructionErrorV1,
-    NativeConditionalPolicyRosterStorageV1, reconstruct_inert_native_conditional_policy_roster_v1,
+    NativeConditionalPolicyRosterStorageV1, native_conditional_root_policy_input_storage_v2,
+    reconstruct_inert_native_conditional_policy_roster_in_original_account_v1,
+    reconstruct_inert_native_conditional_policy_roster_v1,
 };
 pub mod compiler_native_conditional_source_packet_v2;
 pub use compiler_native_conditional_source_packet_v2::{
@@ -44,6 +47,44 @@ mod compiler_refined_forwarding_output_v1;
 mod compiler_target_lineage_v1;
 mod conditional_contract_request_v2;
 mod conditional_ranked_formulas_v1;
+mod mixed_native_correspondence_v60;
+mod mixed_native_correspondence_v89;
+mod mixed_optimizer_refinement_v26;
+mod mixed_target_selection_family;
+mod mixed_target_selection_v53;
+mod mixed_target_selection_v89;
+pub use mixed_optimizer_refinement_v26::{
+    AggregateMemoryCfgObligationV30, AggregateMemoryCfgSubjectV30,
+    ExecutedMixedComposedRefinementV29, ExecutedMixedOptimizerBlockSimulationV26,
+    ExecutedMixedPureCseCfgRefinementV27, ExecutedMixedWorklistCfgRefinementV27,
+    ExecutedPredicatedTypedSourceTailV90, ExecutedTypedSourceTailV50,
+    InertPredicatedTypedSourceReceiptV90, InertTypedSourceReceiptV53, MixedOptimizerCfgSubjectV27,
+    MixedOptimizerRefinementErrorV26, MixedOptimizerRefinementSubjectV26,
+    MixedOptimizerRelocationCfgSubjectV28, MixedOptimizerRelocationErrorV28,
+    MixedOptimizerRelocationSubjectV28, OriginalSemanticMirRefinementSubjectV30,
+    OriginalSemanticMirRefinementSubjectV31, OriginalSemanticMirRefinementSubjectV36,
+    PredicatedTypedSourceTailSubjectV90, PreparedMixedComposedExecutionV29,
+    PreparedMixedComposedRelocationCfgRefinementV28,
+    PreparedMixedFixedpointComposedRelocationCfgRefinementV29,
+    PreparedMixedFixedpointRelocationCfgRefinementV29,
+    PreparedMixedFixedpointRelocationExpressionsV29, PreparedMixedOptimizerRefinementV26,
+    PreparedMixedPureCseCfgRefinementV27, PreparedMixedRelocationCfgRefinementV28,
+    PreparedMixedRelocationExpressionsV28, PreparedMixedWorklistCfgRefinementV27,
+    PreparedOriginalSemanticMirRefinementV30, PreparedOriginalSemanticMirRefinementV31,
+    PreparedOriginalSemanticMirRefinementV36, PreparedPredicatedTypedSourceTailExecutionV90,
+    PreparedPredicatedTypedSourceTailV90, PreparedTypedSourceTailExecutionV50,
+    PreparedTypedSourceTailV50, SourceScalarReferenceInputV69, TypedSourceTailSubjectV50,
+    check_inert_predicated_typed_source_receipt_v90, check_inert_typed_source_receipt_v53,
+    execute_mixed_optimizer_block_simulation_v26, execute_mixed_pure_cse_cfg_refinement_v27,
+    execute_mixed_worklist_cfg_refinement_v27, prepare_aggregate_memory_cfg_obligation_v30,
+    prepare_mixed_fixedpoint_relocation_expressions_v29, prepare_mixed_optimizer_refinement_v26,
+    prepare_mixed_pure_cse_cfg_refinement_v27, prepare_mixed_relocation_expressions_v28,
+    prepare_mixed_worklist_cfg_refinement_v27, prepare_original_semantic_mir_refinement_v30,
+    prepare_original_semantic_mir_refinement_v31, prepare_original_semantic_mir_refinement_v36,
+    prepare_predicated_typed_source_tail_v90,
+    prepare_predicated_typed_source_tail_with_references_v90, prepare_typed_source_tail_v50,
+    prepare_typed_source_tail_with_references_v69,
+};
 pub mod conditional_reference_v1;
 mod control_flow_binding;
 mod executor;
@@ -207,6 +248,14 @@ pub use mir_pliron_verus_execution_evidence_v1::{
     ProductionMirPlironVerusExecutionClaimsV1, ProductionMirPlironVerusExecutionEvidenceErrorV1,
     ProductionMirPlironVerusExecutionEvidenceIdentityV1,
 };
+pub use mixed_native_correspondence_v60::{
+    MixedNativeCorrespondenceErrorV60, check_mixed_native_correspondence_v60,
+};
+pub use mixed_native_correspondence_v89::{
+    MixedNativeCorrespondenceErrorV89, check_mixed_native_correspondence_v89,
+};
+pub use mixed_target_selection_v53::*;
+pub use mixed_target_selection_v89::*;
 pub use model::{
     AxiomPolicy, Configuration, ConfigurationEntry, CorrelationId, Digest, ExecutionTools,
     MAX_CONFIGURATION_ENTRIES, MAX_PROPERTIES, MAX_TEXT_BYTES, MAX_TRUSTED_ITEMS,

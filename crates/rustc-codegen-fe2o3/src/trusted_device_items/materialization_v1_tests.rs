@@ -109,6 +109,48 @@ fn admit_reviewed_materialization(
 }
 
 #[test]
+fn execution_documentation_refresh_replaces_both_previous_materializations() {
+    for (vendored, previous) in [
+        (
+            false,
+            "09d8b1702b59f7d2a6d11f2c687c4bd5e4d172efde7a051e01c8e8ad7fddb01f",
+        ),
+        (
+            true,
+            "542cf2ba9747a6800e23c413fd0c6000ac788e13d40541b9bd6f21cc630cb529",
+        ),
+    ] {
+        let fixture = reviewed_materialization_fixture(vendored);
+        let current = admit_reviewed_materialization(&fixture).unwrap().identity;
+        let source_path = fixture.source_root().join("execution.rs");
+        let source = fs::read_to_string(&source_path).unwrap();
+        let mut historical = source.clone();
+        for comment in [
+            "    // Authenticated issuance records the total number of work-items here.\n",
+            "    // X-fastest linear work-item rank within this workgroup, matching\n",
+            "    // group::Workgroup::thread_rank; not launch dimensionality or group index.\n",
+        ] {
+            assert_eq!(historical.matches(comment).count(), 1);
+            historical = historical.replacen(comment, "", 1);
+        }
+        fs::write(&source_path, historical).unwrap();
+        let observed = reviewed_provider_source_closure_identity(
+            &fixture.root,
+            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        )
+        .unwrap();
+        assert_eq!(observed, digest(previous));
+        assert_ne!(observed, current);
+        assert!(admit_reviewed_materialization(&fixture).is_err());
+        fs::write(&source_path, source).unwrap();
+        assert_eq!(
+            admit_reviewed_materialization(&fixture).unwrap().identity,
+            current
+        );
+    }
+}
+
+#[test]
 fn canonical_and_cargo_vendor_materializations_preserve_actual_identities() {
     use sha2::{Digest as _, Sha256};
 

@@ -29,6 +29,12 @@ const PACKING_OBSERVATION_DOMAIN_V1: &[u8] = b"FE2O3/HOST/GENERATED-KFD-PACKING-
 #[path = "generated_kfd_conditional_premises_v1.rs"]
 pub(crate) mod conditional;
 
+#[path = "generated_kfd_mixed_conditional_v26.rs"]
+pub(crate) mod mixed_conditional_v26;
+
+#[path = "generated_kfd_mixed_preparation_v53.rs"]
+pub(crate) mod mixed_preparation_v53;
+
 /// Compiler-generated address-free argument bridge for one exact kernel signature.
 ///
 /// # Safety
@@ -1027,7 +1033,7 @@ mod tests {
         .unwrap()
     }
 
-    fn plan() -> GeneratedArgumentPackingPlanV1 {
+    pub(super) fn plan() -> GeneratedArgumentPackingPlanV1 {
         let fields = vec![
             slice_field::<i32>("input", 0, false),
             slice_field::<i32>("output", 16, true),

@@ -1,8 +1,9 @@
 //! Fixed logical limits for codegen's separate canonical materialization and
 //! assertion-projection phases, not an optimizer or whole-compiler budget.
 
-pub(crate) const WORK_LIMIT: u64 = 18_014_398_509_481_984;
-pub(crate) const STORAGE_LIMIT: usize = 2_147_483_648;
+pub(crate) use fe2o3_kernel_ir::{
+    CANONICAL_PHASE_STORAGE_LIMIT_V1 as STORAGE_LIMIT, CANONICAL_PHASE_WORK_LIMIT_V1 as WORK_LIMIT,
+};
 
 #[cfg(test)]
 mod tests {

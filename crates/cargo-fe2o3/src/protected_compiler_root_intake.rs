@@ -1,4 +1,4 @@
-//! Original-root TCB transport only. No accepted/compiler-ready wire status exists.
+//! Original-root TCB transport; inert records cannot substitute original custody.
 use super::ParentRustcInvocationCustody as Parent;
 use crate::capability_broker::BrokeredInvocationAuthorityV1 as InvocationAuthority;
 use crate::project::PinnedDirectory;
@@ -11,15 +11,20 @@ use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ROOT_INTAKE_BYTES_V4 as N,
     COMPILER_EXECUTION_ROOT_INTAKE_STORAGE_V4 as RECORD_SCRATCH,
     COMPILER_EXECUTION_ROOT_INTAKE_WORK_V4 as RECORD_WORK,
+    COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_BYTES_V1 as COMPLETION_BYTES,
+    COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_MATCH_WORK_V1 as COMPLETION_MATCH_WORK,
     COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_MODE_V1 as DIRECTORY_MODE,
     COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1 as SOCKET_MODE,
     COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1 as SOCKET_PATH,
     CompilerExecutionRootIntakeErrorV4 as RecordError, CompilerExecutionRootIntakeKindV4 as Kind,
     CompilerExecutionRootIntakeRecordV4 as Record, CompilerExecutionRootIntakeRoleV4 as Role,
+    CompilerExecutionRootPublicationCompletionErrorV1 as CompletionError,
+    CompilerExecutionRootPublicationCompletionV1 as Completion,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
+    CanonicalKernelIrWorkLedgerIdentityV1 as Ledger,
 };
 use fe2o3_protected_service_spawn::launch_io::{self as io, MessageSender};
 use fe2o3_rustc_invocation::{InvocationDigestV3, MAX_DESCRIPTOR_BYTES_V3};
@@ -33,8 +38,14 @@ use std::{
 };
 
 const MAX_ATTEMPTS: usize = 120_001;
+const COMPLETION_WORK: usize = Completion::COMPOSED_DECODE_WORK;
+const COMPLETION_SCRATCH: usize = Completion::COMPOSED_DECODE_STORAGE;
 const LOCAL_WORK: usize = 8 + 128 * 1024;
-const FRAME: usize = 4 * size_of::<Endpoint>() + 16 * N + 16 * size_of::<Error>() + 16384;
+const FRAME: usize = 4 * size_of::<Endpoint>()
+    + 16 * N
+    + 16 * size_of::<Error>()
+    + 2 * size_of::<RootEvidence<'static>>()
+    + 16384;
 const TRANSFERS: usize = Invocation::NATIVE_FILE_STORAGE + 5 * size_of::<OwnedFd>();
 // Exact producer owner is checked against this bound before transfer. No tree
 // contents or namespace authority is included in this descriptor/header charge.
@@ -46,6 +57,34 @@ pub(crate) const PARENT_MAX_STORAGE: usize =
 // validation passes. Paid BEFORE native capture, not retrospectively at contact.
 pub(crate) const CAPTURE_WORK: usize = 8 * Invocation::NATIVE_ADMISSION_WORK;
 pub(crate) const CAPTURE_SCRATCH: usize = 2 * Invocation::NATIVE_OPERATION_SCRATCH + 8192;
+
+/// Created only by the exact authenticated original-root exchange below. The
+/// budget borrow forces downstream admission to remain in the funded profile's
+/// original callback; no record-only constructor or detached success exists.
+pub(crate) struct RootCompleted<'b, 'work> {
+    evidence: RootEvidence<'b>,
+    budget: &'b mut Budget<'work>,
+}
+
+/// Private move-only origin retained by the existing V5 readiness pipeline.
+/// Fields are inaccessible outside this transport module and its implementation.
+pub(crate) struct RootEvidence<'b> {
+    parent: &'b Parent,
+    profile: &'b Profile,
+    _authority: &'b InvocationAuthority,
+    output: &'b PinnedDirectory,
+    endpoint: Endpoint,
+    socket: OwnedFd,
+    sender: MessageSender,
+    last: Record,
+    record: Completion,
+    retained: usize,
+    ledger: Ledger,
+    address: usize,
+}
+
+#[path = "protected_compiler_root_completion.rs"]
+mod completion;
 
 pub(crate) fn prepay_capture_once(
     used: &std::cell::Cell<bool>,
@@ -115,7 +154,12 @@ pub(crate) fn check_capture_shape(
 // These are COMPLETE additional transport quotas above parent/profile/authority
 // owners. The V4 broker profile import has its own original-request quote.
 pub(crate) const WORK: usize = LOCAL_WORK
-    + MAX_ATTEMPTS * (LOCAL_WORK + io::packet_receive_work(N) + 4 * RECORD_WORK)
+    + MAX_ATTEMPTS
+        * (LOCAL_WORK
+            + io::packet_receive_work(COMPLETION_BYTES)
+            + 4 * RECORD_WORK
+            + COMPLETION_WORK
+            + COMPLETION_MATCH_WORK)
     + 2 * (PARENT_MAX_STORAGE + 6 * 1024 + Invocation::NATIVE_REVALIDATION_WORK + 8 + 3 * 1024)
     + 2 * Profile::IO_WORK
     + Invocation::NATIVE_TRANSFER_WORK
@@ -126,19 +170,16 @@ pub(crate) const SCRATCH: usize = FRAME
     + Invocation::NATIVE_OPERATION_SCRATCH
     + Profile::IO_STORAGE
     + RECORD_SCRATCH
-    + io::packet_receive_scratch(N)
+    + COMPLETION_SCRATCH
+    + io::packet_receive_scratch(COMPLETION_BYTES)
     + 8192;
-
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum Refusal {
-    RuntimeEnforcementUnavailable,
-}
 
 #[derive(Debug)]
 pub(crate) enum Error {
     Resource(Resource),
     Capability(CapabilityError),
     Record(RecordError),
+    Completion(CompletionError),
     Io {
         operation: &'static str,
         source: rustix::io::Errno,
@@ -160,12 +201,21 @@ impl From<RecordError> for Error {
         Self::Record(e)
     }
 }
+impl From<CompletionError> for Error {
+    fn from(e: CompletionError) -> Self {
+        match e {
+            CompletionError::Resource(e) => Self::Resource(e),
+            e => Self::Completion(e),
+        }
+    }
+}
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Resource(e) => e.fmt(f),
             Self::Capability(e) => e.fmt(f),
             Self::Record(e) => e.fmt(f),
+            Self::Completion(e) => e.fmt(f),
             Self::Io { operation, source } => write!(f, "{operation}: {source}"),
             Self::Rejected(reason) => f.write_str(reason),
         }
@@ -185,24 +235,23 @@ fn syscall<T>(operation: &'static str, result: rustix::io::Result<T>) -> Result<
 
 impl Parent {
     /// Keeps the actual invocation stream borrowed until the exact authenticated
-    /// terminal ACK. There is deliberately no successful FD195 transition here:
-    /// failure/EOF never releases authority to a child, and the only reply refuses
-    /// runtime enforcement. The caller must keep the original profile admission
-    /// account and these full input owners prepaid, not wrap them in a fresh meter.
-    pub(crate) fn contact_original_root(
-        &self,
-        profile: &Profile,
-        _authority: &InvocationAuthority,
-        output: &PinnedDirectory,
-        b: &mut Budget<'_>,
-    ) -> Result<Refusal> {
+    /// structured completion. Refusal ACKs, partial frames and EOF remain errors;
+    /// no local child or legacy FD195 transition follows this exchange. The
+    /// returned owner retains the original account borrow and every input owner.
+    pub(crate) fn contact_original_root<'b, 'work>(
+        &'b self,
+        profile: &'b Profile,
+        authority: &'b InvocationAuthority,
+        output: &'b PinnedDirectory,
+        b: &'b mut Budget<'work>,
+    ) -> Result<RootCompleted<'b, 'work>> {
         let floor = self
             .native_retained_storage()?
             .checked_add(profile.retained_storage())
             .and_then(|n| n.checked_add(OUTPUT_OWNER_STORAGE))
             .and_then(|n| n.checked_add(size_of::<InvocationAuthority>()))
             .ok_or(Resource::Arithmetic)?;
-        b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
+        let evidence = b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
             self.revalidate_native(b)?;
             profile.revalidate(b)?;
             validate_output(output)?;
@@ -290,15 +339,15 @@ impl Parent {
                 let finished = b.with_prepaid_scope(
                     0,
                     8,
-                    io::packet_receive_work(N),
-                    io::packet_receive_scratch(N),
+                    io::packet_receive_work(COMPLETION_BYTES),
+                    io::packet_receive_scratch(COMPLETION_BYTES),
                     |b| {
                         match phase {
                             Phase::Connect => {
                                 match net::connect(&socket, &address) {
                                     Ok(()) => {}
                                     Err(rustix::io::Errno::AGAIN | rustix::io::Errno::INTR) => {
-                                        return Ok(false);
+                                        return Ok(None);
                                     }
                                     Err(source) => {
                                         return Err(Error::Io {
@@ -330,7 +379,7 @@ impl Parent {
                                 )
                                 .map_err(transport)?
                                 else {
-                                    return Ok(false);
+                                    return Ok(None);
                                 };
                                 let (record, _) = Record::decode(&bytes, b)?;
                                 if record.kind() != Kind::Challenge
@@ -375,53 +424,82 @@ impl Parent {
                                 {
                                     last = Some(record);
                                     phase = if index + 1 == challenge.roles().count() {
-                                        Phase::Ack
+                                        Phase::Completion
                                     } else {
                                         Phase::Input(index + 1)
                                     };
                                 }
                             }
-                            Phase::Ack => {
-                                let Some(bytes) = io::receive_authenticated_packet::<N>(
-                                    socket.as_fd(),
-                                    sender.unwrap(),
+                            Phase::Completion => {
+                                let Some(bytes) = io::receive_authenticated_packet::<
+                                    COMPLETION_BYTES,
+                                >(
+                                    socket.as_fd(), sender.unwrap()
                                 )
                                 .map_err(transport)?
                                 else {
-                                    return Ok(false);
+                                    return Ok(None);
                                 };
-                                let (ack, _) = Record::decode(&bytes, b)?;
-                                if ack.kind() != Kind::Ack
-                                    || !ack.matches_predecessor(last.as_ref().unwrap(), b)?
-                                {
+                                let (record, charge) =
+                                    Completion::decode_in_original_account_v1(&bytes, b)?;
+                                b.reserve_storage(charge.additional_storage())?;
+                                if !record.matches_intake(last.as_ref().unwrap(), b)? {
                                     return Err(Error::Rejected(
-                                        "root ACK differs from complete intake",
+                                        "root completion differs from complete intake",
                                     ));
                                 }
                                 endpoint.revalidate()?;
                                 profile.revalidate(b)?;
                                 self.revalidate_native(b)?;
                                 validate_output(output)?;
-                                return Ok(true);
+                                return Ok(Some(record));
                             }
                         }
-                        Ok(false)
+                        Ok(None)
                     },
                 )?;
                 if Instant::now() >= deadline {
                     return Err(Error::Rejected("root intake deadline exceeded"));
                 }
-                if finished {
-                    return Ok(Refusal::RuntimeEnforcementUnavailable);
+                if let Some(record) = finished {
+                    let last = last
+                        .take()
+                        .ok_or(Error::Rejected("missing final original input"))?;
+                    let retained = size_of::<RootCompleted<'_, '_>>()
+                        .checked_add(last.retained_storage())
+                        .and_then(|n| n.checked_add(record.retained_storage()))
+                        .ok_or(Resource::Arithmetic)?;
+                    b.reserve_storage(retained)?;
+                    return Ok(RootEvidence {
+                        parent: self,
+                        profile,
+                        _authority: authority,
+                        output,
+                        endpoint,
+                        socket,
+                        sender: sender.ok_or(Error::Rejected("missing original root peer"))?,
+                        last,
+                        record,
+                        retained,
+                        ledger: b.work_ledger_identity_v1(),
+                        address: b as *const Budget<'_> as usize,
+                    });
                 }
                 std::thread::sleep(Duration::from_millis(1));
             }
             Err(Error::Rejected("root intake attempt bound exhausted"))
+        })?;
+        // Terminal V5 persistence must not run inside the refundable transport
+        // scope. Retain its complete result before exposing the continuation.
+        b.reserve_storage(evidence.retained)?;
+        Ok(RootCompleted {
+            evidence,
+            budget: b,
         })
     }
 }
 
-// The already brokered PinnedDirectory stays borrowed through the exact ACK.
+// The brokered PinnedDirectory stays borrowed through completion and admission.
 // Compare its actual FD, never reopen display_path or a wrapper PID's fd table.
 fn validate_output(output: &PinnedDirectory) -> Result<()> {
     if output.retained_storage().ok_or(Resource::Arithmetic)? > OUTPUT_OWNER_STORAGE {
@@ -453,7 +531,7 @@ enum Phase {
     Hello,
     Challenge,
     Input(usize),
-    Ack,
+    Completion,
 }
 
 fn root_sender(peer: net::UCred) -> Result<MessageSender> {

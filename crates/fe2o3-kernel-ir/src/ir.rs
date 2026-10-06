@@ -963,7 +963,9 @@ impl AmdGpuDiagnosticOperation {
             .find_map(|(name, descriptor)| (callee.as_str() == *name).then_some(*descriptor))
     }
 
-    pub(crate) fn intrinsic_descriptor_lookup_work_v1(callee: &FunctionId) -> Option<usize> {
+    /// Work bound for the closed diagnostic descriptor lookup. Consumers of
+    /// `from_intrinsic_call` can pay for the roster without copying its size.
+    pub fn intrinsic_descriptor_lookup_work_v1(callee: &FunctionId) -> Option<usize> {
         callee
             .as_str()
             .len()

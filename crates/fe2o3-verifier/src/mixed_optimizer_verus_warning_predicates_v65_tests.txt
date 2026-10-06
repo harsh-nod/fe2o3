@@ -1,0 +1,134 @@
+// Exact historical reference definitions from 31f1a5557373fd7314e10f1f9e5e0e6fdd5b0fd8.
+// String-only test input; never emitted as a production proof.
+
+spec fn invocation_source_enum_well_formed_v47(value: InvocationSourceEnumV47) -> bool {
+    value.fields.dom().finite()
+        && match invocation_source_enum_field_count_v47(value.source_type, value.variant) {
+            Some(count) => count >= 0
+                && (forall|field: int| value.fields.contains_key(field) ==>
+                    0 <= field < count
+                        && match invocation_source_enum_field_type_v47(
+                            value.source_type, value.variant, field) {
+                            Some(ty) => invocation_source_enum_value_typed_v47(ty, value.fields[field]),
+                            None => false,
+                        }),
+            None => false,
+        }
+}
+
+spec fn invocation_source_aggregate_well_formed_v42(value: InvocationSourceAggregateV42) -> bool {
+    invocation_source_aggregate_leaf_count_v42(value.source_type) > 0
+        && value.leaves.dom().finite()
+        && (forall|path: Seq<int>| value.leaves.contains_key(path) ==>
+            exists|ordinal: int| 0 <= ordinal < invocation_source_aggregate_leaf_count_v42(value.source_type)
+                && path == invocation_source_aggregate_leaf_path_v42(value.source_type, ordinal)
+                && invocation_source_byte_value_typed_v36(value.leaves[path],
+                    invocation_source_aggregate_leaf_bits_v42(value.source_type, ordinal)))
+}
+
+spec fn invocation_source_logical_well_formed_v38(
+    logical: InvocationSourceLogicalV38, count: int,
+) -> bool {
+    logical.versions.len() == count
+        && (forall|i: int| 0 <= i < count ==> logical.versions[i] >= 0)
+        && logical.witnesses.dom().finite() && logical.references.dom().finite()
+        && logical.descriptor_references.dom().finite()
+        && (forall|i: int| logical.descriptor_references.contains_key(i) ==>
+            0 <= i < count
+                && invocation_source_descriptor_reference_shape_v51(logical.descriptor_references[i], count)
+                && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i)
+                && !logical.aggregates.contains_key(i) && !logical.enums.contains_key(i))
+        && logical.aggregates.dom().finite()
+        && logical.enums.dom().finite()
+        && (forall|i: int| logical.enums.contains_key(i) ==>
+            0 <= i < count && invocation_source_enum_well_formed_v47(logical.enums[i])
+                && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i)
+                && !logical.aggregates.contains_key(i))
+        && (forall|i: int| logical.aggregates.contains_key(i) ==>
+            0 <= i < count && invocation_source_aggregate_well_formed_v42(logical.aggregates[i])
+                && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i))
+        && (forall|i: int| logical.witnesses.contains_key(i) ==>
+            0 <= i < count && logical.witnesses[i] >= 0
+                && !logical.references.contains_key(i))
+        && (forall|i: int| logical.references.contains_key(i) ==>
+            0 <= i < count && 0 <= logical.references[i].origin < count
+                && logical.references[i].version >= 0
+                && logical.references[i].source_type >= 0
+                && logical.references[i].origin_generation >= 0
+                && logical.references[i].borrow_instance >= 0
+                && logical.references[i].borrow_block >= 0
+                && logical.references[i].borrow_statement >= 0)
+}
+
+spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByteStateV36) -> bool {
+    byte_memory_well_formed_v30(source.machine.memory)
+        && invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len())
+        && (forall|local: int| source.logical.descriptor_references.contains_key(local) ==>
+            !source.objects.contains_key(local)
+                && match source.machine.values[local] {
+                    MemoryValueV30::Slice(_) => true,
+                    _ => false,
+                })
+        && (forall|local: int| source.logical.aggregates.contains_key(local) ==>
+            source.machine.values[local] == MemoryValueV30::Undefined
+                && !source.objects.contains_key(local))
+        && (forall|local: int| source.logical.enums.contains_key(local) ==>
+            source.machine.values[local] == MemoryValueV30::Undefined
+                && !source.objects.contains_key(local))
+        && byte_frame_runtime_well_formed_v30(source.machine.frames)
+        && byte_private_frames_live_v30(source.machine.memory, source.machine.frames)
+        && private_generation_counters_valid_v30(source.machine.generations, source.machine.memory)
+        && source.slots.dom().finite()
+        && source.objects.dom().finite()
+        && (forall|local: int| source.objects.contains_key(local) ==>
+            0 <= local < source.machine.values.len()
+                && source.objects[local].activation >= 0
+                && invocation_source_object_binding_v40(local, source.objects[local])
+                && source.slots.contains_key(source.objects[local].descriptor))
+        && (forall|left: int, right: int| source.objects.contains_key(left)
+            && source.objects.contains_key(right) && left != right ==>
+                source.objects[left].descriptor != source.objects[right].descriptor)
+        && (forall|descriptor: int| source.slots.contains_key(descriptor) ==>
+            descriptor >= 0 && source.slots[descriptor].byte_offset == 0
+                && source.machine.memory.live.contains_key(source.slots[descriptor].allocation)
+                && match source.slots[descriptor].allocation {
+                    MemoryAllocationV30::Private { owner, invocation, generation, .. } =>
+                        generation >= 0 && exists|i: int| 0 <= i < source.machine.frames.active.len()
+                            && source.machine.frames.active[i].owner == owner
+                            && source.machine.frames.active[i].invocation == invocation,
+                    _ => false,
+                })
+        && (forall|left: int, right: int|
+            source.slots.contains_key(left) && source.slots.contains_key(right)
+                && left != right ==>
+                    source.slots[left].allocation != source.slots[right].allocation)
+}
+
+enum InvocationSourceByteEventV36 {
+    AggregateDeinitialize(InvocationSourceAggregatePlaceV42),
+    AggregateReset { local: int },
+    AggregateTransfer { destination: InvocationSourceAggregatePlaceV42,
+        source: InvocationSourceAggregatePlaceV42, moved: bool },
+    Checked { destination: int, source_type: int, operation: int, bits: int, signed: bool,
+        left: InvocationSourceByteValueV36, right: InvocationSourceByteValueV36 },
+    CheckedObject(InvocationSourceCheckedObjectV44),
+    Discriminant(InvocationSourceDiscriminantReadV41),
+    EnumConstruct(InvocationSourceEnumConstructV43),
+    LogicalEnum(InvocationSourceLogicalEnumEventV47),
+    IntegerCast(InvocationSourceIntegerCastV43),
+    ScalarOperands(InvocationSourceScalarOperandsV48),
+    Scalar,
+    WitnessBorrow { destination: int, origin: int, source_type: int, generation: int,
+        instance: int, block: int, statement: int, parent: Option<InvocationSourceWitnessParentV43> },
+    WitnessTransfer { destination: int, input: int, source_type: int, reference: bool, moved: bool },
+    Descriptor(InvocationSourceDescriptorEventV51),
+    Pointer(InvocationSourcePointerEventV36),
+    Transfer { destination: InvocationSourceByteDestinationV36,
+        value: InvocationSourceByteValueV36, bits: int },
+    Address { destination: int, access: InvocationSourceByteAccessV36 },
+    Deinitialize(InvocationSourceByteAccessV36),
+    ObjectLive { descriptor: int, slot: InvocationSourceSlotV36, local: int, activation: int },
+    ObjectDead { local: int },
+    StorageLive { descriptor: int, slot: InvocationSourceSlotV36, local: int },
+    StorageDead { descriptor: int, slot: InvocationSourceSlotV36, local: int },
+}

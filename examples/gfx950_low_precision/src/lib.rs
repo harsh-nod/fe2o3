@@ -31,6 +31,7 @@ compile_error!("an AMDGPU build must select exactly one gfx950 kernel feature");
 ))]
 compile_error!("an AMDGPU build must not select more than one gfx950 kernel feature");
 
+mod dimensions;
 pub mod kernel;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;

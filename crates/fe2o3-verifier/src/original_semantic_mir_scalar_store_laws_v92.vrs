@@ -1,0 +1,241 @@
+// Scalar stores change bytes, initialization, epochs and relocations, not owners.
+// These laws do not assume equal heaps, empty private storage or absent guards.
+
+#[verifier::spinoff_prover]
+proof fn invocation_scalar_store_layout_v92(
+    memory: ByteMemoryV30, pointer: MemoryPointerV30, width: int,
+    value: int, little_endian: bool,
+)
+    requires memory.live.contains_key(pointer.allocation),
+    ensures
+        byte_store_v30(memory, pointer, width, value, little_endian).live.dom() == memory.live.dom(),
+        byte_store_v30(memory, pointer, width, value, little_endian).view_contracts == memory.view_contracts,
+        byte_store_v30(memory, pointer, width, value, little_endian).live[pointer.allocation].bytes.len()
+            == memory.live[pointer.allocation].bytes.len(),
+        byte_store_v30(memory, pointer, width, value, little_endian).live[pointer.allocation].base_alignment
+            == memory.live[pointer.allocation].base_alignment,
+        forall|allocation: MemoryAllocationV30| allocation != pointer.allocation
+            && memory.live.contains_key(allocation) ==>
+            #[trigger] byte_store_v30(memory, pointer, width, value, little_endian).live[allocation]
+                == memory.live[allocation],
+{
+    hide(byte_overwrite_epochs_v38);
+    hide(byte_relocations_without_overlap_v37);
+    let written = byte_store_v30(memory, pointer, width, value, little_endian);
+    assert(written.live.dom() =~= memory.live.dom());
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_scalar_store_well_formed_v92(
+    memory: ByteMemoryV30, pointer: MemoryPointerV30, width: int,
+    value: int, little_endian: bool,
+)
+    requires byte_memory_well_formed_v30(memory), ordinary_memory_width_v30(width),
+        byte_range_live_v30(memory, pointer, width),
+        0 <= value < memory_value_modulus_v30(width),
+    ensures byte_memory_well_formed_v30(byte_store_v30(memory, pointer, width, value, little_endian)),
+{
+    let previous = memory.live[pointer.allocation];
+    let result = byte_store_v30(memory, pointer, width, value, little_endian);
+    let written = result.live[pointer.allocation];
+    invocation_scalar_store_layout_v92(memory, pointer, width, value, little_endian);
+    assert(byte_object_relocations_well_formed_v37(previous));
+    assert forall|i: int| 0 <= i < written.bytes.len()
+        implies byte_token_well_formed_v37(written.bytes[i]) by {
+        if pointer.byte_offset <= i < pointer.byte_offset + width {
+            let ordinal = i - pointer.byte_offset;
+            let octet = (value / byte_scale_v30(if little_endian { ordinal } else { width - 1 - ordinal })) % 256;
+            assert(0 <= octet < 256);
+        } else {
+            assert(byte_token_well_formed_v37(previous.bytes[i]));
+        }
+    }
+    assert forall|at: int| written.relocations.contains_key(at) implies {
+        let relocation = written.relocations[at];
+        ordinary_memory_width_v30(relocation.width)
+            && 0 <= at && at + relocation.width <= written.bytes.len()
+            && (forall|i: int| 0 <= i < relocation.width ==>
+                written.initialized[at + i]
+                    && written.bytes[at + i] == byte_relocation_fragment_v37(relocation, i))
+    } by {
+        assert(previous.relocations.contains_key(at));
+        let relocation = previous.relocations[at];
+        assert(!byte_intervals_overlap_v37(at, relocation.width, pointer.byte_offset, width));
+        assert forall|i: int| 0 <= i < relocation.width implies
+            written.initialized[at + i]
+                && written.bytes[at + i] == byte_relocation_fragment_v37(relocation, i) by {
+            assert(previous.initialized[at + i]);
+            assert(previous.bytes[at + i] == byte_relocation_fragment_v37(relocation, i));
+            assert(!(pointer.byte_offset <= at + i < pointer.byte_offset + width));
+        }
+    }
+    assert forall|a: int, b: int| written.relocations.contains_key(a)
+        && written.relocations.contains_key(b) && a != b implies
+        !byte_intervals_overlap_v37(a, written.relocations[a].width, b, written.relocations[b].width) by {
+        assert(previous.relocations.contains_key(a));
+        assert(previous.relocations.contains_key(b));
+    }
+    assert(byte_object_relocations_well_formed_v37(written));
+    assert forall|i: int| #![trigger written.write_epochs[i]]
+        0 <= i < written.write_epochs.len() implies
+        0 <= written.write_epochs[i] <= written.write_clock by {
+        assert(0 <= previous.write_epochs[i] <= previous.write_clock);
+    }
+    assert forall|allocation: MemoryAllocationV30| result.live.contains_key(allocation) implies
+        0 < result.live[allocation].base_alignment
+        && result.live[allocation].bytes.len() == result.live[allocation].initialized.len()
+        && result.live[allocation].write_epochs.len() == result.live[allocation].bytes.len()
+        && 0 <= result.live[allocation].write_clock
+        && (forall|i: int| #![trigger result.live[allocation].write_epochs[i]]
+            0 <= i < result.live[allocation].write_epochs.len() ==>
+            0 <= result.live[allocation].write_epochs[i] <= result.live[allocation].write_clock)
+        && byte_object_relocations_well_formed_v37(result.live[allocation]) by {
+        if allocation != pointer.allocation {
+            assert(memory.live.contains_key(allocation));
+            assert(result.live[allocation] == memory.live[allocation]);
+        }
+    }
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_scalar_store_frame_v92(
+    source: MemoryStateV30, pointer: MemoryPointerV30, width: int,
+    alignment: int, value: MemoryValueV30, little_endian: bool,
+)
+    ensures
+        invocation_source_store_v36(source, pointer, width, alignment, value, little_endian).pc == source.pc,
+        invocation_source_store_v36(source, pointer, width, alignment, value, little_endian).values == source.values,
+        invocation_source_store_v36(source, pointer, width, alignment, value, little_endian).generations == source.generations,
+        invocation_source_store_v36(source, pointer, width, alignment, value, little_endian).frames == source.frames,
+        invocation_source_store_v36(source, pointer, width, alignment, value, little_endian).memory.live.dom() == source.memory.live.dom(),
+        invocation_source_store_v36(source, pointer, width, alignment, value, little_endian).memory.view_contracts == source.memory.view_contracts,
+        invocation_source_store_v36(source, pointer, width, alignment, value, little_endian).valid ==
+            invocation_source_store_enabled_v36(source, pointer, width, alignment, value),
+        invocation_source_store_v36(source, pointer, width, alignment, value, little_endian).valid ==>
+            byte_memory_well_formed_v30(invocation_source_store_v36(source, pointer, width, alignment, value, little_endian).memory),
+{
+    hide(byte_store_v30);
+    if invocation_source_store_enabled_v36(source, pointer, width, alignment, value) {
+        if let MemoryValueV30::Scalar(bits) = value {
+            invocation_scalar_store_layout_v92(source.memory, pointer, width, bits, little_endian);
+            invocation_scalar_store_well_formed_v92(source.memory, pointer, width, bits, little_endian);
+        }
+    }
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_scalar_store_facts_v92()
+    ensures forall|s: MemoryStateV30, pointer: MemoryPointerV30, width: int,
+        alignment: int, value: MemoryValueV30, little_endian: bool|
+        #![trigger invocation_source_store_v36(s, pointer, width, alignment, value, little_endian)]
+        invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).pc == s.pc
+        && invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).values == s.values
+        && invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).generations == s.generations
+        && invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).frames == s.frames
+        && invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).memory.live.dom() == s.memory.live.dom()
+        && invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).memory.view_contracts == s.memory.view_contracts
+        && (invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).valid ==>
+            byte_memory_well_formed_v30(invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).memory)),
+    forall|source: InvocationSourceByteStateV36, pointer: MemoryPointerV30, width: int,
+        alignment: int, value: MemoryValueV30, little_endian: bool|
+        #![trigger invocation_source_store_v36(source.machine, pointer, width, alignment, value, little_endian)]
+        invocation_source_byte_state_well_formed_v36(source)
+        && invocation_source_store_enabled_v36(source.machine, pointer, width, alignment, value) ==>
+        invocation_source_byte_state_well_formed_v36(InvocationSourceByteStateV36 {
+            machine: invocation_source_store_v36(source.machine, pointer, width, alignment, value, little_endian),
+            ..source
+        }),
+{
+    hide(invocation_source_store_v36);
+    hide(byte_memory_well_formed_v30);
+    assert forall|s: MemoryStateV30, pointer: MemoryPointerV30, width: int,
+        alignment: int, value: MemoryValueV30, little_endian: bool|
+        #![trigger invocation_source_store_v36(s, pointer, width, alignment, value, little_endian)]
+        invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).pc == s.pc
+        && invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).values == s.values
+        && invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).generations == s.generations
+        && invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).frames == s.frames
+        && invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).memory.live.dom() == s.memory.live.dom()
+        && invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).memory.view_contracts == s.memory.view_contracts
+        && (invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).valid ==>
+            byte_memory_well_formed_v30(invocation_source_store_v36(s, pointer, width, alignment, value, little_endian).memory)) by {
+        invocation_scalar_store_frame_v92(s, pointer, width, alignment, value, little_endian);
+    }
+    assert forall|source: InvocationSourceByteStateV36, pointer: MemoryPointerV30, width: int,
+        alignment: int, value: MemoryValueV30, little_endian: bool|
+        #![trigger invocation_source_store_v36(source.machine, pointer, width, alignment, value, little_endian)]
+        invocation_source_byte_state_well_formed_v36(source)
+        && invocation_source_store_enabled_v36(source.machine, pointer, width, alignment, value) implies
+        invocation_source_byte_state_well_formed_v36(InvocationSourceByteStateV36 {
+            machine: invocation_source_store_v36(source.machine, pointer, width, alignment, value, little_endian),
+            ..source
+        }) by {
+        invocation_scalar_store_source_well_formed_v92(source, pointer, width, alignment, value, little_endian);
+    }
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_scalar_store_live_domain_frames_v92(
+    before: ByteMemoryV30, after: ByteMemoryV30, frames: MemoryFrameRuntimeV30,
+    generations: Map<MemoryPrivateSiteV30, int>,
+)
+    requires before.live.dom() == after.live.dom(),
+        byte_private_frames_live_v30(before, frames),
+        private_generation_counters_valid_v30(generations, before),
+    ensures byte_private_frames_live_v30(after, frames),
+        private_generation_counters_valid_v30(generations, after),
+{
+    assert forall|allocation: MemoryAllocationV30| after.live.contains_key(allocation) implies
+        match allocation {
+            MemoryAllocationV30::External { identity: _, generation } => 0 <= generation,
+            MemoryAllocationV30::Private { owner, invocation, site, generation } =>
+                0 <= owner && 0 <= invocation && 0 <= generation
+                && 0 <= site.function && 0 <= site.block && 0 <= site.operation
+                && exists|i: int| 0 <= i < frames.active.len()
+                    && frames.active[i] == (MemoryDynamicFrameV30 { owner, invocation }),
+        } by {
+        assert(before.live.contains_key(allocation));
+    }
+    assert forall|site: MemoryPrivateSiteV30, generation: int|
+        after.live.contains_key(private_allocation_v30(site, generation)) implies
+        0 <= generation < private_generation_v30(generations, site) by {
+        assert(before.live.contains_key(private_allocation_v30(site, generation)));
+    }
+}
+
+#[verifier::spinoff_prover]
+proof fn invocation_scalar_store_source_well_formed_v92(
+    source: InvocationSourceByteStateV36, pointer: MemoryPointerV30, width: int,
+    alignment: int, value: MemoryValueV30, little_endian: bool,
+)
+    requires invocation_source_byte_state_well_formed_v36(source),
+        invocation_source_store_enabled_v36(source.machine, pointer, width, alignment, value),
+    ensures invocation_source_byte_state_well_formed_v36(InvocationSourceByteStateV36 {
+        machine: invocation_source_store_v36(source.machine, pointer, width, alignment, value, little_endian),
+        ..source
+    }),
+{
+    hide(invocation_source_store_v36);
+    hide(byte_memory_well_formed_v30);
+    hide(byte_frame_runtime_well_formed_v30);
+    hide(byte_private_frames_live_v30);
+    hide(private_generation_counters_valid_v30);
+    hide(invocation_source_logical_well_formed_v38);
+    hide(invocation_source_object_binding_v40);
+    invocation_scalar_store_frame_v92(source.machine, pointer, width, alignment, value, little_endian);
+    let after = invocation_source_store_v36(source.machine, pointer, width, alignment, value, little_endian);
+    invocation_scalar_store_live_domain_frames_v92(source.machine.memory, after.memory,
+        source.machine.frames, source.machine.generations);
+    assert forall|descriptor: int| source.slots.contains_key(descriptor) implies
+        descriptor >= 0 && source.slots[descriptor].byte_offset == 0
+            && after.memory.live.contains_key(source.slots[descriptor].allocation)
+            && match source.slots[descriptor].allocation {
+                MemoryAllocationV30::Private { owner, invocation, generation, .. } =>
+                    generation >= 0 && exists|i: int| 0 <= i < after.frames.active.len()
+                        && after.frames.active[i].owner == owner
+                        && after.frames.active[i].invocation == invocation,
+                _ => false,
+            } by {
+        assert(source.machine.memory.live.contains_key(source.slots[descriptor].allocation));
+    }
+}

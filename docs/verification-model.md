@@ -88,6 +88,18 @@ coordinates to a separately reviewed unsafe proof backend. It alone can seal
 that backend's owned proof artifacts into the opaque Worker V3 receipt. This is
 an evidence transport and consumption boundary, not a semantic proof.
 
+The mixed V53 receiver separately checks inert final-content correspondence on
+the same freshly readmitted V18 owner used for target selection. It replays the
+selected native emitter, compares the complete lowering receipt and final LLVM
+including its exact V53 descriptor suffix, and checks the strict layout and all
+thirteen semantic-to-LLVM receipt coordinates. Temporary returned text and
+comparison storage use the receiving ledger; the native emitter retains its
+existing separate finite allocation policy. This does not admit semantic MIR,
+authenticate a self-signed execution receipt, supply a native refinement theorem,
+or grant compiler, artifact, publication, load, or launch authority. The protected
+V53 proof-execution service, independently approved backend and concrete native
+proof artifacts remain separate requirements.
+
 Until a reviewed protected verifier and concrete issue #214 proof
 backend/artifact consume those owners together with the missing machine and
 launch evidence, ordinary generated applications fail closed. Synthetic

@@ -262,6 +262,13 @@ executes the container payload. Exact child shutdown/reaping tears down the
 helper-only namespace and alias, including on failure. The target path,
 socket metadata admission and transaction checks are unchanged.
 
+After capturing the inherited root descriptors, the machine helper connects
+nspawn's piped console and stderr to the same diagnostic pipe. Their combined
+retained output has one fixed 64 KiB limit; overflow refuses qualification and
+reaps the child. Failure records escape and truncate this output without
+interpreting it as readiness or transaction evidence. Startup arguments,
+timeouts, socket admission and cleanup are unchanged.
+
 `recover` accepts only an empty qualification parent or one canonically named
 qualification transaction. `recover-install` additionally requires the
 out-of-band expected manifest SHA-256. It admits only that digest's deterministic

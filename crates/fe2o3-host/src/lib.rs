@@ -21,6 +21,11 @@ mod hsa_executable_lifecycle;
 mod prepared_launch;
 #[cfg(target_os = "linux")]
 mod production_application;
+#[cfg(target_os = "linux")]
+pub use production_application::{
+    ProductionMixedWorkerV53ApplicationError, ProductionMixedWorkerV89ApplicationError,
+    prepare_inherited_mixed_worker_v53_application, prepare_inherited_mixed_worker_v89_application,
+};
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 mod published_direct_link;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
@@ -127,6 +132,8 @@ pub mod __hardware_test {
 #[cfg(target_os = "linux")]
 pub use application_descriptor_handoff::{
     ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
+    consume_inherited_mixed_worker_v53_application_handoff,
+    consume_inherited_mixed_worker_v89_application_handoff,
 };
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
@@ -272,10 +279,15 @@ pub use published_hsaco_inspection::{
     PublishedPhysicalLaunchLayoutV1, PublishedPhysicalLayoutInspectionError,
 };
 pub use recovered_worker_v3_admission::{
+    MixedWorkerV53PreparationError, MixedWorkerV53VerificationRequest,
+    MixedWorkerV89PreparationError, MixedWorkerV89VerificationRequest,
+    PreparedMixedWorkerV53Invocation, PreparedMixedWorkerV89Invocation,
+    RecoveredMixedWorkerV53PinnedRoster, RecoveredMixedWorkerV89PinnedRoster,
     RecoveredNominalWorkerV3AdmissionError, RecoveredNominalWorkerV3PinnedRoster,
     RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3EntrypointV1,
     RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3PinnedRosterV1,
-    WorkerV3HostLineageIdentityV1, admit_recovered_nominal_worker_v3_roster,
+    WorkerV3HostLineageIdentityV1, admit_recovered_mixed_worker_v53_roster,
+    admit_recovered_mixed_worker_v89_roster, admit_recovered_nominal_worker_v3_roster,
     admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]

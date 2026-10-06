@@ -8,6 +8,107 @@ fn kernel_entry_plan_v1(
     max_operations: usize,
     closure_budget: &mut ReachableClosureBudgetV1,
 ) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
+    kernel_entry_plan_with_shape_v1(
+        semantic,
+        correspondence_owner,
+        semantic_function,
+        kernel_ir_function,
+        max_operations,
+        closure_budget,
+        |body, argument, _, ty| kernel_parameter_shape_v1(semantic, body, argument, ty),
+    )
+}
+
+fn kernel_entry_plan_with_descriptors_v29(
+    semantic: &AdmittedInertSemanticMirV1,
+    correspondence_owner: SemanticFunctionIdV1,
+    semantic_function: SemanticFunctionIdV1,
+    kernel_ir_function: FunctionId,
+    max_operations: usize,
+    closure_budget: &mut ReachableClosureBudgetV1,
+    references: &SourceReferencePlanV29<'_, '_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
+    if references.descriptor_root.is_none() {
+        return kernel_entry_plan_with_shape_v1(
+            semantic,
+            correspondence_owner,
+            semantic_function,
+            kernel_ir_function,
+            max_operations,
+            closure_budget,
+            |body, argument, _, ty| source_kernel_parameter_shape_v18(semantic, body, argument, ty),
+        );
+    }
+    references.check_owner(references.instances, budget)?;
+    if !std::ptr::eq(semantic, references.instances.owner().source_semantic())
+        || references
+            .instances
+            .instance(references.root)
+            .map(|row| row.function())
+            != Some(semantic_function)
+    {
+        return Err(execution_call_error_v29());
+    }
+    kernel_entry_plan_with_shape_v1(
+        semantic,
+        correspondence_owner,
+        semantic_function,
+        kernel_ir_function,
+        max_operations,
+        closure_budget,
+        |body, argument, local, ty| {
+            kernel_parameter_shape_with_descriptors_v29(
+                semantic, body, argument, local, ty, references, budget,
+            )
+        },
+    )
+}
+
+// Shared original ABI shape selection. Callers prepay the structural shape
+// walk; the descriptor service independently authenticates the source node.
+fn kernel_parameter_shape_with_descriptors_v29(
+    semantic: &AdmittedInertSemanticMirV1,
+    body: &SemanticFunctionDeclV1,
+    argument: u32,
+    local: usize,
+    ty: SemanticTypeIdV1,
+    references: &SourceReferencePlanV29<'_, '_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> Result<KernelParameterShapeV1, ProductionSemanticKirErrorV1> {
+    let shape = source_kernel_parameter_shape_v18(semantic, body, argument, ty)?;
+    if references.descriptor_root.is_some()
+        && matches!(&shape, KernelParameterShapeV1::Direct(Type::Slice(_)))
+        && source_descriptor_original_space_v29(semantic.types(), ty)?.is_some()
+    {
+        let local = SemanticLocalIdV1::from_index(
+            u32::try_from(local).map_err(|_| ArgumentResourceV1::Arithmetic)?,
+        );
+        let node =
+            source_reference_entry_node_v29(references, references.root, local, None, budget)?;
+        budget.source_reference_reserve_v29(references, std::mem::size_of::<Type>())?;
+        Ok(KernelParameterShapeV1::Direct(
+            source_descriptor_node_type_v29(references, node, ty, budget)?,
+        ))
+    } else {
+        Ok(shape)
+    }
+}
+
+fn kernel_entry_plan_with_shape_v1(
+    semantic: &AdmittedInertSemanticMirV1,
+    correspondence_owner: SemanticFunctionIdV1,
+    semantic_function: SemanticFunctionIdV1,
+    kernel_ir_function: FunctionId,
+    max_operations: usize,
+    closure_budget: &mut ReachableClosureBudgetV1,
+    mut shape: impl FnMut(
+        &SemanticFunctionDeclV1,
+        u32,
+        usize,
+        SemanticTypeIdV1,
+    ) -> Result<KernelParameterShapeV1, ProductionSemanticKirErrorV1>,
+) -> Result<LoweredFunctionPlanV1, ProductionSemanticKirErrorV1> {
     let body = semantic
         .functions()
         .get(semantic_function.index() as usize)
@@ -54,7 +155,7 @@ fn kernel_entry_plan_v1(
         )
     })?;
     for (argument, local, ty) in &entry_parameters {
-        let components = match kernel_parameter_shape_v1(semantic, body, *argument, *ty)? {
+        let components = match shape(body, *argument, *local, *ty)? {
             KernelParameterShapeV1::Direct(parameter_ty) => {
                 closure_budget.charge_parameter_expansion(
                     logical_argument_rows_v1(body),

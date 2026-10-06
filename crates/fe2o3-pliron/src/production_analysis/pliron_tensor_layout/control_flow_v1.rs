@@ -589,7 +589,10 @@ fn tensor_trace(trace: &PlironInvocationTraceV1) -> Vec<PlironTraceLocationV1> {
         .iter()
         .filter_map(|event| match event {
             PlironTraceEventV1::TensorInstruction { location, .. } => Some(*location),
-            PlironTraceEventV1::Barrier { .. }
+            PlironTraceEventV1::NativeSubject { .. }
+            | PlironTraceEventV1::NativeBarrier { .. }
+            | PlironTraceEventV1::NativeFence { .. }
+            | PlironTraceEventV1::Barrier { .. }
             | PlironTraceEventV1::Fence { .. }
             | PlironTraceEventV1::Trap { .. }
             | PlironTraceEventV1::Memory { .. }
