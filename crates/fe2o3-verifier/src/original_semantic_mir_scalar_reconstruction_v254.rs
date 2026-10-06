@@ -50,6 +50,14 @@ pub(super) fn headers() -> usize {
     let recipe_refs = 10 * size_of::<&()>();
     let phi_refs = 9 * size_of::<&()>();
     let operand_refs = 4 * size_of::<&()>();
+    let traversal_borrows =
+        size_of::<&mut [Option<Recipe>]>() + size_of::<&mut [u8]>() + 4 * size_of::<&()>();
+    let loader_frame = (5 + 2) * size_of::<&()>()
+        + size_of::<usize>()
+        + size_of::<Recipe>()
+        + size_of::<Result<Recipe>>();
+    let arm_iterator = size_of::<std::array::IntoIter<Block, 2>>();
+    let snapshot_path = size_of::<[u32; 2]>() + size_of::<&[u32]>();
     let borrowed_rosters = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>()
         + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1]>()
         + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>]>();
@@ -75,6 +83,10 @@ pub(super) fn headers() -> usize {
         + recipe_refs
         + phi_refs
         + operand_refs
+        + traversal_borrows
+        + loader_frame
+        + arm_iterator
+        + snapshot_path
         + borrowed_rosters
         + frame_indices
         + 2 * size_of::<Type>()
@@ -91,12 +103,234 @@ pub(super) fn headers() -> usize {
         + size_of::<std::slice::Iter<'_, usize>>()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mixed_optimizer_refinement_v26::Budget;
+    use fe2o3_kernel_ir::{
+        BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work, Function as IrFunction, Module,
+        Signature, StorageLayoutLimitsV1, ValueDef, VerifiedCanonicalKernelIrModuleV18 as Owner,
+    };
+
+    const LIMIT: usize = 100_000_000;
+    const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
+        rows: 64,
+        edges: 256,
+        containment_depth: 32,
+        object_bytes: 4096,
+    };
+
+    fn diamond(nonclosed: bool, extra_predecessor: bool) -> Module {
+        let mut entry = BasicBlock::new(BlockId(100));
+        entry.terminator = Some(Terminator::ConditionalBranch {
+            condition: ValueId(2),
+            then_target: BlockId(300),
+            then_arguments: vec![],
+            else_target: BlockId(400),
+            else_arguments: vec![],
+        });
+        let mut left = BasicBlock::new(BlockId(300));
+        left.terminator = Some(if nonclosed {
+            Terminator::ConditionalBranch {
+                condition: ValueId(3),
+                then_target: BlockId(500),
+                then_arguments: vec![ValueId(0)],
+                else_target: BlockId(600),
+                else_arguments: vec![],
+            }
+        } else {
+            Terminator::Branch {
+                target: BlockId(500),
+                arguments: vec![ValueId(0)],
+            }
+        });
+        let mut right = BasicBlock::new(BlockId(400));
+        right.terminator = Some(Terminator::Branch {
+            target: BlockId(500),
+            arguments: vec![ValueId(1)],
+        });
+        let mut merge = BasicBlock::new(BlockId(500));
+        merge.parameters = vec![ValueDef::new(ValueId(4), Type::Scalar(ScalarType::U32))];
+        merge.terminator = Some(Terminator::Return {
+            values: vec![ValueId(4)],
+        });
+        let mut blocks = Vec::new();
+        if extra_predecessor {
+            let mut outer = BasicBlock::new(BlockId(50));
+            outer.terminator = Some(Terminator::ConditionalBranch {
+                condition: ValueId(3),
+                then_target: BlockId(100),
+                then_arguments: vec![],
+                else_target: BlockId(200),
+                else_arguments: vec![],
+            });
+            let mut extra = BasicBlock::new(BlockId(200));
+            extra.terminator = Some(Terminator::Branch {
+                target: BlockId(300),
+                arguments: vec![],
+            });
+            blocks.extend([outer, extra]);
+        }
+        blocks.extend([entry, left, right, merge]);
+        if nonclosed {
+            let mut exit = BasicBlock::new(BlockId(600));
+            exit.terminator = Some(Terminator::Return {
+                values: vec![ValueId(0)],
+            });
+            blocks.push(exit);
+        }
+        let mut module = Module::new("scalar-reconstruction-diamond");
+        module.functions.push(IrFunction::internal_helper(
+            "entry",
+            Signature::new(
+                vec![
+                    Type::Scalar(ScalarType::U32),
+                    Type::Scalar(ScalarType::U32),
+                    Type::Scalar(ScalarType::Bool),
+                    Type::Scalar(ScalarType::Bool),
+                ],
+                vec![Type::Scalar(ScalarType::U32)],
+            ),
+            vec![ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
+            blocks,
+        ));
+        module
+    }
+
+    #[test]
+    fn reconstruction_rejects_nonclosed_and_extra_predecessor_diamonds() {
+        for (nonclosed, extra) in [(false, false), (true, false), (false, true)] {
+            let module = diamond(nonclosed, extra);
+            let mut work = Work::new(LIMIT);
+            let mut budget = Budget::new(&mut work, LIMIT);
+            let (owner, storage) =
+                Owner::from_module_ref_with_verification_budget_v18(&module, LAYOUTS, &mut budget)
+                    .unwrap();
+            budget.reserve_storage(storage.retained_storage()).unwrap();
+            let (input, storage) = Inventory::derive_v18(&owner, &mut budget).unwrap();
+            budget.reserve_storage(storage.retained_storage()).unwrap();
+            let original = input
+                .definitions()
+                .iter()
+                .position(|row| row.value == Some(ValueId(4)))
+                .unwrap();
+            let Definition::BlockArgument { block, .. } = input.definitions()[original].coordinate
+            else {
+                panic!("fixture merge argument must retain its original coordinate");
+            };
+            let mut out = Writer::new(&mut budget).unwrap();
+            let result = phi(&input, original, block, &mut out);
+            if nonclosed || extra {
+                assert!(matches!(result, Err(Error::Statement(_))));
+            } else {
+                let Recipe::Select {
+                    condition,
+                    on_true,
+                    on_false,
+                } = result.unwrap()
+                else {
+                    panic!("closed fixture must use both distinct original values");
+                };
+                assert_eq!(input.definitions()[condition].value, Some(ValueId(2)));
+                assert_eq!(input.definitions()[on_true].value, Some(ValueId(0)));
+                assert_eq!(input.definitions()[on_false].value, Some(ValueId(1)));
+            }
+            assert!(out.finish().unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn reconstruction_traversal_rejects_cycles_and_out_of_range_dependencies() {
+        for (root, child, accepted) in [
+            (Recipe::Forward(1), Recipe::Actual(0), true),
+            (Recipe::Forward(1), Recipe::Forward(0), false),
+            (Recipe::Forward(0), Recipe::Actual(0), false),
+            (Recipe::Forward(2), Recipe::Actual(0), false),
+        ] {
+            let mut work = Work::new(LIMIT);
+            let mut budget = Budget::new(&mut work, LIMIT);
+            let mut out = Writer::new(&mut budget).unwrap();
+            let mut recipes = [Some(root), None];
+            let mut marks = [1, 0];
+            let mut stack = vec![(0, 0)];
+            let mut order = Vec::new();
+            let result = traverse(
+                &mut recipes,
+                &mut marks,
+                &mut stack,
+                &mut order,
+                &mut out,
+                &mut |index, _| {
+                    assert_eq!(index, 1);
+                    Ok(child)
+                },
+            );
+            if accepted {
+                result.unwrap();
+                assert_eq!(order, [1, 0]);
+                assert_eq!(marks, [2, 2]);
+                assert!(stack.is_empty());
+            } else {
+                assert!(matches!(result, Err(Error::Statement(_))));
+                assert!(order.is_empty());
+            }
+            assert!(out.finish().unwrap().is_empty());
+        }
+    }
+}
+
 fn function(coordinate: Definition) -> Function {
     match coordinate {
         Definition::FunctionArgument { function, .. } => function,
         Definition::BlockArgument { block, .. } => block.function,
         Definition::Result { operation, .. } => operation.block.function,
     }
+}
+
+fn traverse(
+    recipes: &mut [Option<Recipe>],
+    marks: &mut [u8],
+    stack: &mut Vec<(usize, u8)>,
+    order: &mut Vec<usize>,
+    out: &mut Writer<'_, '_>,
+    load: &mut impl FnMut(usize, &mut Writer<'_, '_>) -> Result<Recipe>,
+) -> Result<()> {
+    out.budget.charge_work(2)?;
+    if marks.len() != recipes.len() {
+        return Err(mismatch());
+    }
+    while let Some(&(current, ordinal)) = stack.last() {
+        out.budget.charge_work(5)?;
+        let recipe = recipes
+            .get(current)
+            .copied()
+            .flatten()
+            .ok_or_else(mismatch)?;
+        if let Some(child) = recipe.child(ordinal) {
+            stack.last_mut().ok_or_else(mismatch)?.1 += 1;
+            if *marks.get(child).ok_or_else(mismatch)? == 1 {
+                return Err(mismatch());
+            }
+            if marks[child] == 0 {
+                out.budget.charge_work(3)?;
+                if stack.len() >= recipes.len() {
+                    return Err(mismatch());
+                }
+                recipes[child] = Some(load(child, out)?);
+                marks[child] = 1;
+                stack.push((child, 0));
+            }
+        } else {
+            out.budget.charge_work(3)?;
+            if order.len() >= recipes.len() {
+                return Err(mismatch());
+            }
+            marks[current] = 2;
+            order.push(current);
+            stack.pop();
+        }
+    }
+    Ok(())
 }
 
 fn operand(
@@ -416,44 +650,29 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
         recipes[original] = Some(first);
         marks[original] = 1;
         stack.push((original, 0u8));
-        while let Some(&(current, ordinal)) = stack.last() {
-            out.budget.charge_work(5)?;
-            let recipe = recipes[current].ok_or_else(mismatch)?;
-            if let Some(child) = recipe.child(ordinal) {
-                stack.last_mut().ok_or_else(mismatch)?.1 += 1;
+        traverse(
+            &mut recipes,
+            &mut marks,
+            &mut stack,
+            &mut order,
+            out,
+            &mut |child, out| {
+                out.budget.charge_work(3)?;
                 let child_row = input.definitions().get(child).ok_or_else(mismatch)?;
-                if function(child_row.coordinate) != function(source.coordinate)
-                    || marks[child] == 1
-                {
+                if function(child_row.coordinate) != function(source.coordinate) {
                     return Err(mismatch());
                 }
-                if marks[child] == 0 {
-                    out.budget.charge_work(3)?;
-                    if stack.len() >= count {
-                        return Err(mismatch());
-                    }
-                    recipes[child] = Some(self.reconstruction_recipe(input, child, out)?);
-                    marks[child] = 1;
-                    stack.push((child, 0));
-                }
-            } else {
-                out.budget.charge_work(3)?;
+                let recipe = self.reconstruction_recipe(input, child, out)?;
                 if let Recipe::Actual(index) = recipe {
                     if !actual_function.definitions.contains(&index)
-                        || actual.definitions().get(index).map(|row| row.ty)
-                            != Some(input.definitions()[current].ty)
+                        || actual.definitions().get(index).map(|row| row.ty) != Some(child_row.ty)
                     {
                         return Err(mismatch());
                     }
                 }
-                if order.len() >= count {
-                    return Err(mismatch());
-                }
-                marks[current] = 2;
-                order.push(current);
-                stack.pop();
-            }
-        }
+                Ok(recipe)
+            },
+        )?;
         let storage = out
             .budget
             .storage()

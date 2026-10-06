@@ -96,6 +96,12 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     let reconstruction_recipe_borrows = 10 * size_of::<&()>();
     let reconstruction_phi_borrows = 9 * size_of::<&()>();
     let reconstruction_operand_borrows = 4 * size_of::<&()>();
+    let reconstruction_traversal_borrows = size_of::<&mut [Option<Recipe>]>()
+        + size_of::<&mut [u8]>() + 4 * size_of::<&()>();
+    let reconstruction_loader_frame = (5 + 2) * size_of::<&()>() + size_of::<usize>()
+        + size_of::<Recipe>() + size_of::<Result<Recipe>>();
+    let reconstruction_arm_iteration = size_of::<std::array::IntoIter<RebuildBlock, 2>>();
+    let reconstruction_snapshot_path = size_of::<[u32; 2]>() + size_of::<&[u32]>();
     let reconstruction_slice_borrows = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>()
         + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1]>()
         + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>]>();
@@ -133,6 +139,8 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + reconstruction_query_frames
         + reconstruction_wrapper_borrows + reconstruction_recipe_borrows
         + reconstruction_phi_borrows + reconstruction_operand_borrows
+        + reconstruction_traversal_borrows + reconstruction_loader_frame
+        + reconstruction_arm_iteration + reconstruction_snapshot_path
         + reconstruction_slice_borrows + reconstruction_indices + reconstruction_values
         + reconstruction_iterators
         + bounded_query_scratch;
