@@ -12,6 +12,9 @@ use fe2o3_kernel_ir::{
 use fe2o3_lower_mir_kernel::ProductionSourceTileLeafV162 as TileLeaf;
 use std::{cmp::Ordering, mem::size_of};
 
+#[path = "original_semantic_mir_expanded_value_relation_v200.rs"]
+mod relation;
+
 pub(in super::super) struct ExpandedScalarBindingsV196<'target, 'slots, 'view, 'source> {
     slots: &'slots SourceSlots<'view, 'source>,
     target: &'target TileTargetV176<'slots, 'view, 'source>,
@@ -32,6 +35,7 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             + size_of::<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>()
             + size_of::<TileLeaf>()
             + 2 * size_of::<Result<Option<usize>>>()
+            + relation::headers()
             + 24 * size_of::<usize>()
     }
 
@@ -70,6 +74,22 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             return Err(mismatch());
         }
         Ok(())
+    }
+
+    pub(in super::super) fn check_owner(
+        &self,
+        slots: &SourceSlots<'_, '_>,
+        target: &TileTargetV176<'_, '_, '_>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.slots.with_source_query_v42(out, |out| {
+            self.check(out)?;
+            out.budget.charge_work(2)?;
+            if !std::ptr::eq(self.slots, slots) || !std::ptr::eq(self.target, target) {
+                return Err(mismatch());
+            }
+            Ok(())
+        })
     }
 
     pub(in super::super) fn definition_counts(
