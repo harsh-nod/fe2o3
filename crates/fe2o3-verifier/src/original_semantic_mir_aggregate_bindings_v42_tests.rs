@@ -393,6 +393,58 @@ fn expanded_source_leaf_relations_preserve_checked_tuple_components() {
     }
 }
 
+#[test]
+fn expanded_source_leaf_relations_refuse_unowned_ordinals_before_emission() {
+    use super::super::{slots::tests::with_tile_slots, tile_target::TileTargetV176};
+    use fe2o3_kernel_ir::ExecutionTileLayoutV1 as Layout;
+
+    for layout in [Layout::Blocked, Layout::Striped] {
+        for ordinal in [2, usize::MAX] {
+            let mut reached = false;
+            let result = super::super::super::invocations::tests::run_source_transform(
+                LIMIT,
+                LIMIT,
+                |types, functions| {
+                    checked_transform(
+                        types,
+                        functions,
+                        SemanticCheckedBinaryOpV1::Add,
+                        false,
+                        false,
+                    )
+                },
+                |plan, out| {
+                    with_tile_slots(plan, layout, out, |slots, out| {
+                        let target = TileTargetV176::derive(slots, out)?;
+                        let bindings = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+                        let value = source_boundary_value(plan, 0, 1, 1, 4, out)?;
+                        let before = out.text.len();
+                        let error = bindings
+                            .emit_source_leaf_conjunct(
+                                plan,
+                                0,
+                                1,
+                                value,
+                                ordinal,
+                                FormalIndexWidth::Bits64,
+                                out,
+                            )
+                            .unwrap_err();
+                        assert_eq!(out.text.len(), before);
+                        reached = true;
+                        Err(error)
+                    })
+                },
+            );
+            assert!(reached);
+            assert!(matches!(
+                result.0,
+                Err(Error::Statement("original aggregate leaf ordinal differs"))
+            ));
+        }
+    }
+}
+
 fn run(
     operation: SemanticCheckedBinaryOpV1,
     failure_move: bool,
