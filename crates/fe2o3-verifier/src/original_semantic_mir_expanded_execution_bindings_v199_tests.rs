@@ -379,6 +379,51 @@ fn exercise(
 }
 
 #[test]
+fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
+    let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
+    assert_eq!(source.matches("proof fn ").count(), 4);
+    let frame = source
+        .split_once("proof fn invocation_context_issue_fresh_preserves_frame_v259(")
+        .unwrap()
+        .1
+        .split_once("\n{\n")
+        .unwrap()
+        .0;
+    let requires = frame
+        .split_once("    requires ")
+        .unwrap()
+        .1
+        .split_once("    ensures ")
+        .unwrap()
+        .0;
+    assert_eq!(
+        requires,
+        "invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),\n        invocation_execution_map_current_v205(source, target, execution_map),\n"
+    );
+    for exact in [
+        "values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined)",
+        "values: target.values.update(destination, next.target.values[destination])",
+        "after.slots == source.slots && after.objects == source.objects",
+        "next.source.observations == Seq::empty()",
+        "0 <= dependency < target.values.len(), dependency != destination",
+        "invocation_source_checked_pair_v44(",
+        "let after = invocation_source_checked_v42(source, destination, source_type,",
+        "0, 32, false, left_operand, right_operand, root, instance, little_endian)",
+        "invocation_source_byte_evaluate_v36(source, left_operand, 32, root, instance, little_endian)",
+        "invocation_source_byte_evaluate_v36(source, right_operand, 32, root, instance, little_endian)",
+        "invocation_source_aggregate_complete_v42(aggregate)",
+    ] {
+        assert!(
+            source.contains(exact),
+            "missing actual transition fact: {exact}"
+        );
+    }
+    for forbidden in ["assume(", "admit(", "external_body", "assume_specification"] {
+        assert!(!source.contains(forbidden));
+    }
+}
+
+#[test]
 fn expanded_context_fresh_preservation_keeps_input_guards_and_all_witness_rows() {
     let source = include_str!("original_semantic_mir_context_issue_coupling_v211.vrs");
     let (_, law) = source
