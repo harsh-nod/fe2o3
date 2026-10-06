@@ -54,6 +54,16 @@ impl PreparedFinalizedConditionalWorkerHsacoV5 {
     pub fn policy(&self) -> &crate::WorkerV3HsacoPolicyV1 {
         &self.inspection.policy
     }
+    pub(crate) fn publication_inspection_identity(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(b"FE2O3/CONDITIONAL-WORKER-RAW-INSPECTION/V5\0");
+        h.update(self.inspection.policy.identity().as_bytes());
+        h.update(self.inspection.descriptor_identity);
+        h.update(self.inspection.abi_identity);
+        h.update(self.inspection.resource_identity);
+        h.finalize().into()
+    }
     pub const fn grants_publication_authority(&self) -> bool {
         false
     }

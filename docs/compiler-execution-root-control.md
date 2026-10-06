@@ -350,6 +350,21 @@ inputs are charged again inside the local window. Ordinary APIs keep their
 strict legacy limit checks. This implementation still requires coherent suite
 and end-to-end qualification before enabling the default native callback.
 
+The conditional output transition retains the actual recovered V5 source and
+replayed Worker/finalizer owners through the existing physical HSACO transaction
+engine. Its binding covers the original record, complete compiler closure,
+source/binding/inspection, exact raw/final bytes, and conditional transcript.
+The returned nominal V5 owner retains the descriptor-derived snapshot and actual
+current-publication lease. Its Rust backing quote includes snapshot and record
+bytes plus retained path capacities; filesystem I/O remains the existing bounded
+transaction domain. It cannot be converted to a V3 or V89 semantic owner.
+
+This is a physical publication transition, not managed-build completion or host
+load permission. A distinct conditional replay/readiness envelope and final
+attempt retirement are still required. The host's separate protected-verifier
+and semantic-to-machine proof obligations must not be replaced by this owner,
+its hashes, or a successful journal operation.
+
 The [checkpoint evidence](evidence/root-control-foundations-20260929.md) records
 the tested source, observed failures, and remaining validation limits.
 The subsequent [envelope/intake evidence](evidence/root-control-envelope-20260929.md)
