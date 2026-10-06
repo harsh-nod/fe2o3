@@ -615,6 +615,15 @@ impl fmt::Debug for WorkerV3LoadReadinessResultV1 {
 }
 
 impl WorkerV3LoadReadinessResultV1 {
+    /// Complete retained Rust backing, including spare wire/path capacity.
+    /// Descriptor state, bounded transaction I/O and kernel memory remain in
+    /// the existing artifact domain. This inert quote grants no admission.
+    pub fn retained_rust_storage(&self) -> Option<usize> {
+        std::mem::size_of::<Self>()
+            .checked_add(self.exact_envelope.capacity())?
+            .checked_add(self.envelope_path.capacity())
+    }
+
     pub const fn outcome(&self) -> WorkerV3LoadReadinessOutcomeV1 {
         self.outcome
     }
