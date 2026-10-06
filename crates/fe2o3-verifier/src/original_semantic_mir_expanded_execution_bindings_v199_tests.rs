@@ -468,6 +468,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "hide(invocation_source_context_shape_v161);",
         "hide(invocation_context_issue_fresh_enabled_v211);",
         "reveal(invocation_context_issue_fresh_enabled_v211);",
+        "reveal(invocation_source_context_issue_v161);\n    }\n    invocation_context_issue_fresh_preserves_current_map_v238(",
         "&& !source.objects.contains_key(issue.destination)\n        && invocation_source_context_shape_v161(issue.source_type)) by {",
         "hide(byte_execution_next_epoch_v178);",
         "reveal(byte_execution_step_v178);",
