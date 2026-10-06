@@ -25,10 +25,12 @@ use fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5 as Handoff;
 pub(crate) use fe2o3_hsaco_finalize::ConditionalWorkerRecoveryPolicyV5 as ConditionalRecoveryPolicy;
 use fe2o3_hsaco_finalize::{
     ConditionalWorkerCompactFinalizerReplayV5 as Transcript,
-    ConditionalWorkerHsacoPublicationErrorV5 as PublicationError, NativeFirstBuildWorkerErrorV1,
+    ConditionalWorkerHsacoPublicationErrorV5 as PublicationError,
+    ConditionalWorkerOutputErrorV5 as OutputError, NativeFirstBuildWorkerErrorV1,
     NativeWorkerCompactReplayErrorV1 as TranscriptError, NativeWorkerFinalizationErrorV1,
     PreparedConditionalWorkerHsacoPublicationV5 as Publication,
     PreparedFinalizedConditionalWorkerHsacoV5 as Artifact,
+    PublishedConditionalWorkerHsacoV5 as PublishedOutput,
     RecoveredConditionalWorkerHsacoPublicationV5 as DurablePublication,
     execute_preflighted_conditional_reproducible_first_build_worker_v2 as execute,
     finalize_conditional_worker_hsaco_v5 as finalize,
@@ -39,6 +41,7 @@ use fe2o3_hsaco_finalize::{
     prepare_conditional_worker_compact_finalizer_replay_v5 as prepare_transcript,
     prepare_conditional_worker_hsaco_publication_in_original_account_v5 as prepare_original,
     prepare_conditional_worker_hsaco_publication_v5 as prepare_publication,
+    publish_recovered_conditional_worker_hsaco_in_original_account_v5 as publish_original,
 };
 use fe2o3_verifier::{
     CompilerConditionalNativeSemanticHandoffErrorV5 as RecoveryError,
@@ -69,6 +72,13 @@ pub(crate) struct ParentPreparedConditionalArtifact<'a, 'b, 'w> {
 /// consumption, or sealed verifier/load/launch authority.
 pub(crate) struct ParentDurableConditionalArtifact<'a, 'b, 'w> {
     publication: DurablePublication,
+    custody: ParentArtifactCustody<'a, 'b, 'w>,
+}
+
+/// Exact physically published V5 output plus the original Root parent. This
+/// cannot be detached into a V89 load envelope or promoted to GPU authority.
+pub(crate) struct ParentPublishedConditionalArtifact<'a, 'b, 'w> {
+    publication: PublishedOutput,
     custody: ParentArtifactCustody<'a, 'b, 'w>,
 }
 
@@ -292,6 +302,92 @@ impl ParentDurableConditionalArtifact<'_, '_, '_> {
     }
 }
 
+impl<'a, 'b, 'w> ParentDurableConditionalArtifact<'a, 'b, 'w> {
+    /// Physical transaction only. Success still requires the distinct V5 durable
+    /// readiness envelope before a managed build can report completion.
+    pub(crate) fn publish_original_root(
+        mut self,
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+    ) -> Result<ParentPublishedConditionalArtifact<'a, 'b, 'w>> {
+        self.revalidate()?;
+        self.custody.readiness.origin.require_original_root()?;
+        self.custody.policy_origin.original_parameters()?;
+        self.custody
+            .readiness
+            .origin
+            .require_output(output_dir, self.custody.readiness.budget)?;
+        let retired = self
+            .publication
+            .required_retained_storage()
+            .checked_add(Self::HEADER)
+            .ok_or(Resource::Arithmetic)?;
+        let replacement = replacement::Replacement::begin(retired, self.custody.readiness.budget)?;
+        let Self {
+            publication,
+            mut custody,
+        } = self;
+        let (publication, extra) =
+            publish_original(output_dir, producer, publication, custody.readiness.budget)?;
+        let charge = publication.required_retained_storage();
+        if charge
+            != retired
+                .checked_sub(Self::HEADER)
+                .and_then(|n| n.checked_add(extra.retained_storage()))
+                .ok_or(Resource::Arithmetic)?
+        {
+            return Err(Resource::Accounting.into());
+        }
+        // The actual old replay owner moved into this publication. Charge the
+        // complete successor before retiring its superseded reservation.
+        replacement.reserve(charge, custody.readiness.budget)?;
+        let retained = publication.recovered_evidence();
+        custody.revalidate(
+            retained.finalized(),
+            retained.transcript(),
+            charge,
+            ParentPublishedConditionalArtifact::HEADER,
+        )?;
+        publication.revalidate(producer, custody.readiness.budget)?;
+        replacement.finish(
+            charge,
+            ParentPublishedConditionalArtifact::HEADER,
+            custody.readiness.budget,
+        )?;
+        Ok(ParentPublishedConditionalArtifact {
+            publication,
+            custody,
+        })
+    }
+}
+
+impl ParentPublishedConditionalArtifact<'_, '_, '_> {
+    const HEADER: usize = size_of::<Self>()
+        - size_of::<PublishedOutput>()
+        - size_of::<Carriage>()
+        - size_of::<PolicyRoster>()
+        - size_of::<Approval>()
+        - size_of::<Readiness<'static, 'static>>();
+
+    pub(crate) fn publication(&self) -> &PublishedOutput {
+        &self.publication
+    }
+    pub(crate) fn compiler_execution(&self) -> &Carriage {
+        &self.custody.compiler_execution
+    }
+    pub(crate) fn revalidate(&mut self, producer: &ProducerIdentity) -> Result<()> {
+        let retained = self.publication.recovered_evidence();
+        self.custody.revalidate(
+            retained.finalized(),
+            retained.transcript(),
+            self.publication.required_retained_storage(),
+            Self::HEADER,
+        )?;
+        self.publication
+            .revalidate(producer, self.custody.readiness.budget)
+    }
+}
+
 impl ParentArtifactCustody<'_, '_, '_> {
     fn revalidate(
         &mut self,
@@ -340,6 +436,7 @@ const FRAME: usize = 4 * size_of::<ContinuationError>()
     + size_of::<super::artifact::CurrentPublication>()
     + 2 * size_of::<ParentPreparedConditionalArtifact<'static, 'static, 'static>>()
     + 2 * size_of::<ParentDurableConditionalArtifact<'static, 'static, 'static>>()
+    + 2 * size_of::<ParentPublishedConditionalArtifact<'static, 'static, 'static>>()
     + size_of::<replacement::Replacement>()
     + 8192;
 type Result<T> = std::result::Result<T, ContinuationError>;
@@ -861,6 +958,7 @@ enum Cause {
     Finalizer(NativeWorkerFinalizationErrorV1),
     Transcript(TranscriptError),
     Publication(PublicationError),
+    Output(OutputError),
 }
 macro_rules! causes {
     ($($ty:ty => $variant:ident),+ $(,)?) => {
@@ -881,4 +979,4 @@ causes!(Resource => Resource, Failure => Readiness, CapabilityError => Invocatio
     CompilerModuleHandoffAdmissionErrorV5<RecoveryError> => Recovery,
     HandoffError => Transaction, SubjectError => Subject,
     NativeFirstBuildWorkerErrorV1 => Worker, NativeWorkerFinalizationErrorV1 => Finalizer,
-    TranscriptError => Transcript, PublicationError => Publication);
+    TranscriptError => Transcript, PublicationError => Publication, OutputError => Output);
