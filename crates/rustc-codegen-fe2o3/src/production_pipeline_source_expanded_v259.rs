@@ -120,6 +120,8 @@ where
             .with_checked_mixed_fixedpoint_optimization_v18(
                 budget,
                 |original, optimized, budget| {
+                    #[cfg(test)]
+                    inspect_tile_convergence(optimized, budget)?;
                     let tile = optimized.prepare_tile_expansion_v159(0, selected, budget)?;
                     let floor = budget.storage();
                     let result = {
@@ -153,6 +155,38 @@ where
         }
         Ok(value)
     }
+}
+
+#[cfg(test)]
+fn inspect_tile_convergence(
+    optimized: &fe2o3_lower_mir_kernel::ProductionOptimizedSourceCorrespondenceV18<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), Error> {
+    let header = size_of::<fe2o3_lower_mir_kernel::ProductionOptimizedSourceCfgRootV18<'_, '_>>();
+    budget.reserve_storage(header)?;
+    {
+        let cfg = optimized.output_root_cfg_v18(0, budget)?;
+        let inventory = cfg.inventory();
+        let function = cfg.function();
+        let checked = fe2o3_kernel_analysis::check_canonical_tile_convergence_v160(
+            inventory,
+            function.coordinate,
+            budget,
+        );
+        if checked.is_err() {
+            eprintln!("EXPANDED_CONVERGENCE_V259 {checked:?}");
+            if function.operations.len() <= 512 && function.blocks.len() <= 256 {
+                for operation in &inventory.operations()[function.operations.clone()] {
+                    eprintln!("EXPANDED_OPERATION_V259 {operation:?}");
+                }
+                for block in &inventory.blocks()[function.blocks.clone()] {
+                    eprintln!("EXPANDED_BLOCK_V259 {block:?}");
+                }
+            }
+        }
+    }
+    budget.release_storage(header)?;
+    Ok(())
 }
 
 #[cfg(test)]
