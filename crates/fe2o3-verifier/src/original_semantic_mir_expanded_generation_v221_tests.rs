@@ -72,6 +72,14 @@ fn run(
             "spec fn invocation_runtime_little_endian_v36() -> bool {{ {} }}",
             endianness == EndiannessV2::Little
         )));
+        let index_bytes = match width {
+            FormalIndexWidth::Bits32 => 4,
+            FormalIndexWidth::Bits64 => 8,
+            FormalIndexWidth::Unknown => panic!("positive fixture needs a concrete width"),
+        };
+        assert!(generated.contains(&format!(
+            "spec fn invocation_runtime_index_bytes_v36() -> int {{ {index_bytes} }}"
+        )));
         let (selected, absent) = match layout {
             Layout::Blocked => ("Blocked", "Striped"),
             Layout::Striped => ("Striped", "Blocked"),
