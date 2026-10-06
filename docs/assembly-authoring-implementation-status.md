@@ -11,6 +11,42 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Fresh build and combined visualization qualification — 2026-10-06
+
+The physical-v12 private successor now compiles and links successfully. Fresh
+observations confirm its 20 primary and two auxiliary type layouts (20,312-byte
+logical reservation), dynamic dependency resolution, complete source census and
+configured-data snapshots. Post-build controls passed 88 tests, bound snapshot
+controls passed 12, and startup-template controls passed 12. Two stale layout
+test fixtures were corrected without changing production code. Startup and a
+new same-stop hardware completion attempt remain pending; old failed evidence
+is not reused as a pass.
+
+The compiler-Worker supervisor now derives its ceiling from exact finite root
+CPU-window bytes instead of requiring a source edit to renew a date. Its
+300-second per-case maximum, 180-second launch reserve and all resource limits
+remain. Tests passed: 41 Rust, 12 family mocks, 44 launcher, 28 enabled-build and
+48 loader controls. All four fresh supervision cases and all 20 enclosing
+checks passed again; every cgroup was subsequently absent. The expected
+overflow refusal still has false inner cleanup acceptance. No actual Worker
+or engineering session is established by those fixture runs.
+
+The new four-case manifest is
+`bf16-captured-four-benign-qualified-root-r75-r1/MANIFEST.json`
+(SHA256 `806b186d35166355878bf5e750ad285cfe2595713b48ebc3dbfc9e83aea29f20`).
+The successful private debugger products are recorded in
+`debugger-proc-record-work-build-products-root-r75-r1/PRODUCTS.json`
+(SHA256 `b26355d7665c32ccc685042e650ce30d0e0b712d6393700ee07f726dccce0dc0`).
+
+The [combined resource-view regression](https://github.com/harsh-nod/fe2o3-kernels/commit/992cb533f63e7598b0fb9b508f741fb9342faa10)
+is published on the tutorial site's main branch. TypeScript, ESLint and all 18
+selected desktop/mobile observations passed. It checks supported source/native
+profiles together, state isolation and incompatible-input refusals. Physical
+register lifetimes, full macro frames and fine instruction source spans remain
+explicitly unavailable; this does not close V3 or V5.
+
+Accepted milestone exits remain **M1/M2/V1/V2/U1/U2/U3, 7/18**.
+
 ## Complete debugger accounting patch staged — 2026-10-06
 
 The disabled physical-v12 package now joins the proc-record work change to the
