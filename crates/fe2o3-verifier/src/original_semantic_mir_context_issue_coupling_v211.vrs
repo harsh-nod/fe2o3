@@ -192,3 +192,92 @@ proof fn invocation_context_issue_initializes_current_map_v211(
         assert(key == identity);
     }
 }
+
+// Fresh issuance preserves an already-current witness without discarding rows.
+// The existing fresh-enabled condition still excludes outstanding source
+// execution references and target-slot reissue. This is not a history theorem.
+proof fn invocation_context_issue_fresh_preserves_current_map_v238(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    issue: InvocationSourceContextIssueV161, site: MemorySourceOperationV30,
+    destination: int,
+)
+    requires invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),
+        invocation_execution_map_current_v205(source, target, execution_map),
+    ensures ({ let next = invocation_context_issue_coupled_v211(
+        source, target, execution_map, issue, site, destination);
+        next.updated && invocation_execution_map_current_v205(
+            next.source.source, next.target, next.execution_map) }),
+{
+    invocation_context_issue_fresh_has_exact_updates_v211(
+        source, target, execution_map, issue, site, destination);
+    invocation_context_issue_fresh_has_exact_updates_v211(
+        source, target, Map::empty(), issue, site, destination);
+    invocation_context_issue_initializes_current_map_v211(source, target, issue, site, destination);
+    let next = invocation_context_issue_coupled_v211(
+        source, target, execution_map, issue, site, destination);
+    let initial = invocation_context_issue_coupled_v211(
+        source, target, Map::empty(), issue, site, destination);
+    let identity = MemoryExecutionReferenceV178 {
+        definition: destination, epoch: 0, frame: target.frames.active.last() };
+    assert(initial.execution_map.contains_key(identity));
+    assert(next.source == initial.source && next.target == initial.target);
+    assert(invocation_execution_map_entry_v205(next.source.source, next.target,
+        identity, initial.execution_map[identity]));
+    assert(invocation_source_byte_state_well_formed_v36(next.source.source));
+    assert forall|key: MemoryExecutionReferenceV178|
+        #![trigger execution_map[key]]
+        execution_map.contains_key(key) implies
+            execution_map[key].local != issue.destination
+                && key.definition != destination
+                && invocation_execution_map_entry_v205(
+                    next.source.source, next.target, key, execution_map[key]) by {
+        let origin = execution_map[key];
+        assert(invocation_execution_map_entry_v205(source, target, key, origin));
+        assert(source.logical.aggregates.contains_key(origin.local));
+        assert(origin.local != issue.destination);
+        assert(key.definition != destination);
+        assert(next.source.source.logical.versions[origin.local] == source.logical.versions[origin.local]);
+        assert(next.source.source.logical.aggregates[origin.local] == source.logical.aggregates[origin.local]);
+        if origin.role == InvocationSourceExecutionRoleV168::Workgroup {
+            let lease = source.logical.aggregates[origin.local].execution_lease.unwrap();
+            assert(invocation_source_execution_lease_current_v170(source, lease));
+            assert(source.logical.aggregates.contains_key(lease.origin));
+            assert(lease.origin != issue.destination);
+            assert(next.source.source.logical.versions[lease.origin] == source.logical.versions[lease.origin]);
+            assert(next.source.source.logical.aggregates[lease.origin] == source.logical.aggregates[lease.origin]);
+            assert(invocation_source_execution_lease_current_v170(next.source.source, lease));
+        }
+        assert(invocation_execution_origin_current_v205(next.source.source, origin));
+        assert(byte_execution_capability_v178(next.target, key.definition,
+            if origin.role == InvocationSourceExecutionRoleV168::Context { 0 } else { 1 })
+            == byte_execution_capability_v178(target, key.definition,
+                if origin.role == InvocationSourceExecutionRoleV168::Context { 0 } else { 1 }));
+    }
+    assert forall|key: MemoryExecutionReferenceV178|
+        #![trigger next.execution_map[key]]
+        next.execution_map.contains_key(key) implies
+            invocation_execution_map_entry_v205(
+                next.source.source, next.target, key, next.execution_map[key]) by {
+        if key != identity {
+            assert(execution_map.contains_key(key));
+            assert(next.execution_map[key] == execution_map[key]);
+        }
+    }
+    assert forall|left: MemoryExecutionReferenceV178, right: MemoryExecutionReferenceV178|
+        #![trigger next.execution_map[left], next.execution_map[right]]
+        next.execution_map.contains_key(left) && next.execution_map.contains_key(right)
+            && next.execution_map[left].local == next.execution_map[right].local
+            && next.execution_map[left].version == next.execution_map[right].version
+            && next.execution_map[left].frame == next.execution_map[right].frame implies left == right by {
+        if left != identity { assert(execution_map.contains_key(left)); }
+        if right != identity { assert(execution_map.contains_key(right)); }
+        if left == identity || right == identity {
+            if left != identity { assert(execution_map[left].local != issue.destination); }
+            if right != identity { assert(execution_map[right].local != issue.destination); }
+        } else {
+            assert(execution_map[left] == next.execution_map[left]);
+            assert(execution_map[right] == next.execution_map[right]);
+        }
+    }
+}

@@ -379,6 +379,30 @@ fn exercise(
 }
 
 #[test]
+fn expanded_context_fresh_preservation_keeps_input_guards_and_all_witness_rows() {
+    let source = include_str!("original_semantic_mir_context_issue_coupling_v211.vrs");
+    let (_, law) = source
+        .split_once("proof fn invocation_context_issue_fresh_preserves_current_map_v238(")
+        .unwrap();
+    let (header, body) = law.split_once("\n{\n").unwrap();
+    let (_, contract) = header.split_once("    requires ").unwrap();
+    let (requires, ensures) = contract.split_once("    ensures ").unwrap();
+    assert_eq!(requires, "invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),\n        invocation_execution_map_current_v205(source, target, execution_map),\n");
+    assert!(ensures.contains("next.updated && invocation_execution_map_current_v205(\n            next.source.source, next.target, next.execution_map)"));
+    assert!(body.contains("source, target, execution_map, issue, site, destination"));
+    assert!(body.contains("execution_map[key].local != issue.destination"));
+    assert!(body.contains("key.definition != destination"));
+    assert!(body.contains("lease.origin != issue.destination"));
+    assert!(body.contains("next.execution_map[key] == execution_map[key]"));
+    assert!(body.contains("next.execution_map[left].frame == next.execution_map[right].frame"));
+    assert!(source.contains("source.logical.execution_references == Map::empty()"));
+    assert!(source.contains("target.values[destination] == MemoryValueV30::Undefined"));
+    for forbidden in ["assume(", "admit(", "external_body", "assume_specification"] {
+        assert!(!law.contains(forbidden));
+    }
+}
+
+#[test]
 fn expanded_execution_map_support_keeps_dynamic_identity_and_history_separate() {
     let source = include_str!("original_semantic_mir_execution_correspondence_v205.vrs");
     assert!(source.contains(
