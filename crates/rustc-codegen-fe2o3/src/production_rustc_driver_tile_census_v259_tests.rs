@@ -62,7 +62,8 @@ fn actual_rustc_collected_tile_census_preserves_shared_body_counts() {
         &[
             ("scalar-shared", "scalar"),
             ("tile-shared", "one"),
-            ("tile-shared", "two"),
+            ("tile-shared-repeat", "repeat"),
+            ("tile-distinct-brands", "two"),
         ],
         &[(0, 0), (3, 0)],
         CENSUS_CHILD,
@@ -79,11 +80,11 @@ pub fn second(_ctx: KernelContext<'_>, seed: u32) { let _ = shared_scalar(seed);
 "#
                 .to_owned();
             }
-            assert!(matches!(case, "one" | "two"));
+            assert!(matches!(case, "one" | "repeat" | "two"));
             let mut source = r#"use fe2o3_device::{kernel, KernelContext};
 use fe2o3_device::tile::MaskedTile1D;
 #[inline(never)]
-fn shared_tile(mut ctx: KernelContext<'_>, input: &[u32], base: u64) {
+fn shared_tile<Kernel>(ctx: &mut KernelContext<'_, Kernel>, input: &[u32], base: u64) {
     let _ = ctx.with_workgroup(|wg| {
         let tile = MaskedTile1D::<u32, 64, 2, _>::load_masked(&wg, input, base as usize);
         let ([a, b], [active_a, active_b]) = tile.into_fragment().into_parts();
@@ -91,16 +92,19 @@ fn shared_tile(mut ctx: KernelContext<'_>, input: &[u32], base: u64) {
     });
 }
 #[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
-pub fn first(ctx: KernelContext<'_>, input: &[u32], base: u64) {
-    shared_tile(ctx, input, base);
-}
+pub fn first(mut ctx: KernelContext<'_>, input: &[u32], base: u64) {
+    shared_tile(&mut ctx, input, base);
 "#
             .to_owned();
+            if case == "repeat" {
+                source.push_str("    shared_tile(&mut ctx, input, base);\n");
+            }
+            source.push_str("}\n");
             if case == "two" {
                 source.push_str(
                     r#"#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
-pub fn second(ctx: KernelContext<'_>, input: &[u32], base: u64) {
-    shared_tile(ctx, input, base);
+pub fn second(mut ctx: KernelContext<'_>, input: &[u32], base: u64) {
+    shared_tile(&mut ctx, input, base);
 }
 "#,
                 );
@@ -113,16 +117,28 @@ pub fn second(ctx: KernelContext<'_>, input: &[u32], base: u64) {
                 assert_eq!(observation.calls, [0; 3]);
                 assert!(!observation.has_tile_operations);
             } else {
-                assert_eq!(label, "tile-shared");
                 assert!(observation.has_tile_operations);
                 assert!(observation.calls.into_iter().all(|count| count > 0));
-                if let Some(single_root) = observations.get(label) {
-                    assert_eq!(single_root.roots, 1);
-                    assert_eq!(observation.roots, 2);
-                    assert_eq!(observation.calls, single_root.calls);
-                } else {
-                    assert_eq!(observation.roots, 1);
-                    observations.insert(label.to_owned(), observation);
+                match label {
+                    "tile-shared" => {
+                        assert_eq!(observation.roots, 1);
+                        assert!(observations.insert(label.to_owned(), observation).is_none());
+                    }
+                    "tile-shared-repeat" => {
+                        let once = observations.get("tile-shared").unwrap();
+                        assert_eq!(observation.roots, 1);
+                        assert_eq!(observation.calls, once.calls);
+                    }
+                    "tile-distinct-brands" => {
+                        let once = observations.get("tile-shared").unwrap();
+                        assert_eq!(observation.roots, 2);
+                        // Each kernel's brand instantiates a distinct helper body.
+                        assert_eq!(
+                            observation.calls,
+                            once.calls.map(|n| n.checked_mul(2).unwrap())
+                        );
+                    }
+                    _ => panic!("unexpected census case {label}"),
                 }
             }
         },
