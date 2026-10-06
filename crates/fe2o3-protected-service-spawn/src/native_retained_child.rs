@@ -328,6 +328,18 @@ pub struct RootRetainedRuntimeTraceV1<'work, T: Send + 'static> {
 }
 
 impl<'work, T: Send + 'static> RootRetainedRuntimeTraceV1<'work, T> {
+    /// Inert pre-construction bound for retaining a dependency of a payload
+    /// declared with this complete storage. It reserves nothing, authenticates
+    /// no declaration and cannot create a trace or dependency owner.
+    pub fn dependency_quota_for_payload(payload: usize) -> Result<RetainedDependencyQuotaV2> {
+        let mut quota = Resources::<T>::dependency_quota_for_payload(payload)?;
+        quota.work = quota
+            .work
+            .checked_add(super::ENTRY)
+            .ok_or(Resource::Arithmetic)?;
+        Ok(quota)
+    }
+
     pub fn retained_storage(&self) -> usize {
         self.trace.retained_storage()
     }

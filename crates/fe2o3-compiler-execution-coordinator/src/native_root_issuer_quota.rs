@@ -52,85 +52,101 @@ impl Prepared {
         trace: &CompilerTrace<'_, T>,
     ) -> Result<Quota> {
         let dependency = trace.issuer_dependency_storage()?;
-        let payload = payload_ceiling::<T>(self.retained_storage(), dependency)?;
         let validation = self.revalidation_quota()?;
         let guard = self.cleanup_guard_quota()?;
         let anchor = self.anchor.supervisor_transfer_quota()?;
         let anchor_validation = self.anchor.supervisor_transfer_validation_quota()?;
-        let image = Image::quota_for_length(
-            self.programs[2].measurement().byte_len(),
-            ImageOperation::Transfer,
-        )?;
-        let source = staging::source_storage(self.programs[2].measurement().byte_len())?;
-        let staging = Quota {
-            work: sum(&[
-                LOCAL_WORK,
-                staging::PEER_PREPARE_WORK,
-                repeated(2, validation.work())?,
-                repeated(2, image.work())?,
-                repeated(2, Inputs::WORK)?,
-                repeated(2, PolicyCap::IO_WORK)?,
-                repeated(2, ServiceKey::WORK)?,
-                repeated(2, ManifestCap::IO_WORK)?,
-                anchor_validation.work(),
-                AnchorTransfer::INTO_DESCRIPTORS_WORK,
-                Stage::STAGING_WORK,
-            ])?,
-            scratch: sum(&[
-                FRAME,
-                staging::PEER_PREPARE_SCRATCH,
-                source,
-                repeated(2, Stage::storage_for_sources(source)?)?,
-                Stage::STAGING_SCRATCH,
-                validation.scratch(),
-                image.scratch(),
-                Inputs::SCRATCH,
-                PolicyCap::IO_STORAGE,
-                ServiceKey::STORAGE,
-                ManifestCap::IO_STORAGE,
-                anchor_validation.scratch(),
-                AnchorTransfer::INTO_DESCRIPTORS_SCRATCH,
-            ])?,
-        };
-        let launch = launch_quota::<T>(
-            payload,
-            source,
+        issuer_launch_for::<T>(
+            self.retained_storage(),
+            dependency,
             trace.issuer_inputs_quota()?,
-            Quota {
-                work: guard.work(),
-                scratch: guard.scratch(),
-            },
             Quota {
                 work: validation.work(),
                 scratch: validation.scratch(),
             },
             Quota {
+                work: guard.work(),
+                scratch: guard.scratch(),
+            },
+            Quota {
                 work: anchor.work(),
                 scratch: anchor.scratch(),
             },
-            staging,
-            self.process_quota()?,
-            self.issuer_image_quota()?,
-        )?;
-        let gate =
-            RootConnection::handshake_quota(self.trust.policy().policy().executable().byte_len())?;
-        root_startup_quota::<T>(
-            launch,
             Quota {
-                work: gate.work(),
-                scratch: gate.scratch(),
+                work: anchor_validation.work(),
+                scratch: anchor_validation.scratch(),
+            },
+            self.programs[2].measurement().byte_len(),
+            self.trust.policy().policy().executable().byte_len(),
+            self.process_quota()?,
+        )
+    }
+
+    /// Inert original-account startup ceiling before either consumed owner
+    /// exists. `compiler_payload` must cover the entire original trace payload;
+    /// actual launch still validates owners and uses actual retained charges.
+    pub(crate) fn maximum_issuer_launch_quota<T: Send + 'static>(
+        compiler_payload: usize,
+    ) -> Result<Quota> {
+        use fe2o3_protected_service_spawn::native_spawn::RootRetainedRuntimeTraceV1;
+        let dependency =
+            RootRetainedRuntimeTraceV1::<T>::dependency_quota_for_payload(compiler_payload)?;
+        let validation = Self::maximum_revalidation_quota()?;
+        let guard = Self::maximum_cleanup_guard_quota()?;
+        let anchor = crate::native_v3::Anchor::maximum_supervisor_transfer_quota()?;
+        let anchor_validation =
+            crate::native_v3::Anchor::maximum_supervisor_transfer_validation_quota()?;
+        issuer_launch_for::<T>(
+            Self::maximum_retained_storage()?,
+            dependency.retained_storage(),
+            CompilerTrace::<T>::maximum_issuer_inputs_quota(compiler_payload)?,
+            Quota {
+                work: validation.work(),
+                scratch: validation.scratch(),
+            },
+            Quota {
+                work: guard.work(),
+                scratch: guard.scratch(),
+            },
+            Quota {
+                work: anchor.work(),
+                scratch: anchor.scratch(),
+            },
+            Quota {
+                work: anchor_validation.work(),
+                scratch: anchor_validation.scratch(),
+            },
+            crate::native_v3::MAX_LAUNCHER,
+            crate::native_v3::MAX_LAUNCHER,
+            Self::process_quota_for(validation)?,
+        )
+    }
+
+    pub(crate) fn maximum_issuer_continuity_quota<T: Send + 'static>() -> Result<Quota> {
+        let root = RootConnection::validation_quota(crate::native_v3::MAX_LAUNCHER)?;
+        continuity::<T>(
+            Self::process_quota_for(Self::maximum_revalidation_quota()?)?,
+            Quota {
+                work: root.work(),
+                scratch: root.scratch(),
             },
         )
     }
 
-    fn issuer_image_quota(&self) -> Result<Quota> {
-        let quota = fe2o3_broker_authority_service::retained_issuer_image_quota_v3(
-            self.trust.policy().policy().executable().byte_len(),
-        )?;
-        Ok(Quota {
-            work: quota.work(),
-            scratch: quota.scratch(),
-        })
+    pub(crate) fn maximum_issuer_cleanup_quota<T: Send + 'static>(
+        compiler_payload: usize,
+        cleanup_turns: usize,
+    ) -> Result<IssuerCleanupQuota> {
+        use fe2o3_protected_service_spawn::native_spawn::RootRetainedRuntimeTraceV1;
+        let dependency =
+            RootRetainedRuntimeTraceV1::<T>::dependency_quota_for_payload(compiler_payload)?;
+        cleanup_quota::<T>(
+            payload_ceiling::<T>(
+                Self::maximum_retained_storage()?,
+                dependency.retained_storage(),
+            )?,
+            cleanup_turns,
+        )
     }
 
     pub(crate) fn issuer_continuity_quota<T: Send + 'static>(&self) -> Result<Quota> {
@@ -160,6 +176,81 @@ impl Prepared {
             cleanup_turns,
         )
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn issuer_launch_for<T: Send + 'static>(
+    prepared: usize,
+    dependency: usize,
+    trace: Quota,
+    validation: Quota,
+    guard: Quota,
+    anchor: Quota,
+    anchor_validation: Quota,
+    image_bytes: u64,
+    policy_image_bytes: u64,
+    process: Quota,
+) -> Result<Quota> {
+    let payload = payload_ceiling::<T>(prepared, dependency)?;
+    let image = Image::quota_for_length(image_bytes, ImageOperation::Transfer)?;
+    let source = staging::source_storage(image_bytes)?;
+    let staging = Quota {
+        work: sum(&[
+            LOCAL_WORK,
+            staging::PEER_PREPARE_WORK,
+            repeated(2, validation.work())?,
+            repeated(2, image.work())?,
+            repeated(2, Inputs::WORK)?,
+            repeated(2, PolicyCap::IO_WORK)?,
+            repeated(2, ServiceKey::WORK)?,
+            repeated(2, ManifestCap::IO_WORK)?,
+            anchor_validation.work(),
+            AnchorTransfer::INTO_DESCRIPTORS_WORK,
+            Stage::STAGING_WORK,
+        ])?,
+        scratch: sum(&[
+            FRAME,
+            staging::PEER_PREPARE_SCRATCH,
+            source,
+            repeated(2, Stage::storage_for_sources(source)?)?,
+            Stage::STAGING_SCRATCH,
+            validation.scratch(),
+            image.scratch(),
+            Inputs::SCRATCH,
+            PolicyCap::IO_STORAGE,
+            ServiceKey::STORAGE,
+            ManifestCap::IO_STORAGE,
+            anchor_validation.scratch(),
+            AnchorTransfer::INTO_DESCRIPTORS_SCRATCH,
+        ])?,
+    };
+    let launch = launch_quota::<T>(
+        payload,
+        source,
+        trace,
+        guard,
+        validation,
+        anchor,
+        staging,
+        process,
+        issuer_image_quota(policy_image_bytes)?,
+    )?;
+    let gate = RootConnection::handshake_quota(policy_image_bytes)?;
+    root_startup_quota::<T>(
+        launch,
+        Quota {
+            work: gate.work(),
+            scratch: gate.scratch(),
+        },
+    )
+}
+
+fn issuer_image_quota(image_bytes: u64) -> Result<Quota> {
+    let quota = fe2o3_broker_authority_service::retained_issuer_image_quota_v3(image_bytes)?;
+    Ok(Quota {
+        work: quota.work(),
+        scratch: quota.scratch(),
+    })
 }
 
 pub(super) fn root_startup_quota<T: Send + 'static>(launch: Quota, gate: Quota) -> Result<Quota> {
@@ -211,6 +302,16 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
             .as_ref()
             .ok_or(Error::Invalid("root attempt has no publication"))?
             .revalidation_quota();
+        publication_operation::<T>(Quota {
+            work: publication.work(),
+            scratch: publication.scratch(),
+        })
+    }
+
+    pub(crate) fn maximum_publication_revalidation_quota(
+        maximum_handoff_bytes: usize,
+    ) -> Result<Quota> {
+        let publication = Publication::maximum_revalidation_quota(maximum_handoff_bytes)?;
         publication_operation::<T>(Quota {
             work: publication.work(),
             scratch: publication.scratch(),

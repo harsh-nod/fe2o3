@@ -298,6 +298,30 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
     pub(crate) fn issuer_inputs_quota(&self) -> Result<native::CompilerExecutionLaunchQuotaV2> {
         let dependency = self.trace.dependency_quota()?;
         let (operation_work, operation_scratch) = self.trace.operation_quota();
+        Self::issuer_inputs_quota_for(dependency, operation_work, operation_scratch)
+    }
+
+    /// Same transfer bound before the original trace exists. The payload is a
+    /// complete declared ceiling, not an independently admitted backing owner.
+    pub(crate) fn maximum_issuer_inputs_quota(
+        payload: usize,
+    ) -> Result<native::CompilerExecutionLaunchQuotaV2> {
+        use fe2o3_protected_service_spawn::native_spawn::RootRetainedRuntimeTraceV1;
+        Self::issuer_inputs_quota_for(
+            RootRetainedRuntimeTraceV1::<T>::dependency_quota_for_payload(payload)?,
+            RootRuntimeTraceV1::OPERATION_WORK
+                .max(fe2o3_protected_service_spawn::native_spawn::RootTaskTraceV2::OPERATION_WORK),
+            RootRuntimeTraceV1::OPERATION_SCRATCH.max(
+                fe2o3_protected_service_spawn::native_spawn::RootTaskTraceV2::OPERATION_SCRATCH,
+            ),
+        )
+    }
+
+    fn issuer_inputs_quota_for(
+        dependency: fe2o3_protected_service_spawn::RetainedDependencyQuotaV2,
+        operation_work: usize,
+        operation_scratch: usize,
+    ) -> Result<native::CompilerExecutionLaunchQuotaV2> {
         Ok(native::CompilerExecutionLaunchQuotaV2 {
             work: native::sum(&[LOCAL_WORK, operation_work, dependency.work()])?,
             scratch: native::sum(&[
@@ -549,6 +573,37 @@ impl<T: Send + 'static> Drop for InputAttempt<'_, '_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preconstruction_issuer_input_quote_preserves_both_trace_modes_and_dependencies() {
+        use fe2o3_protected_service_spawn::native_spawn::{
+            RootRetainedRuntimeTraceV1, RootTaskTraceV2,
+        };
+        for payload in [0, 4096, 1 << 20] {
+            let quote = CompilerTrace::<()>::maximum_issuer_inputs_quota(payload).unwrap();
+            let dependency =
+                RootRetainedRuntimeTraceV1::<()>::dependency_quota_for_payload(payload).unwrap();
+            for (work, scratch) in [
+                (
+                    RootTaskTraceV2::OPERATION_WORK,
+                    RootTaskTraceV2::OPERATION_SCRATCH,
+                ),
+                (
+                    RootRuntimeTraceV1::OPERATION_WORK,
+                    RootRuntimeTraceV1::OPERATION_SCRATCH,
+                ),
+            ] {
+                let actual =
+                    CompilerTrace::<()>::issuer_inputs_quota_for(dependency, work, scratch)
+                        .unwrap();
+                assert!(quote.work() >= actual.work());
+                assert!(quote.scratch() >= actual.scratch());
+            }
+            assert!(quote.scratch() >= 2 * dependency.retained_storage());
+        }
+        assert!(CompilerTrace::<[u8; 32]>::maximum_issuer_inputs_quota(31).is_err());
+        assert!(CompilerTrace::<()>::maximum_issuer_inputs_quota(usize::MAX).is_err());
+    }
 
     #[test]
     fn issuer_access_requires_both_confirmation_and_a_current_held_exec() {

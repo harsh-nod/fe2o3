@@ -64,6 +64,19 @@ check, steps the terminal syscall. Terminal status, full trace retirement and
 downstream publication acceptance are still separate checks; holding an exit or
 observing publication cannot manufacture successful compiler completion.
 
+The startup schedule now composes these phases on the two original accounts.
+Shared inert dependency and issuer quota queries use the same checked formulas
+as the live owners; they neither create owners nor authenticate declared payload
+sizes. Issuer launch/readiness is funded once. Each bounded runtime turn funds
+the maximum phase work plus original policy and continuity checks, while the
+sum of construction peaks preserves overlapping retained outputs. The original
+cleanup account separately covers issuer backing and the publication's late
+lease/token holder, including all monitor and cleanup pump turns plus direct
+terminal retirement. No phase
+constructs a new budget, renews the deadline, or turns exhausted cleanup into a
+successful retirement. The conservative logical storage ceiling is not an RSS
+or elapsed-time guarantee.
+
 These private transitions do not change the production request's refusal
 selection. Actual device attachment and the joined positive native route still
 need an admitted privileged qualification lane. Ordinary
