@@ -88,6 +88,7 @@ mod canonical_kir_v6;
 mod canonical_kir_v7;
 mod canonical_kir_v8;
 mod canonical_kir_v9;
+mod canonical_phase_resource_policy_v1;
 mod canonical_work_budget_v1;
 mod conditional_total_view_v1;
 mod contract_catalog_v1;
@@ -208,6 +209,9 @@ pub use canonical_kir_v19::*;
 pub use canonical_kir_v20::*;
 pub use canonical_kir_v21::*;
 pub use canonical_kir_v22::*;
+pub use canonical_phase_resource_policy_v1::{
+    CANONICAL_PHASE_STORAGE_LIMIT_V1, CANONICAL_PHASE_WORK_LIMIT_V1,
+};
 pub use canonical_work_budget_v1::*;
 pub use conditional_total_view_v1::*;
 pub use contract_catalog_v1::*;
