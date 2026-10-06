@@ -273,6 +273,8 @@ fn typed_endpoint_header_oracle_v36() -> usize {
     h::<SourceSsaElementV36>()
         + h::<SourceSsaCarrierTypeV36>()
         + h::<SourceSsaLoanV36>()
+        + execution_borrow_header_oracle_v163()
+        + execution_owner_header_oracle_v199()
         + reference_endpoint_header_oracle_v38()
         + h::<SourceSsaWitnessV50>()
         + h::<(ValueId, SourceSsaCarrierTypeV36)>()
@@ -308,6 +310,37 @@ fn typed_endpoint_header_oracle_v36() -> usize {
         + h::<SemanticLocalIdV1>()
         + h::<SemanticTypeIdV1>()
         + 12 * h::<usize>()
+}
+
+fn execution_borrow_header_oracle_v163() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + 2 * size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceOwnedResultV18<T>>()
+    }
+    let expected = h::<SourceSsaExecutionBorrowV163>()
+        + h::<ProductionSourceExecutionBorrowSiteV163>()
+        + h::<ProductionSourceExecutionBorrowCoordinatesV163>()
+        + h::<Option<ProductionSourceExecutionBorrowCoordinatesV163>>()
+        + h::<&SemanticExecutionBorrowBindingV29>()
+        + 8 * h::<&()>();
+    assert_eq!(source_execution_borrow_headers_v163().unwrap(), expected);
+    expected
+}
+
+fn execution_owner_header_oracle_v199() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>()
+            + 2 * size_of::<Result<T, ProductionSemanticKirErrorV1>>()
+            + 2 * size_of::<SourceOwnedResultV18<T>>()
+    }
+    let expected = h::<ProductionSourceExecutionIdentityV199>()
+        + h::<ProductionSourceExecutionOwnerV199>()
+        + h::<Option<ProductionSourceExecutionIdentityV199>>()
+        + h::<Option<ProductionSourceExecutionOwnerV199>>()
+        + 8 * h::<&()>();
+    assert_eq!(source_execution_owner_headers_v199().unwrap(), expected);
+    expected
 }
 
 fn reference_endpoint_header_oracle_v38() -> usize {
