@@ -486,6 +486,20 @@ pub(super) struct CollectedRustStage<'tcx> {
     transaction: ProductionTransactionBindings,
 }
 
+impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    /// Borrows the single collection's authenticated terminal observation on the
+    /// existing account. No MIR query, importer selection, or authority grant.
+    pub(crate) fn collected_tile_terminals_v259(
+        &self,
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<
+        &crate::collector::CollectedTileTerminalCensusV259,
+        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1,
+    > {
+        self.stage.closure.collected_tile_terminals_v259(budget)
+    }
+}
+
 struct ProductionTransactionBindings {
     producer: ProducerIdentity,
     output_dir: PathBuf,

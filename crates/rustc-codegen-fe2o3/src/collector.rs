@@ -259,7 +259,13 @@ pub(crate) struct AuthenticatedCollectedKernelClosureV1<'tcx> {
     roots: Box<[AuthenticatedProductionRootV1<'tcx>]>,
     context_entries: kernel_context_auth_v1::AuthenticatedContextEntriesV1<'tcx>,
     closure_flow: closure_flow_v1::AuthenticatedClosureFlowV1<'tcx>,
+    terminal_census: CollectedTileTerminalCensusV259,
 }
+
+mod terminal_census_v259;
+pub(crate) use terminal_census_v259::{
+    CollectedTileTerminalCensusV259, CollectedTileTerminalKindV259,
+};
 
 #[path = "production_source_census_v1.rs"]
 pub(crate) mod source_census_v1;
@@ -268,6 +274,16 @@ pub(crate) mod source_census_v1;
 pub(crate) mod ordered_origin_v1;
 
 impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
+    pub(crate) fn collected_tile_terminals_v259(
+        &self,
+        budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+    ) -> Result<
+        &CollectedTileTerminalCensusV259,
+        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1,
+    > {
+        self.terminal_census.borrow_on_account(budget)
+    }
+
     /// Observes an exact trusted terminal in the already sealed closure.
     /// This chooses a continuation only; import repeats all source/provider,
     /// signature, FnABI and source-record checks before admitting MIR36.
@@ -426,7 +442,7 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
     target: crate::production_target_v1::RetainedProductionTargetV1,
     context_producers: CapturedContextProducersV1<'tcx>,
 ) -> Result<AuthenticatedCollectedKernelClosureV1<'tcx>, CollectError> {
-    let (collection, context_entries, closure_flow) = collect_device_functions(
+    let (collection, context_entries, closure_flow, terminal_census) = collect_device_functions(
         tcx,
         cgus,
         verbose,
@@ -460,6 +476,7 @@ pub(crate) fn collect_authenticated_kernel_closure_v1<'tcx>(
         roots: roots.into_boxed_slice(),
         context_entries,
         closure_flow,
+        terminal_census,
     })
 }
 
@@ -474,6 +491,7 @@ fn collect_device_functions<'tcx>(
         CollectionResult<'tcx>,
         kernel_context_auth_v1::AuthenticatedContextEntriesV1<'tcx>,
         closure_flow_v1::AuthenticatedClosureFlowV1<'tcx>,
+        CollectedTileTerminalCensusV259,
     ),
     CollectError,
 > {
@@ -2445,6 +2463,7 @@ struct DeviceCollector<'tcx> {
     >,
     call_edges: closure_flow_v1::CallGraphV1,
     closure_work: crate::rustc_semantic_plan_v1::SourceClosureWorkV1,
+    terminal_census: CollectedTileTerminalCensusV259,
     reachable_unsafe_calls:
         BTreeMap<crate::device_ffi::DeviceFfiInstanceIdentity, BTreeSet<String>>,
     inline_assembly:
@@ -2574,6 +2593,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             call_chains: BTreeMap::new(),
             call_edges: BTreeMap::new(),
             closure_work: crate::rustc_semantic_plan_v1::SourceClosureWorkV1::default(),
+            terminal_census: CollectedTileTerminalCensusV259::empty(),
             reachable_unsafe_calls: BTreeMap::new(),
             inline_assembly: BTreeMap::new(),
             used_export_names: BTreeSet::new(),
@@ -2730,6 +2750,7 @@ impl<'tcx> DeviceCollector<'tcx> {
             CollectionResult<'tcx>,
             kernel_context_auth_v1::AuthenticatedContextEntriesV1<'tcx>,
             closure_flow_v1::AuthenticatedClosureFlowV1<'tcx>,
+            CollectedTileTerminalCensusV259,
         ),
         CollectError,
     > {
@@ -2840,7 +2861,12 @@ impl<'tcx> DeviceCollector<'tcx> {
                     message: format!("compiler FFI envelope construction failed: {error}"),
                 },
             )?;
-        Ok((collection, context_entries, closure_flow))
+        Ok((
+            collection,
+            context_entries,
+            closure_flow,
+            self.terminal_census,
+        ))
     }
 
     fn process_terminator(
@@ -3499,9 +3525,10 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         // Diagnostic-item terminals and the separate exact normalized-call
         // rules below require matching recipes in the sole semantic importer.
-        let registered_terminal =
-            crate::production_semantic_terminal_v1::classify(self.tcx, *def_id).is_some();
-        if registered_terminal {
+        if let Some(rule) = crate::production_semantic_terminal_v1::classify(self.tcx, *def_id) {
+            self.terminal_census
+                .record(rule, &mut self.closure_work)
+                .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?;
             if self.verbose {
                 eprintln!(
                     "[collector] stopping at trusted device item {}",
@@ -3578,7 +3605,12 @@ impl<'tcx> DeviceCollector<'tcx> {
 
         // Repeat the workload-neutral device registry check for the concrete
         // implementation selected by rustc, after normalized-call boundaries.
-        if crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id()).is_some() {
+        if let Some(rule) =
+            crate::production_semantic_terminal_v1::classify(self.tcx, resolved.def_id())
+        {
+            self.terminal_census
+                .record(rule, &mut self.closure_work)
+                .map_err(|error| self.reachable_error(caller, &error.to_string(), None))?;
             if self.verbose {
                 eprintln!(
                     "[collector] stopping at registered semantic terminal {}",

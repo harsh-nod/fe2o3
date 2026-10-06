@@ -513,6 +513,7 @@ fn construct_production_semantic_mir_with_policy_v1<'tcx>(
         roots,
         context_entries,
         mut closure_flow,
+        terminal_census: _,
     } = closure;
     let target = match target.authenticate_import_session(tcx) {
         Ok(target) => target,
