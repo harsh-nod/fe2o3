@@ -5,6 +5,7 @@ fn component_race_names_v1() -> RaceNameCensusV1 {
         name_storage: 64,
         scan_work: 0,
         execution_lookup_work: 0,
+        private_ranked_accesses: 0,
     }
 }
 
@@ -129,6 +130,7 @@ mod name_census_tests {
                 32 + 8 * census.blocks
                     + 12 * census.operations
                     + 4 * census.operands
+                    + census.ranked_accesses * (census.attributes + 8)
                     + (census.operands + census.operations) * (lookup + 80)
             );
             let mut analyses = PlironAnalysisManagerV1::new(&function);
@@ -177,8 +179,12 @@ mod name_census_tests {
         let inventory = BoundedPlironFunctionInventoryV1::collect(&context, &function).unwrap();
         let work = race_name_scan_work_v1(census).unwrap();
         for (work_limit, peak_limit, expected) in [
-            (work - 1, 16, "work upper bound"),
-            (work, 15, "peak storage upper bound"),
+            (work - 1, RACE_NAME_CENSUS_SCRATCH_V1, "work upper bound"),
+            (
+                work,
+                RACE_NAME_CENSUS_SCRATCH_V1 - 1,
+                "peak storage upper bound",
+            ),
         ] {
             let queries = Cell::new(0);
             let error = collect_race_name_census_v1(
@@ -207,20 +213,20 @@ mod name_census_tests {
             &function,
             &inventory,
             census,
-            ProductionAnalysisResourceLimitsV1::new(work, 16),
+            ProductionAnalysisResourceLimitsV1::new(work, RACE_NAME_CENSUS_SCRATCH_V1),
             |value| value.unique_name_byte_len(&context),
         )
         .unwrap();
         assert_eq!(names.scan_work, work);
         assert_eq!(names.name_storage, 38);
-        assert_eq!(RACE_NAME_CENSUS_SCRATCH_V1, 8 + 3 + 2 + 1 + 2);
+        assert_eq!(RACE_NAME_CENSUS_SCRATCH_V1, 24);
         assert_eq!(
             std::mem::size_of::<RaceNameScanV1>(),
-            8 * std::mem::size_of::<usize>()
+            9 * std::mem::size_of::<usize>()
         );
         assert_eq!(
             std::mem::size_of::<RaceNameCensusV1>(),
-            3 * std::mem::size_of::<usize>()
+            4 * std::mem::size_of::<usize>()
         );
         let with_scan =
             calculate_race_resource_upper_bound_for_shape_v1(census, names, Some((2, 1)), None)
@@ -470,6 +476,7 @@ mod name_census_tests {
             name_storage: 91,
             scan_work: 123,
             execution_lookup_work: 57,
+            private_ranked_accesses: 0,
         };
         let base =
             calculate_race_resource_upper_bound_for_shape_v1(census, names, Some((2, 1)), None)
@@ -970,10 +977,10 @@ mod status_tests {
         // The single symbolic pair also prepays twelve root queries and
         // three comparisons: 12*4+3=51. These queries allocate nothing.
         // Two possible name constructions each pay 4*64+64 work; the scan's
-        // sixteen logical slots and two 64-byte copies add to temporary space.
+        // twenty-four logical slots and two 64-byte copies add to temporary space.
         const EXACT_WORK: usize = 3_707;
         const EXACT_RETAINED: usize = 1_272;
-        const EXACT_PEAK: usize = 68_646;
+        const EXACT_PEAK: usize = 68_654;
         let exact = race_resource_upper_bound_for_shape_v1(
             census,
             component_race_names_v1(),
@@ -1090,7 +1097,7 @@ mod status_tests {
             const RETAINED: usize = 1_272;
             // Effect collection (88), four signal/class sets (8), one retained
             // diagnostic and one construction temporary. No exact map/query.
-            const PEAK: usize = 88 + 8 + 2 * RETAINED + 2 * 64 + 16;
+            const PEAK: usize = 88 + 8 + 2 * RETAINED + 2 * 64 + RACE_NAME_CENSUS_SCRATCH_V1;
             let bound = race_resource_upper_bound_for_shape_v1(
                 census,
                 component_race_names_v1(),
@@ -1140,7 +1147,12 @@ mod status_tests {
         assert_eq!(bound.retained_storage_upper_bound(), PER_FINDING);
         assert_eq!(
             bound.peak_storage_upper_bound(),
-            64 * (8 + 16 + 32_768 + 64) + 23_200 + 64 * 8 + 2 * PER_FINDING + 2 * 32_832 + 16
+            64 * (8 + 16 + 32_768 + 64)
+                + 23_200
+                + 64 * 8
+                + 2 * PER_FINDING
+                + 2 * 32_832
+                + RACE_NAME_CENSUS_SCRATCH_V1
         );
         assert!(
             race_resource_upper_bound_for_shape_v1(census, names, Some((2, 1)), None, limits)
@@ -1217,7 +1229,7 @@ mod status_tests {
         .unwrap();
         assert_eq!(bound.retained_storage_upper_bound(), 1_272);
         assert_eq!(bound.work_upper_bound(), 1_051_843 + work);
-        assert_eq!(bound.peak_storage_upper_bound(), 2_784 + storage);
+        assert_eq!(bound.peak_storage_upper_bound(), 2_792 + storage);
         assert_eq!(
             race_resource_upper_bound_for_shape_v1(
                 census,
@@ -1449,7 +1461,14 @@ mod numeric_preflight_tests {
         assert_eq!(numbers.conflict_class_storage, 4_097 * 16);
         assert_eq!(
             numbers.temporary,
-            numbers.effect_state + 272 + per_finding + 4_097 * 16 + 8 + 38 + 2 * 64 + 16
+            numbers.effect_state
+                + 272
+                + per_finding
+                + 4_097 * 16
+                + 8
+                + 38
+                + 2 * 64
+                + RACE_NAME_CENSUS_SCRATCH_V1
         );
         assert_eq!(
             numbers.bound.work_upper_bound(),
@@ -1473,7 +1492,7 @@ mod numeric_preflight_tests {
             + 8
             + (6 + 3 * 8 + 8)
             + 2 * 64
-            + 16;
+            + RACE_NAME_CENSUS_SCRATCH_V1;
         assert_eq!(
             fields,
             BTreeMap::from([
