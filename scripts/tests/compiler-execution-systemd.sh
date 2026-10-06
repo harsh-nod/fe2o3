@@ -153,7 +153,7 @@ paired_sandbox_contract() {
     BEGIN {
       expected["User"] = "root"
       expected["Group"] = "root"
-      expected["CapabilityBoundingSet"] = "CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE"
+      expected["CapabilityBoundingSet"] = "CAP_BPF CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_NET_ADMIN CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE"
       expected["AmbientCapabilities"] = ""
       expected["NoNewPrivileges"] = "no"
       expected["PrivateDevices"] = "yes"
@@ -240,6 +240,11 @@ for replacement in \
   'Delegate=yes' \
   'SystemCallFilter=' \
   'SystemCallFilter=~unshare:EPERM setns:EPERM clone3:ENOSYS' \
+  'CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_NET_ADMIN CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE' \
+  'CapabilityBoundingSet=CAP_BPF CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE' \
+  'CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE' \
+  'CapabilityBoundingSet=CAP_BPF CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_NET_ADMIN CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_ADMIN CAP_SYS_PTRACE' \
+  'CapabilityBoundingSet=' \
   'CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE' \
   'CapabilityBoundingSet=CAP_SYS_ADMIN'; do
   key="${replacement%%=*}"
@@ -249,6 +254,10 @@ for replacement in \
     fail "sandbox oracle accepted ${replacement}"
   fi
 done
+if awk '{ print } /^CapabilityBoundingSet=/ { print "CapabilityBoundingSet=CAP_SYS_ADMIN" }' "${SERVICE}" |
+    paired_sandbox_contract; then
+  fail 'sandbox oracle accepted an additional capability assignment'
+fi
 if awk '{ print } /^ReadWritePaths=/ { print "ReadWritePaths=/sys/fs/cgroup" }' "${SERVICE}" |
     paired_sandbox_contract; then
   fail 'sandbox oracle accepted an additional broad writable subtree'
