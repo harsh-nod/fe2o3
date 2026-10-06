@@ -21,7 +21,8 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
     /// Inert transport record, not publication authority. The original account,
     /// locked backing, acknowledged root wait and complete trace retirement are
     /// checked here. No caller-supplied terminal status or publication ID enters
-    /// this operation. Actual publication custody stays retained in this owner.
+    /// this operation. The original root session supplies its retained exact
+    /// publication and durable carriage tombstone; no second holder is acquired.
     /// Returns the FULL unreserved record charge, not a new execution account.
     pub(crate) fn publication_completion(
         &mut self,
@@ -31,10 +32,7 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
         let floor = sum(&[self.retained, last.retained_storage()])?;
         b.with_prepaid_scope(floor, 0, 0, 0, |b| {
             self.account.with(self.retained, b, |b| {
-                let publication = self
-                    .publication
-                    .as_ref()
-                    .ok_or(Error::Invalid("completion lost original publication"))?;
+                let root = &self.root;
                 let issuer = self
                     .issuer
                     .as_ref()
@@ -48,13 +46,13 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
                         wait.exit_code(),
                         wait.terminating_signal(),
                     )?;
+                    let observed = root.retired_publication_subject(runtime, b)?;
                     issuer.child.with_resources(b, |payload, b| {
                         let (terminal, charge) = Terminal::new(last, Termination::Exited(0), b)
                             .map_err(completion_error)?;
                         b.reserve_storage(charge.additional_storage())?;
-                        let (subject, charge) =
-                            Subject::decode(publication.subject().canonical_bytes(), b)
-                                .map_err(completion_error)?;
+                        let (subject, charge) = Subject::decode(observed.canonical_bytes(), b)
+                            .map_err(completion_error)?;
                         b.reserve_storage(charge.retained_storage())?;
                         let (manifest, charge) =
                             Manifest::decode(payload.manifest.manifest().canonical_bytes(), b)
@@ -77,9 +75,11 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
 
     pub(crate) fn publication_completion_quota() -> Result<Quota> {
         let original = Self::runtime_backing_quota()?;
+        let retired = RootSession::retired_publication_subject_quota();
         Ok(Quota {
             work: sum(&[
                 original.work(),
+                retired.work(),
                 Resources::<Payload<T>>::ACCESS_WORK,
                 TERMINAL_WORK,
                 SUBJECT_WORK,
@@ -89,6 +89,7 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
             ])?,
             scratch: sum(&[
                 original.scratch(),
+                retired.scratch(),
                 Resources::<Payload<T>>::ACCESS_SCRATCH,
                 TERMINAL_SCRATCH,
                 SUBJECT_SCRATCH,
@@ -146,10 +147,12 @@ mod tests {
     #[test]
     fn completion_quote_keeps_both_original_accesses_and_all_codec_work() {
         let access = NativeAttempt::<()>::runtime_backing_quota().unwrap();
+        let retired = RootSession::retired_publication_subject_quota();
         let completion = NativeAttempt::<()>::publication_completion_quota().unwrap();
         assert_eq!(
             completion.work(),
             access.work()
+                + retired.work()
                 + Resources::<Payload<()>>::ACCESS_WORK
                 + TERMINAL_WORK
                 + SUBJECT_WORK
@@ -160,6 +163,7 @@ mod tests {
         assert_eq!(
             completion.scratch(),
             access.scratch()
+                + retired.scratch()
                 + Resources::<Payload<()>>::ACCESS_SCRATCH
                 + TERMINAL_SCRATCH
                 + SUBJECT_SCRATCH

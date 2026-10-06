@@ -9,13 +9,17 @@ receipt or replace that flow. Root RPC occurrence integration remains separate.
 
 ## Custody Path
 
-1. The root retains its actual publication lease/token through the original
-   successful terminal wait and all traced-task retirement. Normal retirement
-   no longer cancels the original cleanup slot: explicit cleanup, cancellation
-   or Drop releases that slot only after its completion use.
+1. The root's Prepare-time RPC uses the original trace's single late holder.
+   After the measured issuer's durable Retire join, the root session retains
+   the exact original publication handle and complete carriage tombstone.
+   Shutdown must not acquire a second holder. Normal task retirement does not
+   eagerly cancel the original cleanup slot; explicit cleanup, cancellation or
+   Drop still handles remaining original resources.
 2. The original issued owner constructs a structured completion from that
-   acknowledged wait and its retained Subject, Manifest and Ready records. It
-   accepts no supplied terminal status or publication identity.
+   acknowledged wait and its retained Subject, Manifest and Ready records.
+   Subject comes from the same-account root session's durable retirement join,
+   including original runtime identity and exact carriage occurrence/Subject.
+   It accepts no supplied terminal status or publication identity.
 3. The parent receives exactly 1210 bytes on its retained, authenticated root
    endpoint, with exact per-message credentials and no incoming descriptors.
    A legacy refusal ACK, partial/extra frame, EOF or mismatched final input
