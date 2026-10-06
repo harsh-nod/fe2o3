@@ -112,6 +112,19 @@ impl Callbacks for ExpandedCallbacks {
                             );
                             assert_eq!(subject.graphs[2], *tile.output(budget)?.identity());
                             assert_eq!(pair.roots(budget)?.len(), 1);
+                            let row = pair.roots(budget)?[0];
+                            let retained = source.source_launch(budget)?.roots()[0];
+                            assert_eq!(row.source_launch, retained.source_launch());
+                            assert_eq!(row.source_layout, retained.layout());
+                            assert_eq!(row.source_launch.max_grid(), [u32::MAX, 1, 1]);
+                            assert_eq!(row.source_layout.global_extents(), [0, 1, 1]);
+                            assert_eq!(
+                                row.launch,
+                                fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                                    rank: 1,
+                                    extents: [64 * u64::from(u32::MAX), 1, 1],
+                                }
+                            );
                             assert_eq!(
                                 pair.runtime(budget)?,
                                 (

@@ -138,26 +138,56 @@ fn expanded_pair_account_rejects_slot_ledger_and_refunded_owner() {
 
 #[test]
 fn expanded_pair_runtime_requires_exact_rank_and_every_extent() {
-    let exact = ExplicitLaunchExtent::Exact {
-        rank: 1,
-        extents: [64, 1, 1],
-    };
-    assert_eq!(
-        join_launch(Launch::PhysicalEnvelope(exact), 1, [64, 1, 1]).unwrap(),
-        exact
-    );
-    for (rank, extents) in [
-        (2, [64, 1, 1]),
-        (1, [63, 1, 1]),
-        (1, [64, 2, 1]),
-        (1, [64, 1, 2]),
-    ] {
-        assert!(matches!(
-            join_launch(Launch::PhysicalEnvelope(exact), rank, extents),
-            Err(Error::Unsupported(
-                "expanded pair input owner or runtime differs"
-            ))
-        ));
+    use fe2o3_artifacts::Dimensions;
+    for groups in [17, u32::MAX] {
+        let authentic = LaunchContract::new(
+            1,
+            BlockSize::Exact(Dimensions::new(64, 1, 1).unwrap()),
+            Dimensions::new(groups, 1, 1).unwrap(),
+            0,
+            0,
+        )
+        .unwrap();
+        let retained = SourceLaunch::new(1, Some([64, 1, 1]), [groups, 1, 1]);
+        let extent = u64::from(groups) * 64;
+        let exact = ExplicitLaunchExtent::Exact {
+            rank: 1,
+            extents: [extent, 1, 1],
+        };
+        assert_eq!(
+            join_launch(Launch::PhysicalEnvelope(exact), retained, &authentic).unwrap(),
+            exact
+        );
+        for changed in [
+            SourceLaunch::new(2, Some([64, 1, 1]), [groups, 1, 1]),
+            SourceLaunch::new(1, Some([128, 1, 1]), [groups, 1, 1]),
+            SourceLaunch::new(1, None, [groups, 1, 1]),
+            SourceLaunch::new(1, Some([64, 1, 1]), [groups - 1, 1, 1]),
+            SourceLaunch::new(1, Some([64, 1, 1]), [groups, 2, 1]),
+            SourceLaunch::new(1, Some([64, 1, 2]), [groups, 1, 1]),
+        ] {
+            assert!(matches!(
+                join_launch(Launch::PhysicalEnvelope(exact), changed, &authentic),
+                Err(Error::Unsupported(
+                    "expanded pair input owner or runtime differs"
+                ))
+            ));
+        }
+        for (rank, extents) in [
+            (2, [extent, 1, 1]),
+            (1, [extent - 1, 1, 1]),
+            (1, [0, 1, 1]),
+            (1, [extent, 2, 1]),
+            (1, [extent, 1, 2]),
+        ] {
+            let changed = Launch::PhysicalEnvelope(ExplicitLaunchExtent::Exact { rank, extents });
+            assert!(matches!(
+                join_launch(changed, retained, &authentic),
+                Err(Error::Unsupported(
+                    "expanded pair input owner or runtime differs"
+                ))
+            ));
+        }
     }
 }
 
