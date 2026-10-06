@@ -1232,6 +1232,11 @@ fn run_expanded_v190(
                         fe2o3_pliron::PlironOptimizationErrorV12::Resources(error),
                     ),
                 )) => Err(error.into()),
+                Err(Optimization::Observation(
+                    fe2o3_pliron::KirNeutralOptimizationErrorV18::Mapping(
+                        fe2o3_pliron::KirOptimizationMapErrorV12::Resources(error),
+                    ),
+                )) => Err(error.into()),
                 Err(error) => panic!("expanded original tag fixture preparation: {error:?}"),
             }
         },
