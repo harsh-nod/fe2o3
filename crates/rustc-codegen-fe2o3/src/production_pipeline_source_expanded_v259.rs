@@ -8,6 +8,27 @@ use fe2o3_lower_mir_kernel::{
 
 struct ExpandedSource;
 
+fn transfer_callback_payload<R>(
+    payload: (R, usize),
+    budget: &mut Budget<'_>,
+) -> Result<(R, usize), Resource> {
+    let transfer = (|| {
+        budget.charge_work(2)?;
+        let bytes = size_of::<R>()
+            .checked_add(payload.1)
+            .ok_or(Resource::Arithmetic)?;
+        budget.release_storage(payload.1)?;
+        Ok(bytes)
+    })();
+    match transfer {
+        Ok(bytes) => Ok((payload.0, bytes)),
+        Err(error) => {
+            formal_context_v19::discard(payload);
+            Err(error)
+        }
+    }
+}
+
 fn settle_callback<R>(
     result: std::thread::Result<Result<(R, usize), Error>>,
     measured: Option<usize>,
@@ -94,6 +115,10 @@ where
             size_of::<ExecutionTileLayoutV1>(),
             6 * size_of::<usize>(),
             size_of::<std::thread::Result<Result<(R, usize), Error>>>(),
+            2 * size_of::<(R, usize)>(),
+            size_of::<usize>(),
+            size_of::<Result<usize, Resource>>(),
+            size_of::<&mut Budget<'_>>(),
             size_of::<fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18<Error>>(),
             align_of::<fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18<Error>>(),
             size_of::<fe2o3_pliron::CheckedNeutralKernelIrOwnerMixedFixedpointV18>(),
@@ -154,7 +179,11 @@ where
                         source.retain_query_resource_error_v18(Resource::Accounting)
                     })?;
                     payload_bytes.set(value.1);
-                    Ok(value)
+                    // The checked optimizer accepts an unreserved ownership
+                    // transfer, including R's inline header. Its callback floor
+                    // must be restored before it reserves that complete receipt.
+                    transfer_callback_payload(value, budget)
+                        .map_err(|error| source.retain_query_resource_error_v18(error).into())
                 },
             )
             .map_err(|error| {
@@ -268,6 +297,10 @@ mod tests {
             + size_of::<ExecutionTileLayoutV1>()
             + 6 * size_of::<usize>()
             + size_of::<std::thread::Result<Result<((), usize), Error>>>()
+            + 2 * size_of::<((), usize)>()
+            + size_of::<usize>()
+            + size_of::<Result<usize, Resource>>()
+            + size_of::<&mut Budget<'_>>()
             + size_of::<fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18<Error>>()
             + align_of::<fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18<Error>>()
             + size_of::<fe2o3_pliron::CheckedNeutralKernelIrOwnerMixedFixedpointV18>()
@@ -333,6 +366,44 @@ mod tests {
         }))
         .unwrap_err();
         assert_eq!(*panic.downcast::<usize>().unwrap(), 17);
+    }
+
+    #[test]
+    fn expanded_transfer_includes_inline_header_and_exact_dynamic_credit() {
+        for bytes in [0, 17] {
+            let mut work = Work::new(2);
+            let mut budget = Budget::new(&mut work, 31 + bytes);
+            budget.reserve_storage(31 + bytes).unwrap();
+            let (value, receipt) = transfer_callback_payload((7usize, bytes), &mut budget).unwrap();
+            assert_eq!(value, 7);
+            assert_eq!(receipt, size_of::<usize>() + bytes);
+            assert_eq!(budget.storage(), 31);
+            assert_eq!(budget.work(), 2);
+        }
+        let mut work = Work::new(1);
+        let mut budget = Budget::new(&mut work, 48);
+        budget.reserve_storage(48).unwrap();
+        assert!(matches!(
+            transfer_callback_payload((7usize, 17), &mut budget),
+            Err(Resource::Work(_))
+        ));
+        assert_eq!(budget.storage(), 48);
+        let mut work = Work::new(2);
+        let mut budget = Budget::new(&mut work, 16);
+        budget.reserve_storage(16).unwrap();
+        assert!(matches!(
+            transfer_callback_payload((7usize, 17), &mut budget),
+            Err(Resource::Accounting)
+        ));
+        assert_eq!(budget.storage(), 16);
+        let mut work = Work::new(2);
+        let mut budget = Budget::new(&mut work, 31);
+        budget.reserve_storage(31).unwrap();
+        assert!(matches!(
+            transfer_callback_payload((7usize, usize::MAX), &mut budget),
+            Err(Resource::Arithmetic)
+        ));
+        assert_eq!(budget.storage(), 31);
     }
 }
 

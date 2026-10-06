@@ -117,6 +117,18 @@ impl Callbacks for ExpandedCallbacks {
                 )
                 .map_err(|error| format!("ordinary expanded source: {error:?}"))?
                 .into_observation();
+            let mut payload_work = Work::new(500_000_000);
+            let mut payload_budget = Budget::new(&mut payload_work, 20_000_000);
+            let payload = transaction()?
+                .with_original_source_expanded_v259(&mut payload_budget, |_, _, _, _, _, budget| {
+                    budget.reserve_storage(17)?;
+                    Ok((Box::new([9u8; 17]), 17))
+                })
+                .map_err(|error| format!("expanded owned payload: {error:?}"))?
+                .into_observation();
+            assert_eq!(*payload, [9u8; 17]);
+            drop(payload);
+            payload_budget.release_storage(17).unwrap();
             let mut calls = 0;
             let refusal = transaction()?.with_original_source_expanded_v259::<(), _>(
                 &mut budget,
