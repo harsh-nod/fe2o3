@@ -1,8 +1,15 @@
+// Active successful reads agree. Failed operations intentionally have different
+// observations: GuardedLoad refuses; the existing plain Load records an attempted
+// Read with an undefined result. This law does not admit their unconditional
+// replacement. A source-to-target proof must handle failure or prove readability.
 proof fn guarded_load_active_matches_actual_load_v189(s: MemoryStateV30, endian: bool)
     requires s.pc == 0, byte_inputs_90_v55(s, endian), s.values[1] == MemoryValueV30::Scalar(1),
     ensures byte_operation_90_0_v30(s, endian).state.valid == byte_operation_90_1_v30(s, endian).state.valid,
         byte_operation_90_0_v30(s, endian).state.values[3] == byte_operation_90_1_v30(s, endian).state.values[4],
-        byte_operation_90_0_v30(s, endian).observation.effect == byte_operation_90_1_v30(s, endian).observation.effect,
+        byte_operation_90_0_v30(s, endian).state.valid ==>
+            byte_operation_90_0_v30(s, endian).observation.effect == byte_operation_90_1_v30(s, endian).observation.effect,
+        !byte_operation_90_0_v30(s, endian).state.valid ==>
+            byte_operation_90_0_v30(s, endian).observation.effect == MemoryOperationEffectV30::Refused,
 {}
 
 proof fn guarded_load_inactive_uses_fallback_without_address_premise_v189(s: MemoryStateV30, endian: bool, fallback: int)
