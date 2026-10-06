@@ -385,6 +385,115 @@ fn byte_function_edges_read_immutable_preedge_values_in_operand_order() {
 }
 
 #[test]
+fn byte_function_microsteps_bind_multiblock_prefixes_and_terminal_return() {
+    let mut module = memory_module(1);
+    let body = module.functions[0].body.as_mut().unwrap();
+    let store = body.blocks[0].operations.pop().unwrap();
+    body.blocks[0].terminator = Some(Terminator::Branch {
+        target: BlockId(1),
+        arguments: vec![],
+    });
+    let mut middle = BasicBlock::new(BlockId(1));
+    middle.operations.push(store);
+    middle.terminator = Some(Terminator::Branch {
+        target: BlockId(2),
+        arguments: vec![],
+    });
+    let mut terminal = BasicBlock::new(BlockId(2));
+    terminal.terminator = Some(Terminator::Return {
+        values: vec![ValueId(4)],
+    });
+    body.blocks.extend([middle, terminal]);
+    with_inventory(&module, |inventory, physical, floor| {
+        let allocations = NoAllocations(inventory.owner());
+        let text = run(floor, LIMIT, LIMIT, |out| {
+            ByteFunctionV30::derive(
+                inventory,
+                physical,
+                Function(0),
+                ByteContext::native(FormalIndexWidth::Bits64),
+                &allocations,
+                out,
+            )?
+            .emit(181, out)
+        })
+        .0
+        .unwrap();
+        for (block, first, count) in [(0, 0, 2), (1, 2, 1), (2, -1, 0)] {
+            assert!(text.contains(&format!(
+                "if s.pc == {block} {{ byte_micro_begin_result_v58(s, {first}) }}"
+            )));
+            assert!(text.contains(&format!(
+                "if m.next_operation == -1 && (m.state.pc == {block} || (false)) && m.observations.len() == {count} {{ byte_control_181_{block}_v30"
+            )));
+        }
+        assert!(text.contains(
+            "byte_micro_result_v55(m, byte_operation_181_0_v30(m.state, little_endian), 1)"
+        ));
+        assert!(text.contains(
+            "byte_micro_result_v55(m, byte_operation_181_1_v30(m.state, little_endian), -1)"
+        ));
+        assert!(text.contains(
+            "byte_micro_result_v55(m, byte_operation_181_2_v30(m.state, little_endian), -1)"
+        ));
+        for block in [1, 2] {
+            assert!(text.contains(&format!(
+                "pc: {block}, values, valid, ..done }}, observations, returned: Seq::empty()"
+            )));
+        }
+        assert!(
+            text.contains("pc: -1, valid, ..done }, observations, returned: seq![done.values[4],]")
+        );
+        assert_eq!(text.matches("MemoryOperationEffectV30::Read").count(), 1);
+        assert_eq!(text.matches("MemoryOperationEffectV30::Write").count(), 1);
+    });
+}
+
+#[test]
+fn byte_function_microsteps_admit_only_terminal_traps_with_exact_prefix() {
+    use fe2o3_kernel_ir::Constant;
+    for after_trap in [false, true] {
+        let mut module = trap_module_v40(1);
+        if after_trap {
+            module.functions[0].body.as_mut().unwrap().blocks[1]
+                .operations
+                .push(KirOperation::effect_free(
+                    ValueDef::new(ValueId(1), Type::Scalar(ScalarType::U32)),
+                    OperationKind::Constant(Constant::U32(7)),
+                ));
+            let mut work = Work::new(LIMIT);
+            let mut budget = Budget::new(&mut work, LIMIT);
+            assert!(
+                Owner::from_module_ref_with_verification_budget_v18(&module, LAYOUTS, &mut budget)
+                    .is_err()
+            );
+            assert_eq!(budget.storage(), 0);
+            continue;
+        }
+        with_inventory(&module, |inventory, physical, floor| {
+            let allocations = NoAllocations(inventory.owner());
+            let result = run(floor, LIMIT, LIMIT, |out| {
+                ByteFunctionV30::derive(
+                    inventory,
+                    physical,
+                    Function(0),
+                    ByteContext::native(FormalIndexWidth::Bits64),
+                    &allocations,
+                    out,
+                )?
+                .emit(182, out)
+            })
+            .0;
+            let text = result.unwrap();
+            assert!(text.contains("m.state.pc == 1 && m.next_operation == 0 && m.observations.len() == 0 { byte_micro_result_v55(m, byte_operation_182_0_v30(m.state, little_endian), -1)"));
+            assert!(text.contains("byte_trap_terminal_v40(m.state, m.observations, MemorySourceOperationV30 { function: 0, block: 1, operation: 0 }, 1, 1)"));
+            assert!(text.contains("m.observations.len() == 1 { byte_control_182_1_v30"));
+            assert!(text.contains("pc: if valid { -2 } else { s.pc }"));
+        });
+    }
+}
+
+#[test]
 fn byte_function_unused_and_unreachable_unsupported_operations_refuse_before_text() {
     for unreachable in [false, true] {
         let mut module = memory_module(1);
@@ -392,7 +501,7 @@ fn byte_function_unused_and_unreachable_unsupported_operations_refuse_before_tex
         let operation = KirOperation::effect_free(
             ValueDef::new(ValueId(5), Type::Scalar(ScalarType::U32)),
             OperationKind::Binary {
-                op: BinaryOp::Add,
+                op: BinaryOp::Divide,
                 lhs: ValueId(2),
                 rhs: ValueId(2),
             },

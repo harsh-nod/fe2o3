@@ -1066,13 +1066,14 @@ fn original_execution_tile_target_emits_the_actual_expanded_graph() {
 }
 
 fn generate_complete_actual_target_v187(
+    plan: &InvocationPlan<'_, '_>,
     slots: &SourceSlots<'_, '_>,
     tile: &TileExpansion<'_, '_>,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     use std::fmt::Write as _;
     super::super::emit_model_prelude_v187(out)?;
-    generate_actual_tile_target_v176(slots, tile, out)?;
+    generate_actual_tile_microcuts_v180(plan, slots, tile, out)?;
     // Use the production support-closure pass. No target operation or theorem
     // is replaced, and no source-to-target relation is added by this export.
     super::super::support_closure::retain_referenced(out)?;
@@ -1081,6 +1082,14 @@ fn generate_complete_actual_target_v187(
     assert!(out.text.contains("spec fn byte_micro_step_0_v30("));
     assert!(out.text.contains("canonical_scalar_math_"));
     assert!(out.text.contains("byte_execution_step_v178(s, operation,"));
+    assert!(
+        out.text
+            .contains("spec fn invocation_tile_micro_seek_0_v181(")
+    );
+    assert!(
+        out.text
+            .contains("proof fn invocation_tile_micro_zero_is_exact_candidate_0_v181(")
+    );
     assert!(!out.text.contains("proof fn invocation_paired_"));
     Ok(())
 }
@@ -1088,7 +1097,7 @@ fn generate_complete_actual_target_v187(
 #[test]
 fn original_execution_tile_target_complete_model_uses_the_production_prelude() {
     for layout in [Layout::Blocked, Layout::Striped] {
-        run_fixture(
+        run_fixture_with_plan(
             layout,
             512 * 1024 * 1024,
             512 * 1024 * 1024,
@@ -1139,14 +1148,14 @@ fn original_execution_tile_target_prelude_preserves_original_shared_bytes() {
 #[test]
 fn original_execution_tile_target_complete_model_has_exact_resource_limits() {
     for layout in [Layout::Blocked, Layout::Striped] {
-        let baseline = run_fixture(
+        let baseline = run_fixture_with_plan(
             layout,
             512 * 1024 * 1024,
             512 * 1024 * 1024,
             generate_complete_actual_target_v187,
         );
         baseline.0.unwrap();
-        let exact = run_fixture(
+        let exact = run_fixture_with_plan(
             layout,
             baseline.1,
             baseline.3,
@@ -1161,7 +1170,9 @@ fn original_execution_tile_target_complete_model_has_exact_resource_limits() {
             (baseline.1 - 1, baseline.3, true),
             (baseline.1, baseline.3 - 1, false),
         ] {
-            let error = run_fixture(layout, work, storage, generate_complete_actual_target_v187).0;
+            let error =
+                run_fixture_with_plan(layout, work, storage, generate_complete_actual_target_v187)
+                    .0;
             use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
             assert!(if is_work {
                 matches!(error, Err(Error::Resource(Resource::Work(error)))
@@ -1182,8 +1193,8 @@ fn diagnostic_complete_expanded_tile_target_models_export_v187() {
     use sha2::{Digest, Sha256};
     use std::io::{BufWriter, Write as _};
     for (layout, label) in [(Layout::Blocked, "blocked"), (Layout::Striped, "striped")] {
-        run_fixture(layout, 512 * 1024 * 1024, 512 * 1024 * 1024, |slots, tile, out| {
-            generate_complete_actual_target_v187(slots, tile, out)?;
+        run_fixture_with_plan(layout, 512 * 1024 * 1024, 512 * 1024 * 1024, |plan, slots, tile, out| {
+            generate_complete_actual_target_v187(plan, slots, tile, out)?;
             assert!(out.text.len() <= 16 * 1024 * 1024);
             let mut output = BufWriter::new(std::io::stdout().lock());
             write!(output, "{{\"kind\":\"fe2o3-expanded-tile-target-model-v187\",\"scope\":\"actual expanded target only\",\"layout\":\"{label}\",\"bytes\":{},\"sha256\":\"", out.text.len()).unwrap();
