@@ -172,6 +172,10 @@ mod tests {
                             let marker = format!("proof fn invocation_context_issue_segment_{root}_{instance}_{block}_v222(");
                             assert_eq!(generated.matches(&marker).count(), 1);
                             let body = generated.split(&marker).nth(1).unwrap().split("// Exact endpoint replay only.").next().unwrap();
+                            let requires = body.split("    ensures").next().unwrap();
+                            assert_eq!(requires.matches(&format!(
+                                "byte_inputs_{root}_v55(target.state, little_endian)"
+                            )).count(), 1);
                             for text in [
                                 format!("source.source.machine.pc == {}", actual.pc),
                                 format!("source.next_statement == {}", actual.statements),

@@ -1,6 +1,7 @@
 //! Replay a real source terminator and one real target micro-operation.
 //! This does not establish the statements before this boundary, arrival at the
 //! next source cut, or preservation of other live values and dynamic leases.
+//! The caller must establish the actual target byte-input admission predicate.
 use super::super::source_function::{ContextIssueSiteV222, SourceByteProgram};
 use super::*;
 
@@ -68,6 +69,7 @@ proof fn invocation_context_issue_segment_{root}_{instance}_{block}_v222(
         source.observations.len() == {statements},
         target.state.pc == {actual_block}, target.next_operation == {operation},
         target.observations.len() == {prefix},
+        byte_inputs_{root}_v55(target.state, little_endian),
     ensures ({{
         let issue = InvocationSourceContextIssueV161 {{ destination: {destination}, source_type: {source_type} }};
         let site = MemorySourceOperationV30 {{ function: {function}, block: {target_block}, operation: {target_operation} }};
