@@ -29,6 +29,10 @@ mod generate;
 mod expanded_scalar;
 pub(super) use expanded_scalar::ExpandedScalarBindingsV196;
 
+#[path = "original_semantic_mir_expanded_live_values_v213.rs"]
+mod expanded_live;
+pub(super) use expanded_live::emit_source_cut_values_v213;
+
 #[path = "original_semantic_mir_invocation_logical_bindings_v38.rs"]
 mod logical;
 use logical::LogicalBinding;

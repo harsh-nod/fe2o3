@@ -156,6 +156,7 @@ fn generate(
         }
     }
     assert!(scalars > 0 && leaves > 0 && scopes > 0 && payloads > 0);
+    super::super::super::paired::emit_source_cut_values_v213(plan, slots, &target, width, out)?;
     super::super::super::support_closure::retain_referenced(out)?;
     writeln!(out, "}}").map_err(|_| out.error())?;
     assert!(
