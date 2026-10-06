@@ -900,10 +900,6 @@ pub fn publish_recovered_protected_worker_v3_hsaco_v1(
     })
 }
 
-#[allow(
-    unsafe_code,
-    reason = "one audited authority bridge follows complete schema-explicit strict-finalizer replay"
-)]
 fn publish_recovered_versioned(
     output_dir: &Path,
     producer: &ProducerIdentity,
@@ -924,6 +920,10 @@ enum PublicationSource<'a> {
     Conditional(conditional_output::Retained<'a>),
 }
 
+#[allow(
+    unsafe_code,
+    reason = "one audited authority bridge follows complete schema-explicit strict-finalizer replay"
+)]
 fn publish_retained_finalizer(
     output_dir: &Path,
     producer: &ProducerIdentity,
