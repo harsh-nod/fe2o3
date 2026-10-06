@@ -877,9 +877,15 @@ spec fn invocation_source_external_argument_v36(value: MemoryValueV30) -> bool {
         MemoryValueV30::Pointer(pointer) => !invocation_private_allocation_v36(pointer.allocation),
         MemoryValueV30::Slice(slice) => !invocation_private_allocation_v36(slice.pointer.allocation),
         MemoryValueV30::Undefined => false,
+        MemoryValueV30::Execution(_) => false,
         _ => true,
     }
 }
+proof fn invocation_source_execution_capability_is_not_external_v178(
+    capability: MemoryExecutionCapabilityV178,
+)
+    ensures !invocation_source_external_argument_v36(MemoryValueV30::Execution(capability)),
+{}
 struct InvocationSourceStatementObservationV36 {
     root: int,
     instance: int,

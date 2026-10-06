@@ -17,8 +17,15 @@ spec fn invocation_native_value_provenance_v39(value: MemoryValueV30) -> bool {
         MemoryValueV30::Slice(slice) => !invocation_private_allocation_v36(slice.pointer.allocation),
         MemoryValueV30::Undefined | MemoryValueV30::Unit
         | MemoryValueV30::Scalar(_) | MemoryValueV30::Vector(_) => true,
+        MemoryValueV30::Execution(_) => false,
     }
 }
+
+proof fn invocation_native_execution_capability_is_not_an_argument_v178(
+    capability: MemoryExecutionCapabilityV178,
+)
+    ensures !invocation_native_value_provenance_v39(MemoryValueV30::Execution(capability)),
+{}
 
 spec fn invocation_native_provenance_v39(memory: ByteMemoryV30,
     arguments: Seq<MemoryValueV30>,

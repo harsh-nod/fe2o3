@@ -15,8 +15,15 @@ spec fn forwarding_value_separate_v46(value: MemoryValueV30) -> bool {
         | MemoryValueV30::Scalar(_) | MemoryValueV30::Vector(_) => true,
         MemoryValueV30::Pointer(pointer) => forwarding_pointer_separate_v46(pointer),
         MemoryValueV30::Slice(slice) => forwarding_pointer_separate_v46(slice.pointer),
+        MemoryValueV30::Execution(_) => false,
     }
 }
+
+proof fn forwarding_execution_capability_is_not_separate_v178(
+    capability: MemoryExecutionCapabilityV178,
+)
+    ensures !forwarding_value_separate_v46(MemoryValueV30::Execution(capability)),
+{}
 
 spec fn forwarding_heap_separate_v46(memory: ByteMemoryV30) -> bool {
     forall|allocation: MemoryAllocationV30| memory.live.contains_key(allocation) ==>
