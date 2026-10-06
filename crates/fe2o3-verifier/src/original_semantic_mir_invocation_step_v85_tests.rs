@@ -54,6 +54,50 @@ pub(super) fn check_four(text: &str, name: &str, root: usize) {
 }
 
 #[test]
+fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_domain() {
+    let text = include_str!("original_semantic_mir_source_entry_observations_v180.vrs");
+    let predicate = text
+        .split_once(") -> bool {\n")
+        .unwrap()
+        .1
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    assert_eq!(
+        predicate,
+        concat!(
+            "    observation.before.machine.valid && observation.after.machine.valid\n",
+            "        && match observation.operand {\n",
+            "            InvocationSourceOperandV36::Scalar {\n",
+            "                value: InvocationSourceByteValueV36::Local { .. }, ..\n",
+            "            } => true,\n",
+            "            _ => false,\n",
+            "        }",
+        )
+    );
+    assert_eq!(text.matches("proof fn ").count(), 3);
+    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 2);
+    for required in [
+        "decreases observations.len(),",
+        "assert(tail[i] == observations[i + 1]);",
+        "invocation_source_local_observations_empty_v180(tail, little_endian);",
+        "requires result.observations.len() == 0, result.source.machine.pc != -2,",
+        "forall|i: int| 0 <= i < result.operands.len() ==>\n            invocation_source_local_observation_v180(result.operands[i]),",
+        "ensures invocation_source_observations_v39(result, little_endian) == Seq::empty(),",
+        "requires !observation.before.machine.valid || !observation.after.machine.valid",
+        "ensures !invocation_source_local_observation_v180(observation),",
+    ] {
+        assert!(
+            text.contains(required),
+            "missing observation guard: {required}"
+        );
+    }
+    for forbidden in ["assume(", "admit(", "external_body", "assume_specification"] {
+        assert!(!text.contains(forbidden));
+    }
+}
+
+#[test]
 fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coordinates() {
     for roots in [2, 3] {
         super::super::super::invocations::tests::run_root_variant(
@@ -188,7 +232,14 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                         assert!(runtime_state.contains(&format!("invocation_source_entry_put_local_pc_v179(installed_{ordinal}, {destination}, source.machine.values[{local}]);\n let installed_{} = invocation_source_byte_put_local_v36(installed_{ordinal}, {destination}, source.machine.values[{local}]);", ordinal + 1)));
                                     }
                                     let no_trap = format!("assert(invocation_constructor_source_{root}_{pc}_v162(source).machine.pc == {});", entry.pc);
-                                    assert!(runtime_state.find(&no_trap).unwrap() < runtime_state.find(" && invocation_source_observations_v39(").unwrap());
+                                    let observed = format!(" invocation_source_local_block_observations_empty_v180(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36());");
+                                    assert_eq!(runtime_state.matches(&observed).count(), 1);
+                                    assert!(runtime_state.find(&no_trap).unwrap() < runtime_state.find(&observed).unwrap());
+                                    assert!(runtime_state.contains(&format!(" && invocation_source_block_runtime_{root}_v36(source).observations.len() == 0")));
+                                    assert!(runtime_state.contains(&format!("forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() ==> invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i])")));
+                                    assert!(!runtime_state.contains("reveal(invocation_source_observations_v39);"));
+                                    assert!(!runtime_state.contains("reveal_with_fuel(invocation_source_operands_observations_v39,"));
+                                    assert!(!runtime_state.contains("reveal_with_fuel(invocation_source_statements_observations_v39,"));
                                     assert!(source_state.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);")));
                                     assert!(runtime_state.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}")));
                                     assert!(runtime_state.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
