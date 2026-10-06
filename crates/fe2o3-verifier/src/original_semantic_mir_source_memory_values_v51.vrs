@@ -47,6 +47,20 @@ spec fn invocation_source_memory_validity_v51(
         }
 }
 
+// A nonrecursive address term keeps array triggers independent of recursion fuel.
+spec fn invocation_source_memory_array_element_pointer_v230(
+    pointer: MemoryPointerV30, index: int, stride: int,
+) -> MemoryPointerV30 {
+    MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer }
+}
+
+proof fn invocation_source_memory_array_element_pointer_is_offset_v230(
+    pointer: MemoryPointerV30, index: int, stride: int,
+)
+    ensures invocation_source_memory_array_element_pointer_v230(pointer, index, stride)
+        == (MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer }),
+{}
+
 // Decomposition checks only original fields. Padding is neither loaded as a
 // scalar nor required initialized. Pointer cells need a complete relocation;
 // references additionally need a live, aligned, independently typed referent.
@@ -88,8 +102,8 @@ spec fn invocation_source_memory_value_valid_v51(
                     InvocationSourceMemoryKindV51::Array { element, count, stride } =>
                         0 <= count && 0 <= stride && layout.width == count * stride
                             && forall|i: int| 0 <= i < count ==>
-                                #[trigger] invocation_source_memory_value_valid_v51(source,
-                                    MemoryPointerV30 { byte_offset: pointer.byte_offset + i * stride, ..pointer },
+                                invocation_source_memory_value_valid_v51(source,
+                                    #[trigger] invocation_source_memory_array_element_pointer_v230(pointer, i, stride),
                                     element, (fuel - 1) as nat, little_endian),
                 }
         }

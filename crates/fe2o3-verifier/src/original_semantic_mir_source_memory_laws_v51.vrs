@@ -59,39 +59,10 @@ proof fn invocation_source_typed_memory_invalid_array_element_refuses_v71(
     ensures !invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian),
 {
     hide(invocation_source_memory_layout_v51);
-    hide(invocation_source_memory_value_valid_v51);
-    let all_elements_valid = forall|element_index: int| 0 <= element_index < count ==>
-        #[trigger] invocation_source_memory_value_valid_v51(source,
-            MemoryPointerV30 { byte_offset: pointer.byte_offset + element_index * stride, ..pointer },
-            element, (fuel - 1) as nat, little_endian);
-    if all_elements_valid {
+    invocation_source_memory_array_element_pointer_is_offset_v230(pointer, index, stride);
+    if invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian) {
         assert(invocation_source_memory_value_valid_v51(source,
-            MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer },
+            invocation_source_memory_array_element_pointer_v230(pointer, index, stride),
             element, (fuel - 1) as nat, little_endian));
-    }
-    assert(!all_elements_valid);
-    assert(!invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian)) by {
-        reveal_with_fuel(invocation_source_memory_value_valid_v51, 2);
-        if invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian) {
-            match invocation_source_memory_layout_v51(ty) {
-                None => { assert(false); }
-                Some(actual) => {
-                    assert(actual == layout);
-                    match actual.kind {
-                        InvocationSourceMemoryKindV51::Array {
-                            element: actual_element, count: actual_count, stride: actual_stride,
-                        } => {
-                            assert(actual_element == element && actual_count == count && actual_stride == stride);
-                            assert(forall|element_index: int| 0 <= element_index < actual_count ==>
-                                #[trigger] invocation_source_memory_value_valid_v51(source,
-                                    MemoryPointerV30 { byte_offset: pointer.byte_offset + element_index * actual_stride, ..pointer },
-                                    actual_element, (fuel - 1) as nat, little_endian));
-                            assert(all_elements_valid);
-                        }
-                        _ => { assert(false); }
-                    }
-                }
-            }
-        }
     }
 }

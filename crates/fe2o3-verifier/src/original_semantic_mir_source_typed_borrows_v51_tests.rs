@@ -439,7 +439,28 @@ fn typed_array_trigger_preserves_stride_bounds_and_recursive_validity() {
                                 invocation_source_memory_value_valid_v51(source,
                                     MemoryPointerV30 { byte_offset: pointer.byte_offset + i * stride, ..pointer },
                                     element, (fuel - 1) as nat, little_endian),"#;
-    assert_eq!(array.replace("#[trigger] ", ""), original);
+    assert_eq!(
+        array.replace(
+            "#[trigger] invocation_source_memory_array_element_pointer_v230(pointer, i, stride)",
+            "MemoryPointerV30 { byte_offset: pointer.byte_offset + i * stride, ..pointer }",
+        ),
+        original,
+    );
+    assert!(runtime.contains(concat!(
+        "spec fn invocation_source_memory_array_element_pointer_v230(\n",
+        "    pointer: MemoryPointerV30, index: int, stride: int,\n",
+        ") -> MemoryPointerV30 {\n",
+        "    MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer }\n",
+        "}",
+    )));
+    assert!(runtime.contains(concat!(
+        "proof fn invocation_source_memory_array_element_pointer_is_offset_v230(\n",
+        "    pointer: MemoryPointerV30, index: int, stride: int,\n",
+        ")\n",
+        "    ensures invocation_source_memory_array_element_pointer_v230(pointer, index, stride)\n",
+        "        == (MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer }),\n",
+        "{}",
+    )));
 }
 
 #[test]
@@ -457,40 +478,11 @@ fn typed_array_invalid_element_law_is_in_complete_source_model() {
         law.split_once("\n{\n").unwrap().1.trim_end(),
         concat!(
             "    hide(invocation_source_memory_layout_v51);\n",
-            "    hide(invocation_source_memory_value_valid_v51);\n",
-            "    let all_elements_valid = forall|element_index: int| 0 <= element_index < count ==>\n",
-            "        #[trigger] invocation_source_memory_value_valid_v51(source,\n",
-            "            MemoryPointerV30 { byte_offset: pointer.byte_offset + element_index * stride, ..pointer },\n",
-            "            element, (fuel - 1) as nat, little_endian);\n",
-            "    if all_elements_valid {\n",
+            "    invocation_source_memory_array_element_pointer_is_offset_v230(pointer, index, stride);\n",
+            "    if invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian) {\n",
             "        assert(invocation_source_memory_value_valid_v51(source,\n",
-            "            MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer },\n",
+            "            invocation_source_memory_array_element_pointer_v230(pointer, index, stride),\n",
             "            element, (fuel - 1) as nat, little_endian));\n",
-            "    }\n",
-            "    assert(!all_elements_valid);\n",
-            "    assert(!invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian)) by {\n",
-            "        reveal_with_fuel(invocation_source_memory_value_valid_v51, 2);\n",
-            "        if invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian) {\n",
-            "            match invocation_source_memory_layout_v51(ty) {\n",
-            "                None => { assert(false); }\n",
-            "                Some(actual) => {\n",
-            "                    assert(actual == layout);\n",
-            "                    match actual.kind {\n",
-            "                        InvocationSourceMemoryKindV51::Array {\n",
-            "                            element: actual_element, count: actual_count, stride: actual_stride,\n",
-            "                        } => {\n",
-            "                            assert(actual_element == element && actual_count == count && actual_stride == stride);\n",
-            "                            assert(forall|element_index: int| 0 <= element_index < actual_count ==>\n",
-            "                                #[trigger] invocation_source_memory_value_valid_v51(source,\n",
-            "                                    MemoryPointerV30 { byte_offset: pointer.byte_offset + element_index * actual_stride, ..pointer },\n",
-            "                                    actual_element, (fuel - 1) as nat, little_endian));\n",
-            "                            assert(all_elements_valid);\n",
-            "                        }\n",
-            "                        _ => { assert(false); }\n",
-            "                    }\n",
-            "                }\n",
-            "            }\n",
-            "        }\n",
             "    }\n",
             "}",
         ),
