@@ -4,6 +4,8 @@ use crate::collector::CollectedTileTerminalKindV259 as TileKind;
 use crate::production_pipeline::source_owned_v29::Error as SourceError;
 use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, ExecutionTileLayoutV1};
 
+#[path = "production_rustc_driver_expanded_roots_v267_tests.rs"]
+mod expanded_roots_tests;
 #[path = "production_rustc_driver_tile_census_v259_tests.rs"]
 mod tile_census_tests;
 
@@ -49,68 +51,6 @@ struct ExpandedObservation {
 struct ExpandedCallbacks {
     case: ExpandedCase,
     result: Option<Result<Option<ExpandedObservation>, String>>,
-}
-
-#[derive(Default)]
-struct MultiRootCallbacks {
-    result: Option<Result<bool, String>>,
-}
-
-impl Callbacks for MultiRootCallbacks {
-    fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
-        self.result = Some((|| {
-            let transaction = transaction_in_active_session_v1(
-                tcx,
-                crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
-            )?;
-            let mut work = Work::new(500_000_000);
-            let mut budget = Budget::new(&mut work, 20_000_000);
-            let census = transaction
-                .collected_tile_terminals_v259(&mut budget)
-                .map_err(|error| format!("context-only collected census: {error:?}"))?;
-            assert!(!census.has_tile_operations());
-            assert_eq!(TILE_KINDS.map(|kind| census.call_occurrences(kind)), [0; 3]);
-            let mut calls = 0;
-            let refused = transaction.with_original_source_expanded_v259::<(), _>(
-                &mut budget,
-                |_, _, _, _, _, _| {
-                    calls += 1;
-                    Ok(((), 0))
-                },
-            );
-            assert_eq!(calls, 0);
-            match refused {
-                Err(SourceError::Unsupported(
-                    "expanded production selection requires one complete kernel root",
-                )) => Ok(true),
-                Err(error) => Err(format!(
-                    "multi-root refused at a different boundary: {error:?}"
-                )),
-                Ok(_) => Err("multi-root selection silently omitted a root".into()),
-            }
-        })());
-        Compilation::Stop
-    }
-}
-
-#[test]
-#[ignore = "process helper; requires an exact actual-source request from its parent"]
-fn expanded_multi_root_child() {
-    let Some(path) = env::var_os(ARGS) else {
-        return;
-    };
-    let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let mut callbacks = MultiRootCallbacks::default();
-    rustc_driver::run_compiler(&args, &mut callbacks);
-    let result = callbacks
-        .result
-        .expect("ordinary multi-root rustc callback");
-    std::fs::write(
-        env::var_os(RESULT).unwrap(),
-        serde_json::to_vec(&result).unwrap(),
-    )
-    .unwrap();
-    assert!(result.is_ok(), "expanded multi-root refusal: {result:?}");
 }
 
 impl Callbacks for ExpandedCallbacks {
@@ -334,20 +274,5 @@ pub fn expanded_probe(mut ctx: KernelContext<'_>, input: &[u32], base: u64) {
             }
         },
     );
-    run_actual_sources::<bool>(
-        &[("multiple", "")],
-        &[(0, 0)],
-        &CHILD.replace("expanded_source_child", "expanded_multi_root_child"),
-        "EXPANDED_MULTI_ROOT_V259",
-        |_| {
-            r#"use fe2o3_device::{kernel, KernelContext};
-#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
-pub fn first(_ctx: KernelContext<'_>, _seed: u32) {}
-#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
-pub fn second(_ctx: KernelContext<'_>, _seed: u32) {}
-"#
-            .to_owned()
-        },
-        |_, _, _, refused, _| assert!(refused),
-    );
+    expanded_roots_tests::run_actual_root_matrix();
 }

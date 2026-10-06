@@ -97,6 +97,64 @@ do not grant Worker, publication, load or launch authority. KFD execution is not
 a substitute for source-refinement proof execution, and LLVM remains a separate
 downstream trust boundary.
 
+## Expanded Source Preparation
+
+The separate, crate-private
+[`with_original_source_expanded_v259`](../../crates/rustc-codegen-fe2o3/src/production_pipeline_source_expanded_v259.rs)
+stage consumes the authenticated collection and retains the original source,
+checked Policy11 neutral output and actual tile-expanded output together:
+
+```text
+one authenticated collection and complete ABI-root roster
+  -> source-owned canonical mixed KIR
+  -> checked target-neutral Policy11 fixed point
+  -> complete original-root tile selection on the same function inventory
+  -> one whole-module expansion and independent replay
+  -> scoped consumer borrowing source, original correspondence,
+     expanded correspondence, all ABI roots, target and the same budget
+```
+
+This is a production-stage implementation with ordinary-rustc integration tests,
+not the default public publication route. Its consumer cannot retain borrowed
+graph owners. Retained result storage is measured on the original account;
+failure and unwind destroy the owned graphs before releasing their storage.
+
+The stage requests a fixed blocked layout for both admitted AMD profiles.
+[`prepare_tile_expansion_with_layout_v260`](../../crates/fe2o3-lower-mir-kernel/src/production_optimized_source_tile_roots_v260.rs)
+derives the complete root policy from actual tile operations. The function plan
+uses one operation scan, one kernel-geometry scan and indexed root lookup rather
+than scanning every function for each root. Selected functions additionally
+undergo convergence checking and the expansion's independent replay; this is
+not a constant-time or linear bound on those analyses.
+
+All original roots remain in one module. Scalar roots have no tile-layout or
+tile-launch requirement, and an all-scalar module has an identity expansion.
+The source importer retains a common scalar helper's original body identity
+and expands its call instances into each root CFG, with per-root source
+correspondence; this does not imply a standalone shared helper in neutral KIR.
+The expansion preserves unselected functions already present in that module.
+Aliased tile entry functions must agree on layout and launch geometry.
+A tile-bearing non-root helper remaining in neutral KIR currently refuses
+because residual interprocedural expansion has not been admitted. No source-name matcher,
+per-root module copy or second rustc collection determines these choices.
+
+The collector also retains an inert census at its existing authenticated tile
+terminal stops. Counts describe occurrences in unique collected monomorphized
+bodies, not dynamic invocations or per-root reachability. This observation is
+neither a pass-policy selector nor a proof certificate.
+
+The expanded graph requires its own complete source-refinement subject and
+initialization, step and trace proofs. Original-source, scalar-prefix or earlier
+four-graph tail proofs cannot be renamed as expanded-program evidence. This
+stage and its component helper proofs do not grant publication or launch rights.
+
+The backend CI entry explicitly runs both ignored real-rustc parent tests after
+its ordinary library suite: the expanded-source parent (including the complete
+multi-root matrix) and the authenticated terminal-census parent. Their target
+matrix is gfx942/gfx950 with MIR optimization levels 0 and 3. They establish
+compilation-stage behavior, not GPU execution or protected-runtime qualification.
+Record their exact source and terminal results before claiming a passing run.
+
 ## Remaining Activation Gates
 
 1. **General source admission.** Complete original memory, borrow, move, call,
