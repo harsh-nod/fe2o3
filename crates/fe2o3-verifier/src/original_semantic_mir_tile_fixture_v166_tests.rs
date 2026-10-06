@@ -925,6 +925,14 @@ fn generate_expanded_private_bindings_v188(
     _: &TileExpansion<'_, '_>,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
+    assert_eq!(check_expanded_private_bindings_v190(slots, out)?, 0);
+    Ok(())
+}
+
+fn check_expanded_private_bindings_v190(
+    slots: &SourceSlots<'_, '_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<usize> {
     use super::super::{
         byte_bindings::SourceByteBindings, slots::AllocationOrigin, tile_target::TileTargetV176,
     };
@@ -967,17 +975,16 @@ fn generate_expanded_private_bindings_v188(
         )));
         frames += 1;
     }
-    assert!(frames > 0);
     assert_eq!(
         out.text.matches("private.insert(source.slots[").count(),
         frames
     );
     assert!(!out.text.contains("invocation_paired_"));
-    Ok(())
+    Ok(frames)
 }
 
 #[test]
-fn original_execution_tile_private_map_keeps_original_descriptors_and_actual_definitions() {
+fn original_execution_tile_private_map_preserves_the_empty_original_frame_census() {
     for layout in [Layout::Blocked, Layout::Striped] {
         run_fixture(
             layout,
@@ -987,6 +994,64 @@ fn original_execution_tile_private_map_keeps_original_descriptors_and_actual_def
         )
         .0
         .unwrap();
+    }
+}
+
+#[test]
+fn original_execution_private_map_keeps_genuine_original_frames_and_actual_definitions() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        super::super::slots::tests::run_tile_slots_with_limits(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            |slots, out| {
+                // This separately admitted source has two address-taken Rust
+                // objects. The tile-only fixture above has no original frame.
+                assert_eq!(check_expanded_private_bindings_v190(slots, out)?, 2);
+                Ok(())
+            },
+        )
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
+fn original_execution_private_map_genuine_frames_have_exact_and_short_resources() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let run = |work, storage| {
+            super::super::slots::tests::run_tile_slots_with_limits(
+                layout,
+                work,
+                storage,
+                |slots, out| {
+                    assert_eq!(check_expanded_private_bindings_v190(slots, out)?, 2);
+                    Ok(())
+                },
+            )
+        };
+        let baseline = run(512 * 1024 * 1024, 512 * 1024 * 1024);
+        baseline.0.unwrap();
+        let exact = run(baseline.1, baseline.3);
+        exact.0.unwrap();
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (baseline.1, baseline.2, baseline.3)
+        );
+        use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as Source;
+        for (work, storage, is_work) in [
+            (baseline.1 - 1, baseline.3, true),
+            (baseline.1, baseline.3 - 1, false),
+        ] {
+            let error = run(work, storage).0;
+            assert!(if is_work {
+                matches!(error, Err(Error::Resource(Resource::Work(error))) | Err(Error::Source(Source::Resource(Resource::Work(error))))
+                    if error.actual() == baseline.1 && error.limit() == work)
+            } else {
+                matches!(error, Err(Error::Resource(Resource::Storage(error))) | Err(Error::Source(Source::Resource(Resource::Storage(error))))
+                    if error.actual() == baseline.3 && error.limit() == storage)
+            });
+        }
     }
 }
 
