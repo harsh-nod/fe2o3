@@ -379,20 +379,16 @@ fn source_runtime(
             hint.instance
         );
     }
-    emit!(
-        out,
-        " assert forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() implies invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i]) by {{\n"
-    );
     for ordinal in 0..call.arguments.len() {
         out.budget.charge_work(2)?;
         emit!(
             out,
-            " if i == {ordinal} {{ assert(invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}])); }} else"
+            " invocation_source_local_observations_extend_v186(invocation_source_block_runtime_{root}_v36(source).operands, {ordinal});\n"
         );
     }
     emit!(
         out,
-        " {{ assert(false); }}\n }}\n invocation_source_local_block_observations_empty_v180(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36());\n"
+        " invocation_source_local_block_observations_empty_v180(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36());\n"
     );
     emit!(out, "}}\n");
     Ok(())
