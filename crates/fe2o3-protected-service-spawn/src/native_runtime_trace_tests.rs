@@ -2,6 +2,14 @@
 use super::*;
 
 #[test]
+fn syscall_info_request_matches_linux_uapi_for_both_libc_request_abis() {
+    assert_eq!(PTRACE_GET_SYSCALL_INFO, 0x420e);
+    assert_eq!(i32::try_from(PTRACE_GET_SYSCALL_INFO).unwrap(), 0x420e);
+    #[cfg(target_env = "gnu")]
+    assert_eq!(PTRACE_GET_SYSCALL_INFO, libc::PTRACE_GET_SYSCALL_INFO);
+}
+
+#[test]
 fn runtime_terminal_kind_never_conflates_exit_code_and_fatal_signal() {
     let pid = Pid::from_raw(1234).unwrap();
     for code in [libc::CLD_EXITED, libc::CLD_KILLED, libc::CLD_DUMPED] {
