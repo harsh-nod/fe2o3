@@ -223,7 +223,8 @@ fn source_carrier_definition_v37(
         SourceSsaPhysicalV36::Execution(owner) => (
             owner.identity.value,
             SourceSsaCarrierTypeV36::Execution(
-                semantic_execution_kir_role_v29(owner.role).map_err(source_reference_error_v29)?,
+                semantic_execution_kir_role_v29(owner.role)
+                    .map_err(ProductionSourceOwnedViewErrorV18::Binding)?,
             ),
         ),
         SourceSsaPhysicalV36::ExecutionBorrow(borrow) => (
