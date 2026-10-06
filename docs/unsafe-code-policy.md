@@ -988,6 +988,25 @@ gate must be rerun after integration; protected runtime, installed deployment,
 compiler gate release, GPU execution and end-to-end production qualification remain
 separate obligations.
 
+## Original Request Routing
+
+The added block in `native_root_request.rs` forwards its existing unsafe
+dedicated-creator contract to the private execution state machine. The one
+unsafe function and three blocks in `native_root_request_runtime.rs` delegate
+only original runtime takeover, confirmed first-exec status and consuming issuer
+launch. Each call uses the Attempt already owned by that request; the issuer
+receives its exact original Prepared and cleanup pool. These sites introduce no
+raw syscall, alternate owner or authority constructed from wire data.
+
+The request keeps its original work ledger, budget address, captured input
+owners and absolute deadline through all transitions. Errors leave the request
+failed and retain the original foreground cancellation obligation. Completion
+encoding follows both actual root terminal wait and trace retirement; it grants
+no publication or execution authority. Startup funding, downstream admission,
+live native qualification and default activation remain separate open gates.
+The inventory changes record only these reviewed sites and do not refresh the
+unrelated pre-existing GPU/memory inventory differences.
+
 ## Initial Reduction
 
 The three unsafe functions and three blocks in
