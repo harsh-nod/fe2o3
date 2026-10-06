@@ -22,6 +22,10 @@ use fe2o3_kernel_ir::{
 use sha2::{Digest, Sha256};
 use std::{fmt, mem::size_of, path::Path};
 
+#[path = "conditional_worker_output_preimages.rs"]
+mod preimages;
+pub use preimages::ConditionalWorkerReplayPreimagesV5;
+
 const DOMAIN: &[u8] = b"FE2O3/CONDITIONAL-WORKER-PUBLISHED-UPSTREAM/V5\0";
 const FRAME: usize = 4 * size_of::<PublishedConditionalWorkerHsacoV5>() + 8192;
 const WORK: usize = 4096;

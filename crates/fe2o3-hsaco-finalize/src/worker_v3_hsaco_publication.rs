@@ -44,7 +44,7 @@ mod nominal_v4;
 mod nominal_v5;
 pub use conditional_output::{
     ConditionalWorkerOutputErrorV5, ConditionalWorkerOutputStorageV5,
-    PublishedConditionalWorkerHsacoV5,
+    ConditionalWorkerReplayPreimagesV5, PublishedConditionalWorkerHsacoV5,
     publish_recovered_conditional_worker_hsaco_in_original_account_v5,
     publish_recovered_conditional_worker_hsaco_v5,
 };
