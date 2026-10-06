@@ -1,6 +1,7 @@
 //! Accounting components only; these do not fabricate compiler/readiness/proof owners.
 use super::super::{
-    ContinuationError, Failure, ParentDurableConditionalArtifact, ParentPreparedConditionalArtifact,
+    ContinuationError, Failure, ParentDurableConditionalArtifact,
+    ParentPreparedConditionalArtifact, ParentPublishedConditionalArtifact,
 };
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
@@ -247,6 +248,9 @@ fn continuation_errors_cannot_expose_nested_refundable_resources() {
     for error in [
         ContinuationError::from(Resource::Accounting),
         ContinuationError::from(Failure::Resource(Resource::Arithmetic)),
+        ContinuationError::from(
+            fe2o3_hsaco_finalize::ConditionalWorkerOutputErrorV5::Resource(Resource::Accounting),
+        ),
     ] {
         assert!(std::error::Error::source(&error).is_none());
         assert!(!error.to_string().is_empty());
@@ -254,7 +258,8 @@ fn continuation_errors_cannot_expose_nested_refundable_resources() {
 }
 
 #[test]
-fn replacement_frame_covers_both_actual_parent_headers() {
+fn replacement_frame_covers_actual_parent_headers() {
     assert!(FRAME >= ParentPreparedConditionalArtifact::HEADER);
     assert!(FRAME >= ParentDurableConditionalArtifact::HEADER);
+    assert!(FRAME >= ParentPublishedConditionalArtifact::HEADER);
 }
