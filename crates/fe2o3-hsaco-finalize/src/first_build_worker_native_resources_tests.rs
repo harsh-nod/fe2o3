@@ -29,6 +29,62 @@ fn dimensions() -> Dimensions {
     }
 }
 
+#[test]
+fn startup_engine_bound_dominates_each_admitted_dimension_without_admitting_it() {
+    let bound = NativeWorkerResourceQuote::admitted_limits_upper_bound().unwrap();
+    for index in 0..14 {
+        let mut d = dimensions();
+        d.handoff = MAX_COMPILER_MODULE_HANDOFF_BYTES_V2;
+        match index {
+            0 => {}
+            1 => d.module = MAX_COMPILER_MODULE_BYTES_V1,
+            2 => d.envelope = MAX_COMPILER_FFI_ENVELOPE_BYTES_V1,
+            3 => d.manifest = MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1,
+            4 => d.providers = MAX_WORKER_TOTAL_INPUT_BYTES - d.module,
+            5 => d.provider_count = MAX_LINK_INPUTS - 1,
+            6 => d.option_text = MAX_LINK_OPTION_NAME_BYTES + MAX_LINK_OPTION_VALUE_BYTES,
+            7 => d.option_count = MAX_LINK_OPTIONS,
+            8 => d.symbols = MAX_COMPILER_MODULE_SYMBOLS_V1,
+            9 => d.contracts = MAX_COMPILER_FFI_CONTRACTS_V1,
+            10 => d.output = MAX_WORKER_OUTPUT_BYTES,
+            11 => d.stdout = MAX_WORKER_RESPONSE_BYTES,
+            12 => d.stderr = MAX_WORKER_STDERR_BYTES,
+            13 => d.timeout = MAX_WORKER_TIMEOUT,
+            _ => unreachable!(),
+        }
+        let actual = NativeWorkerResourceQuote::from_dimensions(d).unwrap();
+        assert!(
+            actual.preflight_work() <= bound.preflight_work(),
+            "dimension {index}"
+        );
+        assert!(
+            actual.execution_work() <= bound.execution_work(),
+            "dimension {index}"
+        );
+        assert!(
+            actual.preflight_storage() <= bound.preflight_storage(),
+            "dimension {index}"
+        );
+        assert!(
+            actual.execution_storage() <= bound.execution_storage(),
+            "dimension {index}"
+        );
+        assert!(
+            actual.returned_retained_storage() <= bound.returned_retained_storage(),
+            "dimension {index}"
+        );
+    }
+    let mut invalid = dimensions();
+    invalid.providers = MAX_WORKER_TOTAL_INPUT_BYTES;
+    assert!(matches!(
+        NativeWorkerResourceQuote::from_dimensions(invalid),
+        Err(NativeWorkerResourceQuoteError::HardBound {
+            component: "aggregate input payload",
+            ..
+        })
+    ));
+}
+
 fn module() -> CompilerModuleHandoffV2 {
     let target = DeviceTargetV1::parse("gfx942:xnack-").unwrap();
     let version = CodeObjectVersion::V6;
