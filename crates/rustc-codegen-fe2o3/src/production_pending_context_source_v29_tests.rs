@@ -9,6 +9,9 @@ const PENDING_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v
 #[path = "production_context_vecadd_source_v29_tests.rs"]
 mod vecadd_tests;
 
+#[path = "production_rustc_driver_expanded_source_v259_tests.rs"]
+mod expanded_source_tests;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct PendingObservation {
     source: [u8; 32],

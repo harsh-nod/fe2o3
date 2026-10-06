@@ -58,6 +58,7 @@ pub(crate) enum Error {
     ConditionalMixedHandoff(fe2o3_lower_mir_kernel::ProductionMixedSourceHandoffErrorV26),
     ConditionalMixedCfg(fe2o3_verifier::MixedOptimizerRefinementErrorV26),
     OriginalMir(fe2o3_verifier::MixedOptimizerRefinementErrorV26),
+    ExpandedSource(Box<fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18<Error>>),
     MixedLicm(fe2o3_lower_mir_kernel::ProductionMixedLicmRelocationErrorV28),
     MixedLicmCompletion(fe2o3_lower_mir_kernel::ProductionMixedLicmCompletionErrorV28),
     MixedDescriptor(crate::compiler_descriptor::nominal_v3::NominalDescriptorErrorV3),
@@ -94,6 +95,7 @@ impl std::error::Error for Error {
             Self::ConditionalMixedHandoff(error) => Some(error),
             Self::ConditionalMixedCfg(error) => Some(error),
             Self::OriginalMir(error) => Some(error),
+            Self::ExpandedSource(error) => Some(error.as_ref()),
             Self::MixedLicm(error) => Some(error),
             Self::MixedLicmCompletion(error) => Some(error),
             Self::MixedDescriptor(error) => Some(error),
@@ -423,6 +425,9 @@ mod mixed_cfg_v27;
 
 #[path = "production_pipeline_source_mixed_fixedpoint_licm_v29.rs"]
 pub(crate) mod mixed_fixedpoint_licm_v29;
+
+#[path = "production_pipeline_source_expanded_v259.rs"]
+pub(crate) mod expanded_v259;
 #[path = "production_pipeline_source_mixed_licm_v28.rs"]
 mod mixed_licm_v28;
 #[path = "production_pipeline_source_predicated_licm_v90.rs"]
