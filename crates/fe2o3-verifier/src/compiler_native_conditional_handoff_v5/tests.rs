@@ -17,6 +17,78 @@ impl Drop for Dropped<'_> {
 }
 
 #[test]
+fn original_recovery_window_exact_one_short_and_terminal_custody() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    const OUTSIDE: usize = MAX_STORAGE + FLOOR;
+    let inputs = METADATA + CAPACITY;
+    let peak = OUTSIDE + inputs + Budget::STORAGE_WINDOW_SCRATCH_V1 + HEADER + WORKING + 17;
+    let work = Budget::STORAGE_WINDOW_WORK_V1 + 8;
+    for (work_limit, storage_limit, mode) in [
+        (work, peak, 0),
+        (work - 1, peak, 1),
+        (work, peak - 1, 2),
+        (work, peak, 3),
+        (work, peak, 4),
+    ] {
+        let mut owned = Owned::new(Work::new(work_limit), storage_limit);
+        owned.with_budget(|b| {
+            b.reserve_storage(OUTSIDE).unwrap();
+            let ledger = b.work_ledger_identity_v1();
+            let identity = b.storage_account_identity_v1();
+            let drops = Cell::new(0);
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                original_recovery(inputs, b, |b| {
+                    let entry = begin_bounded(CAPACITY, b)?;
+                    b.reserve_storage(17)?;
+                    let owner = Dropped(&drops);
+                    if mode == 3 {
+                        return Err(Error::mismatch("actual original-window partial refusal"));
+                    }
+                    if mode == 4 {
+                        panic!("actual original-window partial unwind");
+                    }
+                    finish(&entry, b, Ok((owner, HEADER + 17)))
+                })
+            }));
+            match mode {
+                0 => {
+                    let (owner, charge) = result.unwrap().unwrap();
+                    assert_eq!(charge, HEADER + 17);
+                    assert_eq!(drops.get(), 0);
+                    assert_eq!(b.storage(), OUTSIDE);
+                    drop(owner);
+                    assert_eq!(drops.get(), 1);
+                    assert_eq!((b.work(), b.peak_storage()), (work, peak));
+                }
+                1 | 2 => {
+                    assert!(matches!(result, Ok(Err(_))));
+                    assert!(b.storage() > OUTSIDE);
+                }
+                3 | 4 => {
+                    assert!(matches!(result, Ok(Err(_)) | Err(_)));
+                    assert_eq!(b.storage(), peak);
+                    assert_eq!(drops.get(), 1);
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(b.storage_account_identity_v1(), identity);
+            assert_eq!(b.work_ledger_identity_v1(), ledger);
+            assert_eq!(b.storage_limit(), storage_limit);
+        });
+    }
+    let mut owned = Owned::new(Work::new(work), peak);
+    owned.with_budget(|b| {
+        b.reserve_storage(OUTSIDE).unwrap();
+        for unpaid in [OUTSIDE + 1, usize::MAX] {
+            assert!(
+                original_recovery::<()>(unpaid, b, |_| panic!("unpaid input entered")).is_err()
+            );
+            assert_eq!(b.storage(), OUTSIDE);
+        }
+    });
+}
+
+#[test]
 fn conditional_native_recovery_component_entry_exact_short_capacity_and_work() {
     let peak = FLOOR + HEADER + WORKING;
     for (storage, work_limit, success) in [(peak, 8, true), (peak - 1, 8, false), (peak, 7, false)]

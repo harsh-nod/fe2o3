@@ -4,7 +4,8 @@ use crate::{
     with_decoded_native_conditional_source_packet_v2,
 };
 use fe2o3_compiler_lineage::{
-    NativeConditionalPolicyRosterErrorV1, read_native_conditional_policy_roster_v1,
+    MAX_NATIVE_CONDITIONAL_STORAGE_V1 as MAX_STORAGE, NativeConditionalPolicyRosterErrorV1,
+    read_native_conditional_policy_roster_v1,
 };
 use fe2o3_functional_proof::{
     FunctionalRefinementBoundaryV2 as Boundary, FunctionalRefinementImportErrorV2,
@@ -30,6 +31,31 @@ const FRAME: usize = 8192;
 // The pinned BTreeSet uses fixed-size nodes. This conservative per-key quote
 // includes an extra root node, insertion scratch and intermediate tree headers.
 const EFFECT_KEY_STORAGE: usize = 1024;
+
+/// Logical full borrowed policy overlap using the same conservative tree-node
+/// model as reconstruction. This is accounting, never provenance or admission.
+pub(crate) fn policy_input_storage(
+    roots: &[NativeConditionalRootPolicyV2<'_>],
+    budget: &mut Budget<'_>,
+) -> Result<usize, Resource> {
+    budget.charge_work(roots.len().checked_add(8).ok_or(Resource::Arithmetic)?)?;
+    let mut total = std::mem::size_of_val(roots);
+    for root in roots {
+        let tree = root
+            .effects
+            .signer_identities()
+            .len()
+            .checked_add(1)
+            .and_then(|n| n.checked_mul(EFFECT_KEY_STORAGE))
+            .ok_or(Resource::Arithmetic)?;
+        total = total
+            .checked_add(size_of::<Effects>())
+            .and_then(|n| n.checked_add(size_of::<Formula>()))
+            .and_then(|n| n.checked_add(tree))
+            .ok_or(Resource::Arithmetic)?;
+    }
+    Ok(total)
+}
 
 struct Root {
     semantic_root: u32,
@@ -102,6 +128,58 @@ pub fn reconstruct_inert_native_conditional_policy_roster_v1(
     ),
     E,
 > {
+    reconstruct_using(bytes, source_packet, budget.storage_limit(), budget)
+}
+
+/// Same inert reconstruction on an original owned account, with both complete
+/// borrowed inputs counted again within an additional <=256 MiB window. The
+/// ordinary strict-cap reader is unchanged. Terminal errors/unwinds keep all
+/// reservations; only successful transfer releases this known local overlap.
+pub fn reconstruct_inert_native_conditional_policy_roster_in_original_account_v1(
+    bytes: &[u8],
+    source_packet: &[u8],
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        InertNativeConditionalPolicyRosterV1,
+        NativeConditionalPolicyRosterStorageV1,
+    ),
+    E,
+> {
+    let inputs = bytes
+        .len()
+        .checked_add(source_packet.len())
+        .ok_or(Resource::Arithmetic)?;
+    let overlap = inputs
+        .checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1)
+        .ok_or(Resource::Arithmetic)?;
+    let floor = budget.storage();
+    budget.with_additional_storage_window_v1(MAX_STORAGE, |b| {
+        if floor < inputs {
+            return Err(Resource::Accounting.into());
+        }
+        b.reserve_storage(overlap)?;
+        let result = reconstruct_using(bytes, source_packet, MAX_STORAGE, b)?;
+        if b.storage() != floor.checked_add(overlap).ok_or(Resource::Arithmetic)? {
+            return Err(Resource::Accounting.into());
+        }
+        b.release_storage(overlap)?;
+        Ok(result)
+    })
+}
+
+fn reconstruct_using(
+    bytes: &[u8],
+    source_packet: &[u8],
+    storage_limit: usize,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        InertNativeConditionalPolicyRosterV1,
+        NativeConditionalPolicyRosterStorageV1,
+    ),
+    E,
+> {
     budget.charge_work(8)?;
     let incoming = budget.storage();
     if incoming
@@ -115,7 +193,7 @@ pub fn reconstruct_inert_native_conditional_policy_roster_v1(
     let ledger = budget.work_ledger_identity_v1();
     let address = budget as *const Budget<'_> as usize;
     budget.reserve_storage(FRAME)?;
-    let frame = read_native_conditional_policy_roster_v1(bytes, budget.storage_limit(), |work| {
+    let frame = read_native_conditional_policy_roster_v1(bytes, storage_limit, |work| {
         budget.charge_work(work)
     })
     .map_err(E::Frame)?;

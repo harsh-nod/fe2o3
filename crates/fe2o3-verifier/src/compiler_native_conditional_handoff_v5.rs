@@ -7,6 +7,7 @@
 
 use crate::compiler_native_conditional_source_proof_v2::final_replay::{
     account::{self, Account},
+    validate_native_conditional_source_through_f_using_original_account_v2,
     validate_native_conditional_source_through_f_using_v2,
 };
 use crate::{
@@ -31,8 +32,10 @@ use fe2o3_kernel_ir::{
 use fe2o3_kernel_opt::{
     CanonicalRefinedForwardingHistoryLimitsV1 as Limits,
     MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1 as MAX_STORAGE,
-    RefinedForwardingHistoryRoleV1 as Role, materialize_refined_forwarding_history_v1,
-    read_refined_forwarding_history_v1,
+    RefinedForwardingHistoryRoleV1 as Role,
+    materialize_refined_forwarding_history_in_original_account_v1,
+    materialize_refined_forwarding_history_v1,
+    read_refined_forwarding_history_in_original_account_v1, read_refined_forwarding_history_v1,
 };
 use std::mem::size_of;
 
@@ -198,8 +201,83 @@ pub fn recover_compiler_conditional_native_semantic_handoff_v5(
     budget: &mut Budget<'_>,
 ) -> Result<Output, Error> {
     let entry = begin(handoff.backing_capacity(), budget)?;
-    let result = replay(&handoff, accepted, expected_limits, profile, &entry, budget);
-    let (parts, retained) = finish(&entry, budget, result)?;
+    recover_using(
+        handoff,
+        accepted,
+        expected_limits,
+        profile,
+        &entry,
+        false,
+        budget,
+    )
+}
+
+/// Same terminal V5 recovery on the original owned account. The complete actual
+/// handoff backing, metadata and borrowed policy backing are counted AGAIN under
+/// an additional <=256 MiB ceiling. Nested history operations use their concrete
+/// original-account variants. No new budget, cap increase or policy authority.
+///
+/// Additional entry work is STORAGE_WINDOW_WORK_V1 + 8 + accepted.len(); each
+/// of the three nested history phases additionally charges its documented
+/// composition overhead. Errors/unwinds preserve all partial reservations. The
+/// returned successful owner/charge remains additional and unreserved.
+pub fn recover_compiler_conditional_native_semantic_handoff_in_original_account_v5(
+    handoff: Handoff,
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    expected_limits: Limits,
+    profile: Profile,
+    budget: &mut Budget<'_>,
+) -> Result<Output, Error> {
+    let policy = crate::compiler_native_conditional_policy_roster_v1::policy_input_storage(
+        accepted, budget,
+    )?;
+    let inputs = sum(&[handoff.backing_capacity(), METADATA, policy])?;
+    original_recovery(inputs, budget, |b| {
+        let entry = begin_bounded(handoff.backing_capacity(), b)?;
+        recover_using(handoff, accepted, expected_limits, profile, &entry, true, b)
+    })
+}
+
+fn original_recovery<T>(
+    inputs: usize,
+    budget: &mut Budget<'_>,
+    operation: impl FnOnce(&mut Budget<'_>) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let overlap = sum(&[inputs, Budget::STORAGE_WINDOW_SCRATCH_V1])?;
+    let floor = budget.storage();
+    budget.with_additional_storage_window_v1(MAX_STORAGE, |b| {
+        if floor < inputs {
+            return Err(Resource::Accounting.into());
+        }
+        b.reserve_storage(overlap)?;
+        let result = operation(b)?;
+        if b.storage() != floor.checked_add(overlap).ok_or(Resource::Arithmetic)? {
+            return Err(Resource::Accounting.into());
+        }
+        b.release_storage(overlap)?;
+        Ok(result)
+    })
+}
+
+fn recover_using(
+    handoff: Handoff,
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    expected_limits: Limits,
+    profile: Profile,
+    entry: &Account,
+    original: bool,
+    budget: &mut Budget<'_>,
+) -> Result<Output, Error> {
+    let result = replay(
+        &handoff,
+        accepted,
+        expected_limits,
+        profile,
+        entry,
+        original,
+        budget,
+    );
+    let (parts, retained) = finish(entry, budget, result)?;
     let storage = RecoveredCompilerConditionalNativeSemanticHandoffStorageV5(retained);
     Ok((
         RecoveredCompilerConditionalNativeSemanticHandoffV5 {
@@ -212,11 +290,20 @@ pub fn recover_compiler_conditional_native_semantic_handoff_v5(
 }
 
 fn begin(backing_capacity: usize, budget: &mut Budget<'_>) -> Result<Account, Error> {
-    let entry = Account::capture(budget);
     budget.charge_work(8)?;
     if budget.storage_limit() > MAX_STORAGE {
         return Err(Error::mismatch("bounded conditional native storage cap"));
     }
+    begin_after_entry(backing_capacity, budget)
+}
+
+fn begin_bounded(backing_capacity: usize, budget: &mut Budget<'_>) -> Result<Account, Error> {
+    budget.charge_work(8)?;
+    begin_after_entry(backing_capacity, budget)
+}
+
+fn begin_after_entry(backing_capacity: usize, budget: &mut Budget<'_>) -> Result<Account, Error> {
+    let entry = Account::capture(budget);
     if budget.storage() < sum(&[backing_capacity, METADATA])? {
         return Err(Resource::Accounting.into());
     }
@@ -251,15 +338,24 @@ fn replay(
     expected_limits: Limits,
     profile: Profile,
     entry: &Account,
+    original: bool,
     budget: &mut Budget<'_>,
 ) -> Result<(Parts, usize), Error> {
     let capsule = handoff.capsule();
-    let frame = read_refined_forwarding_history_v1(capsule.history_bytes(), budget)
-        .map_err(|e| Error(Cause::History(e)))?;
+    let frame = if original {
+        read_refined_forwarding_history_in_original_account_v1(capsule.history_bytes(), budget)
+    } else {
+        read_refined_forwarding_history_v1(capsule.history_bytes(), budget)
+    }
+    .map_err(|e| Error(Cause::History(e)))?;
     let frame_storage = frame.storage().retained_storage();
     budget.reserve_storage(frame_storage)?;
-    let history = materialize_refined_forwarding_history_v1(&frame, budget)
-        .map_err(|e| Error(Cause::History(e)))?;
+    let history = if original {
+        materialize_refined_forwarding_history_in_original_account_v1(&frame, budget)
+    } else {
+        materialize_refined_forwarding_history_v1(&frame, budget)
+    }
+    .map_err(|e| Error(Cause::History(e)))?;
     let history_storage = history.storage().retained_storage();
     budget.reserve_storage(history_storage)?;
     let (catalog, receipt) = Catalog::decode_with_budget(capsule.catalog_bytes(), budget)
@@ -276,21 +372,32 @@ fn replay(
     budget.charge_work(handoff.module_handoff().module_bytes().len())?;
     let final_llvm = std::str::from_utf8(handoff.module_handoff().module_bytes())
         .map_err(|e| Error(Cause::Utf8(e)))?;
-    let (source, receipt) = validate_native_conditional_source_through_f_using_v2(
-        capsule.source_packet_bytes(),
-        accepted,
-        NativeConditionalFinalInputsV2 {
-            decoded_history: &history,
-            expected_limits,
-            final_catalog: &catalog,
-            published_output_bytes: history.graph(Role::F).canonical().canonical_bytes(),
-            profile,
-            descriptors: &table,
-            final_llvm,
-        },
-        budget,
-        |source, _, relation, budget| joins::check(handoff, source, relation, budget),
-    )?;
+    let inputs = NativeConditionalFinalInputsV2 {
+        decoded_history: &history,
+        expected_limits,
+        final_catalog: &catalog,
+        published_output_bytes: history.graph(Role::F).canonical().canonical_bytes(),
+        profile,
+        descriptors: &table,
+        final_llvm,
+    };
+    let (source, receipt) = if original {
+        validate_native_conditional_source_through_f_using_original_account_v2(
+            capsule.source_packet_bytes(),
+            accepted,
+            inputs,
+            budget,
+            |source, _, relation, budget| joins::check(handoff, source, relation, budget),
+        )
+    } else {
+        validate_native_conditional_source_through_f_using_v2(
+            capsule.source_packet_bytes(),
+            accepted,
+            inputs,
+            budget,
+            |source, _, relation, budget| joins::check(handoff, source, relation, budget),
+        )
+    }?;
     let source_storage = receipt.retained_storage();
     budget.reserve_storage(source_storage)?;
     // No graph moves until same-visit joins and all enclosing CPU/source/F

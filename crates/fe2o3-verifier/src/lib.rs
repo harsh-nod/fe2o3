@@ -24,11 +24,14 @@ pub use compiler_native_conditional_handoff_v5::{
     CompilerConditionalNativeSemanticHandoffErrorV5,
     RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
     RecoveredCompilerConditionalNativeSemanticHandoffV5,
+    recover_compiler_conditional_native_semantic_handoff_in_original_account_v5,
     recover_compiler_conditional_native_semantic_handoff_v5,
 };
 pub use compiler_native_conditional_policy_roster_v1::{
     InertNativeConditionalPolicyRosterV1, NativeConditionalPolicyReconstructionErrorV1,
-    NativeConditionalPolicyRosterStorageV1, reconstruct_inert_native_conditional_policy_roster_v1,
+    NativeConditionalPolicyRosterStorageV1,
+    reconstruct_inert_native_conditional_policy_roster_in_original_account_v1,
+    reconstruct_inert_native_conditional_policy_roster_v1,
 };
 pub mod compiler_native_conditional_source_packet_v2;
 pub use compiler_native_conditional_source_packet_v2::{
