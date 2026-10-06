@@ -230,12 +230,9 @@ fn source_state(
     entry: &SourceEntryHintsV85,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
+    source_runtime(root, pc, hints, hint, call, out)?;
     out.budget.reserve_storage(13 * size_of::<usize>())?;
-    out.budget.charge_work(24)?;
-    let fuel = add(hint.statements, 1)?;
-    if fuel > *hints.fuels.get(hint.instance).ok_or_else(mismatch)? {
-        return Err(mismatch());
-    }
+    out.budget.charge_work(12)?;
     emit!(
         out,
         "#[verifier::spinoff_prover]\nproof fn invocation_constructor_source_state_{root}_{pc}_v165(source: InvocationSourceByteStateV36)\n requires invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},\n ensures\n invocation_paired_source_step_{root}_v36(source).state == invocation_constructor_source_{root}_{pc}_v162(source),\n invocation_paired_source_step_{root}_v36(source).events.len() == 0,\n !invocation_paired_source_step_{root}_v36(source).halted,\n invocation_source_block_runtime_{root}_v36(source).source == invocation_constructor_source_{root}_{pc}_v162(source),\n invocation_source_block_runtime_{root}_v36(source).returned.is_none(),\n invocation_source_block_runtime_{root}_v36(source).operands.len() == {},\n",
@@ -248,6 +245,53 @@ fn source_state(
             " invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}].value == InvocationSourceValueV42::Carrier(source.machine.values[{local}]),\n"
         );
     }
+    emit!(
+        out,
+        "{{\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_observations_v39);\n hide(invocation_source_entry_initialize_v166);\n invocation_constructor_source_runtime_{root}_{pc}_v167(source);\n assert(invocation_paired_source_step_{root}_v36(source).state == invocation_constructor_source_{root}_{pc}_v162(source)) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n"
+    );
+    out.budget.charge_work(5)?;
+    emit!(
+        out,
+        " invocation_source_entry_initialize_pc_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n",
+        entry.pc,
+        entry.locals.start,
+        entry.locals.end,
+        entry.owner
+    );
+    Ok(())
+}
+
+// Keep full runtime state construction separate from its scalar step projections.
+fn source_runtime(
+    root: usize,
+    pc: usize,
+    hints: &SourceStepHintsV85,
+    hint: &SourceCutHintsV85,
+    call: &SourceCallHintsV85,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    out.budget.reserve_storage(13 * size_of::<usize>())?;
+    out.budget.charge_work(24)?;
+    let fuel = add(hint.statements, 1)?;
+    if fuel > *hints.fuels.get(hint.instance).ok_or_else(mismatch)? {
+        return Err(mismatch());
+    }
+    emit!(
+        out,
+        "#[verifier::spinoff_prover]\nproof fn invocation_constructor_source_runtime_{root}_{pc}_v167(source: InvocationSourceByteStateV36)\n requires invocation_paired_source_defined_{root}_v36(source, 1), source.machine.pc == {pc},\n ensures\n invocation_source_block_runtime_{root}_v36(source).source == invocation_constructor_source_{root}_{pc}_v162(source),\n invocation_source_block_runtime_{root}_v36(source).returned.is_none(),\n invocation_source_block_runtime_{root}_v36(source).operands.len() == {},\n",
+        call.arguments.len()
+    );
+    for (ordinal, (local, _, _)) in call.arguments.iter().enumerate() {
+        out.budget.charge_work(1)?;
+        emit!(
+            out,
+            " invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}].value == InvocationSourceValueV42::Carrier(source.machine.values[{local}]),\n"
+        );
+    }
+    emit!(
+        out,
+        " invocation_source_observations_v39(invocation_source_block_runtime_{root}_v36(source), invocation_runtime_little_endian_v36()) == Seq::empty(),\n"
+    );
     emit!(
         out,
         "{{\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_entry_refuses_{root}_{}_v167);\n hide(invocation_source_entry_body_{root}_{}_v167);\n hide(invocation_source_entry_select_v167);\n hide(invocation_source_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_byte_value_typed_v36);\n hide(invocation_source_entry_initialize_v166);\n reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {fuel});\n reveal_with_fuel(invocation_source_operands_observations_v39, {});\n reveal_with_fuel(invocation_source_statements_observations_v39, {fuel});\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}\n",
@@ -317,19 +361,7 @@ fn source_state(
         call.child,
         call.child
     );
-    emit!(
-        out,
-        " assert(invocation_paired_source_step_{root}_v36(source).state == invocation_constructor_source_{root}_{pc}_v162(source)) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n"
-    );
-    out.budget.charge_work(5)?;
-    emit!(
-        out,
-        " invocation_source_entry_initialize_pc_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n reveal(invocation_source_observations_v39);\n }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted) by {{\n reveal(invocation_paired_source_step_{root}_v36);\n }}\n}}\n",
-        entry.pc,
-        entry.locals.start,
-        entry.locals.end,
-        entry.owner
-    );
+    emit!(out, "}}\n");
     Ok(())
 }
 
