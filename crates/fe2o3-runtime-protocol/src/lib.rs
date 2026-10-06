@@ -2,6 +2,11 @@
 #![doc = include_str!("../README.md")]
 
 mod application_handoff_v3;
+mod conditional_worker_readiness_codec;
+pub use conditional_worker_readiness_codec::{
+    CONDITIONAL_WORKER_READINESS_MAGIC_V5, ConditionalWorkerReadinessCodecErrorV5,
+    InertConditionalWorkerReadinessWireV5, MAX_CONDITIONAL_WORKER_READINESS_BYTES_V5,
+};
 mod worker_v3_load_envelope;
 mod worker_v3_load_envelope_v2;
 
