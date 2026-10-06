@@ -73,6 +73,8 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                 if !inventory.functions().get(function.0 as usize)
                     .is_some_and(|row| row.definitions.contains(&actual))
                 {
+                    #[cfg(test)]
+                    eprintln!("expanded scalar source root={root}, instance={instance}, local={local}, original={original:?}, actual={actual}, target_root={function:?}");
                     return Err(mismatch());
                 }
             }

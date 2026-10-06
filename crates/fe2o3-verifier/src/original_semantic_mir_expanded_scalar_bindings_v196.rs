@@ -29,7 +29,10 @@ pub(in super::super) struct ExpandedScalarBindingsV196<'target, 'slots, 'view, '
     required: usize,
 }
 
+#[cfg_attr(test, track_caller)]
 fn mismatch() -> Error {
+    #[cfg(test)]
+    eprintln!("expanded scalar endpoint refusal at {}", std::panic::Location::caller());
     Error::Statement("expanded scalar binding differs from its retained source endpoint")
 }
 
@@ -225,7 +228,11 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             let neutral = tile.neutral_source_v162(out.budget)?;
             let descendants = neutral.definition_descendants(source.coordinate, out.budget)?;
             out.budget.charge_work(2)?;
-            let [descendant] = descendants else { return Err(mismatch()); };
+            let [descendant] = descendants else {
+                #[cfg(test)]
+                eprintln!("expanded source definition {original}: coordinate={:?}, descendants={descendants:?}", source.coordinate);
+                return Err(mismatch());
+            };
             if descendant.kind == Descendant::Retained {
                 return self.definition(original, out);
             }
