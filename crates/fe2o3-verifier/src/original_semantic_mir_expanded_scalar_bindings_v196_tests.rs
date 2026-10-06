@@ -183,19 +183,20 @@ fn exercise_source_arguments(
             let actual = pairs.definition(original, out)?;
             let local = row.locals.start + endpoint.source_local(out.budget)?.index() as usize;
             let start = out.text.len();
-            assert!(matches!(
-                pairs.emit_source_conjunct(
-                    &plan,
-                    root,
-                    0,
-                    entry.value(),
-                    FormalIndexWidth::Unknown,
-                    out
-                ),
+            match pairs.emit_source_conjunct(
+                &plan,
+                root,
+                0,
+                entry.value(),
+                FormalIndexWidth::Unknown,
+                out,
+            ) {
                 Err(Error::Statement(
-                    "expanded scalar binding differs from its retained source endpoint"
-                ))
-            ));
+                    "expanded scalar binding differs from its retained source endpoint",
+                )) => (),
+                Err(error) => return Err(error),
+                Ok(()) => panic!("unknown-width source relation was admitted"),
+            }
             assert_eq!(out.text.len(), start);
             pairs.emit_source_conjunct(
                 &plan,
