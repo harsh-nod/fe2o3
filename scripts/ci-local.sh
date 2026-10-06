@@ -1128,6 +1128,16 @@ run_rustc_codegen_lib_tests() {
   # full debuginfo can exceed the executable identity measurement limit.
   run_step rustc-codegen-lib-tests \
     env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib
+  run_step rustc-codegen-expanded-source-tests \
+    env CARGO_PROFILE_DEV_DEBUG=1 \
+      cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib \
+        production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::actual_rustc_source_retains_original_neutral_and_expanded_owners -- \
+        --ignored --exact --test-threads=1
+  run_step rustc-codegen-tile-census-source-tests \
+    env CARGO_PROFILE_DEV_DEBUG=1 \
+      cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib \
+        production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::tile_census_tests::actual_rustc_collected_tile_census_preserves_shared_body_counts -- \
+        --ignored --exact --test-threads=1
   run_step rustc-codegen-extractor-bin-tests \
     env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --bin fe2o3-rustc-extract
   run_step rustc-codegen-exporter-bin-tests \
