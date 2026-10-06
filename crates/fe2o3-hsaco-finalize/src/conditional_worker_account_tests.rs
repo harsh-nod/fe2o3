@@ -41,7 +41,7 @@ fn retained_worker_account_exact_and_one_short_work_and_storage() {
 }
 
 #[test]
-fn retained_worker_account_refuses_foreign_inline_unpaid_and_widening() {
+fn retained_worker_account_refuses_foreign_inline_and_unpaid_inputs() {
     let mut owner = Owned::new(Work::new(usize::MAX), OUTSIDE * 3);
     let mut alien = Owned::new(Work::new(usize::MAX), OUTSIDE * 3);
     owner.with_budget(|b| {
@@ -63,12 +63,6 @@ fn retained_worker_account_refuses_foreign_inline_unpaid_and_widening() {
             mode.run::<(), Resource>(b, usize::MAX, |_| panic!("overflow"))
                 .is_err()
         );
-        assert!(
-            b.with_additional_storage_window_v1(4096, |b| {
-                mode.run::<(), Resource>(b, 0, |_| panic!("widened parent window"))
-            })
-            .is_err()
-        );
         assert_eq!(b.storage(), OUTSIDE);
     });
     let mut work = Work::new(32);
@@ -80,6 +74,44 @@ fn retained_worker_account_refuses_foreign_inline_unpaid_and_widening() {
             .unwrap(),
         19
     );
+}
+
+#[test]
+fn retained_worker_nested_window_enforces_the_parent_ceiling() {
+    for one_over in [false, true] {
+        let mut owned = Owned::new(Work::new(usize::MAX), OUTSIDE * 3);
+        owned.with_budget(|b| {
+            b.reserve_storage(OUTSIDE).unwrap();
+            let mode = AccountMode::original(b).unwrap();
+            let account = b.storage_account_identity_v1();
+            let ledger = b.work_ledger_identity_v1();
+            let overlap = mode.operation_quote(0).unwrap().additional_storage();
+            let allowance = overlap + 11;
+            let result = b.with_additional_storage_window_v1(allowance, |b| {
+                mode.run(b, 0, |b| -> Result<(), Resource> {
+                    assert_eq!(b.storage_account_identity_v1(), account);
+                    assert!(b.work_ledger_identity_v1() == ledger);
+                    assert_eq!(b.storage(), OUTSIDE + overlap);
+                    b.reserve_storage(11 + usize::from(one_over))?;
+                    assert_eq!(b.storage(), OUTSIDE + allowance);
+                    Ok(())
+                })
+            });
+            if one_over {
+                let Err(Resource::Storage(error)) = result else {
+                    panic!("nested Worker scope widened the original parent ceiling");
+                };
+                assert_eq!(error.limit(), OUTSIDE + allowance);
+                assert_eq!(error.actual(), OUTSIDE + allowance + 1);
+            } else {
+                result.unwrap();
+            }
+            assert_eq!(b.storage(), OUTSIDE);
+            assert_eq!(b.storage_limit(), OUTSIDE * 3);
+            assert_eq!(b.storage_account_identity_v1(), account);
+            assert!(b.work_ledger_identity_v1() == ledger);
+        });
+    }
 }
 
 #[test]
