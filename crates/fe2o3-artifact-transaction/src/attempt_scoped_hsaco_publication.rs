@@ -183,6 +183,19 @@ impl fmt::Display for BackendPublicationReceiptValidationErrorV3 {
 impl std::error::Error for BackendPublicationReceiptValidationErrorV3 {}
 
 impl AttemptScopedHsacoPublicationResultV3 {
+    /// Borrows this result's actual immutable-file lease, never load authority.
+    pub fn current_publication_lease(&self) -> &DurableCurrentLinkPublicationLeaseV1 {
+        self.publication.current_lease()
+    }
+
+    /// Complete retained logical Rust storage, not publication or load authority.
+    /// Filesystem I/O and snapshot creation retain their existing bounded domain.
+    pub fn retained_rust_storage(&self) -> Option<usize> {
+        self.publication.retained_rust_storage()?.checked_add(
+            std::mem::size_of::<Self>() - std::mem::size_of::<DurableLinkPublicationResultV1>(),
+        )
+    }
+
     pub const fn outcome(&self) -> AttemptScopedHsacoPublicationOutcomeV3 {
         self.outcome
     }

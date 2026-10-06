@@ -305,6 +305,17 @@ pub struct DurableLinkPublicationResultV1 {
 }
 
 impl DurableLinkPublicationResultV1 {
+    pub(crate) fn current_lease(&self) -> &DurableCurrentLinkPublicationLeaseV1 {
+        &self.lease
+    }
+
+    pub(crate) fn retained_rust_storage(&self) -> Option<usize> {
+        self.lease.retained_rust_storage()?.checked_add(
+            std::mem::size_of::<Self>()
+                - std::mem::size_of::<DurableCurrentLinkPublicationLeaseV1>(),
+        )
+    }
+
     pub const fn outcome(&self) -> DurableLinkPublicationOutcomeV1 {
         self.outcome
     }
@@ -406,6 +417,27 @@ impl fmt::Debug for DurableCurrentLinkPublicationLeaseV1 {
 }
 
 impl DurableCurrentLinkPublicationLeaseV1 {
+    /// Conservative logical Rust backing, including complete shared snapshots.
+    /// Counts each Arc in full, even when another owner retains the same bytes.
+    /// This quote is not currentness, FD/kernel memory, allocator RSS or authority.
+    pub fn retained_rust_storage(&self) -> Option<usize> {
+        let value = &self.binding;
+        std::mem::size_of::<Self>()
+            .checked_add(std::mem::size_of::<DurableCurrentLinkPublicationBindingV1>())?
+            .checked_add(12 * std::mem::size_of::<usize>())?
+            .checked_add(value.record_bytes.len())?
+            .checked_add(value.snapshot.artifact.bytes.len())?
+            .checked_add(value.snapshot.artifact.path.capacity())?
+            .checked_add(value.output.display_path.capacity())?
+            .checked_add(
+                value
+                    .output
+                    .path_guard
+                    .as_ref()
+                    .map_or(0, |v| v.display_path.capacity()),
+            )
+    }
+
     /// Returns the exact inert publication identity chain bound to this lease.
     pub fn published(&self) -> super::PublishedLinkArtifactV1 {
         self.binding.published

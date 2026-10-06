@@ -3,6 +3,13 @@
 
 use std::{fmt, ops::Range};
 
+pub use worker_v3_hsaco_publication::{
+    ConditionalWorkerOutputErrorV5, ConditionalWorkerOutputStorageV5,
+    PublishedConditionalWorkerHsacoV5,
+    publish_recovered_conditional_worker_hsaco_in_original_account_v5,
+    publish_recovered_conditional_worker_hsaco_v5,
+};
+
 use fe2o3_hsaco::{
     ArgumentAccess, ArgumentAddressSpace, COV6_IMPLICIT_ARGUMENT_BYTES,
     CodeObjectVersion as InspectedCodeObjectVersion, ExplicitArgument, ExplicitValueKind,

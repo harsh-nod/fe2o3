@@ -36,10 +36,18 @@ pub use mixed_v89::{
     prepare_mixed_worker_publication_v89, publish_recovered_mixed_worker_hsaco_v89,
     recover_mixed_worker_publication_v89,
 };
+#[path = "conditional_worker_output.rs"]
+mod conditional_output;
 #[path = "nominal_worker_publication_v4.rs"]
 mod nominal_v4;
 #[path = "nominal_worker_publication_v5.rs"]
 mod nominal_v5;
+pub use conditional_output::{
+    ConditionalWorkerOutputErrorV5, ConditionalWorkerOutputStorageV5,
+    PublishedConditionalWorkerHsacoV5,
+    publish_recovered_conditional_worker_hsaco_in_original_account_v5,
+    publish_recovered_conditional_worker_hsaco_v5,
+};
 pub use mixed_v53::{
     PreparedMixedWorkerPublicationV53, PublishedMixedWorkerHsacoV53,
     RecoveredMixedWorkerPublicationV53, persist_prepared_mixed_worker_publication_v53,
@@ -902,11 +910,43 @@ fn publish_recovered_versioned(
     compiler_closure: CompilerClosureV2,
     recovered: RecoveredPublicationRef<'_>,
 ) -> Result<AttemptScopedHsacoPublicationResultV3, WorkerV3HsacoPublicationErrorV1> {
-    let intent = recovered.intent();
-    let binding = recovered.publication_binding(compiler_closure)?;
-    // SAFETY: Both closed variants retain independently reconstructed finalizer
-    // custody. Shared replay checked exact schema, every stored input and binding
-    // axis. Each typed facade retains its owner alongside the publication result.
+    publish_retained_finalizer(
+        output_dir,
+        producer,
+        compiler_closure,
+        PublicationSource::Versioned(recovered),
+    )
+}
+
+// Only actual privately constructed replay owners enter the authority bridge.
+enum PublicationSource<'a> {
+    Versioned(RecoveredPublicationRef<'a>),
+    Conditional(conditional_output::Retained<'a>),
+}
+
+fn publish_retained_finalizer(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    compiler_closure: CompilerClosureV2,
+    source: PublicationSource<'_>,
+) -> Result<AttemptScopedHsacoPublicationResultV3, WorkerV3HsacoPublicationErrorV1> {
+    let (binding, plan, upstream, bytes) = match source {
+        PublicationSource::Versioned(recovered) => {
+            let intent = recovered.intent();
+            (
+                recovered.publication_binding(compiler_closure)?,
+                intent.durable_plan(),
+                intent.upstream_evidence(),
+                recovered.finalized().bytes(),
+            )
+        }
+        PublicationSource::Conditional(retained) => retained.parts(compiler_closure)?,
+    };
+    // SAFETY: Every closed variant retains independently reconstructed finalizer
+    // custody of its own nominal family. Replay checked the complete source,
+    // transcript, inspection and exact raw/final bytes. Conditional custody is
+    // never projected to V3/V89; each facade retains its actual owner alongside
+    // the result. This grants physical publication, not compiler/proof/load authority.
     let authority = unsafe {
         VerifiedWorkerV3PublicationAuthorityV1::from_authenticated_finalizer_replay_unchecked(
             binding,
@@ -915,11 +955,11 @@ fn publish_recovered_versioned(
     Ok(publish_exact_hsaco_evidence_for_attempt_v3(
         output_dir,
         producer,
-        intent.durable_plan().attempt(),
-        intent.durable_plan(),
-        intent.upstream_evidence(),
+        plan.attempt(),
+        plan,
+        upstream,
         authority,
-        recovered.finalized().bytes(),
+        bytes,
     )?)
 }
 
