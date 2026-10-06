@@ -35,10 +35,13 @@ pub(crate) const FRAME: usize =
 /// lease. Reaching the monitoring limit cancels the service and returns a refusal
 /// even if cleanup succeeds. No V1/V2 fallback or runtime family selector exists.
 /// The paired binary selects this original-root listener. One bounded authenticated
-/// intake consumes its whole original request into fixed-origin compiler backing
-/// and an approved helper-backed compiler child behind a CLOSED exec gate before
-/// the same RuntimeEnforcementUnavailable refusal. Helper READY is not proof;
-/// compiler exec, runtime/source enforcement and publication remain unavailable.
+/// intake consumes its whole original request into fixed-origin compiler backing.
+/// The original request controls gated launch, runtime enforcement, publication,
+/// terminal wait, trace retirement and delivery of its bound completion record.
+/// Completion ends monitoring, but cannot bypass foreground or aggregate cleanup.
+/// Helper READY alone is not proof or permission to open the compiler exec gate.
+/// Successful service completion does not replace the compiler terminal status
+/// carried in the completion record or establish deployment qualification.
 ///
 /// Every return requires termination of the dedicated process. Once cleanup is
 /// admitted, return/unwind before successful original-pool empty shutdown exits
@@ -152,6 +155,8 @@ trait Runtime<'work> {
         self.wait(b)
     }
     fn continuity(&mut self, b: &mut Budget<'_>) -> Result<()>;
+    /// True means the original request sent its terminal publication completion,
+    /// not that intake, helper readiness, compiler launch or publication began.
     fn intake(&mut self, _b: &mut Budget<'work>) -> Result<bool> {
         Ok(false)
     }
@@ -179,10 +184,7 @@ fn monitor<'work>(
         }
         runtime.continuity(b)?;
         if runtime.intake(b)? {
-            return Err(root::invalid(
-                "compiler launch",
-                "RuntimeEnforcementUnavailable",
-            ));
+            return Ok(());
         }
         runtime.pump()?;
     }

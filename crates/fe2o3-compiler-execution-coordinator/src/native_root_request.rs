@@ -145,6 +145,8 @@ impl<'work> RootCompilerRequest<'work> {
     /// Native supplies its original creator's pool. Helper exec is permitted by
     /// that dedicated deployment contract. Only the original native attempt can
     /// release its gate, validate first exec and control subsequent checkpoints.
+    /// True requires delivery of the original terminal publication completion;
+    /// all intermediate states return false and still require another turn.
     ///
     /// # Safety
     /// Preserve the entrypoint's actual outside whole-domain custodian, unique

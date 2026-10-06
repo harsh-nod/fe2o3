@@ -25,6 +25,7 @@ struct Fake {
     busy: usize,
     shutdowns: usize,
     intake: bool,
+    intake_pending: usize,
     foreground: bool,
     foreground_pending: usize,
     nonblocking_monitor: bool,
@@ -44,6 +45,7 @@ impl Fake {
             busy: 0,
             shutdowns: 0,
             intake: false,
+            intake_pending: 0,
             foreground: false,
             foreground_pending: 0,
             nonblocking_monitor: false,
@@ -100,7 +102,12 @@ impl<'work> Runtime<'work> for Fake {
             return Ok(false);
         }
         self.request("intake", b)?;
-        Ok(true)
+        if self.intake_pending == 0 {
+            Ok(true)
+        } else {
+            self.intake_pending -= 1;
+            Ok(false)
+        }
     }
     fn cancel(&mut self) {
         self.trace.borrow_mut().events.push("cancel");
@@ -587,7 +594,7 @@ fn fixed_schedule_fits_checked_native_funding_and_accounts_are_independent() {
 }
 
 #[test]
-fn root_intake_terminal_refusal_or_error_cancels_before_original_cleanup_drain() {
+fn root_request_completion_or_error_cancels_before_original_cleanup_drain() {
     for fail in [None, Some("intake")] {
         let mut fake = Fake::new();
         fake.signal_at = usize::MAX;
@@ -595,7 +602,13 @@ fn root_intake_terminal_refusal_or_error_cancels_before_original_cleanup_drain()
         fake.fail = fail;
         fake.busy = 1;
         let (result, trace, _) = run(fake, 3, 2);
-        assert!(result.is_err());
+        match fail {
+            None => result.unwrap(),
+            Some(role) => assert!(matches!(
+                result,
+                Err(Failure::Invalid { role: actual, .. }) if actual == role
+            )),
+        }
         assert_eq!(
             trace.borrow().events,
             [
@@ -614,6 +627,121 @@ fn root_intake_terminal_refusal_or_error_cancels_before_original_cleanup_drain()
             ]
         );
     }
+}
+
+#[test]
+fn only_completed_request_ends_monitoring_on_the_original_account() {
+    let mut fake = Fake::new();
+    fake.signal_at = usize::MAX;
+    fake.intake = true;
+    fake.intake_pending = 2;
+    let (result, trace, request) = run(fake, 3, 1);
+    result.unwrap();
+    let trace = trace.borrow();
+    assert_eq!(
+        trace.events,
+        [
+            "start",
+            "publish",
+            "wait",
+            "continuity",
+            "intake",
+            "pump",
+            "wait",
+            "continuity",
+            "intake",
+            "pump",
+            "wait",
+            "continuity",
+            "intake",
+            "cancel",
+            "shutdown",
+            "restore",
+            "drop"
+        ]
+    );
+    assert_eq!(
+        request.work(),
+        17 + 2 * root::LOCAL_WORK + 4 * root::TURN_WORK + 12 * EFFECT_WORK
+    );
+    assert_eq!(request.peak_storage(), 13 + FRAME + RETAINED);
+    assert_eq!(request.failed_work(), None);
+    assert_eq!(
+        trace.cleanup.work(),
+        2 * Cleanup::pump_work(CAPACITY).unwrap()
+    );
+}
+
+#[test]
+fn incomplete_request_cannot_convert_monitor_exhaustion_into_completion() {
+    let mut fake = Fake::new();
+    fake.signal_at = usize::MAX;
+    fake.intake = true;
+    fake.intake_pending = 3;
+    let (result, trace, _) = run(fake, 3, 1);
+    assert!(matches!(
+        result,
+        Err(Failure::Invalid {
+            role: "lifetime",
+            ..
+        })
+    ));
+    let trace = trace.borrow();
+    assert_eq!(trace.events.iter().filter(|&&e| e == "intake").count(), 3);
+    assert_eq!(trace.events.iter().filter(|&&e| e == "pump").count(), 3);
+    assert_eq!(
+        &trace.events[trace.events.len() - 4..],
+        ["cancel", "shutdown", "restore", "drop"]
+    );
+}
+
+#[test]
+fn completed_request_still_requires_foreground_pool_and_signal_retirement() {
+    for phase in ["foreground", "wait", "pump", "shutdown", "restore"] {
+        let mut fake = Fake::new();
+        fake.signal_at = usize::MAX;
+        fake.nonblocking_monitor = true;
+        fake.intake = true;
+        fake.foreground = true;
+        fake.foreground_pending = 1;
+        fake.fail = Some(phase);
+        let (result, trace, _) = run(fake, 1, 2);
+        assert!(matches!(
+            result,
+            Err(Failure::Invalid { role, .. }) if role == phase
+        ));
+        let trace = trace.borrow();
+        assert_eq!(
+            &trace.events[..6],
+            [
+                "start",
+                "publish",
+                "monitor-poll",
+                "continuity",
+                "intake",
+                "cancel"
+            ]
+        );
+        assert_eq!(trace.events.iter().filter(|&&e| e == "intake").count(), 1);
+        assert_eq!(
+            trace.events.contains(&"restore"),
+            matches!(phase, "wait" | "restore")
+        );
+    }
+}
+
+#[test]
+fn completed_request_with_busy_cleanup_cannot_restore_signals_or_report_success() {
+    let mut fake = Fake::new();
+    fake.signal_at = usize::MAX;
+    fake.intake = true;
+    fake.busy = usize::MAX;
+    let (result, trace, _) = run(fake, 1, 2);
+    assert!(matches!(result, Err(Failure::Cleanup(CleanupError::Busy))));
+    let trace = trace.borrow();
+    assert_eq!(trace.events.iter().filter(|&&e| e == "intake").count(), 1);
+    assert_eq!(trace.events.iter().filter(|&&e| e == "shutdown").count(), 3);
+    assert!(!trace.events.contains(&"restore"));
 }
 
 #[test]
