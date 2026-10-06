@@ -160,6 +160,62 @@ fn dispatch_refusal_closes_inputs_without_retry_or_replenishment() {
 }
 
 #[test]
+fn dispatch_initial_reservation_exact_and_one_short_preserve_original_budget() {
+    use rustix::pipe::{PipeFlags, pipe_with};
+    let required = native_v3::Admitted::INPUT_STORAGE + size_of::<Admitted<'_, '_>>();
+    for short in [false, true] {
+        let (reader, service) = pipe_with(PipeFlags::CLOEXEC).unwrap();
+        let policy = legacy_policy();
+        let startup = startup(policy.try_clone_for_transfer().unwrap(), service);
+        let mut work = Work::new(0);
+        let mut b = Budget::new(&mut work, 91 + required - usize::from(short));
+        b.reserve_storage(91).unwrap();
+        let ledger = b.work_ledger_identity_v1();
+        let address = &b as *const Budget<'_> as usize;
+        let result = startup.admit_selected(&mut b);
+        match (short, &result) {
+            (true, Err(native_v3::Error::Resource(Resource::Storage(_)))) => {}
+            (
+                false,
+                Err(native_v3::Error::Policy(
+                    fe2o3_compiler_closure_capability::CompilerExecutionCapabilityErrorV2::Resource(
+                        Resource::Work(_),
+                    ),
+                )),
+            ) => {}
+            _ => panic!("wrong initial dispatch reservation refusal"),
+        }
+        drop(result);
+        assert!(b.work_ledger_identity_v1() == ledger);
+        assert_eq!(&b as *const Budget<'_> as usize, address);
+        assert_eq!(b.storage(), 91 + if short { 0 } else { required });
+        assert_eq!(b.work(), 0);
+        assert_eq!(rustix::io::read(reader, &mut [0]).unwrap(), 0);
+        assert!(matches!(
+            startup.admit_selected(&mut b),
+            Err(native_v3::Error::Startup(
+                StartupError::InputAlreadyConsumed
+            ))
+        ));
+        assert!(matches!(
+            startup.admit_native(&mut b),
+            Err(native_v3::Error::Startup(
+                StartupError::InputAlreadyConsumed
+            ))
+        ));
+        assert!(matches!(
+            startup.admit(),
+            Err(StartupError::InputAlreadyConsumed)
+        ));
+        assert!(b.work_ledger_identity_v1() == ledger);
+        assert_eq!(&b as *const Budget<'_> as usize, address);
+        assert_eq!(b.storage(), 91 + if short { 0 } else { required });
+        assert_eq!(b.work(), 0);
+        policy.revalidate().unwrap();
+    }
+}
+
+#[test]
 fn driver_dispatch_keeps_matching_publications_and_existing_native_refusal() {
     let source = include_str!("protected_compiler_execution_dispatch_v236.rs");
     let selected = source.split("let family = ").nth(1).unwrap();
