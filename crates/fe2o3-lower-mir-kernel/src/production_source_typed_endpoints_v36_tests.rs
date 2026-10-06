@@ -163,7 +163,8 @@ fn checked_rows(
                     assert_eq!(endpoint.physical_type(budget)?, Some(actual.ty));
                     assert!(endpoint.reference(budget)?.is_none());
                 }
-                SourceSsaPhysicalV36::ExecutionBorrow(_)
+                SourceSsaPhysicalV36::Execution(_)
+                | SourceSsaPhysicalV36::ExecutionBorrow(_)
                 | SourceSsaPhysicalV36::EnumVariant { .. }
                 | SourceSsaPhysicalV36::Unmodeled => {
                     unreachable!()

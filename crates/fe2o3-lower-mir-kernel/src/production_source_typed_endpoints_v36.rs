@@ -3,6 +3,7 @@
 include!("production_source_carrier_tree_v37.rs");
 include!("production_source_reference_endpoints_v38.rs");
 include!("production_source_execution_borrow_endpoint_v163.rs");
+include!("production_source_execution_owner_endpoint_v199.rs");
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceSsaElementV36 {
     Scalar(ScalarType),
@@ -142,6 +143,7 @@ enum SourceSsaPhysicalV36 {
         loan: Option<SourceSsaLoanV36>,
     },
     Witness(SourceSsaWitnessV50),
+    Execution(ProductionSourceExecutionOwnerV199),
     ExecutionBorrow(SourceSsaExecutionBorrowV163),
     Unmodeled,
 }
@@ -293,6 +295,11 @@ fn retain_source_carrier_leaf_v37(
         .ok_or_else(source_typed_endpoint_error_v36)?
         .shape();
     let physical = match (binding, shape) {
+        (SemanticValueBindingV1::Execution(binding), _) => {
+            SourceSsaPhysicalV36::Execution(retain_source_execution_owner_v199(
+                instances, ty, binding, budget,
+            )?)
+        }
         (SemanticValueBindingV1::ExecutionBorrow(borrow), SemanticTypeShapeV1::Pointer(_)) => {
             SourceSsaPhysicalV36::ExecutionBorrow(retain_source_execution_borrow_v163(
                 instances, ty, borrow, budget,
@@ -635,6 +642,7 @@ fn source_typed_endpoint_headers_v36() -> Result<usize, ArgumentResourceV1> {
         h::<SourceSsaCarrierTypeV36>()?,
         h::<SourceSsaLoanV36>()?,
         source_execution_borrow_headers_v163()?,
+        source_execution_owner_headers_v199()?,
         source_reference_endpoint_headers_v38()?,
         h::<SourceSsaWitnessV50>()?,
         h::<(ValueId, SourceSsaCarrierTypeV36)>()?,
