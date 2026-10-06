@@ -163,74 +163,48 @@ where
         let payload_bytes = std::cell::Cell::new(0);
         let mut callback_panic = None;
         let optimized = source.with_checked_mixed_fixedpoint_optimization_v18(
-                budget,
-                |original, optimized, budget| {
-                    #[cfg(test)]
-                    eprintln!("EXPANDED_ACCOUNT_V260 optimizer_enter storage={}", budget.storage());
-                    #[cfg(test)]
-                    inspect_tile_convergence(optimized, budget)?;
-                    #[cfg(test)]
-                    eprintln!("EXPANDED_ACCOUNT_V260 convergence_done storage={}", budget.storage());
-                    let tile = optimized.prepare_tile_expansion_v159(0, selected, budget)
-                        .map_err(|error| {
-                            #[cfg(test)]
-                            eprintln!("EXPANDED_ACCOUNT_V260 tile_refused storage={} error={error:?}", budget.storage());
-                            error
-                        })?;
-                    let floor = budget.storage();
-                    #[cfg(test)]
-                    eprintln!("EXPANDED_ACCOUNT_V260 tile_ready storage={floor}");
-                    let result = {
-                        let consumer = pending.take();
-                        let tile = &tile;
-                        let budget = &mut *budget;
-                        catch_unwind(AssertUnwindSafe(move || {
-                            consumer(source, original, tile, roots, target, budget)
-                        }))
-                    };
-                    // Adoption normalizes unwinds. Retain this caller's original
-                    // payload outside that scope and let an ordinary refusal
-                    // drive the same owned-graph cleanup before resuming it.
-                    let result = match result {
-                        Err(payload) => {
-                            callback_panic = Some(payload);
-                            Ok(Err(Error::Unsupported("expanded consumer unwound")))
-                        }
-                        other => other,
-                    };
-                    // A callback's retained payload cannot borrow any of these
-                    // graph owners. Preserve its exact measured credit while
-                    // destroying the tile owner before the optimizer scope ends.
-                    let measured = budget.storage().checked_sub(floor);
-                    let released = tile.discard(budget);
-                    #[cfg(test)]
-                    eprintln!("EXPANDED_ACCOUNT_V260 consumer_done success={} measured={measured:?} released={released:?} storage={}", matches!(&result, Ok(Ok(_))), budget.storage());
-                    let value = settle_callback(result, measured, released, || {
-                        source.retain_query_resource_error_v18(Resource::Accounting)
-                    })?;
-                    payload_bytes.set(value.1);
-                    // The checked optimizer accepts an unreserved ownership
-                    // transfer, including R's inline header. Its callback floor
-                    // must be restored before it reserves that complete receipt.
-                    transfer_callback_payload(value, budget)
-                        .map_err(|error| source.retain_query_resource_error_v18(error).into())
-                },
-            );
-        let (neutral, value, receipt) =
-            resume_callback_panic(optimized, callback_panic).map_err(|error| {
+            budget,
+            |original, optimized, budget| {
                 #[cfg(test)]
-                eprintln!(
-                    "EXPANDED_ACCOUNT_V260 optimizer_refused storage={} error={error:?}",
-                    budget.storage()
-                );
-                Error::ExpandedSource(Box::new(error))
-            })?;
-        #[cfg(test)]
-        eprintln!(
-            "EXPANDED_ACCOUNT_V260 optimizer_done storage={} payload={}",
-            budget.storage(),
-            payload_bytes.get()
+                inspect_tile_convergence(optimized, budget)?;
+                let tile = optimized.prepare_tile_expansion_v159(0, selected, budget)?;
+                let floor = budget.storage();
+                let result = {
+                    let consumer = pending.take();
+                    let tile = &tile;
+                    let budget = &mut *budget;
+                    catch_unwind(AssertUnwindSafe(move || {
+                        consumer(source, original, tile, roots, target, budget)
+                    }))
+                };
+                // Adoption normalizes unwinds. Retain this caller's original
+                // payload outside that scope and let an ordinary refusal
+                // drive the same owned-graph cleanup before resuming it.
+                let result = match result {
+                    Err(payload) => {
+                        callback_panic = Some(payload);
+                        Ok(Err(Error::Unsupported("expanded consumer unwound")))
+                    }
+                    other => other,
+                };
+                // A callback's retained payload cannot borrow any of these
+                // graph owners. Preserve its exact measured credit while
+                // destroying the tile owner before the optimizer scope ends.
+                let measured = budget.storage().checked_sub(floor);
+                let released = tile.discard(budget);
+                let value = settle_callback(result, measured, released, || {
+                    source.retain_query_resource_error_v18(Resource::Accounting)
+                })?;
+                payload_bytes.set(value.1);
+                // The checked optimizer accepts an unreserved ownership
+                // transfer, including R's inline header. Its callback floor
+                // must be restored before it reserves that complete receipt.
+                transfer_callback_payload(value, budget)
+                    .map_err(|error| source.retain_query_resource_error_v18(error).into())
+            },
         );
+        let (neutral, value, receipt) = resume_callback_panic(optimized, callback_panic)
+            .map_err(|error| Error::ExpandedSource(Box::new(error)))?;
         // The non-retained optimizer API transfers unreserved output credit.
         // Drop both neutral objects before restoring only the callback payload.
         drop(neutral);
