@@ -1,0 +1,20 @@
+{
+  "schema": "fe2o3-disabled-physical-v10-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-target.c",
+  "before": {
+    "bytes": 167523,
+    "sha256": "9d897c5fafa2d3644b4ed9a92eff6ced98510250e04f2d6dc49853f8ec59db07"
+  },
+  "after": {
+    "bytes": 167954,
+    "sha256": "24e419e4c86a96bace819e8b58294360260e98395d9d6b55667ee9d09b72def2"
+  },
+  "changes": [
+    {
+      "beforeOffset": 69049,
+      "afterOffset": 69049,
+      "before": "      std::optional<stopped_wave_candidate_v1> observed;\n      if (event_kind == AMD_DBGAPI_EVENT_KIND_WAVE_STOP\n          && !stopped_wave_observation.invalid ())\n        observed = query_stopped_wave_event_v1 (info, event_id);",
+      "after": "      std::optional<stopped_wave_candidate_v1> observed;\n      // The selected owned profile has its own complete same-client stop queries.\n      // Reject the simultaneous legacy profile before it spends another pair of\n      // private queue-health permits. Never manufacture a legacy observation.\n      if (event_kind == AMD_DBGAPI_EVENT_KIND_WAVE_STOP\n          && amd_owned_one_stop_native_v1::selected ())\n        stopped_obs::invalidate (stopped_obs::reason::unsupported_profile);\n      if (event_kind == AMD_DBGAPI_EVENT_KIND_WAVE_STOP\n          && !stopped_wave_observation.invalid ())\n        observed = query_stopped_wave_event_v1 (info, event_id);"
+    }
+  ]
+}

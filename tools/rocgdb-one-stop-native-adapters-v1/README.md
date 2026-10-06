@@ -114,3 +114,7 @@ physical-v11/ retains the disabled v10 query-separation layer and adds only a fi
 ## Disabled proc-record logical-work candidate
 
 The separate [proc-record-work-v1 candidate](proc-record-work-v1/README.md) changes one helper to charge the admitted record extent before parsing. It preserves the full requested-I/O debit, guards and caps, but explicitly changes logical work accounting. Its exact-source and mocked-parser controls do not qualify a native fix or replace the physical-v11 selected-source package.
+
+## Complete disabled proc-record selected-source successor
+
+The additive [physical-v12 package](physical-v12/README.md) adopts proc-record-work-v1 into the complete63-leaf selected-source contract over physical-v11. It retains all public false gates and caps, makes the logical accounting change explicit, and supplies exact reversible source/patch and CPU controls. This supersedes only the candidate incomplete packaging status; it does not qualify a native fix or reuse prior startup or one-use authority.
