@@ -551,6 +551,41 @@ fn explicit_source_tile_gap_candidates_never_enter_scalar_expansions() {
                 }
             }
             assert!(candidates > 0);
+            let source = view.original_source(budget)?;
+            let semantic = source.source_semantic(budget)?;
+            let mut merged_entries = 0;
+            for root in 0..source.root_count(budget)? {
+                for instance in 0..source.instance_count(root, budget)? {
+                    let function = source.instance(root, instance, budget)?.0;
+                    for block in 0..semantic.functions()[function.index() as usize]
+                        .blocks()
+                        .len()
+                    {
+                        let gap_floor = budget.storage();
+                        let gap = expanded.source_block_entry_gap_v177(
+                            root,
+                            instance,
+                            SemanticBlockIdV1::from_index(block as u32),
+                            budget,
+                        )?;
+                        if let Some(gap) = &gap
+                            && let ProductionOptimizedSourceGapV18::Reachable(interval) =
+                                gap.prefix_disposition(budget)?
+                            && interval.first > 0
+                        {
+                            assert!(gap.candidate_count(budget)? > 0);
+                            assert!(gap.candidate(0, budget)?.first > 0);
+                            merged_entries += 1;
+                        }
+                        drop(gap);
+                        budget.release_storage(budget.storage() - gap_floor)?;
+                    }
+                }
+            }
+            assert!(
+                merged_entries > 0,
+                "fixture must include an actual source entry merged into a nonzero output gap"
+            );
             expanded.discard(budget)?;
             assert_eq!(budget.storage(), floor);
             Ok(())
@@ -618,4 +653,87 @@ fn explicit_source_tile_gap_candidates_refuse_out_of_range_indices() {
         Err::<(), _>(error)
     });
     assert!(result.is_err());
+}
+
+#[test]
+fn explicit_source_tile_gap_candidates_coincide_across_erased_transport() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let prepared = prepared_tile_schedule_v155(&mut budget);
+    with_actual_optimized_source_v18(prepared, &mut budget, |view, budget| {
+        let floor = budget.storage();
+        let expanded =
+            view.prepare_tile_expansion_v159(0, ExecutionTileLayoutV1::Blocked, budget)?;
+        let mut erased = 0;
+        for row in view.input_inventory(budget)?.operations() {
+            if !matches!(
+                row.operation.kind,
+                OperationKind::Execution(ExecutionOperationV15::TileIntoFragmentU32 { .. })
+            ) {
+                continue;
+            }
+            let span = expanded
+                .operation_span(row.coordinate, budget)?
+                .unwrap()
+                .expansion;
+            assert_eq!(
+                span.first, span.end,
+                "transport has no extra read or scalar operation"
+            );
+            let gap_floor = budget.storage();
+            let before = expanded.original_gap_v177(
+                row.coordinate.block,
+                row.coordinate.operation,
+                budget,
+            )?;
+            let after = expanded.original_gap_v177(
+                row.coordinate.block,
+                row.coordinate.operation + 1,
+                budget,
+            )?;
+            let mut before_has_boundary = false;
+            for index in 0..before.candidate_count(budget)? {
+                let point = before.candidate(index, budget)?;
+                before_has_boundary |= point.block == span.input.block && point.first == span.first;
+            }
+            let mut after_has_boundary = false;
+            for index in 0..after.candidate_count(budget)? {
+                let point = after.candidate(index, budget)?;
+                after_has_boundary |= point.block == span.input.block && point.first == span.end;
+            }
+            assert!(before_has_boundary && after_has_boundary);
+            drop((before, after));
+            budget.release_storage(budget.storage() - gap_floor)?;
+            erased += 1;
+        }
+        assert!(erased > 0);
+        expanded.discard(budget)?;
+        assert_eq!(budget.storage(), floor);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn explicit_source_tile_gap_candidates_keep_actual_unreachable_omission() {
+    run_optimized_source_v18(optimizer_dead_helper_source_owner_v18, |view, budget| {
+        let floor = budget.storage();
+        let expanded =
+            view.prepare_tile_expansion_v159(0, ExecutionTileLayoutV1::Striped, budget)?;
+        let gap_floor = budget.storage();
+        let gap = expanded
+            .source_block_entry_gap_v177(0, 0, SemanticBlockIdV1::from_index(1), budget)?
+            .unwrap();
+        assert_eq!(
+            gap.prefix_disposition(budget)?,
+            ProductionOptimizedSourceGapV18::Unreachable { placement: None }
+        );
+        assert_eq!(gap.candidate_count(budget)?, 0);
+        drop(gap);
+        budget.release_storage(budget.storage() - gap_floor)?;
+        expanded.discard(budget)?;
+        assert_eq!(budget.storage(), floor);
+        Ok(())
+    });
 }
