@@ -1828,6 +1828,7 @@ pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_tile_v161.vrs"),
     include_str!("original_semantic_mir_source_entry_initialize_v166.vrs"),
     include_str!("original_semantic_mir_source_entry_select_v167.vrs"),
+    include_str!("original_semantic_mir_source_entry_observations_v180.vrs"),
     include_str!("original_semantic_mir_source_thread_write_v88.vrs"),
     include_str!("original_semantic_mir_source_descriptor_indices_v52.vrs"),
     include_str!("original_semantic_mir_source_memory_values_v51.vrs"),
