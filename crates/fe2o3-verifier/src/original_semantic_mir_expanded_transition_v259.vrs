@@ -151,8 +151,16 @@ proof fn invocation_source_context_issue_frame_v262(
         invocation_context_marker_aggregate_well_formed_v260(issue.source_type);
     }
     assert(aggregate.execution_lease.is_none());
-    invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);
     let installed = invocation_source_aggregate_install_v42(source, issue.destination, aggregate);
+    assert(installed == (InvocationSourceByteStateV36 {
+        machine: MemoryStateV30 {
+            values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+            ..source.machine },
+        logical: InvocationSourceLogicalV38 {
+            aggregates: source.logical.aggregates.insert(issue.destination, aggregate),
+            ..invocation_source_logical_write_v38(source.logical, issue.destination) }, ..source })) by {
+        invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);
+    }
     assert(installed.machine.valid);
     assert(invocation_source_context_issue_v161(source, issue)
         == (InvocationSourceTileResultV161 {
@@ -292,8 +300,6 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
         && byte_execution_next_epoch_v178(target, destination, 0, site) == Some(0)) by {
         reveal(invocation_context_issue_fresh_enabled_v211);
     }
-    invocation_source_context_issue_frame_v262(source, issue);
-    invocation_target_context_issue_frame_v262(target, site, destination);
     let aggregate = InvocationSourceAggregateV42 {
         source_type: issue.source_type, execution_lease: None,
         leaves: Map::empty()
@@ -302,14 +308,34 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
             .insert(seq![2int], MemoryValueV30::Unit)
             .insert(seq![3int], MemoryValueV30::Unit)
             .insert(seq![4int], MemoryValueV30::Unit) };
-    invocation_context_issue_fresh_preserves_current_map_v238(
-        source, target, execution_map, issue, site, destination);
-    invocation_context_issue_fresh_has_exact_updates_v211(
-        source, target, execution_map, issue, site, destination);
-    invocation_context_issue_coupling_replays_both_actual_steps_v211(
-        source, target, execution_map, issue, site, destination);
+    let source_step = invocation_source_context_issue_v161(source, issue);
+    assert(source_step.observations == Seq::empty()
+        && source_step.source == (InvocationSourceByteStateV36 {
+            machine: MemoryStateV30 {
+                values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+                ..source.machine },
+            logical: InvocationSourceLogicalV38 {
+                aggregates: source.logical.aggregates.insert(issue.destination, aggregate),
+                ..invocation_source_logical_write_v38(source.logical, issue.destination) }, ..source })) by {
+        invocation_source_context_issue_frame_v262(source, issue);
+    }
+    let target_step = byte_execution_step_v178(target, site, 0, destination, -1);
+    assert(target_step == (MemoryStateV30 {
+        values: target.values.update(destination, target_step.values[destination]), ..target })) by {
+        invocation_target_context_issue_frame_v262(target, site, destination);
+    }
     let next = invocation_context_issue_coupled_v211(
         source, target, execution_map, issue, site, destination);
+    assert(next.updated && invocation_execution_map_current_v205(
+        next.source.source, next.target, next.execution_map)
+        && next.source == source_step && next.target == target_step) by {
+        invocation_context_issue_fresh_preserves_current_map_v238(
+            source, target, execution_map, issue, site, destination);
+        invocation_context_issue_fresh_has_exact_updates_v211(
+            source, target, execution_map, issue, site, destination);
+        invocation_context_issue_coupling_replays_both_actual_steps_v211(
+            source, target, execution_map, issue, site, destination);
+    }
     assert(next.source == invocation_source_context_issue_v161(source, issue));
     let after = next.source.source;
     assert(after == (InvocationSourceByteStateV36 {

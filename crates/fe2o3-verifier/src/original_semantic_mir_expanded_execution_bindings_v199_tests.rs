@@ -493,7 +493,12 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);",
         "invocation_context_marker_aggregate_well_formed_v260(issue.source_type);",
         "invocation_checked_add_aggregate_complete_v260(source_type, left, right);",
-        "invocation_context_issue_coupling_replays_both_actual_steps_v211(\n        source, target, execution_map, issue, site, destination);",
+        "invocation_context_issue_coupling_replays_both_actual_steps_v211(\n            source, target, execution_map, issue, site, destination);",
+        "assert(source_step.observations == Seq::empty()\n        && source_step.source == (InvocationSourceByteStateV36 {",
+        "..source })) by {\n        invocation_source_context_issue_frame_v262(source, issue);",
+        "..source })) by {\n        invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);",
+        "..target })) by {\n        invocation_target_context_issue_frame_v262(target, site, destination);",
+        "&& next.source == source_step && next.target == target_step) by {\n        invocation_context_issue_fresh_preserves_current_map_v238(",
     ] {
         assert!(
             source.contains(exact),
@@ -527,9 +532,13 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
             assert!(body.contains(&format!("hide({hidden});")));
         }
         assert!(body.contains("assert(invocation_source_aggregate_well_formed_v42(aggregate)"));
-        assert!(body.contains(
-            "assert(aggregate.execution_lease.is_none());\n    invocation_source_plain_aggregate_install_frame_v260("
-        ));
+        let no_lease = body
+            .find("assert(aggregate.execution_lease.is_none());")
+            .unwrap();
+        let installer = body
+            .find("invocation_source_plain_aggregate_install_frame_v260(")
+            .unwrap();
+        assert!(no_lease < installer);
     }
     for name in [
         "invocation_source_context_issue_frame_v262",
