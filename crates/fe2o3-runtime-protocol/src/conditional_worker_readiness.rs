@@ -163,6 +163,35 @@ impl<'a, 'p> ConditionalWorkerReadinessEnvelopeV5<'a, 'p> {
                 .ok_or(Resource::Arithmetic)?,
         })
     }
+
+    /// Terminal operation quote, excluding the already prepaid envelope and
+    /// borrowed owners. Partial failures keep their original reservations;
+    /// this describes the peak, not a refundable operation scope.
+    pub fn persistence_quote(&self, output: &Path) -> Result<ConditionalWorkerReadinessQuoteV5> {
+        let inputs = input_storage(self.replay, self.carriage)?
+            .checked_add(self.retained_storage)
+            .ok_or(Resource::Arithmetic)?;
+        let validation = self.revalidation_quote()?;
+        let replay = self.replay.revalidation_quote()?;
+        let result =
+            Readiness::publication_retained_rust_storage_bound(output, self.exact.capacity())
+                .ok_or(Resource::Arithmetic)?;
+        let work = 8usize
+            .checked_add(Budget::STORAGE_WINDOW_WORK_V1)
+            .and_then(|n| n.checked_add(validation.work()))
+            .and_then(|n| n.checked_add(replay.work()))
+            .and_then(|n| n.checked_add(self.exact.len()))
+            .ok_or(Resource::Arithmetic)?;
+        let post = result
+            .checked_add(replay.additional_storage())
+            .ok_or(Resource::Arithmetic)?;
+        Ok(ConditionalWorkerReadinessQuoteV5 {
+            work,
+            additional_storage: quote_overlap(inputs)?
+                .checked_add(validation.additional_storage().max(post))
+                .ok_or(Resource::Arithmetic)?,
+        })
+    }
     /// Returns this envelope's additional complete storage unreserved. Both
     /// borrowed owners and the publication behind `replay` remain prepaid.
     pub fn in_original_account(
@@ -289,6 +318,9 @@ impl<'a, 'p> ConditionalWorkerReadinessEnvelopeV5<'a, 'p> {
         let inputs = input_storage(self.replay, self.carriage)?
             .checked_add(self.retained_storage)
             .ok_or(Resource::Arithmetic)?;
+        let result_bound =
+            Readiness::publication_retained_rust_storage_bound(output, self.exact.capacity())
+                .ok_or(Resource::Arithmetic)?;
         b.charge_work(8)?;
         if b.storage() < inputs {
             return Err(Resource::Accounting.into());
@@ -309,6 +341,9 @@ impl<'a, 'p> ConditionalWorkerReadinessEnvelopeV5<'a, 'p> {
                 .retained_rust_storage()
                 .ok_or(Resource::Arithmetic)?;
             b.reserve_storage(storage)?;
+            if storage > result_bound {
+                return Err(Resource::Accounting.into());
+            }
             self.replay.revalidate(producer, b)?;
             b.charge_work(readiness.exact_envelope_bytes().len())?;
             if readiness.receipt().envelope_binding() != self.binding
