@@ -1,0 +1,114 @@
+// A segment retains its exact initial microstate, including the observation
+// prefix already associated with earlier source cuts. Only new observations
+// appear in `observations`; these are not a source/target correspondence proof.
+struct InvocationTileMicroStepV181 {
+    next: MemoryMicroStateV30,
+    observations: Seq<MemoryOperationObservationV30>,
+    returned: Seq<MemoryValueV30>,
+    terminal: bool,
+}
+
+struct InvocationTileMicroSegmentV181 {
+    start: MemoryMicroStateV30,
+    end: MemoryMicroStateV30,
+    observations: Seq<MemoryOperationObservationV30>,
+    returned: Seq<MemoryValueV30>,
+    terminal: bool,
+    steps: nat,
+}
+
+spec fn invocation_tile_micro_operation_v181(
+    result: MemoryMicroResultV30,
+) -> InvocationTileMicroStepV181 {
+    InvocationTileMicroStepV181 {
+        next: result.next,
+        observations: seq![result.observation],
+        returned: seq![],
+        terminal: false,
+    }
+}
+
+spec fn invocation_tile_micro_zero_v181(
+    start: MemoryMicroStateV30,
+) -> InvocationTileMicroSegmentV181 {
+    InvocationTileMicroSegmentV181 {
+        start, end: start, observations: seq![], returned: seq![],
+        terminal: false, steps: 0,
+    }
+}
+
+spec fn invocation_tile_micro_exhausted_v181(
+    start: MemoryMicroStateV30,
+) -> InvocationTileMicroSegmentV181 {
+    InvocationTileMicroSegmentV181 {
+        end: MemoryMicroStateV30 {
+            state: MemoryStateV30 { valid: false, ..start.state }, ..start
+        },
+        ..invocation_tile_micro_zero_v181(start)
+    }
+}
+
+spec fn invocation_tile_micro_last_v181(
+    start: MemoryMicroStateV30, head: InvocationTileMicroStepV181,
+) -> InvocationTileMicroSegmentV181 {
+    InvocationTileMicroSegmentV181 {
+        start, end: head.next, observations: head.observations,
+        returned: head.returned, terminal: head.terminal, steps: 1,
+    }
+}
+
+spec fn invocation_tile_micro_join_v181(
+    start: MemoryMicroStateV30, head: InvocationTileMicroStepV181,
+    tail: InvocationTileMicroSegmentV181,
+) -> InvocationTileMicroSegmentV181 {
+    if head.next != tail.start || head.terminal || !head.next.state.valid {
+        InvocationTileMicroSegmentV181 {
+            observations: head.observations,
+            steps: 1,
+            ..invocation_tile_micro_exhausted_v181(start)
+        }
+    } else {
+        InvocationTileMicroSegmentV181 {
+            start, end: tail.end,
+            observations: head.observations + tail.observations,
+            returned: tail.returned, terminal: tail.terminal,
+            steps: 1 + tail.steps,
+        }
+    }
+}
+
+proof fn invocation_tile_micro_operation_prefix_v181(
+    before: MemoryMicroStateV30, result: MemoryOperationResultV30, next: int,
+)
+    ensures ({
+        let step = invocation_tile_micro_operation_v181(byte_micro_result_v55(before, result, next));
+        step.next.observations == before.observations + step.observations
+            && step.observations == seq![result.observation]
+            && step.returned.len() == 0 && !step.terminal
+    }),
+{ }
+
+proof fn invocation_tile_micro_zero_keeps_start_prefix_v181(start: MemoryMicroStateV30)
+    ensures invocation_tile_micro_zero_v181(start).start == start,
+        invocation_tile_micro_zero_v181(start).end == start,
+        invocation_tile_micro_zero_v181(start).observations.len() == 0,
+        invocation_tile_micro_zero_v181(start).steps == 0,
+{ }
+
+proof fn invocation_tile_micro_join_keeps_exact_prefix_v181(
+    start: MemoryMicroStateV30, head: InvocationTileMicroStepV181,
+    tail: InvocationTileMicroSegmentV181,
+)
+    requires head.next == tail.start, !head.terminal, head.next.state.valid,
+    ensures invocation_tile_micro_join_v181(start, head, tail).start == start,
+        invocation_tile_micro_join_v181(start, head, tail).end == tail.end,
+        invocation_tile_micro_join_v181(start, head, tail).observations
+            == head.observations + tail.observations,
+        invocation_tile_micro_join_v181(start, head, tail).steps == 1 + tail.steps,
+{ }
+
+proof fn invocation_tile_micro_exhaustion_never_admits_v181(start: MemoryMicroStateV30)
+    ensures !invocation_tile_micro_exhausted_v181(start).end.state.valid,
+        invocation_tile_micro_exhausted_v181(start).start == start,
+        invocation_tile_micro_exhausted_v181(start).end.observations == start.observations,
+{ }

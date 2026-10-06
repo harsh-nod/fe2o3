@@ -22,6 +22,9 @@ struct Cursor {
 #[path = "original_semantic_mir_tile_microcuts_v180_tests.rs"]
 mod tests;
 
+#[path = "original_semantic_mir_tile_microexecution_v181.rs"]
+mod execution;
+
 struct Cut {
     instance: usize,
     block: Block,
@@ -463,6 +466,7 @@ impl<'target, 'slots, 'view, 'source> TileMicroCutsV180<'target, 'slots, 'view, 
             write!(out, " }}\nproof fn invocation_tile_zero_edge_decreases_{root}_v180(from: int, to: int)\n requires invocation_tile_zero_edge_{root}_v180(from, to),\n ensures invocation_tile_zero_rank_{root}_v180(from) > invocation_tile_zero_rank_{root}_v180(to),\n{{ }}\n")
                 .map_err(|_| out.error())?;
         }
+        execution::emit(self, out)?;
         self.check(out)
     }
 }

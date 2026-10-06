@@ -882,6 +882,40 @@ fn generate_actual_tile_microcuts_v180(
         out.text
             .contains("proof fn invocation_tile_zero_edge_decreases_0_v180(")
     );
+    for root in 0..slots
+        .correspondence(out)?
+        .source(out.budget)?
+        .root_count(out.budget)?
+    {
+        assert!(out.text.contains(&format!(
+            "invocation_tile_micro_operation_v181(byte_micro_step_{root}_v30(before, little_endian))"
+        )));
+        assert!(out.text.contains(&format!(
+            "let finished = byte_micro_finish_{root}_v30(before);"
+        )));
+        assert!(
+            out.text
+                .contains(&format!("else {{ byte_micro_begin_{root}_v30(state) }};"))
+        );
+        assert!(out.text.contains(&format!(
+            "if invocation_tile_cursor_{root}_v180(source_pc, start) {{"
+        )));
+        assert!(out.text.contains(&format!(
+            "proof fn invocation_tile_micro_zero_is_exact_candidate_{root}_v181("
+        )));
+    }
+    assert!(
+        out.text
+            .contains("finished.observations == before.observations")
+    );
+    assert!(
+        out.text
+            .contains("next, observations: seq![], returned: finished.returned, terminal,")
+    );
+    assert!(
+        out.text
+            .contains("source_pc, head.next, little_endian, (fuel - 1) as nat,")
+    );
     assert!(!out.text.contains("assume("));
     Ok(())
 }
