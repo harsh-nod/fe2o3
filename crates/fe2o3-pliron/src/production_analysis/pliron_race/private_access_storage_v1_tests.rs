@@ -309,13 +309,13 @@ fn captured_v5_effect_geometry_retains_work_and_changes_only_address_storage() {
     assert_eq!(candidate.retained_effect_instances, 524_288);
     assert_eq!(
         old_population.address_state - candidate.address_state,
-        17_825_792
+        12_582_912
     );
-    assert_eq!(old_population.temporary - candidate.temporary, 17_825_792);
+    assert_eq!(old_population.temporary - candidate.temporary, 12_582_912);
     assert_eq!(
         old_population.bound.peak_storage_upper_bound()
             - candidate.bound.peak_storage_upper_bound(),
-        17_825_792
+        12_582_912
     );
     assert_eq!(
         old_population.bound.work_upper_bound(),
@@ -367,6 +367,9 @@ fn captured_v5_effect_geometry_retains_work_and_changes_only_address_storage() {
         old_population.bound.peak_storage_upper_bound(),
         peak,
         work,
-        17_825_792
+        12_582_912
     );
 }
+
+#[path = "witness_rank_storage_v1_tests.rs"]
+mod witness_rank_storage_v1_tests;

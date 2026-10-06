@@ -980,7 +980,7 @@ mod status_tests {
         // twenty-four logical slots and two 64-byte copies add to temporary space.
         const EXACT_WORK: usize = 3_707;
         const EXACT_RETAINED: usize = 1_272;
-        const EXACT_PEAK: usize = 68_654;
+        const EXACT_PEAK: usize = 68_542;
         let exact = race_resource_upper_bound_for_shape_v1(
             census,
             component_race_names_v1(),
@@ -1456,13 +1456,13 @@ mod numeric_preflight_tests {
             32 + 80 + 51 + 2 * 48 + 264 + 2 * (4 * 64 + 64)
         );
         assert_eq!(numbers.effect_state, 8 + 16 + 64);
-        assert_eq!(numbers.address_state, 2 * (8 * 9 + 64));
+        assert_eq!(numbers.address_state, 2 * (8 + 8 + 64));
         assert_eq!(numbers.attempted_finding, per_finding);
         assert_eq!(numbers.conflict_class_storage, 4_097 * 16);
         assert_eq!(
             numbers.temporary,
             numbers.effect_state
-                + 272
+                + 160
                 + per_finding
                 + 4_097 * 16
                 + 8
@@ -1486,7 +1486,7 @@ mod numeric_preflight_tests {
         let fields = fields(&output);
         let core_work = 32 + 80 + 51 + 2 * 48 + 264 + 2 * (4 * 64 + 64);
         let temporary = (8 + 16 + 64)
-            + 2 * (8 * 9 + 64)
+            + 2 * (8 + 8 + 64)
             + per_finding
             + 4_097 * 16
             + 8
@@ -1524,7 +1524,7 @@ mod numeric_preflight_tests {
                 ("presburger_work", 0),
                 ("symbolic_work", 8 * 8 + 16),
                 ("effect_state", 8 + 16 + 64),
-                ("address_state", 2 * (8 * 9 + 64)),
+                ("address_state", 2 * (8 + 8 + 64)),
                 ("attempted_finding", per_finding),
                 ("conflict_class_storage", 4_097 * 16),
                 ("raw_temporary", 6 + 3 * 8 + 8),

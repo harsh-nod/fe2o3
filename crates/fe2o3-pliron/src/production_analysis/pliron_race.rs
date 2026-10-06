@@ -842,11 +842,11 @@ fn calculate_race_resource_upper_bound_for_shape_v1(
             .and_then(|items| items.checked_add(name_storage))
             .ok_or_else(race_resource_overflow_v1)?,
     )?;
+    // One address key uses the ranked-memory bound; the four witness pairs
+    // clone only the authenticated launch coordinates, never address indices.
     let address_state = checked_race_mul_v1(
         retained_effect_instances,
-        rank.checked_mul(9)
-            .and_then(|n| n.checked_add(64))
-            .ok_or_else(race_resource_overflow_v1)?,
+        checked_race_sum_v1(&[rank, checked_race_mul_v1(launch_rank, 8)?, 64])?,
     )?;
     let per_finding_storage = checked_race_sum_v1(&[
         checked_race_mul_v1(rank, 3)?,
