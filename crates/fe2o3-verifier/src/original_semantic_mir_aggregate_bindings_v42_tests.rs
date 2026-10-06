@@ -349,6 +349,50 @@ fn source_boundary_value(
     boundaries.value(Block::new(block), Variable::new(local), out)
 }
 
+#[test]
+fn expanded_source_leaf_relations_preserve_checked_tuple_components() {
+    use super::super::{slots::tests::with_tile_slots, tile_target::TileTargetV176};
+    use fe2o3_kernel_ir::ExecutionTileLayoutV1 as Layout;
+
+    for layout in [Layout::Blocked, Layout::Striped] {
+        for operation in [
+            SemanticCheckedBinaryOpV1::Add,
+            SemanticCheckedBinaryOpV1::Subtract,
+            SemanticCheckedBinaryOpV1::Multiply,
+        ] {
+            super::super::super::invocations::tests::run_source_transform(
+                LIMIT, LIMIT,
+                |types, functions| checked_transform(types, functions, operation, false, false),
+                |plan, out| {
+                    with_tile_slots(plan, layout, out, |slots, out| {
+                        let target = TileTargetV176::derive(slots, out)?;
+                        let bindings = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+                        for root in 0..2 {
+                            for instance in 1..=2 {
+                                let row = plan.instance(root, instance, out)?;
+                                let value = source_boundary_value(plan, root, instance, 1, 4, out)?;
+                                let local = row.locals.start + 4;
+                                for ordinal in 0..2 {
+                                    let start = out.text.len();
+                                    bindings.emit_source_leaf_conjunct(plan, root, instance, value,
+                                        ordinal, FormalIndexWidth::Bits64, out)?;
+                                    let text = &out.text[start..];
+                                    assert!(text.contains(&format!("invocation_source_aggregate_leaf_v42(source, {local}, ")));
+                                    assert!(text.contains(&format!("seq![{ordinal}int,]")));
+                                    assert!(text.contains("invocation_value_related_v36(original, actual, map, source.machine.memory, target.memory)"));
+                                    assert!(!text.contains("invocation_source_execution_aggregate_current_v170"));
+                                    assert!(text.contains("source.machine.frames.active[1].owner"));
+                                }
+                            }
+                        }
+                        Ok(())
+                    })
+                },
+            ).0.unwrap();
+        }
+    }
+}
+
 fn run(
     operation: SemanticCheckedBinaryOpV1,
     failure_move: bool,

@@ -50,6 +50,12 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + 12 * size_of::<usize>()
         + super::super::logical::headers();
     let bounded_query_scratch = 24 * size_of::<usize>();
+    let source_leaf_scratch = 2 * size_of::<Endpoint<'_, '_>>()
+        + 2 * size_of::<Result<Endpoint<'_, '_>>>()
+        + size_of::<super::super::super::slots::SourceAggregateLeafV42<'_, '_, '_>>()
+        + 2 * size_of::<Result<Option<usize>>>()
+        + size_of::<Result<()>>()
+        + 14 * size_of::<usize>();
     let header = retained
         + construction_and_query_results
         + input_predecessor_and_actual_coordinates
@@ -58,6 +64,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + tile_results
         + relation_scratch
         + source_relation_scratch
+        + source_leaf_scratch
         + bounded_query_scratch;
     assert_eq!(out.budget.storage() - before, header);
     let original = slots.correspondence(out)?.inventory(out.budget)?;
@@ -155,7 +162,155 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     refusal(pairs.definition(usize::MAX, out))?;
     exercise_tile_leaves(&pairs, out)?;
     exercise_source_arguments(&pairs, out)?;
+    exercise_source_leaves(&pairs, out)?;
     Ok(())
+}
+
+fn exercise_source_leaves(
+    pairs: &ExpandedScalarBindingsV196<'_, '_, '_, '_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    use super::super::InvocationPlan;
+    use fe2o3_kernel_ir::ExecutionRoleV15;
+    use fe2o3_mir_model::{
+        SsaBlockIdV1 as Block, SsaEdgeIdV1 as Edge, SsaResolvedEventV1 as Event,
+    };
+
+    let source = pairs.slots.correspondence(out)?.source(out.budget)?;
+    let plan = InvocationPlan::derive(source, out)?;
+    let archive = source.source_ssa(out.budget)?;
+    let semantic = source.source_semantic(out.budget)?;
+    let mut counts = [0usize; 3];
+    for root in 0..source.root_count(out.budget)? {
+        for instance in 0..plan.root(root, out)?.instances.len() {
+            let row = plan.instance(root, instance, out)?;
+            if !row.active {
+                continue;
+            }
+            let ssa = archive.plan_for_function(row.function).unwrap().plan();
+            let function = &semantic.functions()[row.function.index() as usize];
+            let mut values = std::collections::BTreeSet::new();
+            values.extend(ssa.entry_definitions().iter().map(|entry| entry.value()));
+            for (block, declaration) in function.blocks().iter().enumerate() {
+                let block = Block::new(block as u32);
+                for (_, event) in ssa.resolved_events(block).into_iter().flatten() {
+                    if let Event::Define { value, .. } = event {
+                        values.insert(*value);
+                    }
+                }
+                for edge in 0..declaration.terminator().kind().edge_count() {
+                    for entry in ssa
+                        .edge_definitions(Edge::new(block, edge as u32))
+                        .into_iter()
+                        .flatten()
+                    {
+                        values.insert(entry.value());
+                    }
+                }
+            }
+            for value in values {
+                let endpoint = pairs
+                    .slots
+                    .correspondence(out)?
+                    .ssa_typed_endpoint_v36(root, instance, value, out.budget)?;
+                let Some(Type::Execution(
+                    ExecutionRoleV15::MaskedTileU32 { .. }
+                    | ExecutionRoleV15::LaneFragmentU32 { .. },
+                )) = endpoint.physical_type(out.budget)?
+                else {
+                    continue;
+                };
+                if endpoint.execution_borrow_v163(out.budget)?.is_some() {
+                    continue;
+                }
+                let ty = endpoint.source_type(out.budget)?;
+                let local = row.locals.start + endpoint.source_local(out.budget)?.index() as usize;
+                let count = pairs.slots.aggregate_leaf_count(ty, out)?.unwrap();
+                let start = out.text.len();
+                match pairs.emit_source_leaf_conjunct(
+                    &plan,
+                    root,
+                    instance,
+                    value,
+                    0,
+                    FormalIndexWidth::Unknown,
+                    out,
+                ) {
+                    Err(Error::Statement(
+                        "expanded scalar binding differs from its retained source endpoint",
+                    )) => (),
+                    Err(error) => return Err(error),
+                    Ok(()) => panic!("unknown-width source leaf was admitted"),
+                }
+                assert_eq!(out.text.len(), start);
+                for ordinal in 0..count {
+                    let leaf = pairs.slots.aggregate_leaf(ty, ordinal, out)?;
+                    let path = leaf.path(out)?.to_vec();
+                    let scalar = leaf.scalar(out)?;
+                    let start = out.text.len();
+                    pairs.emit_source_leaf_conjunct(
+                        &plan,
+                        root,
+                        instance,
+                        value,
+                        ordinal,
+                        FormalIndexWidth::Bits64,
+                        out,
+                    )?;
+                    let text = &out.text[start..];
+                    assert!(text.contains(&format!(
+                        "invocation_source_execution_aggregate_current_v170(source, {local})"
+                    )));
+                    let fields = path
+                        .iter()
+                        .map(|field| format!("{field}int,"))
+                        .collect::<String>();
+                    assert!(text.contains(&format!(
+                        "invocation_source_aggregate_leaf_v42(source, {local}, {}, seq![{fields}])",
+                        ty.index()
+                    )));
+                    match scalar {
+                        super::super::ScalarV30::Unit => {
+                            assert!(text.contains("original == MemoryValueV30::Unit"));
+                            counts[0] += 1;
+                        }
+                        super::super::ScalarV30::Bool => {
+                            assert!(text.contains("byte_scalar_type_v57(actual, 2)"));
+                            counts[1] += 1;
+                        }
+                        super::super::ScalarV30::Integer {
+                            width: 32,
+                            signed: false,
+                        } => {
+                            assert!(text.contains(
+                                "byte_scalar_type_v57(actual, memory_value_modulus_v30(4))"
+                            ));
+                            counts[2] += 1;
+                        }
+                        _ => panic!("unexpected fixture leaf"),
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        counts.into_iter().all(|count| count > 0),
+        "unit, mask and payload must all be checked"
+    );
+    Ok(())
+}
+
+#[test]
+fn expanded_source_leaf_relations_preserve_typed_payload_masks_units_and_current_lease() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture(layout, LIMIT, LIMIT, |slots, _, out| {
+            let target = TileTargetV176::derive(slots, out)?;
+            let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+            exercise_source_leaves(&pairs, out)
+        })
+        .0
+        .unwrap();
+    }
 }
 
 fn exercise_source_arguments(
