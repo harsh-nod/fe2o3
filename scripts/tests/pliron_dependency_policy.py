@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
+import tomllib
 import unittest
 
 
@@ -25,6 +27,41 @@ def package(name: str, version: str = CHECKER.PLIRON_VERSION, source: str | None
 
 
 class PlironDependencyPolicyTests(unittest.TestCase):
+    def test_workspace_dependency_declarations_match_the_policy_pin(self) -> None:
+        manifest = tomllib.loads((CHECKER.REPO_ROOT / "Cargo.toml").read_text())
+        for name in ("pliron", "pliron-llvm"):
+            with self.subTest(package=name):
+                dependency = manifest["workspace"]["dependencies"][name]
+                self.assertEqual(
+                    f"https://{CHECKER.PLIRON_REPOSITORY}", dependency["git"]
+                )
+                self.assertEqual(CHECKER.PLIRON_REVISION, dependency["rev"])
+
+    def test_tracked_lockfiles_retain_the_exact_pliron_family(self) -> None:
+        paths = subprocess.check_output(
+            ["git", "ls-files", "-z", "Cargo.lock", "*/Cargo.lock"],
+            cwd=CHECKER.REPO_ROOT,
+        ).decode().split("\0")
+        self.assertIn("Cargo.lock", paths)
+        self.assertIn("examples/row_softmax_v1/Cargo.lock", paths)
+        for name in filter(None, paths):
+            lock = tomllib.loads((CHECKER.REPO_ROOT / name).read_text())
+            for row in lock["package"]:
+                if row["name"] not in CHECKER.REQUIRED_PACKAGES:
+                    continue
+                with self.subTest(lockfile=name, package=row["name"]):
+                    self.assertEqual(CHECKER.PLIRON_VERSION, row["version"])
+                    self.assertEqual(CHECKER.PLIRON_SOURCE, row.get("source"))
+
+    def test_previous_pinned_revision_is_not_accepted(self) -> None:
+        old = "e054e5b2e53c7330470f9202c35c8c0e4e102092"
+        source = f"git+https://{CHECKER.PLIRON_REPOSITORY}?rev={old}#{old}"
+        violations, _ = CHECKER.check_metadata(
+            {"packages": [package(name, source=source) for name in CHECKER.REQUIRED_PACKAGES]}
+        )
+        self.assertEqual(3, len(violations))
+        self.assertTrue(all(item.startswith("wrong Pliron source:") for item in violations))
+
     def test_accepts_exact_dialect_only_closure(self) -> None:
         violations, stats = CHECKER.check_metadata(
             {

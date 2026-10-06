@@ -507,11 +507,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-hsaco"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-amd-target",
+]
+
+[[package]]
+name = "fe2o3-hsaco-finalize"
+version = "0.1.0"
+dependencies = [
+ "dialect-amdgcn",
+ "fe2o3-amd-target",
+ "fe2o3-artifact-transaction",
+ "fe2o3-build-authority",
+ "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
+ "fe2o3-hsaco",
+ "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
+ "fe2o3-kernel-opt",
+ "fe2o3-llvm-handoff",
+ "fe2o3-llvm-text",
+ "fe2o3-lower-mir-kernel",
+ "fe2o3-mir-model",
+ "fe2o3-process-identity",
+ "fe2o3-source-isa-observation",
+ "fe2o3-verifier",
+ "object",
+ "reserved-fe2o3-symbols",
+ "rustix",
+ "sha2 0.11.0",
+]
+
+[[package]]
 name = "fe2o3-kernel-analysis"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-kernel-ir",
+ "fe2o3-mir-model",
  "rustc_apfloat",
  "rustix",
  "sha2 0.11.0",
@@ -549,6 +584,14 @@ name = "fe2o3-llvm-handoff"
 version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "fe2o3-llvm-text"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-llvm-handoff",
  "sha2 0.11.0",
 ]
 
@@ -877,6 +920,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
+name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "once_vec"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -895,7 +947,7 @@ dependencies = [
 [[package]]
 name = "pliron"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=90ef1c11647cc33bbadc83c29d21525cbd8e4c2c#90ef1c11647cc33bbadc83c29d21525cbd8e4c2c"
 dependencies = [
  "awint",
  "combine",
@@ -922,7 +974,7 @@ dependencies = [
 [[package]]
 name = "pliron-derive"
 version = "0.17.0"
-source = "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092"
+source = "git+https://github.com/harsh-nod/pliron.git?rev=90ef1c11647cc33bbadc83c29d21525cbd8e4c2c#90ef1c11647cc33bbadc83c29d21525cbd8e4c2c"
 dependencies = [
  "combine",
  "convert_case",
@@ -1022,6 +1074,7 @@ dependencies = [
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
  "fe2o3-functional-proof",
+ "fe2o3-hsaco-finalize",
  "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",

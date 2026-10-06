@@ -855,6 +855,7 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-hsaco-finalize",
+ "fe2o3-kernel-ir",
  "fe2o3-static-executable-format",
  "sha2 0.11.0",
 ]
