@@ -121,9 +121,20 @@ where
                 budget,
                 |original, optimized, budget| {
                     #[cfg(test)]
+                    eprintln!("EXPANDED_ACCOUNT_V260 optimizer_enter storage={}", budget.storage());
+                    #[cfg(test)]
                     inspect_tile_convergence(optimized, budget)?;
-                    let tile = optimized.prepare_tile_expansion_v159(0, selected, budget)?;
+                    #[cfg(test)]
+                    eprintln!("EXPANDED_ACCOUNT_V260 convergence_done storage={}", budget.storage());
+                    let tile = optimized.prepare_tile_expansion_v159(0, selected, budget)
+                        .map_err(|error| {
+                            #[cfg(test)]
+                            eprintln!("EXPANDED_ACCOUNT_V260 tile_refused storage={} error={error:?}", budget.storage());
+                            error
+                        })?;
                     let floor = budget.storage();
+                    #[cfg(test)]
+                    eprintln!("EXPANDED_ACCOUNT_V260 tile_ready storage={floor}");
                     let result = {
                         let consumer = pending.take();
                         let tile = &tile;
@@ -137,6 +148,8 @@ where
                     // destroying the tile owner before the optimizer scope ends.
                     let measured = budget.storage().checked_sub(floor);
                     let released = tile.discard(budget);
+                    #[cfg(test)]
+                    eprintln!("EXPANDED_ACCOUNT_V260 consumer_done success={} measured={measured:?} released={released:?} storage={}", matches!(&result, Ok(Ok(_))), budget.storage());
                     let value = settle_callback(result, measured, released, || {
                         source.retain_query_resource_error_v18(Resource::Accounting)
                     })?;
@@ -144,7 +157,17 @@ where
                     Ok(value)
                 },
             )
-            .map_err(|error| Error::ExpandedSource(Box::new(error)))?;
+            .map_err(|error| {
+                #[cfg(test)]
+                eprintln!("EXPANDED_ACCOUNT_V260 optimizer_refused storage={} error={error:?}", budget.storage());
+                Error::ExpandedSource(Box::new(error))
+            })?;
+        #[cfg(test)]
+        eprintln!(
+            "EXPANDED_ACCOUNT_V260 optimizer_done storage={} payload={}",
+            budget.storage(),
+            payload_bytes.get()
+        );
         // The non-retained optimizer API transfers unreserved output credit.
         // Drop both neutral objects before restoring only the callback payload.
         drop(neutral);
