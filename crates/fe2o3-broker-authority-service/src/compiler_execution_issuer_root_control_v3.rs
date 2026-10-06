@@ -3,7 +3,7 @@ use super::{Admission, Budget, Error, Manifest, Resource, Result, readiness};
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ROOT_CONTROL_BYTES_V3 as BYTES,
     CompilerExecutionAttestationStorageV3 as Storage,
-    CompilerExecutionRootControlErrorV3 as CodecError,
+    CompilerExecutionRootControlErrorV3 as CodecError, CompilerExecutionRootControlKindV3 as Kind,
     CompilerExecutionRootControlRecordV3 as Record,
     compiler_execution_root_gate_reply_v3 as gate_reply,
     validate_compiler_execution_root_gate_request_v3 as validate_gate_request,
@@ -14,6 +14,7 @@ use fe2o3_kernel_ir::{
 use fe2o3_protected_service_spawn::launch_io as transport;
 use rustix::{event, fs, io, net, process};
 use std::{
+    cell::RefCell,
     marker::PhantomData,
     mem::size_of,
     os::fd::{AsFd, BorrowedFd, OwnedFd},
@@ -36,6 +37,36 @@ const PACKET_FRAME: usize = CHECK_FRAME + transport::packet_receive_scratch(BYTE
 const GATE_WORK: usize = ENTRY + 8 * BYTES;
 const GATE_FRAME: usize = 4 * size_of::<(Record, Storage)>() + BYTES + 4096;
 
+struct Established {
+    gate: Record,
+    deadline: Instant,
+    attempts: usize,
+    next_sequence: u64,
+}
+
+enum ConnectionState {
+    Fresh,
+    Established(Established),
+    Failed,
+}
+
+impl ConnectionState {
+    fn begin_handshake(&mut self) -> Result<()> {
+        if !matches!(self, Self::Fresh) {
+            return Err(Error::rejected("root control handshake already attempted"));
+        }
+        *self = Self::Failed;
+        Ok(())
+    }
+
+    fn take_established(&mut self) -> Result<Established> {
+        match std::mem::replace(self, Self::Failed) {
+            Self::Established(session) => Ok(session),
+            Self::Fresh | Self::Failed => Err(Error::rejected("root control session unavailable")),
+        }
+    }
+}
+
 /// Internal transport custody only. No raw-FD extraction or synthetic Admission.
 /// The full returned owner charge is unreserved; the consumed FD charge stays
 /// prepaid until its enclosing service scope ends. Both charges are conservative.
@@ -46,6 +77,7 @@ pub(super) struct RootEndpoint<'work> {
     thread: process::Pid,
     account: Ledger,
     budget_address: usize,
+    state: RefCell<ConnectionState>,
     _work: PhantomData<(&'work Work, Rc<()>)>,
 }
 
@@ -65,6 +97,7 @@ impl<'work> RootEndpoint<'work> {
                     thread: rustix::thread::gettid(),
                     account: b.work_ledger_identity_v1(),
                     budget_address: b as *const Budget<'_> as usize,
+                    state: RefCell::new(ConnectionState::Fresh),
                     _work: PhantomData,
                 },
                 Self::STORAGE,
@@ -79,11 +112,12 @@ impl<'work> RootEndpoint<'work> {
         deadline: Instant,
         b: &mut Budget<'_>,
     ) -> Result<()> {
+        self.begin_handshake()?;
         let floor = Self::STORAGE
             .checked_add(a.retained_storage())
             .and_then(|n| n.checked_add(manifest.retained_storage()))
             .ok_or(Resource::Arithmetic)?;
-        b.with_prepaid_scope(floor, ENTRY, GATE_WORK, GATE_FRAME, |b| {
+        let established = b.with_prepaid_scope(floor, ENTRY, GATE_WORK, GATE_FRAME, |b| {
             a.validate_continuity(b)?;
             readiness::check_binding(a, manifest, b)?;
             let mut attempts = 0;
@@ -113,8 +147,104 @@ impl<'work> RootEndpoint<'work> {
             }
             a.validate_continuity(b)?;
             readiness::check_binding(a, manifest, b)?;
-            self.revalidate(deadline, b)
-        })
+            self.revalidate(deadline, b)?;
+            Ok::<_, Error>(Established {
+                gate: request,
+                deadline,
+                attempts,
+                // The issuer-to-root request stream has its own sequence. The
+                // root's sequence-one admission challenge is the reverse flow.
+                next_sequence: 1,
+            })
+        })?;
+        *self
+            .state
+            .try_borrow_mut()
+            .map_err(|_| Error::rejected("root control reentry"))? =
+            ConnectionState::Established(established);
+        Ok(())
+    }
+
+    fn begin_handshake(&self) -> Result<()> {
+        let mut state = self
+            .state
+            .try_borrow_mut()
+            .map_err(|_| Error::rejected("root control reentry"))?;
+        // Refusal or unwind cannot reopen an unauthenticated startup interval.
+        state.begin_handshake()
+    }
+
+    /// Private authenticated exchange only; decoding its result does not grant
+    /// occurrence or retirement authority. The concrete session must admit the
+    /// operation payload and exact durable join before any authority-bearing use.
+    /// All calls share the original handshake deadline and cumulative attempts.
+    /// An error or unwind permanently poisons this endpoint; no replay with a
+    /// renewed account, sequence or deadline is exposed.
+    pub(super) fn exchange(
+        &self,
+        a: &Admission<'_>,
+        kind: Kind,
+        payload: &[u8],
+        b: &mut Budget<'_>,
+    ) -> Result<(Record, Storage)> {
+        let mut state = self
+            .state
+            .try_borrow_mut()
+            .map_err(|_| Error::rejected("root control reentry"))?;
+        let mut session = state.take_established()?;
+        let floor = Self::STORAGE
+            .checked_add(a.retained_storage())
+            .and_then(|n| n.checked_add(payload.len().min(BYTES)))
+            .ok_or(Resource::Arithmetic)?;
+        let next = session
+            .next_sequence
+            .checked_add(1)
+            .ok_or(Resource::Arithmetic)?;
+        let result = b.with_prepaid_scope(floor, ENTRY, GATE_WORK, GATE_FRAME, |b| {
+            self.revalidate(session.deadline, b)?;
+            a.validate_continuity(b)?;
+            let (request, charge) = session
+                .gate
+                .request_on_same_connection(session.next_sequence, kind, payload, b)
+                .map_err(codec_error)?;
+            b.reserve_storage(charge.additional_storage())?;
+            loop {
+                a.validate_continuity(b)?;
+                if self
+                    .send(
+                        request.canonical_bytes(),
+                        session.deadline,
+                        &mut session.attempts,
+                        b,
+                    )?
+                    .is_some()
+                {
+                    break;
+                }
+                self.pause(session.deadline, true, b)?;
+            }
+            let bytes = loop {
+                a.validate_continuity(b)?;
+                if let Some(bytes) = self.receive(session.deadline, &mut session.attempts, b)? {
+                    break bytes;
+                }
+                self.pause(session.deadline, false, b)?;
+            };
+            b.reserve_storage(BYTES)?;
+            let (reply, charge) = Record::decode(&bytes, b).map_err(codec_error)?;
+            b.reserve_storage(charge.additional_storage())?;
+            if !reply.matches_reply(&request, b).map_err(codec_error)? {
+                return Err(Error::rejected(
+                    "root control reply changed original request",
+                ));
+            }
+            a.validate_continuity(b)?;
+            self.revalidate(session.deadline, b)?;
+            Ok::<_, Error>((reply, charge))
+        })?;
+        session.next_sequence = next;
+        *state = ConnectionState::Established(session);
+        Ok(result)
     }
 
     fn receive(

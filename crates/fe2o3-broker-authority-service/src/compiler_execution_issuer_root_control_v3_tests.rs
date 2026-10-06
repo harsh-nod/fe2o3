@@ -1,6 +1,36 @@
 //! Default tests exercise endpoint prerequisites and accounting, never Admission.
 use super::*;
 
+#[test]
+fn handshake_and_exchange_refusals_cannot_reset_the_connection() {
+    let mut state = ConnectionState::Fresh;
+    state.begin_handshake().unwrap();
+    assert!(matches!(state, ConnectionState::Failed));
+    assert!(state.begin_handshake().is_err());
+    assert!(state.take_established().is_err());
+    assert!(matches!(state, ConnectionState::Failed));
+
+    // Calling an exchange before the gate consumes the unauthenticated state.
+    // This is an inert state test, not successful endpoint/Admission custody.
+    let mut state = ConnectionState::Fresh;
+    assert!(state.take_established().is_err());
+    assert!(state.begin_handshake().is_err());
+    assert!(matches!(state, ConnectionState::Failed));
+}
+
+#[test]
+fn failed_handshake_unwind_keeps_the_same_terminal_state() {
+    let mut state = ConnectionState::Fresh;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        state.begin_handshake().unwrap();
+        panic!("injected handshake failure after one-use transition");
+    }));
+    assert!(result.is_err());
+    assert!(matches!(state, ConnectionState::Failed));
+    assert!(state.begin_handshake().is_err());
+    assert!(state.take_established().is_err());
+}
+
 fn pair(kind: net::SocketType, flags: net::SocketFlags) -> (OwnedFd, OwnedFd) {
     net::socketpair(net::AddressFamily::UNIX, kind, flags, None).unwrap()
 }
