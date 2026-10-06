@@ -7,6 +7,10 @@ use fe2o3_kernel_opt::{OwnedTileScalarContinuationV18 as Tail, OwnedTileScalarEr
 mod gaps;
 pub use gaps::ProductionSourceTileGapV177;
 
+#[path = "production_optimized_source_tile_roots_v260.rs"]
+mod roots;
+use roots::RootPoliciesV260;
+
 #[cfg(test)]
 thread_local! {
     static PANIC_AFTER_TILE_REPLAY_V159: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -58,8 +62,7 @@ pub struct ProductionSourceTileExpansionV159<'view, 'source> {
     required: usize,
     slot: usize,
     ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
-    root: usize,
-    lanes: u16,
+    roots: RootPoliciesV260,
 }
 
 fn tile_error(error: Error) -> ProductionSourceOwnedViewErrorV18 {
@@ -159,8 +162,7 @@ impl<'source> ProductionOptimizedSourceCorrespondenceV18<'source> {
             required: budget.storage(),
             slot: std::ptr::from_ref(budget) as usize,
             ledger: budget.work_ledger_identity_v1(),
-            root,
-            lanes,
+            roots: RootPoliciesV260::Single { root, lanes },
         })
     }
 }
@@ -233,13 +235,7 @@ impl<'view, 'source> ProductionSourceTileExpansionV159<'view, 'source> {
         self.source.original.source.root(root, budget)?;
         self.source.retain((|| {
             budget.charge_work(2)?;
-            if root != self.root {
-                return Ok(None);
-            }
-            let [selection] = self.tail.selections() else {
-                return resources::binding("source tile policy census differs");
-            };
-            Ok(Some((selection.function, selection.layout, self.lanes)))
+            self.roots.policy(root, self.tail.selections())
         })())
     }
 
@@ -374,10 +370,12 @@ impl<'view, 'source> ProductionSourceTileExpansionV159<'view, 'source> {
         let Self {
             source,
             tail,
+            roots,
             retained,
             ..
         } = self;
         drop(tail);
+        drop(roots);
         let settled = custody
             .and_then(|()| source.retain(budget.release_storage(retained).map_err(Into::into)));
         selected?;
