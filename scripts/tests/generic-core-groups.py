@@ -199,12 +199,14 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
             observed = [json.loads(line) for line in calls.read_text().splitlines()]
             return result, observed, str(library / "Cargo.toml")
 
-    def test_cold_auxiliary_fetches_selected_sysroot_before_all_three_harnesses(self) -> None:
+    def test_cold_auxiliary_fetches_selected_sysroot_before_all_backend_stages(self) -> None:
         result, calls, manifest = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.splitlines(), [
             "stage:rustc-codegen-sysroot-dependencies",
             "stage:rustc-codegen-lib-tests",
+            "stage:rustc-codegen-expanded-source-tests",
+            "stage:rustc-codegen-tile-census-source-tests",
             "stage:rustc-codegen-extractor-bin-tests",
             "stage:rustc-codegen-exporter-bin-tests",
         ])
@@ -215,6 +217,20 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
             ]},
             {"command": "cargo", "arguments": [
                 "test", "--locked", "-p", "rustc-codegen-fe2o3", "--lib",
+            ]},
+            {"command": "cargo", "arguments": [
+                "test", "--locked", "-p", "rustc-codegen-fe2o3", "--lib",
+                "production_rustc_driver_v1::checked_output_source_v1_tests::"
+                "context_source_v29_tests::pending_source_tests::expanded_source_tests::"
+                "actual_rustc_source_retains_original_neutral_and_expanded_owners",
+                "--", "--ignored", "--exact", "--test-threads=1",
+            ]},
+            {"command": "cargo", "arguments": [
+                "test", "--locked", "-p", "rustc-codegen-fe2o3", "--lib",
+                "production_rustc_driver_v1::checked_output_source_v1_tests::"
+                "context_source_v29_tests::pending_source_tests::expanded_source_tests::"
+                "tile_census_tests::actual_rustc_collected_tile_census_preserves_shared_body_counts",
+                "--", "--ignored", "--exact", "--test-threads=1",
             ]},
             {"command": "cargo", "arguments": [
                 "test", "--locked", "-p", "rustc-codegen-fe2o3",
