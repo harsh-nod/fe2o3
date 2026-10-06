@@ -77,9 +77,21 @@ constructs a new budget, renews the deadline, or turns exhausted cleanup into a
 successful retirement. The conservative logical storage ceiling is not an RSS
 or elapsed-time guarantee.
 
-These private transitions do not change the production request's refusal
-selection. Actual device attachment and the joined positive native route still
-need an admitted privileged qualification lane. Ordinary
-compilation, exact/one-short joined controller accounting, actual first-exec/EOF
-ordering, issuer readiness and end-to-end native compilation still require
-qualification; source and mechanical quote tests do not establish those results.
+The original request now routes these transitions through its retained Attempt,
+including transfer of the original Prepared into the issuer, held-exit
+publication observation, actual root wait and separate complete trace retirement.
+The distinct `CompilerExecutionRootCompletionRecordV1` binds the final original
+input transcript; it never reinterprets a V4 refusal ACK as success. Its public
+codec is inert. An authenticated terminal zero alone is not publication, proof,
+load or launch authority.
+
+This request wiring is an unqualified integration candidate, not default
+production activation. The startup/cleanup quota composition is implemented but
+awaits joined qualification. Authenticated parent-side terminal and exact
+publication custody, ordinary failing-compiler
+exit handling, live-sibling exit-group completion and joined native qualification
+remain required. The default selection has not changed. Actual device attachment
+and the joined positive route need an admitted privileged qualification lane.
+Ordinary compilation, exact/one-short joined accounting, actual first-exec/EOF
+ordering, issuer readiness and end-to-end native compilation must be tested;
+source and mechanical quote tests do not establish those results.
