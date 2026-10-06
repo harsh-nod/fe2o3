@@ -257,6 +257,61 @@ fn run_loans(work: usize, storage: usize, hostile: bool) -> (Result<()>, usize, 
 }
 
 #[test]
+fn expanded_source_scalar_relations_preserve_genuine_descriptor_loan_recipes() {
+    use super::super::super::{
+        paired::ExpandedScalarBindingsV196, slots::tests::with_tile_slots,
+        tile_target::TileTargetV176,
+    };
+    use fe2o3_kernel_ir::{ExecutionTileLayoutV1 as Layout, FormalIndexWidth};
+
+    for layout in [Layout::Blocked, Layout::Striped] {
+        super::super::super::super::invocations::tests::run_captured_callable_transform(
+            LIMIT,
+            LIMIT,
+            loans_fixture,
+            capture,
+            |plan, out| {
+                with_tile_slots(plan, layout, out, |slots, out| {
+                    let target = TileTargetV176::derive(slots, out)?;
+                    let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+                    for root in 0..2 {
+                        let row = plan.instance(root, 0, out)?;
+                        for (statement, local) in [(2, 6), (3, 9), (4, 10), (5, 9)] {
+                            let value = witness_events::original_value(
+                                slots, row.function, 0, Some(statement), Role::Destination,
+                                local, true, out,
+                            )?;
+                            let endpoint = slots.correspondence(out)?
+                                .ssa_typed_endpoint_v36(root, 0, value, out.budget)?;
+                            let recipe = Recipe::derive(slots, plan, root, &endpoint, out)?;
+                            assert_eq!(recipe.origin, row.locals.start + 4);
+                            let recipe_start = out.text.len();
+                            recipe.emit(out)?;
+                            let expected_recipe = out.text[recipe_start..].to_owned();
+                            let actual = pairs.definition(
+                                endpoint.original_definition(out.budget)?.unwrap(), out,
+                            )?;
+                            let start = out.text.len();
+                            pairs.emit_source_conjunct(
+                                plan, root, 0, value, FormalIndexWidth::Bits64, out,
+                            )?;
+                            let text = &out.text[start..];
+                            let local = row.locals.start + local as usize;
+                            assert!(text.contains(&format!(
+                                "invocation_source_descriptor_reference_current_v51(source, {local}, {expected_recipe})"
+                            )));
+                            assert!(text.contains(&format!("let actual = target.values[{actual}];")));
+                            assert!(text.contains("invocation_value_related_v36(original, actual, map, source.machine.memory, target.memory)"));
+                        }
+                    }
+                    Ok(())
+                })
+            },
+        ).0.unwrap();
+    }
+}
+
+#[test]
 fn original_descriptor_loans_preserve_slice_identity_through_copy_move_reborrow_and_length() {
     run_loans(LIMIT, LIMIT, false).0.unwrap();
 }

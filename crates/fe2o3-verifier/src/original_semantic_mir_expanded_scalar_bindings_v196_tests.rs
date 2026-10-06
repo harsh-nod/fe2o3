@@ -394,6 +394,46 @@ fn expanded_source_scalar_relations_bind_authentic_original_arguments() {
 }
 
 #[test]
+fn expanded_source_relations_keep_address_observable_scalars_in_explicit_memory() {
+    use super::super::super::{byte_bindings::SourceByteBindings, slots::tests::with_tile_slots};
+    use fe2o3_mir_model::{SsaBlockIdV1, SsaResolvedEventV1};
+
+    for layout in [Layout::Blocked, Layout::Striped] {
+        super::super::super::super::invocations::tests::run_scalar_allocation_variant(
+            LIMIT, LIMIT, |plan, out| {
+                with_tile_slots(plan, layout, out, |slots, out| {
+                    let target = TileTargetV176::derive(slots, out)?;
+                    let bindings = SourceByteBindings::derive_expanded_v188(&target, out)?;
+                    let source = slots.correspondence(out)?.source(out.budget)?;
+                    let archive = source.source_ssa(out.budget)?;
+                    let semantic = source.source_semantic(out.budget)?;
+                    let start = out.text.len();
+                    bindings.emit(out)?;
+                    for root in 0..2 {
+                        let row = plan.instance(root, 0, out)?;
+                        let (descriptor, _) = slots.legacy_descriptor_by_source(root, 0, 4, out)?
+                            .expect("genuine address-observable scalar allocation");
+                        let ssa = archive.plan_for_function(row.function).unwrap().plan();
+                        assert!(ssa.entry_definitions().iter().all(|entry| entry.variable().get() != 4));
+                        let function = &semantic.functions()[row.function.index() as usize];
+                        for block in 0..function.blocks().len() {
+                            for (_, event) in ssa.resolved_events(SsaBlockIdV1::new(block as u32)).unwrap() {
+                                if let SsaResolvedEventV1::Define { variable, .. } = event {
+                                    assert_ne!(variable.get(), 4, "memory must not become a fabricated SSA definition");
+                                }
+                            }
+                        }
+                        assert!(out.text[start..].contains(&format!("private.insert(source.slots[{descriptor}].allocation, InvocationByteBindingV36")));
+                        assert!(out.text[start..].contains(&format!("spec fn invocation_source_byte_storage_related_{root}_v36")));
+                    }
+                    Ok(())
+                })
+            },
+        ).0.unwrap();
+    }
+}
+
+#[test]
 fn original_and_expanded_scalar_relations_share_exact_logical_obligations() {
     use super::super::LogicalBinding;
     let mut work = Work::new(LIMIT);
