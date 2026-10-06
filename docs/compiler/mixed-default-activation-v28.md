@@ -134,8 +134,8 @@ and expands its call instances into each root CFG, with per-root source
 correspondence; this does not imply a standalone shared helper in neutral KIR.
 The expansion preserves unselected functions already present in that module.
 Aliased tile entry functions must agree on layout and launch geometry.
-A tile-bearing non-root helper currently refuses
-because interprocedural expansion has not been admitted. No source-name matcher,
+A tile-bearing non-root helper remaining in neutral KIR currently refuses
+because residual interprocedural expansion has not been admitted. No source-name matcher,
 per-root module copy or second rustc collection determines these choices.
 
 The collector also retains an inert census at its existing authenticated tile
