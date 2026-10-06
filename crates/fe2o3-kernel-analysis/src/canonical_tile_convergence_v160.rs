@@ -19,6 +19,8 @@ use std::{fmt, mem::size_of};
 
 #[path = "canonical_tile_callee_summaries_v167.rs"]
 mod callees;
+#[path = "canonical_tile_private_uniformity_v259.rs"]
+mod private_uniformity;
 #[path = "canonical_tile_reconvergence_v165.rs"]
 mod reconvergence;
 
@@ -104,6 +106,7 @@ impl Graph<'_, '_> {
         &self,
         reachable: &[bool],
         postdominance: Option<&reconvergence::Postdominance>,
+        private_reads: &[Option<private_uniformity::Read>],
         meter: &mut Meter<'_, '_, Error>,
         mut visit: impl FnMut(usize, usize) -> Result<()>,
     ) -> Result<()> {
@@ -129,9 +132,15 @@ impl Graph<'_, '_> {
                     meter.work(1)?;
                     visit(node, self.definition(definition)?)?;
                 }
-                for operand in &self.inventory.uses()[operation.operands.clone()] {
-                    meter.work(1)?;
-                    visit(self.definition(operand.definition)?, node)?;
+                if let Some(read) = private_reads[index - self.function.operations.start] {
+                    meter.work(2)?;
+                    visit(self.definition(read.value)?, node)?;
+                    visit(self.block(read.writer_block)?, node)?;
+                } else {
+                    for operand in &self.inventory.uses()[operation.operands.clone()] {
+                        meter.work(1)?;
+                        visit(self.definition(operand.definition)?, node)?;
+                    }
                 }
             }
             let discriminator = match block.terminator {
@@ -293,9 +302,12 @@ fn analyze(graph: &Graph<'_, '_>, meter: &mut Meter<'_, '_, Error>) -> Result<()
 
     scratch.degrees = filled(meter, graph.nodes, 0_usize)?;
     let postdominance = reconvergence::derive(graph, &scratch.reachable, meter)?;
+    let private_reads =
+        private_uniformity::derive(graph, &scratch.reachable, postdominance.is_some(), meter)?;
     graph.dependencies(
         &scratch.reachable,
         postdominance.as_ref(),
+        &private_reads,
         meter,
         |from, _| {
             scratch.degrees[from] = scratch.degrees[from]
@@ -321,6 +333,7 @@ fn analyze(graph: &Graph<'_, '_>, meter: &mut Meter<'_, '_, Error>) -> Result<()
     graph.dependencies(
         &scratch.reachable,
         postdominance.as_ref(),
+        &private_reads,
         meter,
         |from, to| {
             let index = scratch.starts[from]
@@ -343,7 +356,9 @@ fn analyze(graph: &Graph<'_, '_>, meter: &mut Meter<'_, '_, Error>) -> Result<()
         if !scratch.reachable[operation.coordinate.block.block as usize] {
             continue;
         }
-        let varying = if matches!(operation.operation.kind, Kind::Call { .. }) {
+        let varying = if private_reads[index - graph.function.operations.start].is_some() {
+            false
+        } else if matches!(operation.operation.kind, Kind::Call { .. }) {
             callees.varying(index, operation.coordinate, meter)?
         } else {
             varying_seed(&operation.operation.kind, operation.coordinate)?
@@ -418,6 +433,11 @@ fn analyze(graph: &Graph<'_, '_>, meter: &mut Meter<'_, '_, Error>) -> Result<()
 /// worst case. Each postdominator-chain visit is charged to the work budget.
 /// Defined-callee summaries add a linear pass over the module's functions,
 /// blocks, CFG edges, operations and call occurrences; recursive SCCs refuse.
+/// Acyclic entry-allocated whole scalar spills may preserve uniformity only
+/// with a closed pointer-use census, one dominating writer and exact read type.
+/// Those reads depend on the stored value and writer control, not pointer bits.
+/// The metered spill census is conservative for aliasing, projections and loops;
+/// its bounded alias fixed point may revisit definitions and CFG edges.
 /// Memory validity, undefined arithmetic, and original-source semantics remain
 /// independent obligations; this analysis is conditional on defined execution.
 pub fn check_canonical_tile_convergence_v160(

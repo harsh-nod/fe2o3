@@ -16,6 +16,8 @@ const LAYOUTS: StorageLayoutLimitsV1 = StorageLayoutLimitsV1 {
 
 #[path = "canonical_tile_callee_summaries_v167_tests.rs"]
 mod callee_tests;
+#[path = "canonical_tile_private_uniformity_v259_tests.rs"]
+mod private_tests;
 fn value(id: u32, ty: Type, kind: Kind) -> Operation {
     Operation::effect_free(ValueDef::new(ValueId(id), ty), kind)
 }
