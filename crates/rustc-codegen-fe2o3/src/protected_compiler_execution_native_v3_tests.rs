@@ -96,23 +96,26 @@ fn native_loader_copies_enter_the_same_account_without_consuming_caller_slots() 
     let before_work = b.work();
     let ledger = b.work_ledger_identity_v1();
     let address = &b as *const Budget<'_> as usize;
-    let admitted = startup.admit_native(&mut b).unwrap();
-    assert_eq!(admitted.policy.policy(), policy.policy());
-    let Admitted {
-        policy: retained,
-        client,
-    } = admitted;
-    let (client, ()) = client
-        .prepare::<_, Error>(|budget| {
-            assert!(budget.work_ledger_identity_v1() == ledger);
-            assert_eq!(budget as *const Budget<'_> as usize, address);
-            assert!(budget.storage() >= floor && budget.work() > before_work);
-            retained.revalidate(budget)?;
-            budget.charge_work(7)?;
-            Ok(())
-        })
-        .unwrap();
-    drop(client);
+    let retained = {
+        let admitted = startup.admit_native(&mut b).unwrap();
+        assert_eq!(admitted.policy.policy(), policy.policy());
+        let Admitted {
+            policy: retained,
+            client,
+        } = admitted;
+        let (client, ()) = client
+            .prepare::<_, Error>(|budget| {
+                assert!(budget.work_ledger_identity_v1() == ledger);
+                assert_eq!(budget as *const Budget<'_> as usize, address);
+                assert!(budget.storage() >= floor && budget.work() > before_work);
+                retained.revalidate(budget)?;
+                budget.charge_work(7)?;
+                Ok(())
+            })
+            .unwrap();
+        drop(client);
+        retained
+    };
     assert_eq!(
         b.storage(),
         floor - Client::PEER_STORAGE + retained.retained_storage() - Policy::FILE_STORAGE
