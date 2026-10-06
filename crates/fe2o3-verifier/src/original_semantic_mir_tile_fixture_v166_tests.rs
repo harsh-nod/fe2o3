@@ -622,7 +622,9 @@ fn generate_actual_tile_source_v168(
         shared_entries, 2,
         "both real shared Workgroup helper instances"
     );
+    let generated_start = out.text.len();
     program.emit(out)?;
+    let generated = &out.text[generated_start..];
     for (operation, expected) in [
         ("ContextIssue", 1),
         ("WorkgroupDerive", 1),
@@ -630,7 +632,7 @@ fn generate_actual_tile_source_v168(
         ("TileTransport", 4),
     ] {
         assert_eq!(
-            out.text
+            generated
                 .matches(&format!(
                     "let event = InvocationSourceByteEventV36::{operation}("
                 ))
@@ -639,41 +641,29 @@ fn generate_actual_tile_source_v168(
             "actual source call census for {operation}"
         );
     }
-    assert!(
-        out.text
-            .contains("InvocationSourceByteEventV36::ExecutionLoan(")
-    );
-    assert!(
-        out.text
-            .contains("InvocationSourceExecutionRoleV168::Context")
-    );
-    assert!(
-        out.text
-            .contains("InvocationSourceExecutionRoleV168::Workgroup")
-    );
-    assert!(
-        out.text
-            .contains("TileLoad(InvocationSourceExecutionTileLoadV168 { workgroup:")
-    );
+    assert!(generated.contains("InvocationSourceByteEventV36::ExecutionLoan("));
+    assert!(generated.contains("InvocationSourceExecutionRoleV168::Context"));
+    assert!(generated.contains("InvocationSourceExecutionRoleV168::Workgroup"));
+    assert!(generated.contains("TileLoad(InvocationSourceExecutionTileLoadV168 { workgroup:"));
     assert_eq!(
-        out.text
+        generated
             .matches("InvocationSourceOperandV36::Execution(")
             .count(),
         2 * shared_entries,
         "each argument appears in evaluation and its independent observation"
     );
     assert_eq!(
-        out.text.matches("invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Execution(").count(),
+        generated.matches("invocation_source_value_evaluate_v42(source, InvocationSourceOperandV36::Execution(").count(),
         shared_entries,
     );
     assert_eq!(
-        out.text
+        generated
             .matches("operand: InvocationSourceOperandV36::Execution(")
             .count(),
         shared_entries,
     );
     assert_eq!(
-        out.text
+        generated
             .matches("=> invocation_source_execution_snapshot_install_v170(entered,")
             .count(),
         2

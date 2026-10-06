@@ -164,6 +164,12 @@ fn generate(
                     SemanticRustTypeKindV1::Execution(SemanticExecutionRoleV29::KernelContext)
                 ) && endpoint.execution_borrow_v163(out.budget)?.is_none()
                 {
+                    let owner = endpoint.execution_owner_v199(out.budget)?.unwrap();
+                    if owner.identity.instance != instance
+                        || owner.identity.destination != endpoint.source_local(out.budget)?
+                    {
+                        continue;
+                    }
                     write!(out, "spec fn expanded_source_context_issue_{root}_{instance}_{ordinal}_v211(source: InvocationSourceByteStateV36, target: MemoryStateV30, execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>) -> InvocationContextIssueCoupledV211 {{ ")
                         .map_err(|_| out.error())?;
                     execution.emit_context_issue_step_v211(root, instance, value, out)?;

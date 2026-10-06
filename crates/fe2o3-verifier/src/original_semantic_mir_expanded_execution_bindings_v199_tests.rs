@@ -88,6 +88,7 @@ fn exercise(
     let mut seen = BTreeSet::new();
     let (mut owned, mut borrowed, mut payloads, mut payload_leases, mut issues) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
+    let mut transported_contexts = 0;
     for instance in 0..root.instances.len() {
         let row = plan.instance(0, instance, out)?;
         if !row.active {
@@ -241,20 +242,31 @@ fn exercise(
                             .ssa_typed_endpoint_v36(0, instance, value, out.budget)?;
                         let owner = endpoint.execution_owner_v199(out.budget)?.unwrap();
                         let site = bindings.site(0, owner.identity, KirRole::Context, out)?;
-                        bindings.emit_context_issue_step_v211(0, instance, value, out)?;
-                        assert_eq!(
-                            &out.text[end..],
-                            format!(
-                                "invocation_context_issue_coupled_v211(source, target, execution_map, InvocationSourceContextIssueV161 {{ destination: {}, source_type: {} }}, MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }}, {})",
-                                row.locals.start + owner.identity.destination.index() as usize,
-                                owner.identity.source_type.index(),
-                                site.operation.block.function.0,
-                                site.operation.block.block,
-                                site.operation.operation,
-                                site.definition
-                            )
-                        );
-                        issues += 1;
+                        let local = endpoint.source_local(out.budget)?;
+                        if owner.identity.instance == instance
+                            && owner.identity.destination == local
+                        {
+                            bindings.emit_context_issue_step_v211(0, instance, value, out)?;
+                            assert_eq!(
+                                &out.text[end..],
+                                format!(
+                                    "invocation_context_issue_coupled_v211(source, target, execution_map, InvocationSourceContextIssueV161 {{ destination: {}, source_type: {} }}, MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }}, {})",
+                                    row.locals.start + owner.identity.destination.index() as usize,
+                                    owner.identity.source_type.index(),
+                                    site.operation.block.function.0,
+                                    site.operation.block.block,
+                                    site.operation.operation,
+                                    site.definition
+                                )
+                            );
+                            issues += 1;
+                        } else {
+                            payload_refusal(
+                                bindings.emit_context_issue_step_v211(0, instance, value, out),
+                            )?;
+                            assert_eq!(out.text.len(), end);
+                            transported_contexts += 1;
+                        }
                     } else {
                         payload_refusal(
                             bindings.emit_context_issue_step_v211(0, instance, value, out),
@@ -332,6 +344,10 @@ fn exercise(
         }
     }
     assert!(owned > 0 && borrowed > 0 && payloads > 0 && payload_leases > 0 && issues > 0);
+    assert!(
+        transported_contexts > 0,
+        "transported Context is not a fresh issuance"
+    );
     assert!(SHARED.contains("scope.parent == Some(context.identity)"));
     assert!(SHARED.contains("context.child == Some(scope.identity)"));
     assert!(SHARED.contains("invocation_source_execution_lease_current_v170"));
