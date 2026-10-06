@@ -11,6 +11,73 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## First budget-denial diagnostics and Worker containment controls — 2026-10-06
+
+The disabled debugger adapter now includes a diagnostic-only physical-v11 layer.
+It preserves the first denied numeric debit's counter, phase, used amount,
+requested amount and cap, and reports them through the existing refusal path.
+All budget limits, charge sites, guards and successful transitions are unchanged.
+The previous hardware run still does not identify its denied counter; this is
+instrumentation for the next measured build, not a resume fix or qualification.
+
+The three changed leaves retain all 63 selected source roles. The package passed
+68 Node tests, its selected-source/API checks and unified-patch applicability
+check. Both packaged C++ fixtures passed normal and UBSan controls. A README
+invocation initially used unsupported option syntax; that failed check is
+retained, the positional invocation passed, and the README and its authenticated
+metadata were corrected. All 68 package tests passed again. Actual new debugger
+type sizes, startup and hardware completion remain pending; no predicted size
+is credited.
+
+The captured-Worker probe also passed the full 217-test finalizer suite with
+one ignored live test in a symbol-stripped build. Its 65,591,120-byte executable
+fits the unchanged 64 MiB containment limit. The disabled process-family owner
+and benign fixture compiled; 35 Rust controls and 12 mock evidence controls
+passed, including bounded post-overflow draining after actual family termination.
+These are CPU/source checks only. Fresh live timeout, descendant/EOF and overflow
+observations, enabled probe bindings and actual Worker execution remain pending.
+
+Retained evidence includes
+`debugger-physical-v11-package-controls-actual-root-r72-r2/MANIFEST.json`
+(`74e83f413efd5a9eb504ff6f2b7a95ca1a8ba0026fa76032ef7a370219370fa4`),
+`debugger-physical-v11-cpp-controls-actual-root-r72-r1/MANIFEST.json`
+(`cb14ce646136be2c8e3bfecb403c736fb5515a8e433ebc25e6475dde81ba8896`),
+`bf16-worker-captured-probe-compact-full-actual-root-r72-r3/MANIFEST.json`
+(`c299531a3af40650d7c0f88a8de87701365aada94e31d970e4dd9a6d91e4b386`),
+and `bf16-worker-captured-scope-cpu-build-actual-root-r72-r3/MANIFEST.json`
+(`561397ce06e3f1f0683419e675b6f376d2c068af49045ea5fbc58c1e99c05ef6`).
+No milestone or tutorial exit changes: **7/18 accepted**.
+
+## Sealed-image Worker probe test coverage — 2026-10-06
+
+A disabled, ignored Linux test now exercises the intended captured-image
+Worker launch path without changing production finalization. It uses the
+existing sealed-image capture and spawn coordinator, production command
+construction and supervisor. Its fixed eight-byte truncated request is intended
+to produce exit 65 with empty streams, before any compilation pipeline runs.
+That actual Worker result has **not** yet been observed.
+
+Ten source controls and six pure Rust controls passed; the full finalizer
+library suite passed **217 tests, zero failures, one ignored**. Independent
+review found no blocking source issue for this disabled test. Live execution
+still requires a fresh enabled binding, current runtime identities, and an
+outer process-family owner qualified against timeout, descendant/EOF and
+overflow behavior. Same-UID cgroup observations are not hostile-migration
+isolation; the image seals do not seal its interpreter or shared libraries.
+No ordinary Worker session, frontend engineering observation or milestone
+acceptance is credited by these tests.
+
+Evidence manifests retained on the remote workspace:
+`bf16-worker-captured-probe-source-controls-actual-root-r72-r1`
+(`fa6582f2c9c42c781ee356a73c52ad1e0b048c7544c893855d9e07ed45d94aa0`),
+`bf16-worker-captured-probe-pure-actual-root-r72-r1`
+(`00a14ad8521bb556e061c1d9a01ab329f34333604ccde07901f628abb0e0f1a6`),
+and `bf16-worker-captured-probe-finalizer-lib-actual-root-r72-r1`
+(`09bf26c65fe745f1acbb47fdf141c97965050be4da7de631779bd231e2666623`).
+The source review is
+`bf16-worker-captured-probe-independent-review-r72-r1/REVIEW.json`
+(`c059b79fe4131bf9860ed9d3f992cd2e6f23462a8ac5bdfae3e28fc006720a81`).
+
 ## Owned debugger capture reached; resume still refused — 2026-10-06
 
 A fresh bounded native attempt reached the owned stopped-wave capture: the

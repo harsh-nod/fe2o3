@@ -1,0 +1,112 @@
+diff --git a/gdb/amd-dbgapi-one-stop-native-io-v1.inc b/gdb/amd-dbgapi-one-stop-native-io-v1.inc
+--- a/gdb/amd-dbgapi-one-stop-native-io-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-io-v1.inc
+@@ -13,6 +13,15 @@
+-  retire_loaded_maintenance ();
+-  retire_entry_maintenance ();
+-  if (m_first_resume_site!=resume_site::none)
+-    error ("fixed owned one-stop native relation refused (%u); commit-site=%u; resume-site=%u",
+-           static_cast<unsigned> (m_owner.why ()),
+-           static_cast<unsigned> (m_owner.first_commit_site ()),
++  retire_loaded_maintenance ();
++  retire_entry_maintenance ();
++  if (m_owner.why ()==failure::budget && m_owner.m_budget_failure.present)
++    error ("fixed owned one-stop native relation refused (%u); commit-site=%u; budget-counter=%u; budget-phase=%u; budget-used=%llu; budget-request=%llu; budget-cap=%llu",
++           static_cast<unsigned> (m_owner.why ()),
++           static_cast<unsigned> (m_owner.first_commit_site ()),
++           static_cast<unsigned> (m_owner.m_budget_failure.kind),
++           static_cast<unsigned> (m_owner.m_budget_failure.state),
++           static_cast<unsigned long long> (m_owner.m_budget_failure.used),
++           static_cast<unsigned long long> (m_owner.m_budget_failure.requested),
++           static_cast<unsigned long long> (m_owner.m_budget_failure.cap));
++  if (m_first_resume_site!=resume_site::none)
++    error ("fixed owned one-stop native relation refused (%u); commit-site=%u; resume-site=%u",
++           static_cast<unsigned> (m_owner.why ()),
++           static_cast<unsigned> (m_owner.first_commit_site ()),
+diff --git a/gdb/amd-dbgapi-one-stop-native-v1.h b/gdb/amd-dbgapi-one-stop-native-v1.h
+--- a/gdb/amd-dbgapi-one-stop-native-v1.h
++++ b/gdb/amd-dbgapi-one-stop-native-v1.h
+@@ -144,8 +144,19 @@
+-  native_result_family family;
+-  std::uint32_t selector,bytes;
+-  std::int32_t status;
+-  char fatal_error_payload[224];
+-};
+-[[gnu::used]] static const native_result_diagnostic_scratch *
+-native_result_diagnostic_debug_type (const native_result_diagnostic_scratch *p) noexcept
+-{ return p; }
++  native_result_family family;
++  std::uint32_t selector,bytes;
++  std::int32_t status;
++  char fatal_error_payload[224];
++  // Separate budget-refusal frame/payload reservation, not reuse of the
++  // native-result frame above. The retained note is in sizeof(native_adapter).
++  struct budget_frames final {
++    const owner *ledger;
++    const budget_failure_note *note;
++    std::uint64_t used, requested, cap;
++    unsigned kind, state;
++    char fatal_error_payload[256];
++  } budget;
++};
++static_assert (sizeof (native_result_diagnostic_scratch::budget_frames) <= 320,
++               "separate bounded budget-refusal frame");
++[[gnu::used]] static const native_result_diagnostic_scratch *
++native_result_diagnostic_debug_type (const native_result_diagnostic_scratch *p) noexcept
++{ return p; }
+diff --git a/gdb/amd-dbgapi-owned-one-stop-v1.h b/gdb/amd-dbgapi-owned-one-stop-v1.h
+--- a/gdb/amd-dbgapi-owned-one-stop-v1.h
++++ b/gdb/amd-dbgapi-owned-one-stop-v1.h
+@@ -107,5 +107,14 @@
+-  file_requested_bytes, file_observed_bytes, file_probe_bytes, file_rounds, proc_requested_bytes
+-};
+-struct usage {
+-  std::uint64_t logical_bytes = 0, api = 0, read_bytes = 0, read_calls = 0, work = 0, rows = 0;
+-  std::uint64_t file_requested_bytes = 0, file_observed_bytes = 0, file_rounds = 0;
++  file_requested_bytes, file_observed_bytes, file_probe_bytes, file_rounds, proc_requested_bytes
++};
++// First denied debit only. This record is diagnostic, never a permit or reset.
++// The owner itself retains it; no external ledger or imported state is used.
++struct budget_failure_note final {
++  counter kind = counter::work;
++  phase state = phase::disabled;
++  bool present = false;
++  std::uint64_t used = 0, requested = 0, cap = 0;
++};
++static_assert (sizeof (budget_failure_note) <= 32, "bounded first-denial record");
++struct usage {
++  std::uint64_t logical_bytes = 0, api = 0, read_bytes = 0, read_calls = 0, work = 0, rows = 0;
++  std::uint64_t file_requested_bytes = 0, file_observed_bytes = 0, file_rounds = 0;
+@@ -269,6 +278,12 @@
+-      case counter::diagnostic_rows: used = &m_usage.rows; cap = limits::rows; break;
+-    }
+-    if (used == nullptr || *used > cap || amount > cap - *used) return fail (failure::budget);
+-    *used += amount; return true;
+-  }
+-  bool note () noexcept {
++      case counter::diagnostic_rows: used = &m_usage.rows; cap = limits::rows; break;
++    }
++    if (used == nullptr) return fail (failure::budget);
++    if (*used > cap || amount > cap - *used) {
++      // No subtraction wraps: the right operand is not evaluated if used>cap.
++      // Invalid owners returned above, so the first denied debit is immutable.
++      m_budget_failure = {kind, m_phase, true, *used, amount, cap};
++      return fail (failure::budget);
++    }
++    *used += amount; return true;
++  }
++  bool note () noexcept {
+@@ -676,6 +691,7 @@
+-  std::array<std::uint64_t, limits::events> m_events {};
+-  std::array<diagnostic, limits::rows> m_rows {};
+-  usage m_usage {};
+-  std::size_t m_events_used = 0, m_callbacks = 0, m_completed_callbacks = 0, m_sent = 0;
+-  std::uintptr_t m_callback_object = 0;
+-  std::uint64_t m_callback_id = 0, m_object = 0;
++  std::array<std::uint64_t, limits::events> m_events {};
++  std::array<diagnostic, limits::rows> m_rows {};
++  usage m_usage {};
++  budget_failure_note m_budget_failure {};
++  std::size_t m_events_used = 0, m_callbacks = 0, m_completed_callbacks = 0, m_sent = 0;
++  std::uintptr_t m_callback_object = 0;
++  std::uint64_t m_callback_id = 0, m_object = 0;

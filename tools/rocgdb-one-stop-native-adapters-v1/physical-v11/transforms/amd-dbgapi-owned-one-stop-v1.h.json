@@ -1,0 +1,32 @@
+{
+  "schema": "fe2o3-disabled-physical-v11-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-owned-one-stop-v1.h",
+  "before": {
+    "bytes": 36280,
+    "sha256": "d29ce0ab8f1171487ced25ec363d564298b62cc03db3de86711db5dbdce7c1d0"
+  },
+  "after": {
+    "bytes": 37019,
+    "sha256": "5159f5682c2b875014d9a80a9516cfed6772d64330e0fda4773f793105a213c8"
+  },
+  "changes": [
+    {
+      "beforeOffset": 3721,
+      "afterOffset": 3721,
+      "before": "struct usage {",
+      "after": "// First denied debit only. This record is diagnostic, never a permit or reset.\n// The owner itself retains it; no external ledger or imported state is used.\nstruct budget_failure_note final {\n  counter kind = counter::work;\n  phase state = phase::disabled;\n  bool present = false;\n  std::uint64_t used = 0, requested = 0, cap = 0;\n};\nstatic_assert (sizeof (budget_failure_note) <= 32, \"bounded first-denial record\");\nstruct usage {"
+    },
+    {
+      "beforeOffset": 11899,
+      "afterOffset": 12317,
+      "before": "    if (used == nullptr || *used > cap || amount > cap - *used) return fail (failure::budget);\n    *used += amount; return true;",
+      "after": "    if (used == nullptr) return fail (failure::budget);\n    if (*used > cap || amount > cap - *used) {\n      // No subtraction wraps: the right operand is not evaluated if used>cap.\n      // Invalid owners returned above, so the first denied debit is immutable.\n      m_budget_failure = {kind, m_phase, true, *used, amount, cap};\n      return fail (failure::budget);\n    }\n    *used += amount; return true;"
+    },
+    {
+      "beforeOffset": 35016,
+      "afterOffset": 35712,
+      "before": "  usage m_usage {};\n",
+      "after": "  usage m_usage {};\n  budget_failure_note m_budget_failure {};\n"
+    }
+  ]
+}

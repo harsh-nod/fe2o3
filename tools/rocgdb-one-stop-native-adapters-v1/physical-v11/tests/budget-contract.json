@@ -1,0 +1,14 @@
+{
+  "schema": "fe2o3-first-budget-denial-diagnostic-contract-v1",
+  "behavioral_fix": false,
+  "actual_denied_counter": null,
+  "actual_new_layout": null,
+  "native_authority": false,
+  "note_bytes_cap": 32,
+  "separate_frame_bytes_cap": 320,
+  "error_text_bytes": 209,
+  "error_payload_bytes": 256,
+  "expected_lp64_reservation": 20312,
+  "unchanged_logical_cap": 65536,
+  "selected_type_count": 20
+}
