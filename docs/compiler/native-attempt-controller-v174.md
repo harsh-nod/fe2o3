@@ -70,7 +70,15 @@ publication observation, actual root wait and separate complete trace retirement
 The distinct `CompilerExecutionRootCompletionRecordV1` binds the final original
 input transcript; it never reinterprets a V4 refusal ACK as success. Its public
 codec is inert. An authenticated terminal zero alone is not publication, proof,
-load or launch authority.
+load or launch authority. The request now sends the distinct structured
+`CompilerExecutionRootPublicationCompletionV1`: the original issued owner reads
+its acknowledged successful root wait and whole-tree retirement through its
+funded backing accessor, then copies its retained publication Subject and actual
+issuer Manifest/Ready records. No supplied status or publication ID can select
+that constructor. The original publication stays retained; the structured
+record is inert and cannot replace the parent's locked V5 transaction or signed
+carriage checks. The startup schedule includes both retained owner accesses,
+all nested codecs, and the complete record's overlapping storage.
 
 The startup schedule now composes these phases on the two original accounts.
 Shared inert dependency and issuer quota queries use the same checked formulas

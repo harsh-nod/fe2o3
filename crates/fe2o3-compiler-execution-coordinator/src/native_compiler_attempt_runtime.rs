@@ -62,6 +62,7 @@ pub(super) enum Phase {
     Issued,
     RootExitHeld,
     PublicationObserved,
+    Completed,
     Cancelled,
 }
 
@@ -609,6 +610,50 @@ impl<'work> Attempt<'work> {
                 helper.scratch(),
                 Controller::STEP_SCRATCH,
             ])?,
+        })
+    }
+
+    /// Copy only the original issued owner's actual retired publication result.
+    /// The record is inert; the request's authenticated original channel and
+    /// parent's retained publication join remain separate obligations.
+    pub(in super::super) fn publication_completion(
+        &mut self,
+        last: &fe2o3_compiler_execution_protocol::CompilerExecutionRootIntakeRecordV4,
+        b: &mut Budget<'_>,
+    ) -> AttemptResult<(
+        fe2o3_compiler_execution_protocol::CompilerExecutionRootPublicationCompletionV1,
+        usize,
+    )> {
+        let result = b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase != Phase::Issued || self.controller.is_none() {
+                return Err(Failure::Invalid(
+                    "completion lost original issued controller",
+                ));
+            }
+            let Some(Owner::Issued(attempt)) = &mut self.owner else {
+                return Err(Failure::Invalid("completion lost original issued owner"));
+            };
+            let (record, charge) = attempt.publication_completion(last, b)?;
+            Ok((record, charge.additional_storage()))
+        });
+        match result {
+            Ok(value) => {
+                self.phase = Phase::Completed;
+                Ok(value)
+            }
+            Err(error) => {
+                self.cancel();
+                Err(error)
+            }
+        }
+    }
+
+    pub(in super::super) fn publication_completion_quota()
+    -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let inner = Issued::<Helper>::publication_completion_quota()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, inner.work()])?,
+            scratch: native::sum(&[FRAME, inner.scratch()])?,
         })
     }
 

@@ -2,9 +2,9 @@
 use super::*;
 use crate::native_runtime_controller::Progress;
 use fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5;
-use fe2o3_compiler_execution_protocol::CompilerExecutionRootCompletionErrorV1 as CompletionError;
+use fe2o3_compiler_execution_protocol::CompilerExecutionRootPublicationCompletionErrorV1 as CompletionError;
 pub(super) use fe2o3_compiler_execution_protocol::{
-    CompilerExecutionRootCompletionRecordV1 as Completion,
+    CompilerExecutionRootPublicationCompletionV1 as Completion,
     CompilerExecutionRootTerminationV1 as Termination,
 };
 
@@ -144,9 +144,16 @@ impl<'work> RootCompilerRequest<'work> {
                     let terminal = self
                         .terminal
                         .ok_or_else(|| rejected("missing actual original root wait"))?;
-                    let (record, charge) =
-                        Completion::new(last, terminal, b).map_err(completion_error)?;
-                    self.reserve_growth(charge.retained_storage(), b)?;
+                    let (record, charge) = self
+                        .attempt
+                        .as_mut()
+                        .ok_or_else(|| rejected("missing original compiler attempt"))?
+                        .publication_completion(last, b)
+                        .map_err(helper_error)?;
+                    self.reserve_growth(charge, b)?;
+                    if record.terminal().termination() != terminal {
+                        return Err(rejected("completion differs from consumed original wait"));
+                    }
                     self.completion = Some(record);
                     State::SendingCompletion
                 }
@@ -224,6 +231,7 @@ fn completion_error(error: CompletionError) -> Error {
     match error {
         CompletionError::Resource(e) => e.into(),
         CompletionError::Framing(reason) => rejected(reason),
+        _ => rejected("original publication completion records differ"),
     }
 }
 

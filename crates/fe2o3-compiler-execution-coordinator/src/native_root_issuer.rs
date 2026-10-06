@@ -744,6 +744,8 @@ mod staging {
 mod quota {
     include!("native_root_issuer_quota.rs");
 }
+#[path = "native_root_issuer_completion.rs"]
+mod completion;
 #[cfg(test)]
 mod tests {
     include!("native_root_issuer_tests.rs");

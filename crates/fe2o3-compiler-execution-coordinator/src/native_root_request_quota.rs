@@ -388,14 +388,15 @@ impl RootCompilerRequest<'_> {
     pub(crate) fn runtime_turn_quota() -> Result<Quota> {
         use compiler_attempt::Attempt;
         use fe2o3_compiler_execution_protocol::{
-            COMPILER_EXECUTION_ROOT_COMPLETION_STORAGE_V1 as COMPLETION_SCRATCH,
-            COMPILER_EXECUTION_ROOT_COMPLETION_WORK_V1 as COMPLETION_WORK,
+            COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_MATCH_WORK_V1 as COMPLETION_WORK,
+            COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_STORAGE_V1 as COMPLETION_SCRATCH,
         };
         let policy = Attempt::original_policy_identity_quota().map_err(helper_error)?;
         let continuity = Attempt::maximum_continuity_quota().map_err(helper_error)?;
         let validation = refusal()?;
         let gate = Attempt::runtime_gate_quota().map_err(helper_error)?;
         let terminal = Attempt::runtime_step_quota().map_err(helper_error)?;
+        let completion = Attempt::publication_completion_quota().map_err(helper_error)?;
         let phases = [
             runtime_interrupt()?,
             from_native(Attempt::runtime_poll_quota().map_err(helper_error)?),
@@ -412,8 +413,8 @@ impl RootCompilerRequest<'_> {
                 Attempt::maximum_root_exit_release_quota(MAX_HANDOFF).map_err(helper_error)?,
             ),
             Quota {
-                work: sum(&[terminal.work(), COMPLETION_WORK])?,
-                scratch: sum(&[terminal.scratch(), COMPLETION_SCRATCH])?,
+                work: sum(&[terminal.work(), completion.work()])?,
+                scratch: sum(&[terminal.scratch(), completion.scratch()])?,
             },
             Quota {
                 work: sum(&[EXCHANGE_WORK, COMPLETION_WORK])?,

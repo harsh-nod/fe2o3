@@ -51,6 +51,7 @@ fn runtime_turn_and_one_time_issuer_schedule_cover_each_actual_phase() {
     let policy = compiler_attempt::Attempt::original_policy_identity_quota().unwrap();
     let continuity = compiler_attempt::Attempt::maximum_continuity_quota().unwrap();
     let step = compiler_attempt::Attempt::runtime_step_quota().unwrap();
+    let completion = compiler_attempt::Attempt::publication_completion_quota().unwrap();
     let capture = quota::runtime_capture().unwrap();
     assert!(
         turn.work()
@@ -58,9 +59,10 @@ fn runtime_turn_and_one_time_issuer_schedule_cover_each_actual_phase() {
                 + 2 * policy.work()
                 + 2 * continuity.work()
                 + step.work()
+                + completion.work()
     );
     assert!(turn.work() >= capture.work());
-    assert!(turn.scratch() >= step.scratch() + capture.scratch());
+    assert!(turn.scratch() >= step.scratch() + capture.scratch() + completion.scratch());
     assert!(startup.work() >= Prepared::maximum_cleanup_guard_quota().unwrap().work());
     let one =
         crate::InheritedCompilerExecutionDeploymentV3::original_root_startup_quota(1, 1).unwrap();
