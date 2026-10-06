@@ -34,6 +34,11 @@ fn exercise(
         2 * size_of::<Option<Recipe>>() + size_of::<Option<execution_loans::ExecutionOperand>>();
     let coordinates = 2 * size_of::<Definition>()
         + size_of::<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>();
+    let outer_frame = size_of::<&ExpandedExecutionBindingsV199<'_, '_, '_, '_, '_>>()
+        + 2 * size_of::<usize>()
+        + size_of::<Value>()
+        + size_of::<&mut Writer<'_, '_>>()
+        + size_of::<Result<()>>();
     assert_eq!(
         out.budget.storage() - before,
         retained
@@ -45,6 +50,7 @@ fn exercise(
             + 32 * size_of::<usize>()
             + size_of::<bool>()
             + size_of::<&str>()
+            + outer_frame
     );
     bindings.check_owner(plan, slots, &target, out)?;
     let source = plan.source(out)?;
