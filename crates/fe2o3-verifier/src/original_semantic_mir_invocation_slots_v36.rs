@@ -387,6 +387,13 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         })
     }
 
+    pub(super) fn tile_owner_v176(
+        &self,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<&'a TileExpansion<'a, 'source>> {
+        self.with_source_query_v42(out, |_| self.tile.ok_or_else(mismatch))
+    }
+
     fn check_tile_custody_v162(&self, budget: &Budget<'_>) -> Result<()> {
         if let Some(tile) = self.tile {
             if !std::ptr::eq(tile.original_source_v162(budget)?, self.relation) {
@@ -860,7 +867,7 @@ pub(super) fn headers() -> usize {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
     use fe2o3_kernel_ir::{
@@ -930,7 +937,7 @@ mod tests {
         run_tile_slots_with_limits(layout, LIMIT, LIMIT, examine)
     }
 
-    pub(super) fn run_tile_slots_with_limits(
+    pub(in super::super) fn run_tile_slots_with_limits(
         layout: fe2o3_kernel_ir::ExecutionTileLayoutV1,
         work: usize,
         storage: usize,

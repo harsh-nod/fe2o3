@@ -690,9 +690,16 @@ spec fn invocation_source_value_escapes_frame_v36(
     match value {
         MemoryValueV30::Pointer(pointer) => byte_allocation_in_frame_v30(pointer.allocation, frame),
         MemoryValueV30::Slice(slice) => byte_allocation_in_frame_v30(slice.pointer.allocation, frame),
+        MemoryValueV30::Execution(_) => true,
         _ => false,
     }
 }
+
+proof fn invocation_source_execution_capability_always_escapes_v178(
+    capability: MemoryExecutionCapabilityV178, frame: MemoryDynamicFrameV30,
+)
+    ensures invocation_source_value_escapes_frame_v36(MemoryValueV30::Execution(capability), frame),
+{}
 
 proof fn invocation_source_pointer_value_escapes_frame_v77(
     pointer: MemoryPointerV30, frame: MemoryDynamicFrameV30,

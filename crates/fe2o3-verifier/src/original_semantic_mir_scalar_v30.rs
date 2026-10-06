@@ -112,6 +112,11 @@ impl ScalarV30 {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum OperatorV30 {
+    // Raw-bit result components only. Core arithmetic admission also requires
+    // the byte transition's signed/unsigned no-overflow guard.
+    WrappingAdd,
+    WrappingSubtract,
+    WrappingMultiply,
     And,
     Or,
     Xor,
@@ -144,7 +149,15 @@ impl OperatorV30 {
     }
 
     fn comparison(self) -> bool {
-        !matches!(self, Self::And | Self::Or | Self::Xor)
+        !matches!(
+            self,
+            Self::WrappingAdd
+                | Self::WrappingSubtract
+                | Self::WrappingMultiply
+                | Self::And
+                | Self::Or
+                | Self::Xor
+        )
     }
 }
 
@@ -278,6 +291,30 @@ fn emit_graph_v30<I: Iterator<Item = Result<Option<usize>>>>(
                     ));
                 }
                 match operation {
+                    OperatorV30::WrappingAdd
+                    | OperatorV30::WrappingSubtract
+                    | OperatorV30::WrappingMultiply => {
+                        let ScalarV30::Integer { width, .. } = operand else {
+                            return Err(Error::Statement(
+                                "original MIR wrapping expression requires integer operands",
+                            ));
+                        };
+                        if !matches!(width, 8 | 16 | 32 | 64) || node.scalar != operand {
+                            return Err(Error::Statement(
+                                "original MIR wrapping expression width or result differs",
+                            ));
+                        }
+                        let symbol = match operation {
+                            OperatorV30::WrappingAdd => "+",
+                            OperatorV30::WrappingSubtract => "-",
+                            OperatorV30::WrappingMultiply => "*",
+                            _ => unreachable!(),
+                        };
+                        // Raw two's-complement carriers use the same positive
+                        // modulus for signed and unsigned wrapping operations.
+                        let modulus = 1u128 << width;
+                        emit!(out, "(m{left} {symbol} m{right}) % {modulus}int");
+                    }
                     OperatorV30::And | OperatorV30::Or | OperatorV30::Xor => {
                         let width = if operand == ScalarV30::Bool {
                             8

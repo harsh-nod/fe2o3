@@ -161,7 +161,7 @@ fn retained_program(work: usize, storage: usize) -> (Result<()>, usize, usize, u
                                 .all(|op| matches!(op.left, Value::Read { moved: false, .. }))
                         );
                         assert!(matches!(operations[0].destination, Destination::Memory(_)));
-                        assert_eq!(operations[0].operator.code(), 3);
+                        assert_eq!(operations[0].operator.code().unwrap(), 3);
                         assert_eq!(operations[1].operator, Operator::Not);
                         assert_eq!(operations[2].output, ScalarV30::Bool);
                     }
@@ -256,7 +256,7 @@ fn original_memory_scalar_operator_types_retain_the_existing_primitive_contract(
         assert_eq!(Operator::Not.result(input).unwrap(), input);
         for (index, operation) in operations.into_iter().enumerate() {
             let operator = Operator::Binary(operation);
-            assert_eq!(operator.code(), (index + 1) as u8);
+            assert_eq!(operator.code().unwrap(), (index + 1) as u8);
             assert_eq!(
                 operator.result(input).unwrap(),
                 if index >= 3 { ScalarV30::Bool } else { input }

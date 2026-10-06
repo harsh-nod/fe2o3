@@ -15,6 +15,7 @@ pub(super) enum Guard {
     Read,
     Write,
     GuardedWrite,
+    GuardedRead,
     Copy,
     Trap,
     View(views::ViewGuard),
@@ -30,13 +31,18 @@ fn guard(plan: &ByteOperationV30<'_, '_>, actual: &OperationKind) -> Result<Guar
             PointerByteEffectV30::Write { .. } => Guard::Write,
             PointerByteEffectV30::Copy { .. } => Guard::Copy,
             PointerByteEffectV30::None => return Err(mismatch()),
-            PointerByteEffectV30::GuardedWrite { .. } => return Err(mismatch()),
+            PointerByteEffectV30::GuardedWrite { .. }
+            | PointerByteEffectV30::GuardedRead { .. } => return Err(mismatch()),
         },
         ByteOperationV30::Pointer(pointer) => match pointer.effect() {
             PointerByteEffectV30::Read { .. } => Guard::Read,
             PointerByteEffectV30::Write { .. } => Guard::Write,
             PointerByteEffectV30::GuardedWrite { .. } => match actual {
                 OperationKind::GuardedStore { .. } => Guard::GuardedWrite,
+                _ => return Err(mismatch()),
+            },
+            PointerByteEffectV30::GuardedRead { .. } => match actual {
+                OperationKind::GuardedLoad { .. } => Guard::GuardedRead,
                 _ => return Err(mismatch()),
             },
             PointerByteEffectV30::Copy { .. } => return Err(mismatch()),
@@ -49,6 +55,7 @@ fn guard(plan: &ByteOperationV30<'_, '_>, actual: &OperationKind) -> Result<Guar
             },
         },
         ByteOperationV30::Scalar(_)
+        | ByteOperationV30::Execution(_)
         | ByteOperationV30::Index(_)
         | ByteOperationV30::Checked(_)
         | ByteOperationV30::Float(_)
@@ -79,7 +86,7 @@ pub(super) fn check(
         // V38 intentionally retains UnknownWrite rather than claiming that a
         // conditional store definitely initializes memory. Only this exact
         // derived opcode discharges its dynamic Operation obligation.
-        Guard::GuardedWrite => Kind::Unmodeled,
+        Guard::GuardedWrite | Guard::GuardedRead => Kind::Unmodeled,
         Guard::Copy => Kind::Copy,
         Guard::Trap => Kind::Unmodeled,
         Guard::View(
@@ -103,6 +110,7 @@ pub(super) fn check(
                     guard,
                     Guard::Form
                         | Guard::Read
+                        | Guard::GuardedRead
                         | Guard::Write
                         | Guard::Copy
                         | Guard::View(
@@ -117,12 +125,12 @@ pub(super) fn check(
             Obligation::Bounds | Obligation::Alignment => {
                 matches!(
                     guard,
-                    Guard::Allocate | Guard::Read | Guard::Write | Guard::Copy
+                    Guard::Allocate | Guard::Read | Guard::GuardedRead | Guard::Write | Guard::Copy
                 ) || guard == Guard::Form
                     || matches!(guard, Guard::View(view) if view != views::ViewGuard::UntaggedNoop)
             }
             Obligation::Initialization => {
-                guard == Guard::Read
+                matches!(guard, Guard::Read | Guard::GuardedRead)
                     || matches!(
                         guard,
                         Guard::View(views::ViewGuard::Variant | views::ViewGuard::Discriminant)
@@ -143,6 +151,7 @@ pub(super) fn check(
                         | Guard::Read
                         | Guard::Write
                         | Guard::GuardedWrite
+                        | Guard::GuardedRead
                         | Guard::Copy
                         | Guard::View(_)
                         | Guard::Trap

@@ -61,6 +61,10 @@ use tagged_select::TaggedSelectV55;
 mod trap;
 use trap::TrapByteOperationV40;
 
+#[path = "mixed_optimizer_execution_byte_v178.rs"]
+mod execution;
+use execution::ExecutionByteOperationV178;
+
 #[path = "mixed_optimizer_transition_body_v56.rs"]
 mod transition_body;
 use transition_body::TransitionBodyV56;
@@ -95,6 +99,7 @@ enum ByteOperationV30<'inventory, 'owner> {
     Index(IndexByteOperationV37),
     Scalar(CanonicalByteScalarV30<'inventory, 'owner>),
     Trap(TrapByteOperationV40),
+    Execution(ExecutionByteOperationV178),
 }
 
 #[derive(Clone, Copy)]
@@ -247,7 +252,16 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
         }
         for definition in &inventory.definitions()[row.definitions.clone()] {
             out.budget.charge_work(1)?;
-            value_type(definition.ty)?;
+            if let Type::Execution(role) = definition.ty {
+                execution::role_code(*role)?;
+                if !matches!(definition.coordinate, Definition::Result { .. }) {
+                    return Err(Error::Statement(
+                        "actual execution capability transport is not modeled",
+                    ));
+                }
+            } else {
+                value_type(definition.ty)?;
+            }
         }
         let mut operations = vector(row.operations.len(), out)?;
         for operation in row.operations.clone() {
@@ -256,7 +270,12 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             if actual.coordinate.block.function != function {
                 return Err(mismatch());
             }
-            let plan = if let Some(alloca) =
+            let plan = if matches!(actual.operation.kind, OperationKind::Execution(_)) {
+                ByteOperationV30::Execution(
+                    ExecutionByteOperationV178::derive(inventory, operation, out)?
+                        .ok_or_else(mismatch)?,
+                )
+            } else if let Some(alloca) =
                 AllocaByteOperationV30::derive(inventory, operation, width, allocations, out)?
             {
                 ByteOperationV30::Alloca(alloca)
@@ -336,7 +355,8 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             } else {
                 let expected = match &actual.operation.kind {
                     OperationKind::Alloca { address_space, .. } => Some((0, *address_space)),
-                    OperationKind::Load { access, .. } => Some((1, access.address_space)),
+                    OperationKind::Load { access, .. }
+                    | OperationKind::GuardedLoad { access, .. } => Some((1, access.address_space)),
                     OperationKind::Store { access, .. }
                     | OperationKind::GuardedStore { access, .. } => Some((2, access.address_space)),
                     _ => None,
@@ -646,6 +666,10 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             valid: "valid",
         };
         let effect = match plan {
+            ByteOperationV30::Execution(execution) => {
+                execution.emit_step(after, out)?;
+                PointerByteEffectV30::None
+            }
             ByteOperationV30::Trap(trap) => {
                 trap.emit_step(before, after, out)?;
                 PointerByteEffectV30::None
@@ -776,6 +800,16 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                     out,
                     "if !valid {{ MemoryOperationEffectV30::Refused }} else if s.values[{predicate}] == MemoryValueV30::Scalar(1) {{ MemoryOperationEffectV30::Write {{ address: s.values[{pointer}], width: {bytes}, alignment: {alignment}, value: s.values[{value}] }} }} else {{ MemoryOperationEffectV30::Pure }}"
                 ),
+                PointerByteEffectV30::GuardedRead {
+                    pointer,
+                    predicate,
+                    bytes,
+                    alignment,
+                    result,
+                } => emit!(
+                    out,
+                    "if !valid {{ MemoryOperationEffectV30::Refused }} else if s.values[{predicate}] == MemoryValueV30::Scalar(1) {{ MemoryOperationEffectV30::Read {{ address: s.values[{pointer}], width: {bytes}, alignment: {alignment}, value: values[{result}] }} }} else {{ MemoryOperationEffectV30::Pure }}"
+                ),
             }
         }
         let pc = if matches!(plan, ByteOperationV30::Trap(_)) {
@@ -846,6 +880,7 @@ fn headers<R>() -> usize {
         + floating::headers()
         + tagged_select::headers()
         + trap::headers()
+        + execution::headers()
         + size_of::<ByteFunctionV30<'_, '_, R>>()
         + 2 * size_of::<Result<ByteFunctionV30<'_, '_, R>>>()
         + size_of::<ByteOperationV30<'_, '_>>()

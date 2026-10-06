@@ -73,6 +73,21 @@ struct MemorySliceV30 {
     length: int,
 }
 
+struct MemoryExecutionReferenceV178 {
+    definition: int,
+    epoch: int,
+    frame: MemoryDynamicFrameV30,
+}
+
+struct MemoryExecutionCapabilityV178 {
+    identity: MemoryExecutionReferenceV178,
+    site: MemorySourceOperationV30,
+    role: int,
+    parent: Option<MemoryExecutionReferenceV178>,
+    child: Option<MemoryExecutionReferenceV178>,
+    active: bool,
+}
+
 enum MemoryValueV30 {
     Undefined,
     Unit,
@@ -80,6 +95,7 @@ enum MemoryValueV30 {
     Vector(Seq<int>),
     Pointer(MemoryPointerV30),
     Slice(MemorySliceV30),
+    Execution(MemoryExecutionCapabilityV178),
 }
 
 enum MemoryByteV37 {
@@ -589,5 +605,6 @@ spec fn byte_state_memory_well_formed_v30(state: MemoryStateV30) -> bool {
     include_str!("mixed_optimizer_byte_views_v38.vrs"),
     include_str!("mixed_optimizer_float_values_v52.vrs"),
     include_str!("mixed_optimizer_byte_value_types_v57.vrs"),
-    include_str!("mixed_optimizer_byte_results_v55.vrs")
+    include_str!("mixed_optimizer_byte_results_v55.vrs"),
+    include_str!("mixed_optimizer_execution_byte_v178.vrs")
 );

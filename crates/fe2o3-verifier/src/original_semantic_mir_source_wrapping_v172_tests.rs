@@ -286,7 +286,7 @@ fn original_wrapping_operator_codes_are_distinct_from_float_and_partial_arithmet
         (Operator::WrappingSubtract, 23),
         (Operator::WrappingMultiply, 24),
     ] {
-        assert_eq!(operator.code(), code);
+        assert_eq!(operator.code().unwrap(), code);
         for width in [8, 16, 32, 64] {
             for signed in [false, true] {
                 let input = ScalarV30::Integer { width, signed };
@@ -318,5 +318,31 @@ fn original_wrapping_operator_codes_are_distinct_from_float_and_partial_arithmet
     assert!(model.contains("event.output_bits == event.input_bits && event.right.is_some()"));
     for forbidden in ["assume(", "admit(", "external_body"] {
         assert!(!model.contains(forbidden));
+    }
+}
+
+#[test]
+fn original_wrapping_refuses_target_core_operator_codes() {
+    for operation in [
+        OperatorV30::WrappingAdd,
+        OperatorV30::WrappingSubtract,
+        OperatorV30::WrappingMultiply,
+    ] {
+        let operator = Operator::Binary(operation);
+        assert!(matches!(
+            operator.code(),
+            Err(Error::Statement(
+                "original MIR typed byte statement is not modeled"
+            ))
+        ));
+        assert!(matches!(
+            operator.result(ScalarV30::Integer {
+                width: 32,
+                signed: false
+            }),
+            Err(Error::Statement(
+                "original MIR typed byte statement is not modeled"
+            ))
+        ));
     }
 }

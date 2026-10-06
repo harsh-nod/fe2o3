@@ -3,6 +3,10 @@ use super::*;
 use fe2o3_kernel_ir::{CanonicalKirFunctionCoordinateV1, ExecutionRoleV15, ScalarType};
 use fe2o3_kernel_opt::{OwnedTileScalarContinuationV18 as Tail, OwnedTileScalarErrorV18 as Error};
 
+#[path = "production_optimized_source_tile_gaps_v177.rs"]
+mod gaps;
+pub use gaps::ProductionSourceTileGapV177;
+
 #[cfg(test)]
 thread_local! {
     static PANIC_AFTER_TILE_REPLAY_V159: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
