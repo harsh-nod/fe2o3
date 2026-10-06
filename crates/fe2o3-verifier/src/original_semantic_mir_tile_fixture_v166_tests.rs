@@ -883,6 +883,142 @@ fn original_execution_tile_target_emits_the_actual_expanded_graph() {
     }
 }
 
+fn generate_complete_actual_target_v187(
+    slots: &SourceSlots<'_, '_>,
+    tile: &TileExpansion<'_, '_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    use std::fmt::Write as _;
+    super::super::emit_model_prelude_v187(out)?;
+    generate_actual_tile_target_v176(slots, tile, out)?;
+    // Use the production support-closure pass. No target operation or theorem
+    // is replaced, and no source-to-target relation is added by this export.
+    super::super::support_closure::retain_referenced(out)?;
+    writeln!(out, "}}").map_err(|_| out.error())?;
+    assert!(out.text.starts_with("use vstd::prelude::*;"));
+    assert!(out.text.contains("spec fn byte_micro_step_0_v30("));
+    assert!(out.text.contains("canonical_scalar_math_"));
+    assert!(out.text.contains("byte_execution_step_v178(s, operation,"));
+    assert!(!out.text.contains("proof fn invocation_paired_"));
+    Ok(())
+}
+
+#[test]
+fn original_execution_tile_target_complete_model_uses_the_production_prelude() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            generate_complete_actual_target_v187,
+        )
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
+fn original_execution_tile_target_prelude_preserves_original_shared_bytes() {
+    use std::fmt::Write as _;
+    run_fixture(
+        Layout::Blocked,
+        512 * 1024 * 1024,
+        512 * 1024 * 1024,
+        |_, _, out| {
+            let invocation = "use vstd::prelude::*;\nuse vstd::seq_lib::*;\nverus! {\n";
+            write!(out, "{invocation}").map_err(|_| out.error())?;
+            super::super::super::relation::emit_prelude(out)?;
+            let mut original = out.text.clone();
+            for shared in [
+                super::super::super::super::structured_state_v30::STATE,
+                super::super::super::control_generate::SOURCE_STATE,
+                super::super::super::super::cfg_trace::PRELUDE,
+                super::super::super::super::byte_memory_v30::BYTE_MEMORY_V30,
+                super::super::bytes::INVOCATION_BYTES_V36,
+                super::super::bytes::CLASSIFIED_VIEW_LAWS_V40,
+                super::super::source_bytes::SOURCE_BYTES_V36,
+                super::super::source_bytes::SOURCE_POINTERS_V36,
+                super::super::source_frames::SOURCE_FRAMES_V36,
+                super::SOURCE_FUNCTION_V36,
+                super::super::effects::INVOCATION_EFFECTS_V36,
+            ] {
+                original.push_str(shared);
+            }
+            out.text.clear();
+            super::super::emit_model_prelude_v187(out)?;
+            assert_eq!(out.text, original);
+            Ok(())
+        },
+    )
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_execution_tile_target_complete_model_has_exact_resource_limits() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let baseline = run_fixture(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            generate_complete_actual_target_v187,
+        );
+        baseline.0.unwrap();
+        let exact = run_fixture(
+            layout,
+            baseline.1,
+            baseline.3,
+            generate_complete_actual_target_v187,
+        );
+        exact.0.unwrap();
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (baseline.1, baseline.2, baseline.3)
+        );
+        for (work, storage, is_work) in [
+            (baseline.1 - 1, baseline.3, true),
+            (baseline.1, baseline.3 - 1, false),
+        ] {
+            let error = run_fixture(layout, work, storage, generate_complete_actual_target_v187).0;
+            use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+            assert!(if is_work {
+                matches!(error, Err(Error::Resource(Resource::Work(error)))
+                    | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+                    if error.actual() == baseline.1 && error.limit() == work)
+            } else {
+                matches!(error, Err(Error::Resource(Resource::Storage(error)))
+                    | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+                    if error.actual() == baseline.3 && error.limit() == storage)
+            });
+        }
+    }
+}
+
+#[test]
+#[ignore = "complete target-only models; no proof or original-source refinement authority"]
+fn diagnostic_complete_expanded_tile_target_models_export_v187() {
+    use sha2::{Digest, Sha256};
+    use std::io::{BufWriter, Write as _};
+    for (layout, label) in [(Layout::Blocked, "blocked"), (Layout::Striped, "striped")] {
+        run_fixture(layout, 512 * 1024 * 1024, 512 * 1024 * 1024, |slots, tile, out| {
+            generate_complete_actual_target_v187(slots, tile, out)?;
+            assert!(out.text.len() <= 16 * 1024 * 1024);
+            let mut output = BufWriter::new(std::io::stdout().lock());
+            write!(output, "{{\"kind\":\"fe2o3-expanded-tile-target-model-v187\",\"scope\":\"actual expanded target only\",\"layout\":\"{label}\",\"bytes\":{},\"sha256\":\"", out.text.len()).unwrap();
+            for byte in Sha256::digest(out.text.as_bytes()) {
+                write!(output, "{byte:02x}").unwrap();
+            }
+            write!(output, "\",\"model_hex\":\"").unwrap();
+            for byte in out.text.as_bytes() {
+                write!(output, "{byte:02x}").unwrap();
+            }
+            writeln!(output, "\"}}").unwrap();
+            output.flush().unwrap();
+            Ok(())
+        }).0.unwrap();
+    }
+}
+
 #[test]
 fn original_execution_tile_target_has_exact_and_one_short_resources() {
     for layout in [Layout::Blocked, Layout::Striped] {

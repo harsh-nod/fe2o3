@@ -234,28 +234,7 @@ fn generate_refinement_inner_v49(
         .checked_sub(original_index_floor)
         .ok_or(Resource::Accounting)?;
     let census = paired.census();
-    write!(
-        out,
-        "use vstd::prelude::*;\nuse vstd::seq_lib::*;\nverus! {{\n"
-    )
-    .map_err(|_| out.error())?;
-    super::relation::emit_prelude(out)?;
-    write!(
-        out,
-        "{}{}{}{}{}{}{}{}{}{}{}",
-        super::super::structured_state_v30::STATE,
-        super::control_generate::SOURCE_STATE,
-        super::super::cfg_trace::PRELUDE,
-        super::super::byte_memory_v30::BYTE_MEMORY_V30,
-        bytes::INVOCATION_BYTES_V36,
-        bytes::CLASSIFIED_VIEW_LAWS_V40,
-        source_bytes::SOURCE_BYTES_V36,
-        source_bytes::SOURCE_POINTERS_V36,
-        source_frames::SOURCE_FRAMES_V36,
-        source_function::SOURCE_FUNCTION_V36,
-        effects::INVOCATION_EFFECTS_V36,
-    )
-    .map_err(|_| out.error())?;
+    emit_model_prelude_v187(out)?;
     tag_pairs.check(out)?;
     slots.emit_source_tag_contracts(SOURCE_TAG_NAMESPACE_V40, out)?;
     contracts.emit(TARGET_TAG_NAMESPACE_V40, out)?;
@@ -324,6 +303,32 @@ fn generate_refinement_inner_v49(
     out.budget
         .release_storage(physical_storage.retained_storage())?;
     Ok(census)
+}
+
+fn emit_model_prelude_v187(out: &mut Writer<'_, '_>) -> Result<()> {
+    use std::fmt::Write as _;
+    write!(
+        out,
+        "use vstd::prelude::*;\nuse vstd::seq_lib::*;\nverus! {{\n"
+    )
+    .map_err(|_| out.error())?;
+    super::relation::emit_prelude(out)?;
+    write!(
+        out,
+        "{}{}{}{}{}{}{}{}{}{}{}",
+        super::super::structured_state_v30::STATE,
+        super::control_generate::SOURCE_STATE,
+        super::super::cfg_trace::PRELUDE,
+        super::super::byte_memory_v30::BYTE_MEMORY_V30,
+        bytes::INVOCATION_BYTES_V36,
+        bytes::CLASSIFIED_VIEW_LAWS_V40,
+        source_bytes::SOURCE_BYTES_V36,
+        source_bytes::SOURCE_POINTERS_V36,
+        source_frames::SOURCE_FRAMES_V36,
+        source_function::SOURCE_FUNCTION_V36,
+        effects::INVOCATION_EFFECTS_V36,
+    )
+    .map_err(|_| out.error())
 }
 
 fn emit_execution_v37(
