@@ -34,6 +34,7 @@ mod conditional_worker_replay;
 mod engineering_hsaco;
 mod first_build_worker_binding;
 mod first_build_worker_conditional;
+pub use first_build_worker_conditional::ConditionalFirstBuildWorkerStartupQuoteV2;
 mod first_build_worker_conditional_binding;
 mod first_build_worker_engine;
 mod first_build_worker_native;
