@@ -11,6 +11,39 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Owned debugger capture reached; resume still refused — 2026-10-06
+
+A fresh bounded native attempt reached the owned stopped-wave capture: the
+register bytes were `df9b5713` (`0x13579bdf`, little-endian), and the 272-byte
+memory view contained the expected sentinels and all 64 lane values. Resume
+advanced to the next owned phase, then the debugger twice reported native
+relation refusal 5 at commit site 0. The target refused completion retirement
+and exited nonzero. This is a **failed qualification**, not a successful capture
+or resume feature; the one-use attempt is consumed and retained.
+
+The owned inner and outer cleanup records joined the exact request, nonce and
+invocation: real stream EOF, child reaping, empty cgroup and eventual cgroup
+absence were observed. The controller's separate unadmitted-inferior cleanup
+limitation remains explicit. The enclosing command failed with no source/tool/
+input postflight. A separate subsequent observation found all 899 selected
+inputs (973,561,031 bytes) and 17 tools unchanged; it does not repair that
+failed outer receipt or establish continuous exclusion.
+
+Before the attempt, the full debugger/provider currentness check passed:
+41,113 source files, 80 static inputs, 78 data files and 54 Python-source joins;
+997,713,881 charged content/EOF bytes within the unchanged 1 GiB limit.
+The verifier's earlier mismatch against the historical configuration's template
+label was corrected in a separate generation with a regression that joins the
+actual three-phase build receipts. The original failed generation is preserved.
+Fresh parent, process, resource and bound-wrapper checks also passed, including
+the launchable-wrapper positive/deadline controls. No resource cap was raised.
+
+Failure evidence: `debugger-owned-legacy-native-failed-actual-root-r72-r1/MANIFEST.json`,
+SHA256 `0acf7d44cf1bfb3bb345ea67a25e28d301ca97364dbe34db189786878c3da644`.
+Diagnosis now focuses on the post-resume relation; the ordinary Worker execution
+and tutorial qualifications remain pending. No milestone exit is newly accepted:
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Worker loader and debugger containment checkpoint — 2026-10-06
 
 The retained direct Worker outputs passed a separate read-only reconciliation:
