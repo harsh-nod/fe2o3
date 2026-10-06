@@ -66,53 +66,78 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + 14 * size_of::<usize>()
         + size_of::<Option<usize>>();
     type ForwardingOwner<'a, 'b, 'c, 'd> = ExpandedScalarBindingsV196<'a, 'b, 'c, 'd>;
-    let forwarding_wrapper = size_of::<(&ForwardingOwner<'_, '_, '_, '_>, &mut Writer<'_, '_>, usize)>();
-    let forwarding_callback = size_of::<(&ForwardingOwner<'_, '_, '_, '_>, &usize, &mut Writer<'_, '_>)>();
+    let forwarding_wrapper =
+        size_of::<(&ForwardingOwner<'_, '_, '_, '_>, &mut Writer<'_, '_>, usize)>();
+    let forwarding_callback = size_of::<(
+        &ForwardingOwner<'_, '_, '_, '_>,
+        &usize,
+        &mut Writer<'_, '_>,
+    )>();
     let forwarding_inventory_tile_neutral = 3 * size_of::<&()>();
     let forwarding_source_current_function = 3 * size_of::<&()>();
     let forwarding_edge_and_predecessor = 2 * size_of::<&()>();
-    let forwarding_descendants = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>();
+    let forwarding_descendants =
+        size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>();
     let forwarding_edges = size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1]>();
     let forwarding_indices = 4 * size_of::<usize>() + size_of::<Option<usize>>();
-    let forwarding_coordinates = size_of::<fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1>()
-        + size_of::<Definition>();
+    let forwarding_coordinates =
+        size_of::<fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1>() + size_of::<Definition>();
     let forwarding_iteration = size_of::<std::ops::Range<usize>>()
         + size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1>>();
     let forwarding_results = 2 * size_of::<Result<usize>>();
+    use fe2o3_kernel_ir::{
+        CanonicalKirBlockCoordinateV1 as RebuildBlock,
+        CanonicalKirFunctionCoordinateV1 as RebuildFunction,
+    };
     use reconstruction::Recipe;
-    use fe2o3_kernel_ir::{CanonicalKirBlockCoordinateV1 as RebuildBlock,
-        CanonicalKirFunctionCoordinateV1 as RebuildFunction};
-    let reconstruction_vectors = size_of::<Vec<Option<Recipe>>>() + size_of::<Vec<u8>>()
-        + size_of::<Vec<(usize, u8)>>() + size_of::<Vec<usize>>();
+    let reconstruction_vectors = size_of::<Vec<Option<Recipe>>>()
+        + size_of::<Vec<u8>>()
+        + size_of::<Vec<(usize, u8)>>()
+        + size_of::<Vec<usize>>();
     let reconstruction_allocation_results = 2 * size_of::<Result<Vec<Option<Recipe>>>>()
-        + 2 * size_of::<Result<Vec<u8>>>() + 2 * size_of::<Result<Vec<(usize, u8)>>>()
+        + 2 * size_of::<Result<Vec<u8>>>()
+        + 2 * size_of::<Result<Vec<(usize, u8)>>>()
         + 2 * size_of::<Result<Vec<usize>>>();
-    let reconstruction_query_frames = 4 * size_of::<Recipe>() + 4 * size_of::<Result<Recipe>>()
-        + 4 * size_of::<Option<usize>>() + 4 * size_of::<Option<RebuildBlock>>()
-        + 4 * size_of::<RebuildBlock>() + 3 * size_of::<RebuildFunction>()
-        + 3 * size_of::<Definition>() + 3 * size_of::<std::ops::Range<usize>>()
+    let reconstruction_query_frames = 4 * size_of::<Recipe>()
+        + 4 * size_of::<Result<Recipe>>()
+        + 4 * size_of::<Option<usize>>()
+        + 4 * size_of::<Option<RebuildBlock>>()
+        + 4 * size_of::<RebuildBlock>()
+        + 3 * size_of::<RebuildFunction>()
+        + 3 * size_of::<Definition>()
+        + 3 * size_of::<std::ops::Range<usize>>()
         + size_of::<[Option<(RebuildBlock, usize)>; 2]>();
     let reconstruction_wrapper_borrows = 6 * size_of::<&()>();
     let reconstruction_recipe_borrows = 10 * size_of::<&()>();
     let reconstruction_phi_borrows = 9 * size_of::<&()>();
     let reconstruction_operand_borrows = 4 * size_of::<&()>();
-    let reconstruction_traversal_borrows = size_of::<&mut [Option<Recipe>]>()
-        + size_of::<&mut [u8]>() + 4 * size_of::<&()>();
-    let reconstruction_loader_frame = (5 + 2) * size_of::<&()>() + size_of::<usize>()
-        + size_of::<Recipe>() + size_of::<Result<Recipe>>();
+    let reconstruction_traversal_borrows =
+        size_of::<&mut [Option<Recipe>]>() + size_of::<&mut [u8]>() + 4 * size_of::<&()>();
+    let reconstruction_loader_frame = (5 + 2) * size_of::<&()>()
+        + size_of::<usize>()
+        + size_of::<Recipe>()
+        + size_of::<Result<Recipe>>();
     let reconstruction_arm_iteration = size_of::<std::array::IntoIter<RebuildBlock, 2>>();
     let reconstruction_snapshot_path = size_of::<[u32; 2]>() + size_of::<&[u32]>();
-    let reconstruction_slice_borrows = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>()
-        + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1]>()
-        + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>]>();
+    let reconstruction_slice_borrows =
+        size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>()
+            + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1]>()
+            + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>]>();
     let reconstruction_indices = (14 + 8 + 8 + 2) * size_of::<usize>();
-    let reconstruction_values = 2 * size_of::<Type>() + 2 * size_of::<fe2o3_kernel_ir::ScalarType>()
-        + 2 * size_of::<fe2o3_kernel_ir::ValueId>() + size_of::<FormalIndexWidth>()
-        + size_of::<[bool; 2]>() + 2 * size_of::<bool>() + size_of::<u8>() + size_of::<u64>()
+    let reconstruction_values = 2 * size_of::<Type>()
+        + 2 * size_of::<fe2o3_kernel_ir::ScalarType>()
+        + 2 * size_of::<fe2o3_kernel_ir::ValueId>()
+        + size_of::<FormalIndexWidth>()
+        + size_of::<[bool; 2]>()
+        + 2 * size_of::<bool>()
+        + size_of::<u8>()
+        + size_of::<u64>()
         + 3 * size_of::<Result<()>>();
-    let reconstruction_iterators = 3 * size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>>>()
-        + size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1>>()
-        + size_of::<std::slice::Iter<'_, usize>>();
+    let reconstruction_iterators = 3 * size_of::<
+        std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>>,
+    >() + size_of::<
+        std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1>,
+    >() + size_of::<std::slice::Iter<'_, usize>>();
     let header = retained
         + construction_and_query_results
         + input_predecessor_and_actual_coordinates
@@ -137,11 +162,17 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + reconstruction_vectors
         + reconstruction_allocation_results
         + reconstruction_query_frames
-        + reconstruction_wrapper_borrows + reconstruction_recipe_borrows
-        + reconstruction_phi_borrows + reconstruction_operand_borrows
-        + reconstruction_traversal_borrows + reconstruction_loader_frame
-        + reconstruction_arm_iteration + reconstruction_snapshot_path
-        + reconstruction_slice_borrows + reconstruction_indices + reconstruction_values
+        + reconstruction_wrapper_borrows
+        + reconstruction_recipe_borrows
+        + reconstruction_phi_borrows
+        + reconstruction_operand_borrows
+        + reconstruction_traversal_borrows
+        + reconstruction_loader_frame
+        + reconstruction_arm_iteration
+        + reconstruction_snapshot_path
+        + reconstruction_slice_borrows
+        + reconstruction_indices
+        + reconstruction_values
         + reconstruction_iterators
         + bounded_query_scratch;
     assert_eq!(out.budget.storage() - before, header);
@@ -411,10 +442,11 @@ fn exercise_source_arguments(
         let ssa = archive.plan_for_function(row.function).unwrap().plan();
         for entry in ssa.entry_definitions() {
             let endpoint = relation.ssa_typed_endpoint_v36(root, 0, entry.value(), out.budget)?;
-            if !matches!(endpoint.carrier_shape(out.budget)?,
+            if !matches!(
+                endpoint.carrier_shape(out.budget)?,
                 fe2o3_lower_mir_kernel::ProductionSourceSsaCarrierShapeV37::Value
-                | fe2o3_lower_mir_kernel::ProductionSourceSsaCarrierShapeV37::Unit)
-            {
+                    | fe2o3_lower_mir_kernel::ProductionSourceSsaCarrierShapeV37::Unit
+            ) {
                 continue;
             }
             if !matches!(
@@ -748,49 +780,72 @@ fn expanded_scalar_bindings_join_actual_definitions_in_both_tile_layouts() {
 #[test]
 fn expanded_source_values_follow_authenticated_scalar_substitutions_with_exact_bounds() {
     for layout in [Layout::Blocked, Layout::Striped] {
-        let run = |work, storage| run_fixture(layout, work, storage, |slots, _, out| {
-            let target = TileTargetV176::derive(slots, out)?;
-            let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
-            let original = slots.correspondence(out)?.inventory(out.budget)?;
-            let tile = slots.tile_owner_v176(out)?;
-            let neutral = tile.neutral_source_v162(out.budget)?;
-            let predecessor = neutral.output_inventory(out.budget)?;
-            let actual = target.inventory(out)?;
-            let mut substitutions = 0;
-            for (index, row) in original.definitions().iter().enumerate() {
-                if !matches!(row.ty, Type::Unit | Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_)) {
-                    continue;
+        let run = |work, storage| {
+            run_fixture(layout, work, storage, |slots, _, out| {
+                let target = TileTargetV176::derive(slots, out)?;
+                let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+                let original = slots.correspondence(out)?.inventory(out.budget)?;
+                let tile = slots.tile_owner_v176(out)?;
+                let neutral = tile.neutral_source_v162(out.budget)?;
+                let predecessor = neutral.output_inventory(out.budget)?;
+                let actual = target.inventory(out)?;
+                let mut substitutions = 0;
+                for (index, row) in original.definitions().iter().enumerate() {
+                    if !matches!(
+                        row.ty,
+                        Type::Unit | Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_)
+                    ) {
+                        continue;
+                    }
+                    let descendants = neutral.definition_descendants(row.coordinate, out.budget)?;
+                    let [descendant] = descendants else {
+                        continue;
+                    };
+                    if descendant.kind != Descendant::Substituted {
+                        continue;
+                    }
+                    let predecessor = &predecessor.definitions()
+                        [definition_index(predecessor, descendant.output)?];
+                    let function = match predecessor.coordinate {
+                        Definition::FunctionArgument { function, .. } => function,
+                        Definition::BlockArgument { block, .. } => block.function,
+                        Definition::Result { operation, .. } => operation.block.function,
+                    };
+                    let expected = actual
+                        .definitions()
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, candidate)| {
+                            actual.functions()[function.0 as usize]
+                                .definitions
+                                .contains(index)
+                                && candidate.value == predecessor.value
+                                && candidate.ty == row.ty
+                        })
+                        .map(|(index, _)| index)
+                        .collect::<Vec<_>>();
+                    assert_eq!(expected.len(), 1);
+                    assert_eq!(pairs.source_definition(index, out)?, expected[0]);
+                    refusal(pairs.definition(index, out))?;
+                    substitutions += 1;
                 }
-                let descendants = neutral.definition_descendants(row.coordinate, out.budget)?;
-                let [descendant] = descendants else { continue; };
-                if descendant.kind != Descendant::Substituted {
-                    continue;
-                }
-                let predecessor = &predecessor.definitions()[definition_index(predecessor, descendant.output)?];
-                let function = match predecessor.coordinate {
-                    Definition::FunctionArgument { function, .. } => function,
-                    Definition::BlockArgument { block, .. } => block.function,
-                    Definition::Result { operation, .. } => operation.block.function,
-                };
-                let expected = actual.definitions().iter().enumerate().filter(|(index, candidate)| {
-                    actual.functions()[function.0 as usize].definitions.contains(index)
-                        && candidate.value == predecessor.value && candidate.ty == row.ty
-                }).map(|(index, _)| index).collect::<Vec<_>>();
-                assert_eq!(expected.len(), 1);
-                assert_eq!(pairs.source_definition(index, out)?, expected[0]);
-                refusal(pairs.definition(index, out))?;
-                substitutions += 1;
-            }
-            assert!(substitutions > 0, "fixture must contain genuine checked replacements");
-            refusal(pairs.source_definition(original.definitions().len(), out))?;
-            refusal(pairs.source_definition(usize::MAX, out))?;
-            Ok(())
-        });
+                assert!(
+                    substitutions > 0,
+                    "fixture must contain genuine checked replacements"
+                );
+                refusal(pairs.source_definition(original.definitions().len(), out))?;
+                refusal(pairs.source_definition(usize::MAX, out))?;
+                Ok(())
+            })
+        };
         let baseline = run(LIMIT, LIMIT);
         baseline.0.unwrap();
         let exact = run(baseline.1, baseline.3);
         exact.0.unwrap();
-        assert_eq!((exact.1, exact.2, exact.3), (baseline.1, baseline.2, baseline.3));
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (baseline.1, baseline.2, baseline.3)
+        );
         assert!(matches!(run(baseline.1 - 1, baseline.3).0,
             Err(Error::Resource(Resource::Work(error)))
             | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
@@ -825,98 +880,141 @@ fn expanded_scalar_bindings_have_exact_and_one_short_full_resource_bounds() {
 #[test]
 fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
     for layout in [Layout::Blocked, Layout::Striped] {
-        let run = |work, storage| run_fixture(layout, work, storage, |slots, _, out| {
-            let target = TileTargetV176::derive(slots, out)?;
-            let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
-            let original = slots.correspondence(out)?.inventory(out.budget)?;
-            let tile = slots.tile_owner_v176(out)?;
-            let neutral = tile.neutral_source_v162(out.budget)?;
-            let predecessor = neutral.output_inventory(out.budget)?;
-            let actual = target.inventory(out)?;
-            let mut forwarded = 0;
-            let mut missing_computations = 0;
-            let mut ambiguous_inputs = 0;
-            for (index, row) in original.definitions().iter().enumerate() {
-                if !matches!(row.ty, Type::Scalar(_))
-                    || !neutral.definition_descendants(row.coordinate, out.budget)?.is_empty()
-                {
-                    continue;
-                }
-                // This independent oracle uses a visited set and all original
-                // edges, not the production iteration bound/function slice.
-                let mut seen = std::collections::BTreeSet::new();
-                let mut chain = Vec::new();
-                let mut current = index;
-                let expected = loop {
-                    if !seen.insert(current) {
-                        break None;
+        let run = |work, storage| {
+            run_fixture(layout, work, storage, |slots, _, out| {
+                let target = TileTargetV176::derive(slots, out)?;
+                let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+                let original = slots.correspondence(out)?.inventory(out.budget)?;
+                let tile = slots.tile_owner_v176(out)?;
+                let neutral = tile.neutral_source_v162(out.budget)?;
+                let predecessor = neutral.output_inventory(out.budget)?;
+                let actual = target.inventory(out)?;
+                let mut forwarded = 0;
+                let mut missing_computations = 0;
+                let mut ambiguous_inputs = 0;
+                for (index, row) in original.definitions().iter().enumerate() {
+                    if !matches!(row.ty, Type::Scalar(_))
+                        || !neutral
+                            .definition_descendants(row.coordinate, out.budget)?
+                            .is_empty()
+                    {
+                        continue;
                     }
-                    chain.push(current);
-                    let current_row = &original.definitions()[current];
-                    assert_eq!(current_row.ty, row.ty);
-                    let descendants = neutral.definition_descendants(current_row.coordinate, out.budget)?;
-                    if let [descendant] = descendants {
-                        let prior = &predecessor.definitions()[definition_index(predecessor, descendant.output)?];
-                        let function = match prior.coordinate {
-                            Definition::FunctionArgument { function, .. } => function,
-                            Definition::BlockArgument { block, .. } => block.function,
-                            Definition::Result { operation, .. } => operation.block.function,
-                        };
-                        let candidates = actual.definitions().iter().enumerate()
-                            .filter(|(at, candidate)| actual.functions()[function.0 as usize].definitions.contains(at)
-                                && candidate.value == prior.value && candidate.ty == row.ty)
-                            .map(|(at, _)| at).collect::<Vec<_>>();
-                        break match candidates.as_slice() { [at] => Some(*at), _ => None };
-                    }
-                    if !descendants.is_empty() {
-                        break None;
-                    }
-                    let Definition::BlockArgument { block, .. } = current_row.coordinate else {
-                        break None;
-                    };
-                    let incoming = original.edge_arguments().iter()
-                        .filter(|edge| edge.target_definition == current)
-                        .map(|edge| {
-                            assert_eq!(edge.coordinate.edge.source.function, block.function);
-                            assert!(original.functions()[block.function.0 as usize].definitions.contains(&edge.incoming_definition));
-                            assert_eq!(original.definitions()[edge.incoming_definition].value, Some(edge.value));
-                            edge.incoming_definition
-                        }).collect::<std::collections::BTreeSet<_>>();
-                    if incoming.len() != 1 {
-                        ambiguous_inputs += usize::from(incoming.len() > 1);
-                        break None;
-                    }
-                    current = *incoming.first().unwrap();
-                };
-                // The old API must remain closed even for newly located inputs.
-                refusal(pairs.source_definition(index, out))?;
-                match expected {
-                    Some(expected) => {
-                        assert_eq!(pairs.source_transport_definition(index, out)?, expected);
-                        assert!(chain.len() > 1);
-                        if forwarded == 0 {
-                            eprintln!("original scalar forwarding {layout:?}: {chain:?} -> actual {expected}");
+                    // This independent oracle uses a visited set and all original
+                    // edges, not the production iteration bound/function slice.
+                    let mut seen = std::collections::BTreeSet::new();
+                    let mut chain = Vec::new();
+                    let mut current = index;
+                    let expected = loop {
+                        if !seen.insert(current) {
+                            break None;
                         }
-                        forwarded += 1;
-                    }
-                    None => {
-                        refusal(pairs.source_transport_definition(index, out))?;
-                        missing_computations += usize::from(matches!(row.coordinate, Definition::Result { .. }));
+                        chain.push(current);
+                        let current_row = &original.definitions()[current];
+                        assert_eq!(current_row.ty, row.ty);
+                        let descendants =
+                            neutral.definition_descendants(current_row.coordinate, out.budget)?;
+                        if let [descendant] = descendants {
+                            let prior = &predecessor.definitions()
+                                [definition_index(predecessor, descendant.output)?];
+                            let function = match prior.coordinate {
+                                Definition::FunctionArgument { function, .. } => function,
+                                Definition::BlockArgument { block, .. } => block.function,
+                                Definition::Result { operation, .. } => operation.block.function,
+                            };
+                            let candidates = actual
+                                .definitions()
+                                .iter()
+                                .enumerate()
+                                .filter(|(at, candidate)| {
+                                    actual.functions()[function.0 as usize]
+                                        .definitions
+                                        .contains(at)
+                                        && candidate.value == prior.value
+                                        && candidate.ty == row.ty
+                                })
+                                .map(|(at, _)| at)
+                                .collect::<Vec<_>>();
+                            break match candidates.as_slice() {
+                                [at] => Some(*at),
+                                _ => None,
+                            };
+                        }
+                        if !descendants.is_empty() {
+                            break None;
+                        }
+                        let Definition::BlockArgument { block, .. } = current_row.coordinate else {
+                            break None;
+                        };
+                        let incoming = original
+                            .edge_arguments()
+                            .iter()
+                            .filter(|edge| edge.target_definition == current)
+                            .map(|edge| {
+                                assert_eq!(edge.coordinate.edge.source.function, block.function);
+                                assert!(
+                                    original.functions()[block.function.0 as usize]
+                                        .definitions
+                                        .contains(&edge.incoming_definition)
+                                );
+                                assert_eq!(
+                                    original.definitions()[edge.incoming_definition].value,
+                                    Some(edge.value)
+                                );
+                                edge.incoming_definition
+                            })
+                            .collect::<std::collections::BTreeSet<_>>();
+                        if incoming.len() != 1 {
+                            ambiguous_inputs += usize::from(incoming.len() > 1);
+                            break None;
+                        }
+                        current = *incoming.first().unwrap();
+                    };
+                    // The old API must remain closed even for newly located inputs.
+                    refusal(pairs.source_definition(index, out))?;
+                    match expected {
+                        Some(expected) => {
+                            assert_eq!(pairs.source_transport_definition(index, out)?, expected);
+                            assert!(chain.len() > 1);
+                            if forwarded == 0 {
+                                eprintln!(
+                                    "original scalar forwarding {layout:?}: {chain:?} -> actual {expected}"
+                                );
+                            }
+                            forwarded += 1;
+                        }
+                        None => {
+                            refusal(pairs.source_transport_definition(index, out))?;
+                            missing_computations +=
+                                usize::from(matches!(row.coordinate, Definition::Result { .. }));
+                        }
                     }
                 }
-            }
-            assert!(forwarded > 0, "fixture must have actual unambiguous scalar forwarding");
-            assert!(missing_computations > 0, "erased computations must remain refused");
-            assert!(ambiguous_inputs > 0, "distinct actual incoming definitions must remain refused");
-            refusal(pairs.source_transport_definition(original.definitions().len(), out))?;
-            refusal(pairs.source_transport_definition(usize::MAX, out))?;
-            Ok(())
-        });
+                assert!(
+                    forwarded > 0,
+                    "fixture must have actual unambiguous scalar forwarding"
+                );
+                assert!(
+                    missing_computations > 0,
+                    "erased computations must remain refused"
+                );
+                assert!(
+                    ambiguous_inputs > 0,
+                    "distinct actual incoming definitions must remain refused"
+                );
+                refusal(pairs.source_transport_definition(original.definitions().len(), out))?;
+                refusal(pairs.source_transport_definition(usize::MAX, out))?;
+                Ok(())
+            })
+        };
         let measured = run(LIMIT, LIMIT);
         measured.0.unwrap();
         let exact = run(measured.1, measured.3);
         exact.0.unwrap();
-        assert_eq!((exact.1, exact.2, exact.3), (measured.1, measured.2, measured.3));
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (measured.1, measured.2, measured.3)
+        );
         assert!(matches!(run(measured.1 - 1, measured.3).0,
             Err(Error::Resource(Resource::Work(error)))
             | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
@@ -932,56 +1030,102 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
 fn expanded_scalar_reconstruction_uses_original_diamonds_and_retained_snapshots() {
     use fe2o3_kernel_ir::{ExecutionOperationV15 as Execution, OperationKind};
     for layout in [Layout::Blocked, Layout::Striped] {
-        let run = |work, storage| run_fixture(layout, work, storage, |slots, _, out| {
-            let target = TileTargetV176::derive(slots, out)?;
-            let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
-            let original = slots.correspondence(out)?.inventory(out.budget)?;
-            let tile = slots.tile_owner_v176(out)?;
-            let neutral = tile.neutral_source_v162(out.budget)?;
-            let mut parts = 0;
-            let mut diamonds = 0;
-            for (index, row) in original.definitions().iter().enumerate() {
-                if let Definition::Result { operation, result } = row.coordinate {
-                    let op = &original.operations()[crate::mixed_optimizer_refinement_v26::semantics::operation_index(original, operation)?];
-                    if let OperationKind::Execution(Execution::FragmentIntoPartsU32 { fragment, elements, .. }) = op.operation.kind {
-                        let fragment = original.definitions().iter().enumerate().find(|(index, row)| {
-                            original.functions()[operation.block.function.0 as usize].definitions.contains(index)
-                                && row.value == Some(fragment)
-                        }).map(|(index, _)| index).unwrap();
-                        let elements = u32::from(elements);
-                        let expected = pairs.tile_leaf(fragment, &[result / elements, result % elements], out)?.unwrap();
-                        let start = out.text.len();
-                        pairs.emit_source_original_relation(0, Some(index), FormalIndexWidth::Bits64, out)?;
-                        let text = &out.text[start..];
-                        assert!(text.contains(&format!("let actual = target.values[{expected}];")));
-                        assert!(!text.contains("byte_load"));
-                        parts += 1;
+        let run = |work, storage| {
+            run_fixture(layout, work, storage, |slots, _, out| {
+                let target = TileTargetV176::derive(slots, out)?;
+                let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+                let original = slots.correspondence(out)?.inventory(out.budget)?;
+                let tile = slots.tile_owner_v176(out)?;
+                let neutral = tile.neutral_source_v162(out.budget)?;
+                let mut parts = 0;
+                let mut diamonds = 0;
+                for (index, row) in original.definitions().iter().enumerate() {
+                    if let Definition::Result { operation, result } = row.coordinate {
+                        let op = &original.operations()
+                            [crate::mixed_optimizer_refinement_v26::semantics::operation_index(
+                                original, operation,
+                            )?];
+                        if let OperationKind::Execution(Execution::FragmentIntoPartsU32 {
+                            fragment,
+                            elements,
+                            ..
+                        }) = op.operation.kind
+                        {
+                            let fragment = original
+                                .definitions()
+                                .iter()
+                                .enumerate()
+                                .find(|(index, row)| {
+                                    original.functions()[operation.block.function.0 as usize]
+                                        .definitions
+                                        .contains(index)
+                                        && row.value == Some(fragment)
+                                })
+                                .map(|(index, _)| index)
+                                .unwrap();
+                            let elements = u32::from(elements);
+                            let expected = pairs
+                                .tile_leaf(fragment, &[result / elements, result % elements], out)?
+                                .unwrap();
+                            let start = out.text.len();
+                            pairs.emit_source_original_relation(
+                                0,
+                                Some(index),
+                                FormalIndexWidth::Bits64,
+                                out,
+                            )?;
+                            let text = &out.text[start..];
+                            assert!(
+                                text.contains(&format!("let actual = target.values[{expected}];"))
+                            );
+                            assert!(!text.contains("byte_load"));
+                            parts += 1;
+                        }
                     }
+                    if !matches!(row.coordinate, Definition::BlockArgument { .. })
+                        || !matches!(row.ty, Type::Scalar(fe2o3_kernel_ir::ScalarType::U32))
+                        || !neutral
+                            .definition_descendants(row.coordinate, out.budget)?
+                            .is_empty()
+                    {
+                        continue;
+                    }
+                    let incoming = original
+                        .edge_arguments()
+                        .iter()
+                        .filter(|edge| edge.target_definition == index)
+                        .map(|edge| edge.incoming_definition)
+                        .collect::<std::collections::BTreeSet<_>>();
+                    if incoming.len() != 2 {
+                        continue;
+                    }
+                    let start = out.text.len();
+                    pairs.emit_source_original_relation(
+                        0,
+                        Some(index),
+                        FormalIndexWidth::Bits64,
+                        out,
+                    )?;
+                    let text = &out.text[start..];
+                    assert!(text.contains("reconstructed_branch_"));
+                    assert!(text.contains("reconstructed_sum_"));
+                    assert!(text.contains("% 4294967296"));
+                    assert!(text.contains(&format!("invocation_value_related_v36(original, reconstructed_{index}, map, source.machine.memory, target.memory)")));
+                    assert!(!text.contains("byte_load") && !text.contains("assume("));
+                    diamonds += 1;
                 }
-                if !matches!(row.coordinate, Definition::BlockArgument { .. })
-                    || !matches!(row.ty, Type::Scalar(fe2o3_kernel_ir::ScalarType::U32))
-                    || !neutral.definition_descendants(row.coordinate, out.budget)?.is_empty() { continue; }
-                let incoming = original.edge_arguments().iter().filter(|edge| edge.target_definition == index)
-                    .map(|edge| edge.incoming_definition).collect::<std::collections::BTreeSet<_>>();
-                if incoming.len() != 2 { continue; }
-                let start = out.text.len();
-                pairs.emit_source_original_relation(0, Some(index), FormalIndexWidth::Bits64, out)?;
-                let text = &out.text[start..];
-                assert!(text.contains("reconstructed_branch_"));
-                assert!(text.contains("reconstructed_sum_"));
-                assert!(text.contains("% 4294967296"));
-                assert!(text.contains(&format!("invocation_value_related_v36(original, reconstructed_{index}, map, source.machine.memory, target.memory)")));
-                assert!(!text.contains("byte_load") && !text.contains("assume("));
-                diamonds += 1;
-            }
-            assert!(parts > 0 && diamonds > 0);
-            Ok(())
-        });
+                assert!(parts > 0 && diamonds > 0);
+                Ok(())
+            })
+        };
         let measured = run(LIMIT, LIMIT);
         measured.0.unwrap();
         let exact = run(measured.1, measured.3);
         exact.0.unwrap();
-        assert_eq!((exact.1, exact.2, exact.3), (measured.1, measured.2, measured.3));
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (measured.1, measured.2, measured.3)
+        );
         assert!(matches!(run(measured.1 - 1, measured.3).0,
             Err(Error::Resource(Resource::Work(error)))
             | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
@@ -1019,7 +1163,11 @@ fn expanded_scalar_bindings_retain_foreign_and_refunded_account_refusals() {
             assert!(pairs.definition_counts(out).is_err());
             assert!(pairs.definition(0, out).is_err());
             assert!(pairs.source_transport_definition(0, out).is_err());
-            assert!(pairs.emit_source_original_relation(0, Some(0), FormalIndexWidth::Bits64, out).is_err());
+            assert!(
+                pairs
+                    .emit_source_original_relation(0, Some(0), FormalIndexWidth::Bits64, out)
+                    .is_err()
+            );
             Err(error)
         });
         assert!(reached);

@@ -224,7 +224,10 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             let input = self.slots.correspondence(out)?.inventory(out.budget)?;
             out.budget.charge_work(2)?;
             let source = input.definitions().get(original).ok_or_else(mismatch)?;
-            if !matches!(source.ty, Type::Unit | Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_)) {
+            if !matches!(
+                source.ty,
+                Type::Unit | Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_)
+            ) {
                 return Err(Error::Statement(
                     "expanded scalar binding requires a scalar, pointer, slice or unit endpoint",
                 ));
@@ -233,7 +236,9 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             let neutral = tile.neutral_source_v162(out.budget)?;
             let descendants = neutral.definition_descendants(source.coordinate, out.budget)?;
             out.budget.charge_work(2)?;
-            let [descendant] = descendants else { return Err(mismatch()); };
+            let [descendant] = descendants else {
+                return Err(mismatch());
+            };
             if descendant.kind == Descendant::Retained {
                 return self.definition(original, out);
             }
@@ -253,7 +258,8 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             // The authenticated tile tail retains scalar value identities even
             // when expansion changes operation coordinates and dense indices.
             let actual = self.target.inventory(out)?;
-            let index = actual.definition_index_for_value(function, value, out.budget)?
+            let index = actual
+                .definition_index_for_value(function, value, out.budget)?
                 .ok_or_else(mismatch)?;
             out.budget.charge_work(2)?;
             let actual = actual.definitions().get(index).ok_or_else(mismatch)?;

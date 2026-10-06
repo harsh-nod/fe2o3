@@ -387,7 +387,10 @@ fn expanded_context_fresh_preservation_keeps_input_guards_and_all_witness_rows()
     let (header, body) = law.split_once("\n{\n").unwrap();
     let (_, contract) = header.split_once("    requires ").unwrap();
     let (requires, ensures) = contract.split_once("    ensures ").unwrap();
-    assert_eq!(requires, "invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),\n        invocation_execution_map_current_v205(source, target, execution_map),\n");
+    assert_eq!(
+        requires,
+        "invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),\n        invocation_execution_map_current_v205(source, target, execution_map),\n"
+    );
     assert!(ensures.contains("next.updated && invocation_execution_map_current_v205(\n            next.source.source, next.target, next.execution_map)"));
     assert!(body.contains("source, target, execution_map, issue, site, destination"));
     assert!(body.contains("execution_map[key].local != issue.destination"));

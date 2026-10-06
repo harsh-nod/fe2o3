@@ -108,8 +108,10 @@ fn independent_nonsymmetric_cases_distinguish_wrong_return_and_output_order() {
         }
     }
     let zeros = oracle::expected(0);
-    assert!((0..64)
-        .all(|lane| oracle::lane_word(&zeros, lane, 0) == oracle::lane_word(&zeros, lane, 1)));
+    assert!(
+        (0..64)
+            .all(|lane| oracle::lane_word(&zeros, lane, 0) == oracle::lane_word(&zeros, lane, 1))
+    );
 }
 #[test]
 fn bounded_diagnostic_stops_at_utf8_boundary_without_ellipsis_overflow() {

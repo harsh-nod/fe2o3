@@ -28,12 +28,20 @@ fn support_only(
         }
         assert!(generated.contains("proof fn invocation_context_issue_segment_"));
         assert_eq!(
-            generated.matches("proof fn invocation_context_issue_initial_map_segment_").count(),
-            generated.matches("proof fn invocation_context_issue_segment_").count()
+            generated
+                .matches("proof fn invocation_context_issue_initial_map_segment_")
+                .count(),
+            generated
+                .matches("proof fn invocation_context_issue_segment_")
+                .count()
         );
         assert_eq!(
-            generated.matches("proof fn invocation_context_issue_current_map_segment_").count(),
-            generated.matches("proof fn invocation_context_issue_segment_").count()
+            generated
+                .matches("proof fn invocation_context_issue_current_map_segment_")
+                .count(),
+            generated
+                .matches("proof fn invocation_context_issue_segment_")
+                .count()
         );
         assert!(!generated.contains("spec fn invocation_expanded_live_values_"));
         assert!(!generated.contains("spec fn expanded_source_component_"));

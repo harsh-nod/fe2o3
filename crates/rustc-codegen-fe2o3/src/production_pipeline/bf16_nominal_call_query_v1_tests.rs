@@ -10,7 +10,7 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticBlockIdV1, SemanticCallDestinationV1, SemanticCallableIdV1, SemanticControlFlowEdgeV1,
     SemanticDirectCallV1, SemanticFunctionIdV1, SemanticOperandV1,
 };
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn query_error(error: QueryError) -> Error {
     match error {
@@ -365,12 +365,14 @@ pub(super) fn inspect(
                 if p.projections().is_empty())
             );
         }
-        assert!(actual
-            .destination()
-            .unwrap()
-            .place()
-            .projections()
-            .is_empty());
+        assert!(
+            actual
+                .destination()
+                .unwrap()
+                .place()
+                .projections()
+                .is_empty()
+        );
         let clone_storage = 2 * std::mem::size_of::<SemanticDirectCallV1>()
             + 8 * std::mem::size_of::<SemanticOperandV1>();
         budget.reserve_storage(clone_storage)?;
@@ -519,12 +521,14 @@ pub(super) fn inspect(
             budget.release_storage(23)?;
         }
         let entered = Cell::new(false);
-        assert!(owner
-            .with_checked_canonical_calls_v1(&inventory, budget, |_, _| {
-                entered.set(true);
-                Ok(())
-            })
-            .is_err());
+        assert!(
+            owner
+                .with_checked_canonical_calls_v1(&inventory, budget, |_, _| {
+                    entered.set(true);
+                    Ok(())
+                })
+                .is_err()
+        );
         assert!(!entered.get());
         Ok(())
     }));

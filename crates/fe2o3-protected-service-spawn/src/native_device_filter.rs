@@ -93,10 +93,7 @@ pub(crate) fn install(directory: BorrowedFd<'_>) -> Result<()> {
     let raw =
         unsafe { libc::syscall(libc::SYS_bpf, PROG_LOAD, &raw const load, size_of::<Load>()) };
     if raw < 0 {
-        return Err(io(
-            "load fixed compiler device denial",
-            last_error(),
-        ));
+        return Err(io("load fixed compiler device denial", last_error()));
     }
     let raw = i32::try_from(raw).map_err(|_| Error::State("invalid BPF program descriptor"))?;
     // SAFETY: successful BPF_PROG_LOAD returned this new, uniquely owned FD.
@@ -119,10 +116,7 @@ pub(crate) fn install(directory: BorrowedFd<'_>) -> Result<()> {
         )
     };
     if result != 0 {
-        return Err(io(
-            "attach fixed compiler device denial",
-            last_error(),
-        ));
+        return Err(io("attach fixed compiler device denial", last_error()));
     }
     Ok(())
 }
