@@ -946,57 +946,58 @@ pub(super) mod tests {
         super::super::super::invocations::tests::run_allocation_variant(
             work,
             storage,
-            |plan, out| {
-                let source = plan.source(out)?;
-                let result = source.with_checked_mixed_fixedpoint_optimization_v18(
-                    out.budget,
-                    |original, optimized, budget| {
-                        let floor = budget.storage();
-                        let tile = optimized.prepare_tile_expansion_v159(0, layout, budget)?;
-                        let tile_floor = budget.storage();
-                        let result = (|| {
-                            let mut writer = Writer::new(budget)?;
-                            let slots = SourceSlots::derive_tile_v162(plan, &tile, &mut writer)?;
-                            slots.check_source(original, &mut writer)?;
-                            examine(&slots, &mut writer)
-                        })();
-                        if result.is_ok() {
-                            budget.release_storage(budget.storage() - tile_floor)?;
-                            tile.discard(budget)?;
-                            assert_eq!(budget.storage(), floor);
-                        }
-                        result.map(|()| ((), 0))
-                    },
-                );
-                match result {
-                    Ok((owner, (), _receipt)) => {
-                        drop(owner);
-                        Ok(())
-                    }
-                    Err(fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Source(
-                        error,
-                    )) => Err(error.into()),
-                    Err(
-                        fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Adoption(
-                            fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(error),
-                        ),
-                    ) => Err(error),
-                    Err(
-                        fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Adoption(
-                            fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Resource(error),
-                        ),
-                    ) => Err(error.into()),
-                    Err(
-                        fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Observation(
-                            fe2o3_pliron::KirNeutralOptimizationErrorV18::Execution(
-                                fe2o3_pliron::PlironOptimizationErrorV12::Resources(error),
-                            ),
-                        ),
-                    ) => Err(error.into()),
-                    Err(error) => panic!("tile slot fixture preparation failed: {error:?}"),
-                }
-            },
+            |plan, out| with_tile_slots(plan, layout, out, examine),
         )
+    }
+
+    pub(in super::super) fn with_tile_slots(
+        plan: &InvocationPlan<'_, '_>,
+        layout: fe2o3_kernel_ir::ExecutionTileLayoutV1,
+        out: &mut Writer<'_, '_>,
+        examine: impl FnOnce(&SourceSlots<'_, '_>, &mut Writer<'_, '_>) -> Result<()>,
+    ) -> Result<()> {
+        let source = plan.source(out)?;
+        let result = source.with_checked_mixed_fixedpoint_optimization_v18(
+            out.budget,
+            |original, optimized, budget| {
+                let floor = budget.storage();
+                let tile = optimized.prepare_tile_expansion_v159(0, layout, budget)?;
+                let tile_floor = budget.storage();
+                let result = (|| {
+                    let mut writer = Writer::new(budget)?;
+                    let slots = SourceSlots::derive_tile_v162(plan, &tile, &mut writer)?;
+                    slots.check_source(original, &mut writer)?;
+                    examine(&slots, &mut writer)
+                })();
+                if result.is_ok() {
+                    budget.release_storage(budget.storage() - tile_floor)?;
+                    tile.discard(budget)?;
+                    assert_eq!(budget.storage(), floor);
+                }
+                result.map(|()| ((), 0))
+            },
+        );
+        match result {
+            Ok((owner, (), _receipt)) => {
+                drop(owner);
+                Ok(())
+            }
+            Err(fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Source(error)) => {
+                Err(error.into())
+            }
+            Err(fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Adoption(
+                fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(error),
+            )) => Err(error),
+            Err(fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Adoption(
+                fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Resource(error),
+            )) => Err(error.into()),
+            Err(fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18::Observation(
+                fe2o3_pliron::KirNeutralOptimizationErrorV18::Execution(
+                    fe2o3_pliron::PlironOptimizationErrorV12::Resources(error),
+                ),
+            )) => Err(error.into()),
+            Err(error) => panic!("tile slot fixture preparation failed: {error:?}"),
+        }
     }
 
     #[test]

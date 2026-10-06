@@ -335,6 +335,63 @@ fn original_source_witness_reborrow_program_preserves_parent_site_on_both_roots(
 }
 
 #[test]
+fn expanded_source_scalar_relations_preserve_genuine_witness_reborrows() {
+    use super::super::super::{
+        paired::ExpandedScalarBindingsV196, slots::tests::with_tile_slots,
+        tile_target::TileTargetV176,
+    };
+    use fe2o3_kernel_ir::{ExecutionTileLayoutV1 as Layout, FormalIndexWidth};
+
+    for layout in [Layout::Blocked, Layout::Striped] {
+        super::super::super::super::invocations::tests::run_callable_transform(
+            LIMIT,
+            LIMIT,
+            |types, functions, callables| fixture(types, functions, callables, 2),
+            |plan, out| {
+                with_tile_slots(plan, layout, out, |slots, out| {
+                    let target = TileTargetV176::derive(slots, out)?;
+                    let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+                    for root in 0..2 {
+                        for instance in 1..=2 {
+                            let row = plan.instance(root, instance, out)?;
+                            for (statement, local) in [(0, 5), (1, 6), (2, 8), (3, 9)] {
+                                let value = original_value(
+                                    slots, row.function, 1, Some(statement),
+                                    OperandRole::Destination, local, true, out,
+                                )?;
+                                let endpoint = slots.correspondence(out)?
+                                    .ssa_typed_endpoint_v36(root, instance, value, out.budget)?;
+                                let reference = endpoint.reference(out.budget)?.unwrap();
+                                assert_eq!(reference.carrier(out.budget)?, Carrier::StableScalar);
+                                let ty = reference.origin_type(out.budget)?.index();
+                                let origin_row = plan.instance(root, reference.origin_instance(out.budget)?, out)?;
+                                let origin = origin_row.locals.start + reference.origin_local(out.budget)?.index() as usize;
+                                let generation = reference.origin_generation(out.budget)?;
+                                let (borrow_instance, borrow_block, borrow_statement) = reference.borrow_site(out.budget)?;
+                                let borrow_block = borrow_block.index();
+                                let borrow_statement = borrow_statement.unwrap();
+                                let start = out.text.len();
+                                pairs.emit_source_conjunct(
+                                    plan, root, instance, value, FormalIndexWidth::Bits64, out,
+                                )?;
+                                let text = &out.text[start..];
+                                let local = row.locals.start + local as usize;
+                                assert!(text.contains(&format!("invocation_source_reference_current_v38(source, {local}, {ty})")));
+                                assert!(text.contains(&format!("reference.origin == {origin} && reference.origin_generation == {generation} && reference.borrow_instance == {borrow_instance} && reference.borrow_block == {borrow_block} && reference.borrow_statement == {borrow_statement}")));
+                                // Both sibling invocations have dynamic source depth one.
+                                assert!(text.contains(&format!("source.machine.frames.active[1].owner == {}", row.function.index())));
+                                assert!(!text.contains("source.machine.frames.active[2]"));
+                            }
+                        }
+                    }
+                    Ok(())
+                })
+            },
+        ).0.unwrap();
+    }
+}
+
+#[test]
 fn original_source_witness_reborrow_program_has_exact_resource_boundaries() {
     let generous = run(2, LIMIT, LIMIT);
     generous.0.unwrap();
