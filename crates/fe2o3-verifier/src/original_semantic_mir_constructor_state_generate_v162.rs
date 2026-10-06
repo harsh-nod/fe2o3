@@ -375,7 +375,7 @@ fn source_runtime(
         out.budget.charge_work(2)?;
         emit!(
             out,
-            " invocation_source_scalar_copy_observation_v185(copied_{ordinal}, invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}], {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());\n",
+            " invocation_source_scalar_copy_observation_checked_v188(copied_{ordinal}, invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}], {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());\n",
             hint.instance
         );
     }

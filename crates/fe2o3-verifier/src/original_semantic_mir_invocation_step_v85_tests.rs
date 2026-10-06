@@ -75,8 +75,8 @@ fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_dom
             "        }",
         )
     );
-    assert_eq!(text.matches("proof fn ").count(), 7);
-    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 6);
+    assert_eq!(text.matches("proof fn ").count(), 8);
+    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 7);
     assert_eq!(
         theorem(text, "invocation_source_local_observation_intro_v183")
             .split_once("\n}\n")
@@ -157,6 +157,33 @@ fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_dom
     ] {
         assert_eq!(body.matches(fact).count(), 1, "{fact}");
     }
+    let checked = theorem(
+        text,
+        "invocation_source_scalar_copy_observation_checked_v188",
+    )
+    .split_once("\n}\n")
+    .unwrap()
+    .0;
+    let (checked_header, checked_body) = checked.split_once("\n{\n").unwrap();
+    assert_eq!(
+        checked_header,
+        header
+            .replace("\n    ensures ({", "\n    requires ({")
+            .replace(
+                "\n            ==> invocation_source_local_observation_v180(observation)",
+                "",
+            )
+            + "\n    ensures invocation_source_local_observation_v180(observation),"
+    );
+    assert_eq!(
+        checked_body,
+        concat!(
+            "    hide(invocation_source_value_evaluate_v42);",
+            "\n    hide(invocation_source_local_observation_v180);",
+            "\n    invocation_source_scalar_copy_observation_v185(",
+            "\n        source, observation, local, bits, root, instance, little_endian);",
+        )
+    );
     assert_eq!(
         theorem(text, "invocation_source_local_observations_extend_v186")
             .split_once("\n}\n")
@@ -374,12 +401,13 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(!runtime_state.contains("reveal(invocation_source_local_observation_v180)"));
                                     assert!(!runtime_state.contains("invocation_source_local_observation_intro_v183("));
                                     assert!(!runtime_state.contains("invocation_source_local_observation_conditional_v184("));
-                                    assert_eq!(runtime_state.matches("invocation_source_scalar_copy_observation_v185(").count(), call.arguments.len());
+                                    assert!(!runtime_state.contains("invocation_source_scalar_copy_observation_v185("));
+                                    assert_eq!(runtime_state.matches("invocation_source_scalar_copy_observation_checked_v188(").count(), call.arguments.len());
                                     assert_eq!(runtime_state.matches(" invocation_source_local_observations_extend_v186(").count(), call.arguments.len());
                                     let observed_at = runtime_state.find(&observed).unwrap();
                                     let mut previous_extension = None;
                                     for (ordinal, (local, _, bits)) in call.arguments.iter().enumerate() {
-                                        let introduction = format!(" invocation_source_scalar_copy_observation_v185(copied_{ordinal}, invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}], {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance);
+                                        let introduction = format!(" invocation_source_scalar_copy_observation_checked_v188(copied_{ordinal}, invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}], {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance);
                                         assert_eq!(runtime_state.matches(&introduction).count(), 1);
                                         let extension = format!(" invocation_source_local_observations_extend_v186(invocation_source_block_runtime_{root}_v36(source).operands, {ordinal});");
                                         assert_eq!(runtime_state.matches(&extension).count(), 1);
