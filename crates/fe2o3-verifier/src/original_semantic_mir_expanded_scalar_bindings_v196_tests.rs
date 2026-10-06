@@ -2,7 +2,7 @@ use super::super::super::source_function::tile_fixture_tests::run_fixture;
 use super::*;
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget, CanonicalKernelIrWorkBudgetV1 as Work,
-    ExecutionTileLayoutV1 as Layout,
+    ExecutionTileLayoutV1 as Layout, FormalIndexWidth,
 };
 use fe2o3_lower_mir_kernel::{
     ProductionOptimizedSourceOperationV18 as SourceOperation,
@@ -37,6 +37,11 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     let expansion_span = size_of::<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>();
     let tile_projection = size_of::<TileLeaf>();
     let tile_results = 2 * size_of::<Result<Option<usize>>>();
+    let relation_scratch = 2 * size_of::<Option<usize>>()
+        + 3 * size_of::<usize>()
+        + size_of::<FormalIndexWidth>()
+        + 2 * size_of::<Result<()>>()
+        + size_of::<&Type>();
     let bounded_query_scratch = 24 * size_of::<usize>();
     let header = retained
         + construction_and_query_results
@@ -44,6 +49,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + expansion_span
         + tile_projection
         + tile_results
+        + relation_scratch
         + bounded_query_scratch;
     assert_eq!(out.budget.storage() - before, header);
     let original = slots.correspondence(out)?.inventory(out.budget)?;
@@ -116,6 +122,18 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         let resolved = pairs.definition(index, out)?;
         assert_eq!(resolved, expected);
         assert_eq!(actual.definitions()[resolved].ty, row.ty);
+        let start = out.text.len();
+        pairs.emit_definition_relation(index, FormalIndexWidth::Bits64, out)?;
+        let emitted = &out.text[start..];
+        assert!(emitted.starts_with(&format!(
+            "(target.values.len() == {} && ({{ ",
+            actual.definitions().len()
+        )));
+        assert!(emitted.contains(&format!("let actual = target.values[{resolved}];")));
+        assert!(emitted.contains("invocation_value_related_v36(original, actual, map, source.machine.memory, target.memory)"));
+        if index != resolved {
+            assert!(!emitted.contains(&format!("target.values[{index}]")));
+        }
         matched += 1;
         shifted += usize::from(index != resolved);
     }
@@ -170,6 +188,15 @@ fn exercise_tile_leaves(
                 assert_eq!(owner, function);
                 assert_eq!(actual.definitions()[found].value, Some(value));
                 assert_eq!(actual.definitions()[found].ty, &Type::Scalar(scalar));
+                let start = out.text.len();
+                pairs.emit_tile_leaf_relation(index, &path, FormalIndexWidth::Bits64, out)?;
+                let emitted = &out.text[start..];
+                assert!(emitted.contains(&format!("let actual = target.values[{found}];")));
+                assert!(emitted.contains(if field == 0 {
+                    "byte_scalar_type_v57(actual, memory_value_modulus_v30(4))"
+                } else {
+                    "byte_scalar_type_v57(actual, 2)"
+                }));
                 assert_eq!(
                     actual
                         .definitions()
@@ -183,12 +210,64 @@ fn exercise_tile_leaves(
         }
         assert_eq!(pairs.tile_leaf(index, &[2], out)?, None);
         assert_eq!(pairs.tile_leaf(index, &[3], out)?, None);
+        for path in [&[2][..], &[3][..]] {
+            let start = out.text.len();
+            pairs.emit_tile_leaf_relation(index, path, FormalIndexWidth::Bits64, out)?;
+            assert_eq!(
+                &out.text[start..],
+                format!(
+                    "(target.values.len() == {} && ({{ original == MemoryValueV30::Unit }}))",
+                    actual.definitions().len()
+                )
+            );
+        }
     }
     assert!(
         leaves > 0,
         "fixture must exercise actual scalarized tile leaves"
     );
     Ok(())
+}
+
+#[test]
+fn expanded_value_relations_require_exact_target_owner_and_known_width() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture(layout, LIMIT, LIMIT, |slots, _, out| {
+            let target = TileTargetV176::derive(slots, out)?;
+            let distinct_target = TileTargetV176::derive(slots, out)?;
+            let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+            pairs.check_owner(slots, &target, out)?;
+            assert!(matches!(
+                pairs.check_owner(slots, &distinct_target, out),
+                Err(Error::Statement(
+                    "expanded scalar binding differs from its retained source endpoint"
+                ))
+            ));
+            let inventory = slots.correspondence(out)?.inventory(out.budget)?;
+            let index = inventory
+                .definitions()
+                .iter()
+                .position(|row| {
+                    matches!(row.coordinate, Definition::FunctionArgument { .. })
+                        && matches!(row.ty, Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_))
+                })
+                .expect("fixture must retain a scalar-compatible root argument");
+            let start = out.text.len();
+            assert!(matches!(
+                pairs.emit_definition_relation(index, FormalIndexWidth::Unknown, out),
+                Err(Error::Statement(
+                    "expanded value relation requires a known INDEX width"
+                ))
+            ));
+            assert_eq!(out.text.len(), start);
+            for width in [FormalIndexWidth::Bits32, FormalIndexWidth::Bits64] {
+                pairs.emit_definition_relation(index, width, out)?;
+            }
+            Ok(())
+        })
+        .0
+        .unwrap();
+    }
 }
 
 #[test]
