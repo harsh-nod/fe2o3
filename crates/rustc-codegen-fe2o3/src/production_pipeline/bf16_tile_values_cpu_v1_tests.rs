@@ -670,6 +670,10 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                                         "private Worker output bound invalid",
                                     ),
                                 ));
+                            stage.handoff.exercise_private_bf16_worker_entry_refusals_for_test_v1(
+                                requested_return, &stage.bindings.typed_descriptor_roots,
+                                stage.bindings.rustc_target.profile(), worker, output_bytes, limits, deadline,
+                            )?;
                             // The actual closed loan gets opposite Return and an
                             // expired deadline. Exact source refusal must win before
                             // the limit check, hence before either Worker invocation.

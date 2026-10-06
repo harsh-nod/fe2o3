@@ -6,6 +6,7 @@
 //! remain explicitly outside this selected logical account and require separate
 //! root runtime-input/containment review. This file issues no execution lease.
 use super::*;
+use fe2o3_compiler_ffi::{CompilerModuleHandoffErrorV1, CompilerModuleHandoffErrorV2};
 use fe2o3_hsaco_finalize::{
     ContentIdentityV1, PinnedWorkerV1, WorkerExecutionLimitsV1, WorkerOutputConstraintsV1,
     derive_unfinalized_hsaco_from_finalized_v1, inspect_finalized, inspect_unfinalized,
@@ -20,6 +21,7 @@ const INSPECTION: &str = "private BF16 engineering HSACO inspection failed";
 const JOIN: &str = "private BF16 engineering HSACO full descriptor or owner binding differs";
 const UNWIND: &str = "private BF16 synchronous Worker loan unwound";
 const LIMIT: &str = "private BF16 synchronous Worker loan exceeds its bounded child allowance";
+const ENTRY_GUARD: &str = "private BF16 negative control entered the engineering boundary";
 const OUTPUT_LIMIT: u64 = 4 * 1024 * 1024;
 const STREAM_LIMIT: usize = 8 * 1024 * 1024;
 const PER_EXECUTION_LIMIT: Duration = Duration::from_secs(120);
@@ -31,6 +33,7 @@ enum Failure {
     Join,
     Unwind,
     Limit,
+    EntryGuard,
 }
 impl Failure {
     fn reason(self) -> &'static str {
@@ -40,8 +43,52 @@ impl Failure {
             Self::Join => JOIN,
             Self::Unwind => UNWIND,
             Self::Limit => LIMIT,
+            Self::EntryGuard => ENTRY_GUARD,
         }
     }
+}
+
+// Harness-only state in this cfg(test)-only module. A negative case must never
+// report engine success: an unexpected actual engineering entry is counted and
+// refused before the external API. No global flag, fresh Budget or worker stub.
+std::thread_local! {
+    static ENTRY_CONTROL: std::cell::Cell<Option<usize>> = const {
+        std::cell::Cell::new(None)
+    };
+}
+struct EntryScope {
+    // The active TLS scope cannot be sent to another thread before Drop.
+    _thread_bound: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl EntryScope {
+    fn enter() -> Result<Self, PrivateBf16LlvmErrorV1> {
+        ENTRY_CONTROL.with(|cell| {
+            if cell.get().is_some() {
+                return Err(mismatch("nested private Worker entry control"));
+            }
+            cell.set(Some(0));
+            Ok(Self {
+                _thread_bound: std::marker::PhantomData,
+            })
+        })
+    }
+    fn entries(&self) -> Option<usize> {
+        ENTRY_CONTROL.with(|cell| cell.get())
+    }
+}
+impl Drop for EntryScope {
+    fn drop(&mut self) {
+        ENTRY_CONTROL.with(|cell| cell.set(None));
+    }
+}
+fn entry_control() -> Result<(), Failure> {
+    ENTRY_CONTROL.with(|cell| match cell.get() {
+        None => Ok(()),
+        Some(count) => {
+            cell.set(Some(count.saturating_add(1)));
+            Err(Failure::EntryGuard)
+        }
+    })
 }
 
 // A closed value, not a generic callback result or detached HSACO owner.
@@ -238,6 +285,7 @@ fn engineering(
     output: WorkerOutputConstraintsV1,
     limits: WorkerExecutionLimitsV1,
 ) -> Result<Row, Failure> {
+    entry_control()?;
     // No provider inference or hidden file loading: this initial closed domain
     // is exactly the retained FFI-free handoff and an empty external roster.
     let observation =
@@ -383,6 +431,183 @@ impl PrivateBf16WorkerHandoffV1 {
             "fe2o3-bf16-private-worker-postchecked-v1 requested={},{},{},{} source_descriptor_handoff_replayed=true selected_storage_restored=true worker_invoked=true cleanup_pending=true normal_admission=false publication_authority=false load_authority=false launch_authority=false",
             requested[0], requested[1], requested[2], requested[3]
         );
+        Ok(())
+    }
+}
+
+// Original-owner negative controls, not a detached admission constructor. The
+// existing public-codec/engine allocations are not newly brought into Budget.
+impl PrivateBf16WorkerHandoffV1 {
+    fn worker_entry_checkpoint_v1(
+        &mut self,
+    ) -> Result<
+        (
+            fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+            usize,
+            usize,
+            usize,
+        ),
+        PrivateBf16LlvmErrorV1,
+    > {
+        self.descriptor
+            .llvm
+            .optimized
+            .target
+            .formal
+            .verification
+            .phase
+            .with_budget(|budget| {
+                budget
+                    .check_prior_denials_v1()
+                    .map_err(E::ConditionalResource)?;
+                Ok((
+                    budget.work_ledger_identity_v1(),
+                    budget.storage(),
+                    budget.work(),
+                    budget.peak_storage(),
+                ))
+            })
+            .map_err(PrivateBf16LlvmErrorV1::RankedVerification)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn exercise_private_bf16_worker_entry_refusals_for_test_v1(
+        &mut self,
+        requested: [u8; 4],
+        roots: &[crate::compiler_descriptor::TypedDescriptorRootV1],
+        profile: fe2o3_amd_target::ProductionAmdTargetProfileV1,
+        worker: &PinnedWorkerV1,
+        output_bytes: u64,
+        limits: WorkerExecutionLimitsV1,
+        deadline: Instant,
+    ) -> Result<(), PrivateBf16LlvmErrorV1> {
+        if profile != fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942 {
+            return Err(mismatch("entry controls require the genuine Gfx942 owner"));
+        }
+        let scope = EntryScope::enter()?;
+        self.revalidate_private_bf16_worker_handoff_v1(requested, roots, profile)?;
+        let wrong = if requested == [0, 1, 2, 3] {
+            [1, 0, 2, 3]
+        } else {
+            [0, 1, 2, 3]
+        };
+        let descriptor_last = self
+            .descriptor
+            .descriptor
+            .canonical_descriptor
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| mismatch("empty genuine descriptor"))?;
+        let text_at = self
+            .descriptor
+            .descriptor
+            .final_llvm
+            .find("gfx942")
+            .ok_or_else(|| mismatch("genuine final target absent"))?;
+        let handoff_last = self
+            .handoff
+            .canonical
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| mismatch("empty genuine handoff"))?;
+        for fault in 0..6 {
+            let before = self.worker_entry_checkpoint_v1()?;
+            let output =
+                WorkerOutputConstraintsV1::new(output_bytes).map_err(|_| mismatch(LIMIT))?;
+            if fault == 3 {
+                self.descriptor.descriptor.canonical_descriptor[descriptor_last] ^= 1;
+            }
+            if fault == 4 {
+                self.descriptor
+                    .descriptor
+                    .final_llvm
+                    .get_mut(text_at..text_at + 6)
+                    .unwrap()
+                    .make_ascii_uppercase();
+            }
+            if fault == 5 {
+                self.handoff.canonical[handoff_last] ^= 1;
+            }
+            let attempted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.observe_private_bf16_worker_for_test_v1(
+                    if fault == 0 { wrong } else { requested },
+                    if fault == 2 { &[] } else { roots },
+                    if fault == 1 {
+                        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950
+                    } else {
+                        profile
+                    },
+                    worker,
+                    output,
+                    limits,
+                    deadline,
+                )
+            }));
+            // Restore the same retained allocations before inspecting either the
+            // Result or an unwind payload. No replacement box/source owner.
+            if fault == 3 {
+                self.descriptor.descriptor.canonical_descriptor[descriptor_last] ^= 1;
+            }
+            if fault == 4 {
+                self.descriptor
+                    .descriptor
+                    .final_llvm
+                    .get_mut(text_at..text_at + 6)
+                    .unwrap()
+                    .make_ascii_lowercase();
+            }
+            if fault == 5 {
+                self.handoff.canonical[handoff_last] ^= 1;
+            }
+            let result = match attempted {
+                Ok(value) => value,
+                Err(payload) => {
+                    drop(payload);
+                    Err(mismatch(
+                        "private Worker negative control unwound after restoration",
+                    ))
+                }
+            };
+            if scope.entries() != Some(0) {
+                drop(result);
+                return Err(mismatch(ENTRY_GUARD));
+            }
+            // Sticky denial wins and unknown credit is never released here.
+            let after = self.worker_entry_checkpoint_v1()?;
+            if before.0 != after.0
+                || before.1 != after.1
+                || before.2 >= after.2
+                || before.3 > after.3
+            {
+                return Err(private_bf16_target_resource_v1(Resource::Accounting));
+            }
+            let exact = match (&result, fault) {
+                (Err(PrivateBf16LlvmErrorV1::RankedVerification(E::FormalMemory(
+                    fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::SemanticKir(
+                        fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::CorrespondenceMismatch)))), 0) => true,
+                (Err(PrivateBf16LlvmErrorV1::Geometry(
+                    crate::production_geometry_v1::ProductionGeometryErrorV1::KernelClosure)), 1 | 2) => true,
+                (Err(PrivateBf16LlvmErrorV1::DescriptorEvidence(
+                    crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                        "private BF16 descriptor/final LLVM bytes differ from owned replay"))), 3 | 4) => true,
+                (Err(PrivateBf16LlvmErrorV1::WorkerHandoff(HandoffError::Handoff(
+                    CompilerModuleHandoffErrorV2::Handoff(CompilerModuleHandoffErrorV1::ModuleIdentityMismatch)))), 5) => true,
+                _ => false,
+            };
+            if !exact {
+                return match result {
+                    Err(error) => Err(error),
+                    Ok(()) => Err(mismatch(
+                        "private Worker negative control unexpectedly succeeded",
+                    )),
+                };
+            }
+            self.revalidate_private_bf16_worker_handoff_v1(requested, roots, profile)?;
+        }
+        if scope.entries() != Some(0) {
+            return Err(mismatch(ENTRY_GUARD));
+        }
+        drop(scope);
         Ok(())
     }
 }
@@ -695,5 +920,84 @@ mod tests {
             .next()
             .unwrap();
         assert!(!production.contains("observe_engineering_hsaco_v1"));
+    }
+
+    #[test]
+    fn entry_guard_counts_and_refuses_without_fabricating_engine_success() {
+        assert_eq!(entry_control(), Ok(()));
+        let scope = EntryScope::enter().unwrap();
+        assert_eq!(scope.entries(), Some(0));
+        assert_eq!(entry_control(), Err(Failure::EntryGuard));
+        assert_eq!(scope.entries(), Some(1));
+        assert_eq!(entry_control(), Err(Failure::EntryGuard));
+        assert_eq!(scope.entries(), Some(2));
+        drop(scope);
+        assert_eq!(entry_control(), Ok(()));
+    }
+    #[test]
+    fn entry_guard_nested_refusal_does_not_clear_outer_scope() {
+        let scope = EntryScope::enter().unwrap();
+        assert!(EntryScope::enter().is_err());
+        assert_eq!(scope.entries(), Some(0));
+        assert_eq!(entry_control(), Err(Failure::EntryGuard));
+        assert_eq!(scope.entries(), Some(1));
+        drop(scope);
+        assert_eq!(entry_control(), Ok(()));
+    }
+    #[test]
+    fn entry_guard_resets_on_unwind_without_global_panic_hook() {
+        let result = std::panic::catch_unwind(|| {
+            let _scope = EntryScope::enter().unwrap();
+            assert_eq!(entry_control(), Err(Failure::EntryGuard));
+            std::panic::resume_unwind(Box::new("inert entry scope unwind"));
+        });
+        assert!(result.is_err());
+        drop(result);
+        assert_eq!(entry_control(), Ok(()));
+        let scope = EntryScope::enter().unwrap();
+        assert_eq!(scope.entries(), Some(0));
+    }
+    #[test]
+    fn entry_guard_is_thread_local() {
+        let scope = EntryScope::enter().unwrap();
+        std::thread::spawn(|| {
+            assert_eq!(entry_control(), Ok(()));
+            let local = EntryScope::enter().unwrap();
+            assert_eq!(entry_control(), Err(Failure::EntryGuard));
+            assert_eq!(local.entries(), Some(1));
+        })
+        .join()
+        .unwrap();
+        assert_eq!(scope.entries(), Some(0));
+        assert_eq!(entry_control(), Err(Failure::EntryGuard));
+        assert_eq!(scope.entries(), Some(1));
+    }
+    #[test]
+    fn entry_guard_is_first_at_actual_engine_boundary_and_owner_controls_are_closed() {
+        let source = include_str!("bf16_private_worker_observation_v1_tests.rs");
+        let engineering = source
+            .split("fn engineering(")
+            .nth(1)
+            .unwrap()
+            .split("impl PrivateBf16WorkerHandoffV1 {")
+            .next()
+            .unwrap();
+        assert!(engineering.contains(") -> Result<Row, Failure> {\n    entry_control()?;"));
+        assert!(
+            engineering.find("entry_control()?").unwrap()
+                < engineering.find("observe_engineering_hsaco_v1(").unwrap()
+        );
+        let controls = source
+            .split("pub(crate) fn exercise_private_bf16_worker_entry_refusals_for_test_v1(")
+            .nth(1)
+            .unwrap()
+            .split("#[cfg(test)]")
+            .next()
+            .unwrap();
+        assert!(controls.contains("for fault in 0..6"));
+        assert!(controls.contains("scope.entries() != Some(0)"));
+        assert!(controls.contains("self.observe_private_bf16_worker_for_test_v1("));
+        assert!(!controls.contains("Budget::new"));
+        assert!(!controls.contains("observe_engineering_hsaco_v1("));
     }
 }

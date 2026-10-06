@@ -11,6 +11,57 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Worker-entry refusals and debugger query separation — 2026-10-06
+
+The private BF16 continuation now has a test-only entry guard immediately before
+the external engineering Worker call. Five new CPU controls check thread-local
+entry counting/refusal, nested-scope rejection and restoration on normal return,
+error and unwind; together with the existing loan controls, all 17 focused
+checks passed. Six original-owner mutation cases are also wired into the ignored
+frontend endpoint: wrong Return, target, typed-root roster, descriptor bytes,
+LLVM target spelling and canonical-handoff bytes. They restore the same
+allocations and require typed refusal with zero Worker entries before clean
+replay. These six genuine frontend cases have **not yet executed**; unit checks
+do not replace that run or external-process containment.
+
+Full backend suites passed in debug and release: 4,010 library tests
+(238 ignored), 19 export-simulation tests, 73 extractor tests and all enabled
+API/integration tests. Both full suites tested source census
+`57196109dfd92bd07d086930a6e50729173b77760cc034d08706a1c81279a02a`.
+
+The optional, disabled [physical-v10 source layer](../tools/rocgdb-one-stop-native-adapters-v1/physical-v10/README.md)
+separates the legacy observer from an explicitly selected owned WAVE_STOP event.
+It invalidates that separate observer before its optional legacy health query,
+retaining unselected legacy behavior, the owned five query pairs and the
+ten-query limit. This addresses the sufficient query-budget refusal reconstructed
+from the failed R70 trace; it does not retroactively qualify that attempt.
+
+Root checks passed eight routing/source controls, strict C++17 and UBSan routing
+fixtures, all 60 public-package checks, the 63-file selected-source check, the
+exact AMD API-header check and unified-patch application checking. The selected
+source totals 2,264,960 bytes. Activation, capture and publication remain
+unavailable; source checks are not native capture/resume qualification.
+
+A fresh private selective rebuild passed preparation, compilation and linking:
+41,113 source files / 386,646,617 bytes, 579 actual compiler dependencies and
+467 linker-trace entries. The new binary is 199,927,176 bytes, SHA256
+`4fada6ebe9f4c694bafb2675fd2fb7721e7992509fbb04bbfe1e7214d91b8f70`.
+The build kept all old inputs unchanged and did not execute the debugger.
+
+After 25 measurement controls passed and the readelf runtime closure was
+reobserved, the new adapter object yielded all 20 required DWARF types and a
+measured 19,976-byte logical reservation under the unchanged 65,536-byte limit.
+The lane charged 38,327,174 read bytes / 406 calls and observed normal exit,
+both real stream EOFs and no abandoned drain. The actual report is
+`debugger-owned-legacy-twenty-type-actual-root-r71-r1/MANIFEST.json`,
+SHA256 `bb805935bac5425891b9deda4a2fdd0fca4110051521acbca6f29508cde920c6`.
+This is object-layout evidence, not whole-engine/RSS accounting, new-ELF
+runtime closure, startup or native qualification; those later checks remain
+separate and pending.
+
+No Worker execution, hardware, public-debugger or tutorial exit is accepted by
+these checkpoints. Accepted milestones remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private BF16 Worker frontend and native debugger attempt — 2026-10-06
 
 The private, test-only generated-source driver now reaches the owning Worker
