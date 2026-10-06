@@ -11,6 +11,35 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 owning Worker loan — 2026-10-05
+
+The private, test-only handoff continuation now offers a closed synchronous
+loan to the external compiler Worker API. The retained canonical allocation,
+descriptor and pinned Worker are borrowed under the original source, formal,
+optimized-output, LLVM and handoff owners. Full source/LLVM/descriptor/handoff
+correspondence is replayed before deadline admission and after success, error
+or unwind. No serialized digest alone restores compiler authority.
+
+The hook reserves two bounded compiler observations on the original ledger
+and slot. Engine-owned temporary results are dropped before selected known
+credit is returned; consumed work is not refunded. Controls cover sticky
+denial, insufficient deadline, mismatched owners, foreign surplus, unwind and
+drop/refund ordering. Selected logical accounting does not include the external
+engine's allocations or process RSS, and does not establish process containment.
+
+Twelve focused CPU controls passed, followed by full backend suites in debug
+and release: 4,002 library tests (237 ignored), 19 export-simulation tests,
+73 extractor tests and all non-ignored package API/integration tests.
+The tested source census is
+`53926d16fdef69a4e3e0236effa8cc3e8d38a2106c324a07c2c92fb695390f0d`.
+An initial test-only tuple-resource compile error was repaired; its failed
+record remains preserved.
+
+These tests have not executed the genuine external Worker through this hook.
+The genuine frontend endpoint, native Worker/runtime containment, artifact
+admission and numerical/GPU qualification remain pending. No milestone or
+tutorial exit is accepted by this checkpoint; the count remains **7/18**.
+
 ## Private BF16 canonical handoff continuation — 2026-10-05
 
 The private continuation now retains a canonical Worker-format handoff under
@@ -107,8 +136,15 @@ controls and produced seven data products covering all 119 record roles. The
 complete raw inputs, retrospective audits, exact tool/environment custody and
 prior failed generator/control runs remain distinct. This validates recorded
 startup evidence, not current runtime state or permission to execute a target.
-The fresh native controller, current runtime binding, currentness checks and
-one-use execution scope remain pending; no expired execution scope is reused.
+The refreshed controller passed 64 protocol and 97 native CPU tests. Its
+current binding replays all 119 historical roles, including ten EOF records.
+The generated supervisor passed 36 tests, was built before its 32 runtime
+modules were deployed, and passed a bounded live currentness check of all
+683 selected inputs. The native roster contains 630 entries under the unchanged
+631-entry cap. The wrapper passed 31 renderer/descriptor-limit/cleanup controls.
+These source, CPU and file observations are not a GPU stop/resume result.
+Fresh whole-source/provider and process-state checks, resource validation and
+a separate one-use native execution remain pending; no expired scope is reused.
 
 External compiler-worker execution, artifact/launch admission, GPU/numerical
 qualification and public debugger qualification remain pending. No milestone
