@@ -4,7 +4,7 @@
 use super::{
     ByteContext, Error, MAX_PRIVATE_BYTE_BOUNDARIES_V38, Resource, Result,
     TARGET_TAG_NAMESPACE_V40, TargetContracts, Writer,
-    slots::{SourceSlots, SourceTagPairsV40, TileAllocationSlotsV164},
+    slots::{SourceSlots, TileAllocationSlotsV164},
     vector,
 };
 use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::{
@@ -125,7 +125,6 @@ impl<'slots, 'view, 'source> TileTargetV176<'slots, 'view, 'source> {
         self.slots.with_source_query_v42(out, |out| {
             self.check(out)?;
             let contracts = TargetContracts::derive(&self.inventory, width, out)?;
-            let pairs = SourceTagPairsV40::derive(self.slots, &contracts, out)?;
             let (physical, receipt) =
                 fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
                     &self.inventory,
@@ -137,7 +136,9 @@ impl<'slots, 'view, 'source> TileTargetV176<'slots, 'view, 'source> {
             out.budget.reserve_storage(receipt.retained_storage())?;
             contracts.emit(TARGET_TAG_NAMESPACE_V40, out)?;
             for root in 0..self.roots.len() {
-                pairs.check(out)?;
+                // Source tag pairing belongs to the eventual paired relation,
+                // not this independently owner-bound target semantics emitter.
+                contracts.check_owner_width_v39(self.inventory.owner(), width, out)?;
                 let function = self.root_function(root, out)?;
                 let actual = ByteFunctionV30::derive(
                     &self.inventory,
