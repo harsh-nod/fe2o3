@@ -39,6 +39,8 @@ mod wire_v3;
 mod wire_v4;
 mod wire_v4_join;
 mod wire_v5;
+mod wire_v5_resources;
+pub use wire_v5_resources::DescriptorWorkBoundsV5;
 
 pub use conditional_invocation::*;
 pub use conditional_v4::*;
