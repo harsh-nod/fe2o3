@@ -163,7 +163,8 @@ proof fn byte_execution_erased_slot_cannot_revive_resident_reference_v178(
         byte_execution_mentions_v178(resident, definition, state.frames.active.last()),
     ensures byte_execution_next_epoch_v178(state, definition, role, site).is_none(),
 {
-    assert(!(forall|index: int| 0 <= index < state.values.len() ==>
+    assert(!(forall|index: int| #![trigger state.values[index]]
+        0 <= index < state.values.len() ==>
         match state.values[index] {
             MemoryValueV30::Execution(value) => !byte_execution_mentions_v178(value,
                 definition, state.frames.active.last()),
