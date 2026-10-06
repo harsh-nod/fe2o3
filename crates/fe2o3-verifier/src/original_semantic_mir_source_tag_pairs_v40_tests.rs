@@ -1454,3 +1454,47 @@ fn expanded_source_tag_tables_compare_all_rows_not_just_selected_enum_geometry()
     .0
     .unwrap();
 }
+
+#[test]
+fn expanded_source_tag_headers_cover_independent_frames_and_iterators() {
+    use fe2o3_kernel_analysis::{CanonicalKirInventoryV18, CanonicalKirOperationRefV1};
+    use fe2o3_lower_mir_kernel::{
+        ProductionSourceTileExpansionV159, ProductionSourceTileOperationSpanV159,
+    };
+    type PairFrame<'a> = (
+        &'a SourceTagPairsV40<'a, 'a, 'a, 'a, 'a>,
+        &'a TileTargetV176<'a, 'a, 'a>,
+        &'a TargetContracts<'a, 'a>,
+        &'a mut Writer<'a, 'a>,
+        [&'a Layout; 2],
+        &'a [Layout],
+        &'a [Layout],
+        std::slice::Iter<'a, TagOperation>,
+        std::slice::Iter<'a, Pair>,
+        [usize; 24],
+        [Operation; 3],
+        [Storage; 2],
+        Option<TypeId>,
+    );
+    type OwnerFrame<'a> = (
+        [&'a CanonicalKirInventoryV18<'a>; 3],
+        &'a ProductionSourceTileExpansionV159<'a, 'a>,
+        [&'a CanonicalKirOperationRefV1<'a>; 2],
+        &'a AdmittedInertSemanticMirV1,
+        &'a fe2o3_kernel_ir::PointerType,
+        SourceTagRecipeV39<'a, 'a, 'a>,
+        std::iter::Zip<
+            std::slice::Iter<'a, CanonicalKirOperationRefV1<'a>>,
+            std::slice::Iter<'a, bool>,
+        >,
+        std::iter::Zip<std::slice::Iter<'a, Layout>, std::slice::Iter<'a, Layout>>,
+        std::array::IntoIter<&'a Layout, 2>,
+    );
+    let expected = size_of::<Vec<bool>>()
+        + 2 * size_of::<Result<Vec<bool>>>()
+        + size_of::<ProductionSourceTileOperationSpanV159>()
+        + 2 * size_of::<Result<Option<ProductionSourceTileOperationSpanV159>>>()
+        + size_of::<PairFrame<'_>>()
+        + size_of::<OwnerFrame<'_>>();
+    assert_eq!(expanded_headers_v190(), expected);
+}
