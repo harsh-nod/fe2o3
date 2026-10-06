@@ -371,12 +371,11 @@ fn source_runtime(
         call.child,
         call.child
     );
-    for (ordinal, (local, _, bits)) in call.arguments.iter().enumerate() {
+    for ordinal in 0..call.arguments.len() {
         out.budget.charge_work(2)?;
         emit!(
             out,
-            " invocation_source_scalar_copy_observation_checked_v188(copied_{ordinal}, invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}], {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());\n",
-            hint.instance
+            " assert(invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}])) by {{\n reveal(invocation_source_local_observation_v180);\n }}\n"
         );
     }
     for ordinal in 0..call.arguments.len() {
