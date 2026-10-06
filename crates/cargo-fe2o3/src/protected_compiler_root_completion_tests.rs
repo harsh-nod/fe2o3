@@ -31,16 +31,20 @@ fn same_account_check_refuses_foreign_ledger_and_moved_budget() {
 fn exact_root_subject_is_additional_to_success_and_policy_records() {
     let mut work = Work::new(10_000_000);
     let mut b = Budget::new(&mut work, 1_000_000);
-    let mut decode = |byte| {
-        let wire = fixture::subject_wire(byte);
+    let mut decode = |substitute| {
+        let mut wire = fixture::subject_wire(3);
+        if substitute {
+            wire[88] ^= 1;
+            fixture::seal(&mut wire, "INERT-COMPILER-EXECUTION-SUBJECT", 3);
+        }
         b.reserve_storage(wire.len()).unwrap();
         let (subject, storage) = Subject::decode(&wire, &mut b).unwrap();
         b.reserve_storage(storage.retained_storage()).unwrap();
         subject
     };
-    let original = decode(3);
-    let duplicate = decode(3);
-    let substituted = decode(4);
+    let original = decode(false);
+    let duplicate = decode(false);
+    let substituted = decode(true);
     require_same_subject(&original, &duplicate).unwrap();
     assert!(require_same_subject(&original, &substituted).is_err());
     assert!(!original.grants_publication_authority());
