@@ -54,3 +54,23 @@ crate::attestation_request_adapter::attestation_request_adapter!(
     CompilerExecutionAttestationRequestIdentityV3,
     CompilerExecutionAttestationRequestV3
 );
+
+impl CompilerExecutionAttestationRequestV3 {
+    pub const COMPOSED_DECODE_WORK: usize =
+        COMPILER_EXECUTION_ATTESTATION_REQUEST_WORK_V3 + Subject::COMPOSED_DECODE_WORK;
+    pub const COMPOSED_DECODE_STORAGE: usize =
+        COMPILER_EXECUTION_ATTESTATION_REQUEST_STORAGE_V3 + Subject::COMPOSED_DECODE_SCRATCH;
+
+    /// Same inert request framing on the original owned account. Only the
+    /// Subject's additional storage uses a fixed local window; no authority,
+    /// new budget, policy provenance or protected occurrence is created.
+    pub fn decode_in_original_account_v3(
+        bytes: &[u8],
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, Storage)> {
+        Self::decode_using(bytes, budget, |bytes, budget| {
+            let (subject, storage) = Subject::decode_in_original_account_v3(bytes, budget)?;
+            Ok((subject, storage.retained_storage()))
+        })
+    }
+}
