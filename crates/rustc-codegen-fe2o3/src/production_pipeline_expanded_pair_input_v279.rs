@@ -1,10 +1,15 @@
 //! Borrowed inputs to a future expanded whole-pair obligation, never a proof.
 //! Only the private source stage supplies the retained compiler binding owner.
 use super::*;
+use fe2o3_artifacts::{BlockSize, LaunchContract};
 use fe2o3_kernel_ir::{
     CanonicalFormalLaunchInputV19 as Launch, CanonicalKirFunctionCoordinateV1 as Function,
     EndiannessV2, ExplicitLaunchExtent, FormalIndexWidth,
     VerifiedCanonicalKernelIrIdentityV18 as Identity,
+};
+use fe2o3_lower_mir_kernel::{
+    ProductionSourceExecutionLayoutV1 as SourceLayout,
+    ProductionSourceLaunchInputV1 as SourceLaunch,
 };
 use sha2::{Digest, Sha256};
 
@@ -15,6 +20,8 @@ pub(crate) struct RootInputV279 {
     pub(crate) source_root: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
     pub(crate) original_function: usize,
     pub(crate) target_function: Function,
+    pub(crate) source_launch: SourceLaunch,
+    pub(crate) source_layout: SourceLayout,
     pub(crate) launch: ExplicitLaunchExtent,
     pub(crate) tile: Option<(ExecutionTileLayoutV1, u16)>,
     pub(crate) instances: usize,
@@ -90,6 +97,11 @@ pub(super) fn headers() -> Result<usize, Resource> {
         size_of::<std::thread::Result<Result<Input<'_, '_, '_, '_>, Error>>>(),
         2 * size_of::<SubjectV279>(),
         3 * size_of::<RootInputV279>(),
+        3 * size_of::<SourceLaunch>(),
+        2 * size_of::<SourceLayout>(),
+        3 * size_of::<[u64; 3]>(),
+        3 * size_of::<[u32; 3]>(),
+        2 * size_of::<&LaunchContract>(),
         2 * size_of::<Sha256>(),
         size_of::<Vec<RootInputV279>>(),
         size_of::<Vec<Launch>>(),
@@ -158,9 +170,30 @@ fn check_account(
 
 fn join_launch(
     checked: Launch,
-    rank: u8,
-    extents: [u64; 3],
+    retained: SourceLaunch,
+    authentic: &LaunchContract,
 ) -> Result<ExplicitLaunchExtent, Error> {
+    let BlockSize::Exact(block) = authentic.block_size() else {
+        return Err(binding());
+    };
+    let workgroup = [block.x(), block.y(), block.z()];
+    let grid = authentic.max_grid();
+    let grid = [grid.x(), grid.y(), grid.z()];
+    let rank = authentic.rank();
+    if retained != SourceLaunch::new(rank, Some(workgroup), grid) || !(1..=3).contains(&rank) {
+        return Err(binding());
+    }
+    // The source layout's zero sentinel is not a physical coordinate ceiling.
+    // Reconstruct the ceiling only from the same retained authentic contract.
+    let mut extents = [1; 3];
+    for axis in 0..3 {
+        extents[axis] = u64::from(workgroup[axis])
+            .checked_mul(u64::from(grid[axis]))
+            .ok_or(Resource::Arithmetic)?;
+        if extents[axis] == 0 || (axis >= usize::from(rank) && extents[axis] != 1) {
+            return Err(binding());
+        }
+    }
     let actual = ExplicitLaunchExtent::Exact { rank, extents };
     if checked != Launch::PhysicalEnvelope(actual) {
         return Err(binding());
@@ -272,15 +305,19 @@ pub(super) fn prepare<'b, 's, 'o, 'scope>(
         append(&mut hash, &[width as u8, endian as u8], budget)?;
         number(&mut hash, count, budget)?;
         for (ordinal, checked) in launches.iter().enumerate() {
-            budget.charge_work(4)?;
+            budget.charge_work(4 + 3 * 8)?;
             let (source_root, original_function) = source.root(ordinal, budget)?;
             let retained_launch = retained_launches.roots().get(ordinal).ok_or_else(binding)?;
             join_root(source_root, retained_launch.selected_root())?;
-            let launch = join_launch(
-                *checked,
-                retained_launch.source_rank(),
-                retained_launch.layout().global_extents(),
-            )?;
+            let authentic = context
+                .bindings
+                .typed_descriptor_roots
+                .get(ordinal)
+                .and_then(|descriptor| descriptor.source_launch())
+                .ok_or_else(binding)?;
+            let source_launch = retained_launch.source_launch();
+            let source_layout = retained_launch.layout();
+            let launch = join_launch(*checked, source_launch, authentic)?;
             let cfg = neutral.output_root_cfg_v18(ordinal, budget)?;
             let target_function = cfg.function().coordinate;
             let output = tile.output(budget)?;
@@ -314,9 +351,34 @@ pub(super) fn prepare<'b, 's, 'o, 'scope>(
             number(&mut hash, original_function, budget)?;
             number(&mut hash, target_function.0 as usize, budget)?;
             append(&mut hash, &[retained_launch.source_rank()], budget)?;
-            for extent in retained_launch.layout().global_extents() {
+            let ExplicitLaunchExtent::Exact { extents, .. } = launch else {
+                return Err(binding());
+            };
+            for extent in extents {
                 append(&mut hash, &extent.to_le_bytes(), budget)?;
             }
+            for extent in source_launch.exact_workgroup().ok_or_else(binding)? {
+                append(&mut hash, &extent.to_le_bytes(), budget)?;
+            }
+            for extent in source_launch.max_grid() {
+                append(&mut hash, &extent.to_le_bytes(), budget)?;
+            }
+            for extent in source_layout.global_extents() {
+                append(&mut hash, &extent.to_le_bytes(), budget)?;
+            }
+            for extent in source_layout.workgroup_extents() {
+                append(&mut hash, &extent.to_le_bytes(), budget)?;
+            }
+            append(
+                &mut hash,
+                &source_layout.subgroup_size().to_le_bytes(),
+                budget,
+            )?;
+            append(
+                &mut hash,
+                &[source_layout.full_physical_workgroups() as u8],
+                budget,
+            )?;
             match tile_policy {
                 None => append(&mut hash, &[0], budget)?,
                 Some((layout, lanes)) => {
@@ -347,6 +409,8 @@ pub(super) fn prepare<'b, 's, 'o, 'scope>(
                 source_root,
                 original_function,
                 target_function,
+                source_launch,
+                source_layout,
                 launch,
                 tile: tile_policy,
                 instances,

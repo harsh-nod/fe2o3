@@ -205,6 +205,18 @@ impl Callbacks for RootsCallbacks {
                         assert_eq!(row.source_root, source.root(root, budget)?.0);
                         assert_eq!(row.original_function, source.root(root, budget)?.1);
                         assert_eq!(row.instances, source.instance_count(root, budget)?);
+                        let retained = source.source_launch(budget)?.roots()[root];
+                        assert_eq!(row.source_launch, retained.source_launch());
+                        assert_eq!(row.source_layout, retained.layout());
+                        assert_eq!(row.source_launch.max_grid(), [u32::MAX, 1, 1]);
+                        assert_eq!(row.source_layout.global_extents(), [0, 1, 1]);
+                        assert_eq!(
+                            row.launch,
+                            fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                                rank: 1,
+                                extents: [64 * u64::from(u32::MAX), 1, 1],
+                            }
+                        );
                         assert!(!abi.export.is_empty());
                         assert_ne!(abi.kernel_binding, &[0; 32]);
                         let cfg = neutral.output_root_cfg_v18(root, budget)?;

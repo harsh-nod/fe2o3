@@ -159,6 +159,10 @@ invocation census. Launches are joined to retained source layouts and original
 typed descriptors; Index width comes from the actual AMD lowering and byte
 order from the authenticated source/target data layout. These inputs are not a
 nominal optimizer execution transcript or an installed proof-runtime lease.
+The retained source layout's zero dynamic-extent marker stays distinct from the
+nonzero physical coordinate envelope. Their join checks the exact original
+descriptor rank, workgroup and grid ceiling, without treating zero as a wildcard
+or clamping the physical envelope to a source layout marker.
 
 Reference rows come from the existing authenticated binding adapter. The
 expanded stage still refuses every nonempty reference-obligation set before its
