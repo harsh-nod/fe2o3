@@ -48,6 +48,30 @@ type WorkerParts = (
 );
 
 impl PreparedNativeProductionBuildConfig {
+    /// Reprepare through the shared metered parser, then require the exact
+    /// configuration already admitted by the authenticated managed build.
+    /// Environment acquisition retains the shared parser's ingress boundary.
+    pub(crate) fn from_environment(
+        expected: &PreparedProductionBuildConfig,
+        b: &mut Budget<'_>,
+    ) -> Result<Self, BuildConfigError> {
+        let entry = b.storage();
+        let config = PreparedProductionBuildConfig::from_environment_with_metered_manifest(b)?
+            .ok_or(BuildConfigError::MissingConfiguration)?;
+        if config.identity() != expected.identity() || config.version != expected.version {
+            return Err(BuildConfigError::Invalid(
+                "native configuration differs from the admitted managed recipe".to_owned(),
+            ));
+        }
+        Ok(Self {
+            config,
+            account_address: b as *const Budget<'_> as usize,
+            ledger: b.work_ledger_identity_v1(),
+            input_floor: b.storage(),
+            retained_storage: b.storage().checked_sub(entry).ok_or(Resource::Accounting)?,
+        })
+    }
+
     /// The broker must independently admit the schema and expected identity.
     /// Equality here is not protected configuration provenance or authority.
     ///

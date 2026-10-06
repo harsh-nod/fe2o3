@@ -110,6 +110,11 @@ impl ParentRustcInvocationCustody {
         self.invocation.descriptor()
     }
 
+    /// Exact captured target, not a value nominated by compiler output.
+    pub(crate) fn amd_target(&self) -> &str {
+        self.descriptor().amd_target()
+    }
+
     /// Runs one operation while the exact selected parent custody remains live.
     pub(crate) fn retain_through<T>(self, operation: impl FnOnce(&Self) -> T) -> T {
         operation(&self)

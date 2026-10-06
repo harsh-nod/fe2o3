@@ -144,6 +144,16 @@ impl RetainedCompilerRuntimeV1 {
     pub const MAX_OPERATION_SCRATCH: usize =
         2 * CODEC_STORAGE + 2 * size_of::<Self>() + 2 * CHUNK + 16 * 1024;
 
+    /// Complete additional inventory backing at the existing manifest limits.
+    /// The consumed approval and operation scratch remain separately funded.
+    pub fn maximum_additional_storage() -> std::result::Result<usize, Resource> {
+        (size_of::<Self>() - size_of::<ApprovedCompilerPolicyV2>())
+            .checked_add(size_of::<RetainedCompilerRuntimeStorageV1>())
+            .and_then(|n| n.checked_add(MAX_BYTES))
+            .and_then(|n| n.checked_add(usize::try_from(MAX_CODE_BYTES).ok()?))
+            .ok_or(Resource::Arithmetic)
+    }
+
     /// One complete code hash/origin pass at the existing manifest limits.
     /// Checked arithmetic refuses hosts unable to represent the fixed bounds.
     pub fn maximum_file_pass_work() -> std::result::Result<usize, Resource> {

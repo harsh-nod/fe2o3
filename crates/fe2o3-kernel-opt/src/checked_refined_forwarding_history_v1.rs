@@ -40,7 +40,24 @@ pub struct CanonicalRefinedForwardingHistoryLimitsV1 {
     /// Exact cross-block forwarding analysis limits.
     pub forwarding: ForwardingLimits,
 }
+impl CanonicalRefinedForwardingHistoryLimitsV1 {
+    /// Shared fixed producer/consumer policy; never inferred from transport.
+    pub fn production_v1() -> Self {
+        Self {
+            refinement: LoopLimits::default(),
+            forwarding: ForwardingLimits::default(),
+        }
+    }
+}
 type Limits = CanonicalRefinedForwardingHistoryLimitsV1;
+
+#[cfg(test)]
+#[test]
+fn fixed_production_history_limits_preserve_both_existing_policies() {
+    let limits = Limits::production_v1();
+    assert_eq!(limits.refinement, LoopLimits::default());
+    assert_eq!(limits.forwarding, ForwardingLimits::default());
+}
 
 /// Fixed semantic subjects and complete claims. No hashes replace actual owners.
 /// Each tail's input is its predecessor's output, not a second selectable field.

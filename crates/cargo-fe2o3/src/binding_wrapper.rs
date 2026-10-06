@@ -758,22 +758,85 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 )
             })?;
             let capabilities = compiler_capabilities.as_ref().unwrap();
-            return capabilities.with_completed_native_root(parent, |_readiness| {
-                // The authenticated root origin can enter the existing V5
-                // pipeline, but this wrapper's recipe/approval/terminal
-                // continuation still requires joined qualification and wiring.
-                // Never fall through to local spawn or fabricate a Child.
-                Err(BindingWrapperError::CompilerExecutionBoundary {
-                    stage: "original-root artifact continuation",
-                    primary: "native parent artifact continuation is not activated".to_owned(),
-                    cleanup: None,
-                })
-            });
+            let managed = managed_attempt
+                .as_ref()
+                .ok_or_else(|| native_continuation_error("native root has no managed attempt"))?;
+            let ManagedProductionBuild::Fresh {
+                config,
+                compiler_closure,
+            } = &managed.production_build
+            else {
+                return Err(native_continuation_error(
+                    "native root refuses legacy recovered publication",
+                ));
+            };
+            let target = fe2o3_amd_target::ProductionAmdTargetProfileV1::from_device_target(
+                parent.amd_target(),
+            )
+            .ok_or_else(|| native_continuation_error("native captured AMD target"))?;
+            let history_limits =
+                fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1::production_v1();
+            return capabilities.with_completed_native_root(
+                parent,
+                |b| {
+                    use fe2o3_compiler_closure_capability::{
+                        ApprovedCompilerPolicyV2, RetainedCompilerRuntimeV1,
+                    };
+                    let recipe = crate::build_config::native::PreparedNativeProductionBuildConfig::
+                        from_environment(config, b).map_err(native_continuation_error)?;
+                    let (approval, storage) = ApprovedCompilerPolicyV2::from_production_policy(b)
+                        .map_err(native_continuation_error)?;
+                    b.reserve_storage(storage.retained_storage())
+                        .map_err(native_continuation_error)?;
+                    let (runtime, storage) =
+                        RetainedCompilerRuntimeV1::from_production_runtime(approval, b)
+                            .map_err(native_continuation_error)?;
+                    b.reserve_storage(storage.additional_storage())
+                        .map_err(native_continuation_error)?;
+                    runtime
+                        .require_compiler(*compiler_closure, b)
+                        .map_err(native_continuation_error)?;
+                    Ok((recipe, runtime))
+                },
+                |(recipe, runtime), readiness| {
+                    let prepared = readiness
+                        .finalize_original_root_publication(
+                            &managed.output_dir,
+                            &managed.producer,
+                            managed.attempt,
+                            parent,
+                            history_limits,
+                            target,
+                            recipe,
+                            runtime,
+                        )
+                        .map_err(native_continuation_error)?;
+                    // Persistence can commit a journal before a later check
+                    // fails. Preserve that attempt, including during unwind.
+                    if let Some(guard) = pre_spawn_attempt_guard.as_mut() {
+                        guard.disarm();
+                    }
+                    let durable = prepared
+                        .persist_original_root(&managed.output_dir, &managed.producer)
+                        .map_err(native_continuation_error)?;
+                    let published = durable
+                        .publish_original_root(&managed.output_dir, &managed.producer)
+                        .map_err(native_continuation_error)?;
+                    published
+                        .complete_original_root(&managed.output_dir, &managed.producer)
+                        .map_err(native_continuation_error)?;
+                    Ok(RustcExecutionOutcome::NativeCompleted)
+                },
+            );
         }
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
-                return Ok((Err(error), parent_rustc_invocation_custody, None));
+                return Ok(RustcExecutionOutcome::Local {
+                    status: Err(error),
+                    parent: parent_rustc_invocation_custody,
+                    readiness: None,
+                });
             }
         };
         let compiler_execution_readiness = match compiler_execution_boundary {
@@ -811,11 +874,11 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     cleanup: terminate_spawned_rustc(&mut child),
                 })?;
         }
-        Ok((
-            Ok(status),
-            parent_rustc_invocation_custody,
-            compiler_execution_readiness,
-        ))
+        Ok(RustcExecutionOutcome::Local {
+            status: Ok(status),
+            parent: parent_rustc_invocation_custody,
+            readiness: compiler_execution_readiness,
+        })
     })();
     let (status, parent_rustc_invocation_custody, compiler_execution_readiness) =
         match pre_spawn_result {
@@ -823,7 +886,16 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 if let Some(guard) = pre_spawn_attempt_guard.as_mut() {
                     guard.disarm();
                 }
-                prepared
+                match prepared {
+                    RustcExecutionOutcome::Local {
+                        status,
+                        parent,
+                        readiness,
+                    } => (status, parent, readiness),
+                    // This variant is constructed only after actual root
+                    // completion, durable readiness and managed attempt finish.
+                    RustcExecutionOutcome::NativeCompleted => return Ok(success_exit_status()),
+                }
             }
             Err(primary) => {
                 return Err(pre_spawn_failure(pre_spawn_attempt_guard.as_mut(), primary));
@@ -1488,12 +1560,17 @@ fn validate_expected_build_config_identity(
 
 // The native profile decoder and later intake borrow this ONE wrapper request
 // account. This is not the separate root process's original launch account.
+// These terms cover intake and pre-root preparation. Complete source replay,
+// Worker and publication funding remains a default-activation prerequisite.
 fn native_intake_account()
 -> Result<crate::authority_release::profile::ClientProfileAccountV3, BindingWrapperError> {
     use crate::authority_release::profile::{
         FundedClientProfileV3, client_profile_receive_quota_v3,
     };
     use crate::protected_compiler_handoff_v3::root_intake;
+    use fe2o3_compiler_closure_capability::{
+        ApprovedCompilerPolicyV2 as Approval, RetainedCompilerRuntimeV1 as Runtime,
+    };
     use fe2o3_kernel_ir::{
         CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account,
         CanonicalKernelIrWorkBudgetV1 as Work,
@@ -1509,18 +1586,28 @@ fn native_intake_account()
     let (configuration_work, configuration_storage) =
         crate::build_config::native::maximum_preparation_quota()
             .map_err(|error| BindingWrapperError::CapabilityBroker(error.to_string()))?;
+    let runtime_work = Runtime::maximum_operation_work().map_err(native_continuation_error)?;
+    let runtime_storage =
+        Runtime::maximum_additional_storage().map_err(native_continuation_error)?;
     let header = size_of::<Account>()
         + size_of::<Mutex<Account>>()
         + size_of::<FundedClientProfileV3>()
         + 2 * size_of::<usize>();
     let work = profile_work
         .checked_add(configuration_work)
+        .and_then(|n| n.checked_add(configuration_work))
+        .and_then(|n| n.checked_add(Approval::MAX_OPERATION_WORK))
+        .and_then(|n| n.checked_add(runtime_work.checked_mul(2)?))
         .and_then(|n| n.checked_add(root_intake::WORK))
         .and_then(|n| n.checked_add(root_intake::CAPTURE_WORK))
         .and_then(|n| n.checked_add(NativeReadiness::ROOT_ADMISSION_WORK))
         .ok_or_else(overflow)?;
     let storage = profile_storage
         .checked_add(configuration_storage)
+        .and_then(|n| n.checked_add(configuration_storage))
+        .and_then(|n| n.checked_add(Approval::MAX_OPERATION_SCRATCH))
+        .and_then(|n| n.checked_add(runtime_storage))
+        .and_then(|n| n.checked_add(Runtime::MAX_OPERATION_SCRATCH))
         .and_then(|n| n.checked_add(root_intake::SCRATCH))
         .and_then(|n| n.checked_add(root_intake::CAPTURE_SCRATCH))
         .and_then(|n| n.checked_add(NativeReadiness::ROOT_ADMISSION_SCRATCH))
@@ -1677,10 +1764,14 @@ impl CompilerCapabilities {
             .map_err(|e| BindingWrapperError::ChildCapability(e.to_string()))
     }
 
-    fn with_completed_native_root<R>(
+    fn with_completed_native_root<P, R>(
         &self,
         parent: &ParentRustcInvocationCustody,
+        prepare: impl FnOnce(
+            &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+        ) -> Result<P, BindingWrapperError>,
         operation: impl for<'b, 'work> FnOnce(
+            P,
             NativeReadiness<'b, 'work>,
         ) -> Result<R, BindingWrapperError>,
     ) -> Result<R, BindingWrapperError> {
@@ -1698,6 +1789,9 @@ impl CompilerCapabilities {
             ));
         }
         profile.with_profile_budget(|profile, b| {
+            // Address-bound recipe/runtime owners must be created in this exact
+            // view, before contacting the root, and consumed before it closes.
+            let prepared = prepare(b)?;
             let completed = parent
                 .contact_original_root(profile, authority, &self.artifact, b)
                 .map_err(|error| BindingWrapperError::CompilerExecutionBoundary {
@@ -1714,7 +1808,7 @@ impl CompilerCapabilities {
             })?;
             // No owner or budget borrow may escape this original funded callback.
             // Artifact persistence is outside the transport's refundable scopes.
-            operation(readiness)
+            operation(prepared, readiness)
         })
     }
 
@@ -1937,6 +2031,23 @@ struct ManagedAttempt {
     compile_environment_profile: Option<BuildCompileEnvironmentProfileV1>,
     source_isa_observer: Option<SourceIsaObservationEmitterV1>,
     production_build: ManagedProductionBuild,
+}
+
+enum RustcExecutionOutcome {
+    Local {
+        status: std::io::Result<ExitStatus>,
+        parent: Option<ParentRustcInvocationCustody>,
+        readiness: Option<ParentCompilerExecutionReadinessCustodyV1>,
+    },
+    NativeCompleted,
+}
+
+fn native_continuation_error(error: impl fmt::Display) -> BindingWrapperError {
+    BindingWrapperError::CompilerExecutionBoundary {
+        stage: "original-root artifact continuation",
+        primary: error.to_string(),
+        cleanup: None,
+    }
 }
 
 struct ManagedProductionAttempt {
@@ -2229,6 +2340,9 @@ fn pre_spawn_failure(
     let Some(guard) = guard else {
         return primary;
     };
+    if !guard.armed {
+        return primary;
+    }
     let cleanup = guard.revoke().err();
     BindingWrapperError::ManagedCompletion {
         primary: primary.to_string(),
@@ -3175,6 +3289,41 @@ mod lifecycle_tests {
                 .extension()
                 .is_none_or(|ext| ext != "hsaco")
         }));
+    }
+
+    #[test]
+    fn durable_native_continuation_failure_preserves_the_real_managed_attempt() {
+        let temp = TestDirectory::new();
+        let output = temp.0.join("output");
+        let producer = ProducerIdentity::from_codegen(
+            "native_completion_failure",
+            Some(Path::new("/workspace/src/lib.rs")),
+        )
+        .unwrap();
+        let session = BuildSession::from_bytes([0x51; 16]);
+        let invocation = BuildInvocation::from_bytes([0x52; 32]);
+        let attempt = begin_build_attempt(&output, &producer, invocation, session).unwrap();
+        let mut guard = ManagedAttemptRevocationGuard {
+            output_dir: output.clone(),
+            producer: producer.clone(),
+            attempt,
+            armed: true,
+        };
+        guard.disarm();
+        let error = pre_spawn_failure(
+            Some(&mut guard),
+            native_continuation_error("injected post-persistence refusal"),
+        );
+        assert!(matches!(
+            error,
+            BindingWrapperError::CompilerExecutionBoundary { .. }
+        ));
+        drop(guard);
+        assert_eq!(
+            begin_build_attempt(&output, &producer, invocation, session).unwrap(),
+            attempt
+        );
+        fail_build_attempt(&output, &producer, attempt).unwrap();
     }
 
     #[test]

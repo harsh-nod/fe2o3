@@ -263,6 +263,13 @@ fn shared_runtime_quotes_preserve_the_closed_schedule() {
             + files
     );
     assert!(RetainedCompilerRuntimeV1::MAX_OPERATION_SCRATCH >= FRAME);
+    assert_eq!(
+        RetainedCompilerRuntimeV1::maximum_additional_storage().unwrap(),
+        size_of::<RetainedCompilerRuntimeV1>() - size_of::<ApprovedCompilerPolicyV2>()
+            + size_of::<RetainedCompilerRuntimeStorageV1>()
+            + MAX_BYTES
+            + code
+    );
 }
 
 #[test]
@@ -273,6 +280,7 @@ fn shared_runtime_work_quote_covers_synthetic_inventory_operations() {
         let inventory = t.retain(b);
         t.revalidate(&inventory, b)?;
         let retained = inventory.additional_storage();
+        assert!(retained <= RetainedCompilerRuntimeV1::maximum_additional_storage()?);
         drop(inventory);
         b.release_storage(retained)?;
         Ok(())

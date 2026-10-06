@@ -259,6 +259,104 @@ fn native_configuration_preserves_both_schema_identities_and_exact_account_limit
 }
 
 #[test]
+fn native_environment_repreparation_keeps_the_admitted_recipe_and_account() {
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use native::PreparedNativeProductionBuildConfig as Native;
+    use std::process::Command;
+    const MARKER: &str = "FE2O3_NATIVE_RECIPE_TEST";
+    const TEST: &str = "build_config::tests::native_environment_repreparation_keeps_the_admitted_recipe_and_account";
+    let Some(version) = std::env::var_os(MARKER) else {
+        let scratch = ScratchDirectory::new();
+        for version in [1, 2] {
+            let (path, _) = native_fixture(&scratch, version);
+            let variable = if version == 1 {
+                PRODUCTION_BUILD_CONFIG_ENV
+            } else {
+                PRODUCTION_BUILD_CONFIG_V2_ENV
+            };
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    TEST,
+                    "--format=json",
+                    "-Zunstable-options",
+                    "--test-threads=1",
+                ])
+                .env_clear()
+                .env(MARKER, version.to_string())
+                .env(variable, path)
+                .env("TMPDIR", &scratch.0)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let records: Vec<Value> = String::from_utf8(output.stdout)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            assert_eq!(records.len(), 4);
+            assert_eq!(
+                records[0],
+                serde_json::json!({"type": "suite", "event": "started", "test_count": 1})
+            );
+            assert_eq!(records[1]["name"], TEST);
+            assert_eq!(records[1]["event"], "started");
+            assert_eq!(records[2]["name"], TEST);
+            assert_eq!(records[2]["event"], "ok");
+            assert_eq!(records[3]["event"], "ok");
+            assert_eq!(records[3]["passed"], 1);
+            assert_eq!(records[3]["failed"], 0);
+        }
+        return;
+    };
+    let version = if version == "1" { 1 } else { 2 };
+    for case in 0..4 {
+        let mut expected = PreparedProductionBuildConfig::from_environment()
+            .unwrap()
+            .unwrap();
+        if case == 1 {
+            expected.link.identity.0[0] ^= 1;
+        }
+        if case == 2 {
+            expected.version = if version == 1 {
+                ProductionBuildConfigVersion::V2(ProductionSourceIsaObservationKindV1::Summary)
+            } else {
+                ProductionBuildConfigVersion::V1
+            };
+        }
+        let mut work = Work::new(if case == 3 { 0 } else { 30_000_000 });
+        let mut budget = Budget::new(&mut work, 30_000_000);
+        budget.reserve_storage(37).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let result = Native::from_environment(&expected, &mut budget);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        if case == 0 {
+            let recipe = result.unwrap();
+            assert_eq!(recipe.identity(), expected.identity());
+            assert_eq!(recipe.retained_storage(), budget.storage() - 37);
+            recipe.check_account(&mut budget).unwrap();
+            let (_, providers, _, _, _, retained) = recipe.into_worker_parts(&mut budget).unwrap();
+            assert_eq!(providers[0].bytes(), b"native configuration provider");
+            assert_eq!(retained, budget.storage() - 37);
+        } else if case == 3 {
+            assert!(matches!(
+                result,
+                Err(BuildConfigError::Resource(Resource::Work(_)))
+            ));
+            assert_eq!((budget.work(), budget.storage()), (0, 37));
+        } else {
+            assert!(matches!(result, Err(BuildConfigError::Invalid(_))));
+            assert!(budget.work() > 0 && budget.storage() > 37);
+        }
+    }
+}
+
+#[test]
 fn native_recipe_rejects_foreign_ledgers_and_retired_input_storage() {
     use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
     use native::PreparedNativeProductionBuildConfig as Native;
