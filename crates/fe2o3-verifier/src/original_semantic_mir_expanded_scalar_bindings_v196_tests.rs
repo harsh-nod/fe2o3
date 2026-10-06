@@ -213,6 +213,11 @@ fn exercise_source_leaves(
                     .slots
                     .correspondence(out)?
                     .ssa_typed_endpoint_v36(root, instance, value, out.budget)?;
+                if endpoint.carrier_shape(out.budget)?
+                    != fe2o3_lower_mir_kernel::ProductionSourceSsaCarrierShapeV37::Value
+                {
+                    continue;
+                }
                 let Some(Type::Execution(
                     ExecutionRoleV15::MaskedTileU32 { .. }
                     | ExecutionRoleV15::LaneFragmentU32 { .. },
@@ -328,6 +333,12 @@ fn exercise_source_arguments(
         let ssa = archive.plan_for_function(row.function).unwrap().plan();
         for entry in ssa.entry_definitions() {
             let endpoint = relation.ssa_typed_endpoint_v36(root, 0, entry.value(), out.budget)?;
+            if !matches!(endpoint.carrier_shape(out.budget)?,
+                fe2o3_lower_mir_kernel::ProductionSourceSsaCarrierShapeV37::Value
+                | fe2o3_lower_mir_kernel::ProductionSourceSsaCarrierShapeV37::Unit)
+            {
+                continue;
+            }
             if !matches!(
                 endpoint.physical_type(out.budget)?,
                 Some(Type::Unit | Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_))

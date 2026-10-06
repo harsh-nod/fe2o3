@@ -48,7 +48,14 @@ fn run(layout: Layout, work: usize, storage: usize) -> (Result<()>, usize, usize
     run_fixture_with_plan(layout, work, storage, |plan, slots, _, out| {
         let target = TileTargetV176::derive(slots, out)?;
         let start = out.text.len();
-        emit_source_cut_values_v213(plan, slots, &target, FormalIndexWidth::Bits64, out)?;
+        emit_source_cut_values_v213(plan, slots, &target, FormalIndexWidth::Bits64, out)
+            .inspect_err(|error| {
+                if matches!(error, Error::Statement(_)) {
+                    eprintln!("last live-value cut before refusal: {}",
+                        out.text[start..].rsplit("spec fn invocation_expanded_live_values_")
+                            .next().unwrap_or("no cut emitted"));
+                }
+            })?;
         let source = plan.source(out)?;
         let archive = source.source_ssa(out.budget)?;
         let mut cuts = 0;
@@ -161,7 +168,7 @@ fn expanded_live_values_refuse_unknown_width_before_emission() {
 fn expanded_live_values_refuse_foreign_plans_and_targets_before_emission() {
     for foreign_plan in [false, true] {
         let mut reached = false;
-        run_fixture_with_plan(Layout::Blocked, LIMIT, LIMIT, |plan, slots, _, out| {
+        let result = run_fixture_with_plan(Layout::Blocked, LIMIT, LIMIT, |plan, slots, _, out| {
             let target = TileTargetV176::derive(slots, out)?;
             let nested =
                 run_fixture_with_plan(
@@ -200,11 +207,16 @@ fn expanded_live_values_refuse_foreign_plans_and_targets_before_emission() {
                     }
                     },
                 );
-            assert!(nested.0.is_err());
-            Ok(())
+            let error = nested.0.unwrap_err();
+            assert!(matches!(error, Error::Resource(Resource::Accounting)
+                | Error::Source(fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                    Resource::Accounting))));
+            Err(error)
         })
-        .0
-        .unwrap();
+        .0;
+        assert!(matches!(result, Err(Error::Resource(Resource::Accounting))
+            | Err(Error::Source(fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                Resource::Accounting)))));
         assert!(reached);
     }
 }
