@@ -323,7 +323,7 @@ connection changes and refusal paths.
 4. Lost retirement replies, issuer restart, old-carriage replay, unknown epoch,
    and exact durable-state joins across every receipt-exposing operation.
 5. Integrated production attempt, protected proof execution, and target-matched
-   positive and negative GPU qualification for all 47 tutorial kernels.
+   positive and negative GPU qualification for the entire registered tutorial-kernel corpus.
 
 Parser, journal, startup, and compile-only tests establish their individual
 properties. They do not substitute for the later gates.
