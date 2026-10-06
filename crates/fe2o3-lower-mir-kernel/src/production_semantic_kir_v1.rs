@@ -34530,7 +34530,7 @@ pub use optimized_source_v18::{
     ProductionOptimizedTileLoadScheduleV155, ProductionPredicatedMemoryCheckedNativePoliciesV89,
     ProductionPrivateMemoryCheckedNativePoliciesV18, ProductionSourceNativeLifecycleDiagnosticV18,
     ProductionSourceNativeLifecycleErrorV18, ProductionSourcePrivateMemoryRootRequestV18,
-    ProductionSourceTileExpansionV159, ProductionSourceTileLeafV162,
+    ProductionSourceTileExpansionV159, ProductionSourceTileGapV177, ProductionSourceTileLeafV162,
     ProductionSourceTileOperationSpanV159, ProductionTileScalarFunctionV156,
     ProductionTileScalarLoadV156,
 };

@@ -12,7 +12,7 @@ pub use scalar::{ProductionTileScalarFunctionV156, ProductionTileScalarLoadV156}
 #[path = "production_optimized_source_tile_expansion_v159.rs"]
 mod expansion;
 pub use expansion::{
-    ProductionSourceTileExpansionV159, ProductionSourceTileLeafV162,
+    ProductionSourceTileExpansionV159, ProductionSourceTileGapV177, ProductionSourceTileLeafV162,
     ProductionSourceTileOperationSpanV159,
 };
 
