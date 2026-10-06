@@ -232,8 +232,8 @@ impl<'a> Retained<'a> {
         b.charge_work(finalized.finalized().as_bytes().len())?;
         let final_bytes = ContentIdentityV1::calculate(finalized.finalized().as_bytes());
         let raw = source.output_identity();
-        if plan.linked_output().as_bytes() != *raw.sha256()
-            || plan.finalized_output().as_bytes() != *final_bytes.sha256()
+        if plan.linked_output().as_bytes() != raw.sha256()
+            || plan.finalized_output().as_bytes() != final_bytes.sha256()
         {
             return Err(Error::Mismatch("retained exact output"));
         }
