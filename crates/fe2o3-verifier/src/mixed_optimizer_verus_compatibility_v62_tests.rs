@@ -48,12 +48,12 @@ fn finite_domain_compatibility_program_retains_equations_and_private_parent_impo
 }
 
 #[test]
-fn finite_domain_compatibility_source_keeps_all_fifteen_finite_maps() {
+fn finite_domain_compatibility_source_keeps_all_sixteen_finite_maps() {
     let sources = [
         (super::super::byte_memory_v30::BYTE_MEMORY_V30, 3),
         (
             include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
-            5,
+            6,
         ),
         (
             include_str!("original_semantic_mir_invocation_source_frames_v36.rs"),
@@ -82,7 +82,9 @@ fn finite_domain_compatibility_source_keeps_all_fifteen_finite_maps() {
         assert!(!source.contains("new_assuming_finite"));
         count += expected;
     }
-    assert_eq!(count, 15);
+    assert_eq!(count, 16);
+    let logical = include_str!("original_semantic_mir_source_logical_locals_v38.vrs");
+    assert!(logical.contains("execution_references: Map::new(logical.execution_references.dom().filter(|i: int| !(begin <= i < end)),\n            |i: int| logical.execution_references[i])"));
     let aggregate = include_str!("original_semantic_mir_source_aggregate_values_v42.vrs");
     assert!(aggregate.contains(".filter(|key: Seq<int>| invocation_source_path_prefix_v42(path, key))\n                .map(|key: Seq<int>| key.subrange(path.len() as int, key.len() as int))"));
     assert!(aggregate.contains(".union(value.leaves.dom().map(|suffix: Seq<int>| path + suffix))"));
