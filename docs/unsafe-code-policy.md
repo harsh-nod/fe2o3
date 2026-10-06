@@ -522,6 +522,72 @@ This reconciliation changes only this one inventory entry and review records.
 Run the source-inventory gate, engineering host tests and compile-fail doctests;
 CPU evidence does not qualify native GPU execution or protected authority.
 
+### Whole-Program Engineering and Startup Reconciliation
+
+The issue #289 review covers six inventory rows on `166670ab7`, not a blanket
+refresh. The affected implementations, tokenizer and baseline are unchanged from
+the recorded failing `12bf5e7a` inventory run. The following source contracts
+were reviewed independently of test execution; the inventory gate and affected
+CPU tests remain required after this correction.
+
+The engineering additions in `eded9474b`, `dcf345452` and `55c1a9b6` add three
+public unsafe entrypoints and one private unsafe policy delegate, with four
+forwarding blocks. Native whole-program submission and the explicit 512-slot
+family preserve the existing device-consent, trusted-machine-code, dedicated
+disposable-process and terminal-error obligations. The boundary-fence entry
+additionally excludes host, peer and other-queue communication during execution;
+all host inputs precede publication, and only final system completion plus
+every retained signal's retirement permits data access or reuse. Safe metadata
+checks cannot establish those machine-code and external-actor obligations.
+Policy is fixed before Ready. Ordinary entries retain their original policy;
+legacy commands retain their 256-slot limit even in the opt-in 512-slot worker.
+
+The two new `memory_linux.rs` blocks implement operations ordinary byte slices
+cannot safely express for retained GPU-visible storage. Signal initialization
+checks the complete rounded arena extent before writing distinct aligned
+64-byte signal records, including their initialized atomic values. Its private
+production caller checks queue idleness and retains both allocation owners
+before initialization. Existing exact-layout reuse does not reinitialize live
+signals. Closed-program header publication borrows a checked live, aligned
+AtomicU32 slot; INVALID state and the typed program position/count/setup must
+match before a release store preserves the setup halfword and publishes the
+header. The original private reservation supplies the slot and all INVALID
+bodies are written before any header. No raw pointer escapes either helper.
+
+All dynamic dispatch validation precedes publication. Native completion checks
+the final signal, queue identity/frontier and every retained signal before
+advancing the completed frontier. Errors poison the path and the worker retains
+uncertain native resources until disposable-process termination; they never
+permit retry or speculative release. Normal close and queue rollover destroy
+the queue before releasing program arenas. Host tests cover extent/alignment,
+wrong-position and old-route refusal, all-signal retirement, partial-publication
+faults and slot-policy separation. They do not qualify native GPU execution.
+
+The `dbd70fd41` host change adds one unsafe function/block for the exact V89
+inherited handoff. Its startup contract excludes concurrent environment and FD
+mutation and transfers every inherited descriptor exactly once, including on
+refusal or unwind. It uses the existing one-shot claim, schema/alias refusal and
+owned-descriptor recovery, then the same retained-currentness/acknowledgment
+sequence. The shared mixed-application function/block moves from the V53 file
+to `production_mixed_application_family.rs`; it is counted once where written,
+not twice for its includes. Concrete V53/V89 aliases and auditors remain
+distinct. Preparation and current-record checks grant no proof or load authority.
+
+The `d5441e0e4` native loader test adds one block adopting two fresh live fixed
+descriptors. The exact-test subprocess's installer relinquishes them with
+`into_raw_fd`; the block creates their sole owners. Startup captures only private
+CLOEXEC duplicates, and the original owners remain live until their explicit
+drop. This is isolated FD-lifetime coverage, not native compiler admission.
+
+The exact changes are: handoff blocks/functions 14/4 to 15/5; the mixed-family
+move 1/1 with the old V53 row removed; engineering 11/8 to 15/12; memory blocks
+38 to 40 with its extern block unchanged; and native loader test blocks 2 to 3.
+No other row, unsafe implementation, tokenizer, assertion or admission policy
+changes. Run the full source-inventory gate, engineering library/worker tests
+and doctests, host handoff/V89 tests and doctests, and the native loader's
+`native_loader_copies_enter_the_same_account_without_consuming_caller_slots`
+test. This reconciliation grants no installed-runtime, proof or GPU authority.
+
 ### Conditional Invocation Binding Comparison Fixture
 
 Peer commit 5e1f9c3441066f13f5d501a95349a8a99fe886be adds one test-only unsafe

@@ -805,8 +805,8 @@
     "function": 1
   },
   "crates/fe2o3-host/src/application_descriptor_handoff.rs": {
-    "block": 14,
-    "function": 4
+    "block": 15,
+    "function": 5
   },
   "crates/fe2o3-host/src/argument_alias.rs": {
     "block": 19,
@@ -866,7 +866,7 @@
     "block": 2,
     "function": 2
   },
-  "crates/fe2o3-host/src/production_mixed_application_v53.rs": {
+  "crates/fe2o3-host/src/production_mixed_application_family.rs": {
     "block": 1,
     "function": 1
   },
@@ -986,8 +986,8 @@
     "block": 4
   },
   "crates/fe2o3-kfd/src/engineering_gfx950.rs": {
-    "block": 11,
-    "function": 8
+    "block": 15,
+    "function": 12
   },
   "crates/fe2o3-kfd/src/engineering_gfx950_debug_execution_v1.rs": {
     "function": 2
@@ -1028,7 +1028,7 @@
     "block": 20
   },
   "crates/fe2o3-kfd/src/memory_linux.rs": {
-    "block": 38,
+    "block": 40,
     "extern_block": 1
   },
   "crates/fe2o3-kfd/src/memory_linux_dispatch_timestamps.rs": {
@@ -1430,7 +1430,7 @@
     "function": 1
   },
   "crates/rustc-codegen-fe2o3/src/protected_compiler_execution_native_v3_tests.rs": {
-    "block": 2
+    "block": 3
   },
   "crates/rustc-codegen-fe2o3/src/protected_compiler_execution_tests.rs": {
     "block": 9
