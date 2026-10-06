@@ -67,7 +67,7 @@ use crate::{
 
 /// Additional prepaid Rust work/storage; existing source-owner floors are separate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct NativeWorkerResourceQuote {
+pub struct NativeWorkerResourceQuote {
     pub(crate) preflight_storage: usize,
     pub(crate) execution_storage: usize,
     pub(crate) preflight_work: usize,
@@ -85,7 +85,7 @@ pub(crate) struct NativeWorkerResourceQuote {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NativeWorkerResourceQuoteError {
+pub enum NativeWorkerResourceQuoteError {
     Arithmetic(&'static str),
     HardBound {
         component: &'static str,
@@ -145,6 +145,53 @@ struct Dimensions {
 }
 
 impl NativeWorkerResourceQuote {
+    /// A componentwise upper bound over the existing admitted codec limits.
+    /// This does not admit a module, enlarge any operation window, or quote the
+    /// caller's source, account, finalization or terminal publication adapters.
+    /// Some simultaneous maxima cannot form a valid input. They still bound
+    /// every accepted input because the shared schedule is monotone in each
+    /// nonnegative dimension; normal construction retains its full validation.
+    pub fn admitted_limits_upper_bound() -> QuoteResult<Self> {
+        Self::schedule(Dimensions {
+            handoff: MAX_COMPILER_MODULE_HANDOFF_BYTES_V2,
+            module: MAX_COMPILER_MODULE_BYTES_V1,
+            envelope: MAX_COMPILER_FFI_ENVELOPE_BYTES_V1,
+            manifest: MAX_COMPILER_MODULE_SYMBOL_MANIFEST_BYTES_V1,
+            providers: MAX_WORKER_TOTAL_INPUT_BYTES,
+            provider_count: MAX_LINK_INPUTS.checked_sub(1).ok_or(
+                NativeWorkerResourceQuoteError::Arithmetic("provider count cap"),
+            )?,
+            option_text: product(
+                MAX_LINK_OPTIONS,
+                sum(
+                    [MAX_LINK_OPTION_NAME_BYTES, MAX_LINK_OPTION_VALUE_BYTES],
+                    "option row bound",
+                )?,
+                "option text bound",
+            )?,
+            option_count: MAX_LINK_OPTIONS,
+            symbols: MAX_COMPILER_MODULE_SYMBOLS_V1,
+            contracts: MAX_COMPILER_FFI_CONTRACTS_V1,
+            output: MAX_WORKER_OUTPUT_BYTES,
+            stdout: MAX_WORKER_RESPONSE_BYTES,
+            stderr: MAX_WORKER_STDERR_BYTES,
+            timeout: MAX_WORKER_TIMEOUT,
+        })
+    }
+
+    pub const fn preflight_work(&self) -> usize {
+        self.preflight_work
+    }
+    pub const fn execution_work(&self) -> usize {
+        self.execution_work
+    }
+    pub const fn preflight_storage(&self) -> usize {
+        self.preflight_storage
+    }
+    pub const fn execution_storage(&self) -> usize {
+        self.execution_storage
+    }
+
     /// Quotes the finite Rust staging, codec and replay operations before consume.
     pub(crate) fn new(
         module: &CompilerModuleHandoffV2,
@@ -215,7 +262,7 @@ impl NativeWorkerResourceQuote {
 
     /// Complete result buffers and metadata; add the native adapter owner shell.
     /// Excludes the original source and prepared-owner reservations.
-    pub(crate) const fn returned_retained_storage(&self) -> usize {
+    pub const fn returned_retained_storage(&self) -> usize {
         self.returned_retained_storage
     }
 
@@ -279,6 +326,15 @@ impl NativeWorkerResourceQuote {
             d.option_text,
             product(d.option_count, option_bytes_per_row, "option text bound")?,
         )?;
+
+        Self::schedule(d)
+    }
+
+    // The only unchecked-dimension caller is the closed admitted-limit bound
+    // above. Actual module preparation always goes through from_dimensions.
+    fn schedule(d: Dimensions) -> QuoteResult<Self> {
+        let metadata = sum([d.envelope, d.manifest], "handoff metadata bytes")?;
+        let inputs = sum([d.module, d.providers], "aggregate input payload")?;
 
         // encode_request: magic + 15 TLV headers, fixed bodies, three symbol
         // counts and provider count. Each input has a kind, digest and u64 length.

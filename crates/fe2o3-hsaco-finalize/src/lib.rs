@@ -39,6 +39,10 @@ mod first_build_worker_engine;
 mod first_build_worker_native;
 mod first_build_worker_native_binding;
 mod first_build_worker_native_resources;
+pub use first_build_worker_native_resources::{
+    NativeWorkerResourceQuote as NativeWorkerEngineResourceQuoteV1,
+    NativeWorkerResourceQuoteError as NativeWorkerEngineResourceQuoteErrorV1,
+};
 mod first_build_worker_v3;
 mod link_plan;
 mod mixed_worker_lineage_v29;
