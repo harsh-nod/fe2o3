@@ -34,7 +34,8 @@ spec fn byte_execution_next_epoch_v178(state: MemoryStateV30, definition: int,
     if definition < 0 || definition >= state.values.len() { None } else {
         match state.values[definition] {
             MemoryValueV30::Undefined => if state.frames.active.len() > 0
-                && (forall|index: int| 0 <= index < state.values.len() ==>
+                && (forall|index: int| #![trigger state.values[index]]
+                    0 <= index < state.values.len() ==>
                     match state.values[index] {
                         MemoryValueV30::Execution(resident) =>
                             !byte_execution_mentions_v178(resident, definition,
