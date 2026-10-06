@@ -762,10 +762,24 @@ fn generate_actual_tile_target_v176(
     ));
     let actual_operations = inventory.operations().len();
     assert!(actual_operations > 0);
-    for row in inventory.definitions() {
-        assert!(!matches!(row.ty, fe2o3_kernel_ir::Type::Execution(_)));
-    }
     let selected = tile.root_policy_v162(0, out.budget)?.unwrap().0;
+    let mut retained_contexts = 0;
+    let mut retained_workgroups = 0;
+    for row in &inventory.definitions()[inventory.functions()[selected.0 as usize]
+        .definitions
+        .clone()]
+    {
+        use fe2o3_kernel_ir::ExecutionRoleV15 as Role;
+        match row.ty {
+            fe2o3_kernel_ir::Type::Execution(
+                Role::MaskedTileU32 { .. } | Role::LaneFragmentU32 { .. },
+            ) => panic!("tile role survived scalar expansion"),
+            fe2o3_kernel_ir::Type::Execution(Role::Context) => retained_contexts += 1,
+            fe2o3_kernel_ir::Type::Execution(Role::Workgroup) => retained_workgroups += 1,
+            _ => {}
+        }
+    }
+    assert!(retained_contexts > 0 && retained_workgroups > 0);
     assert_eq!(target.root_function(0, out)?, selected);
     target.emit(fe2o3_kernel_ir::FormalIndexWidth::Bits64, out)?;
     assert!(out.text.contains("spec fn byte_micro_step_0_v30("));
