@@ -75,8 +75,8 @@ fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_dom
             "        }",
         )
     );
-    assert_eq!(text.matches("proof fn ").count(), 4);
-    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 3);
+    assert_eq!(text.matches("proof fn ").count(), 5);
+    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 4);
     assert_eq!(
         theorem(text, "invocation_source_local_observation_intro_v183")
             .split_once("\n}\n")
@@ -93,6 +93,36 @@ fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_dom
             "\n        },",
             "\n    ensures invocation_source_local_observation_v180(observation),",
             "\n{",
+        )
+    );
+    let conditional = theorem(text, "invocation_source_local_observation_conditional_v184")
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    assert!(!conditional.contains("requires"));
+    assert_eq!(
+        conditional,
+        concat!(
+            "\n    observation: InvocationSourceOperandObservationV36,\n)",
+            "\n    ensures",
+            "\n        observation.before.machine.valid && observation.after.machine.valid",
+            "\n            && (match observation.operand {",
+            "\n                InvocationSourceOperandV36::Scalar {",
+            "\n                    value: InvocationSourceByteValueV36::Local { .. }, ..",
+            "\n                } => true,",
+            "\n                _ => false,",
+            "\n            }) ==> invocation_source_local_observation_v180(observation),",
+            "\n{",
+            "\n    if observation.before.machine.valid && observation.after.machine.valid",
+            "\n        && (match observation.operand {",
+            "\n            InvocationSourceOperandV36::Scalar {",
+            "\n                value: InvocationSourceByteValueV36::Local { .. }, ..",
+            "\n            } => true,",
+            "\n            _ => false,",
+            "\n        })",
+            "\n    {",
+            "\n        invocation_source_local_observation_intro_v183(observation);",
+            "\n    }",
         )
     );
     for required in [
@@ -285,10 +315,11 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(runtime_state.contains(&format!("assert forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() implies invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i]) by {{")));
                                     assert_eq!(runtime_state.matches("hide(invocation_source_local_observation_v180);").count(), 1);
                                     assert!(!runtime_state.contains("reveal(invocation_source_local_observation_v180)"));
-                                    assert_eq!(runtime_state.matches("invocation_source_local_observation_intro_v183(").count(), call.arguments.len());
+                                    assert!(!runtime_state.contains("invocation_source_local_observation_intro_v183("));
+                                    assert_eq!(runtime_state.matches("invocation_source_local_observation_conditional_v184(").count(), call.arguments.len());
                                     let quantified = runtime_state.find(" assert forall|i: int|").unwrap();
                                     for ordinal in 0..call.arguments.len() {
-                                        let introduction = format!(" invocation_source_local_observation_intro_v183(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}]);");
+                                        let introduction = format!(" invocation_source_local_observation_conditional_v184(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}]);");
                                         assert_eq!(runtime_state.matches(&introduction).count(), 1);
                                         assert!(runtime_state.find(&introduction).unwrap() < quantified);
                                     }
