@@ -4,8 +4,8 @@ use crate::{
     WorkerExecutionLimitsV1, WorkerInputV1, WorkerMeasurementV1, WorkerOutputConstraintsV1,
     WorkerResponseV2,
     first_build_worker_conditional_binding::{
-        ProtectedCompilerConditionalHandoffBindingV2 as Binding, require_storage_limit,
-        storage_floor,
+        AccountMode, ProtectedCompilerConditionalHandoffBindingV2 as Binding,
+        conditional_worker_configuration_storage_v2, require_storage_limit, storage_floor,
     },
     first_build_worker_engine::ReproducibleFirstBuildEnginePreflight as Engine,
     first_build_worker_native::failure,
@@ -51,6 +51,7 @@ pub struct PreparedConditionalFirstBuildWorkerV2 {
     quote: Quote,
     engine: Engine,
     storage: Storage,
+    account: AccountMode,
 }
 type Prepared = PreparedConditionalFirstBuildWorkerV2;
 impl Prepared {
@@ -112,6 +113,7 @@ pub struct InertConditionalFirstBuildWorkerEvidenceV2 {
     replay: InertWorkerExecutionV2,
     storage: Storage,
     retained_storage: usize,
+    account: AccountMode,
 }
 type Evidence = InertConditionalFirstBuildWorkerEvidenceV2;
 impl Evidence {
@@ -123,18 +125,21 @@ impl Evidence {
         }
     }
     pub(crate) fn revalidate_for_artifact(&self, b: &mut Budget<'_>) -> Result<(), Error> {
-        b.with_prepaid_scope(self.retained_storage, 8, ENTRY_WORK, FRAME, |b| {
-            if self.source.receipt() != self.binding.receipt()
-                || Binding::from_handoff(
-                    self.source.content(),
-                    self.source.receipt(),
-                    self.binding.compiler_closure(),
-                    b,
-                )? != self.binding
-            {
-                return Err(Error::PreflightMismatch("conditional artifact source"));
-            }
-            Ok(())
+        self.account.run(b, self.retained_storage, |b| {
+            b.with_prepaid_scope(self.retained_storage, 8, ENTRY_WORK, FRAME, |b| {
+                if self.source.receipt() != self.binding.receipt()
+                    || Binding::from_handoff_using(
+                        self.source.content(),
+                        self.source.receipt(),
+                        self.binding.compiler_closure(),
+                        b,
+                        self.account,
+                    )? != self.binding
+                {
+                    return Err(Error::PreflightMismatch("conditional artifact source"));
+                }
+                Ok(())
+            })
         })
     }
     pub(crate) fn artifact_lineage(
@@ -246,56 +251,117 @@ pub fn preflight_conditional_reproducible_first_build_worker_v2(
     limits: WorkerExecutionLimitsV1,
     b: &mut Budget<'_>,
 ) -> Result<(Prepared, Storage), Error> {
-    b.with_prepaid_scope(
-        token.storage().retained_storage(),
-        16,
-        ENTRY_WORK,
-        FRAME,
-        |b| {
-            require_storage_limit(b)?;
-            if token.receipt() != receipt {
-                return Err(Error::PreflightMismatch("locked V5 receipt"));
-            }
-            token
-                .revalidate_locked_currentness(b)
-                .map_err(currentness_error)?;
-            let binding = Binding::from_handoff(token.content(), receipt, closure, b)?;
-            let handoff = token.content().handoff();
-            let (engine, quote) = prepare_native_engine(
-                (&binding).into(),
-                handoff.canonical_bytes().len(),
-                handoff.module_handoff(),
-                worker,
-                providers,
-                options,
-                output,
-                limits,
-                size_of::<Prepared>(),
-                b,
-            )?;
-            let storage = Storage(
-                quote
-                    .preflight_storage
-                    .checked_add(size_of::<Prepared>())
-                    .ok_or(Resource::Arithmetic)?,
-            );
-            b.reserve_storage(storage.0)?;
-            token
-                .revalidate_locked_currentness(b)
-                .map_err(currentness_error)?;
-            Ok((
-                Prepared {
-                    binding,
-                    worker: worker.measurement().clone(),
-                    limits,
-                    quote,
-                    engine,
-                    storage,
-                },
-                storage,
-            ))
-        },
+    preflight_using(
+        token,
+        receipt,
+        closure,
+        worker,
+        providers,
+        options,
+        output,
+        limits,
+        b,
+        AccountMode::LEGACY,
     )
+}
+
+/// Explicit same-original-account variant. Prepay the complete token and the
+/// actual configuration quote; returned preflight/evidence retain the account
+/// association. All source, occurrence and measured Worker checks are unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn preflight_conditional_worker_in_original_account_v2(
+    token: &Token<Source>,
+    receipt: Receipt,
+    closure: Closure,
+    worker: &PinnedWorkerV1,
+    providers: Vec<WorkerInputV1>,
+    options: Vec<LinkOptionV1>,
+    output: WorkerOutputConstraintsV1,
+    limits: WorkerExecutionLimitsV1,
+    b: &mut Budget<'_>,
+) -> Result<(Prepared, Storage), Error> {
+    let account = AccountMode::original(b)?;
+    preflight_using(
+        token, receipt, closure, worker, providers, options, output, limits, b, account,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn preflight_using(
+    token: &Token<Source>,
+    receipt: Receipt,
+    closure: Closure,
+    worker: &PinnedWorkerV1,
+    providers: Vec<WorkerInputV1>,
+    options: Vec<LinkOptionV1>,
+    output: WorkerOutputConstraintsV1,
+    limits: WorkerExecutionLimitsV1,
+    b: &mut Budget<'_>,
+    account: AccountMode,
+) -> Result<(Prepared, Storage), Error> {
+    let inputs = if account.is_original() {
+        token
+            .storage()
+            .retained_storage()
+            .checked_add(conditional_worker_configuration_storage_v2(
+                worker, &providers, &options, b,
+            )?)
+            .ok_or(Resource::Arithmetic)?
+    } else {
+        0
+    };
+    account.run(b, inputs, |b| {
+        b.with_prepaid_scope(
+            token.storage().retained_storage(),
+            16,
+            ENTRY_WORK,
+            FRAME,
+            |b| {
+                if !account.is_original() {
+                    require_storage_limit(b)?;
+                }
+                if token.receipt() != receipt {
+                    return Err(Error::PreflightMismatch("locked V5 receipt"));
+                }
+                revalidate_token(token, account, b)?;
+                let binding =
+                    Binding::from_handoff_using(token.content(), receipt, closure, b, account)?;
+                let handoff = token.content().handoff();
+                let (engine, quote) = prepare_native_engine(
+                    (&binding).into(),
+                    handoff.canonical_bytes().len(),
+                    handoff.module_handoff(),
+                    worker,
+                    providers,
+                    options,
+                    output,
+                    limits,
+                    size_of::<Prepared>(),
+                    b,
+                )?;
+                let storage = Storage(
+                    quote
+                        .preflight_storage
+                        .checked_add(size_of::<Prepared>())
+                        .ok_or(Resource::Arithmetic)?,
+                );
+                b.reserve_storage(storage.0)?;
+                revalidate_token(token, account, b)?;
+                Ok((
+                    Prepared {
+                        binding,
+                        worker: worker.measurement().clone(),
+                        limits,
+                        quote,
+                        engine,
+                        storage,
+                        account,
+                    },
+                    storage,
+                ))
+            },
+        )
+    })
 }
 
 /// Rechecks the exact consumed occurrence and pinned worker before any process
@@ -312,62 +378,91 @@ pub fn execute_preflighted_conditional_reproducible_first_build_worker_v2(
         .retained_storage()
         .checked_add(preflight.storage.0)
         .ok_or(Resource::Arithmetic)?;
-    b.with_prepaid_scope(floor, 8, ENTRY_WORK, FRAME, |b| {
-        require_storage_limit(b)?;
-        if consumed.receipt() != preflight.binding.receipt() {
-            return Err(Error::PreflightMismatch("consumed V5 receipt"));
-        }
-        let binding = Binding::from_handoff(
-            consumed.content(),
-            consumed.receipt(),
-            preflight.binding.compiler_closure(),
-            b,
-        )?;
-        if binding != preflight.binding {
-            return Err(Error::PreflightMismatch("conditional source/F binding"));
-        }
-        if worker.measurement() != &preflight.worker {
-            return Err(Error::PreflightMismatch("measured worker"));
-        }
-        let Prepared {
-            worker: measurement,
-            limits,
-            quote,
-            engine,
-            ..
-        } = preflight;
-        let storage = Storage(
-            quote
-                .returned_retained_storage()
+    let account = preflight.account;
+    let inputs = if account.is_original() {
+        floor
+            .checked_add(worker.rust_storage().ok_or(Resource::Arithmetic)?)
+            .ok_or(Resource::Arithmetic)?
+    } else {
+        0
+    };
+    account.run(b, inputs, |b| {
+        b.with_prepaid_scope(floor, 8, ENTRY_WORK, FRAME, |b| {
+            if !account.is_original() {
+                require_storage_limit(b)?;
+            }
+            if consumed.receipt() != preflight.binding.receipt() {
+                return Err(Error::PreflightMismatch("consumed V5 receipt"));
+            }
+            let binding = Binding::from_handoff_using(
+                consumed.content(),
+                consumed.receipt(),
+                preflight.binding.compiler_closure(),
+                b,
+                account,
+            )?;
+            if binding != preflight.binding {
+                return Err(Error::PreflightMismatch("conditional source/F binding"));
+            }
+            if worker.measurement() != &preflight.worker {
+                return Err(Error::PreflightMismatch("measured worker"));
+            }
+            let Prepared {
+                worker: measurement,
+                limits,
+                quote,
+                engine,
+                ..
+            } = preflight;
+            let storage = Storage(
+                quote
+                    .returned_retained_storage()
+                    .checked_add(size_of::<Evidence>())
+                    .ok_or(Resource::Arithmetic)?,
+            );
+            let scratch = quote
+                .execution_storage
                 .checked_add(size_of::<Evidence>())
-                .ok_or(Resource::Arithmetic)?,
-        );
-        let scratch = quote
-            .execution_storage
-            .checked_add(size_of::<Evidence>())
-            .ok_or(Resource::Arithmetic)?;
-        b.with_prepaid_scope(floor, 0, quote.execution_work, scratch, |_| {
-            let (result, identity) =
-                execute_native_engine((&binding).into(), engine, &measurement, limits, worker)?;
-            Ok((
-                Evidence {
-                    source: ConditionalSource::Consumed(consumed),
-                    binding,
-                    identity,
-                    worker: measurement,
-                    limits,
-                    plan: result.plan,
-                    bootstrap_request: result.candidate_request_bytes,
-                    bootstrap: result.candidate,
-                    replay_request: result.authorized_request_bytes,
-                    replay: result.authorized,
+                .ok_or(Resource::Arithmetic)?;
+            b.with_prepaid_scope(floor, 0, quote.execution_work, scratch, |_| {
+                let (result, identity) =
+                    execute_native_engine((&binding).into(), engine, &measurement, limits, worker)?;
+                Ok((
+                    Evidence {
+                        source: ConditionalSource::Consumed(consumed),
+                        binding,
+                        identity,
+                        worker: measurement,
+                        limits,
+                        plan: result.plan,
+                        bootstrap_request: result.candidate_request_bytes,
+                        bootstrap: result.candidate,
+                        replay_request: result.authorized_request_bytes,
+                        replay: result.authorized,
+                        storage,
+                        retained_storage: floor
+                            .checked_add(storage.0)
+                            .ok_or(Resource::Arithmetic)?,
+                        account,
+                    },
                     storage,
-                    retained_storage: floor.checked_add(storage.0).ok_or(Resource::Arithmetic)?,
-                },
-                storage,
-            ))
+                ))
+            })
         })
     })
+}
+
+fn revalidate_token(
+    token: &Token<Source>,
+    account: AccountMode,
+    b: &mut Budget<'_>,
+) -> Result<(), Error> {
+    if account.is_original() {
+        token.revalidate_locked_currentness_in_original_account_v5(b)
+    } else {
+        token.revalidate_locked_currentness(b)
+    }
+    .map_err(currentness_error)
 }
 
 fn currentness_error(error: HandoffError) -> Error {
@@ -382,6 +477,7 @@ pub(crate) struct ConditionalWorkerReplaySource {
     pub(crate) binding: Binding,
     pub(crate) worker: WorkerMeasurementV1,
     pub(crate) limits: WorkerExecutionLimitsV1,
+    pub(crate) account: AccountMode,
 }
 
 /// Only the original-account prepaid replay adapter calls this constructor.
@@ -397,6 +493,7 @@ pub(crate) fn recover_prepaid_conditional_worker_evidence_v2(
         binding,
         worker,
         limits,
+        account,
     } = input;
     let identity = exchanges.validate_identity((&binding).into(), decoded, &worker, limits)?;
     let storage = Storage(
@@ -432,6 +529,7 @@ pub(crate) fn recover_prepaid_conditional_worker_evidence_v2(
             ),
             storage,
             retained_storage,
+            account,
         },
         storage,
     ))

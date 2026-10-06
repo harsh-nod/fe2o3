@@ -116,6 +116,10 @@ impl WorkerInputV1 {
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
     }
+
+    pub(crate) fn backing_capacity(&self) -> usize {
+        self.bytes.capacity()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

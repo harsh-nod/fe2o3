@@ -127,6 +127,10 @@ impl LinkOptionV1 {
     pub fn value(&self) -> &str {
         &self.value
     }
+
+    pub(crate) fn backing_capacity(&self) -> Option<usize> {
+        self.name.capacity().checked_add(self.value.capacity())
+    }
 }
 
 /// One node in a complete output-to-source provenance DAG.

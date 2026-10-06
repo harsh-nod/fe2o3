@@ -107,6 +107,7 @@ pub use compiler_module_handoff::conditional_v5::{
     quote_compiler_module_handoff_currentness_custody_v5,
     recover_compiler_module_handoff_receipt_v5,
     rederive_compiler_module_handoff_receipt_for_replay_v5,
+    rederive_compiler_module_handoff_receipt_in_original_account_v5,
     try_recover_compiler_module_handoff_receipt_in_root_budget_v5,
     try_recover_compiler_module_handoff_receipt_v5,
     try_recover_compiler_module_handoff_receipt_with_limit_v5,

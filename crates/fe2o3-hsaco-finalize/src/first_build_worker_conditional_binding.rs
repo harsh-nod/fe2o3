@@ -20,6 +20,11 @@ const WORK: usize = 8192;
 const SCRATCH: usize = 4 * size_of::<Binding>() + 2 * size_of::<Sha256>() + 4096;
 type Binding = ProtectedCompilerConditionalHandoffBindingV2;
 
+#[path = "conditional_worker_account.rs"]
+mod account;
+pub use account::conditional_worker_configuration_storage_v2;
+pub(crate) use account::{AccountMode, replay_input_storage};
+
 /// Inert coordinates, not source proof or protected compiler origin. The
 /// complete recovered V5 owner must remain live; no V4 projection is exposed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,50 +43,64 @@ impl Binding {
         compiler_closure: Closure,
         b: &mut Budget<'_>,
     ) -> Result<Self, Error> {
+        Self::from_handoff_using(source, receipt, compiler_closure, b, AccountMode::LEGACY)
+    }
+
+    pub(crate) fn from_handoff_using(
+        source: &Source,
+        receipt: Receipt,
+        compiler_closure: Closure,
+        b: &mut Budget<'_>,
+        account: AccountMode,
+    ) -> Result<Self, Error> {
         let floor = storage_floor(source)?;
-        b.with_prepaid_scope(floor, 8, WORK, SCRATCH, |b| {
-            require_storage_limit(b)?;
-            let handoff = source.handoff();
-            let capsule = handoff.capsule();
-            if handoff.identity() != receipt.handoff_identity()
-                || receipt.length() != handoff.canonical_bytes().len()
-                || u64::try_from(receipt.length()).ok() != Some(handoff.identity().byte_len())
-            {
-                return Err(Error::PreflightMismatch(
-                    "complete conditional V5 occurrence",
-                ));
-            }
-            if *capsule.invocation().compiler_closure() != compiler_closure {
-                return Err(Error::PreflightMismatch("conditional compiler closure"));
-            }
-            let graph = source.output().canonical().identity();
-            let declared = capsule.native_lowering().inputs();
-            if graph.digest() != declared.final_native.graph_digest()
-                || graph.canonical_length() != declared.final_native.graph_length()
-                || source.catalog().digest() != declared.final_native.catalog_digest()
-                || u64::try_from(source.catalog().canonical_bytes().len()).ok()
-                    != Some(declared.final_native.catalog_length())
-                || source.profile() != declared.profile
-            {
-                return Err(Error::PreflightMismatch(
-                    "conditional final graph/catalog/profile",
-                ));
-            }
-            // Recovery already joined exact carrier, descriptor, LLVM, module,
-            // source policy and final graph. The private V5 identity commits all
-            // those immutable bytes; do not decode or copy a second graph here.
-            let mut value = Self {
-                receipt,
-                compiler_closure,
-                final_graph: *graph,
-                catalog: *source.catalog().digest(),
-                catalog_length: declared.final_native.catalog_length(),
-                identity: [0; 32],
-            };
-            let mut hash = Sha256::new();
-            value.hash_identity_preimage(&mut hash);
-            value.identity = hash.finalize().into();
-            Ok(value)
+        account.run(b, floor, |b| {
+            b.with_prepaid_scope(floor, 8, WORK, SCRATCH, |b| {
+                if !account.is_original() {
+                    require_storage_limit(b)?;
+                }
+                let handoff = source.handoff();
+                let capsule = handoff.capsule();
+                if handoff.identity() != receipt.handoff_identity()
+                    || receipt.length() != handoff.canonical_bytes().len()
+                    || u64::try_from(receipt.length()).ok() != Some(handoff.identity().byte_len())
+                {
+                    return Err(Error::PreflightMismatch(
+                        "complete conditional V5 occurrence",
+                    ));
+                }
+                if *capsule.invocation().compiler_closure() != compiler_closure {
+                    return Err(Error::PreflightMismatch("conditional compiler closure"));
+                }
+                let graph = source.output().canonical().identity();
+                let declared = capsule.native_lowering().inputs();
+                if graph.digest() != declared.final_native.graph_digest()
+                    || graph.canonical_length() != declared.final_native.graph_length()
+                    || source.catalog().digest() != declared.final_native.catalog_digest()
+                    || u64::try_from(source.catalog().canonical_bytes().len()).ok()
+                        != Some(declared.final_native.catalog_length())
+                    || source.profile() != declared.profile
+                {
+                    return Err(Error::PreflightMismatch(
+                        "conditional final graph/catalog/profile",
+                    ));
+                }
+                // Recovery already joined exact carrier, descriptor, LLVM, module,
+                // source policy and final graph. The private V5 identity commits all
+                // those immutable bytes; do not decode or copy a second graph here.
+                let mut value = Self {
+                    receipt,
+                    compiler_closure,
+                    final_graph: *graph,
+                    catalog: *source.catalog().digest(),
+                    catalog_length: declared.final_native.catalog_length(),
+                    identity: [0; 32],
+                };
+                let mut hash = Sha256::new();
+                value.hash_identity_preimage(&mut hash);
+                value.identity = hash.finalize().into();
+                Ok(value)
+            })
         })
     }
     pub const fn receipt(&self) -> Receipt {

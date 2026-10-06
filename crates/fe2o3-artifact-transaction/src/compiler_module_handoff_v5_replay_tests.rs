@@ -40,6 +40,56 @@ fn mismatch(result: Result<CompilerModuleHandoffReceiptV5>) {
 }
 
 #[test]
+fn conditional_receipt_original_account_preserves_exact_replay_and_bounded_join() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    let f = Fixture::new();
+    let outside = LIMIT + 1;
+    let run = |work, storage| {
+        let mut owner = Owned::new(Work::new(work), storage);
+        owner.with_budget(|b| {
+            b.reserve_storage(outside).unwrap();
+            f.reserve(b);
+            let floor = b.storage();
+            let identity = b.storage_account_identity_v1();
+            let ledger = b.work_ledger_identity_v1();
+            let result = rederive_compiler_module_handoff_receipt_in_original_account_v5(
+                &f.producer,
+                f.attempt,
+                SLOT,
+                expected(&f),
+                &f.handoff,
+                b,
+            );
+            assert_eq!(b.storage(), floor);
+            assert_eq!(b.storage_account_identity_v1(), identity);
+            assert_eq!(b.work_ledger_identity_v1(), ledger);
+            (result, b.work(), b.peak_storage())
+        })
+    };
+    let (receipt, work, peak) = run(usize::MAX, LIMIT * 3);
+    let receipt = receipt.unwrap();
+    assert_eq!(run(work, peak).0.unwrap(), receipt);
+    assert!(run(work - 1, peak).0.is_err());
+    assert!(run(work, peak - 1).0.is_err());
+    assert!(!f.slot().exists());
+    let mut work = Work::new(usize::MAX);
+    let mut b = Budget::new(&mut work, LIMIT);
+    f.reserve(&mut b);
+    assert_eq!(replay(&f, &mut b).unwrap(), receipt);
+    assert!(
+        rederive_compiler_module_handoff_receipt_in_original_account_v5(
+            &f.producer,
+            f.attempt,
+            SLOT,
+            expected(&f),
+            &f.handoff,
+            &mut b,
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn conditional_v5_receipt_replay_never_creates_or_restores_currentness() {
     let f = Fixture::new();
     let mut work = Work::new(usize::MAX);
