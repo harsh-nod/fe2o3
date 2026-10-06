@@ -1,4 +1,4 @@
-//! Original compiler custody; the production request still refuses at its gate.
+//! Original compiler custody from gated launch through runtime trace retirement.
 use super::*;
 use crate::{
     compiler_child_channel::CompilerTrace,
