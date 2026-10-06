@@ -6,6 +6,11 @@ use fe2o3_lower_mir_kernel::{
     ProductionSourceReferenceCarrierV38 as Carrier, ProductionSourceReferenceEndpointV38,
     ProductionSourceSsaEndpointV36,
 };
+use std::fmt::Write as _;
+
+macro_rules! emit {
+    ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum LogicalBinding {
@@ -25,6 +30,40 @@ pub(super) enum LogicalBinding {
 }
 
 impl LogicalBinding {
+    pub(super) fn emit_current(&self, local: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+        match *self {
+            Self::Plain => (),
+            Self::DescriptorReference(recipe) => {
+                emit!(
+                    out,
+                    " && invocation_source_descriptor_reference_current_v51(source, {local}, "
+                );
+                recipe.emit(out)?;
+                emit!(out, ")");
+            }
+            Self::Witness { source_type } => {
+                emit!(
+                    out,
+                    " && invocation_source_witness_current_v38(source, {local}, {source_type})"
+                );
+            }
+            Self::Reference {
+                source_type,
+                origin,
+                generation,
+                instance,
+                block,
+                statement,
+            } => {
+                emit!(
+                    out,
+                    " && invocation_source_reference_current_v38(source, {local}, {source_type}) && ({{ let reference = source.logical.references[{local}]; reference.origin == {origin} && reference.origin_generation == {generation} && reference.borrow_instance == {instance} && reference.borrow_block == {block} && reference.borrow_statement == {statement} }})"
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn derive(
         slots: &SourceSlots<'_, '_>,
         plan: &InvocationPlan<'_, '_>,

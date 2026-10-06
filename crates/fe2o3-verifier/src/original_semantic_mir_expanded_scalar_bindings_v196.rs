@@ -15,6 +15,9 @@ use std::{cmp::Ordering, mem::size_of};
 #[path = "original_semantic_mir_expanded_value_relation_v200.rs"]
 mod relation;
 
+#[path = "original_semantic_mir_expanded_source_scalar_v203.rs"]
+mod source_relation;
+
 pub(in super::super) struct ExpandedScalarBindingsV196<'target, 'slots, 'view, 'source> {
     slots: &'slots SourceSlots<'view, 'source>,
     target: &'target TileTargetV176<'slots, 'view, 'source>,
@@ -36,6 +39,7 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             + size_of::<TileLeaf>()
             + 2 * size_of::<Result<Option<usize>>>()
             + relation::headers()
+            + source_relation::headers()
             + 24 * size_of::<usize>()
     }
 

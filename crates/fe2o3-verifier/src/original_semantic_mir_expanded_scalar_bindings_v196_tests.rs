@@ -42,6 +42,13 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + size_of::<FormalIndexWidth>()
         + 2 * size_of::<Result<()>>()
         + size_of::<&Type>();
+    type Endpoint<'a, 'b> = fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'a, 'b>;
+    let source_relation_scratch = size_of::<Endpoint<'_, '_>>()
+        + 2 * size_of::<Result<Endpoint<'_, '_>>>()
+        + size_of::<Option<(usize, u32)>>()
+        + size_of::<Result<()>>()
+        + 12 * size_of::<usize>()
+        + super::super::logical::headers();
     let bounded_query_scratch = 24 * size_of::<usize>();
     let header = retained
         + construction_and_query_results
@@ -50,6 +57,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + tile_projection
         + tile_results
         + relation_scratch
+        + source_relation_scratch
         + bounded_query_scratch;
     assert_eq!(out.budget.storage() - before, header);
     let original = slots.correspondence(out)?.inventory(out.budget)?;
@@ -146,7 +154,119 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     refusal(pairs.definition(original.definitions().len(), out))?;
     refusal(pairs.definition(usize::MAX, out))?;
     exercise_tile_leaves(&pairs, out)?;
+    exercise_source_arguments(&pairs, out)?;
     Ok(())
+}
+
+fn exercise_source_arguments(
+    pairs: &ExpandedScalarBindingsV196<'_, '_, '_, '_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    use super::super::InvocationPlan;
+    let relation = pairs.slots.correspondence(out)?;
+    let source = relation.source(out.budget)?;
+    let plan = InvocationPlan::derive(source, out)?;
+    let archive = source.source_ssa(out.budget)?;
+    let mut bound = 0;
+    for root in 0..source.root_count(out.budget)? {
+        let row = plan.instance(root, 0, out)?;
+        let ssa = archive.plan_for_function(row.function).unwrap().plan();
+        for entry in ssa.entry_definitions() {
+            let endpoint = relation.ssa_typed_endpoint_v36(root, 0, entry.value(), out.budget)?;
+            if !matches!(
+                endpoint.physical_type(out.budget)?,
+                Some(Type::Unit | Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_))
+            ) {
+                continue;
+            }
+            let original = endpoint.original_definition(out.budget)?.unwrap();
+            let actual = pairs.definition(original, out)?;
+            let local = row.locals.start + endpoint.source_local(out.budget)?.index() as usize;
+            let start = out.text.len();
+            assert!(matches!(
+                pairs.emit_source_conjunct(
+                    &plan,
+                    root,
+                    0,
+                    entry.value(),
+                    FormalIndexWidth::Unknown,
+                    out
+                ),
+                Err(Error::Statement(
+                    "expanded scalar binding differs from its retained source endpoint"
+                ))
+            ));
+            assert_eq!(out.text.len(), start);
+            pairs.emit_source_conjunct(
+                &plan,
+                root,
+                0,
+                entry.value(),
+                FormalIndexWidth::Bits64,
+                out,
+            )?;
+            let text = &out.text[start..];
+            assert!(text.starts_with(" && (source.machine.valid && target.valid && "));
+            assert!(text.contains(&format!("let original = source.machine.values[{local}];")));
+            assert!(text.contains(&format!(
+                "source.machine.frames.active[0].owner == {}",
+                row.function.index()
+            )));
+            assert!(text.contains(&format!("let actual = target.values[{actual}];")));
+            assert!(text.contains("invocation_value_related_v36(original, actual, map, source.machine.memory, target.memory)"));
+            bound += 1;
+        }
+    }
+    assert!(
+        bound > 0,
+        "fixture must exercise source-backed root arguments"
+    );
+    Ok(())
+}
+
+#[test]
+fn expanded_source_scalar_relations_bind_authentic_original_arguments() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture(layout, LIMIT, LIMIT, |slots, _, out| {
+            let target = TileTargetV176::derive(slots, out)?;
+            let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+            exercise_source_arguments(&pairs, out)
+        })
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
+fn original_and_expanded_scalar_relations_share_exact_logical_obligations() {
+    use super::super::LogicalBinding;
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    let mut out = Writer::new(&mut budget).unwrap();
+    LogicalBinding::Plain.emit_current(2, &mut out).unwrap();
+    assert!(out.text.is_empty());
+    LogicalBinding::Witness { source_type: 7 }
+        .emit_current(2, &mut out)
+        .unwrap();
+    assert_eq!(
+        out.text,
+        " && invocation_source_witness_current_v38(source, 2, 7)"
+    );
+    out.text.clear();
+    LogicalBinding::Reference {
+        source_type: 7,
+        origin: 3,
+        generation: 5,
+        instance: 1,
+        block: 8,
+        statement: 4,
+    }
+    .emit_current(2, &mut out)
+    .unwrap();
+    assert_eq!(
+        out.text,
+        " && invocation_source_reference_current_v38(source, 2, 7) && ({ let reference = source.logical.references[2]; reference.origin == 3 && reference.origin_generation == 5 && reference.borrow_instance == 1 && reference.borrow_block == 8 && reference.borrow_statement == 4 })"
+    );
 }
 
 fn exercise_tile_leaves(

@@ -167,47 +167,10 @@ fn binding(
     if matches!(row.source, SourceValue::Slot { .. }) {
         emit!(out, " }}) }}) }})");
     }
-    match (row.source, row.logical) {
-        (_, LogicalBinding::Plain) => (),
-        (SourceValue::Local(local), LogicalBinding::DescriptorReference(recipe)) => {
-            emit!(
-                out,
-                " && invocation_source_descriptor_reference_current_v51(source, {local}, "
-            );
-            recipe.emit(out)?;
-            emit!(out, ")");
-        }
-        (SourceValue::Local(local), LogicalBinding::Witness { source_type }) => {
-            emit!(
-                out,
-                " && invocation_source_witness_current_v38(source, {local}, {source_type})"
-            );
-        }
-        (
-            SourceValue::Local(local),
-            LogicalBinding::Reference {
-                source_type,
-                origin,
-                generation,
-                instance,
-                block,
-                statement,
-            },
-        ) => {
-            emit!(
-                out,
-                " && invocation_source_reference_current_v38(source, {local}, {source_type}) && ({{ let reference = source.logical.references[{local}]; reference.origin == {origin} && reference.origin_generation == {generation} && reference.borrow_instance == {instance} && reference.borrow_block == {block} && reference.borrow_statement == {statement} }})"
-            );
-        }
-        (
-            SourceValue::Slot { .. }
-            | SourceValue::Aggregate(_)
-            | SourceValue::Enum(_)
-            | SourceValue::ReturnSnapshot,
-            _,
-        ) => {
-            return Err(mismatch());
-        }
+    match row.source {
+        SourceValue::Local(local) => row.logical.emit_current(local, out)?,
+        _ if matches!(row.logical, LogicalBinding::Plain) => (),
+        _ => return Err(mismatch()),
     }
     emit!(out, " }})");
     Ok(())
