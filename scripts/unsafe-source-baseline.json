@@ -346,7 +346,7 @@
     "block": 1
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_root_request.rs": {
-    "block": 2,
+    "block": 3,
     "function": 1
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_root_request_preexec_process_tests.rs": {
@@ -354,6 +354,10 @@
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_root_request_process_tests.rs": {
     "block": 4
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_root_request_runtime.rs": {
+    "block": 3,
+    "function": 1
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_tests.rs": {
     "block": 1
