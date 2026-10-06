@@ -22,7 +22,7 @@ fn finite_domain_compatibility_program_retains_equations_and_private_parent_impo
     let source = run(37, LIMIT, LIMIT, emit_finite_domain_program_v62)
         .0
         .unwrap();
-    assert_eq!(source.matches("proof fn ").count(), 15);
+    assert_eq!(source.matches("proof fn ").count(), 25);
     for name in [
         "finite_filter_domain_v62",
         "byte_end_frame_domain_v62",
@@ -33,6 +33,16 @@ fn finite_domain_compatibility_program_retains_equations_and_private_parent_impo
         "aggregate_replace_domain_v62",
         "private_parent_equation_v62",
         "indexed_match_conjunction_v62",
+        "byte_execution_copied_record_has_no_slot_authority_v178",
+        "byte_execution_departed_frame_has_no_authority_v178",
+        "byte_execution_erased_slot_cannot_revive_resident_reference_v178",
+        "byte_execution_suspended_context_refuses_second_child_v178",
+        "byte_execution_scope_end_requires_current_reciprocal_parent_v178",
+        "byte_execution_unknown_operation_is_not_neutral_v178",
+        "byte_execution_scope_end_never_leaves_receiver_authority_v178",
+        "byte_execution_all_steps_preserve_byte_storage_and_dynamic_frames_v178",
+        "byte_execution_reissued_slot_increments_retained_epoch_v178",
+        "byte_execution_new_frame_cannot_recreate_old_frame_identity_v178",
     ] {
         assert_eq!(
             source.matches(&format!("proof fn {name}(")).count()

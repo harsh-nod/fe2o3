@@ -1,0 +1,51 @@
+proof fn guarded_load_active_matches_actual_load_v189(s: MemoryStateV30, endian: bool)
+    requires s.pc == 0, byte_inputs_90_v55(s, endian), s.values[1] == MemoryValueV30::Scalar(1),
+    ensures byte_operation_90_0_v30(s, endian).state.valid == byte_operation_90_1_v30(s, endian).state.valid,
+        byte_operation_90_0_v30(s, endian).state.values[3] == byte_operation_90_1_v30(s, endian).state.values[4],
+        byte_operation_90_0_v30(s, endian).observation.effect == byte_operation_90_1_v30(s, endian).observation.effect,
+{}
+
+proof fn guarded_load_inactive_uses_fallback_without_address_premise_v189(s: MemoryStateV30, endian: bool, fallback: int)
+    requires s.pc == 0, byte_inputs_90_v55(s, endian), s.valid,
+        s.values[1] == MemoryValueV30::Scalar(0), s.values[2] == MemoryValueV30::Scalar(fallback),
+        0 <= fallback < memory_value_modulus_v30(4),
+    ensures byte_operation_90_0_v30(s, endian).state == MemoryStateV30 { values: s.values.update(3, s.values[2]), ..s },
+        byte_operation_90_0_v30(s, endian).observation.effect == MemoryOperationEffectV30::Pure,
+{}
+
+proof fn guarded_load_nonbool_predicate_refuses_v189(s: MemoryStateV30, endian: bool)
+    requires s.values.len() == 5,
+        s.values[1] != MemoryValueV30::Scalar(0), s.values[1] != MemoryValueV30::Scalar(1),
+    ensures !byte_operation_90_0_v30(s, endian).state.valid,
+        byte_operation_90_0_v30(s, endian).state.memory == s.memory,
+        byte_operation_90_0_v30(s, endian).observation.effect == MemoryOperationEffectV30::Refused,
+{}
+
+proof fn guarded_load_inactive_invalid_fallback_refuses_v189(s: MemoryStateV30, endian: bool)
+    requires s.values.len() == 5, s.values[1] == MemoryValueV30::Scalar(0),
+        s.values[2] == MemoryValueV30::Undefined,
+    ensures !byte_operation_90_0_v30(s, endian).state.valid,
+        byte_operation_90_0_v30(s, endian).state.memory == s.memory,
+        byte_operation_90_0_v30(s, endian).observation.effect == MemoryOperationEffectV30::Refused,
+{}
+
+proof fn guarded_load_active_requires_initialization_v189(s: MemoryStateV30, p: MemoryPointerV30, endian: bool)
+    requires s.values.len() == 5, s.values[0] == MemoryValueV30::Pointer(p),
+        s.values[1] == MemoryValueV30::Scalar(1), !byte_scalar_range_initialized_v37(s.memory, p, 4),
+    ensures !byte_operation_90_0_v30(s, endian).state.valid,
+        byte_operation_90_0_v30(s, endian).state.memory == s.memory,
+        byte_operation_90_0_v30(s, endian).observation.effect == MemoryOperationEffectV30::Refused,
+{}
+
+proof fn guarded_load_inactive_cannot_restore_invalid_predecessor_v189(s: MemoryStateV30, endian: bool)
+    requires !s.valid,
+    ensures !byte_operation_90_0_v30(s, endian).state.valid,
+        byte_operation_90_0_v30(s, endian).state.memory == s.memory,
+        byte_operation_90_0_v30(s, endian).observation.effect == MemoryOperationEffectV30::Refused,
+{}
+
+proof fn guarded_load_preserves_storage_and_frames_v189(s: MemoryStateV30, endian: bool)
+    ensures byte_operation_90_0_v30(s, endian).state.memory == s.memory,
+        byte_operation_90_0_v30(s, endian).state.generations == s.generations,
+        byte_operation_90_0_v30(s, endian).state.frames == s.frames,
+{}

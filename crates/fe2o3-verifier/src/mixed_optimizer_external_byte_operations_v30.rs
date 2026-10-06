@@ -87,6 +87,13 @@ pub(super) enum PointerByteEffectV30 {
         alignment: u32,
         value: usize,
     },
+    GuardedRead {
+        pointer: usize,
+        predicate: usize,
+        bytes: usize,
+        alignment: u32,
+        result: usize,
+    },
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -127,6 +134,17 @@ enum Action {
         pointer: usize,
         predicate: usize,
         value: usize,
+        bytes: usize,
+        index_bytes: usize,
+        space: usize,
+        alignment: u32,
+        boolean: bool,
+    },
+    GuardedLoad {
+        pointer: usize,
+        predicate: usize,
+        fallback: usize,
+        output: usize,
         bytes: usize,
         index_bytes: usize,
         space: usize,
@@ -312,8 +330,10 @@ impl PointerByteOperationV30 {
             }
             OperationKind::Load { access, .. }
             | OperationKind::Store { access, .. }
+            | OperationKind::GuardedLoad { access, .. }
             | OperationKind::GuardedStore { access, .. } => {
                 let guarded = matches!(row.operation.kind, OperationKind::GuardedStore { .. });
+                let guarded_read = matches!(row.operation.kind, OperationKind::GuardedLoad { .. });
                 if guarded && !external(access.address_space) {
                     return Err(Error::Statement(
                         "byte guarded store requires external memory",
@@ -351,7 +371,9 @@ impl PointerByteOperationV30 {
                     value
                 } else {
                     let output = result()?;
-                    if uses.len() != 1 || ty(output)? != pointer_type.pointee.as_ref() {
+                    if uses.len() != if guarded_read { 3 } else { 1 }
+                        || ty(output)? != pointer_type.pointee.as_ref()
+                    {
                         return Err(Error::Statement("byte Load exact payload"));
                     }
                     output
@@ -369,6 +391,31 @@ impl PointerByteOperationV30 {
                             pointer,
                             predicate,
                             value,
+                            bytes: scalar_bytes(scalar, width)?,
+                            index_bytes: scalar_bytes(ScalarType::Index, width)?,
+                            space: pointer_space(pointer_type.address_space)?,
+                            alignment: access.alignment,
+                            boolean: scalar == ScalarType::Bool,
+                        },
+                    }));
+                }
+                if guarded_read {
+                    out.budget.charge_work(5)?;
+                    let predicate = input(1)?;
+                    let fallback = input(2)?;
+                    if ty(predicate)? != &Type::BOOL
+                        || ty(fallback)? != pointer_type.pointee.as_ref()
+                    {
+                        return Err(Error::Statement(
+                            "byte guarded load requires exact predicate and fallback types",
+                        ));
+                    }
+                    return Ok(Some(Self {
+                        action: Action::GuardedLoad {
+                            pointer,
+                            predicate,
+                            fallback,
+                            output: value,
                             bytes: scalar_bytes(scalar, width)?,
                             index_bytes: scalar_bytes(ScalarType::Index, width)?,
                             space: pointer_space(pointer_type.address_space)?,
@@ -395,6 +442,20 @@ impl PointerByteOperationV30 {
 
     pub(super) fn effect(&self) -> PointerByteEffectV30 {
         match self.action {
+            Action::GuardedLoad {
+                pointer,
+                predicate,
+                output,
+                bytes,
+                alignment,
+                ..
+            } => PointerByteEffectV30::GuardedRead {
+                pointer,
+                predicate,
+                bytes,
+                alignment,
+                result: output,
+            },
             Action::GuardedStore {
                 pointer,
                 predicate,
@@ -452,6 +513,46 @@ impl PointerByteOperationV30 {
         let valid = before.valid;
         let endian = context.little_endian;
         match self.action {
+            Action::GuardedLoad {
+                pointer,
+                predicate,
+                fallback,
+                output,
+                bytes,
+                index_bytes,
+                space,
+                alignment,
+                boolean,
+            } => {
+                // Match the canonical dispatcher: evaluate the Bool first,
+                // then only the selected load or fallback. Earlier failures
+                // remain failures even when this access is inactive.
+                emit!(
+                    out,
+                    " let {} = {valid} && match {values}[{predicate}] {{ MemoryValueV30::Scalar(predicate) => if predicate == 0 {{ match {values}[{fallback}] {{ MemoryValueV30::Scalar(v) => 0 <= v < ",
+                    after.valid
+                );
+                if boolean {
+                    emit!(out, "2");
+                } else {
+                    emit!(out, "memory_value_modulus_v30({bytes})");
+                }
+                emit!(
+                    out,
+                    ", _ => false }} }} else if predicate == 1 {{ match {values}[{pointer}] {{ MemoryValueV30::Pointer(p) => byte_pointer_type_v30(p, {space}, {index_bytes}) && byte_range_aligned_v30({memory}, p, {bytes}, {alignment}) && byte_scalar_range_initialized_v37({memory}, p, {bytes})"
+                );
+                if boolean {
+                    emit!(out, " && byte_load_v30({memory}, p, {bytes}, {endian}) < 2");
+                }
+                emit!(out, ", _ => false }} }} else {{ false }}, _ => false }};\n");
+                emit!(
+                    out,
+                    " let {} = {values}.update({output}, if {} {{ if {values}[{predicate}] == MemoryValueV30::Scalar(0) {{ {values}[{fallback}] }} else {{ match {values}[{pointer}] {{ MemoryValueV30::Pointer(p) => MemoryValueV30::Scalar(byte_load_v30({memory}, p, {bytes}, {endian})), _ => MemoryValueV30::Undefined }} }} }} else {{ MemoryValueV30::Undefined }});\n let {} = {memory};\n",
+                    after.values,
+                    after.valid,
+                    after.memory
+                );
+            }
             Action::GuardedStore {
                 pointer,
                 predicate,
@@ -635,8 +736,8 @@ pub(super) fn headers() -> usize {
         + size_of::<(usize, bool)>()
         + size_of::<(
             Option<usize>,
-            [usize; 18],
-            [bool; 4],
+            [usize; 19],
+            [bool; 5],
             [&(); 18],
             [Result<usize>; 5],
         )>()

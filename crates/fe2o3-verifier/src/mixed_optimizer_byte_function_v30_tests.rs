@@ -33,6 +33,7 @@ include!("mixed_optimizer_byte_state_results_v58_tests.rs");
 include!("mixed_optimizer_verus_compatibility_v62_tests.rs");
 include!("mixed_optimizer_verus_warning_cleanup_v65_tests.rs");
 include!("mixed_optimizer_guarded_store_v90_tests.rs");
+include!("mixed_optimizer_guarded_load_v189_tests.rs");
 include!("mixed_optimizer_byte_control_inputs_v99_tests.rs");
 include!("mixed_optimizer_execution_byte_v178_tests.rs");
 
@@ -801,8 +802,8 @@ fn byte_function_header_oracle_accounts_for_retained_plan_and_coexisting_helper_
         + size_of::<(usize, bool)>()
         + size_of::<(
             Option<usize>,
-            [usize; 18],
-            [bool; 4],
+            [usize; 19],
+            [bool; 5],
             [&(); 18],
             [Result<usize>; 5],
         )>();

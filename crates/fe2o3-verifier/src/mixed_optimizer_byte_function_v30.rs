@@ -355,7 +355,8 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
             } else {
                 let expected = match &actual.operation.kind {
                     OperationKind::Alloca { address_space, .. } => Some((0, *address_space)),
-                    OperationKind::Load { access, .. } => Some((1, access.address_space)),
+                    OperationKind::Load { access, .. }
+                    | OperationKind::GuardedLoad { access, .. } => Some((1, access.address_space)),
                     OperationKind::Store { access, .. }
                     | OperationKind::GuardedStore { access, .. } => Some((2, access.address_space)),
                     _ => None,
@@ -798,6 +799,16 @@ impl<'a, 'owner, R: ByteAllocationResolverV30> ByteFunctionV30<'a, 'owner, R> {
                 } => emit!(
                     out,
                     "if !valid {{ MemoryOperationEffectV30::Refused }} else if s.values[{predicate}] == MemoryValueV30::Scalar(1) {{ MemoryOperationEffectV30::Write {{ address: s.values[{pointer}], width: {bytes}, alignment: {alignment}, value: s.values[{value}] }} }} else {{ MemoryOperationEffectV30::Pure }}"
+                ),
+                PointerByteEffectV30::GuardedRead {
+                    pointer,
+                    predicate,
+                    bytes,
+                    alignment,
+                    result,
+                } => emit!(
+                    out,
+                    "if !valid {{ MemoryOperationEffectV30::Refused }} else if s.values[{predicate}] == MemoryValueV30::Scalar(1) {{ MemoryOperationEffectV30::Read {{ address: s.values[{pointer}], width: {bytes}, alignment: {alignment}, value: values[{result}] }} }} else {{ MemoryOperationEffectV30::Pure }}"
                 ),
             }
         }
