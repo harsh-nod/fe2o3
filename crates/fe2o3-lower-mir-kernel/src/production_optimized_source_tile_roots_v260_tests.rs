@@ -9,8 +9,10 @@ fn multi_tile_owner(second_tile: bool) -> ProductionSemanticSsaOwnerV1 {
     let mut roots = vec![ROOT];
     let shared = SemanticFunctionIdV1::from_index(functions.len() as u32);
     let shared_call = SemanticCallableIdV1::from_index(callables.len() as u32);
+    // Keep identities ordered after the original 80/100/110/130 functions and
+    // before the appended 210/220 roots, without changing any function index.
     functions.push(function(
-        230,
+        200,
         SemanticFunctionRoleV1::InternalHelper,
         abi(231, false, &[]),
         vec![local(232, UNIT, SemanticLocalRoleV1::Return)],
