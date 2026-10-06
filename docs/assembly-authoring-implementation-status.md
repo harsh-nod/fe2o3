@@ -3298,3 +3298,46 @@ whole-region origin information: not per-instruction origins, LLVM inline
 stacks, register values, native emission, GPU evidence or launch authority.
 M5's broader debug-map and allocator-lifetime work remains open; accepted
 milestones remain M1/M2/V1/V2/U1/U2/U3 (7/18).
+
+## Private BF16 owning-Worker pair — 2026-10-06
+
+The bounded Identity/Swap01 engineering pair now passed all five normal gates.
+Two fresh real-rustc frontends each completed the retained source → guarded
+checked output → LLVM → descriptor → handoff path and two ordinary-v2 Worker
+calls: four Worker executions total. Each raw observation has the exact
+44-field schema; its complete bytes match the retained observation file.
+The pinned entry also requires six source-first refusals (wrong Return order,
+target, roots, descriptor bytes, retained LLVM bytes and handoff bytes), plus
+the separate source-before-expired-deadline check, before the successful Worker
+loan. These are mandatory source-bound checks, not six separate raw reports.
+
+Both runs retained the original materialization account, replayed the complete
+owned descriptor/handoff evidence, and completed owner drops. Their raw formal
+analysis remains `Incomplete`, with eight guarded-access reasons, one bounds
+requirement and two runtime alias duties per frontend. The enclosing same-UID
+owner/family records joined exit/close/EOF, terminal acknowledgement, empty
+cgroup and cleanup; a separate normal read observed that exact cgroup absent.
+This is not hostile-process isolation or a whole-compiler memory proof.
+
+The selected historical compiler ELF is SHA256
+`43f202092d7a77ddca73a476490a622e9757669b9c589fc2cccc17eeea7deec2`.
+Its build association remains distinct from the current outer source census;
+the selected 70 current source leaves and 13 compiled continuation leaves
+joined exactly. Evidence: `bf16-engineering-pair-complete-actual-root-r75-r9`
+manifest SHA256
+`2870b2b3f21e3786fc0058af9602c84ba618d6ec9912938e2fa73055f09ba8c4`;
+normal receipt SHA256
+`2597a1eb28e962723ac29d335809706e7805d5679daa28909a74dd55d117eba3`;
+independent review SHA256
+`69c3f0e9b6900939ab8de0ce49e9449272cfcd4cc8012a1336c830f7aaba40d8`.
+Earlier consumed attempts remain failures.
+
+This closes the missing **private engineering execution** observation, not
+normal BF16 admission. The ignored test endpoint grants no publication, load,
+launch or GPU authority and supplies no new numerical replay. Its two reported
+7,648-byte HSACO identities are diagnostics; the payloads were not retained for
+independent artifact rehashing. Production same-owner integration, exact
+target/layout/resource/ISA correspondence and target-qualified execution remain
+separate M4 duties, including gfx950. The public
+[Cargo source workflow](bf16-cargo-source-workflow.md) is unchanged.
+Accepted milestones remain M1/M2/V1/V2/U1/U2/U3 (7/18).
