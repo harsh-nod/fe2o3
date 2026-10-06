@@ -21,6 +21,9 @@ mod source_relation;
 #[path = "original_semantic_mir_expanded_source_leaf_v207.rs"]
 mod source_leaf;
 
+#[path = "original_semantic_mir_expanded_scalar_forwarding_v244.rs"]
+mod forwarding;
+
 pub(in super::super) struct ExpandedScalarBindingsV196<'target, 'slots, 'view, 'source> {
     slots: &'slots SourceSlots<'view, 'source>,
     target: &'target TileTargetV176<'slots, 'view, 'source>,
@@ -44,6 +47,7 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             + relation::headers()
             + source_relation::headers()
             + source_leaf::headers()
+            + forwarding::headers()
             + size_of::<Definition>()
             + size_of::<fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1>()
             + size_of::<fe2o3_kernel_ir::ValueId>()

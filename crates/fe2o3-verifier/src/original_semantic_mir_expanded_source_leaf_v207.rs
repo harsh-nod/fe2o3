@@ -108,7 +108,7 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                         {
                             return Err(mismatch());
                         }
-                        Some(self.source_definition(original, out)?)
+                        Some(self.source_transport_definition(original, out)?)
                     }
                     _ => return Err(mismatch()),
                 }
