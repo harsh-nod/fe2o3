@@ -1,0 +1,22 @@
+--- a/gdb/amd-dbgapi-one-stop-native-owner-v1.inc
++++ b/gdb/amd-dbgapi-one-stop-native-owner-v1.inc
+@@ -47,13 +47,16 @@
+                                  "/proc/%d/stat",m_inferior->pid);
+   require (count>0 && static_cast<std::size_t> (count)<m_proc_path.size (),failure::budget);
+   debit (counter::proc_requested_bytes,m_proc.size ());
+-  debit (counter::work,m_proc.size ());
+   scoped_fd fd (::open (m_proc_path.data (),O_RDONLY|O_CLOEXEC|O_NOFOLLOW));
+   require (fd.get ()>=0,failure::owner_changed);
+   const auto got=::read (fd.get (),m_proc.data (),m_proc.size ());
+-  require (got>0 && static_cast<std::size_t> (got)<m_proc.size ()
+-           && m_proc[static_cast<std::size_t> (got)-1]=='\n',failure::owner_changed);
++  require (got>0 && static_cast<std::size_t> (got)<m_proc.size (),
++           failure::owner_changed);
+   const auto end=static_cast<std::size_t> (got);
++  // Work here measures admitted record extent, not byte visits or instructions.
++  // Requested I/O was prepaid above; no buffer byte is inspected before this debit.
++  debit (counter::work,end);
++  require (m_proc[end-1]=='\n',failure::owner_changed);
+   std::size_t at=0; std::uint64_t pid=0;
+   while (at<end && m_proc[at]>='0' && m_proc[at]<='9') {
+     const unsigned digit=static_cast<unsigned> (m_proc[at++]-'0');

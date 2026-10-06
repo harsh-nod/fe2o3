@@ -11,6 +11,31 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Complete debugger accounting patch staged — 2026-10-06
+
+The disabled physical-v12 package now joins the proc-record work change to the
+complete 63-file debugger source contract. Exactly one selected source leaf
+changes; all public activation, capture and publication gates remain disabled,
+and all hard caps remain unchanged. This replaces the earlier candidate's
+incomplete packaging status, not its unqualified hardware status.
+
+On mi350, all 78 Node package tests passed. The query-routing, first-denial and
+exact-parser C++ fixtures each passed normal and UBSan runs. The selected-source
+and pinned API-header checks passed, as did a zero-fuzz, dry-run applicability
+check of the unified patch against its exact predecessor. Independent review
+found no blocking source issue. The patch changes the logical work-accounting
+convention; it neither measures CPU work nor guarantees terminal completion.
+
+Retained manifests:
+- `debugger-physical-v12-package-controls-actual-root-r75-r1/MANIFEST.json`
+  (`3d8d1820ffef5a716e2f4a5a69bc6ed74c5848b75627b1ee3a07e15f612dfb8b`).
+- `debugger-physical-v12-cpp-controls-actual-root-r75-r1/MANIFEST.json`
+  (`c0de55a3f38e30a76e9523f2d0e057b72de31029eaca81508d2ccbd779a9cb13`).
+
+A fresh private build, startup and one-use native qualification are still
+required. Historical failed and consumed attempts remain unchanged.
+No milestone exit changes: **M1/M2/V1/V2/U1/U2/U3, 7/18 accepted**.
+
 ## Measured debugger budget refusal and live Worker cleanup — 2026-10-06
 
 The instrumented private debugger built, passed its ELF/runtime checks and
