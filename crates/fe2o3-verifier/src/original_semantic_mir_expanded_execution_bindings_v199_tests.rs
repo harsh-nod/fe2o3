@@ -430,6 +430,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "reveal(invocation_source_aggregate_install_v42);",
         "invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);",
         "invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);",
+        "invocation_context_issue_coupling_replays_both_actual_steps_v211(\n        source, target, execution_map, issue, site, destination);",
     ] {
         assert!(
             source.contains(exact),
@@ -439,6 +440,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     for forbidden in ["assume(", "admit(", "external_body", "assume_specification"] {
         assert!(!source.contains(forbidden));
     }
+    assert!(!source.contains("reveal(invocation_context_issue_coupled_v211);"));
 }
 
 #[test]

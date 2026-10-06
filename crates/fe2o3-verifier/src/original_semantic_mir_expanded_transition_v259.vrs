@@ -69,6 +69,8 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
         source, target, execution_map, issue, site, destination);
     invocation_context_issue_fresh_has_exact_updates_v211(
         source, target, execution_map, issue, site, destination);
+    invocation_context_issue_coupling_replays_both_actual_steps_v211(
+        source, target, execution_map, issue, site, destination);
     let leaves = Map::empty()
         .insert(seq![0int], MemoryValueV30::Unit)
         .insert(seq![1int], MemoryValueV30::Unit)
@@ -98,9 +100,7 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
     }
     let next = invocation_context_issue_coupled_v211(
         source, target, execution_map, issue, site, destination);
-    assert(next.source == invocation_source_context_issue_v161(source, issue)) by {
-        reveal(invocation_context_issue_coupled_v211);
-    }
+    assert(next.source == invocation_source_context_issue_v161(source, issue));
     let after = next.source.source;
     assert(after.machine == (MemoryStateV30 {
         values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
@@ -114,9 +114,7 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
         ..invocation_source_logical_write_v38(source.logical, issue.destination) }));
     assert(next.target == (MemoryStateV30 {
         values: target.values.update(destination, next.target.values[destination]),
-        ..target })) by {
-        reveal(invocation_context_issue_coupled_v211);
-    }
+        ..target }));
 }
 
 // This is an actual operation preservation rule, not an assumed equality of
