@@ -83,6 +83,28 @@ proof fn invocation_source_scalar_copy_observation_v185(
 }
 
 #[verifier::spinoff_prover]
+proof fn invocation_source_scalar_copy_observation_checked_v188(
+    source: InvocationSourceByteStateV36, observation: InvocationSourceOperandObservationV36,
+    local: int, bits: int, root: int, instance: int, little_endian: bool,
+)
+    requires ({
+        let operand = InvocationSourceOperandV36::Scalar {
+            value: InvocationSourceByteValueV36::Local { local, moved: false }, bits,
+        };
+        let evaluated = invocation_source_value_evaluate_v42(
+            source, operand, root, instance, little_endian);
+        evaluated.source.machine.valid && observation.before == source
+            && observation.after == evaluated.source && observation.operand == operand
+    }),
+    ensures invocation_source_local_observation_v180(observation),
+{
+    hide(invocation_source_value_evaluate_v42);
+    hide(invocation_source_local_observation_v180);
+    invocation_source_scalar_copy_observation_v185(
+        source, observation, local, bits, root, instance, little_endian);
+}
+
+#[verifier::spinoff_prover]
 proof fn invocation_source_local_observations_extend_v186(
     observations: Seq<InvocationSourceOperandObservationV36>, bound: int,
 )
