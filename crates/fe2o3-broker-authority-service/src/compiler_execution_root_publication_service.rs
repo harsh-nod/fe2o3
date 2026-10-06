@@ -10,8 +10,6 @@ use fe2o3_artifact_transaction::{
     InertCompilerExecutionSubjectV3 as Subject,
 };
 use fe2o3_compiler_execution_protocol::{
-    COMPILER_EXECUTION_RECEIPT_CARRIAGE_DECODE_STORAGE_V3 as CARRIAGE_SCRATCH,
-    COMPILER_EXECUTION_RECEIPT_CARRIAGE_DECODE_WORK_V3 as CARRIAGE_WORK,
     CompilerExecutionReceiptCarriageV3 as Carriage, CompilerExecutionRootControlKindV3 as Kind,
 };
 use fe2o3_protected_service_spawn::{
@@ -19,6 +17,8 @@ use fe2o3_protected_service_spawn::{
 };
 
 const OBSERVED_BYTES: usize = 32 + SUBJECT_BYTES;
+const CARRIAGE_WORK: usize = Carriage::COMPOSED_DECODE_WORK;
+const CARRIAGE_SCRATCH: usize = Carriage::COMPOSED_DECODE_STORAGE;
 const RPC_WORK: usize = ENTRY + 16 * BYTES;
 const RPC_FRAME: usize = FRAME + 8 * BYTES + 4 * size_of::<Step<'static>>();
 
@@ -279,7 +279,8 @@ impl<'work> RootControlSessionV3<'work> {
                     ));
                 }
                 let publication = self.current_publication()?;
-                let (carriage, charge) = Carriage::decode(request.payload(), b)?;
+                let (carriage, charge) =
+                    Carriage::decode_in_original_account_v3(request.payload(), b)?;
                 let growth = charge.additional_storage();
                 b.reserve_storage(growth)?;
                 require_retirement_join(publication, &carriage, policy)?;
@@ -483,6 +484,8 @@ mod tests {
         let validate = Publication::maximum_revalidation_quota(limit).unwrap();
         let retire = Publication::maximum_retirement_quota(limit).unwrap();
         assert!(q.work() >= RPC_WORK + observe.work() + 2 * validate.work() + retire.work());
+        assert!(q.work() >= RPC_WORK + Carriage::COMPOSED_DECODE_WORK);
+        assert!(q.scratch() >= RPC_FRAME + Carriage::COMPOSED_DECODE_STORAGE);
         assert!(
             q.scratch()
                 >= RPC_FRAME + observe.scratch() + 2 * validate.scratch() + retire.scratch()
