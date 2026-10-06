@@ -131,7 +131,7 @@ fn collect<'tcx>(
     tcx: TyCtxt<'tcx>,
     name: &str,
 ) -> (CollectionResult<'tcx>, AuthenticatedClosureFlowV1<'tcx>) {
-    let (collection, _, flow) = collector(tcx, local(tcx, name)).collect().unwrap();
+    let (collection, _, flow, _) = collector(tcx, local(tcx, name)).collect().unwrap();
     (collection, flow)
 }
 
