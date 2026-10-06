@@ -47,7 +47,8 @@ impl ExpandedSupportRuntimeV280 {
         retained: &ProductionSourceLaunchRootV1,
         budget: &mut Budget<'_>,
     ) -> Result<(u8, [u64; 3])> {
-        budget.charge_work(5 + 3 * 3)?;
+        // Prepay every fixed raw/layout field and all three physical products.
+        budget.charge_work(32)?;
         if self.source_root != retained.selected_root()
             || self.source_launch != retained.source_launch()
             || self.source_layout != retained.layout()
