@@ -92,6 +92,50 @@ fn original_pair(
 }
 
 #[test]
+fn original_currentness_quote_covers_actual_locked_check_and_one_short_limits() {
+    if isolated("original_currentness_quote_covers_actual_locked_check_and_one_short_limits") {
+        return;
+    }
+    for case in 0..3 {
+        let f = Fixture::new();
+        let receipt = published(&f);
+        let barrier = crate::try_acquire_artifact_lock_retirement_barrier_v1().unwrap();
+        let mut owned = Owned::new(Work::new(usize::MAX), EXTERNAL + LIMIT);
+        owned.with_budget(|b| {
+            b.reserve_storage(EXTERNAL).unwrap();
+            let (_lease, token) = original_pair(&f, receipt, &barrier, b);
+            let quote = token.original_currentness_revalidation_quota().unwrap();
+            let floor = b.storage();
+            let work = b.work();
+            let account = b.storage_account_identity_v1();
+            let ledger = b.work_ledger_identity_v1();
+            let result = b.with_bounded_scratch_v1(
+                Budget::BOUNDED_SCRATCH_WORK_V1 + quote.work() - usize::from(case == 1),
+                Budget::BOUNDED_SCRATCH_STORAGE_V1 + quote.scratch() - usize::from(case == 2),
+                |b| {
+                    assert_eq!(b.storage_account_identity_v1(), account);
+                    assert!(b.work_ledger_identity_v1() == ledger);
+                    token.revalidate_locked_currentness_in_original_account_v5(b)
+                },
+            );
+            assert_eq!(result.is_ok(), case == 0);
+            if case == 0 {
+                assert_eq!(
+                    b.work() - work,
+                    Budget::BOUNDED_SCRATCH_WORK_V1 + quote.work()
+                );
+            } else {
+                assert!(matches!(result, Err(Error::Resource(_))));
+            }
+            assert_eq!(b.storage(), floor);
+            assert_eq!(b.storage_account_identity_v1(), account);
+            assert!(b.work_ledger_identity_v1() == ledger);
+            locked(&f, true);
+        });
+    }
+}
+
+#[test]
 fn original_terminal_map_and_consume_keep_actual_pair_and_account() {
     if isolated("original_terminal_map_and_consume_keep_actual_pair_and_account") {
         return;
@@ -119,9 +163,12 @@ fn original_terminal_map_and_consume_keep_actual_pair_and_account() {
         b.reserve_storage(charge.0).unwrap();
         assert_eq!(backing_snapshot(mapped.handoff()), original);
         assert!(mapped.revalidate_locked_currentness(b).is_err());
+        let validation_quote = mapped.original_currentness_revalidation_quota().unwrap();
+        let validation_work = b.work();
         mapped
             .revalidate_locked_currentness_in_original_account_v5(b)
             .unwrap();
+        assert_eq!(b.work() - validation_work, validation_quote.work());
         let before = b.storage();
         let consumed =
             consume_compiler_module_handoff_in_original_account_v5(&lease, mapped, b).unwrap();

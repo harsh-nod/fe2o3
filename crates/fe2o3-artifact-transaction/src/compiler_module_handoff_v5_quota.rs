@@ -255,6 +255,23 @@ impl<T> CompilerModuleHandoffConsumptionTokenV5<T> {
     pub fn currentness_revalidation_quota(&self) -> Result<CompilerModuleHandoffOperationQuotaV5> {
         currentness(current_dynamic(&self.binding)?)
     }
+
+    /// The same metadata check plus this actual complete token's overlap under
+    /// an original-account local window. The returned scratch is additional to
+    /// the already prepaid token; no new account or currentness is established.
+    pub fn original_currentness_revalidation_quota(
+        &self,
+    ) -> Result<CompilerModuleHandoffOperationQuotaV5> {
+        let ordinary = self.currentness_revalidation_quota()?;
+        Ok(CompilerModuleHandoffOperationQuotaV5 {
+            work: sum(&[ordinary.work, Budget::STORAGE_WINDOW_WORK_V1])?,
+            scratch: sum(&[
+                ordinary.scratch,
+                self.storage.0,
+                Budget::STORAGE_WINDOW_SCRATCH_V1,
+            ])?,
+        })
+    }
 }
 
 pub(in super::super) fn prepay_currentness(
