@@ -7,6 +7,23 @@ use fe2o3_lower_mir_kernel::{
 };
 
 struct ExpandedSource;
+type CallbackPanic = Box<dyn std::any::Any + Send>;
+type OptimizerResult<R> = Result<
+    (
+        fe2o3_pliron::CheckedNeutralKernelIrOwnerMixedFixedpointV18,
+        R,
+        fe2o3_pliron::KirNeutralOwnedOriginStorageV1,
+    ),
+    fe2o3_lower_mir_kernel::ProductionSourceOptimizationErrorV18<Error>,
+>;
+
+fn resume_callback_panic<T, E>(result: Result<T, E>, panic: Option<CallbackPanic>) -> Result<T, E> {
+    if let Some(payload) = panic {
+        formal_context_v19::discard(result);
+        resume_unwind(payload);
+    }
+    result
+}
 
 fn transfer_callback_payload<R>(
     payload: (R, usize),
@@ -103,6 +120,7 @@ where
             &'a mut Budget<'a>,
             &'a mut formal_context_v19::PendingConsumerV19<F>,
             &'a std::cell::Cell<usize>,
+            &'a mut Option<CallbackPanic>,
         );
         [
             entry_headers_for_handoff::<R, F, Expanded<'static, 'static>>()?,
@@ -112,6 +130,8 @@ where
             align_of::<CallbackFrame<'_, F>>(),
             size_of::<AssertUnwindSafe<CallbackFrame<'_, F>>>(),
             size_of::<std::cell::Cell<usize>>(),
+            2 * size_of::<Option<CallbackPanic>>(),
+            2 * size_of::<OptimizerResult<R>>(),
             size_of::<ExecutionTileLayoutV1>(),
             6 * size_of::<usize>(),
             size_of::<std::thread::Result<Result<(R, usize), Error>>>(),
@@ -141,8 +161,8 @@ where
         let selected = layout(source, target, budget)?;
         let mut pending = formal_context_v19::PendingConsumerV19::new(consume);
         let payload_bytes = std::cell::Cell::new(0);
-        let (neutral, value, receipt) = source
-            .with_checked_mixed_fixedpoint_optimization_v18(
+        let mut callback_panic = None;
+        let optimized = source.with_checked_mixed_fixedpoint_optimization_v18(
                 budget,
                 |original, optimized, budget| {
                     #[cfg(test)]
@@ -168,6 +188,16 @@ where
                             consumer(source, original, tile, roots, target, budget)
                         }))
                     };
+                    // Adoption normalizes unwinds. Retain this caller's original
+                    // payload outside that scope and let an ordinary refusal
+                    // drive the same owned-graph cleanup before resuming it.
+                    let result = match result {
+                        Err(payload) => {
+                            callback_panic = Some(payload);
+                            Ok(Err(Error::Unsupported("expanded consumer unwound")))
+                        }
+                        other => other,
+                    };
                     // A callback's retained payload cannot borrow any of these
                     // graph owners. Preserve its exact measured credit while
                     // destroying the tile owner before the optimizer scope ends.
@@ -185,10 +215,14 @@ where
                     transfer_callback_payload(value, budget)
                         .map_err(|error| source.retain_query_resource_error_v18(error).into())
                 },
-            )
-            .map_err(|error| {
+            );
+        let (neutral, value, receipt) =
+            resume_callback_panic(optimized, callback_panic).map_err(|error| {
                 #[cfg(test)]
-                eprintln!("EXPANDED_ACCOUNT_V260 optimizer_refused storage={} error={error:?}", budget.storage());
+                eprintln!(
+                    "EXPANDED_ACCOUNT_V260 optimizer_refused storage={} error={error:?}",
+                    budget.storage()
+                );
                 Error::ExpandedSource(Box::new(error))
             })?;
         #[cfg(test)]
@@ -285,6 +319,7 @@ mod tests {
             &'a mut Budget<'a>,
             &'a mut formal_context_v19::PendingConsumerV19<Consumer>,
             &'a std::cell::Cell<usize>,
+            &'a mut Option<CallbackPanic>,
         );
         let expected = entry_headers_for_handoff::<(), Consumer, Expanded<'static, 'static>>()
             .unwrap()
@@ -294,6 +329,8 @@ mod tests {
             + align_of::<Frame<'_>>()
             + size_of::<AssertUnwindSafe<Frame<'_>>>()
             + size_of::<std::cell::Cell<usize>>()
+            + 2 * size_of::<Option<CallbackPanic>>()
+            + 2 * size_of::<OptimizerResult<()>>()
             + size_of::<ExecutionTileLayoutV1>()
             + 6 * size_of::<usize>()
             + size_of::<std::thread::Result<Result<((), usize), Error>>>()
@@ -404,6 +441,34 @@ mod tests {
             Err(Resource::Arithmetic)
         ));
         assert_eq!(budget.storage(), 31);
+    }
+
+    #[test]
+    fn expanded_callback_panic_precedes_later_optimizer_disposition() {
+        struct Later<'a>(&'a std::cell::Cell<usize>);
+        impl Drop for Later<'_> {
+            fn drop(&mut self) {
+                self.0.set(self.0.get() + 1);
+                panic!("later disposition cannot replace the consumer panic");
+            }
+        }
+        for success in [false, true] {
+            let drops = std::cell::Cell::new(0);
+            let result = if success {
+                Ok(Later(&drops))
+            } else {
+                Err(Later(&drops))
+            };
+            let panic = catch_unwind(AssertUnwindSafe(|| {
+                resume_callback_panic(result, Some(Box::new(259usize)))
+            }))
+            .err()
+            .unwrap();
+            assert_eq!(*panic.downcast::<usize>().unwrap(), 259);
+            assert_eq!(drops.get(), 1);
+        }
+        assert_eq!(resume_callback_panic::<_, ()>(Ok(7), None), Ok(7));
+        assert_eq!(resume_callback_panic::<(), _>(Err(9), None), Err(9));
     }
 }
 
