@@ -30,6 +30,10 @@ pub const MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1: usize = 256 * 1024 * 1024;
 pub(super) const HEADER: usize = 248;
 pub(super) const TAIL_HEADER: usize = 4 + 40 + 80 + 36 + 8;
 
+#[path = "refined_forwarding_history_read_resources_v1.rs"]
+mod read_resources;
+pub use read_resources::RefinedForwardingHistoryReadQuoteV1;
+
 /// Every role is a complete, independently admitted V12 graph, even for equal bytes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(usize)]

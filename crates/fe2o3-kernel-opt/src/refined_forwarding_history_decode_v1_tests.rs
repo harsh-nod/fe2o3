@@ -2,6 +2,46 @@ use super::*;
 use crate::materialize_refined_forwarding_history_v1 as materialize;
 
 #[test]
+fn history_frame_quote_covers_actual_original_account_reader() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    for nonempty in [false, true] {
+        let wire = with_history(nonempty, |inputs, floor| encode(inputs, floor));
+        let quote = RefinedForwardingHistoryReadQuoteV1::in_original_account_for_length(
+            wire.canonical_bytes().len(),
+        )
+        .unwrap();
+        let floor =
+            MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1 + 19 + wire.storage().retained_storage();
+        let mut owned = Owned::new(
+            Work::new(7 + quote.work()),
+            floor + quote.additional_storage(),
+        );
+        owned.with_budget(|b| {
+            b.charge_work(7).unwrap();
+            b.reserve_storage(floor).unwrap();
+            let identity = b.storage_account_identity_v1();
+            let ledger = b.work_ledger_identity_v1();
+            let frame =
+                read_refined_forwarding_history_in_original_account_v1(wire.canonical_bytes(), b)
+                    .unwrap();
+            assert_eq!(frame.storage().retained_storage(), quote.retained_storage());
+            assert_eq!(b.storage(), floor);
+            assert!(b.work() - 7 <= quote.work());
+            assert!(b.peak_storage() - floor <= quote.additional_storage());
+            assert_eq!(b.storage_account_identity_v1(), identity);
+            assert!(b.work_ledger_identity_v1() == ledger);
+        });
+    }
+    assert!(RefinedForwardingHistoryReadQuoteV1::for_length(HEADER - 1).is_err());
+    assert!(RefinedForwardingHistoryReadQuoteV1::for_length(usize::MAX).is_err());
+    let max = RefinedForwardingHistoryReadQuoteV1::in_original_account_for_length(
+        MAX_REFINED_FORWARDING_HISTORY_BYTES_V1,
+    )
+    .unwrap();
+    assert!(max.additional_storage() < MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1);
+}
+
+#[test]
 fn original_account_history_full_chain_exact_one_short_and_legacy_refusal() {
     use crate::{
         materialize_refined_forwarding_history_in_original_account_v1 as materialize_original,
