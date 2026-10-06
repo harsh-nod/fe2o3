@@ -11,6 +11,66 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Genuine macro, linked lines and browser demand — 2026-10-06 17:55 UTC
+
+This checkpoint supersedes the pending statements in the earlier same-day
+sections below. The six-step genuine Rust macro campaign passed: the unchanged
+original canonical export and fresh macro observation agree while the owner is
+live; the source is rechecked; stale canonical/callsite/false-inline controls
+refuse. The observed single `amdgpu_ordered_program` frame contains the actual
+call, definition and expansion spans. Nested macro and LLVM inline-stack
+coverage are not established by this one-frame fixture.
+
+Actual CPU compilation/linking and DWARF verification now pass for both O0 and
+O3 using the genuine edited-source LLVM. The exact three-instruction,
+twelve-byte regions are covered by the selected source file, line 7, column 20
+at both levels. ELF file offsets are independently joined to linked addresses.
+The helper-only verifier also passed. The first final parser run refused
+LLVM22's explicit OpIndex column; the reviewed successor requires that column,
+zero OpIndex, and exactly one max_ops_per_inst=1. All 38 parser controls and the
+fresh final fourteen-input acceptance passed. The original failure is retained.
+This is whole-region linked-line coverage, not runtime addresses, per-instruction
+source spans, protected artifact admission or GPU execution.
+
+Both real-source retained KIR variants now pass the new inspector's JSON and
+ASCII demand modes with exact source/native identity joins. Their old JSON mode
+remains byte-for-byte unchanged. Release model/CLI suites passed 284/114 tests
+(five model tests ignored), in addition to the earlier debug checks.
+
+The [authored-demand browser view](https://github.com/harsh-nod/fe2o3-kernels/commit/8bed870f056b40bb5629b30d85345be1b1c59774)
+is pushed to the tutorial repository's main branch. It independently reconstructs
+definition/use/overwrite/result boundaries from the checked instruction report,
+joins both verbatim CLI outputs, and offers keyboard-accessible table and ASCII
+views. The old fourteen-artifact native projection is unchanged; stale optional
+evidence cannot hide a valid native selection. All 2,237 site unit tests and 20
+selected desktop/mobile tests passed, along with lint, type checking and build.
+One initial unit oracle omitted input1's first read; the corrected oracle and
+full rerun are retained. This is declared demand, not physical liveness.
+
+The fresh debugger startup's 119 evidence duties have been replayed under a new
+normal gate, including ten EOF duties. The original startup selected only eight
+benign duties directly, three through receipt edges, and not the other 55:
+those remain explicitly retrospective, never rewritten historical admission.
+Semantic controls passed 95 tests; controller construction and current-consumer
+controls passed 27 each; the new controller passed 64 protocol and 97 native-CPU
+tests and built. Fresh currentness checks and a same-stop hardware attempt are
+still pending. BF16 engineering remains pending after the successful decoder
+prerequisite; the private entry stays disabled.
+
+Selected retained remote evidence (under the work root's phase28-drafts):
+
+- `m5-macro-genuine-complete-root-r75-r1/MANIFEST.json`:
+  `b9cd2cd54f77f4260da2f9162376161483a2c2eacd3cad6f65b63901b0c079e7`.
+- `m5-linked-line-acceptance-actual-root-r75-r2/MANIFEST.json`:
+  `edeed5db1a36f953f6188c5c75e4d4d4fed0abc1bfce080786353dde2226469e`.
+- `v3-browser-authored-demand-all-unit-actual-root-r75-r1/MANIFEST.json`:
+  `706d0ee1c025e857f855457773dd79da3acd189eb42b78244ba7cd14f2c986a4`.
+- `debugger-proc-record-work-controller-built-root-r75-r1/MANIFEST.json`:
+  `5157d2ff21e062ef58e5d172c7266b3dd30713a6f883a778fef6e3b6b08bbeed`.
+
+Accepted exits remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**. These additions advance
+M5/V3/V5; they do not close their complete contracts.
+
 ## Source-line emission, macro origins and captured Worker — 2026-10-06
 
 The opt-in V17 lowering API now attributes a whole ordered region to its actual

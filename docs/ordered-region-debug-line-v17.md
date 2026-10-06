@@ -1,7 +1,8 @@
 # Opt-in ordered-region LLVM line attribution (V17)
 
 Status: implemented bounded M5 slice, with model/backend tests and an actual
-genuine-source LLVM export. Linked-DWARF acceptance is still pending. The production default and existing lowering API
+genuine-source LLVM export, real one-frame macro observation and actual O0/O3
+linked-DWARF acceptance. The production default and existing lowering API
 remain metadata-free. The new optional API with None delegates to the old entry
 and must return exactly the old bytes. No transport or execution authority is added.
 
@@ -67,7 +68,7 @@ line emission before consuming that same projection as a debugger catalog.
 Require both genuine default/edited callbacks, all old refusal/capture checks,
 and the unchanged bounded output report. This does not emit a portable map.
 
-## Proposed actual O0/O3 linked-DWARF recipe (CPU only)
+## Actual O0/O3 linked-DWARF recipe (CPU only)
 
 Do not run a GPU kernel, GDB, a production Worker service or a public finalizer.
 Use the already reviewed LLVM22/LLD ordinary ordered-program native build route
@@ -120,17 +121,21 @@ The private actual_source_candidate_line_export_ladder now exports the actual
 adapter-returned LLVM and expected source span while the original owner remains
 alive. Its default and edited callbacks passed with full source rechecks and
 stale-source/KIR refusals. The source export does not itself establish linked
-DWARF acceptance: the exact exported bytes must still pass the native/DWARF
-checks above. A separate ordinary-helper fixture checks that surrounding calls
+DWARF acceptance by itself: the exact edited export subsequently passed the
+native/DWARF checks above at both O0 and O3. The selected line-row intervals
+cover the full twelve-byte region at line 7, column 20. LLVM22 output includes
+OpIndex: the checker requires it to be zero with max_ops_per_inst=1. All 38
+parser controls and the separate final input-bound acceptance passed. A separate ordinary-helper fixture checks that surrounding calls
 are not falsely assigned the ordered region's location.
 
 ## Explicit remaining work
 
-This slice does not complete M5 by itself. Still separate: genuine-source linked
-DWARF acceptance, real-source macro-frame qualification and viewer integration,
-finer per-authored-instruction attribution where representable,
-allocator/expansion/variant trace publication, final optimized instruction-range
-joining and consumer UX. Existing KIR maps, CPU debugger/storage observations and
+This slice does not complete M5 by itself. Still separate: nested macro and
+LLVM inline-stack coverage, macro-frame viewer integration, finer
+per-authored-instruction attribution where representable, allocator/expansion/
+variant trace publication, general final optimized instruction-range joining
+and consumer UX. The genuine three-step O0/O3 region is now joined, not a
+general arbitrary-kernel guarantee. Existing KIR maps, CPU debugger/storage observations and
 native whole-region matching remain valid evidence in their own scopes; they
 must neither be discarded nor promoted to those missing observations.
 
@@ -143,5 +148,8 @@ identity and inconsistent depth/site joins. Limits are 32 frames, 256 name bytes
 and a 64-KiB report, within the existing cumulative logical capture budget.
 The default origin path is unchanged. These diagnostic frames are not LLVM
 inlinedAt, a physical allocator trace, authenticated portable source, or
-per-authored-instruction microsteps. Pure tests passed; the separate real-source
-macro test must qualify the producer before that coverage is claimed.
+per-authored-instruction microsteps. Pure tests and the separate real-source
+macro campaign passed. The actual one-frame fixture joins the unchanged
+canonical baseline and actual call/definition/expansion spans, with source
+rechecks and stale canonical/callsite/false-inline refusals. Nested actual
+expansions remain unqualified.
