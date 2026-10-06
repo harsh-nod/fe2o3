@@ -999,6 +999,9 @@ impl Drop for RootRuntimeTraceV1<'_> {
     }
 }
 
+// Linux UAPI linux/ptrace.h; libc exposes this request on GNU but not musl.
+const PTRACE_GET_SYSCALL_INFO: u32 = 0x420e;
+
 fn request(request: Request, pid: Pid, address: usize, data: usize) -> Result<usize> {
     // Infer libc's request ABI for both glibc and musl, as the original tracer does.
     let request = match request {
@@ -1009,7 +1012,7 @@ fn request(request: Request, pid: Pid, address: usize, data: usize) -> Result<us
         Request::Listen => libc::PTRACE_LISTEN,
         Request::Interrupt => libc::PTRACE_INTERRUPT,
         Request::Registers => libc::PTRACE_GETREGS,
-        Request::SyscallInfo => libc::PTRACE_GET_SYSCALL_INFO,
+        Request::SyscallInfo => PTRACE_GET_SYSCALL_INFO as _,
     };
     // SAFETY: callers select only a PID retained from original clone custody or
     // an actual owned birth event, and keep every pointed-to output buffer live.
