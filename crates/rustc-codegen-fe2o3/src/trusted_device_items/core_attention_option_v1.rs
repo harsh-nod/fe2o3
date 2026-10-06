@@ -90,7 +90,7 @@ fn observed_callback<'tcx>(tcx: TyCtxt<'tcx>, callback: Ty<'tcx>, output: Ty<'tc
         || callback.needs_drop(tcx, TypingEnv::fully_monomorphized())
     { return false; }
     let closure = args.as_closure();
-    if closure.kind_ty().to_opt_closure_kind() != Some(ClosureKind::Fn) { return false; }
+    if closure.kind_ty().to_opt_closure_kind() != Some(ClosureKind::FnOnce) { return false; }
     let captures = closure.upvar_tys();
     if captures.len() != 1
         || !matches!(captures[0].kind(), TyKind::Ref(_, ty, mutability)
@@ -196,6 +196,12 @@ fn drop_other(kind: &TerminatorKind<'_>, target_block: u32) -> bool {
             && matches!(unwind, UnwindAction::Unreachable))
 }
 
+fn callback_resolution_matches<'tcx>(callback: Ty<'tcx>, resolved: Instance<'tcx>) -> bool {
+    let TyKind::Closure(def_id, args) = *callback.kind() else { return false; };
+    matches!(resolved.def, InstanceKind::Item(resolved_id)
+        if resolved_id == def_id && resolved.args == args)
+}
+
 fn callback_call<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>, types: &Types<'tcx>, kind: &TerminatorKind<'tcx>) -> bool {
     let TerminatorKind::Call { func: Operand::Constant(function), args, destination, target, unwind, .. } = kind
     else { return false; };
@@ -222,10 +228,9 @@ fn callback_call<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>, types: &Type
     { return false; }
     let Ok(Some(resolved)) = Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), def_id, arguments)
     else { return false; };
-    // Resolution must retain this exact closure. No callback or shim body is
-    // exempted from the collector's existing independent traversal.
-    matches!(resolved.def, InstanceKind::ClosureOnceShim { call_once, track_caller: false }
-        if call_once == def_id && resolved.args == arguments)
+    // The observed FnOnce closure needs no adapter. Its exact body and args
+    // remain subject to the collector's existing independent traversal.
+    callback_resolution_matches(types.other, resolved)
 }
 
 fn body_matches<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>, body: &Body<'tcx>) -> bool {

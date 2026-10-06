@@ -50,7 +50,10 @@ pub fn fake_option(e: KernelError) -> Result<usize, KernelError> { Lookalike.ok_
 "#;
 
 #[derive(Clone, Default)]
-struct Results { positives: usize, refusals: usize, mutations: [usize; 8] }
+struct Results {
+    positives: usize, refusals: usize, mutations: [usize; 8],
+    callback_resolutions: usize, callback_contract_refusals: usize,
+}
 
 #[derive(Default)]
 struct FixtureCallbacks { results: Option<Results> }
@@ -108,6 +111,49 @@ impl Callbacks for FixtureCallbacks {
                     _ => None,
                 });
             result.positives += 1;
+        }
+        for (name, other_name) in [("then_add", "then_mul"), ("then_mul", "then_add")] {
+            let (instance, _) = fixture_call(tcx, name, "and_then");
+            let types = signature(tcx, instance).expect("observed FnOnce signature");
+            let TyKind::Closure(closure_id, closure_args) = *types.other.kind() else { unreachable!() };
+            assert_eq!(closure_args.as_closure().kind_ty().to_opt_closure_kind(), Some(ClosureKind::FnOnce));
+            let body = tcx.instance_mir(instance.def);
+            let TerminatorKind::Call { func: Operand::Constant(function), .. } =
+                &body.basic_blocks[BasicBlock::from_u32(3)].terminator().kind else { unreachable!() };
+            let TyKind::FnDef(call_once, raw_args) = *function.const_.ty().kind() else { unreachable!() };
+            let arguments = instance.try_instantiate_mir_and_normalize_erasing_regions(
+                tcx, TypingEnv::fully_monomorphized(), EarlyBinder::bind(raw_args),
+            ).expect("actual call_once arguments");
+            let resolved = Instance::try_resolve(tcx, TypingEnv::fully_monomorphized(), call_once, arguments)
+                .expect("actual call_once resolution").expect("resolved FnOnce closure");
+            assert!(matches!(resolved.def, InstanceKind::Item(id) if id == closure_id));
+            assert_eq!(resolved.args, closure_args);
+            assert!(callback_resolution_matches(types.other, resolved));
+            result.callback_resolutions += 1;
+
+            for kind in [ClosureKind::Fn, ClosureKind::FnMut] {
+                let mut changed = closure_args.to_vec();
+                changed[closure_args.as_closure().parent_args().len()] = Ty::from_closure_kind(tcx, kind).into();
+                let changed = tcx.mk_args(&changed);
+                let callback = Ty::new_closure(tcx, closure_id, changed);
+                assert_eq!(changed.as_closure().kind_ty().to_opt_closure_kind(), Some(kind));
+                assert!(!observed_callback(tcx, callback, types.output));
+                result.callback_contract_refusals += 1;
+                assert!(!callback_resolution_matches(types.other,
+                    Instance { def: resolved.def, args: changed }));
+                result.callback_contract_refusals += 1;
+            }
+            let (other, _) = fixture_call(tcx, other_name, "and_then");
+            let other = signature(tcx, other).expect("other real closure signature");
+            let TyKind::Closure(other_id, _) = *other.other.kind() else { unreachable!() };
+            assert_ne!(other_id, closure_id);
+            assert!(!callback_resolution_matches(types.other,
+                Instance { def: InstanceKind::Item(other_id), args: closure_args }));
+            result.callback_contract_refusals += 1;
+            assert!(!callback_resolution_matches(types.other, Instance {
+                def: InstanceKind::ClosureOnceShim { call_once, track_caller: false }, args: arguments,
+            }));
+            result.callback_contract_refusals += 1;
         }
         for (name, method) in [("wrong_payload", "ok_or"), ("wrong_error", "ok_or"),
             ("dropping_error", "ok_or"), ("wrong_tile", "ok_or"), ("fake_option", "ok_or"),
@@ -460,10 +506,18 @@ fn compiler_results() -> Results {
 }
 
 #[test]
-fn attention_option_real_provider_and_closure_positives() { assert_eq!(compiler_results().positives, 5); }
+fn attention_option_real_provider_and_closure_positives() {
+    let result = compiler_results();
+    assert_eq!(result.positives, 5);
+    assert_eq!(result.callback_resolutions, 2);
+}
 
 #[test]
-fn attention_option_real_identity_payload_and_callback_refusals() { assert_eq!(compiler_results().refusals, 15); }
+fn attention_option_real_identity_payload_and_callback_refusals() {
+    let result = compiler_results();
+    assert_eq!(result.refusals, 15);
+    assert_eq!(result.callback_contract_refusals, 12);
+}
 
 #[test]
 fn attention_option_real_shape_mutations() { assert_eq!(compiler_results().mutations[0], 18); }
