@@ -26,6 +26,31 @@ proof fn invocation_source_local_observation_intro_v183(
 }
 
 #[verifier::spinoff_prover]
+proof fn invocation_source_local_observation_conditional_v184(
+    observation: InvocationSourceOperandObservationV36,
+)
+    ensures
+        observation.before.machine.valid && observation.after.machine.valid
+            && (match observation.operand {
+                InvocationSourceOperandV36::Scalar {
+                    value: InvocationSourceByteValueV36::Local { .. }, ..
+                } => true,
+                _ => false,
+            }) ==> invocation_source_local_observation_v180(observation),
+{
+    if observation.before.machine.valid && observation.after.machine.valid
+        && (match observation.operand {
+            InvocationSourceOperandV36::Scalar {
+                value: InvocationSourceByteValueV36::Local { .. }, ..
+            } => true,
+            _ => false,
+        })
+    {
+        invocation_source_local_observation_intro_v183(observation);
+    }
+}
+
+#[verifier::spinoff_prover]
 proof fn invocation_source_local_observations_empty_v180(
     observations: Seq<InvocationSourceOperandObservationV36>, little_endian: bool,
 )

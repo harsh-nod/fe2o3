@@ -375,7 +375,7 @@ fn source_runtime(
         out.budget.charge_work(1)?;
         emit!(
             out,
-            " invocation_source_local_observation_intro_v183(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}]);\n"
+            " invocation_source_local_observation_conditional_v184(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}]);\n"
         );
     }
     emit!(
