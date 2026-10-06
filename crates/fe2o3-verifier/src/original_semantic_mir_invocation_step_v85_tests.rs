@@ -398,16 +398,16 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(runtime_state.contains(&format!(" && invocation_source_block_runtime_{root}_v36(source).observations.len() == 0")));
                                     assert!(!runtime_state.contains("assert forall|i: int|"));
                                     assert_eq!(runtime_state.matches("hide(invocation_source_local_observation_v180);").count(), 1);
-                                    assert!(!runtime_state.contains("reveal(invocation_source_local_observation_v180)"));
+                                    assert_eq!(runtime_state.matches("reveal(invocation_source_local_observation_v180);").count(), call.arguments.len());
                                     assert!(!runtime_state.contains("invocation_source_local_observation_intro_v183("));
                                     assert!(!runtime_state.contains("invocation_source_local_observation_conditional_v184("));
                                     assert!(!runtime_state.contains("invocation_source_scalar_copy_observation_v185("));
-                                    assert_eq!(runtime_state.matches("invocation_source_scalar_copy_observation_checked_v188(").count(), call.arguments.len());
+                                    assert!(!runtime_state.contains("invocation_source_scalar_copy_observation_checked_v188("));
                                     assert_eq!(runtime_state.matches(" invocation_source_local_observations_extend_v186(").count(), call.arguments.len());
                                     let observed_at = runtime_state.find(&observed).unwrap();
                                     let mut previous_extension = None;
-                                    for (ordinal, (local, _, bits)) in call.arguments.iter().enumerate() {
-                                        let introduction = format!(" invocation_source_scalar_copy_observation_checked_v188(copied_{ordinal}, invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}], {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance);
+                                    for ordinal in 0..call.arguments.len() {
+                                        let introduction = format!(" assert(invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}])) by {{\n reveal(invocation_source_local_observation_v180);\n }}");
                                         assert_eq!(runtime_state.matches(&introduction).count(), 1);
                                         let extension = format!(" invocation_source_local_observations_extend_v186(invocation_source_block_runtime_{root}_v36(source).operands, {ordinal});");
                                         assert_eq!(runtime_state.matches(&extension).count(), 1);
