@@ -1,0 +1,18 @@
+diff --git a/gdb/amd-dbgapi-target.c b/gdb/amd-dbgapi-target.c
+--- a/gdb/amd-dbgapi-target.c
++++ b/gdb/amd-dbgapi-target.c
+@@ -2137,4 +2137,10 @@
+-      std::optional<stopped_wave_candidate_v1> observed;
+-      if (event_kind == AMD_DBGAPI_EVENT_KIND_WAVE_STOP
+-          && !stopped_wave_observation.invalid ())
+-        observed = query_stopped_wave_event_v1 (info, event_id);
++      std::optional<stopped_wave_candidate_v1> observed;
++      // The selected owned profile has its own complete same-client stop queries.
++      // Reject the simultaneous legacy profile before it spends another pair of
++      // private queue-health permits. Never manufacture a legacy observation.
++      if (event_kind == AMD_DBGAPI_EVENT_KIND_WAVE_STOP
++          && amd_owned_one_stop_native_v1::selected ())
++        stopped_obs::invalidate (stopped_obs::reason::unsupported_profile);
++      if (event_kind == AMD_DBGAPI_EVENT_KIND_WAVE_STOP
++          && !stopped_wave_observation.invalid ())
++        observed = query_stopped_wave_event_v1 (info, event_id);

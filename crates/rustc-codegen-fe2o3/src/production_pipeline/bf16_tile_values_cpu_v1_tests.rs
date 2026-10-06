@@ -27,6 +27,7 @@ enum NominalQueryProfileV1 {
     OwnedLlvm { requested_return: [u8; 4] },
     OwnedDescriptor { requested_return: [u8; 4] },
     OwnedHandoff { requested_return: [u8; 4] },
+    OwnedWorker { requested_return: [u8; 4] },
 }
 
 #[derive(Clone, Copy, Debug, serde::Serialize)]
@@ -309,9 +310,49 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         )
     }
 
+    /// Distinct explicit test-only Worker route. The borrowed image cannot escape
+    /// and does not grant ordinary, artifact, load, or launch authority.
+    pub(crate) fn observe_bf16_owned_worker_for_test_v1(
+        self,
+        requested_return: [u8; 4],
+        worker: &fe2o3_hsaco_finalize::PinnedWorkerV1,
+        output_bytes: u64,
+        limits: fe2o3_hsaco_finalize::WorkerExecutionLimitsV1,
+        deadline: std::time::Instant,
+        inspect: impl for<'a, 'b, 'work> FnOnce(
+            &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
+            &Bf16CallInstanceEmissionViewV1<'b>,
+            &mut Budget<'work>,
+        ) -> Result<(), Error>,
+    ) -> (Result<(), Box<ProductionPipelineError>>, Option<CpuPhase>) {
+        self.observe_bf16_call_source_profile_with_worker_for_test_v1(
+            NominalQueryProfileV1::OwnedWorker { requested_return },
+            Some((worker, output_bytes, limits, deadline)),
+            inspect,
+        )
+    }
+
     fn observe_bf16_call_source_profile_for_test_v1<R: Copy + 'static>(
         self,
         profile: NominalQueryProfileV1,
+        inspect: impl for<'a, 'b, 'work> FnOnce(
+            &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
+            &Bf16CallInstanceEmissionViewV1<'b>,
+            &mut Budget<'work>,
+        ) -> Result<R, Error>,
+    ) -> (Result<R, Box<ProductionPipelineError>>, Option<CpuPhase>) {
+        self.observe_bf16_call_source_profile_with_worker_for_test_v1(profile, None, inspect)
+    }
+
+    fn observe_bf16_call_source_profile_with_worker_for_test_v1<R: Copy + 'static>(
+        self,
+        profile: NominalQueryProfileV1,
+        worker: Option<(
+            &fe2o3_hsaco_finalize::PinnedWorkerV1,
+            u64,
+            fe2o3_hsaco_finalize::WorkerExecutionLimitsV1,
+            std::time::Instant,
+        )>,
         inspect: impl for<'a, 'b, 'work> FnOnce(
             &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
             &Bf16CallInstanceEmissionViewV1<'b>,
@@ -404,7 +445,8 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                                              | NominalQueryProfileV1::OwnedOutputGuard { .. }
                                              | NominalQueryProfileV1::OwnedLlvm { .. }
                                              | NominalQueryProfileV1::OwnedDescriptor { .. }
-                                             | NominalQueryProfileV1::OwnedHandoff { .. } => Ok(()),
+                                             | NominalQueryProfileV1::OwnedHandoff { .. }
+                                             | NominalQueryProfileV1::OwnedWorker { .. } => Ok(()),
                                         },
                                     )?;
                                     source_seed.with_relation(relation, budget, |source, budget| {
@@ -484,6 +526,197 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             // Keep the actual same account after the source callback returns.
             // This entry is opt-in and test-only; the default stack-backed
             // preparation helper and ordinary nominal refusal are unchanged.
+            if let NominalQueryProfileV1::OwnedWorker { requested_return } = profile {
+                return prepared
+                    .try_map(|prepared, budget| {
+                        let before = phase.get().expect("successful nominal phase");
+                        assert_eq!(budget.work(), before.work);
+                        assert_eq!(budget.storage(), before.final_storage);
+                        assert_eq!(budget.peak_storage(), before.phase_peak_storage);
+                        budget.check_prior_denials_v1()
+                            .map_err(materialization_resource_error_v29)?;
+                        let PreparedMaterializationV29 {
+                            materialized: (materialized, observed), ranked_roots, bindings,
+                        } = prepared;
+                        let checked = MaterializedNeutralProductionCompilation {
+                            materialized, ranked_roots, bindings,
+                        }.verify_private_nominal_kernel_checks_v1().map_err(Box::new)?;
+                        Ok((checked, observed))
+                    })?
+                    .try_map(|(checked, observed), _original_materialization_account| {
+                        let stage = checked.admit_private_bf16_formal_memory_v1(requested_return)
+                            .map_err(Box::new)?;
+                        Ok((stage, observed))
+                    })?
+                    .try_map(|(formal, observed), _original_materialization_account| {
+                        let target = formal.bind_private_bf16_target_v1(requested_return)
+                            .map_err(Box::new)?;
+                        Ok((target, observed))
+                    })?
+                    .try_map(|(target, observed), _original_materialization_account| {
+                        let optimized = target.optimize_private_bf16_target_v1(requested_return)
+                            .map_err(Box::new)?;
+                        Ok((optimized, observed))
+                    })?
+                    .try_map(|(mut stage, observed), _original_materialization_account| {
+                        // Preserve fresh raw O evidence before LLVM exists; this
+                        // guard observer does not authorize the later constructor.
+                        stage.optimized.observe_private_bf16_checked_output_guard_for_test_v1(
+                            requested_return,
+                        ).map_err(Box::new)?;
+                        Ok((stage, observed))
+                    })?
+                    .try_map(|(stage, observed), _original_materialization_account| {
+                        // Actual consuming constructor freshly repeats source/O
+                        // proof and emits/rebinds LLVM on the original phase.
+                        let llvm = stage.lower_private_bf16_llvm_v1(requested_return)
+                            .map_err(Box::new)?;
+                        Ok((llvm, observed))
+                    })?
+                    .try_map(|(mut stage, observed), _original_materialization_account| {
+                        let wrong = if requested_return == [0, 1, 2, 3] {
+                            [1, 0, 2, 3]
+                        } else { [0, 1, 2, 3] };
+                        match stage.revalidate_private_bf16_llvm_v1(wrong) {
+                            Err(ProductionPipelineError::RankedVerification(
+                                crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1::FormalMemory(
+                                    fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::SemanticKir(
+                                        fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                                    ),
+                                ),
+                            )) => {}
+                            Err(error) => return Err(Box::new(error)),
+                            Ok(()) => return Err(Box::new(ProductionPipelineError::RankedVerification(
+                                crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1::RosterMetadata(
+                                    "opposite Return unexpectedly replayed LLVM owner",
+                                ),
+                            ))),
+                        }
+                        stage.revalidate_private_bf16_llvm_v1(requested_return)
+                            .map_err(Box::new)?;
+                        Ok((stage, observed))
+                    })?
+
+                    .try_map(|(mut stage, observed), _original_materialization_account| {
+                        // Actual source/constructor controls retain this same owner
+                        // and original phase. They do not reset sticky denials.
+                        stage.llvm.exercise_private_bf16_descriptor_constructor_for_test_v1(
+                            requested_return, &stage.bindings.typed_descriptor_roots,
+                            stage.bindings.rustc_target.profile(),
+                        ).map_err(Box::new)?;
+                        // This earlier LLVM row still truthfully says descriptor=false.
+                        stage.llvm.observe_private_bf16_llvm_for_test_v1(requested_return)
+                            .map_err(Box::new)?;
+                        Ok((stage, observed))
+                    })?
+                    .try_map(|(stage, observed), _original_materialization_account| {
+                        let descriptor = stage.prepare_private_bf16_descriptor_v1(requested_return)
+                            .map_err(Box::new)?;
+                        Ok((descriptor, observed))
+                    })?
+                    .try_map(|(mut stage, observed), _original_materialization_account| {
+                        let wrong = if requested_return == [0, 1, 2, 3] {
+                            [1, 0, 2, 3]
+                        } else { [0, 1, 2, 3] };
+                        match stage.revalidate_private_bf16_descriptor_v1(wrong) {
+                            Err(ProductionPipelineError::RankedVerification(
+                                crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1::FormalMemory(
+                                    fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::SemanticKir(
+                                        fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                                    ),
+                                ),
+                            )) => {}
+                            Err(error) => return Err(Box::new(error)),
+                            Ok(()) => return Err(Box::new(ProductionPipelineError::DescriptorEvidence(
+                                crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                                    "opposite Return unexpectedly replayed descriptor owner",
+                                ),
+                            ))),
+                        }
+                        stage.descriptor.exercise_private_bf16_descriptor_bytes_for_test_v1(
+                            requested_return, &stage.bindings.typed_descriptor_roots,
+                            stage.bindings.rustc_target.profile(),
+                        ).map_err(Box::new)?;
+                        Ok((stage, observed))
+                    })?
+                    .try_map(|(mut stage, observed), _original_materialization_account| {
+                        stage.descriptor.observe_private_bf16_descriptor_for_test_v1(requested_return).map_err(Box::new)?;
+                        stage.descriptor.exercise_private_bf16_handoff_constructor_for_test_v1(
+                            requested_return, &stage.bindings.typed_descriptor_roots, stage.bindings.rustc_target.profile(),
+                        ).map_err(Box::new)?;
+                        let handoff = stage.prepare_private_bf16_worker_handoff_v1(requested_return).map_err(Box::new)?;
+                        Ok((handoff, observed))
+                    })?
+                    .try_map(|(mut stage, observed), _original_materialization_account| {
+                        stage.handoff.exercise_private_bf16_handoff_for_test_v1(
+                            requested_return, &stage.bindings.typed_descriptor_roots, stage.bindings.rustc_target.profile(),
+                        ).map_err(Box::new)?;
+                        stage.handoff.observe_private_bf16_handoff_for_test_v1(
+                            requested_return, &stage.bindings.typed_descriptor_roots, stage.bindings.rustc_target.profile(),
+                        ).map_err(Box::new)?;
+                        Ok((stage, observed))
+                    })?
+                    .try_map(|(mut stage, observed), budget| {
+                        let attempted = (|| {
+                            let (worker, output_bytes, limits, deadline) = worker.ok_or_else(||
+                                ProductionPipelineError::DescriptorEvidence(
+                                    crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                                        "explicit private Worker context missing",
+                                    ),
+                                ))?;
+                            let output = || fe2o3_hsaco_finalize::WorkerOutputConstraintsV1::new(output_bytes)
+                                .map_err(|_| ProductionPipelineError::DescriptorEvidence(
+                                    crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                                        "private Worker output bound invalid",
+                                    ),
+                                ));
+                            stage.handoff.exercise_private_bf16_worker_entry_refusals_for_test_v1(
+                                requested_return, &stage.bindings.typed_descriptor_roots,
+                                stage.bindings.rustc_target.profile(), worker, output_bytes, limits, deadline,
+                            )?;
+                            // The actual closed loan gets opposite Return and an
+                            // expired deadline. Exact source refusal must win before
+                            // the limit check, hence before either Worker invocation.
+                            let wrong = if requested_return == [0, 1, 2, 3] { [1, 0, 2, 3] } else { [0, 1, 2, 3] };
+                            match stage.handoff.observe_private_bf16_worker_for_test_v1(
+                                wrong, &stage.bindings.typed_descriptor_roots,
+                                stage.bindings.rustc_target.profile(), worker, output()?, limits,
+                                std::time::Instant::now(),
+                            ) {
+                                Err(ProductionPipelineError::RankedVerification(
+                                    crate::production_ranked_projection_v1::ProductionRankedVerificationErrorV1::FormalMemory(
+                                        fe2o3_lower_mir_kernel::ProductionFormalMemoryErrorV1::SemanticKir(
+                                            fe2o3_lower_mir_kernel::ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                                        ),
+                                    ),
+                                )) => {}
+                                Err(error) => return Err(error),
+                                Ok(()) => return Err(ProductionPipelineError::DescriptorEvidence(
+                                    crate::compiler_descriptor::CompilerDescriptorError::ProductionDescriptorMismatch(
+                                        "opposite Return unexpectedly entered private Worker loan",
+                                    ),
+                                )),
+                            }
+                            stage.handoff.observe_private_bf16_worker_for_test_v1(
+                                requested_return, &stage.bindings.typed_descriptor_roots,
+                                stage.bindings.rustc_target.profile(), worker, output()?, limits, deadline,
+                            )
+                        })();
+                        // Original materialization custody survives BOTH engine
+                        // executions. Stage drop and this check also run on error.
+                        drop(stage);
+                        let before = phase.get().expect("successful nominal phase");
+                        assert_eq!(budget.work(), before.work);
+                        assert_eq!(budget.storage(), before.final_storage);
+                        assert_eq!(budget.peak_storage(), before.phase_peak_storage);
+                        budget.check_prior_denials_v1().map_err(materialization_resource_error_v29)?;
+                        eprintln!("fe2o3-bf16-private-worker-owner-drop-v1 attempted_ok={} original_materialization_account_unchanged=true stage_dropped=true normal_admission=false publication_authority=false load_authority=false launch_authority=false", attempted.is_ok());
+                        attempted.map_err(Box::new)?;
+                        eprintln!("fe2o3-bf16-private-owning-worker-entry-v1 completed=true materialization_account_unchanged=true source_first_worker_return_refused=true llvm_emitted=true descriptor_constructed=true handoff_constructed=true full_descriptor_replayed=true source_descriptor_handoff_replayed=true worker_invocations=2 engine_owners_dropped=true stage_dropped=true runtime_bounds_alias_duties_preserved=true worker_invoked=true cleanup_pending=false normal_admission=false publication_authority=false load_authority=false launch_authority=false");
+                        Ok(observed)
+                    })
+                    .map(|finished| finished.finish_copy());
+            }
             if let NominalQueryProfileV1::OwnedHandoff { requested_return } = profile {
                 return prepared
                     .try_map(|prepared, budget| {

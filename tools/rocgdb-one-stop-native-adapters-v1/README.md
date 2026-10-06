@@ -102,3 +102,7 @@ The additive [physical-v8 package](physical-v8/README.md) retains the checkpoint
 ## Disabled paired completion successor
 
 The optional [physical-v9](physical-v9/README.md) source layer follows physical-v8 and adds the bounded, host-first paired CPU/wave completion transaction with actual-return and final-commit checks. Public activation, capture and publication remain disabled; source/CPU checks do not confer native qualification.
+
+## Disabled owned/legacy query separation successor
+
+The additive [physical-v10](physical-v10/README.md) layer follows physical-v9 and explicitly rejects the simultaneous legacy stopped-wave profile only while the owned profile is selected. It preserves all five real owned queue-health pairs and the original ten-query provider cap. The unselected legacy route and disabled public gates are unchanged; no native completion is qualified by this source-only correction.

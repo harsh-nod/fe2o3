@@ -11,6 +11,137 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Worker-entry refusals and debugger query separation — 2026-10-06
+
+The private BF16 continuation now has a test-only entry guard immediately before
+the external engineering Worker call. Five new CPU controls check thread-local
+entry counting/refusal, nested-scope rejection and restoration on normal return,
+error and unwind; together with the existing loan controls, all 17 focused
+checks passed. Six original-owner mutation cases are also wired into the ignored
+frontend endpoint: wrong Return, target, typed-root roster, descriptor bytes,
+LLVM target spelling and canonical-handoff bytes. They restore the same
+allocations and require typed refusal with zero Worker entries before clean
+replay. These six genuine frontend cases have **not yet executed**; unit checks
+do not replace that run or external-process containment.
+
+Full backend suites passed in debug and release: 4,010 library tests
+(238 ignored), 19 export-simulation tests, 73 extractor tests and all enabled
+API/integration tests. Both full suites tested source census
+`57196109dfd92bd07d086930a6e50729173b77760cc034d08706a1c81279a02a`.
+
+The optional, disabled [physical-v10 source layer](../tools/rocgdb-one-stop-native-adapters-v1/physical-v10/README.md)
+separates the legacy observer from an explicitly selected owned WAVE_STOP event.
+It invalidates that separate observer before its optional legacy health query,
+retaining unselected legacy behavior, the owned five query pairs and the
+ten-query limit. This addresses the sufficient query-budget refusal reconstructed
+from the failed R70 trace; it does not retroactively qualify that attempt.
+
+Root checks passed eight routing/source controls, strict C++17 and UBSan routing
+fixtures, all 60 public-package checks, the 63-file selected-source check, the
+exact AMD API-header check and unified-patch application checking. The selected
+source totals 2,264,960 bytes. Activation, capture and publication remain
+unavailable; source checks are not native capture/resume qualification.
+
+A fresh private selective rebuild passed preparation, compilation and linking:
+41,113 source files / 386,646,617 bytes, 579 actual compiler dependencies and
+467 linker-trace entries. The new binary is 199,927,176 bytes, SHA256
+`4fada6ebe9f4c694bafb2675fd2fb7721e7992509fbb04bbfe1e7214d91b8f70`.
+The build kept all old inputs unchanged and did not execute the debugger.
+
+After 25 measurement controls passed and the readelf runtime closure was
+reobserved, the new adapter object yielded all 20 required DWARF types and a
+measured 19,976-byte logical reservation under the unchanged 65,536-byte limit.
+The lane charged 38,327,174 read bytes / 406 calls and observed normal exit,
+both real stream EOFs and no abandoned drain. The actual report is
+`debugger-owned-legacy-twenty-type-actual-root-r71-r1/MANIFEST.json`,
+SHA256 `bb805935bac5425891b9deda4a2fdd0fca4110051521acbca6f29508cde920c6`.
+This is object-layout evidence, not whole-engine/RSS accounting, new-ELF
+runtime closure, startup or native qualification; those later checks remain
+separate and pending.
+
+No Worker execution, hardware, public-debugger or tutorial exit is accepted by
+these checkpoints. Accepted milestones remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
+## Private BF16 Worker frontend and native debugger attempt — 2026-10-06
+
+The private, test-only generated-source driver now reaches the owning Worker
+loan through a separately named ignored endpoint. Its bounded seven-field
+configuration binds the executable content and build identities and has an
+absolute deadline; the original source, formal, optimized-output, LLVM,
+descriptor and canonical-handoff owners remain live throughout. Source replay
+precedes Worker deadline admission. The old handoff-only route is unchanged.
+The new 44-field result is emitted only after replay and original-owner drop;
+it grants no ordinary admission, artifact publication, load or launch authority.
+
+Three focused endpoint controls passed. Full backend suites then passed in
+debug and release: 4,005 library tests (238 ignored), 19 export-simulation
+tests, 73 extractor tests and all non-ignored package API/integration tests.
+The tested source census is
+`28a7bc043450cd5e854a01d2696c49e99a5c9d087c0607ab5a6926646604293d`.
+The first release attempt reached its finite scope deadline during compilation;
+its failed record was preserved before the successful fresh-scope run.
+The disabled two-session parent passed 31 pure controls. These checks have
+**not executed the genuine external Worker**. Measured native runtime inputs,
+enforced process-family containment and the actual owning observations remain
+pending; the endpoint remains ignored and the parent remains disabled.
+
+Separately, a fresh private debugger attempt captured the expected four-byte
+register value (`0x13579bdf`) and 272 memory bytes: two sentinels surrounding
+64 lane values, each equal to that register value XOR the lane index.
+Resume then failed at a queue-state health query with
+`native-site=2; native-family=1; native-selector=5; native-bytes=4; native-status=-3`.
+This is not a completed paired CPU/wave resume or qualified physical capture.
+The four-byte query matches the API; the failure is not an output-width error.
+
+The preserved source/trace reconstruction identifies an extra pair of legacy
+observer health queries. Together with the owned checks, these spend all ten
+allowed queries before completion attempts the eleventh. This is a sufficient
+refusal cause, not proof that no concurrent taint or driver change occurred.
+A correction must retain the existing health checks and ten-query limit;
+a new reviewed build and fresh native attempt are still required.
+
+The outer family supervisor observed reaping, closed streams and an empty,
+removed cgroup. Its cleanup evidence is distinct from the controller's local
+unadmitted-inferior limitation. The command failed and the outer runner did
+not produce a complete source postflight. The failed one-use attempt and
+transcript remain preserved and cannot be reused as an execution scope.
+The actual record is
+`debugger-paired-native-failed-actual-root-r70-r1/MANIFEST.json`
+(SHA256 `73a10839731aa5c6d3beb790de095fd8a2ad2beafa73433fe7b576df59d16d0f`).
+
+These are implementation and diagnostic checkpoints, not accepted Worker,
+hardware, public-debugger or tutorial exits. Accepted milestones remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
+## Private BF16 owning Worker loan — 2026-10-05
+
+The private, test-only handoff continuation now offers a closed synchronous
+loan to the external compiler Worker API. The retained canonical allocation,
+descriptor and pinned Worker are borrowed under the original source, formal,
+optimized-output, LLVM and handoff owners. Full source/LLVM/descriptor/handoff
+correspondence is replayed before deadline admission and after success, error
+or unwind. No serialized digest alone restores compiler authority.
+
+The hook reserves two bounded compiler observations on the original ledger
+and slot. Engine-owned temporary results are dropped before selected known
+credit is returned; consumed work is not refunded. Controls cover sticky
+denial, insufficient deadline, mismatched owners, foreign surplus, unwind and
+drop/refund ordering. Selected logical accounting does not include the external
+engine's allocations or process RSS, and does not establish process containment.
+
+Twelve focused CPU controls passed, followed by full backend suites in debug
+and release: 4,002 library tests (237 ignored), 19 export-simulation tests,
+73 extractor tests and all non-ignored package API/integration tests.
+The tested source census is
+`53926d16fdef69a4e3e0236effa8cc3e8d38a2106c324a07c2c92fb695390f0d`.
+An initial test-only tuple-resource compile error was repaired; its failed
+record remains preserved.
+
+These tests have not executed the genuine external Worker through this hook.
+The genuine frontend endpoint, native Worker/runtime containment, artifact
+admission and numerical/GPU qualification remain pending. No milestone or
+tutorial exit is accepted by this checkpoint; the count remains **7/18**.
+
 ## Private BF16 canonical handoff continuation — 2026-10-05
 
 The private continuation now retains a canonical Worker-format handoff under
@@ -107,8 +238,15 @@ controls and produced seven data products covering all 119 record roles. The
 complete raw inputs, retrospective audits, exact tool/environment custody and
 prior failed generator/control runs remain distinct. This validates recorded
 startup evidence, not current runtime state or permission to execute a target.
-The fresh native controller, current runtime binding, currentness checks and
-one-use execution scope remain pending; no expired execution scope is reused.
+The refreshed controller passed 64 protocol and 97 native CPU tests. Its
+current binding replays all 119 historical roles, including ten EOF records.
+The generated supervisor passed 36 tests, was built before its 32 runtime
+modules were deployed, and passed a bounded live currentness check of all
+683 selected inputs. The native roster contains 630 entries under the unchanged
+631-entry cap. The wrapper passed 31 renderer/descriptor-limit/cleanup controls.
+These source, CPU and file observations are not a GPU stop/resume result.
+Fresh whole-source/provider and process-state checks, resource validation and
+a separate one-use native execution remain pending; no expired scope is reused.
 
 External compiler-worker execution, artifact/launch admission, GPU/numerical
 qualification and public debugger qualification remain pending. No milestone

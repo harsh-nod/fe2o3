@@ -4,11 +4,11 @@ use super::gfx942_bf16_publication_tap_v1_tests as tap;
 use super::gfx942_tiled_region_qualification_v1_tests::observation::cpu::observed as original_cpu;
 use super::{Callbacks, Compilation, Compiler, TyCtxt};
 use crate::production_tiled_region_source_v1::{
-    publish_bf16_tile_helper_source_v1, Bf16SourcePublicationProgressV1, Bf16TileReturnOrderV1,
-    Bf16TileSourcePublishRequestV1, PublishedBf16TileSourceV1,
+    Bf16SourcePublicationProgressV1, Bf16TileReturnOrderV1, Bf16TileSourcePublishRequestV1,
+    PublishedBf16TileSourceV1, publish_bf16_tile_helper_source_v1,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -2703,3 +2703,6 @@ fn actual_generated_owning_handoff_source() {
         "private owning handoff refused; no Worker/ordinary/launch qualification"
     );
 }
+
+#[path = "gfx942_bf16_private_worker_v1_tests.rs"]
+mod private_worker;
