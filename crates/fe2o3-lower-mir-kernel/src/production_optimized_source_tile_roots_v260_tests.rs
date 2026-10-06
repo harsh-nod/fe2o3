@@ -297,6 +297,37 @@ fn prepared_multi_tile(
             kind,
         });
     }
+    if second_tile {
+        assert!(matches!(
+            crate::production_execution_source_input_v29::check_source_owned_census_v18(
+                &owner,
+                &launch,
+                ProductionExecutionSourceInputV29 {
+                    semantic_sha256: projection.source_semantic_sha256(),
+                    roots: &roots,
+                    classes: &classes,
+                    events: &events,
+                },
+                budget,
+            ),
+            Err(crate::ProductionContextRootErrorV29::ScopeEventCensus)
+        ));
+    }
+    // Source census order is function/block order, not root enumeration followed
+    // by provider events. Preserve every event when the later tile root exists.
+    events.sort_by_key(|event| (event.function.index(), event.block.index()));
+    crate::production_execution_source_input_v29::check_source_owned_census_v18(
+        &owner,
+        &launch,
+        ProductionExecutionSourceInputV29 {
+            semantic_sha256: projection.source_semantic_sha256(),
+            roots: &roots,
+            classes: &classes,
+            events: &events,
+        },
+        budget,
+    )
+    .unwrap();
     let profile = kernel_argument_abi_v18::tests::FixtureKernelAbiV18::new(&projection);
     let profile_roots = profile.roots();
     ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
