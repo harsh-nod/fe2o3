@@ -13,7 +13,9 @@ use super::{
 use crate::build_config::native::PreparedNativeProductionBuildConfig;
 use crate::protected_compiler_handoff_v3::ParentRustcInvocationCustody as Invocation;
 use fe2o3_artifact_transaction::{
-    CompilerModuleHandoffAdmissionErrorV5, CompilerModuleHandoffReceiptV5 as Receipt,
+    ArtifactLockRetirementBarrierV1 as Barrier, CompilerModuleHandoffAdmissionErrorV5,
+    CompilerModuleHandoffReceiptV5 as Receipt,
+    consume_compiler_module_handoff_in_original_account_v5 as consume_original,
     consume_compiler_module_handoff_with_currentness_v5 as consume,
 };
 use fe2o3_compiler_closure_capability::{
@@ -30,19 +32,28 @@ use fe2o3_hsaco_finalize::{
     RecoveredConditionalWorkerHsacoPublicationV5 as DurablePublication,
     execute_preflighted_conditional_reproducible_first_build_worker_v2 as execute,
     finalize_conditional_worker_hsaco_v5 as finalize,
+    persist_prepared_conditional_worker_hsaco_publication_in_original_account_v5 as persist_original,
     persist_prepared_conditional_worker_hsaco_publication_v5 as persist_publication,
     preflight_conditional_reproducible_first_build_worker_v2 as preflight,
     prepare_conditional_worker_compact_finalizer_replay_v5 as prepare_transcript,
+    prepare_conditional_worker_hsaco_publication_in_original_account_v5 as prepare_original,
     prepare_conditional_worker_hsaco_publication_v5 as prepare_publication,
 };
 use fe2o3_verifier::{
     CompilerConditionalNativeSemanticHandoffErrorV5 as RecoveryError,
     InertNativeConditionalPolicyRosterV1 as PolicyRoster,
     NativeConditionalPolicyReconstructionErrorV1 as PolicyRosterError,
+    reconstruct_inert_native_conditional_policy_roster_in_original_account_v1 as reconstruct_original,
     reconstruct_inert_native_conditional_policy_roster_v1 as reconstruct_policies,
+    recover_compiler_conditional_native_semantic_handoff_in_original_account_v5 as recover_original,
     recover_compiler_conditional_native_semantic_handoff_v5 as recover,
 };
-use std::{fmt, mem::size_of, path::Path};
+use std::{
+    fmt,
+    mem::size_of,
+    panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    path::Path,
+};
 
 /// Move-only structural result. Exact parent/readiness custody and its exclusive
 /// budget borrow survive through this owner; there is no detached parts escape.
@@ -152,7 +163,12 @@ impl<'a, 'b, 'w> ParentPreparedConditionalArtifact<'a, 'b, 'w> {
             mut custody,
         } = self;
         // Concrete terminal source recovery is deliberately outside refund scopes.
-        let (publication, storage) = persist_publication(
+        let persist = if matches!(custody.readiness.origin, super::Origin::Root(_)) {
+            persist_original
+        } else {
+            persist_publication
+        };
+        let (publication, storage) = persist(
             output_dir,
             producer,
             publication,
@@ -212,7 +228,7 @@ impl<'a, 'b, 'w> ParentPreparedConditionalArtifact<'a, 'b, 'w> {
         let (publication, storage) = custody.policy_roster.with_root_policies(
             custody.readiness.budget,
             |roots, budget| {
-                let (publication, storage) = persist_publication(
+                let (publication, storage) = persist_original(
                     output_dir,
                     producer,
                     publication,
@@ -319,6 +335,8 @@ impl ParentArtifactCustody<'_, '_, '_> {
 }
 
 const FRAME: usize = 4 * size_of::<ContinuationError>()
+    + size_of::<RetirementPanic>()
+    + size_of::<super::artifact::CurrentPublication>()
     + 2 * size_of::<ParentPreparedConditionalArtifact<'static, 'static, 'static>>()
     + 2 * size_of::<ParentDurableConditionalArtifact<'static, 'static, 'static>>()
     + size_of::<replacement::Replacement>()
@@ -417,114 +435,160 @@ impl<'b, 'w> Readiness<'b, 'w> {
         self.budget.reserve_storage(FRAME)?;
         self.revalidate()?;
         invocation.revalidate_native(self.budget)?;
-        let (lease, token) = self.acquire_current_publication(output_dir, producer, attempt)?;
-        let closure = invocation
-            .match_native_invocation(token.handoff().capsule().invocation(), self.budget)?;
-        approval.require_compiler(closure, self.budget)?;
-        require_approved_profile(&approval, &mut self)?;
-        let compiler_execution = self.admit_current_receipt(&lease, &token)?;
-
-        // No policy value is lent before ALL original occurrence, approval and
-        // signed-current-publication checks above succeed. The independent path
-        // additionally requires exact equality with its supplied policy backing.
-        let (policy_roster, storage) = reconstruct_policies(
-            token.handoff().capsule().policy_roster_bytes(),
-            token.handoff().capsule().source_packet_bytes(),
-            self.budget,
-        )?;
-        self.budget.reserve_storage(storage.retained_storage())?;
-        if let SelectedPolicy::Independent(policy) = &policy {
-            policy_roster.require_expected_policies(policy.roots, self.budget)?;
-        }
-        token.revalidate_locked_currentness(self.budget)?;
-
-        // No blanket-refund scope may enclose this concrete terminal recovery.
-        let (token, policy_origin) = match policy {
-            SelectedPolicy::Independent(policy) => {
-                let (token, storage) = token.try_map_handoff(self.budget, |handoff, b| {
-                    recover(
-                        handoff,
-                        policy.roots,
-                        policy.history_limits,
-                        policy.target,
-                        b,
-                    )
-                    .map(|(source, storage)| (source, storage.retained_storage()))
-                })?;
-                self.budget.reserve_storage(storage.retained_storage())?;
-                (token, PolicyOrigin::Independent)
-            }
-            SelectedPolicy::OriginalRoot(parameters) => {
-                self.origin.require_original_root()?;
+        let super::artifact::CurrentPublication {
+            lease,
+            token,
+            retirement,
+        } = self.acquire_current_publication(output_dir, producer, attempt)?;
+        let original = retirement.is_some();
+        let (consumed, prepared, compiler_execution, policy_roster, policy_origin) =
+            with_retirement(retirement, || {
+                let closure = invocation
+                    .match_native_invocation(token.handoff().capsule().invocation(), self.budget)?;
                 approval.require_compiler(closure, self.budget)?;
                 require_approved_profile(&approval, &mut self)?;
+                let compiler_execution = self.admit_current_receipt(&lease, &token)?;
+
+                // No policy value is lent before ALL original occurrence, approval and
+                // signed-current-publication checks above succeed. The independent path
+                // additionally requires exact equality with its supplied policy backing.
+                let reconstruct = if original {
+                    reconstruct_original
+                } else {
+                    reconstruct_policies
+                };
+                let (policy_roster, storage) = reconstruct(
+                    token.handoff().capsule().policy_roster_bytes(),
+                    token.handoff().capsule().source_packet_bytes(),
+                    self.budget,
+                )?;
+                self.budget.reserve_storage(storage.retained_storage())?;
+                if let SelectedPolicy::Independent(policy) = &policy {
+                    policy_roster.require_expected_policies(policy.roots, self.budget)?;
+                }
+                if original {
+                    token.revalidate_locked_currentness_in_original_account_v5(self.budget)?;
+                } else {
+                    token.revalidate_locked_currentness(self.budget)?;
+                }
+
+                // No blanket-refund scope may enclose this concrete terminal recovery.
+                let (token, policy_origin) = match policy {
+                    SelectedPolicy::Independent(policy) => {
+                        let recover_using = if original { recover_original } else { recover };
+                        let admit = |handoff, b: &mut super::Budget<'_>| {
+                            recover_using(
+                                handoff,
+                                policy.roots,
+                                policy.history_limits,
+                                policy.target,
+                                b,
+                            )
+                            .map(|(source, storage)| (source, storage.retained_storage()))
+                        };
+                        let (token, storage) = if original {
+                            token.try_map_handoff_in_original_account_v5(self.budget, admit)
+                        } else {
+                            token.try_map_handoff(self.budget, admit)
+                        }?;
+                        self.budget.reserve_storage(storage.retained_storage())?;
+                        (token, PolicyOrigin::Independent)
+                    }
+                    SelectedPolicy::OriginalRoot(parameters) => {
+                        self.origin.require_original_root()?;
+                        approval.require_compiler(closure, self.budget)?;
+                        require_approved_profile(&approval, &mut self)?;
+                        self.revalidate()?;
+                        check_pair(
+                            &mut self,
+                            invocation,
+                            token.receipt(),
+                            token.handoff(),
+                            &compiler_execution,
+                        )?;
+                        let token =
+                            policy_roster.with_root_policies(self.budget, |roots, b| {
+                                let (token, storage) = token
+                                    .try_map_handoff_in_original_account_v5(b, |handoff, b| {
+                                        recover_original(
+                                            handoff,
+                                            roots,
+                                            parameters.history_limits,
+                                            parameters.target,
+                                            b,
+                                        )
+                                        .map(
+                                            |(source, storage)| {
+                                                (source, storage.retained_storage())
+                                            },
+                                        )
+                                    })?;
+                                b.reserve_storage(storage.retained_storage())?;
+                                Ok::<_, ContinuationError>(token)
+                            })??;
+                        (token, PolicyOrigin::OriginalRoot(parameters))
+                    }
+                };
+                // Each branch retains the mapped owner before any lent policy view dies.
+                let receipt = token.receipt();
+                let (prepared, storage) = preflight(
+                    &token,
+                    receipt,
+                    closure,
+                    &worker,
+                    providers,
+                    options,
+                    output,
+                    limits,
+                    self.budget,
+                )?;
+                self.budget.reserve_storage(storage.retained_storage())?;
                 self.revalidate()?;
+                invocation.match_native_invocation(
+                    token.content().handoff().capsule().invocation(),
+                    self.budget,
+                )?;
+                let consumed = if original {
+                    consume_original(&lease, token, self.budget)
+                } else {
+                    consume(&lease, token, self.budget)
+                }?;
                 check_pair(
                     &mut self,
                     invocation,
-                    token.receipt(),
-                    token.handoff(),
+                    consumed.receipt(),
+                    consumed.content().handoff(),
                     &compiler_execution,
                 )?;
-                let token = policy_roster.with_root_policies(self.budget, |roots, b| {
-                    let (token, storage) = token.try_map_handoff(b, |handoff, b| {
-                        recover(
-                            handoff,
-                            roots,
-                            parameters.history_limits,
-                            parameters.target,
-                            b,
-                        )
-                        .map(|(source, storage)| (source, storage.retained_storage()))
-                    })?;
-                    b.reserve_storage(storage.retained_storage())?;
-                    Ok::<_, ContinuationError>(token)
-                })??;
-                (token, PolicyOrigin::OriginalRoot(parameters))
-            }
-        };
-        // Each branch retains the mapped owner before any lent policy view dies.
-        let receipt = token.receipt();
-        let (prepared, storage) = preflight(
-            &token,
-            receipt,
-            closure,
-            &worker,
-            providers,
-            options,
-            output,
-            limits,
-            self.budget,
-        )?;
-        self.budget.reserve_storage(storage.retained_storage())?;
-        self.revalidate()?;
-        invocation.match_native_invocation(
-            token.content().handoff().capsule().invocation(),
-            self.budget,
-        )?;
-        let consumed = consume(&lease, token, self.budget)?;
-        check_pair(
-            &mut self,
-            invocation,
-            consumed.receipt(),
-            consumed.content().handoff(),
-            &compiler_execution,
-        )?;
+                let lease_storage = lease.storage().retained_storage();
+                drop(lease);
+                self.budget.release_storage(lease_storage)?;
+                Ok((
+                    consumed,
+                    prepared,
+                    compiler_execution,
+                    policy_roster,
+                    policy_origin,
+                ))
+            })?;
+        // The actual original retirement barrier has now dropped. Worker spawn
+        // cannot start while either current-publication lock remains held.
         let (evidence, storage) = execute(consumed, prepared, &worker, self.budget)?;
         self.budget.reserve_storage(storage.retained_storage())?;
         let (artifact, storage) = finalize(evidence, self.budget)?;
         self.budget.reserve_storage(storage.retained_storage())?;
         let (transcript, storage) = prepare_transcript(&artifact, self.budget)?;
         self.budget.reserve_storage(storage.retained_storage())?;
-        let (publication, storage) =
-            prepare_publication(producer, artifact, transcript, self.budget)?;
+        let prepare = if original {
+            prepare_original
+        } else {
+            prepare_publication
+        };
+        let (publication, storage) = prepare(producer, artifact, transcript, self.budget)?;
         self.budget.reserve_storage(storage.retained_storage())?;
 
         // Only known success-only scratch is released. Source/preflight/worker
         // reservations remain with the actual retained artifact and receipt.
-        let lease_storage = lease.storage().retained_storage();
-        drop(lease);
-        self.budget.release_storage(lease_storage)?;
         self.budget
             .release_storage(FRAME - ParentPreparedConditionalArtifact::HEADER)?;
         let mut prepared = ParentPreparedConditionalArtifact {
@@ -576,7 +640,11 @@ fn check_pair(
     readiness
         .budget
         .with_prepaid_scope(floor, 0, 0, FRAME, |b| {
-            let (subject, storage) = Subject::from_publication(receipt, handoff, b)?;
+            let (subject, storage) = if matches!(readiness.origin, super::Origin::Root(_)) {
+                Subject::from_publication_in_original_account_v3(receipt, handoff, b)
+            } else {
+                Subject::from_publication(receipt, handoff, b)
+            }?;
             b.reserve_storage(storage.retained_storage())?;
             readiness.origin.require_subject(&subject, b)?;
             validate_receipt(&readiness.profile, &subject, carriage, b)?;
@@ -599,6 +667,104 @@ mod tests {
         CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
         CanonicalKernelIrWorkBudgetV1 as Work,
     };
+
+    fn isolated_retirement_test(name: &str) -> bool {
+        const ENV: &str = "FE2O3_ORIGINAL_PARENT_RETIREMENT_TEST";
+        if std::env::var_os(ENV).is_some() {
+            return false;
+        }
+        let full = format!("{}::{name}", module_path!());
+        let (_, test) = full.split_once("::").unwrap();
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", test, "--nocapture"]).env(ENV, "1");
+        let mut child =
+            fe2o3_artifact_transaction::with_artifact_process_spawn_v1(|| command.spawn()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(
+                    status.success(),
+                    "original parent retirement test: {status}"
+                );
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                child.wait().unwrap();
+                panic!("original parent retirement test timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn actual_parent_retirement_survives_error_and_unwind_payload_destruction() {
+        if isolated_retirement_test(
+            "actual_parent_retirement_survives_error_and_unwind_payload_destruction",
+        ) {
+            return;
+        }
+        use fe2o3_artifact_transaction::try_acquire_artifact_lock_retirement_barrier_v1 as acquire;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        struct Payload(Arc<AtomicUsize>);
+        impl Drop for Payload {
+            fn drop(&mut self) {
+                assert!(
+                    acquire().is_err(),
+                    "payload outlived its actual retirement barrier"
+                );
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let barrier = acquire().unwrap();
+        let error =
+            with_retirement::<()>(Some(barrier), || Err(Resource::Accounting.into())).unwrap_err();
+        assert!(acquire().is_err());
+        drop(error);
+        drop(acquire().unwrap());
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let barrier = acquire().unwrap();
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            with_retirement::<()>(Some(barrier), || {
+                std::panic::panic_any(Payload(Arc::clone(&drops)))
+            })
+        }));
+        assert!(caught.is_err());
+        assert!(acquire().is_err());
+        assert_eq!(drops.load(Ordering::SeqCst), 0);
+        drop(caught);
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        drop(acquire().unwrap());
+    }
+
+    #[test]
+    fn actual_parent_retirement_releases_before_successful_worker_continuation() {
+        if isolated_retirement_test(
+            "actual_parent_retirement_releases_before_successful_worker_continuation",
+        ) {
+            return;
+        }
+        use fe2o3_artifact_transaction::try_acquire_artifact_lock_retirement_barrier_v1 as acquire;
+        let barrier = acquire().unwrap();
+        assert_eq!(
+            with_retirement(Some(barrier), || {
+                assert!(acquire().is_err());
+                Ok(17)
+            })
+            .unwrap(),
+            17
+        );
+        drop(acquire().unwrap());
+        assert!(
+            FRAME
+                >= size_of::<RetirementPanic>()
+                    + size_of::<super::super::artifact::CurrentPublication>()
+        );
+    }
 
     #[test]
     fn continuation_account_floor_accepts_exact_and_rejects_short_resources() {
@@ -649,7 +815,33 @@ mod tests {
 /// Opaque terminal error: nested resource errors must not invite blanket refunds
 /// around an operation that can already have consumed source/proof custody.
 #[derive(Debug)]
-pub(crate) struct ContinuationError(Cause);
+pub(crate) struct ContinuationError(Cause, Option<Barrier>);
+
+// The inner payload can own a terminal error and its output lock. Its destructor
+// must finish while the original barrier still excludes process creation.
+struct RetirementPanic {
+    _payload: Box<dyn std::any::Any + Send>,
+    _barrier: Option<Barrier>,
+}
+
+fn with_retirement<T>(barrier: Option<Barrier>, run: impl FnOnce() -> Result<T>) -> Result<T> {
+    match catch_unwind(AssertUnwindSafe(run)) {
+        Ok(Ok(value)) => {
+            drop(barrier);
+            Ok(value)
+        }
+        Ok(Err(mut error)) => {
+            // This private scope is entered once, immediately after acquisition.
+            assert!(error.1.is_none());
+            error.1 = barrier;
+            Err(error)
+        }
+        Err(payload) => resume_unwind(Box::new(RetirementPanic {
+            _payload: payload,
+            _barrier: barrier,
+        })),
+    }
+}
 #[derive(Debug)]
 enum Cause {
     Approval(ApprovalError),
@@ -668,7 +860,7 @@ enum Cause {
 macro_rules! causes {
     ($($ty:ty => $variant:ident),+ $(,)?) => {
         $(impl From<$ty> for ContinuationError {
-            fn from(error: $ty) -> Self { Self(Cause::$variant(error)) }
+            fn from(error: $ty) -> Self { Self(Cause::$variant(error), None) }
         })+
         impl fmt::Display for ContinuationError {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
