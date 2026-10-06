@@ -3276,3 +3276,25 @@ See [V22 evidence and limits](physical-lds-exchange-source-v22.md#actual-same-co
 No native LLVM execution, GPU execution, general divergent-barrier/race proof
 or protected artifact/launch authority is established. Accepted milestones
 remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**; M3 remains pending.
+
+## Genuine nested macro-frame qualification — 2026-10-06
+
+The six-step real-rustc nested-macro campaign now passes, including the original
+baseline export and the measured macro-frame callback. The local wrapper's
+actual definition covers bytes 290..558 (6:1 through 14:2), while the external
+macro definition retains its distinct header span. Four regression tests check
+the independently specified full body, reject the former header-only expectation,
+and reject altered coordinates, source identities and expansion associations.
+Only the test expectation changed; the producer and strict validation remain
+unchanged. The original failed run and interrupted campaign are retained.
+
+The corrected historical compiler binary is SHA256
+`a300f28561a6294879704ee39f2fa2609b2d8cd3d3db334b8139ee231fbb3ba0`.
+The final genuine step's normal receipt is SHA256
+`c8503d13368ae6b23032bcec291ac593d405892522754ba597ed21d80b7c679b`.
+The live callback retains two ordered macro frames and matches the complete
+original canonical baseline while its owner is live. This is diagnostic,
+whole-region origin information: not per-instruction origins, LLVM inline
+stacks, register values, native emission, GPU evidence or launch authority.
+M5's broader debug-map and allocator-lifetime work remains open; accepted
+milestones remain M1/M2/V1/V2/U1/U2/U3 (7/18).
