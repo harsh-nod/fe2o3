@@ -274,6 +274,11 @@ pub(crate) mod source_census_v1;
 pub(crate) mod ordered_origin_v1;
 
 impl<'tcx> AuthenticatedCollectedKernelClosureV1<'tcx> {
+    #[cfg(test)]
+    pub(crate) fn collected_root_count_for_test_v259(&self) -> usize {
+        self.roots.len()
+    }
+
     pub(crate) fn collected_tile_terminals_v259(
         &self,
         budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
