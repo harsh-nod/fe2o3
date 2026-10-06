@@ -6,6 +6,8 @@ use super::*;
 use crate::production_pipeline::source_candidate_debug_join_v17_tests::CandidateDebugEvidenceV17;
 
 const JOIN_OUTPUT: &str = "FE2O3_TEST_SOURCE_CANDIDATE_DEBUG_JOIN_OUTPUT";
+const LINE_OUTPUT: &str = "FE2O3_TEST_SOURCE_CANDIDATE_LINE_EXPORT_OUTPUT";
+const LINE_CHILD_FLAG: &str = "FE2O3_TEST_SOURCE_CANDIDATE_LINE_EXPORT_CHILD";
 const JOIN_CHILD: &str = "production_rustc_driver_v1::source_bitselect_feasibility_v1_tests::roundtrip::machine::debug_join::actual_source_candidate_debug_join_child";
 const JOIN_PREFIX: &str = "FE2O3_SOURCE_CANDIDATE_DEBUG_JOIN ";
 const PAIR: [&str; 2] = ["default", "edited"];
@@ -83,6 +85,7 @@ pub(super) fn require_inspection_observation(observation: &Value, edited: bool) 
 struct JoinCallbacks {
     source: Option<RetainedInput>,
     plan: Gfx942OrderedProgramRegistersV1,
+    line_export: Option<PathBuf>,
     previous: Option<CandidateDebugEvidenceV17>,
     calls: usize,
     result: Option<Result<CandidateDebugEvidenceV17, String>>,
@@ -101,11 +104,20 @@ impl Callbacks for JoinCallbacks {
                 crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
             )
             .and_then(|transaction| {
-                transaction.observe_source_candidate_debug_join(
-                    input,
-                    self.plan,
-                    self.previous.as_ref(),
-                )
+                if let Some(directory) = self.line_export.as_deref() {
+                    transaction.observe_source_candidate_debug_join_with_line_export(
+                        input,
+                        self.plan,
+                        self.previous.as_ref(),
+                        directory,
+                    )
+                } else {
+                    transaction.observe_source_candidate_debug_join(
+                        input,
+                        self.plan,
+                        self.previous.as_ref(),
+                    )
+                }
             }),
         );
         Compilation::Stop
@@ -177,6 +189,11 @@ fn actual_source_candidate_debug_join_child() {
         );
         fixed_child_environment(record);
     }
+    let export_enabled = match std::env::var(LINE_CHILD_FLAG).as_deref() {
+        Ok("1") => true,
+        Ok("0") | Err(_) => false,
+        _ => panic!("closed line-export child flag differs"),
+    };
     let mut previous: Option<CandidateDebugEvidenceV17> = None;
     let mut reports = Vec::with_capacity(2);
     for (record, selector) in records.iter().zip(PAIR) {
@@ -189,6 +206,7 @@ fn actual_source_candidate_debug_join_child() {
         let mut callbacks = JoinCallbacks {
             source: Some(source),
             plan: register_plan(selector),
+            line_export: export_enabled.then(|| directory.join("line-exports")),
             previous,
             calls: 0,
             result: None,
@@ -215,6 +233,54 @@ fn actual_source_candidate_debug_join_child() {
         assert_eq!(derive(&directory, selector), *record);
         fixed_child_environment(record);
         assert_eq!(hash(&source_path), record.source_sha256);
+        if export_enabled {
+            use crate::production_pipeline::source_candidate_debug_join_v17_tests::line_export;
+            assert_eq!(evidence.report["source_rechecked_after_line_export"], true);
+            let canonical: [u8; 32] =
+                serde_json::from_value(evidence.report["fresh"]["kernel_ir_sha256"].clone())
+                    .unwrap();
+            let export = &evidence.report["ordered_region_line_export"];
+            line_export::verify_export(
+                &directory.join("line-exports"),
+                selector == "edited",
+                export,
+                &record.source_sha256,
+                canonical,
+            )
+            .unwrap();
+            if let Some(old) = callbacks.previous.as_ref() {
+                let old_source: [u8; 32] =
+                    serde_json::from_value(old.report["fresh"]["candidate_sha256"].clone())
+                        .unwrap();
+                let old_canonical: [u8; 32] =
+                    serde_json::from_value(old.report["fresh"]["kernel_ir_sha256"].clone())
+                        .unwrap();
+                let old_source_hex: String =
+                    old_source.iter().map(|b| format!("{b:02x}")).collect();
+                assert_eq!(
+                    line_export::verify_export(
+                        &directory.join("line-exports"),
+                        true,
+                        export,
+                        &old_source_hex,
+                        canonical
+                    )
+                    .unwrap_err(),
+                    "line export source/canonical/authority join differs"
+                );
+                assert_eq!(
+                    line_export::verify_export(
+                        &directory.join("line-exports"),
+                        true,
+                        export,
+                        &record.source_sha256,
+                        old_canonical
+                    )
+                    .unwrap_err(),
+                    "line export source/canonical/authority join differs"
+                );
+            }
+        }
         reports.push(json!({"invocation":record,"observation":evidence.report.clone()}));
         // Drop prior owned evidence now. Current evidence is retained only so
         // the second callback can submit the genuine old objects to its consumer.
@@ -255,6 +321,10 @@ fn actual_source_candidate_debug_join_child() {
 }
 
 pub(super) fn run_pair_child(directory: &Path) -> Value {
+    run_pair_child_with_line_export(directory, false)
+}
+
+fn run_pair_child_with_line_export(directory: &Path, line_export: bool) -> Value {
     let records = pair(directory);
     for (record, selector) in records.iter().zip(PAIR) {
         let bytes = serde_json::to_vec_pretty(record).unwrap();
@@ -281,6 +351,7 @@ pub(super) fn run_pair_child(directory: &Path) -> Value {
                 "--test-threads=1",
             ])
             .env(INPUT, directory)
+            .env(LINE_CHILD_FLAG, if line_export { "1" } else { "0" })
             .env(CRATE_BINDING_ID_ENV_V1, &records[0].crate_binding)
             .env(
                 CARGO_METADATA_BUILD_OBSERVATION_ENV_V2,
@@ -323,13 +394,29 @@ pub(super) fn run_pair_child(directory: &Path) -> Value {
         );
     }
     assert_eq!(pair(directory), records);
+    if line_export {
+        crate::production_pipeline::source_candidate_debug_join_v17_tests::line_export::publish_pair(
+            directory, line.as_bytes(),
+        ).unwrap();
+    }
     report
 }
 
 #[test]
 #[ignore = "fresh source publication plus fixed-environment real dual-session qualification"]
 fn actual_source_candidate_debug_join_ladder() {
-    let directory = PathBuf::from(std::env::var_os(JOIN_OUTPUT).expect("fresh absolute output"));
+    run_debug_join_ladder(JOIN_OUTPUT, false);
+}
+
+#[test]
+#[ignore = "genuine two-session source-backed LLVM export; root-owned CPU/native recipe"]
+fn actual_source_candidate_line_export_ladder() {
+    run_debug_join_ladder(LINE_OUTPUT, true);
+}
+
+fn run_debug_join_ladder(output_variable: &str, line_export: bool) {
+    let directory =
+        PathBuf::from(std::env::var_os(output_variable).expect("fresh absolute output"));
     assert!(directory.is_absolute());
     fs::create_dir(&directory).unwrap();
     let directory = directory.canonicalize().unwrap();
@@ -355,7 +442,14 @@ fn actual_source_candidate_debug_join_ladder() {
     let edits = fixture_cases::run_edits(&directory);
     let edited_sha = hash(&case.join("edited.rs"));
     assert_ne!(candidate_sha, edited_sha);
-    let joined = run_pair_child(&directory);
+    if line_export {
+        fs::create_dir(directory.join("line-exports")).unwrap();
+    }
+    let joined = if line_export {
+        run_pair_child_with_line_export(&directory, true)
+    } else {
+        run_pair_child(&directory)
+    };
     assert_eq!(joined["actual_rustc_callbacks"], 2);
     assert_eq!(joined["current_owner_inspections"], 2);
     assert_eq!(joined["exact_stale_inspection_identity_refusals"], 1);
@@ -365,7 +459,7 @@ fn actual_source_candidate_debug_join_ladder() {
     assert_eq!(hash(&case.join("edited.rs")), edited_sha);
     require_current_source();
     let (source_files, source_bytes) = fixture_cases::footprint(&directory);
-    let report = json!({
+    let mut report = json!({
         "kind":"private_actual_source_candidate_debug_join_ladder",
         "baseline":baseline,"edit_publications":edits,"joined":joined,
         "actual_frontend_callbacks_total":3,"baseline_owner_version":"V8",
@@ -377,10 +471,50 @@ fn actual_source_candidate_debug_join_ladder() {
         "source_directory":paths::relative_root(&directory),
         "original_sha256":original_sha,"candidate_sha256":candidate_sha,
         "edited_sha256":edited_sha,"new_wire_schema":false,
-        "public_v17_source_map_support":false,"llvm_or_native_emission":false,
+        "public_v17_source_map_support":false,"llvm_or_native_emission":true,
         "production_resume":false,"hardware_observed":false,
         "grants_artifact_or_launch_authority":false,
     });
+    if line_export {
+        use crate::production_pipeline::source_candidate_debug_join_v17_tests::line_export;
+        let mut files = fs::read_dir(directory.join("line-exports"))
+            .unwrap()
+            .take(5)
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        files.sort();
+        assert_eq!(
+            files,
+            [
+                "default.expected.json",
+                "default.ll",
+                "edited.expected.json",
+                "edited.ll"
+            ]
+            .map(std::ffi::OsString::from)
+        );
+        for (index, selector) in PAIR.into_iter().enumerate() {
+            let observation = &report["joined"]["observations"][index]["observation"];
+            let invocation = &report["joined"]["observations"][index]["invocation"];
+            let canonical: [u8; 32] =
+                serde_json::from_value(observation["fresh"]["kernel_ir_sha256"].clone()).unwrap();
+            line_export::verify_export(
+                &directory.join("line-exports"),
+                selector == "edited",
+                &observation["ordered_region_line_export"],
+                invocation["source_sha256"].as_str().unwrap(),
+                canonical,
+            )
+            .unwrap();
+        }
+        report["ordered_region_line_exports"] = json!({
+            "relative_directory":"line-exports","files":4,"llvm_byte_limit":65_536,
+            "expected_byte_limit":16_384,"genuine_sessions":2,
+            "old_source_or_kir_export_joins_refused":2,
+            "native_profile":"edited-only-v32-v36","native_emitted":false,
+            "hardware_observed":false,"grants_artifact_or_launch_authority":false,
+        });
+    }
     let bytes = serde_json::to_vec_pretty(&report).unwrap();
     assert!(bytes.len() <= 512 * 1024);
     paths::write_new(&directory.join("debug-join-observation.json"), &bytes);

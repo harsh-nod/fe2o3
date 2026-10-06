@@ -232,7 +232,11 @@ impl FunctionLowerer<'_> {
                 }
             }
         }
-        writeln!(output, "\", \"=&{{v{destination}}},{{v{input0}}},{{v{input1}}},{{v{input2}}},~{{v{scratch}}}\"(i32 {a}, i32 {b}, i32 {c})").unwrap();
+        let location = self
+            .ordered_debug_line_v17
+            .filter(|line| line.matches_operation(operation))
+            .map_or("", |_| ", !dbg !6");
+        writeln!(output, "\", \"=&{{v{destination}}},{{v{input0}}},{{v{input1}}},{{v{input2}}},~{{v{scratch}}}\"(i32 {a}, i32 {b}, i32 {c}){location}").unwrap();
     }
 }
 

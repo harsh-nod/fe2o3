@@ -736,6 +736,7 @@ dependencies = [
  "fe2o3-kernel-opt",
  "fe2o3-llvm-handoff",
  "rustix",
+ "serde_json",
  "sha2 0.11.0",
 ]
 

@@ -1197,12 +1197,10 @@ mod platform {
                     PinnedWorkerV1::open(WORKER, measurement).expect("exact captured Worker");
                 validate_image(&worker.image, &worker.descriptor_path, worker.snapshot).unwrap();
                 require_image_digest(&worker.image, ELF_BYTES, ELF_SHA).unwrap();
-                // Only the private sealed copy is challenged, never the source ELF.
-                let mut alias = worker.image.try_clone().unwrap();
-                assert!(alias.write_all(b"X").is_err());
-                assert!(alias.set_len(0).is_err());
-                drop(alias);
-                require_image_digest(&worker.image, ELF_BYTES, ELF_SHA).unwrap();
+                // Do not attempt writes through an alias of the execution image.
+                // Linux may update mtime/ctime even when a sealed write returns
+                // EPERM. Separate seal tests cover rejected mutations; this probe
+                // retains the exact original snapshot before and after execution.
                 assert_eq!(before, observe_scope(scope).expect("pre-spawn scope"));
                 let now = now_ms();
                 admit(ENABLED, SCOPE, now).expect("scope expired during capture");
@@ -1371,9 +1369,30 @@ mod platform {
                 error.kind(),
                 &WorkerExecutionErrorKind::WorkerChangedDuringCapture
             );
+            let path = PathBuf::from(format!("/proc/self/fd/{}", image.as_raw_fd()));
+            validate_image(&image, &path, snapshot).unwrap();
+            require_image_digest(&image, snapshot.size, digest).unwrap();
+            for field in 0..8 {
+                let mut different = snapshot;
+                match field {
+                    0 => different.device ^= 1,
+                    1 => different.inode ^= 1,
+                    2 => different.mode ^= 1,
+                    3 => different.size ^= 1,
+                    4 => different.modified_seconds ^= 1,
+                    5 => different.modified_nanoseconds ^= 1,
+                    6 => different.changed_seconds ^= 1,
+                    _ => different.changed_nanoseconds ^= 1,
+                }
+                let error = validate_image(&image, &path, different).unwrap_err();
+                assert_eq!(error.kind(), &WorkerExecutionErrorKind::PreparePinnedImage);
+            }
+            // Digest reads cannot authorize rebasing any field of the snapshot.
+            validate_image(&image, &path, snapshot).unwrap();
             let mut writable_alias = image.try_clone().unwrap();
             assert!(writable_alias.write_all(b"mutation").is_err());
             assert!(writable_alias.set_len(0).is_err());
+            require_image_digest(&image, snapshot.size, digest).unwrap();
         }
 
         #[test]

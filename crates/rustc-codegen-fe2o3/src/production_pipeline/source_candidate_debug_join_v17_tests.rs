@@ -26,6 +26,9 @@ use serde_json::{Value, json};
 #[path = "source_candidate_inspection_join_v17_tests.rs"]
 mod inspection;
 
+#[path = "source_candidate_debug_line_export_v17_tests.rs"]
+pub(crate) mod line_export;
+
 const MAX_RECORDS: usize = 8192;
 // Private two-session fixture cap. Exact inline symbolic observations increase
 // the shared binding size; retain the 128 MiB envelope, not the old value count.
@@ -72,6 +75,11 @@ fn prepay_fixed_envelope_for_values(max_values: usize) -> Result<usize, String> 
         })
         // Separate bounded shared-projection tree/Vec coexistence allowance.
         .and_then(|n| n.checked_add(16 * 1024 * 1024))
+        // Two opt-in LLVM Strings (new narrow debug-line cap, not the larger
+        // legacy cap). Projection reused below; envelope remains 128 MiB.
+        .and_then(|n| {
+            n.checked_add(2 * fe2o3_amdgcn_model::MAX_ORDERED_PROGRAM_DEBUG_LINE_LLVM_BYTES_V17)
+        })
         .ok_or("source-candidate debug logical envelope overflow")?;
     if required > LOGICAL_ENVELOPE {
         return Err("source-candidate debug logical envelope exceeds fixed cap".into());
@@ -488,8 +496,15 @@ fn observe(
     owner: &OrderedProgramObservationOwnerV32,
     registers: Gfx942OrderedProgramRegistersV1,
     old: Option<&CandidateDebugEvidenceV17>,
+    export_directory: Option<&std::path::Path>,
+    source_sha256: [u8; 32],
+    source_bytes: usize,
 ) -> Result<CandidateDebugEvidenceV17, String> {
-    let prepaid = prepay_fixed_envelope()?;
+    let prepaid = if export_directory.is_some() {
+        line_export::prepay()?
+    } else {
+        prepay_fixed_envelope()?
+    };
     let materialized = owner.materialized();
     if materialized.grants_artifact_or_launch_authority() {
         return Err("source-candidate debug unexpected owner authority".into());
@@ -503,7 +518,16 @@ fn observe(
     {
         return Err("source-candidate debug canonical byte profile bound".into());
     }
-    let catalog = catalog(owner, owner.diagnostic_source_projection_v17()?)?;
+    let (line_llvm, projection) = owner.diagnostic_llvm_line_v17()?;
+    // Default route still drops LLVM immediately. The separately named export
+    // route keeps this same String, never re-emits or substitutes a module.
+    let line_llvm = if export_directory.is_some() {
+        Some(line_llvm)
+    } else {
+        drop(line_llvm);
+        None
+    };
+    let catalog = catalog(owner, projection)?;
     let module = AdmittedSimulationModuleV1::admit_v17(materialized.executable(), limits())
         .map_err(|error| error.to_string())?;
     if module.grants_execution_authority() {
@@ -548,7 +572,7 @@ fn observe(
     if let Some(old) = old {
         old_evidence_negatives(&module, &transcript, &catalog, old)?;
     }
-    let report = json!({
+    let mut report = json!({
         "stage":"private_actual_source_candidate_catalog_join",
         "ordered_program_inspection":inspection_report,
         "catalog_identity":catalog.identity().digest,
@@ -573,6 +597,18 @@ fn observe(
         "resource_lifetime_observations":false,"hardware_observed":false,
         "grants_artifact_or_launch_authority":false,
     });
+    if let (Some(directory), Some(llvm)) = (export_directory, line_llvm.as_deref()) {
+        report["ordered_region_line_export"] = line_export::publish(
+            directory,
+            old.is_some(),
+            owner,
+            llvm,
+            &catalog,
+            selected,
+            source_sha256,
+            source_bytes,
+        )?;
+    }
     Ok(CandidateDebugEvidenceV17 {
         report,
         catalog,
@@ -588,6 +624,39 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         registers: Gfx942OrderedProgramRegistersV1,
         previous: Option<&CandidateDebugEvidenceV17>,
     ) -> Result<CandidateDebugEvidenceV17, String> {
+        self.observe_source_candidate_debug_join_impl(input, registers, previous, None)
+    }
+
+    pub(crate) fn observe_source_candidate_debug_join_with_line_export(
+        self,
+        input: RetainedInput,
+        registers: Gfx942OrderedProgramRegistersV1,
+        previous: Option<&CandidateDebugEvidenceV17>,
+        directory: &std::path::Path,
+    ) -> Result<CandidateDebugEvidenceV17, String> {
+        self.observe_source_candidate_debug_join_impl(input, registers, previous, Some(directory))
+    }
+
+    fn observe_source_candidate_debug_join_impl(
+        self,
+        input: RetainedInput,
+        registers: Gfx942OrderedProgramRegistersV1,
+        previous: Option<&CandidateDebugEvidenceV17>,
+        export_directory: Option<&std::path::Path>,
+    ) -> Result<CandidateDebugEvidenceV17, String> {
+        let (source_sha256, source_bytes) = if export_directory.is_some() {
+            use sha2::{Digest, Sha256};
+            line_export::prepay()?;
+            if input.original().is_empty() || input.original().len() > line_export::SOURCE_BYTES {
+                return Err("line export original source profile".into());
+            }
+            (
+                <[u8; 32]>::from(Sha256::digest(input.original())),
+                input.original().len(),
+            )
+        } else {
+            ([0; 32], 0)
+        };
         let expected = if previous.is_some() {
             Gfx942OrderedProgramRegistersV1::new(32, 33, [34, 35, 36])
         } else {
@@ -599,7 +668,14 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         }
         let (fresh, (oracle, mut evidence)) = self
             .observe_fresh_source_bitselect_candidate_debug_with(input, registers, |owner| {
-                observe(owner, registers, previous)
+                observe(
+                    owner,
+                    registers,
+                    previous,
+                    export_directory,
+                    source_sha256,
+                    source_bytes,
+                )
             })?;
         // Existing fresh helper rechecks actual source custody after ALL work.
         if oracle["runs"] != 30
@@ -607,6 +683,12 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             || oracle["immutable_inputs"] != true
         {
             return Err("source-candidate debug existing full-output oracle differs".into());
+        }
+        if export_directory.is_some() {
+            if fresh["candidate_sha256"] != serde_json::json!(source_sha256) {
+                return Err("line export retained source postflight differs".into());
+            }
+            evidence.report["source_rechecked_after_line_export"] = serde_json::json!(true);
         }
         evidence.report["fresh"] = fresh;
         evidence.report["whole_kernel_simulation"] = oracle;

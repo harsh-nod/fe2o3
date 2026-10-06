@@ -548,3 +548,448 @@ fn sixteen_steps_keep_exact_order_self_moves_dead_steps_and_output_reads() {
     assert!(asm.contains("\"=&{v33},{v34},{v35},{v36},~{v32}\""));
     // Text emission only: this is not final machine encoding/effect qualification.
 }
+
+#[cfg(test)]
+mod debug_line_tests {
+    use super::*;
+    use crate::{
+        OrderedProgramDebugLineErrorV17 as E, OrderedProgramDebugLineV17,
+        lower_canonical_v17_compiler_module_with_debug_line_to_gfx942_xnack_minus_llvm_ir as emit,
+    };
+    use fe2o3_kernel_ir::{
+        DebugSourceMapFileV1 as File, DebugSourceMapKirSiteV1 as Site,
+        DebugSourceMapSiteV1 as Mapping, DebugSourceMapSpanV1 as Span,
+    };
+
+    fn source() -> AssemblySourceIdentity {
+        AssemblySourceIdentity::new([1; 32], [2; 32], [3; 32], [4; 32])
+    }
+    fn site() -> Site {
+        Site::operation(0, 0, 2)
+    }
+    fn span() -> Span {
+        Span::new([5; 32], 10, 20, 27, 9).unwrap()
+    }
+    fn files() -> Vec<File> {
+        vec![File::new([5; 32], 100, "src/kernel.rs".into()).unwrap()]
+    }
+    fn sites() -> Vec<Mapping> {
+        vec![Mapping::new(site(), vec![span()]).unwrap()]
+    }
+    fn error(owner: &VerifiedCanonicalKernelIrModuleV17, sites: &[Mapping], files: &[File]) -> E {
+        OrderedProgramDebugLineV17::try_new(owner, owner.identity(), source(), site(), sites, files)
+            .err()
+            .expect("exact typed refusal")
+    }
+
+    #[test]
+    fn default_is_exact_old_bytes_and_opt_in_changes_only_debug_attachments_and_nodes() {
+        let owner = admit(&fixture());
+        let original =
+            lower_canonical_v17_compiler_module_to_gfx942_xnack_minus_llvm_ir(&owner).unwrap();
+        assert_eq!(emit(&owner, None).unwrap(), original);
+        assert!(!original.contains("!dbg"));
+        let files = files();
+        let line = OrderedProgramDebugLineV17::try_new(
+            &owner,
+            owner.identity(),
+            source(),
+            site(),
+            &sites(),
+            &files,
+        )
+        .unwrap();
+        let bytes = owner.canonical_bytes().to_vec();
+        let actual = emit(&owner, Some(&line)).unwrap();
+        let body = actual
+            .split("!llvm.dbg.cu")
+            .next()
+            .unwrap()
+            .replace(" !dbg !5", "")
+            .replace(", !dbg !6", "");
+        assert_eq!(body, original);
+        assert_eq!(actual.matches(" !dbg !5").count(), 1);
+        assert_eq!(actual.matches(", !dbg !6").count(), 1);
+        assert!(actual.contains("!6 = !DILocation(line: 27, column: 9, scope: !5)"));
+        assert!(actual.contains("emissionKind: LineTablesOnly"));
+        assert!(actual.contains("line: 0, type: !3, scopeLine: 0"));
+        assert!(!actual.contains("inlinedAt"));
+        assert!(!actual.contains("checksum"));
+        assert_eq!(owner.canonical_bytes(), bytes);
+    }
+
+    #[test]
+    fn stale_edited_kir_and_equal_bytes_different_owner_are_not_rebound() {
+        let old = admit(&fixture());
+        let mut edited_module = fixture();
+        blocks(&mut edited_module)[0].operations[0].kind =
+            OperationKind::Constant(Constant::U32(18));
+        let edited = admit(&edited_module);
+        assert_ne!(old.identity(), edited.identity());
+        let files = files();
+        assert_eq!(
+            OrderedProgramDebugLineV17::try_new(
+                &edited,
+                old.identity(),
+                source(),
+                site(),
+                &sites(),
+                &files
+            )
+            .err(),
+            Some(E::CanonicalIdentityMismatch)
+        );
+        let line = OrderedProgramDebugLineV17::try_new(
+            &old,
+            old.identity(),
+            source(),
+            site(),
+            &sites(),
+            &files,
+        )
+        .unwrap();
+        let equal_but_distinct_owner = admit(&fixture());
+        assert_eq!(old.identity(), equal_but_distinct_owner.identity());
+        let refused = emit(&equal_but_distinct_owner, Some(&line)).unwrap_err();
+        assert_eq!(refused.diagnostics().len(), 1);
+        assert_eq!(
+            refused.diagnostics()[0].code,
+            LoweringDiagnosticCode::SemanticAnchorIdentityMismatch
+        );
+        assert!(emit(&old, Some(&line)).is_ok());
+    }
+
+    #[test]
+    fn source_and_all_three_site_coordinates_are_exact() {
+        let owner = admit(&fixture());
+        let files = files();
+        for field in 0..4 {
+            let mut wrong = source();
+            match field {
+                0 => wrong.frontend_unit[0] ^= 1,
+                1 => wrong.function[0] ^= 1,
+                2 => wrong.contract[0] ^= 1,
+                _ => wrong.statement[0] ^= 1,
+            }
+            assert_eq!(
+                OrderedProgramDebugLineV17::try_new(
+                    &owner,
+                    owner.identity(),
+                    wrong,
+                    site(),
+                    &sites(),
+                    &files
+                )
+                .err(),
+                Some(E::SourceIdentityMismatch)
+            );
+        }
+        for bad in [
+            Site::operation(1, 0, 2),
+            Site::operation(0, 1, 2),
+            Site::operation(0, 0, 1),
+        ] {
+            assert_eq!(
+                OrderedProgramDebugLineV17::try_new(
+                    &owner,
+                    owner.identity(),
+                    source(),
+                    bad,
+                    &sites(),
+                    &files
+                )
+                .err(),
+                Some(E::SiteMismatch)
+            );
+        }
+    }
+
+    #[test]
+    fn missing_and_ambiguous_site_span_file_refuse_without_guessing() {
+        let owner = admit(&fixture());
+        assert_eq!(error(&owner, &[], &files()), E::MissingSite);
+        assert_eq!(
+            error(&owner, &[sites().remove(0), sites().remove(0)], &files()),
+            E::AmbiguousSite
+        );
+        let two = Mapping::new(
+            site(),
+            vec![span(), Span::new([5; 32], 30, 40, 28, 2).unwrap()],
+        )
+        .unwrap();
+        assert_eq!(error(&owner, &[two], &files()), E::AmbiguousSpan);
+        assert_eq!(error(&owner, &sites(), &[]), E::MissingFile);
+        assert_eq!(
+            error(&owner, &sites(), &[files().remove(0), files().remove(0)]),
+            E::AmbiguousFile
+        );
+        assert_eq!(
+            error(
+                &owner,
+                &sites(),
+                &[File::new([6; 32], 100, "wrong.rs".into()).unwrap()]
+            ),
+            E::MissingFile
+        );
+    }
+
+    #[test]
+    fn byte_extent_and_llvm_column_width_are_checked_before_emission() {
+        let owner = admit(&fixture());
+        assert_eq!(
+            error(
+                &owner,
+                &sites(),
+                &[File::new([5; 32], 19, "short.rs".into()).unwrap()]
+            ),
+            E::SpanOutsideFile
+        );
+        let bad =
+            Mapping::new(site(), vec![Span::new([5; 32], 10, 20, 27, 65536).unwrap()]).unwrap();
+        assert_eq!(error(&owner, &[bad], &files()), E::UnsupportedColumn);
+        let files = files();
+        let ok = Mapping::new(
+            site(),
+            vec![Span::new([5; 32], 10, 100, 27, 65535).unwrap()],
+        )
+        .unwrap();
+        assert!(
+            OrderedProgramDebugLineV17::try_new(
+                &owner,
+                owner.identity(),
+                source(),
+                site(),
+                &[ok],
+                &files
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn bounded_source_roster_and_path_escaping_do_not_inject_metadata() {
+        let owner = admit(&fixture());
+        let many = vec![files().remove(0); 17];
+        assert_eq!(error(&owner, &sites(), &many), E::ResourceLimit);
+        let many = vec![sites().remove(0); 4097];
+        assert_eq!(error(&owner, &many, &files()), E::ResourceLimit);
+        let files = vec![File::new([5; 32], 100, "a\"\\\nλ.rs".into()).unwrap()];
+        let line = OrderedProgramDebugLineV17::try_new(
+            &owner,
+            owner.identity(),
+            source(),
+            site(),
+            &sites(),
+            &files,
+        )
+        .unwrap();
+        let actual = emit(&owner, Some(&line)).unwrap();
+        assert!(actual.contains("filename: \"a\\22\\5C\\0A\\CE\\BB.rs\""));
+        assert_eq!(actual.matches("!DIFile(").count(), 1);
+    }
+
+    #[test]
+    fn direct_deserialization_cannot_bypass_selected_file_validation() {
+        let owner = admit(&fixture());
+        for path in [String::new(), "x".repeat(4097), "x\0y".into()] {
+            let mut raw = serde_json::to_value(files().remove(0)).unwrap();
+            raw["display_path"] = serde_json::json!(path);
+            let file: File = serde_json::from_value(raw).unwrap();
+            assert_eq!(error(&owner, &sites(), &[file]), E::InvalidFile);
+        }
+        let mut raw = serde_json::to_value(files().remove(0)).unwrap();
+        raw["byte_len"] = serde_json::json!(0);
+        assert_eq!(
+            error(&owner, &sites(), &[serde_json::from_value(raw).unwrap()]),
+            E::InvalidFile
+        );
+    }
+
+    #[test]
+    fn direct_deserialization_cannot_silently_make_location_unknown() {
+        let owner = admit(&fixture());
+        for field in ["line", "column"] {
+            let mut raw = serde_json::to_value(sites().remove(0)).unwrap();
+            raw["spans"][0][field] = serde_json::json!(0);
+            let bad: Mapping = serde_json::from_value(raw).unwrap();
+            assert_eq!(error(&owner, &[bad], &files()), E::InvalidSpan);
+        }
+        assert_eq!(
+            crate::MAX_ORDERED_PROGRAM_DEBUG_LINE_LLVM_BYTES_V17,
+            4 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn block_coordinates_are_roster_ordinals_not_block_ids() {
+        let mut module = fixture();
+        blocks(&mut module)[0].id = BlockId(17);
+        let owner = admit(&module);
+        let files = files();
+        let line = OrderedProgramDebugLineV17::try_new(
+            &owner,
+            owner.identity(),
+            source(),
+            site(),
+            &sites(),
+            &files,
+        )
+        .unwrap();
+        assert!(
+            emit(&owner, Some(&line))
+                .unwrap()
+                .contains("!DILocation(line: 27, column: 9, scope: !5)")
+        );
+        assert_eq!(
+            OrderedProgramDebugLineV17::try_new(
+                &owner,
+                owner.identity(),
+                source(),
+                Site::operation(0, 17, 2),
+                &sites(),
+                &files
+            )
+            .err(),
+            Some(E::SiteMismatch)
+        );
+    }
+
+    #[test]
+    fn total_span_cardinality_boundary_is_checked_before_selection() {
+        let owner = admit(&fixture());
+        let make = |count| {
+            Mapping::new(
+                site(),
+                (0..count)
+                    .map(|n| Span::new([5; 32], n, n + 1, 27, 9).unwrap())
+                    .collect(),
+            )
+            .unwrap()
+        };
+        assert_eq!(error(&owner, &[make(8192)], &files()), E::AmbiguousSpan);
+        assert_eq!(error(&owner, &[make(8193)], &files()), E::ResourceLimit);
+    }
+
+    #[test]
+    #[ignore = "root-selected CPU-only LLVM/LLD recipe; inert synthetic LLVM to stdout"]
+    fn print_synthetic_ordered_debug_line_llvm() {
+        let owner = admit(&fixture());
+        let files = files();
+        let line = OrderedProgramDebugLineV17::try_new(
+            &owner,
+            owner.identity(),
+            source(),
+            site(),
+            &sites(),
+            &files,
+        )
+        .unwrap();
+        println!(
+            "FE2O3_ORDERED_DEBUG_LLVM_BEGIN\n{}FE2O3_ORDERED_DEBUG_LLVM_END",
+            emit(&owner, Some(&line)).unwrap()
+        );
+    }
+
+    // Synthetic model fixture only. The ordinary identity helper is deliberately
+    // unlocated; both calls surround the located ordered operation.
+    fn helper_call_line_fixture() -> String {
+        let mut module = fixture();
+        let mut helper_block = BasicBlock::new(BlockId(0));
+        helper_block.terminator = Some(Terminator::Return {
+            values: vec![ValueId(0)],
+        });
+        module.functions.push(Function::internal_helper(
+            "ordinary_line_helper",
+            Signature::new(vec![scalar()], vec![scalar()]),
+            vec![ValueId(0)],
+            vec![helper_block],
+        ));
+        let operations = &mut blocks(&mut module)[0].operations;
+        operations.insert(
+            2,
+            Operation::effect_free(
+                ValueDef::new(ValueId(7), scalar()),
+                OperationKind::Call {
+                    callee: "ordinary_line_helper".into(),
+                    arguments: vec![ValueId(5)],
+                },
+            ),
+        );
+        let OperationKind::Gfx942OrderedProgram(region) = operations[3].kind else {
+            unreachable!()
+        };
+        operations[3].kind = OperationKind::Gfx942OrderedProgram(
+            Gfx942OrderedProgramV1::new(
+                region.source(),
+                region.registers(),
+                [ValueId(7), ValueId(1), ValueId(2)],
+                *region.program(),
+            )
+            .unwrap(),
+        );
+        operations.insert(
+            4,
+            Operation::effect_free(
+                ValueDef::new(ValueId(8), scalar()),
+                OperationKind::Call {
+                    callee: "ordinary_line_helper".into(),
+                    arguments: vec![ValueId(6)],
+                },
+            ),
+        );
+        let OperationKind::Store { value, .. } = &mut operations[5].kind else {
+            unreachable!()
+        };
+        *value = ValueId(8);
+        let owner = admit(&module);
+        let files = files();
+        let selected = Site::operation(0, 0, 3);
+        let sites = [Mapping::new(selected, vec![span()]).unwrap()];
+        let line = OrderedProgramDebugLineV17::try_new(
+            &owner,
+            owner.identity(),
+            source(),
+            selected,
+            &sites,
+            &files,
+        )
+        .unwrap();
+        let old =
+            lower_canonical_v17_compiler_module_to_gfx942_xnack_minus_llvm_ir(&owner).unwrap();
+        assert_eq!(emit(&owner, None).unwrap(), old);
+        let llvm = emit(&owner, Some(&line)).unwrap();
+        let calls: Vec<_> = llvm
+            .lines()
+            .filter(|line| line.contains("call i32 @") && line.contains("ordinary_line_helper"))
+            .collect();
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(|line| !line.contains("!dbg")));
+        assert_eq!(llvm.matches(", !dbg !6").count(), 1);
+        assert_eq!(llvm.matches(" !dbg !5").count(), 1);
+        let positions: Vec<_> = llvm
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| {
+                line.contains("call i32 @") && line.contains("ordinary_line_helper")
+                    || line.contains(" asm sideeffect ")
+            })
+            .map(|(_, line)| line.contains(" asm sideeffect "))
+            .collect();
+        assert_eq!(positions, [false, true, false]);
+        llvm
+    }
+
+    #[test]
+    fn ordinary_helper_calls_surround_opt_in_region_without_invented_locations() {
+        let _ = helper_call_line_fixture();
+    }
+
+    #[test]
+    #[ignore = "explicit bounded synthetic input for actual LLVM22 verifier-only control"]
+    fn print_synthetic_ordered_debug_helper_line_llvm() {
+        let llvm = helper_call_line_fixture();
+        println!(
+            "FE2O3_ORDERED_DEBUG_HELPER_LLVM_BEGIN\n{llvm}FE2O3_ORDERED_DEBUG_HELPER_LLVM_END"
+        );
+    }
+}

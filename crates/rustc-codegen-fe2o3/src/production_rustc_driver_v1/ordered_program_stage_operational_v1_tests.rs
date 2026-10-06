@@ -340,3 +340,6 @@ fn operational_prepared_record_rejects_incomplete_or_extra_fields() {
         .insert("authority".into(), json!(true));
     assert!(serde_json::from_value::<Prepared>(extra).is_err());
 }
+
+#[path = "ordered_program_macro_frames_genuine_v1_tests.rs"]
+mod macro_frames;

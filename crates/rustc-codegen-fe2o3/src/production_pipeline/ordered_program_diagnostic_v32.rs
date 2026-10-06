@@ -29,6 +29,63 @@ impl OrderedProgramObservationOwnerV32 {
             .map_err(|error| format!("source-candidate debug projection: {error}"))
     }
 
+    /// Test-only opt-in from the actual retained source projection. The returned
+    /// projection and LLVM are diagnostic payloads, never compiler authority.
+    #[cfg(all(test, target_os = "linux"))]
+    pub(super) fn diagnostic_llvm_line_v17(
+        &self,
+    ) -> Result<(String, ExactDebugSourceProjectionV1), String> {
+        let projection = self.diagnostic_source_projection_v17()?;
+        let executable = self.materialized.executable();
+        let mut selected = None;
+        for (f, function) in executable.module().functions.iter().enumerate() {
+            let Some(body) = &function.body else {
+                continue;
+            };
+            for (b, block) in body.blocks.iter().enumerate() {
+                for (o, operation) in block.operations.iter().enumerate() {
+                    if let fe2o3_kernel_ir::OperationKind::Gfx942OrderedProgram(region) =
+                        &operation.kind
+                    {
+                        let site = fe2o3_kernel_ir::DebugSourceMapKirSiteV1::operation(
+                            u64::try_from(f).map_err(|_| "debug line function index")?,
+                            u64::try_from(b).map_err(|_| "debug line block index")?,
+                            u64::try_from(o).map_err(|_| "debug line operation index")?,
+                        );
+                        if selected.replace((site, region.source())).is_some() {
+                            return Err("debug line requires one actual ordered region".into());
+                        }
+                    }
+                }
+            }
+        }
+        let (site, source) = selected.ok_or("debug line actual region absent")?;
+        let line = fe2o3_amdgcn_model::OrderedProgramDebugLineV17::try_new(
+            executable,
+            executable.identity(),
+            source,
+            site,
+            &projection.sites,
+            &projection.files,
+        )
+        .map_err(|error| error.to_string())?;
+        let llvm = fe2o3_amdgcn_model::lower_canonical_v17_compiler_module_with_debug_line_to_gfx942_xnack_minus_llvm_ir(
+            executable, Some(&line),
+        ).map_err(|error| error.to_string())?;
+        // Check the exact actual selected location, not a fixture line guessed
+        // from this source tree. No parsed/copied wire owner is admitted.
+        if llvm.matches(", !dbg !6").count() != 1
+            || !llvm.contains(&format!(
+                "!6 = !DILocation(line: {}, column: {}, scope: !5)",
+                line.span().line(),
+                line.span().column()
+            ))
+        {
+            return Err("actual ordered-region LLVM line emission mismatch".into());
+        }
+        Ok((llvm, projection))
+    }
+
     pub(crate) fn materialized(
         &self,
     ) -> &fe2o3_lower_mir_kernel::ProductionOrderedProgramPreRankedKirOwnerV17 {

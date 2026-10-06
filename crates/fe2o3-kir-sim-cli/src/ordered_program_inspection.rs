@@ -29,9 +29,14 @@ const MAX_ID_BYTES: usize = 1024;
 const MAX_REQUEST_DATA_BYTES: usize = 4 * 1024 * 1024;
 const OUTPUT_BYTES: usize = 8192;
 const CPU_PREFLIGHT_RESIDENT_BYTES: usize = 64 * 1024 * 1024;
+#[path = "ordered_program_planned_registers.rs"]
+mod planned_registers;
+
 const USAGE: &str = "usage: fe2o3-program-inspect KIR_PATH REQUEST_PATH";
 const HELP: &[u8] = b"usage: fe2o3-program-inspect KIR_PATH REQUEST_PATH\n\
        fe2o3-program-inspect --text KIR_PATH REQUEST_PATH\n\
+       fe2o3-program-inspect --planned-registers KIR_PATH REQUEST_PATH\n\
+       fe2o3-program-inspect --planned-registers-json KIR_PATH REQUEST_PATH\n\
 Read-only diagnostic KIR V17 inspection: one gfx942 Wave64 ordered program.\n\
 Default output is JSON. --text lists declared syntax, not native disassembly.\n\
 Reports declared registers/instructions, not physical values or execution authority.\n";
@@ -512,6 +517,8 @@ impl Write for FixedOutput {
 enum OutputFormat {
     Json,
     Text,
+    PlannedRegisters,
+    PlannedRegistersJson,
 }
 #[derive(Debug, Eq, PartialEq)]
 enum InspectionCommand {
@@ -531,7 +538,17 @@ fn parse_arguments(mut args: impl Iterator<Item = OsString>) -> InspectResult<In
         (Some(flag), Some(kir), Some(request), None) if flag == "--text" => {
             (OutputFormat::Text, kir, request)
         }
-        (Some(flag), Some(_), Some(_), _) if flag != "--text" => {
+        (Some(flag), Some(kir), Some(request), None) if flag == "--planned-registers" => {
+            (OutputFormat::PlannedRegisters, kir, request)
+        }
+        (Some(flag), Some(kir), Some(request), None) if flag == "--planned-registers-json" => {
+            (OutputFormat::PlannedRegistersJson, kir, request)
+        }
+        (Some(flag), Some(_), Some(_), _)
+            if flag != "--text"
+                && flag != "--planned-registers"
+                && flag != "--planned-registers-json" =>
+        {
             return Err("exactly two paths of at most 4096 bytes are required");
         }
         _ => return Err(USAGE),
@@ -631,6 +648,13 @@ fn render_output(observed: &Report<'_>, format: OutputFormat) -> InspectResult<F
         }
         OutputFormat::Text => write_text(&mut output, observed)
             .map_err(|_| "bounded inspection text serialization failed")?,
+        OutputFormat::PlannedRegisters | OutputFormat::PlannedRegistersJson => {
+            planned_registers::render(
+                &mut output,
+                observed,
+                format == OutputFormat::PlannedRegistersJson,
+            )?;
+        }
     }
     Ok(output)
 }

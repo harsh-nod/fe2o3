@@ -151,3 +151,55 @@ roundtripping are not claimed.
 See [the implementation status](assembly-authoring-implementation-status.md)
 for the remaining full milestones, including memory/synchronization, gfx950,
 matrix operations, physical-resource views and production qualification.
+
+## Planned register demand intervals
+
+Two opt-in modes derive a bounded def/use view from the same admitted V17 owner:
+
+    fe2o3-program-inspect --planned-registers program.kir request.json
+    fe2o3-program-inspect --planned-registers-json program.kir request.json
+
+The first is an ASCII timeline; the second is its normalized, read-only JSON
+handoff for a viewer. Existing default JSON and --text output are unchanged.
+Neither mode executes the program, compiles a kernel, reads GPU state, or changes
+inputs. Both retain the existing 8-KiB output limit and fail before publishing
+any prefix when admission or rendering fails.
+
+Each input has an entry version. Every authored destination write creates a new
+version, including dead overwrites and self-moves. Both operands read the prior
+versions before the destination is installed. The final output version has an
+explicit region-result handoff even if the enclosing KIR result is unused.
+This does not claim that surrounding Rust consumes that result.
+
+The integer boundary convention is exact: 0 is entry; step i reads at 2*i+1 and
+writes at 2*i+2; 2*n+1 is the final result handoff. A demand interval includes
+both def and last_use. A null last_use means unused, not a zero-time use.
+The overwritten boundary records a later authored definition, not deallocation.
+The timeline uses D for definitions, r for reads, R for result handoff, - for
+intervening demand, x for overwrite, and . for no declared demand. Duplicate
+binary operands remain two distinct uses in JSON even when they share a cell.
+
+The JSON schema is fe2o3-declared-register-demand-v1. It carries the exact
+canonical identity, KIR coordinate/raw block, logical input/result IDs, declared
+source IDs, target/wave and register plan. Its plan has at most 19 value rows
+(three entry inputs plus sixteen writes) and 33 use rows (two operands per step
+plus one result). Value rows contain id, role, binding, def, last_use and
+overwritten. Use rows contain at, value and kind (move, left, right or
+region_result). IDs are local to this exact report, not globally reusable value
+or allocation IDs. A browser must bind the complete canonical/coordinate and
+variant identity before comparing or selecting them; matching names or register
+numbers is not enough.
+
+These are planned/static authored-register demand intervals, not physical LLVM
+allocation lifetimes, native instruction intervals, captured register values,
+or allocator create/free/reuse events. All physical/source-authentication and
+artifact/resume/hardware authority flags remain false. This narrow view advances
+V3; it does not complete V3 or supply a source-to-final-artifact mapping.
+
+The report also gives compiler-measured fixed_plan_bytes and
+fixed_projection_bytes, with a compile-time 4096-byte ceiling on their sum.
+That ceiling covers these two representations only. The preflight plan has
+already been dropped before rendering; its separate 64-MiB resident budget
+does not pay for this representation storage. The existing 8192-byte output
+buffer is separate too. This is not a combined allocator, complete stack
+(including compiler-generated copies and serializer internals), or RSS bound.
