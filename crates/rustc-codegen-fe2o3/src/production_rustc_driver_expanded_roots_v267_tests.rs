@@ -66,20 +66,6 @@ impl Callbacks for RootsCallbacks {
                         assert_ne!(abi.kernel_binding, &[0; 32]);
                         let cfg = neutral.output_root_cfg_v18(root, budget)?;
                         assert_eq!(cfg.root(), root);
-                        assert!(
-                            cfg.function()
-                                .function
-                                .body
-                                .as_ref()
-                                .unwrap()
-                                .blocks
-                                .iter()
-                                .flat_map(|block| &block.operations)
-                                .any(|operation| matches!(&operation.kind,
-                                OperationKind::Call { callee, .. }
-                                if callee.as_str().contains("shared_scalar"))),
-                            "every authentic root calls the retained shared helper"
-                        );
                         let policy = tile.root_policy_v162(root, budget)?;
                         let selection = selections
                             .iter()
@@ -95,7 +81,6 @@ impl Callbacks for RootsCallbacks {
                             _ => panic!("original root and whole-module policy disagree"),
                         }
                     }
-                    budget.release_storage(cfg_header)?;
                     assert_eq!(selected, selections.len());
                     let mut helpers = 0;
                     for (index, function) in input.functions().iter().enumerate() {
@@ -106,8 +91,9 @@ impl Callbacks for RootsCallbacks {
                         {
                             assert_eq!(&output.module().functions[index], function.function);
                         }
-                        if function.function.id.as_str().contains("shared_scalar") {
-                            helpers += 1;
+                        if function.function.role != fe2o3_kernel_ir::FunctionRole::KernelEntry
+                            && function.function.body.is_some()
+                        {
                             let calls_to_helper = |caller: &fe2o3_kernel_ir::Function| {
                                 caller
                                     .body
@@ -122,6 +108,18 @@ impl Callbacks for RootsCallbacks {
                                     })
                                     .count()
                             };
+                            // Canonical helper identifiers are hashes, not Rust names.
+                            // Select the genuine shared callee through every root's CFG.
+                            let mut called_by_every_root = true;
+                            for root in 0..roots.len() {
+                                let cfg = neutral.output_root_cfg_v18(root, budget)?;
+                                called_by_every_root &=
+                                    calls_to_helper(cfg.function().function) > 0;
+                            }
+                            if !called_by_every_root {
+                                continue;
+                            }
+                            helpers += 1;
                             for (before, after) in input
                                 .owner()
                                 .module()
@@ -133,6 +131,7 @@ impl Callbacks for RootsCallbacks {
                             }
                         }
                     }
+                    budget.release_storage(cfg_header)?;
                     assert_eq!(
                         helpers, 1,
                         "the shared scalar helper is retained exactly once"
