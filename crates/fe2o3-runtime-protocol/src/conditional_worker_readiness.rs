@@ -39,6 +39,22 @@ pub enum ConditionalWorkerReadinessErrorV5 {
 }
 type Error = ConditionalWorkerReadinessErrorV5;
 type Result<T> = std::result::Result<T, Error>;
+
+/// Logical accounting only. These checked costs include original-account local
+/// windows and all source/Subject calls, not filesystem I/O or host authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConditionalWorkerReadinessQuoteV5 {
+    work: usize,
+    additional_storage: usize,
+}
+impl ConditionalWorkerReadinessQuoteV5 {
+    pub const fn work(self) -> usize {
+        self.work
+    }
+    pub const fn additional_storage(self) -> usize {
+        self.additional_storage
+    }
+}
 impl From<Resource> for Error {
     fn from(e: Resource) -> Self {
         Self::Resource(e)
@@ -83,6 +99,70 @@ pub struct ConditionalWorkerReadinessEnvelopeV5<'a, 'p> {
 }
 
 impl<'a, 'p> ConditionalWorkerReadinessEnvelopeV5<'a, 'p> {
+    /// Complete constructor quote over the actual borrowed inputs. Allocation
+    /// capacity is bounded conservatively by the existing canonical wire cap;
+    /// this quote does not enlarge the unchanged <=256 MiB operation window.
+    pub fn encoding_quote(
+        replay: &Preimages<'_>,
+        carriage: &Carriage,
+    ) -> Result<ConditionalWorkerReadinessQuoteV5> {
+        let inputs = input_storage(replay, carriage)?;
+        let wire = codec::encoded_length(
+            [
+                RECORD_BYTES,
+                CLAIM_BYTES,
+                replay.outer_handoff().len(),
+                replay.transcript().len(),
+                carriage.canonical_bytes().len(),
+            ],
+            replay.providers().len(),
+            replay.providers().payload_length(),
+        )?;
+        let revalidate = replay.revalidation_quote()?;
+        let (subject_work, subject_storage) = subject_quote(replay)?;
+        let work = Budget::STORAGE_WINDOW_WORK_V1
+            .checked_add(8)
+            .and_then(|n| n.checked_add(revalidate.work().checked_mul(2)?))
+            .and_then(|n| n.checked_add(subject_work))
+            .and_then(|n| n.checked_add(wire.checked_mul(4)?))
+            .and_then(|n| n.checked_add(FRAME))
+            .ok_or(Resource::Arithmetic)?;
+        let wire_owner = codec::MAX_CONDITIONAL_WORKER_READINESS_BYTES_V5
+            .checked_add(size_of::<Self>())
+            .ok_or(Resource::Arithmetic)?;
+        let peak = revalidate
+            .additional_storage()
+            .checked_add(wire_owner)
+            .ok_or(Resource::Arithmetic)?
+            .max(subject_storage);
+        Ok(ConditionalWorkerReadinessQuoteV5 {
+            work,
+            additional_storage: quote_overlap(inputs)?
+                .checked_add(peak)
+                .ok_or(Resource::Arithmetic)?,
+        })
+    }
+
+    pub fn revalidation_quote(&self) -> Result<ConditionalWorkerReadinessQuoteV5> {
+        let inputs = input_storage(self.replay, self.carriage)?
+            .checked_add(self.retained_storage)
+            .ok_or(Resource::Arithmetic)?;
+        let revalidate = self.replay.revalidation_quote()?;
+        let (subject_work, subject_storage) = subject_quote(self.replay)?;
+        let work = Budget::STORAGE_WINDOW_WORK_V1
+            .checked_add(8)
+            .and_then(|n| n.checked_add(revalidate.work()))
+            .and_then(|n| n.checked_add(subject_work))
+            .and_then(|n| n.checked_add(self.exact.len()))
+            .ok_or(Resource::Arithmetic)?;
+        let peak = revalidate.additional_storage().max(subject_storage);
+        Ok(ConditionalWorkerReadinessQuoteV5 {
+            work,
+            additional_storage: quote_overlap(inputs)?
+                .checked_add(peak)
+                .ok_or(Resource::Arithmetic)?,
+        })
+    }
     /// Returns this envelope's additional complete storage unreserved. Both
     /// borrowed owners and the publication behind `replay` remain prepaid.
     pub fn in_original_account(
@@ -93,10 +173,7 @@ impl<'a, 'p> ConditionalWorkerReadinessEnvelopeV5<'a, 'p> {
     ) -> Result<Self> {
         let inputs = input_storage(replay, carriage)?;
         let outside = b.storage();
-        let overlap = inputs
-            .checked_add(FRAME)
-            .and_then(|n| n.checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1))
-            .ok_or(Resource::Arithmetic)?;
+        let overlap = quote_overlap(inputs)?;
         b.with_additional_storage_window_v1(WINDOW, |b| {
             b.with_prepaid_scope(outside.max(inputs), 8, 8, overlap, |b| {
                 replay.revalidate(producer, b)?;
@@ -181,10 +258,7 @@ impl<'a, 'p> ConditionalWorkerReadinessEnvelopeV5<'a, 'p> {
             .checked_add(self.retained_storage)
             .ok_or(Resource::Arithmetic)?;
         let outside = b.storage();
-        let overlap = inputs
-            .checked_add(FRAME)
-            .and_then(|n| n.checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1))
-            .ok_or(Resource::Arithmetic)?;
+        let overlap = quote_overlap(inputs)?;
         b.with_additional_storage_window_v1(WINDOW, |b| {
             b.with_prepaid_scope(outside.max(inputs), 8, 8, overlap, |b| {
                 self.replay.revalidate(producer, b)?;
@@ -219,10 +293,7 @@ impl<'a, 'p> ConditionalWorkerReadinessEnvelopeV5<'a, 'p> {
         if b.storage() < inputs {
             return Err(Resource::Accounting.into());
         }
-        let overlap = inputs
-            .checked_add(FRAME)
-            .and_then(|n| n.checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1))
-            .ok_or(Resource::Arithmetic)?;
+        let overlap = quote_overlap(inputs)?;
         b.with_additional_storage_window_v1(WINDOW, |b| {
             b.reserve_storage(overlap)?;
             self.revalidate(producer, b)?;
@@ -284,6 +355,25 @@ fn input_storage(replay: &Preimages<'_>, carriage: &Carriage) -> Result<usize> {
         .and_then(|n| n.checked_add(carriage.retained_storage()))
         .ok_or(Resource::Arithmetic.into())
 }
+fn quote_overlap(inputs: usize) -> Result<usize> {
+    inputs
+        .checked_add(FRAME)
+        .and_then(|n| n.checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1))
+        .ok_or(Resource::Arithmetic.into())
+}
+fn subject_quote(replay: &Preimages<'_>) -> Result<(usize, usize)> {
+    let handoff = replay
+        .publication()
+        .recovered_evidence()
+        .finalized()
+        .source()
+        .recovered_handoff()
+        .handoff();
+    let work = Subject::COMPOSED_PUBLICATION_WORK_V3
+        .checked_add(fe2o3_artifact_transaction::INERT_COMPILER_EXECUTION_SUBJECT_BYTES_V3)
+        .ok_or(Resource::Arithmetic)?;
+    Ok((work, Subject::composed_publication_storage_v3(handoff)?))
+}
 fn require_subject(replay: &Preimages<'_>, carriage: &Carriage, b: &mut Budget<'_>) -> Result<()> {
     let source = replay
         .publication()
@@ -304,4 +394,24 @@ fn require_subject(replay: &Preimages<'_>, carriage: &Carriage, b: &mut Budget<'
         return Err(Error::Mismatch("original compiler-execution Subject"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod quote_tests {
+    use super::*;
+    #[test]
+    fn original_window_overlap_keeps_all_inputs_and_refuses_overflow() {
+        assert_eq!(
+            quote_overlap(97).unwrap(),
+            97 + FRAME + Budget::STORAGE_WINDOW_SCRATCH_V1
+        );
+        assert!(matches!(
+            quote_overlap(usize::MAX),
+            Err(Error::Resource(Resource::Arithmetic))
+        ));
+        assert!(
+            Subject::COMPOSED_PUBLICATION_WORK_V3
+                > fe2o3_artifact_transaction::INERT_COMPILER_EXECUTION_SUBJECT_WORK_V3
+        );
+    }
 }
