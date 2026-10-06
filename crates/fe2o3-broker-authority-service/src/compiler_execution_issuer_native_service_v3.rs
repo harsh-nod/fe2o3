@@ -1,7 +1,6 @@
 //! Consuming native issuer session with durable Worker/external-anchor joins.
 use super::{Admission, Budget, Key, KeyError, Policy, Resource};
 use crate::compiler_execution_external_anchor::NativeAnchorV3 as NativeAnchor;
-use crate::compiler_execution_occurrence::NativeOccurrenceV3 as NativeOccurrence;
 use crate::compiler_execution_service::{
     COMPILER_EXECUTION_SERVICE_SESSION_TIMEOUT_V1, MAX_COMPILER_EXECUTION_SERVICE_PACKETS_V1,
     receive_packet_metered, send_packet_metered,
@@ -30,6 +29,10 @@ mod readiness;
 
 #[path = "compiler_execution_issuer_root_control_v3.rs"]
 mod root_control;
+
+#[path = "compiler_execution_issuer_occurrence_context_v3.rs"]
+mod occurrence_context;
+use occurrence_context::{NativeOccurrence, OccurrenceContext};
 
 #[path = "compiler_execution_issuer_native_error.rs"]
 mod error;
@@ -126,11 +129,13 @@ impl Admission<'_> {
                 Some((manifest, writer)),
                 b,
                 root_control::TIMEOUT,
-                |a, deadline, b| root.handshake(a, manifest, deadline, b),
+                |a, deadline, b| {
+                    root.handshake(a, manifest, deadline, b)?;
+                    let (context, growth) = OccurrenceContext::from_root(root, manifest, b)?;
+                    b.reserve_storage(growth)?;
+                    Ok(Session::with_context(context))
+                },
             );
-            // The gate callback only borrows the owner. Keep its endpoint alive
-            // until the consuming service has finished, even after handshake.
-            drop(root);
             result
         })
     }

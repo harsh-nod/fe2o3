@@ -95,7 +95,7 @@ pub(super) struct RootEndpoint<'work> {
 }
 
 impl<'work> RootEndpoint<'work> {
-    const STORAGE: usize = size_of::<(Self, usize)>() + ENDPOINT_STORAGE;
+    pub(super) const STORAGE: usize = size_of::<(Self, usize)>() + ENDPOINT_STORAGE;
 
     pub(super) fn new(endpoint: OwnedFd, b: &mut Budget<'work>) -> Result<(Self, usize)> {
         b.with_prepaid_scope(ENDPOINT_STORAGE, ENTRY, CHECK_WORK, CHECK_FRAME, |b| {
