@@ -26,3 +26,14 @@ proof fn invocation_source_entry_initialize_pc_v166(
     ensures invocation_source_entry_initialize_v166(source, pc, begin, end, frames).machine.pc == pc,
 {
 }
+
+#[verifier::spinoff_prover]
+proof fn invocation_source_entry_put_local_pc_v179(
+    source: InvocationSourceByteStateV36, local: int, value: MemoryValueV30,
+)
+    ensures invocation_source_byte_put_local_v36(source, local, value).machine.pc
+        == source.machine.pc,
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_logical_write_v38);
+}

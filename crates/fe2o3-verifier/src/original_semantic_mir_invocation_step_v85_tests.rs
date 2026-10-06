@@ -180,6 +180,15 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(runtime_state.contains(&format!("invocation_source_entry_select_success_v167(copied_{0}, invocation_source_entry_refuses_{root}_{1}_v167(copied_{0}, entered_arguments, invocation_runtime_little_endian_v36()), invocation_source_entry_body_{root}_{1}_v167(copied_{0}, entered_arguments, invocation_runtime_little_endian_v36()));", call.arguments.len(), call.child)));
                                     assert_eq!(source_state.matches("invocation_source_entry_initialize_pc_v166(").count(), 1);
                                     assert!(source_state.contains(&format!("invocation_source_entry_initialize_pc_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));", entry.pc, entry.locals.start, entry.locals.end, entry.owner)));
+                                    assert_eq!(runtime_state.matches("invocation_source_entry_initialize_pc_v166(").count(), 1);
+                                    assert!(runtime_state.contains(&format!("invocation_source_entry_initialize_pc_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));", entry.pc, entry.locals.start, entry.locals.end, entry.owner)));
+                                    assert!(runtime_state.contains(&format!("let installed_0 = invocation_source_entry_initialize_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));", entry.pc, entry.locals.start, entry.locals.end, entry.owner)));
+                                    assert_eq!(runtime_state.matches("invocation_source_entry_put_local_pc_v179(").count(), call.arguments.len());
+                                    for (ordinal, (destination, (local, _, _))) in entry.arguments.iter().zip(&call.arguments).enumerate() {
+                                        assert!(runtime_state.contains(&format!("invocation_source_entry_put_local_pc_v179(installed_{ordinal}, {destination}, source.machine.values[{local}]);\n let installed_{} = invocation_source_byte_put_local_v36(installed_{ordinal}, {destination}, source.machine.values[{local}]);", ordinal + 1)));
+                                    }
+                                    let no_trap = format!("assert(invocation_constructor_source_{root}_{pc}_v162(source).machine.pc == {});", entry.pc);
+                                    assert!(runtime_state.find(&no_trap).unwrap() < runtime_state.find(" && invocation_source_observations_v39(").unwrap());
                                     assert!(source_state.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.pc >= 0\n && invocation_paired_source_step_{root}_v36(source).state.machine.pc != -2);")));
                                     assert!(runtime_state.contains(&format!("assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}")));
                                     assert!(runtime_state.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));

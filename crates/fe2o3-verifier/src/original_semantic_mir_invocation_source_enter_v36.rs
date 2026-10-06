@@ -677,6 +677,9 @@ mod tests {
         assert!(!text.contains("requires"));
         assert!(!text.contains("assume("));
         assert!(!text.contains("external_body"));
+        let (proof, installed_pc) = proof
+            .split_once("\n#[verifier::spinoff_prover]\nproof fn ")
+            .unwrap();
         assert_eq!(
             proof,
             concat!(
@@ -686,6 +689,20 @@ mod tests {
                 ")\n",
                 "    ensures invocation_source_entry_initialize_v166(source, pc, begin, end, frames).machine.pc == pc,\n",
                 "{\n",
+                "}\n",
+            )
+        );
+        assert_eq!(
+            installed_pc,
+            concat!(
+                "invocation_source_entry_put_local_pc_v179(\n",
+                "    source: InvocationSourceByteStateV36, local: int, value: MemoryValueV30,\n",
+                ")\n",
+                "    ensures invocation_source_byte_put_local_v36(source, local, value).machine.pc\n",
+                "        == source.machine.pc,\n",
+                "{\n",
+                "    hide(invocation_source_byte_state_well_formed_v36);\n",
+                "    hide(invocation_source_logical_write_v38);\n",
                 "}\n",
             )
         );
