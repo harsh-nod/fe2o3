@@ -110,6 +110,12 @@ impl Record {
     pub const fn canonical_bytes(&self) -> &[u8; N] {
         &self.bytes
     }
+    pub fn policy_identity(&self) -> &[u8; 32] {
+        self.bytes[88..120].try_into().expect("fixed policy")
+    }
+    pub fn invocation_identity(&self) -> &[u8; 32] {
+        self.bytes[120..152].try_into().expect("fixed invocation")
+    }
     pub const fn retained_storage(&self) -> usize {
         RETAINED
     }
