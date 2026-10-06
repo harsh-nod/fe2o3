@@ -73,3 +73,33 @@ crate::receipt_carriage_adapter::receipt_carriage_adapter!(
     CompilerExecutionReceiptCarriageIdentityV3,
     CompilerExecutionReceiptCarriageV3
 );
+
+impl CompilerExecutionReceiptCarriageV3 {
+    pub const COMPOSED_DECODE_WORK: usize =
+        COMPILER_EXECUTION_RECEIPT_CARRIAGE_DECODE_WORK_V3 - QW + Request::COMPOSED_DECODE_WORK;
+    pub const COMPOSED_DECODE_STORAGE: usize = COMPILER_EXECUTION_RECEIPT_CARRIAGE_STORAGE_V3
+        + maximum(&[
+            PS,
+            POLICY_RETAINED + Request::COMPOSED_DECODE_STORAGE,
+            POLICY_RETAINED + REQUEST_RETAINED + US,
+            POLICY_RETAINED + REQUEST_RETAINED + PUBLICATION_RETAINED + AS,
+            INHERITED + VS,
+            INHERITED + AS,
+        ]);
+
+    /// Original-account composition of the SAME native carriage and every
+    /// signature/association check. No policy, runtime or endpoint is admitted.
+    /// Returns the full result charge unreserved; legacy decode remains strict.
+    pub fn decode_in_original_account_v3(
+        bytes: &[u8],
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, Storage)> {
+        Self::decode_using(bytes, budget, |bytes, budget| {
+            Ok(Request::decode_in_original_account_v3(bytes, budget)?)
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "original_account_codec_v3_tests.rs"]
+mod original_account_tests;

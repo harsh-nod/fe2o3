@@ -12,9 +12,7 @@ use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ROOT_INTAKE_STORAGE_V4 as RECORD_SCRATCH,
     COMPILER_EXECUTION_ROOT_INTAKE_WORK_V4 as RECORD_WORK,
     COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_BYTES_V1 as COMPLETION_BYTES,
-    COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_DECODE_WORK_V1 as COMPLETION_WORK,
     COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_MATCH_WORK_V1 as COMPLETION_MATCH_WORK,
-    COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_STORAGE_V1 as COMPLETION_SCRATCH,
     COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_MODE_V1 as DIRECTORY_MODE,
     COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1 as SOCKET_MODE,
     COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1 as SOCKET_PATH,
@@ -40,6 +38,8 @@ use std::{
 };
 
 const MAX_ATTEMPTS: usize = 120_001;
+const COMPLETION_WORK: usize = Completion::COMPOSED_DECODE_WORK;
+const COMPLETION_SCRATCH: usize = Completion::COMPOSED_DECODE_STORAGE;
 const LOCAL_WORK: usize = 8 + 128 * 1024;
 const FRAME: usize = 4 * size_of::<Endpoint>()
     + 16 * N
@@ -440,7 +440,8 @@ impl Parent {
                                 else {
                                     return Ok(None);
                                 };
-                                let (record, charge) = Completion::decode(&bytes, b)?;
+                                let (record, charge) =
+                                    Completion::decode_in_original_account_v1(&bytes, b)?;
                                 b.reserve_storage(charge.additional_storage())?;
                                 if !record.matches_intake(last.as_ref().unwrap(), b)? {
                                     return Err(Error::Rejected(

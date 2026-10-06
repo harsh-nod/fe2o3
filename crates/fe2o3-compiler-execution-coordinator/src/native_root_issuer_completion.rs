@@ -1,10 +1,6 @@
 //! Copy inert completion inputs only from the original retired runtime owner.
 use super::*;
-use fe2o3_artifact_transaction::{
-    INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V3 as SUBJECT_SCRATCH,
-    INERT_COMPILER_EXECUTION_SUBJECT_WORK_V3 as SUBJECT_WORK,
-    InertCompilerExecutionSubjectV3 as Subject,
-};
+use fe2o3_artifact_transaction::InertCompilerExecutionSubjectV3 as Subject;
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_ROOT_COMPLETION_STORAGE_V1 as TERMINAL_SCRATCH,
     COMPILER_EXECUTION_ROOT_COMPLETION_WORK_V1 as TERMINAL_WORK,
@@ -16,6 +12,9 @@ use fe2o3_compiler_execution_protocol::{
     CompilerExecutionRootPublicationCompletionV1 as Completion,
     CompilerExecutionRootTerminationV1 as Termination,
 };
+
+const SUBJECT_WORK: usize = Subject::COMPOSED_DECODE_WORK;
+const SUBJECT_SCRATCH: usize = Subject::COMPOSED_DECODE_SCRATCH;
 
 impl<T: Send + 'static> NativeAttempt<'_, T> {
     /// Inert transport record, not publication authority. The original account,
@@ -51,8 +50,9 @@ impl<T: Send + 'static> NativeAttempt<'_, T> {
                         let (terminal, charge) = Terminal::new(last, Termination::Exited(0), b)
                             .map_err(completion_error)?;
                         b.reserve_storage(charge.additional_storage())?;
-                        let (subject, charge) = Subject::decode(observed.canonical_bytes(), b)
-                            .map_err(completion_error)?;
+                        let (subject, charge) =
+                            Subject::decode_in_original_account_v3(observed.canonical_bytes(), b)
+                                .map_err(completion_error)?;
                         b.reserve_storage(charge.retained_storage())?;
                         let (manifest, charge) =
                             Manifest::decode(payload.manifest.manifest().canonical_bytes(), b)

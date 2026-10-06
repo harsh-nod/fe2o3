@@ -62,6 +62,47 @@ fn record(mask: u8, nonce: u8, b: &mut Budget<'_>) -> (Intake, Record) {
 }
 
 #[test]
+fn original_account_completion_decode_keeps_aggregate_and_codec_budgets_distinct() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    let mut fixture_work = Work::new(1_000_000);
+    let mut fixture_budget = Budget::new(&mut fixture_work, 1_000_000);
+    let (_, record) = record(7, 0x72, &mut fixture_budget);
+    let bytes = *record.canonical_bytes();
+    let floor = fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5 + N;
+    let mut peak = Record::COMPOSED_DECODE_STORAGE;
+    for case in 0..3 {
+        let work = Record::COMPOSED_DECODE_WORK - usize::from(case == 1);
+        let limit = floor + peak - usize::from(case == 2);
+        let mut account = Owned::new(Work::new(work), limit);
+        account.with_budget(|b| {
+            b.reserve_storage(floor).unwrap();
+            let ledger = b.work_ledger_identity_v1();
+            let identity = b.storage_account_identity_v1();
+            let result = Record::decode_in_original_account_v1(&bytes, b);
+            if case == 0 {
+                let (decoded, charge) = result.unwrap();
+                assert_eq!(decoded, record);
+                assert_eq!(charge.additional_storage(), decoded.retained_storage());
+                assert_eq!(b.work(), work);
+                peak = b.peak_storage() - floor;
+            } else {
+                assert!(result.is_err());
+                if case == 1 {
+                    assert!(b.failed_work().is_some());
+                }
+                if case == 2 {
+                    assert!(b.failed_storage().is_some());
+                }
+            }
+            assert_eq!(b.storage(), floor);
+            assert_eq!(b.storage_limit(), limit);
+            assert!(b.work_ledger_identity_v1() == ledger);
+            assert_eq!(b.storage_account_identity_v1(), identity);
+        });
+    }
+}
+
+#[test]
 fn structured_roundtrip_preserves_exact_publication_and_intake_for_every_mask() {
     for mask in 0..8 {
         let mut work = Work::new(usize::MAX);

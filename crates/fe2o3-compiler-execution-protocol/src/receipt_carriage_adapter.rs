@@ -131,6 +131,12 @@ macro_rules! receipt_carriage_adapter {
             /// Decode each real native child on this ledger. Returns the FULL carriage
             /// charge; internally reserved children do not transfer from borrowed bytes.
             pub fn decode(bytes: &[u8], budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
+                Self::decode_using(bytes, budget, |bytes, budget| Ok(Request::decode(bytes, budget)?))
+            }
+            fn decode_using(
+                bytes: &[u8], budget: &mut Budget<'_>,
+                decode_request: impl FnOnce(&[u8], &mut Budget<'_>) -> Result<(Request, Storage)>,
+            ) -> Result<(Self, Storage)> {
                 resources::nested_fixed(
                     budget,
                     resources::fixed_input_floor(bytes, codec::CARRIAGE_BYTES),
@@ -140,7 +146,7 @@ macro_rules! receipt_carriage_adapter {
                         let parts = codec::$schema.carriage_parts(bytes)?;
                         let (policy, s) = Policy::decode(parts.policy, budget)?;
                         budget.reserve_storage(s.additional_storage())?;
-                        let (request, s) = Request::decode(parts.request, budget)?;
+                        let (request, s) = decode_request(parts.request, budget)?;
                         budget.reserve_storage(s.additional_storage())?;
                         let (publication, s) = Publication::decode(parts.publication, budget)?;
                         budget.reserve_storage(s.additional_storage())?;

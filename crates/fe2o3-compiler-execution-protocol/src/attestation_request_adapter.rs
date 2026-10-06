@@ -101,6 +101,17 @@ macro_rules! attestation_request_adapter {
             #[doc = concat!("existing ", "V", $handoff, " storage ceiling on this same ledger. Entry storage is restored")]
             /// on success, refusal and unwind, without resetting work or denial history.
             pub fn decode(bytes: &[u8], budget: &mut Budget<'_>) -> Result<(Self, Storage)> {
+                Self::decode_using(bytes, budget, |bytes, budget| {
+                    let (subject, storage) = Subject::decode(bytes, budget)?;
+                    Ok((subject, storage.retained_storage()))
+                })
+            }
+            // Private fixed-family codec selection only. Public legacy decode
+            // always uses the original Subject decoder and its existing cap.
+            fn decode_using(
+                bytes: &[u8], budget: &mut Budget<'_>,
+                decode_subject: impl FnOnce(&[u8], &mut Budget<'_>) -> Result<(Subject, usize)>,
+            ) -> Result<(Self, Storage)> {
                 resources::nested_fixed(
                     budget,
                     resources::fixed_input_floor(bytes, codec::REQUEST_BYTES),
@@ -111,8 +122,8 @@ macro_rules! attestation_request_adapter {
                         let challenge = Challenge {
                             record: codec::$schema.decode_challenge(parts.challenge)?,
                         };
-                        let (subject, storage) = Subject::decode(parts.subject, budget)?;
-                        budget.reserve_storage(storage.retained_storage())?;
+                        let (subject, storage) = decode_subject(parts.subject, budget)?;
+                        budget.reserve_storage(storage)?;
                         crate::attestation::require_identity(parts.identity, "request")?;
                         let decoded = Self::from_owned(challenge, subject)?;
                         if *decoded.identity.as_bytes() != parts.identity

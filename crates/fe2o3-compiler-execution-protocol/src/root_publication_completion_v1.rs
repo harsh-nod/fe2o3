@@ -74,6 +74,17 @@ pub struct CompilerExecutionRootPublicationCompletionV1 {
 use CompilerExecutionRootPublicationCompletionV1 as Record;
 
 impl Record {
+    /// Same immutable framing on a larger original owned account; the nested
+    /// Subject codec uses its fixed local window without replacing that account.
+    pub const COMPOSED_DECODE_WORK: usize =
+        COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_DECODE_WORK_V1
+            + Subject::COMPOSED_DECODE_WORK
+            - SUBJECT_WORK;
+    pub const COMPOSED_DECODE_STORAGE: usize =
+        COMPILER_EXECUTION_ROOT_PUBLICATION_COMPLETION_STORAGE_V1
+            + Subject::COMPOSED_DECODE_SCRATCH
+            - SUBJECT_SCRATCH;
+
     /// Consume four original prepaid inert records. Returns only the additional
     /// charge above their full reservations, which remain charged on refusal.
     pub fn new(
@@ -92,6 +103,23 @@ impl Record {
     /// Decode on the same account; full result charge is returned unreserved.
     /// Nested canonical codecs and every retained child remain separately paid.
     pub fn decode(bytes: &[u8], b: &mut Budget<'_>) -> Result<(Self, Storage)> {
+        Self::decode_using(bytes, b, DecodeAccount::Legacy)
+    }
+
+    /// Original-owned-account variant. Does not authenticate the endpoint,
+    /// original occurrence, runtime, publication, or nominated proof policy.
+    pub fn decode_in_original_account_v1(
+        bytes: &[u8],
+        b: &mut Budget<'_>,
+    ) -> Result<(Self, Storage)> {
+        Self::decode_using(bytes, b, DecodeAccount::Original)
+    }
+
+    fn decode_using(
+        bytes: &[u8],
+        b: &mut Budget<'_>,
+        account: DecodeAccount,
+    ) -> Result<(Self, Storage)> {
         resources::nested_fixed(
             b,
             resources::fixed_input_floor(bytes, N),
@@ -107,7 +135,13 @@ impl Record {
                 }
                 let (terminal, charge) = Terminal::decode(&bytes[HEADER..SUBJECT_START], b)?;
                 b.reserve_storage(charge.additional_storage())?;
-                let (subject, charge) = Subject::decode(&bytes[SUBJECT_START..MANIFEST_START], b)?;
+                let subject_bytes = &bytes[SUBJECT_START..MANIFEST_START];
+                let (subject, charge) = match account {
+                    DecodeAccount::Legacy => Subject::decode(subject_bytes, b),
+                    DecodeAccount::Original => {
+                        Subject::decode_in_original_account_v3(subject_bytes, b)
+                    }
+                }?;
                 b.reserve_storage(charge.retained_storage())?;
                 let (manifest, charge) = Manifest::decode(&bytes[MANIFEST_START..READY_START], b)?;
                 b.reserve_storage(charge.additional_storage())?;
@@ -188,6 +222,11 @@ fn digest(bytes: &[u8; N]) -> [u8; 32] {
     h.update(DOMAIN);
     h.update(&bytes[..DIGEST_START]);
     h.finalize().into()
+}
+
+enum DecodeAccount {
+    Legacy,
+    Original,
 }
 
 #[derive(Debug)]
