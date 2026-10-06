@@ -257,10 +257,11 @@ impl MixedConditionalDispatchPremisesV26 {
                 source_rank,
                 index_width,
             )?;
-            if let Some(axis) = access.invocation_axis {
-                if axis >= source_rank {
-                    return Err(Error::Geometry);
-                }
+            if access
+                .invocation_axis
+                .is_some_and(|axis| axis >= source_rank)
+            {
+                return Err(Error::Geometry);
             }
             if access.writing {
                 let axis = access.invocation_axis.ok_or(Error::Binding)?;
