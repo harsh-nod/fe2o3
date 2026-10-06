@@ -11,7 +11,7 @@ use fe2o3_verifier::PreparedOriginalSemanticMirRefinementV36 as OriginalMir;
 use fe2o3_verifier::TypedSourceTailSubjectV50 as Subject;
 
 #[path = "production_pipeline_source_original_mir_v30.rs"]
-pub(super) mod original_mir_v30;
+pub(in super::super) mod original_mir_v30;
 
 #[path = "production_pipeline_source_mixed_publication_execution_v29.rs"]
 mod execution;

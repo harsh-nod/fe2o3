@@ -6,6 +6,10 @@ use fe2o3_lower_mir_kernel::{
     ProductionSourceCorrespondenceV18 as Original, ProductionSourceTileExpansionV159 as Expanded,
 };
 
+#[path = "production_pipeline_expanded_pair_input_v279.rs"]
+mod pair_input_v279;
+pub(crate) use pair_input_v279::ExpandedPairInputV279;
+
 struct ExpandedSource;
 type CallbackPanic = Box<dyn std::any::Any + Send>;
 type OptimizerResult<R> = Result<
@@ -81,12 +85,13 @@ fn selected_layout(target: TargetProfile) -> ExecutionTileLayoutV1 {
 
 impl<R: 'static, F> SourceHandoffPolicyV29<R, F> for ExpandedSource
 where
-    F: for<'view, 'source, 'original, 'scope, 'tile, 'abi, 'work> FnOnce(
+    F: for<'view, 'source, 'original, 'scope, 'tile, 'abi, 'pair, 'work> FnOnce(
         &'view Source<'source>,
         &'original Original<'scope>,
         &'tile Expanded<'original, 'scope>,
         &[AbiRoot<'abi>],
         TargetProfile,
+        &'pair ExpandedPairInputV279<'pair, 'source, 'original, 'scope>,
         &mut Budget<'work>,
     ) -> Result<
         (R, usize),
@@ -100,6 +105,7 @@ where
             &'a Expanded<'a, 'a>,
             &'a [AbiRoot<'a>],
             TargetProfile,
+            &'a ExpandedPairInputV279<'a, 'a, 'a, 'a>,
             &'a mut Budget<'a>,
             &'a mut formal_context_v19::PendingConsumerV19<F>,
             &'a std::cell::Cell<usize>,
@@ -150,13 +156,17 @@ where
             budget,
             |original, optimized, budget| {
                 let tile = optimized.prepare_tile_expansion_with_layout_v260(selected, budget)?;
+                let pair = pair_input_v279::prepare(source, original, &tile, context, budget)?;
+                budget.reserve_storage(pair.retained_storage())?;
+                pair.check(source, original, &tile, budget)?;
                 let floor = budget.storage();
                 let result = {
                     let consumer = pending.take();
                     let tile = &tile;
+                    let pair = &pair;
                     let budget = &mut *budget;
                     catch_unwind(AssertUnwindSafe(move || {
-                        consumer(source, original, tile, roots, target, budget)
+                        consumer(source, original, tile, roots, target, pair, budget)
                     }))
                 };
                 // Adoption normalizes unwinds. Retain this caller's original
@@ -173,7 +183,9 @@ where
                 // graph owners. Preserve its exact measured credit while
                 // destroying the tile owner before the optimizer scope ends.
                 let measured = budget.storage().checked_sub(floor);
-                let released = tile.discard(budget);
+                let pair_released = pair.discard(budget);
+                let tile_released = tile.discard(budget);
+                let released = pair_released.and(tile_released);
                 let value = settle_callback(result, measured, released, || {
                     source.retain_query_resource_error_v18(Resource::Accounting)
                 })?;
@@ -216,12 +228,13 @@ mod tests {
 
     #[test]
     fn expanded_entry_prepays_complete_error_payload_and_callback_frames() {
-        type Consumer = for<'v, 's, 'o, 'scope, 't, 'a, 'w> fn(
+        type Consumer = for<'v, 's, 'o, 'scope, 't, 'a, 'p, 'w> fn(
             &'v Source<'s>,
             &'o Original<'scope>,
             &'t Expanded<'o, 'scope>,
             &[AbiRoot<'a>],
             TargetProfile,
+            &'p ExpandedPairInputV279<'p, 's, 'o, 'scope>,
             &mut Budget<'w>,
         )
             -> Result<((), usize), Error>;
@@ -231,6 +244,7 @@ mod tests {
             &'a Expanded<'a, 'a>,
             &'a [AbiRoot<'a>],
             TargetProfile,
+            &'a ExpandedPairInputV279<'a, 'a, 'a, 'a>,
             &'a mut Budget<'a>,
             &'a mut formal_context_v19::PendingConsumerV19<Consumer>,
             &'a std::cell::Cell<usize>,
@@ -405,14 +419,16 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         consume: F,
     ) -> Result<SourceOwnedCompilationContinuationV29<R>, Error>
     where
-        F: for<'view, 'source, 'original, 'scope, 'tile, 'abi, 'work> FnOnce(
+        F: for<'view, 'source, 'original, 'scope, 'tile, 'abi, 'pair, 'work> FnOnce(
             &'view Source<'source>,
             &'original Original<'scope>,
             &'tile Expanded<'original, 'scope>,
             &[AbiRoot<'abi>],
             TargetProfile,
+            &'pair ExpandedPairInputV279<'pair, 'source, 'original, 'scope>,
             &mut Budget<'work>,
-        ) -> Result<
+        )
+            -> Result<
             (R, usize),
             Error,
         >,

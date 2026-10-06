@@ -182,7 +182,7 @@ impl Callbacks for RootsCallbacks {
             let mut calls = 0;
             let result = transaction.with_original_source_expanded_v259(
                 &mut budget,
-                |source, original, tile, roots, _, budget| {
+                |source, original, tile, roots, _, pair, budget| {
                     calls += 1;
                     assert_eq!(roots.len(), collected_roots);
                     assert_eq!(source.root_count(budget)?, collected_roots);
@@ -200,11 +200,18 @@ impl Callbacks for RootsCallbacks {
                     >();
                     budget.reserve_storage(cfg_header)?;
                     for (root, abi) in roots.iter().enumerate() {
+                        pair.check(source, original, tile, budget)?;
+                        let row = pair.roots(budget)?[root];
+                        assert_eq!(row.source_root, source.root(root, budget)?.0);
+                        assert_eq!(row.original_function, source.root(root, budget)?.1);
+                        assert_eq!(row.instances, source.instance_count(root, budget)?);
                         assert!(!abi.export.is_empty());
                         assert_ne!(abi.kernel_binding, &[0; 32]);
                         let cfg = neutral.output_root_cfg_v18(root, budget)?;
+                        assert_eq!(row.target_function, cfg.function().coordinate);
                         assert_eq!(cfg.root(), root);
                         let policy = tile.root_policy_v162(root, budget)?;
+                        assert_eq!(row.tile, policy.map(|(_, layout, lanes)| (layout, lanes)));
                         let selection = selections
                             .iter()
                             .find(|row| row.function == cfg.function().coordinate);
@@ -220,6 +227,18 @@ impl Callbacks for RootsCallbacks {
                         }
                     }
                     assert_eq!(selected, selections.len());
+                    assert_eq!(pair.roots(budget)?.len(), roots.len());
+                    let subject = pair.subject(budget)?;
+                    assert_eq!(subject.graphs[0], *source.canonical(budget)?.identity());
+                    assert_eq!(subject.graphs[1], *input.owner().identity());
+                    assert_eq!(subject.graphs[2], *output.identity());
+                    assert_eq!(
+                        pair.runtime(budget)?,
+                        (
+                            fe2o3_amdgcn_model::production_logical_index_width_v19(),
+                            fe2o3_kernel_ir::EndiannessV2::Little,
+                        )
+                    );
                     for (index, function) in input.functions().iter().enumerate() {
                         assert_eq!(output.module().functions[index].id, function.function.id);
                         if !selections
