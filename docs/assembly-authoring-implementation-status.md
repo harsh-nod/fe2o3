@@ -11,6 +11,57 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Private BF16 Worker frontend and native debugger attempt — 2026-10-06
+
+The private, test-only generated-source driver now reaches the owning Worker
+loan through a separately named ignored endpoint. Its bounded seven-field
+configuration binds the executable content and build identities and has an
+absolute deadline; the original source, formal, optimized-output, LLVM,
+descriptor and canonical-handoff owners remain live throughout. Source replay
+precedes Worker deadline admission. The old handoff-only route is unchanged.
+The new 44-field result is emitted only after replay and original-owner drop;
+it grants no ordinary admission, artifact publication, load or launch authority.
+
+Three focused endpoint controls passed. Full backend suites then passed in
+debug and release: 4,005 library tests (238 ignored), 19 export-simulation
+tests, 73 extractor tests and all non-ignored package API/integration tests.
+The tested source census is
+`28a7bc043450cd5e854a01d2696c49e99a5c9d087c0607ab5a6926646604293d`.
+The first release attempt reached its finite scope deadline during compilation;
+its failed record was preserved before the successful fresh-scope run.
+The disabled two-session parent passed 31 pure controls. These checks have
+**not executed the genuine external Worker**. Measured native runtime inputs,
+enforced process-family containment and the actual owning observations remain
+pending; the endpoint remains ignored and the parent remains disabled.
+
+Separately, a fresh private debugger attempt captured the expected four-byte
+register value (`0x13579bdf`) and 272 memory bytes: two sentinels surrounding
+64 lane values, each equal to that register value XOR the lane index.
+Resume then failed at a queue-state health query with
+`native-site=2; native-family=1; native-selector=5; native-bytes=4; native-status=-3`.
+This is not a completed paired CPU/wave resume or qualified physical capture.
+The four-byte query matches the API; the failure is not an output-width error.
+
+The preserved source/trace reconstruction identifies an extra pair of legacy
+observer health queries. Together with the owned checks, these spend all ten
+allowed queries before completion attempts the eleventh. This is a sufficient
+refusal cause, not proof that no concurrent taint or driver change occurred.
+A correction must retain the existing health checks and ten-query limit;
+a new reviewed build and fresh native attempt are still required.
+
+The outer family supervisor observed reaping, closed streams and an empty,
+removed cgroup. Its cleanup evidence is distinct from the controller's local
+unadmitted-inferior limitation. The command failed and the outer runner did
+not produce a complete source postflight. The failed one-use attempt and
+transcript remain preserved and cannot be reused as an execution scope.
+The actual record is
+`debugger-paired-native-failed-actual-root-r70-r1/MANIFEST.json`
+(SHA256 `73a10839731aa5c6d3beb790de095fd8a2ad2beafa73433fe7b576df59d16d0f`).
+
+These are implementation and diagnostic checkpoints, not accepted Worker,
+hardware, public-debugger or tutorial exits. Accepted milestones remain
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Private BF16 owning Worker loan — 2026-10-05
 
 The private, test-only handoff continuation now offers a closed synchronous
