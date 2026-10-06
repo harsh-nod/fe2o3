@@ -49,6 +49,11 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                 out.budget.charge_work(2)?;
                 let row = input.definitions().get(current).ok_or_else(mismatch)?;
                 let descendants = neutral.definition_descendants(row.coordinate, out.budget)?;
+                #[cfg(test)]
+                eprintln!(
+                    "source forwarding requested={original} current={current} coordinate={:?} value={:?} type={:?} descendants={descendants:?}",
+                    row.coordinate, row.value, row.ty
+                );
                 out.budget.charge_work(1)?;
                 if !descendants.is_empty() {
                     return self.source_definition(current, out);
@@ -79,6 +84,11 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                     if edge.target_definition != current {
                         continue;
                     }
+                    #[cfg(test)]
+                    eprintln!(
+                        "source forwarding requested={original} current={current} edge={:?} incoming={} value={:?}",
+                        edge.coordinate, edge.incoming_definition, edge.value
+                    );
                     out.budget.charge_work(5)?;
                     if edge.coordinate.edge.source.function != block.function
                         || !function.definitions.contains(&edge.incoming_definition)
