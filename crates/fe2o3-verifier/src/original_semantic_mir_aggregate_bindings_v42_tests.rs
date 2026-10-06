@@ -3,6 +3,156 @@ use fe2o3_mir_model::semantic_mir_v1::*;
 
 const LIMIT: usize = 256 * 1024 * 1024;
 
+fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
+    use super::super::{byte_bindings::SourceByteBindings, slots::SourceTagPairsV40};
+    use std::fmt::Write as _;
+    super::super::super::invocations::tests::run_source_transform(
+        LIMIT,
+        LIMIT,
+        |types, functions| checked_transform(types, functions, SemanticCheckedBinaryOpV1::Add, false, false),
+        |plan, out| {
+            super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                let relation = slots.correspondence(out)?;
+                let owner = relation.source(out.budget)?;
+                let semantic = owner.source_semantic(out.budget)?;
+                let inventory = relation.inventory(out.budget)?;
+                let contracts = super::super::TargetContracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
+                let tags = SourceTagPairsV40::derive(slots, &contracts, out)?;
+                let bindings = SourceByteBindings::derive(slots, out)?;
+                let mut program = SourceByteProgram::derive(plan, slots, out)?;
+                super::super::emit_model_prelude_v187(out)?;
+                slots.emit_source_tag_contracts(0, out)?;
+                contracts.emit(1, out)?;
+                tags.emit(0, 1, out)?;
+                slots.emit(out)?;
+                program.emit(out)?;
+                bindings.emit(out)?;
+                writeln!(out, "spec fn invocation_runtime_index_bytes_v36() -> int {{ 8 }}\nspec fn invocation_runtime_little_endian_v36() -> bool {{ true }}").map_err(|_| out.error())?;
+                let (physical, storage) = fe2o3_kernel_analysis::analyze_canonical_kir_private_bytes_v38(
+                    inventory,
+                    fe2o3_kernel_analysis::CanonicalKirPrivateByteLimitsV38 { max_boundaries: 1 << 20 },
+                    out.budget,
+                )?;
+                out.budget.reserve_storage(storage.retained_storage())?;
+                let mut witnesses = 0;
+                for root in 0..owner.root_count(out.budget)? {
+                    let (_, function) = owner.root(root, out.budget)?;
+                    let target = super::super::super::super::byte_function_v30::ByteFunctionV30::derive(
+                        inventory, &physical,
+                        fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1(function.try_into().unwrap()),
+                        super::super::ByteContext::classified(FormalIndexWidth::Bits64, &contracts, 1),
+                        slots, out,
+                    )?;
+                    target.emit(root, out)?;
+                    writeln!(out, "spec fn invocation_runtime_launch_{root}_v36() -> (int, Seq<int>) {{ (1, seq![64, 1, 1]) }}").map_err(|_| out.error())?;
+                    super::super::emit_execution_v37(relation, root, out)?;
+                    for instance in 0..plan.root(root, out)?.instances.len() {
+                        let row = plan.instance(root, instance, out)?;
+                        if !row.active { continue; }
+                        let function = &semantic.functions()[row.function.index() as usize];
+                        for (block, body) in function.blocks().iter().enumerate() {
+                            for (statement, original) in body.statements().iter().enumerate() {
+                                let SemanticStatementKindV1::Assign(assignment) = original.kind() else { continue; };
+                                let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else { continue; };
+                                assert_eq!(checked.operation(), SemanticCheckedBinaryOpV1::Add);
+                                let SemanticOperandV1::Copy(left) = checked.left() else { panic!("pure left copy"); };
+                                let SemanticOperandV1::Copy(right) = checked.right() else { panic!("pure right copy"); };
+                                assert!(left.projections().is_empty() && right.projections().is_empty());
+                                assert_eq!(semantic.types()[left.ty().index() as usize].rust_type_kind(), SemanticRustTypeKindV1::U32);
+                                assert_eq!(left.ty(), right.ty());
+                                let destination = assignment.destination();
+                                assert!(destination.projections().is_empty());
+                                let ty = destination.ty().index();
+                                let Shape::Tuple(fields) = semantic.types()[ty as usize].shape() else { panic!("actual checked tuple"); };
+                                assert_eq!(fields.fields().len(), 2);
+                                assert_eq!(fields.fields()[0], left.ty());
+                                assert_eq!(semantic.types()[fields.fields()[1].index() as usize].rust_type_kind(), SemanticRustTypeKindV1::Bool);
+                                let destination = row.locals.start + destination.local().index() as usize;
+                                let left = row.locals.start + left.local().index() as usize;
+                                let right = row.locals.start + right.local().index() as usize;
+                                let event = format!("InvocationSourceByteEventV36::Checked {{ destination: {destination}int, source_type: {ty}int, operation: 0int, bits: 32int, signed: false, left: InvocationSourceByteValueV36::Local {{ local: {left}int, moved: false }}, right: InvocationSourceByteValueV36::Local {{ local: {right}int, moved: false }} }}");
+                                writeln!(out, "proof fn checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260()\n ensures invocation_source_aggregate_leaf_count_v42({ty}) == 2,\n invocation_source_aggregate_leaf_path_v42({ty}, 0) == seq![0int],\n invocation_source_aggregate_leaf_path_v42({ty}, 1) == seq![1int],\n invocation_source_aggregate_leaf_bits_v42({ty}, 0) == 32,\n invocation_source_aggregate_leaf_bits_v42({ty}, 1) == 1,\n invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}) == Some({event}),\n{{ }}").map_err(|_| out.error())?;
+                                writeln!(out, r#"proof fn checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260(
+ source: InvocationSourceByteStateV36, left: int, right: int, little_endian: bool,
+)
+ requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+ 0 <= {destination} < source.machine.values.len(), !source.objects.contains_key({destination}),
+ 0 <= {left} < source.machine.values.len(), 0 <= {right} < source.machine.values.len(),
+ source.machine.values[{left}] == MemoryValueV30::Scalar(left),
+ source.machine.values[{right}] == MemoryValueV30::Scalar(right),
+ 0 <= left < 4294967296, 0 <= right < 4294967296,
+ ensures ({{ let after = invocation_source_byte_step_v36(source,
+ invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian);
+ after.machine.valid && after.machine.memory == source.machine.memory
+ && after.machine.frames == source.machine.frames && after.machine.generations == source.machine.generations
+ && after.logical.aggregates.contains_key({destination})
+ && after.logical.aggregates[{destination}].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)
+ && after.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}) }}),
+{{
+ hide(invocation_source_byte_state_well_formed_v36);
+ checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
+ invocation_source_checked_add_reconstruction_step_v259(source, {destination}, {ty},
+ InvocationSourceByteValueV36::Local {{ local: {left}, moved: false }},
+ InvocationSourceByteValueV36::Local {{ local: {right}, moved: false }},
+ left, right, {root}, {instance}, little_endian);
+}}
+"#).map_err(|_| out.error())?;
+                                witnesses += 1;
+                            }
+                        }
+                    }
+                }
+                assert!(witnesses > 0);
+                super::super::support_closure::retain_referenced(out)?;
+                writeln!(out, "}}").map_err(|_| out.error())?;
+                drop(physical);
+                out.budget.release_storage(storage.retained_storage())?;
+                assert_eq!(out.text.matches("proof fn checked_add_actual_schema_").count(), witnesses);
+                assert_eq!(out.text.matches("proof fn checked_add_actual_step_").count(), witnesses);
+                inspect(&out.text);
+                Ok(())
+            })
+        },
+    ).0.unwrap();
+}
+
+#[test]
+fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
+    checked_add_transition_model_v260(|model| {
+        assert!(model.contains("proof fn checked_add_actual_schema_"));
+        assert!(model.contains("proof fn checked_add_actual_step_"));
+        for forbidden in ["assume(", "admit(", "external_body", "assume_specification"] {
+            assert!(!model.contains(forbidden));
+        }
+    });
+}
+
+#[test]
+#[ignore = "exports a complete authentic checked-add source model, not proof admission"]
+fn diagnostic_checked_add_transition_model_export_v260() {
+    use sha2::{Digest, Sha256};
+    use std::io::{BufWriter, Write as _};
+    checked_add_transition_model_v260(|model| {
+        assert!(model.len() <= 16 * 1024 * 1024);
+        let mut output = BufWriter::new(std::io::stdout().lock());
+        write!(
+            output,
+            "{{\"kind\":\"fe2o3-checked-add-transition-model-v260\",\"bytes\":{},\"sha256\":\"",
+            model.len()
+        )
+        .unwrap();
+        for byte in Sha256::digest(model.as_bytes()) {
+            write!(output, "{byte:02x}").unwrap();
+        }
+        write!(output, "\",\"model_hex\":\"").unwrap();
+        for byte in model.as_bytes() {
+            write!(output, "{byte:02x}").unwrap();
+        }
+        writeln!(output, "\"}}").unwrap();
+        output.flush().unwrap();
+    });
+}
+
 // This remains an admitted original program, shared by producer and cut tests.
 pub(in super::super) fn checked_transform(
     types: &mut Vec<SemanticTypeDeclV1>,
