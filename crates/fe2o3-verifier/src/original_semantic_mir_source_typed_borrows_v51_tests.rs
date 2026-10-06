@@ -456,6 +456,7 @@ fn typed_array_invalid_element_law_is_in_complete_source_model() {
     assert_eq!(
         law.split_once("\n{\n").unwrap().1.trim_end(),
         concat!(
+            "    hide(invocation_source_memory_layout_v51);\n",
             "    reveal_with_fuel(invocation_source_memory_value_valid_v51, 1);\n",
             "    if invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian) {\n",
             "        assert forall|element_index: int| 0 <= element_index < count implies\n",

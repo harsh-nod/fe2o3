@@ -58,6 +58,7 @@ proof fn invocation_source_typed_memory_invalid_array_element_refuses_v71(
             element, (fuel - 1) as nat, little_endian),
     ensures !invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian),
 {
+    hide(invocation_source_memory_layout_v51);
     reveal_with_fuel(invocation_source_memory_value_valid_v51, 1);
     if invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian) {
         assert forall|element_index: int| 0 <= element_index < count implies
