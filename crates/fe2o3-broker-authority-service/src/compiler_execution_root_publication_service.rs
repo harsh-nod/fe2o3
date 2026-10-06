@@ -44,6 +44,70 @@ enum Step<'a> {
     },
 }
 
+// Returning an owned outcome ends every token borrow before mutating the
+// session. The original accounting scope must have succeeded before commit.
+enum CommittedStep {
+    Idle,
+    Sent,
+    Reply,
+    Observed {
+        publication: Publication,
+        growth: usize,
+        retained: usize,
+    },
+    Retired {
+        carriage: Carriage,
+        growth: usize,
+        retained: usize,
+    },
+}
+
+impl Step<'_> {
+    fn commit(self) -> CommittedStep {
+        match self {
+            Self::Idle => CommittedStep::Idle,
+            Self::Sent => CommittedStep::Sent,
+            Self::Replay => CommittedStep::Reply,
+            Self::Complete(reply) => {
+                reply.commit();
+                CommittedStep::Reply
+            }
+            Self::Observed {
+                publication,
+                growth,
+                retained,
+                reply,
+            } => {
+                reply.commit();
+                CommittedStep::Observed {
+                    publication,
+                    growth,
+                    retained,
+                }
+            }
+            Self::Retired {
+                carriage,
+                growth,
+                retained,
+                retirement,
+                reply,
+            } => {
+                retirement.commit();
+                reply.commit();
+                CommittedStep::Retired {
+                    carriage,
+                    growth,
+                    retained,
+                }
+            }
+        }
+    }
+}
+
+const _: () = assert!(
+    4 * size_of::<Step<'static>>() >= size_of::<Step<'static>>() + 2 * size_of::<CommittedStep>()
+);
+
 impl<'work> RootControlSessionV3<'work> {
     /// Service at most one authenticated request or one pending reply. Only the
     /// original runtime, measured retained issuer and root-created connection are
@@ -94,42 +158,31 @@ impl<'work> RootControlSessionV3<'work> {
                 b,
             )
         })?;
-        let growth = match step {
-            Step::Idle => 0,
-            Step::Sent => {
+        let growth = match step.commit() {
+            CommittedStep::Idle => 0,
+            CommittedStep::Sent => {
                 connection.reply_pending = false;
                 0
             }
-            Step::Replay => {
+            CommittedStep::Reply => {
                 connection.reply_pending = true;
                 0
             }
-            Step::Complete(reply) => {
-                reply.commit();
-                connection.reply_pending = true;
-                0
-            }
-            Step::Observed {
+            CommittedStep::Observed {
                 publication,
                 growth,
                 retained,
-                reply,
             } => {
-                reply.commit();
                 self.publication = Some(publication);
                 self.retained = retained;
                 connection.reply_pending = true;
                 growth
             }
-            Step::Retired {
+            CommittedStep::Retired {
                 carriage,
                 growth,
                 retained,
-                retirement,
-                reply,
             } => {
-                retirement.commit();
-                reply.commit();
                 self.retirement = Some(carriage);
                 self.retained = retained;
                 connection.reply_pending = true;
@@ -447,6 +500,13 @@ fn start_publication_call(failed: &mut bool, b: &mut Budget<'_>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transport_only_steps_commit_without_fabricating_publication() {
+        assert!(matches!(Step::Idle.commit(), CommittedStep::Idle));
+        assert!(matches!(Step::Sent.commit(), CommittedStep::Sent));
+        assert!(matches!(Step::Replay.commit(), CommittedStep::Reply));
+    }
 
     #[test]
     fn publication_entry_poison_survives_debit_refusal_and_unwind() {
