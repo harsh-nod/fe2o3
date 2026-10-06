@@ -359,11 +359,29 @@ current-publication lease. Its Rust backing quote includes snapshot and record
 bytes plus retained path capacities; filesystem I/O remains the existing bounded
 transaction domain. It cannot be converted to a V3 or V89 semantic owner.
 
-This is a physical publication transition, not managed-build completion or host
-load permission. A distinct conditional replay/readiness envelope and final
-attempt retirement are still required. The host's separate protected-verifier
-and semantic-to-machine proof obligations must not be replaced by this owner,
-its hashes, or a successful journal operation.
+Physical publication alone is not managed-build completion or host load
+permission. The distinct `F3CENV05` conditional readiness framing carries the
+exact intent record, physical claim, conditional outer V5 handoff, compact
+transcript, signed Carriage V3, and every ordered provider payload. Its public
+zero-allocation wire view validates framing only, not nested semantic evidence.
+
+The actual envelope constructor instead borrows a nonconstructible preimage
+owner derived from the independently replayed conditional publication. It
+rechecks all intent coordinates and original source/currentness, joins the
+carriage to the exact reconstructed Subject V3, and preserves the complete
+bytes. A narrow private bridge permits schema-neutral durable replay custody
+and duplicate-intent retirement only. It does not convert into an old V89
+envelope or manufacture protected-verifier or semantic-to-machine authority.
+
+The parent `complete_original_root` path keeps the original approval, profile,
+invocation and artifact owners through persistence, exact intent retirement,
+and the final bound attempt completion. It reports artifact publication only.
+All stages stay on the original account with unchanged local storage windows;
+terminal failure/unwind keeps partial charges, and only known-success temporary
+owner drops release their reservations. Complete upfront funding and joined
+end-to-end qualification remain required before default activation. The host's
+separate protected-verifier and semantic-to-machine proof obligations must not
+be replaced by these owners, their hashes, or a successful journal operation.
 
 The [checkpoint evidence](evidence/root-control-foundations-20260929.md) records
 the tested source, observed failures, and remaining validation limits.

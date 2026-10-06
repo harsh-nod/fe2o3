@@ -14,9 +14,11 @@ use crate::build_config::native::PreparedNativeProductionBuildConfig;
 use crate::protected_compiler_handoff_v3::ParentRustcInvocationCustody as Invocation;
 use fe2o3_artifact_transaction::{
     ArtifactLockRetirementBarrierV1 as Barrier, CompilerModuleHandoffAdmissionErrorV5,
-    CompilerModuleHandoffReceiptV5 as Receipt,
+    CompilerModuleHandoffReceiptV5 as Receipt, EmitError as AttemptError,
+    WorkerV3PublicationIntentErrorV1 as RetirementError,
     consume_compiler_module_handoff_in_original_account_v5 as consume_original,
-    consume_compiler_module_handoff_with_currentness_v5 as consume,
+    consume_compiler_module_handoff_with_currentness_v5 as consume, finish_build_attempt,
+    retire_worker_v3_publication_intent_after_load_readiness_v1,
 };
 use fe2o3_compiler_closure_capability::{
     RetainedCompilerRuntimeErrorV1 as ApprovalError, RetainedCompilerRuntimeV1 as Approval,
@@ -42,6 +44,10 @@ use fe2o3_hsaco_finalize::{
     prepare_conditional_worker_hsaco_publication_in_original_account_v5 as prepare_original,
     prepare_conditional_worker_hsaco_publication_v5 as prepare_publication,
     publish_recovered_conditional_worker_hsaco_in_original_account_v5 as publish_original,
+};
+use fe2o3_runtime_protocol::{
+    ConditionalWorkerReadinessEnvelopeV5 as ReplayEnvelope,
+    ConditionalWorkerReadinessErrorV5 as ReplayReadinessError,
 };
 use fe2o3_verifier::{
     CompilerConditionalNativeSemanticHandoffErrorV5 as RecoveryError,
@@ -387,6 +393,76 @@ impl ParentPublishedConditionalArtifact<'_, '_, '_> {
             .revalidate(producer, self.custody.readiness.budget)?;
         Ok(())
     }
+
+    /// Complete only this actual Root-bound managed artifact. Durable readiness
+    /// contains every conditional replay preimage; it is not host load authority.
+    /// No success is returned before exact intent retirement and attempt finish.
+    pub(crate) fn complete_original_root(
+        mut self,
+        output: &Path,
+        producer: &ProducerIdentity,
+    ) -> Result<()> {
+        self.revalidate(producer)?;
+        self.custody.readiness.origin.require_original_root()?;
+        self.custody.policy_origin.original_parameters()?;
+        self.custody
+            .readiness
+            .origin
+            .require_output(output, self.custody.readiness.budget)?;
+        self.custody.readiness.budget.reserve_storage(FRAME)?;
+        let record = self.publication.recovered_evidence().record();
+        let preimages = self
+            .publication
+            .replay_preimages(producer, self.custody.readiness.budget)?;
+        let preimage_storage = preimages.required_retained_storage();
+        self.custody
+            .readiness
+            .budget
+            .reserve_storage(preimage_storage)?;
+        let envelope = ReplayEnvelope::in_original_account(
+            &preimages,
+            &self.custody.compiler_execution,
+            producer,
+            self.custody.readiness.budget,
+        )?;
+        let envelope_storage = envelope.required_retained_storage();
+        self.custody
+            .readiness
+            .budget
+            .reserve_storage(envelope_storage)?;
+        let (readiness, readiness_storage) =
+            envelope.persist(output, producer, self.custody.readiness.budget)?;
+        self.custody
+            .readiness
+            .budget
+            .reserve_storage(readiness_storage)?;
+        drop(preimages);
+        self.custody.readiness.budget.release_storage(
+            preimage_storage
+                .checked_add(envelope_storage)
+                .ok_or(Resource::Arithmetic)?,
+        )?;
+        self.revalidate(producer)?;
+        retire_worker_v3_publication_intent_after_load_readiness_v1(
+            output,
+            producer,
+            record.attempt(),
+            record.identity(),
+            readiness.receipt(),
+        )?;
+        self.revalidate(producer)?;
+        // Original approval/profile/currentness owners remain live across the
+        // final storage transition, including refusal and unwind. No rollback
+        // of already durable custody is claimed by a later failure.
+        finish_build_attempt(output, producer, record.attempt())?;
+        drop(readiness);
+        self.custody
+            .readiness
+            .budget
+            .release_storage(readiness_storage)?;
+        self.custody.readiness.budget.release_storage(FRAME)?;
+        Ok(())
+    }
 }
 
 impl ParentArtifactCustody<'_, '_, '_> {
@@ -438,6 +514,9 @@ const FRAME: usize = 4 * size_of::<ContinuationError>()
     + 2 * size_of::<ParentPreparedConditionalArtifact<'static, 'static, 'static>>()
     + 2 * size_of::<ParentDurableConditionalArtifact<'static, 'static, 'static>>()
     + 2 * size_of::<ParentPublishedConditionalArtifact<'static, 'static, 'static>>()
+    + 2 * size_of::<ReplayEnvelope<'static, 'static>>()
+    + size_of::<fe2o3_hsaco_finalize::ConditionalWorkerReplayPreimagesV5<'static>>()
+    + size_of::<fe2o3_artifact_transaction::WorkerV3LoadReadinessResultV1>()
     + size_of::<replacement::Replacement>()
     + 8192;
 type Result<T> = std::result::Result<T, ContinuationError>;
@@ -960,6 +1039,9 @@ enum Cause {
     Transcript(TranscriptError),
     Publication(PublicationError),
     Output(OutputError),
+    ReplayReadiness(ReplayReadinessError),
+    Retirement(RetirementError),
+    Attempt(AttemptError),
 }
 macro_rules! causes {
     ($($ty:ty => $variant:ident),+ $(,)?) => {
@@ -980,4 +1062,5 @@ causes!(Resource => Resource, Failure => Readiness, CapabilityError => Invocatio
     CompilerModuleHandoffAdmissionErrorV5<RecoveryError> => Recovery,
     HandoffError => Transaction, SubjectError => Subject,
     NativeFirstBuildWorkerErrorV1 => Worker, NativeWorkerFinalizationErrorV1 => Finalizer,
-    TranscriptError => Transcript, PublicationError => Publication, OutputError => Output);
+    TranscriptError => Transcript, PublicationError => Publication, OutputError => Output,
+    ReplayReadinessError => ReplayReadiness, RetirementError => Retirement, AttemptError => Attempt);
