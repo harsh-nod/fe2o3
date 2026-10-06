@@ -146,3 +146,23 @@ hardware evidence, full compiler memory coverage, or broad milestone closure.
 
 For the lower-level public interface and historical qualification boundaries,
 see [BF16 source authoring](bf16-source-authoring.md).
+
+## Separate private Worker evidence — 2026-10-06
+
+A supervised, ignored engineering test has now completed Identity and Swap01
+through two fresh rustc callbacks and four calls to the existing ordinary-v2
+Worker. The same source/checked-output/LLVM/descriptor/handoff owners stayed
+live across each two-call loan; complete replay, source-first refusals and
+owner-drop checks passed. See the
+[implementation checkpoint](assembly-authoring-implementation-status.md#private-bf16-owning-worker-pair--2026-10-06)
+for the exact historical compiler and raw evidence identities.
+
+This does **not** change any command or acceptance result in this guide. The
+public five-action workflow still produces nominal source admission followed
+by the explicit normal-ranked refusal. “Ordinary Worker” names the existing
+Worker protocol/entrypoint, not ordinary BF16 compiler admission. Do not enable
+the ignored test or reuse a historical scope as a public compilation recipe.
+The private run preserved raw `Incomplete` analysis and runtime bounds/alias
+duties; it granted no artifact publication, loading or launch authority and
+performed no GPU or new CPU numerical qualification. Reported code-object
+digests are not a downloadable or independently rehashed artifact.
