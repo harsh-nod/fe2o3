@@ -746,3 +746,121 @@ fn original_execution_tile_source_dispatch_has_exact_and_one_short_resources() {
         }
     }
 }
+
+fn generate_actual_tile_target_v176(
+    slots: &SourceSlots<'_, '_>,
+    tile: &TileExpansion<'_, '_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    use super::super::tile_target::TileTargetV176;
+    let target = TileTargetV176::derive(slots, out)?;
+    let inventory = target.inventory(out)?;
+    assert!(std::ptr::eq(inventory.owner(), tile.output(out.budget)?));
+    assert!(!std::ptr::eq(
+        inventory.owner(),
+        slots.correspondence(out)?.inventory(out.budget)?.owner(),
+    ));
+    let actual_operations = inventory.operations().len();
+    assert!(actual_operations > 0);
+    for row in inventory.definitions() {
+        assert!(!matches!(row.ty, fe2o3_kernel_ir::Type::ExecutionRole(_)));
+    }
+    let selected = tile.root_policy_v162(0, out.budget)?.unwrap().0;
+    assert_eq!(target.root_function(0, out)?, selected);
+    target.emit(fe2o3_kernel_ir::FormalIndexWidth::Bits64, out)?;
+    assert!(out.text.contains("spec fn byte_micro_step_0_v30("));
+    assert_eq!(target.inventory(out)?.operations().len(), actual_operations);
+    Ok(())
+}
+
+#[test]
+fn original_execution_tile_target_emits_the_actual_expanded_graph() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            generate_actual_tile_target_v176,
+        )
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
+fn original_execution_tile_target_has_exact_and_one_short_resources() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let baseline = run_fixture(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            generate_actual_tile_target_v176,
+        );
+        baseline.0.unwrap();
+        let exact = run_fixture(
+            layout,
+            baseline.1,
+            baseline.3,
+            generate_actual_tile_target_v176,
+        );
+        exact.0.unwrap();
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (baseline.1, baseline.2, baseline.3)
+        );
+        for (work, storage, is_work) in [
+            (baseline.1 - 1, baseline.3, true),
+            (baseline.1, baseline.3 - 1, false),
+        ] {
+            let result = run_fixture(layout, work, storage, generate_actual_tile_target_v176).0;
+            use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+            assert!(if is_work {
+                matches!(result, Err(Error::Resource(Resource::Work(error)))
+                    | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+                    if error.actual() == baseline.1 && error.limit() == work)
+            } else {
+                matches!(result, Err(Error::Resource(Resource::Storage(error)))
+                    | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+                    if error.actual() == baseline.3 && error.limit() == storage)
+            });
+        }
+    }
+}
+
+#[test]
+fn original_execution_tile_target_rejects_foreign_and_refunded_accounts() {
+    use super::super::tile_target::TileTargetV176;
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    for foreign in [false, true] {
+        let mut reached = false;
+        let result = run_fixture(
+            Layout::Blocked,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            |slots, _, out| {
+                let target = TileTargetV176::derive(slots, out)?;
+                reached = true;
+                let error = if foreign {
+                    let mut work = Work::new(512 * 1024 * 1024);
+                    let mut budget = Budget::new(&mut work, 512 * 1024 * 1024);
+                    budget.reserve_storage(out.budget.storage())?;
+                    let mut other = Writer::new(&mut budget)?;
+                    target.root_function(0, &mut other).unwrap_err()
+                } else {
+                    out.budget.release_storage(1)?;
+                    target.root_function(0, out).unwrap_err()
+                };
+                assert!(matches!(
+                    error,
+                    Error::Resource(Resource::Accounting)
+                        | Error::Source(SourceError::Resource(Resource::Accounting))
+                ));
+                assert!(target.inventory(out).is_err());
+                Err(error)
+            },
+        );
+        assert!(reached);
+        assert!(result.0.is_err());
+    }
+}
