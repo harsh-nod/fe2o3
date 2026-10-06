@@ -943,7 +943,6 @@ fn nested_refusal_diagnostic_keeps_one_step_and_source_rejections_unchanged() {
     assert!(validate_nested(&origin, &frames, FIXTURE).is_ok());
 }
 
-
 // Independent literal source coordinates: do not derive this observed record
 // using nested_ranges() or coordinate(), whose expectations it exercises.
 fn literal_local_wrapper_definition() -> Value {
@@ -998,7 +997,7 @@ fn nested_wrapper_literal_span_cannot_change_file_macro_or_expansion_identity() 
     let (origin, original) = inert_nested_reports();
     let mut frames = original.clone();
     frames["frames"][1]["definition_site"] = literal_local_wrapper_definition();
-    frames["frames"][1]["definition_site"]["file_identity"] = json!(vec![2_u8;32]);
+    frames["frames"][1]["definition_site"]["file_identity"] = json!(vec![2_u8; 32]);
     assert_eq!(
         validate_nested(&origin, &frames, FIXTURE),
         Err("nested fixture file identity mismatch")
