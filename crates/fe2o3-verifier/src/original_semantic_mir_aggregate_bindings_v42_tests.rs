@@ -311,6 +311,84 @@ pub(in super::super) fn deinitialized_transform(
     .unwrap();
 }
 
+// Both tuple fields remain live, while every helper path returns normally.
+// Assertion failure admission is a separate control-flow obligation.
+fn checked_leaf_transform(
+    types: &mut Vec<SemanticTypeDeclV1>,
+    functions: &mut Vec<SemanticFunctionDeclV1>,
+    operation: SemanticCheckedBinaryOpV1,
+) {
+    checked_transform(types, functions, operation, false, false);
+    let old = functions.last_mut().unwrap();
+    let source = old.source();
+    let mut blocks = old.blocks().to_vec();
+    let SemanticTerminatorKindV1::Assert { condition, .. } = blocks[1].terminator().kind() else {
+        panic!("expected checked-result assertion");
+    };
+    blocks[1] = SemanticBasicBlockV1::new(
+        blocks[1].identity(),
+        source,
+        vec![],
+        SemanticTerminatorV1::new(
+            source,
+            SemanticTerminatorKindV1::SwitchInt {
+                discriminant: condition.clone(),
+                targets: SemanticSwitchTargetsV1::new(
+                    vec![SemanticSwitchTargetV1::new(
+                        0,
+                        SemanticControlFlowEdgeV1::new(
+                            SemanticEdgeRoleV1::SwitchValue,
+                            SemanticBlockIdV1::from_index(2),
+                        ),
+                    )],
+                    SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::SwitchOtherwise,
+                        SemanticBlockIdV1::from_index(3),
+                    ),
+                )
+                .unwrap(),
+            },
+        ),
+    )
+    .unwrap();
+    let word = SemanticTypeIdV1::from_index(0);
+    blocks.push(
+        SemanticBasicBlockV1::new(
+            SemanticBlockIdentityV1::from_sha256([248; 32]),
+            source,
+            vec![SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(0), vec![], word).unwrap(),
+                    SemanticRvalueV1::new(
+                        word,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                            SemanticPlaceV1::new(SemanticLocalIdV1::from_index(1), vec![], word)
+                                .unwrap(),
+                        )),
+                    ),
+                )),
+            )],
+            SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Return),
+        )
+        .unwrap(),
+    );
+    *old = SemanticFunctionDeclV1::new(
+        old.identity(),
+        old.role(),
+        old.item_definition_identity(),
+        old.monomorphization_identity(),
+        old.generic_type_arguments_identity(),
+        old.const_generic_arguments_identity(),
+        source,
+        old.abi().clone(),
+        old.locals().to_vec(),
+        old.entry(),
+        blocks,
+    )
+    .unwrap();
+}
+
 fn source_boundary_value(
     plan: &InvocationPlan<'_, '_>,
     root: usize,
@@ -362,7 +440,7 @@ fn expanded_source_leaf_relations_preserve_checked_tuple_components() {
         ] {
             super::super::super::invocations::tests::run_source_transform(
                 LIMIT, LIMIT,
-                |types, functions| checked_transform(types, functions, operation, false, false),
+                |types, functions| checked_leaf_transform(types, functions, operation),
                 |plan, out| {
                     with_tile_slots(plan, layout, out, |slots, out| {
                         let target = TileTargetV176::derive(slots, out)?;
@@ -405,13 +483,7 @@ fn expanded_source_leaf_relations_refuse_unowned_ordinals_before_emission() {
                 LIMIT,
                 LIMIT,
                 |types, functions| {
-                    checked_transform(
-                        types,
-                        functions,
-                        SemanticCheckedBinaryOpV1::Add,
-                        false,
-                        false,
-                    )
+                    checked_leaf_transform(types, functions, SemanticCheckedBinaryOpV1::Add)
                 },
                 |plan, out| {
                     with_tile_slots(plan, layout, out, |slots, out| {

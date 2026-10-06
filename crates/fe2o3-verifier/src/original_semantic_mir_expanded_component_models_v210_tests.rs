@@ -87,7 +87,13 @@ fn generate(
             for (ordinal, value) in definitions.into_iter().enumerate() {
                 let endpoint =
                     relation.ssa_typed_endpoint_v36(root, instance, value, out.budget)?;
-                let ty = endpoint.physical_type(out.budget)?;
+                let ty = match endpoint.carrier_shape(out.budget)? {
+                    fe2o3_lower_mir_kernel::ProductionSourceSsaCarrierShapeV37::Value
+                    | fe2o3_lower_mir_kernel::ProductionSourceSsaCarrierShapeV37::Unit => {
+                        endpoint.physical_type(out.budget)?
+                    }
+                    _ => None,
+                };
                 let nominal = &semantic.types()[endpoint.source_type(out.budget)?.index() as usize];
                 let role = match nominal.rust_type_kind() {
                     SemanticRustTypeKindV1::Execution(role) => Some(role),

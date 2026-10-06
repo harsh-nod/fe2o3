@@ -6,6 +6,7 @@ use fe2o3_kernel_ir::{ExecutionRoleV15, FormalIndexWidth};
 use fe2o3_lower_mir_kernel::{
     ProductionSourceSsaCarrierShapeV37 as Carrier, ProductionSourceSsaEndpointV36 as Endpoint,
 };
+use fe2o3_mir_model::semantic_mir_v1::{SemanticExecutionRoleV29, SemanticRustTypeKindV1};
 use std::fmt::Write as _;
 
 macro_rules! emit {
@@ -62,12 +63,21 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
             out.budget.charge_work(1)?;
             let nominal = semantic.types().get(leaf_type.index() as usize)
                 .ok_or_else(mismatch)?.rust_type_kind();
-            let execution = matches!(endpoint.physical_type(out.budget)?, Some(Type::Execution(
-                ExecutionRoleV15::MaskedTileU32 { .. } | ExecutionRoleV15::LaneFragmentU32 { .. }
-            )));
+            out.budget.charge_work(1)?;
+            let execution = matches!(semantic.types().get(source_type.index() as usize)
+                .ok_or_else(mismatch)?.rust_type_kind(), SemanticRustTypeKindV1::Execution(
+                    SemanticExecutionRoleV29::MaskedTileU32 { .. }
+                    | SemanticExecutionRoleV29::LaneFragmentU32 { .. }
+                ));
             let actual = if execution {
                 // Borrowed execution carriers require the separate loan relation.
                 if endpoint.execution_borrow_v163(out.budget)?.is_some() {
+                    return Err(mismatch());
+                }
+                if !matches!(endpoint.physical_type(out.budget)?, Some(Type::Execution(
+                    ExecutionRoleV15::MaskedTileU32 { .. }
+                    | ExecutionRoleV15::LaneFragmentU32 { .. }
+                ))) {
                     return Err(mismatch());
                 }
                 let original = endpoint.original_definition(out.budget)?.ok_or_else(mismatch)?;
@@ -85,12 +95,12 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                 if component.source_type(out.budget)? != leaf_type {
                     return Err(mismatch());
                 }
-                match (component.carrier_shape(out.budget)?,
-                    component.original_definition(out.budget)?, component.physical_type(out.budget)?)
-                {
-                    (Carrier::Unit | Carrier::Aggregate { components: 0 }, None, None)
+                match component.carrier_shape(out.budget)? {
+                    Carrier::Unit | Carrier::Aggregate { components: 0 }
                         if scalar == ScalarV30::Unit => None,
-                    (Carrier::Value, Some(original), Some(ty)) => {
+                    Carrier::Value => {
+                        let original = component.original_definition(out.budget)?.ok_or_else(mismatch)?;
+                        let ty = component.physical_type(out.budget)?.ok_or_else(mismatch)?;
                         let original_inventory = relation.inventory(out.budget)?;
                         out.budget.charge_work(1)?;
                         if original_inventory.definitions().get(original).map(|row| row.ty) != Some(ty)
