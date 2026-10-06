@@ -28,6 +28,8 @@ pub(super) mod descriptor_loans;
 mod discriminants;
 #[path = "original_semantic_mir_source_enum_construction_v43.rs"]
 mod enum_construction;
+#[path = "original_semantic_mir_source_execution_loans_v168.rs"]
+pub(super) mod execution_loans;
 #[path = "original_semantic_mir_source_integer_casts_v43.rs"]
 mod integer_casts;
 #[path = "original_semantic_mir_source_enum_events_v47.rs"]
@@ -164,6 +166,7 @@ pub(super) enum Value {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OperandKind {
+    Execution(execution_loans::ExecutionOperand),
     Descriptor(descriptor_helpers::DescriptorOperand),
     Enum {
         local: usize,
@@ -233,6 +236,7 @@ pub(super) enum Event {
     WitnessBorrow(witness_events::Borrow),
     WitnessTransfer(witness_transfers::Transfer),
     Descriptor(descriptor_loans::DescriptorEvent),
+    ExecutionLoan(execution_loans::ExecutionEvent),
     Pointer(pointer_events::Event),
     Discriminant(discriminants::Read),
     EnumConstruct(enum_construction::Construct),
@@ -577,6 +581,19 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                     _ => None,
                 };
                 let borrowed = match (borrowed, statement.kind()) {
+                    (None, Statement::Assign(assignment)) => execution_loans::derive(
+                        &context,
+                        row.function,
+                        block_ordinal,
+                        statement_ordinal,
+                        assignment,
+                        out,
+                    )
+                    .map_err(|error| statement_error(error, site, statement.kind(), context.types))?
+                    .map(Event::ExecutionLoan),
+                    (other, _) => other,
+                };
+                let borrowed = match (borrowed, statement.kind()) {
                     (None, Statement::Assign(assignment)) => descriptor_loans::derive(
                         &context,
                         plan,
@@ -752,6 +769,23 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
         argument: usize,
         out: &mut Writer<'_, '_>,
     ) -> Result<TypedOperand> {
+        if let Some(operand) = execution_loans::call_argument(
+            self.slots,
+            plan,
+            self.root,
+            self.instance,
+            block,
+            argument,
+            out,
+        )? {
+            if operand.recipe.mutable {
+                return Err(unsupported());
+            }
+            return Ok(TypedOperand {
+                ty: TypeId::from_index(operand.recipe.reference_type),
+                kind: OperandKind::Execution(operand),
+            });
+        }
         match descriptor_helpers::call_argument(
             self.slots,
             plan,
@@ -1227,6 +1261,11 @@ impl Context<'_, '_, '_> {
         let ty = operand.ty();
         let declaration = self.types.get(ty.index() as usize).ok_or_else(mismatch)?;
         let kind = if let Shape::Pointer(pointer) = declaration.shape() {
+            if execution_loans::nominal_reference(self.types, ty)?.is_some() {
+                return Err(Error::Statement(
+                    "original execution reference needs its authenticated loan operand",
+                ));
+            }
             // Stable witness references have logical scalar carriers. Ordinary
             // memory operands cannot transport their loan/version metadata yet.
             if self.slots.witness_class(pointer.pointee(), out)?.is_some() {
@@ -1522,6 +1561,11 @@ impl TypedOperand {
     pub(super) fn emit(self, out: &mut Writer<'_, '_>) -> Result<()> {
         out.budget.charge_work(1)?;
         match self.kind {
+            OperandKind::Execution(operand) => {
+                write!(out, "InvocationSourceOperandV36::Execution(").map_err(|_| out.error())?;
+                operand.emit(out)?;
+                write!(out, ")").map_err(|_| out.error())
+            }
             OperandKind::Descriptor(operand) => {
                 write!(out, "InvocationSourceOperandV36::Descriptor {{ local: {}int, recipe: ", operand.local)
                     .map_err(|_| out.error())?;
@@ -1677,6 +1721,7 @@ fn emit_event(
         Event::WitnessBorrow(borrow) => borrow.emit(out)?,
         Event::WitnessTransfer(transfer) => transfer.emit(out)?,
         Event::Descriptor(event) => event.emit(out)?,
+        Event::ExecutionLoan(event) => event.emit(out)?,
         Event::Scalar => {
             write!(out, "InvocationSourceByteEventV36::Scalar").map_err(|_| out.error())?
         }
@@ -1762,6 +1807,7 @@ fn headers() -> usize {
         + witness_transfers::headers()
         + descriptor_loans::headers()
         + descriptor_helpers::headers()
+        + execution_loans::headers()
         + slice_reads::headers()
         + discriminants::headers()
         + aggregates::headers()
@@ -1774,6 +1820,7 @@ fn headers() -> usize {
 }
 
 pub(super) const SOURCE_BYTES_V36: &str = concat!(
+    include_str!("original_semantic_mir_source_execution_loans_v168.vrs"),
     include_str!("original_semantic_mir_source_tile_v161.vrs"),
     include_str!("original_semantic_mir_source_thread_write_v88.vrs"),
     include_str!("original_semantic_mir_source_descriptor_indices_v52.vrs"),
@@ -1812,6 +1859,8 @@ struct InvocationSourceObjectV40 {
 spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByteStateV36) -> bool {
     byte_memory_well_formed_v30(source.machine.memory)
         && invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len() as int)
+        && (forall|local: int| source.logical.execution_references.contains_key(local) ==>
+            source.machine.values[local] == MemoryValueV30::Unit && !source.objects.contains_key(local))
         && (forall|local: int| source.logical.descriptor_references.contains_key(local) ==>
             !source.objects.contains_key(local)
                 && match source.machine.values[local] {
@@ -1873,6 +1922,7 @@ enum InvocationSourceByteValueV36 {
 }
 
 enum InvocationSourceOperandV36 {
+    Execution(InvocationSourceExecutionOperandV168),
     Descriptor { local: int, recipe: InvocationSourceDescriptorRecipeV51, moved: bool },
     Enum { local: int, source_type: int, moved: bool },
     Aggregate { place: InvocationSourceAggregatePlaceV42, moved: bool },
@@ -1907,9 +1957,11 @@ enum InvocationSourceByteEventV36 {
         instance: int, block: int, statement: int, parent: Option<InvocationSourceWitnessParentV43> },
     WitnessTransfer { destination: int, input: int, source_type: int, reference: bool, moved: bool },
     Descriptor(InvocationSourceDescriptorEventV51),
+    ExecutionLoan(InvocationSourceExecutionEventV168),
     ThreadWrite(InvocationSourceThreadWriteV88),
     ContextIssue(InvocationSourceContextIssueV161),
-    TileLoad(InvocationSourceTileLoadV161),
+    WorkgroupDerive(InvocationSourceWorkgroupDeriveV168),
+    TileLoad(InvocationSourceExecutionTileLoadV168),
     TileTransport(InvocationSourceTileTransportV161),
     Pointer(InvocationSourcePointerEventV36),
     Transfer { destination: InvocationSourceByteDestinationV36,
@@ -2132,7 +2184,7 @@ spec fn invocation_source_operand_evaluate_v36(
 ) -> InvocationSourceByteEvaluationV36 {
     match operand {
         InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }
-        | InvocationSourceOperandV36::Descriptor { .. } => InvocationSourceByteEvaluationV36 {
+        | InvocationSourceOperandV36::Descriptor { .. } | InvocationSourceOperandV36::Execution(_) => InvocationSourceByteEvaluationV36 {
             source: invocation_source_byte_refused_v36(source), value: MemoryValueV30::Undefined },
         InvocationSourceOperandV36::Scalar { value, bits } =>
             invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian),
@@ -2250,6 +2302,8 @@ spec fn invocation_source_byte_step_v36(
                 source, destination, input, source_type, reference, moved),
         InvocationSourceByteEventV36::Descriptor(event) =>
             invocation_source_descriptor_step_v51(source, event),
+        InvocationSourceByteEventV36::ExecutionLoan(event) =>
+            invocation_source_execution_step_v168(source, event),
         // A scalar marker is not a no-op. The exact statement's existing
         // primitive graph must run on the current values between byte events.
         InvocationSourceByteEventV36::Scalar => invocation_source_byte_refused_v36(source),
@@ -2279,17 +2333,19 @@ spec fn invocation_source_byte_step_v36(
             invocation_source_thread_write_v88(source, write, root, instance, little_endian).source,
         InvocationSourceByteEventV36::ContextIssue(issue) =>
             invocation_source_context_issue_v161(source, issue).source,
+        InvocationSourceByteEventV36::WorkgroupDerive(derive) =>
+            invocation_source_workgroup_derive_v168(source, derive).source,
         InvocationSourceByteEventV36::TileLoad(load) =>
-            invocation_source_tile_load_v161(source, load, root, instance, little_endian).source,
+            invocation_source_execution_tile_load_v168(source, load, root, instance, little_endian).source,
         InvocationSourceByteEventV36::TileTransport(transfer) =>
-            invocation_source_tile_transport_v161(source, transfer).source,
+            invocation_source_execution_tile_transport_v170(source, transfer).source,
         InvocationSourceByteEventV36::Transfer { destination, value, bits } => {
             let evaluated = invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian);
             if !evaluated.source.machine.valid { evaluated.source }
             else { match destination {
                 InvocationSourceByteDestinationV36::Component(place) =>
                     invocation_source_aggregate_place_replace_v42(evaluated.source, place,
-                        InvocationSourceAggregateV42 { source_type: place.result_type,
+                        InvocationSourceAggregateV42 { source_type: place.result_type, execution_lease: None,
                             leaves: Map::empty().insert(seq![], evaluated.value) }),
                 InvocationSourceByteDestinationV36::Local(local) =>
                     invocation_source_byte_put_local_v36(evaluated.source, local, evaluated.value),

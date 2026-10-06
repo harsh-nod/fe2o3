@@ -1,0 +1,435 @@
+// Execution references are logical loans, not addresses or Index1d witnesses.
+// Original source ownership binds their types and sites. Dynamic state checks
+// origin versions, active frames, reborrow ancestry and shared/unique conflicts.
+// Shape is not a transition-history proof. Authenticated source events create
+// all admitted references from the empty initial map. NLL loan-end transport
+// is not implemented: a retained descendant conservatively suspends its parent.
+enum InvocationSourceExecutionRoleV168 { Context, Workgroup }
+
+struct InvocationSourceExecutionRecipeV168 {
+    reference_type: int,
+    source_type: int,
+    role: InvocationSourceExecutionRoleV168,
+    mutable: bool,
+    instance: int,
+    block: int,
+    statement: int,
+}
+
+struct InvocationSourceExecutionLoanIdV168 { local: int, version: int }
+
+struct InvocationSourceExecutionReferenceV168 {
+    recipe: InvocationSourceExecutionRecipeV168,
+    identity: InvocationSourceExecutionLoanIdV168,
+    origin: int,
+    origin_version: int,
+    frame: MemoryDynamicFrameV30,
+    ancestors: Seq<InvocationSourceExecutionLoanIdV168>,
+}
+
+enum InvocationSourceExecutionEventV168 {
+    Borrow { destination: int, input: int, recipe: InvocationSourceExecutionRecipeV168,
+        parent: Option<InvocationSourceExecutionRecipeV168> },
+    Transfer { destination: int, input: int, recipe: InvocationSourceExecutionRecipeV168,
+        moved: bool },
+}
+
+struct InvocationSourceExecutionOperandV168 {
+    local: int,
+    recipe: InvocationSourceExecutionRecipeV168,
+    moved: bool,
+}
+
+struct InvocationSourceWorkgroupDeriveV168 {
+    context: InvocationSourceExecutionOperandV168,
+    destination: int,
+    source_type: int,
+}
+
+struct InvocationSourceExecutionTileLoadV168 {
+    workgroup: InvocationSourceExecutionOperandV168,
+    load: InvocationSourceTileLoadV161,
+}
+
+spec fn invocation_source_execution_id_shape_v168(
+    identity: InvocationSourceExecutionLoanIdV168, versions: Seq<int>,
+) -> bool {
+    0 <= identity.local < versions.len() && 0 < identity.version <= versions[identity.local]
+}
+
+spec fn invocation_source_execution_reference_shape_v168(
+    reference: InvocationSourceExecutionReferenceV168, versions: Seq<int>,
+) -> bool {
+    invocation_source_execution_id_shape_v168(reference.identity, versions)
+        && 0 <= reference.origin < versions.len()
+        && 0 <= reference.origin_version <= versions[reference.origin]
+        && reference.recipe.source_type >= 0 && reference.recipe.reference_type >= 0
+        && reference.recipe.instance >= 0 && reference.recipe.block >= 0
+        && reference.recipe.statement >= 0
+        && (forall|i: int| 0 <= i < reference.ancestors.len() ==>
+            invocation_source_execution_id_shape_v168(reference.ancestors[i], versions)
+                && reference.ancestors[i] != reference.identity)
+        && (forall|i: int, j: int| 0 <= i < j < reference.ancestors.len() ==>
+            reference.ancestors[i] != reference.ancestors[j])
+}
+
+spec fn invocation_source_execution_ancestry_v168(
+    references: Map<int, InvocationSourceExecutionReferenceV168>,
+) -> bool {
+    forall|left: int, right: int| references.contains_key(left)
+        && references.contains_key(right) ==>
+        ({ let a = references[left]; let b = references[right];
+            (a.identity == b.identity ==> a == b && (!a.recipe.mutable || left == right))
+                && (a.ancestors.contains(b.identity) ==>
+                    invocation_source_execution_same_origin_v168(a, b)
+                        && b.ancestors.len() < a.ancestors.len()
+                        && a.ancestors.take(b.ancestors.len() as int) == b.ancestors
+                        && a.ancestors[b.ancestors.len() as int] == b.identity) })
+}
+
+// Field 0 is total work-items; field 1 is x-fastest work-item rank within the
+// workgroup. Launch dimensionality and the workgroup's grid index are distinct.
+spec fn invocation_source_workgroup_shape_v168(ty: int) -> bool {
+    invocation_source_aggregate_leaf_count_v42(ty) == 6
+        && invocation_source_aggregate_leaf_path_v42(ty, 0) == seq![0int]
+        && invocation_source_aggregate_leaf_path_v42(ty, 1) == seq![1int]
+        && invocation_source_aggregate_leaf_bits_v42(ty, 0) == 64
+        && invocation_source_aggregate_leaf_bits_v42(ty, 1) == 64
+        && (forall|i: int| 0 <= i < 3 ==>
+            invocation_source_aggregate_leaf_path_v42(ty, i + 2) == seq![2int, i]
+                && invocation_source_aggregate_leaf_bits_v42(ty, i + 2) == 0)
+        && invocation_source_aggregate_leaf_path_v42(ty, 5) == seq![3int]
+        && invocation_source_aggregate_leaf_bits_v42(ty, 5) == 0
+}
+
+spec fn invocation_source_workgroup_size_v168(execution: MemoryExecutionContextV37) -> int {
+    execution.workgroup[0] * execution.workgroup[1] * execution.workgroup[2]
+}
+
+spec fn invocation_source_workgroup_rank_v168(execution: MemoryExecutionContextV37) -> int {
+    execution.local[0] + execution.workgroup[0]
+        * (execution.local[1] + execution.workgroup[1] * execution.local[2])
+}
+
+spec fn invocation_source_execution_payload_v168(
+    source: InvocationSourceByteStateV36, local: int, ty: int,
+    role: InvocationSourceExecutionRoleV168,
+) -> bool {
+    source.logical.aggregates.contains_key(local)
+        && source.logical.aggregates[local].source_type == ty
+        && invocation_source_aggregate_complete_v42(source.logical.aggregates[local])
+        && match source.machine.frames.execution {
+            Some(execution) => byte_execution_well_formed_v37(execution) && match role {
+                InvocationSourceExecutionRoleV168::Context =>
+                    invocation_source_context_shape_v161(ty)
+                        && (forall|i: int| 0 <= i < 5 ==>
+                            source.logical.aggregates[local].leaves[seq![i]] == MemoryValueV30::Unit),
+                InvocationSourceExecutionRoleV168::Workgroup =>
+                    invocation_source_workgroup_shape_v168(ty)
+                        && source.logical.aggregates[local].leaves[seq![0int]] == MemoryValueV30::Scalar(
+                            invocation_source_workgroup_size_v168(execution))
+                        && source.logical.aggregates[local].leaves[seq![1int]] == MemoryValueV30::Scalar(
+                            invocation_source_workgroup_rank_v168(execution))
+                        && (forall|i: int| 0 <= i < 3 ==>
+                            source.logical.aggregates[local].leaves[seq![2int, i]] == MemoryValueV30::Unit)
+                        && source.logical.aggregates[local].leaves[seq![3int]] == MemoryValueV30::Unit,
+            },
+            None => false,
+        }
+}
+
+// This is the generative Context lease, not the shorter receiver borrow of a
+// particular Workgroup storage local. Full-value transport retains this record.
+spec fn invocation_source_execution_lease_current_v170(
+    source: InvocationSourceByteStateV36, lease: InvocationSourceExecutionReferenceV168,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && lease.recipe.role == InvocationSourceExecutionRoleV168::Context
+        && lease.recipe.mutable
+        && invocation_source_execution_reference_shape_v168(lease, source.logical.versions)
+        && source.logical.versions[lease.origin] == lease.origin_version
+        && invocation_source_execution_payload_v168(source, lease.origin,
+            lease.recipe.source_type, InvocationSourceExecutionRoleV168::Context)
+        && exists|i: int| 0 <= i < source.machine.frames.active.len()
+            && source.machine.frames.active[i] == lease.frame
+}
+
+spec fn invocation_source_execution_aggregate_current_v170(
+    source: InvocationSourceByteStateV36, local: int,
+) -> bool {
+    source.logical.aggregates.contains_key(local)
+        && invocation_source_aggregate_complete_v42(source.logical.aggregates[local])
+        && match source.logical.aggregates[local].execution_lease {
+            Some(lease) => invocation_source_execution_lease_current_v170(source, lease),
+            None => false,
+        }
+}
+
+spec fn invocation_source_execution_value_v168(
+    source: InvocationSourceByteStateV36, local: int, ty: int,
+    role: InvocationSourceExecutionRoleV168,
+) -> bool {
+    invocation_source_execution_payload_v168(source, local, ty, role)
+        && (role == InvocationSourceExecutionRoleV168::Workgroup ==>
+            invocation_source_execution_aggregate_current_v170(source, local))
+}
+
+spec fn invocation_source_execution_record_current_v168(
+    source: InvocationSourceByteStateV36, reference: InvocationSourceExecutionReferenceV168,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && invocation_source_execution_reference_shape_v168(reference, source.logical.versions)
+        && source.logical.versions[reference.origin] == reference.origin_version
+        && invocation_source_execution_value_v168(source, reference.origin,
+            reference.recipe.source_type, reference.recipe.role)
+        && exists|i: int| 0 <= i < source.machine.frames.active.len()
+            && source.machine.frames.active[i] == reference.frame
+}
+
+spec fn invocation_source_execution_same_origin_v168(
+    left: InvocationSourceExecutionReferenceV168, right: InvocationSourceExecutionReferenceV168,
+) -> bool {
+    left.origin == right.origin && left.origin_version == right.origin_version
+        && left.frame == right.frame
+}
+
+// Ancestors are suspended, not recreated. Shared siblings coexist; a unique
+// descendant excludes every other non-ancestor loan. Moves retain identity.
+spec fn invocation_source_execution_no_conflict_v168(
+    source: InvocationSourceByteStateV36, candidate: InvocationSourceExecutionReferenceV168,
+) -> bool {
+    (forall|local: int| source.logical.execution_references.contains_key(local) ==>
+        ({ let other = source.logical.execution_references[local];
+            invocation_source_execution_record_current_v168(source, other)
+                && invocation_source_execution_same_origin_v168(candidate, other)
+                && candidate.identity != other.identity
+                && !candidate.ancestors.contains(other.identity)
+                ==> !candidate.recipe.mutable && !other.recipe.mutable }))
+        && (forall|local: int| source.logical.aggregates.contains_key(local) ==>
+            match source.logical.aggregates[local].execution_lease {
+                Some(lease) => invocation_source_execution_lease_current_v170(source, lease)
+                    ==> !invocation_source_execution_same_origin_v168(candidate, lease),
+                None => true,
+            })
+}
+
+spec fn invocation_source_execution_reference_current_v168(
+    source: InvocationSourceByteStateV36, local: int,
+    recipe: InvocationSourceExecutionRecipeV168,
+) -> bool {
+    source.logical.execution_references.contains_key(local)
+        && source.logical.execution_references[local].recipe == recipe
+        && invocation_source_execution_record_current_v168(source, source.logical.execution_references[local])
+        && invocation_source_execution_no_conflict_v168(source, source.logical.execution_references[local])
+}
+
+spec fn invocation_source_execution_install_v168(
+    source: InvocationSourceByteStateV36, destination: int,
+    reference: InvocationSourceExecutionReferenceV168,
+) -> InvocationSourceByteStateV36 {
+    if destination == reference.origin || source.objects.contains_key(destination) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let changed = invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Unit);
+        if !changed.machine.valid { changed }
+        else { InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+            execution_references: changed.logical.execution_references.insert(destination, reference),
+            ..changed.logical }, ..changed } }
+    }
+}
+
+spec fn invocation_source_execution_step_v168(
+    source: InvocationSourceByteStateV36, event: InvocationSourceExecutionEventV168,
+) -> InvocationSourceByteStateV36 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) {
+        invocation_source_byte_refused_v36(source)
+    } else { match event {
+        InvocationSourceExecutionEventV168::Borrow { destination, input, recipe, parent } => {
+            if !(0 <= destination < source.machine.values.len())
+                || !(0 <= input < source.machine.values.len())
+                || source.machine.frames.active.len() == 0
+                || recipe.source_type < 0 || recipe.reference_type < 0
+                || recipe.instance < 0 || recipe.block < 0 || recipe.statement < 0 {
+                invocation_source_byte_refused_v36(source)
+            } else {
+                let identity = InvocationSourceExecutionLoanIdV168 {
+                    local: destination, version: source.logical.versions[destination] + 1 };
+                let candidate = match parent {
+                    None => Some(InvocationSourceExecutionReferenceV168 { recipe, identity,
+                        origin: input, origin_version: source.logical.versions[input],
+                        frame: source.machine.frames.active.last(), ancestors: seq![] }),
+                    Some(expected) => {
+                        if !source.logical.execution_references.contains_key(input) { None }
+                        else {
+                            let before = source.logical.execution_references[input];
+                            if before.recipe != expected
+                                || !invocation_source_execution_record_current_v168(source, before)
+                                || recipe.source_type != expected.source_type || recipe.role != expected.role
+                                || recipe.mutable && !expected.mutable { None }
+                            else { Some(InvocationSourceExecutionReferenceV168 { recipe, identity,
+                                ancestors: before.ancestors + seq![before.identity], ..before }) }
+                        }
+                    },
+                };
+                match candidate {
+                    None => invocation_source_byte_refused_v36(source),
+                    Some(reference) => {
+                        if destination == reference.origin
+                            || !invocation_source_execution_value_v168(source, reference.origin,
+                                recipe.source_type, recipe.role)
+                            || !invocation_source_execution_no_conflict_v168(source, reference) {
+                            invocation_source_byte_refused_v36(source)
+                        } else { invocation_source_execution_install_v168(source, destination, reference) }
+                    },
+                }
+            }
+        },
+        InvocationSourceExecutionEventV168::Transfer { destination, input, recipe, moved } => {
+            if recipe.mutable && !moved
+                || !invocation_source_execution_reference_current_v168(source, input, recipe) {
+                invocation_source_byte_refused_v36(source)
+            } else {
+                let reference = source.logical.execution_references[input];
+                let consumed = if moved {
+                    invocation_source_byte_put_local_v36(source, input, MemoryValueV30::Undefined)
+                } else { source };
+                invocation_source_execution_install_v168(consumed, destination, reference)
+            }
+        },
+    } }
+}
+
+spec fn invocation_source_execution_operand_valid_v168(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+    role: InvocationSourceExecutionRoleV168, mutable: bool,
+) -> bool {
+    operand.recipe.role == role && operand.recipe.mutable == mutable
+        && (!mutable || operand.moved)
+        && invocation_source_execution_reference_current_v168(source, operand.local, operand.recipe)
+}
+
+spec fn invocation_source_execution_operand_consume_v168(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+) -> InvocationSourceByteStateV36 {
+    if operand.moved {
+        invocation_source_byte_put_local_v36(source, operand.local, MemoryValueV30::Undefined)
+    } else { source }
+}
+
+// The staged Workgroup payload uses invocation-local x-fastest rank. Its shadow
+// lease keeps Context suspended after the temporary receiver reference is moved.
+spec fn invocation_source_workgroup_derive_v168(
+    source: InvocationSourceByteStateV36, derive: InvocationSourceWorkgroupDeriveV168,
+) -> InvocationSourceTileResultV161 {
+    if !invocation_source_execution_operand_valid_v168(source, derive.context,
+        InvocationSourceExecutionRoleV168::Context, true)
+        || !invocation_source_workgroup_shape_v168(derive.source_type)
+        || !(0 <= derive.destination < source.machine.values.len())
+        || source.objects.contains_key(derive.destination)
+        || source.logical.execution_references[derive.context.local].origin == derive.destination {
+        invocation_source_tile_refused_v161(source)
+    } else { match source.machine.frames.execution {
+        Some(execution) if byte_execution_well_formed_v37(execution) => {
+            let size = invocation_source_workgroup_size_v168(execution);
+            let rank = invocation_source_workgroup_rank_v168(execution);
+            if !(0 < size < memory_value_modulus_v30(8)) || !(0 <= rank < size) {
+                invocation_source_tile_refused_v161(source)
+            } else {
+                let lease = source.logical.execution_references[derive.context.local];
+                let consumed = invocation_source_execution_operand_consume_v168(source, derive.context);
+                let leaves = Map::empty()
+                    .insert(seq![0int], MemoryValueV30::Scalar(size))
+                    .insert(seq![1int], MemoryValueV30::Scalar(rank))
+                    .insert(seq![2int, 0int], MemoryValueV30::Unit)
+                    .insert(seq![2int, 1int], MemoryValueV30::Unit)
+                    .insert(seq![2int, 2int], MemoryValueV30::Unit)
+                    .insert(seq![3int], MemoryValueV30::Unit);
+                let after = invocation_source_aggregate_install_v42(consumed, derive.destination,
+                    InvocationSourceAggregateV42 { source_type: derive.source_type, leaves,
+                        execution_lease: Some(lease) });
+                invocation_source_tile_installed_v161(consumed, after, seq![])
+            }
+        },
+        _ => invocation_source_tile_refused_v161(source),
+    } }
+}
+
+spec fn invocation_source_execution_tile_load_v168(
+    source: InvocationSourceByteStateV36, event: InvocationSourceExecutionTileLoadV168,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceTileResultV161 {
+    if !invocation_source_execution_operand_valid_v168(source, event.workgroup,
+        InvocationSourceExecutionRoleV168::Workgroup, false) {
+        invocation_source_tile_refused_v161(source)
+    } else {
+        let reference = source.logical.execution_references[event.workgroup.local];
+        let lease = source.logical.aggregates[reference.origin].execution_lease;
+        let consumed = invocation_source_execution_operand_consume_v168(source, event.workgroup);
+        let loaded = invocation_source_tile_load_v161(consumed, event.load, root, instance, little_endian);
+        if !loaded.source.machine.valid { loaded }
+        else {
+            let value = loaded.source.logical.aggregates[event.load.destination];
+            let after = InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+                aggregates: loaded.source.logical.aggregates.insert(event.load.destination,
+                    InvocationSourceAggregateV42 { execution_lease: lease, ..value }),
+                ..loaded.source.logical }, ..loaded.source };
+            if invocation_source_execution_aggregate_current_v170(after, event.load.destination) {
+                InvocationSourceTileResultV161 { source: after, ..loaded }
+            } else { invocation_source_tile_refused_after_v161(after, loaded.observations) }
+        }
+    }
+}
+
+spec fn invocation_source_execution_tile_transport_v170(
+    source: InvocationSourceByteStateV36, transfer: InvocationSourceTileTransportV161,
+) -> InvocationSourceTileResultV161 {
+    if !invocation_source_execution_aggregate_current_v170(source, transfer.input) {
+        invocation_source_tile_refused_v161(source)
+    } else {
+        let transferred = invocation_source_tile_transport_v161(source, transfer);
+        if !transferred.source.machine.valid || transfer.parts
+            || invocation_source_execution_aggregate_current_v170(transferred.source, transfer.destination) {
+            transferred
+        } else { invocation_source_tile_refused_after_v161(transferred.source, transferred.observations) }
+    }
+}
+
+spec fn invocation_source_execution_snapshot_current_v170(
+    source: InvocationSourceByteStateV36, reference: InvocationSourceExecutionReferenceV168,
+    expected: InvocationSourceExecutionRecipeV168,
+) -> bool {
+    !expected.mutable && reference.recipe == expected
+        && invocation_source_execution_record_current_v168(source, reference)
+        && invocation_source_execution_no_conflict_v168(source, reference)
+}
+
+spec fn invocation_source_execution_snapshot_evaluate_v170(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+) -> InvocationSourceValueEvaluationV42 {
+    if operand.recipe.mutable
+        || !invocation_source_execution_reference_current_v168(source, operand.local, operand.recipe) {
+        InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(source),
+            value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+    } else {
+        let reference = source.logical.execution_references[operand.local];
+        let consumed = invocation_source_execution_operand_consume_v168(source, operand);
+        if !invocation_source_execution_snapshot_current_v170(consumed, reference, operand.recipe) {
+            InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(consumed),
+                value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+        } else { InvocationSourceValueEvaluationV42 { source: consumed,
+            value: InvocationSourceValueV42::Execution(reference) } }
+    }
+}
+
+spec fn invocation_source_execution_snapshot_install_v170(
+    source: InvocationSourceByteStateV36, destination: int,
+    expected: InvocationSourceExecutionRecipeV168, reference: InvocationSourceExecutionReferenceV168,
+) -> InvocationSourceByteStateV36 {
+    if !invocation_source_execution_snapshot_current_v170(source, reference, expected) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let after = invocation_source_execution_install_v168(source, destination, reference);
+        if invocation_source_execution_reference_current_v168(after, destination, expected) { after }
+        else { invocation_source_byte_refused_v36(after) }
+    }
+}

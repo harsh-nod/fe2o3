@@ -64,7 +64,7 @@ proof fn invocation_source_aggregate_zero_sized_leaf_is_not_vacuous_v42(ty: int)
         invocation_source_aggregate_leaf_path_v42(ty, 0) == seq![],
         invocation_source_aggregate_leaf_bits_v42(ty, 0) == 0,
     ensures !invocation_source_aggregate_complete_v42(InvocationSourceAggregateV42 {
-        source_type: ty, leaves: Map::empty() }),
+        source_type: ty, leaves: Map::empty(), execution_lease: None }),
 {}
 
 proof fn invocation_source_aggregate_frame_clear_removes_aggregate_v42(

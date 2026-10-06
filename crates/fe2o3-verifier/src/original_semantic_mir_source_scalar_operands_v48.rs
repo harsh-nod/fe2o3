@@ -10,6 +10,9 @@ enum Operator {
     Not,
     Binary(OperatorV30),
     Float(u8),
+    WrappingAdd,
+    WrappingSubtract,
+    WrappingMultiply,
 }
 
 impl Operator {
@@ -17,6 +20,9 @@ impl Operator {
         match self {
             Self::Not => 0,
             Self::Float(code) => code,
+            Self::WrappingAdd => 22,
+            Self::WrappingSubtract => 23,
+            Self::WrappingMultiply => 24,
             Self::Binary(operator) => match operator {
                 OperatorV30::And => 1,
                 OperatorV30::Or => 2,
@@ -32,6 +38,15 @@ impl Operator {
     }
 
     fn result(self, input: ScalarV30) -> Result<ScalarV30> {
+        if self.wrapping() {
+            return match input {
+                ScalarV30::Integer {
+                    width: 8 | 16 | 32 | 64,
+                    ..
+                } => Ok(input),
+                _ => Err(unsupported()),
+            };
+        }
         if let Self::Float(code) = self {
             if !matches!(input, ScalarV30::Float { width: 32 | 64 }) || !(10..=21).contains(&code) {
                 return Err(unsupported());
@@ -45,6 +60,13 @@ impl Operator {
             Self::Binary(operator) if operator.comparison() => ScalarV30::Bool,
             _ => input,
         })
+    }
+
+    fn wrapping(self) -> bool {
+        matches!(
+            self,
+            Self::WrappingAdd | Self::WrappingSubtract | Self::WrappingMultiply
+        )
     }
 
     fn float_binary(operation: SemanticBinaryOpV1) -> Result<Self> {
@@ -105,7 +127,12 @@ impl Operation {
                 if matches!(context.scalar(left.ty(), out)?, ScalarV30::Float { .. }) {
                     Operator::float_binary(*operation)?
                 } else {
-                    Operator::Binary(OperatorV30::from_source(*operation)?)
+                    match operation {
+                        SemanticBinaryOpV1::Add => Operator::WrappingAdd,
+                        SemanticBinaryOpV1::Subtract => Operator::WrappingSubtract,
+                        SemanticBinaryOpV1::Multiply => Operator::WrappingMultiply,
+                        _ => Operator::Binary(OperatorV30::from_source(*operation)?),
+                    }
                 },
                 left,
                 Some(right),
@@ -127,7 +154,8 @@ impl Operation {
             })
             .transpose()?;
         let is_local_value = |value| matches!(value, Value::Constant(_) | Value::Local { .. });
-        if !matches!(input, ScalarV30::Float { .. })
+        if !operator.wrapping()
+            && !matches!(input, ScalarV30::Float { .. })
             && matches!(destination, Destination::Local(_))
             && is_local_value(left)
             && right.is_none_or(is_local_value)
@@ -190,3 +218,11 @@ mod tests;
 #[cfg(test)]
 #[path = "original_semantic_mir_float_operators_v52_tests.rs"]
 mod float_tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_source_wrapping_v172_tests.rs"]
+mod wrapping_tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_source_wrapping_effects_v172_tests.rs"]
+mod wrapping_effects_tests;

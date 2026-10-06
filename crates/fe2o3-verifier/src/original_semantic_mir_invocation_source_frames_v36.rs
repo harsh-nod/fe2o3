@@ -94,6 +94,12 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             return Err(mismatch());
         }
         let ty = function.abi().return_type();
+        if super::source_bytes::execution_loans::nominal_reference(semantic.types(), ty)?.is_some()
+        {
+            return Err(Error::Statement(
+                "original helper execution reference return requires loan snapshot transport",
+            ));
+        }
         let class = if descriptor_helpers::nominal_reference(slots, ty, out)? {
             if instance == 0 || row.incoming.is_none() {
                 return Err(mismatch());
@@ -592,6 +598,7 @@ spec fn invocation_source_return_refused_v36(source: InvocationSourceByteStateV3
 
 spec fn invocation_source_return_value_defined_v42(value: InvocationSourceValueV42) -> bool {
     match value {
+        InvocationSourceValueV42::Execution(_) => false,
         InvocationSourceValueV42::Carrier(value) => match value {
             MemoryValueV30::Undefined => false, _ => true },
         InvocationSourceValueV42::Aggregate(value) => invocation_source_aggregate_complete_v42(value),
@@ -632,9 +639,11 @@ spec fn invocation_source_return_install_v42(
         Some((root_type, result_type, path)) => {
             let aggregate = match value {
                 InvocationSourceValueV42::Carrier(value) => Some(InvocationSourceAggregateV42 {
-                    source_type: result_type, leaves: Map::empty().insert(seq![], value) }),
+                    source_type: result_type, leaves: Map::empty().insert(seq![], value),
+                    execution_lease: None }),
                 InvocationSourceValueV42::Aggregate(value) => Some(value),
-                InvocationSourceValueV42::Enum(_) | InvocationSourceValueV42::Descriptor(_) => None,
+                InvocationSourceValueV42::Enum(_) | InvocationSourceValueV42::Descriptor(_)
+                | InvocationSourceValueV42::Execution(_) => None,
             };
             match aggregate {
                 Some(aggregate) => if aggregate.source_type == result_type {
@@ -653,7 +662,8 @@ spec fn invocation_source_return_install_v42(
                 if invocation_source_enum_snapshot_current_v50(source, value, little_endian) {
                     invocation_source_enum_install_v47(source, destination.local, value)
                 } else { invocation_source_byte_refused_v36(source) },
-            InvocationSourceValueV42::Descriptor(_) => invocation_source_byte_refused_v36(source),
+            InvocationSourceValueV42::Descriptor(_) | InvocationSourceValueV42::Execution(_) =>
+                invocation_source_byte_refused_v36(source),
         },
     } }
 }
@@ -663,8 +673,11 @@ spec fn invocation_source_snapshot_escapes_frame_v42(
 ) -> bool {
     match value {
         InvocationSourceValueV42::Carrier(value) => invocation_source_value_escapes_frame_v36(value, frame),
-        InvocationSourceValueV42::Aggregate(value) => exists|path: Seq<int>|
-            value.leaves.contains_key(path) && invocation_source_value_escapes_frame_v36(value.leaves[path], frame),
+        InvocationSourceValueV42::Aggregate(value) =>
+            (match value.execution_lease { Some(lease) => lease.frame == frame, None => false })
+            || (exists|path: Seq<int>| value.leaves.contains_key(path)
+                && invocation_source_value_escapes_frame_v36(value.leaves[path], frame)),
+        InvocationSourceValueV42::Execution(_) => true,
         InvocationSourceValueV42::Enum(value) => exists|field: int|
             value.fields.contains_key(field) && invocation_source_value_escapes_frame_v36(value.fields[field], frame),
         InvocationSourceValueV42::Descriptor(value) => invocation_source_descriptor_snapshot_escapes_frame_v53(value, frame),

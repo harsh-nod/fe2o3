@@ -1,0 +1,211 @@
+proof fn execution_rank_is_local_x_fastest_not_launch_rank_v168(execution: MemoryExecutionContextV37)
+    requires execution.workgroup == seq![4int, 3int, 2int],
+        execution.local == seq![2int, 1int, 1int],
+    ensures invocation_source_workgroup_size_v168(execution) == 24,
+        invocation_source_workgroup_rank_v168(execution) == 18,
+{}
+
+proof fn execution_replacement_invalidates_old_origin_v168(
+    source: InvocationSourceByteStateV36, reference: InvocationSourceExecutionReferenceV168,
+)
+    requires source.logical.versions[reference.origin] != reference.origin_version,
+    ensures !invocation_source_execution_record_current_v168(source, reference),
+{}
+
+proof fn execution_reference_cannot_escape_its_origin_frame_v168(
+    source: InvocationSourceByteStateV36, reference: InvocationSourceExecutionReferenceV168,
+)
+    requires forall|i: int| 0 <= i < source.machine.frames.active.len() ==>
+        source.machine.frames.active[i] != reference.frame,
+    ensures !invocation_source_execution_record_current_v168(source, reference),
+{}
+
+proof fn execution_unique_copy_is_refused_v168(
+    source: InvocationSourceByteStateV36, destination: int, input: int,
+    recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires recipe.mutable,
+    ensures invocation_source_execution_step_v168(source,
+        InvocationSourceExecutionEventV168::Transfer {
+            destination, input, recipe, moved: false }) == invocation_source_byte_refused_v36(source),
+{}
+
+proof fn execution_mutual_resident_ancestry_is_refused_v168(
+    references: Map<int, InvocationSourceExecutionReferenceV168>, left: int, right: int,
+)
+    requires references.contains_key(left), references.contains_key(right),
+        references[left].ancestors.contains(references[right].identity),
+        references[right].ancestors.contains(references[left].identity),
+    ensures !invocation_source_execution_ancestry_v168(references),
+{
+    if invocation_source_execution_ancestry_v168(references) {
+        assert(references[right].ancestors.len() < references[left].ancestors.len());
+        assert(references[left].ancestors.len() < references[right].ancestors.len());
+    }
+}
+
+// This is the deliberate conservative boundary until source-authenticated NLL
+// end-loan events are implemented. Merely ceasing to read a child does not end it.
+proof fn execution_retained_descendant_suspends_unique_parent_v168(
+    source: InvocationSourceByteStateV36, parent: int, child: int,
+    recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires source.logical.execution_references.contains_key(parent),
+        source.logical.execution_references.contains_key(child),
+        source.logical.execution_references[parent].recipe.mutable,
+        source.logical.execution_references[parent].identity
+            != source.logical.execution_references[child].identity,
+        !source.logical.execution_references[parent].ancestors
+            .contains(source.logical.execution_references[child].identity),
+        invocation_source_execution_same_origin_v168(
+            source.logical.execution_references[parent], source.logical.execution_references[child]),
+        invocation_source_execution_record_current_v168(source, source.logical.execution_references[child]),
+    ensures !invocation_source_execution_reference_current_v168(source, parent, recipe),
+{
+    if invocation_source_execution_reference_current_v168(source, parent, recipe) {
+        assert(!source.logical.execution_references[parent].recipe.mutable);
+    }
+}
+
+proof fn execution_invalid_workgroup_loan_refuses_before_tile_evaluation_v168(
+    source: InvocationSourceByteStateV36, event: InvocationSourceExecutionTileLoadV168,
+    root: int, instance: int, little_endian: bool,
+)
+    requires !invocation_source_execution_operand_valid_v168(source, event.workgroup,
+        InvocationSourceExecutionRoleV168::Workgroup, false),
+    ensures invocation_source_execution_tile_load_v168(source, event, root, instance, little_endian)
+        == invocation_source_tile_refused_v161(source),
+{}
+
+proof fn execution_workgroup_payload_without_lease_refuses_v170(
+    source: InvocationSourceByteStateV36, local: int, ty: int,
+)
+    requires source.logical.aggregates.contains_key(local),
+        source.logical.aggregates[local].execution_lease.is_none(),
+    ensures !invocation_source_execution_value_v168(source, local, ty,
+        InvocationSourceExecutionRoleV168::Workgroup),
+{}
+
+proof fn execution_live_aggregate_suspends_context_v170(
+    source: InvocationSourceByteStateV36, local: int,
+    lease: InvocationSourceExecutionReferenceV168,
+    candidate: InvocationSourceExecutionReferenceV168,
+)
+    requires source.logical.aggregates.contains_key(local),
+        source.logical.aggregates[local].execution_lease == Some(lease),
+        invocation_source_execution_lease_current_v170(source, lease),
+        invocation_source_execution_same_origin_v168(candidate, lease),
+    ensures !invocation_source_execution_no_conflict_v168(source, candidate),
+{
+    if invocation_source_execution_no_conflict_v168(source, candidate) {
+        assert(!invocation_source_execution_same_origin_v168(candidate, lease));
+    }
+}
+
+proof fn execution_lease_origin_overwrite_refuses_v170(
+    source: InvocationSourceByteStateV36, value: InvocationSourceAggregateV42,
+    lease: InvocationSourceExecutionReferenceV168,
+)
+    requires value.execution_lease == Some(lease),
+    ensures !invocation_source_aggregate_install_v42(source, lease.origin, value).machine.valid,
+{}
+
+proof fn execution_lease_projection_refuses_v170(
+    source: InvocationSourceByteStateV36, local: int, ty: int,
+    path: Seq<int>, result_type: int,
+)
+    requires source.logical.aggregates.contains_key(local),
+        source.logical.aggregates[local].execution_lease.is_some(), path.len() > 0,
+    ensures invocation_source_aggregate_snapshot_v42(source, local, ty, path, result_type).is_none(),
+{}
+
+proof fn execution_whole_snapshot_retains_lease_v170(
+    source: InvocationSourceByteStateV36, local: int, ty: int,
+    value: InvocationSourceAggregateV42,
+)
+    requires invocation_source_aggregate_snapshot_v42(source, local, ty, seq![], ty) == Some(value),
+    ensures source.logical.aggregates.contains_key(local),
+        value.execution_lease == source.logical.aggregates[local].execution_lease,
+{}
+
+proof fn execution_stale_context_lease_refuses_v170(
+    source: InvocationSourceByteStateV36, lease: InvocationSourceExecutionReferenceV168,
+)
+    requires 0 <= lease.origin < source.logical.versions.len(),
+        source.logical.versions[lease.origin] != lease.origin_version,
+    ensures !invocation_source_execution_lease_current_v170(source, lease),
+{}
+
+proof fn execution_parent_frame_exit_invalidates_lease_v170(
+    source: InvocationSourceByteStateV36, lease: InvocationSourceExecutionReferenceV168,
+)
+    requires forall|i: int| 0 <= i < source.machine.frames.active.len() ==>
+        source.machine.frames.active[i] != lease.frame,
+    ensures !invocation_source_execution_lease_current_v170(source, lease),
+{}
+
+proof fn execution_tile_load_retains_evaluation_observation_prefix_v170(
+    source: InvocationSourceByteStateV36, event: InvocationSourceExecutionTileLoadV168,
+    root: int, instance: int, little_endian: bool,
+)
+    requires invocation_source_execution_operand_valid_v168(source, event.workgroup,
+        InvocationSourceExecutionRoleV168::Workgroup, false),
+    ensures ({
+        let consumed = invocation_source_execution_operand_consume_v168(source, event.workgroup);
+        let evaluated = invocation_source_tile_load_v161(consumed, event.load, root, instance, little_endian);
+        let result = invocation_source_execution_tile_load_v168(source, event, root, instance, little_endian);
+        result.observations.take(evaluated.observations.len() as int) == evaluated.observations
+    }),
+{}
+
+proof fn execution_helper_snapshot_preserves_exact_identity_v170(
+    source: InvocationSourceByteStateV36, destination: int,
+    recipe: InvocationSourceExecutionRecipeV168, reference: InvocationSourceExecutionReferenceV168,
+)
+    requires invocation_source_execution_snapshot_install_v170(source, destination, recipe, reference).machine.valid,
+    ensures ({
+        let after = invocation_source_execution_snapshot_install_v170(source, destination, recipe, reference);
+        after.logical.execution_references.contains_key(destination)
+            && after.logical.execution_references[destination] == reference
+    }),
+{}
+
+proof fn execution_helper_snapshot_rejects_retagged_recipe_v170(
+    source: InvocationSourceByteStateV36, reference: InvocationSourceExecutionReferenceV168,
+    expected: InvocationSourceExecutionRecipeV168,
+)
+    requires reference.recipe != expected,
+    ensures !invocation_source_execution_snapshot_current_v170(source, reference, expected),
+{}
+
+proof fn execution_helper_snapshot_rejects_unique_loan_v170(
+    source: InvocationSourceByteStateV36, reference: InvocationSourceExecutionReferenceV168,
+    expected: InvocationSourceExecutionRecipeV168,
+)
+    requires expected.mutable,
+    ensures !invocation_source_execution_snapshot_current_v170(source, reference, expected),
+{}
+
+proof fn execution_helper_snapshot_rejects_stale_origin_v170(
+    source: InvocationSourceByteStateV36, reference: InvocationSourceExecutionReferenceV168,
+    expected: InvocationSourceExecutionRecipeV168,
+)
+    requires 0 <= reference.origin < source.logical.versions.len(),
+        source.logical.versions[reference.origin] != reference.origin_version,
+    ensures !invocation_source_execution_snapshot_current_v170(source, reference, expected),
+{}
+
+proof fn execution_helper_snapshot_rejects_ended_origin_frame_v170(
+    source: InvocationSourceByteStateV36, reference: InvocationSourceExecutionReferenceV168,
+    expected: InvocationSourceExecutionRecipeV168,
+)
+    requires forall|i: int| 0 <= i < source.machine.frames.active.len() ==>
+        source.machine.frames.active[i] != reference.frame,
+    ensures !invocation_source_execution_snapshot_current_v170(source, reference, expected),
+{}
+
+proof fn execution_helper_reference_return_remains_refused_v170(
+    reference: InvocationSourceExecutionReferenceV168,
+)
+    ensures !invocation_source_return_value_defined_v42(InvocationSourceValueV42::Execution(reference)),
+{}

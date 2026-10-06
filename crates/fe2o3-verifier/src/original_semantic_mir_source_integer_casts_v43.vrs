@@ -56,7 +56,7 @@ spec fn invocation_source_integer_cast_v43(
         InvocationSourceByteDestinationV36::Component(place) =>
             InvocationSourceIntegerCastResultV43 {
                 source: invocation_source_aggregate_place_replace_v42(evaluated.source, place,
-                    InvocationSourceAggregateV42 { source_type: place.result_type,
+                    InvocationSourceAggregateV42 { source_type: place.result_type, execution_lease: None,
                         leaves: Map::empty().insert(seq![], value) }),
                 observations: reads },
         InvocationSourceByteDestinationV36::Memory(access) => {

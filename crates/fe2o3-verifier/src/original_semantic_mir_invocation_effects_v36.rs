@@ -75,15 +75,28 @@ spec fn invocation_source_statement_effects_v36(
                     Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
                 } else { seq![MemoryOperationEffectV30::Refused] }
             }
+            Some(InvocationSourceByteEventV36::ExecutionLoan(event)) => {
+                // Loans alter logical authority, not externally visible bytes.
+                // An unrelated claimed successor is still an explicit refusal.
+                let after = invocation_source_execution_step_v168(observation.before, event);
+                if after == observation.after { seq![] }
+                else { seq![MemoryOperationEffectV30::Refused] }
+            }
+            Some(InvocationSourceByteEventV36::WorkgroupDerive(derive)) => {
+                let result = invocation_source_workgroup_derive_v168(observation.before, derive);
+                if result.source == observation.after {
+                    Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
+                } else { seq![MemoryOperationEffectV30::Refused] }
+            }
             Some(InvocationSourceByteEventV36::TileLoad(load)) => {
-                let result = invocation_source_tile_load_v161(observation.before, load,
+                let result = invocation_source_execution_tile_load_v168(observation.before, load,
                     observation.root, observation.instance, little_endian);
                 if result.source == observation.after {
                     Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
                 } else { seq![MemoryOperationEffectV30::Refused] }
             }
             Some(InvocationSourceByteEventV36::TileTransport(transfer)) => {
-                let result = invocation_source_tile_transport_v161(observation.before, transfer);
+                let result = invocation_source_execution_tile_transport_v170(observation.before, transfer);
                 if result.source == observation.after {
                     Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
                 } else { seq![MemoryOperationEffectV30::Refused] }
@@ -195,6 +208,7 @@ spec fn invocation_source_operands_effects_v36(
                     head.root, head.instance, little_endian),
             InvocationSourceOperandV36::Pointer { .. }
             | InvocationSourceOperandV36::Slice { .. } => seq![],
+            InvocationSourceOperandV36::Execution(_) |
             InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }
             | InvocationSourceOperandV36::Descriptor { .. } => {
                 let evaluated = invocation_source_value_evaluate_v42(head.before, head.operand,

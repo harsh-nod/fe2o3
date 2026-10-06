@@ -1,13 +1,14 @@
 //! Source entry lifetimes come from the archive, never from target Alloca order.
 
 use super::super::{Function, LocalRole, ScalarV30, Shape, Statement, invocations::InvocationPlan};
-use super::source_bytes::{descriptor_helpers, descriptor_loans::Recipe};
+use super::source_bytes::{descriptor_helpers, descriptor_loans::Recipe, execution_loans};
 use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_mir_model::semantic_mir_v1::SemanticPointerMetadataV1 as Metadata;
 use std::{fmt::Write as _, mem::size_of, ops::Range};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Class {
+    Execution(execution_loans::Recipe),
     Scalar(u32),
     Pointer,
     Slice(u32),
@@ -228,7 +229,18 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 .types()
                 .get(declaration.ty().index() as usize)
                 .ok_or_else(mismatch)?;
-            let class = if let Some(recipe) = descriptor_helpers::entry_recipe(
+            let class = if let Some(recipe) = execution_loans::entry_recipe(
+                slots,
+                plan,
+                root,
+                instance,
+                fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1::from_index(
+                    u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
+                ),
+                out,
+            )? {
+                Class::Execution(recipe)
+            } else if let Some(recipe) = descriptor_helpers::entry_recipe(
                 slots,
                 plan,
                 root,
@@ -432,6 +444,11 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             out.budget.charge_work(1)?;
             write!(out, " || !(").map_err(|_| out.error())?;
             match argument.ok_or_else(mismatch)?.class {
+                Class::Execution(recipe) => {
+                    write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Execution(value) => invocation_source_execution_snapshot_current_v170(source, value, ").map_err(|_| out.error())?;
+                    recipe.emit(out)?;
+                    write!(out, "), _ => false }}")
+                }
                 Class::Descriptor(recipe) => {
                     write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Descriptor(value) => invocation_source_descriptor_snapshot_current_v53(source, value, ").map_err(|_| out.error())?;
                     recipe.emit(out)?;
@@ -470,6 +487,16 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         for (i, argument) in self.arguments.iter().enumerate() {
             out.budget.charge_work(1)?;
             let argument = argument.ok_or_else(mismatch)?;
+            if let Class::Execution(recipe) = argument.class {
+                write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::Execution(value) => invocation_source_execution_snapshot_install_v170(entered, {}, ", argument.local).map_err(|_| out.error())?;
+                recipe.emit(out)?;
+                write!(
+                    out,
+                    ", value), _ => invocation_source_byte_refused_v36(entered) }};\n"
+                )
+                .map_err(|_| out.error())?;
+                continue;
+            }
             if let Class::Descriptor(recipe) = argument.class {
                 write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::Descriptor(value) => invocation_source_descriptor_snapshot_install_v53(entered, {}, ", argument.local).map_err(|_| out.error())?;
                 recipe.emit(out)?;
@@ -526,6 +553,7 @@ fn headers() -> usize {
         + h::<Range<usize>>()
         + h::<Class>()
         + descriptor_helpers::headers()
+        + execution_loans::headers()
         + h::<super::slots::ObjectActivation>()
         + h::<Option<super::slots::ObjectActivation>>()
         + 32 * size_of::<usize>()
