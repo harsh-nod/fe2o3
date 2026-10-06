@@ -93,17 +93,31 @@ fn original_helper_instances(
     let canonical = source.canonical(budget)?;
     let mut mapped_operations = [0; 2];
     for (root, instance) in instances.into_iter().enumerate() {
-        let (actual, incoming) = source.instance(root, instance, budget)?;
+        let (actual, _) = source.instance(root, instance, budget)?;
         assert_eq!(actual, helper);
-        let (caller, call_block) = incoming.expect("helper has an authentic caller");
-        assert_eq!(
-            source.instance(root, caller, budget)?.0,
-            source.root(root, budget)?.0
-        );
-        assert_eq!(
-            original.defined_call_instance(root, caller, call_block, budget)?,
-            instance
-        );
+        let count = source.instance_count(root, budget)?;
+        assert!(count < 256);
+        let mut current = instance;
+        let mut reached_root = false;
+        for _ in 0..count {
+            budget.charge_work(1)?;
+            assert!(current < count);
+            assert!(source.instance_active(root, current, budget)?);
+            let (function, incoming) = source.instance(root, current, budget)?;
+            let Some((caller, call_block)) = incoming else {
+                assert_eq!(function, source.root(root, budget)?.0);
+                reached_root = true;
+                break;
+            };
+            assert!(caller < count);
+            assert_ne!(caller, current);
+            assert_eq!(
+                original.defined_call_instance(root, caller, call_block, budget)?,
+                current
+            );
+            current = caller;
+        }
+        assert!(reached_root, "helper caller chain reaches the actual root");
         assert!(source.invocation_entry(root, instance, budget)?.is_none());
         let root_function = source.root(root, budget)?.1;
         for (block, source_block) in function.blocks().iter().enumerate() {
