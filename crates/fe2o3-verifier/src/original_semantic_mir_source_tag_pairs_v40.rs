@@ -793,11 +793,11 @@ impl<'a, 'view, 'source, 'inventory, 'owner>
             let predecessor = &neutral.operations()[before];
             out.budget.charge_work(6)?;
             let (OperationKind::Storage(left), OperationKind::Storage(right)) =
-                (predecessor.operation.kind, actual.operation.kind)
+                (&predecessor.operation.kind, &actual.operation.kind)
             else {
                 return Err(mismatch());
             };
-            if !is_tag_operation(left) || left != right || seen[at] {
+            if !is_tag_operation(*left) || left != right || seen[at] {
                 return Err(mismatch());
             }
             let first = output
