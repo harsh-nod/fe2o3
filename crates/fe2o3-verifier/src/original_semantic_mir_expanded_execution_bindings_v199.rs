@@ -29,7 +29,11 @@ use std::{fmt::Write as _, mem::size_of};
 pub(super) const SHARED: &str = concat!(
     include_str!("original_semantic_mir_expanded_execution_bindings_v199.vrs"),
     include_str!("original_semantic_mir_execution_correspondence_v205.vrs"),
+    include_str!("original_semantic_mir_expanded_payload_lease_v209.vrs"),
 );
+
+#[path = "original_semantic_mir_expanded_payload_lease_v209.rs"]
+mod payload_lease;
 
 pub(super) struct ExpandedExecutionBindingsV199<'plan, 'target, 'slots, 'view, 'source> {
     plan: &'plan InvocationPlan<'view, 'source>,
@@ -72,6 +76,7 @@ impl<'plan, 'target, 'slots, 'view, 'source>
             + size_of::<Value>()
             + size_of::<&mut Writer<'_, '_>>()
             + size_of::<Result<()>>()
+            + payload_lease::headers()
     }
 
     pub(super) fn derive(

@@ -13,6 +13,16 @@ use std::collections::BTreeSet;
 
 const LIMIT: usize = 200_000_000;
 
+fn payload_refusal(result: Result<()>) -> Result<()> {
+    match result {
+        Err(Error::Statement(
+            "execution relation differs from its source producer or actual scope slot",
+        )) => Ok(()),
+        Err(error) => Err(error),
+        Ok(()) => panic!("non-payload or borrowed payload admitted without its relation"),
+    }
+}
+
 fn exercise(
     plan: &InvocationPlan<'_, '_>,
     slots: &SourceSlots<'_, '_>,
@@ -39,6 +49,15 @@ fn exercise(
         + size_of::<Value>()
         + size_of::<&mut Writer<'_, '_>>()
         + size_of::<Result<()>>();
+    let payload_frame = size_of::<fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>>()
+        + size_of::<Result<fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>>>()
+        + size_of::<Owner>()
+        + size_of::<Identity>()
+        + 2 * size_of::<Site>()
+        + size_of::<execution_loans::ExecutionOperand>()
+        + size_of::<Option<execution_loans::ExecutionOperand>>()
+        + size_of::<Result<()>>()
+        + 12 * size_of::<usize>();
     assert_eq!(
         out.budget.storage() - before,
         retained
@@ -51,6 +70,7 @@ fn exercise(
             + size_of::<bool>()
             + size_of::<&str>()
             + outer_frame
+            + payload_frame
     );
     bindings.check_owner(plan, slots, &target, out)?;
     let source = plan.source(out)?;
@@ -58,7 +78,8 @@ fn exercise(
     let archive = source.source_ssa(out.budget)?;
     let root = plan.root(0, out)?;
     let mut seen = BTreeSet::new();
-    let (mut owned, mut borrowed, mut payloads) = (0usize, 0usize, 0usize);
+    let (mut owned, mut borrowed, mut payloads, mut payload_leases) =
+        (0usize, 0usize, 0usize, 0usize);
     for instance in 0..root.instances.len() {
         let row = plan.instance(0, instance, out)?;
         if !row.active {
@@ -201,6 +222,11 @@ fn exercise(
                         )
                         .unwrap();
                     assert_eq!(original, mapped);
+                    let end = out.text.len();
+                    payload_refusal(
+                        bindings.emit_payload_lease_conjunct_v209(0, instance, value, out),
+                    )?;
+                    assert_eq!(out.text.len(), end);
                     if is_borrowed {
                         borrowed += 1;
                     } else {
@@ -224,12 +250,54 @@ fn exercise(
                         Ok(()) => panic!("execution map silently admitted a tile payload"),
                     }
                     assert_eq!(out.text.len(), before);
+                    if is_borrowed {
+                        payload_refusal(
+                            bindings.emit_payload_lease_conjunct_v209(0, instance, value, out),
+                        )?;
+                        assert_eq!(out.text.len(), before);
+                    } else {
+                        let endpoint = slots
+                            .correspondence(out)?
+                            .ssa_typed_endpoint_v36(0, instance, value, out.budget)?;
+                        let owner = endpoint.execution_owner_v199(out.budget)?.unwrap();
+                        let workgroup = owner.workgroup.unwrap();
+                        let original = execution_loans::call_argument(
+                            slots,
+                            plan,
+                            0,
+                            workgroup.instance,
+                            workgroup.block.index() as usize,
+                            0,
+                            out,
+                        )?
+                        .unwrap();
+                        let context = bindings.site(0, owner.context, KirRole::Context, out)?;
+                        let local =
+                            row.locals.start + endpoint.source_local(out.budget)?.index() as usize;
+                        bindings.emit_payload_lease_conjunct_v209(0, instance, value, out)?;
+                        let text = &out.text[before..];
+                        let recipe = original.recipe;
+                        assert!(original.moved && recipe.mutable && recipe.role == Role::Context);
+                        assert!(text.starts_with("invocation_execution_payload_related_v209(source, target, execution_map, "));
+                        assert!(text.contains(&format!(
+                            "local: {local}, source_type: {}",
+                            owner.identity.source_type.index()
+                        )));
+                        assert!(
+                            text.contains(&format!("context_definition: {}", context.definition))
+                        );
+                        assert!(text.contains(&format!(
+                            "lease_recipe: InvocationSourceExecutionRecipeV168 {{ reference_type: {}, source_type: {}, role: InvocationSourceExecutionRoleV168::Context, mutable: true, instance: {}, block: {}, statement: {} }}",
+                            recipe.reference_type, recipe.source_type, recipe.instance, recipe.block,
+                            recipe.statement)));
+                        payload_leases += 1;
+                    }
                     payloads += 1;
                 }
             }
         }
     }
-    assert!(owned > 0 && borrowed > 0 && payloads > 0);
+    assert!(owned > 0 && borrowed > 0 && payloads > 0 && payload_leases > 0);
     assert!(SHARED.contains("scope.parent == Some(context.identity)"));
     assert!(SHARED.contains("context.child == Some(scope.identity)"));
     assert!(SHARED.contains("invocation_source_execution_lease_current_v170"));
@@ -278,6 +346,43 @@ fn expanded_execution_map_support_keeps_dynamic_identity_and_history_separate() 
         "epoch == origin.version",
     ] {
         assert!(!source.contains(unsupported));
+    }
+}
+
+#[test]
+fn expanded_execution_payload_lease_support_binds_actual_context_origin() {
+    let source = include_str!("original_semantic_mir_expanded_payload_lease_v209.vrs");
+    for guard in [
+        "source.logical.aggregates[binding.local].source_type == binding.source_type",
+        "invocation_source_execution_aggregate_current_v170(source, binding.local)",
+        "lease.recipe == binding.lease_recipe",
+        "context.site == binding.context_site",
+        "execution_map.contains_key(context.identity)",
+        "== invocation_execution_reference_origin_v205(lease)",
+    ] {
+        assert!(
+            source.contains(guard),
+            "missing payload parent guard: {guard}"
+        );
+    }
+    for law in [
+        "wrong_recipe_is_not_related",
+        "wrong_context_origin_is_not_related",
+        "missing_context_is_not_related",
+        "relation_keeps_source_lease_current",
+    ] {
+        assert!(source.contains(&format!(
+            "proof fn invocation_execution_payload_{law}_v209("
+        )));
+    }
+    assert_eq!(source.matches("proof fn ").count(), 4);
+    for invalid in [
+        "assume(",
+        "admit(",
+        "external_body",
+        "epoch == lease.origin_version",
+    ] {
+        assert!(!source.contains(invalid));
     }
 }
 
