@@ -1223,13 +1223,13 @@ fn validate_release_environment() -> Result<(), String> {
 }
 
 fn validate_release_environment_values(values: &[(OsString, OsString)]) -> Result<(), String> {
-    for (name, value) in values {
+    for (name, _) in values {
         let Some(name_text) = name.to_str() else {
             return Err("authority release rejects a non-UTF-8 environment name".to_owned());
         };
         if !RELEASE_ENVIRONMENT_ALLOWLIST.contains(&name_text) {
             return Err(format!(
-                "authority release rejects unexpected inherited environment {name:?}={value:?}"
+                "authority release rejects unexpected inherited environment {name:?}"
             ));
         }
     }

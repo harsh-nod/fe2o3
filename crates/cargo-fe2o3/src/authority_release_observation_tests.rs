@@ -72,6 +72,40 @@ fn release_observation_does_not_admit_loader_toolchain_or_unknown_channels() {
 }
 
 #[test]
+fn release_environment_refusal_does_not_disclose_unknown_values() {
+    for secret in [
+        OsString::from("example-secret-token"),
+        OsString::from("secret\nwith\"escaped content"),
+        OsString::from_vec(vec![0xff, 0xfe, b's', b'e', b'c', b'r', b'e', b't']),
+        OsString::new(),
+    ] {
+        let mut values = observation_environment();
+        values.push(("FE2O3_TEST_SECRET".into(), secret));
+        assert_eq!(
+            validate_release_environment_values(&values).unwrap_err(),
+            "authority release rejects unexpected inherited environment \"FE2O3_TEST_SECRET\""
+        );
+        values.last_mut().unwrap().0 = OsString::from_vec(vec![0xff]);
+        assert_eq!(
+            validate_release_environment_values(&values).unwrap_err(),
+            "authority release rejects a non-UTF-8 environment name"
+        );
+    }
+}
+
+#[test]
+fn release_locale_refusal_does_not_disclose_observed_values() {
+    for (index, expected) in ["LANG=C", "LC_ALL=C", "TZ=UTC"].into_iter().enumerate() {
+        let mut values = observation_environment();
+        values[index].1 = "example-secret-token".into();
+        assert_eq!(
+            validate_release_environment_values(&values).unwrap_err(),
+            format!("authority release requires exact environment {expected}")
+        );
+    }
+}
+
+#[test]
 fn release_observation_preserves_exact_locale_requirements() {
     for index in 0..3 {
         let mut values = observation_environment();
