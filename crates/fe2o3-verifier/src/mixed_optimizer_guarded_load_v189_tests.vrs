@@ -9,7 +9,7 @@ proof fn guarded_load_inactive_uses_fallback_without_address_premise_v189(s: Mem
     requires s.pc == 0, byte_inputs_90_v55(s, endian), s.valid,
         s.values[1] == MemoryValueV30::Scalar(0), s.values[2] == MemoryValueV30::Scalar(fallback),
         0 <= fallback < memory_value_modulus_v30(4),
-    ensures byte_operation_90_0_v30(s, endian).state == MemoryStateV30 { values: s.values.update(3, s.values[2]), ..s },
+    ensures byte_operation_90_0_v30(s, endian).state == (MemoryStateV30 { values: s.values.update(3, s.values[2]), ..s }),
         byte_operation_90_0_v30(s, endian).observation.effect == MemoryOperationEffectV30::Pure,
 {}
 
