@@ -31,6 +31,7 @@ pub struct ProductionSourceExecutionBorrowCoordinatesV163 {
 struct SourceSsaExecutionBorrowV163 {
     value: ValueId,
     role: ExecutionRoleV15,
+    owner: ProductionSourceExecutionOwnerV199,
     coordinates: ProductionSourceExecutionBorrowCoordinatesV163,
 }
 
@@ -98,6 +99,12 @@ fn retain_source_execution_borrow_v163(
         value: borrow.borrowed.identity.value,
         role: semantic_execution_kir_role_v29(borrow.borrowed.role)
             .map_err(source_reference_error_v29)?,
+        owner: retain_source_execution_owner_v199(
+            instances,
+            borrow.borrowed.semantic_type(),
+            &borrow.borrowed,
+            budget,
+        )?,
         coordinates: ProductionSourceExecutionBorrowCoordinatesV163 {
             kind: borrow.kind,
             site: source_execution_borrow_site_v163(borrow.occurrence),
@@ -122,6 +129,7 @@ impl ProductionSourceSsaEndpointV36<'_, '_> {
             match self.physical {
                 SourceSsaPhysicalV36::ExecutionBorrow(borrow) => Ok(Some(borrow.coordinates)),
                 SourceSsaPhysicalV36::Value { .. }
+                | SourceSsaPhysicalV36::Execution(_)
                 | SourceSsaPhysicalV36::Witness(_)
                 | SourceSsaPhysicalV36::Unit => Ok(None),
                 _ => self
