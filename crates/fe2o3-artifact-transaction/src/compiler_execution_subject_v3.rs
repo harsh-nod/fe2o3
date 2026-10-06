@@ -227,6 +227,21 @@ impl InertCompilerExecutionSubjectV3 {
         })
     }
 
+    /// Inert logical work for original-account publication reconstruction.
+    /// Caller comparison and retention of the returned owner are additional.
+    pub const COMPOSED_PUBLICATION_WORK_V3: usize =
+        Budget::STORAGE_WINDOW_WORK_V1 + INERT_COMPILER_EXECUTION_SUBJECT_WORK_V3;
+
+    /// Full nested scratch quote over this actual immutable handoff. It does
+    /// not reserve storage, validate occurrence currentness or grant authority.
+    pub fn composed_publication_storage_v3(handoff: &Handoff) -> Result<usize> {
+        handoff_floor(handoff)?
+            .checked_add(size_of::<CompilerModuleHandoffReceiptV5>())
+            .and_then(|n| n.checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1))
+            .and_then(|n| n.checked_add(INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V3))
+            .ok_or(Resource::Arithmetic.into())
+    }
+
     // Only exact-pair custody composition enters here, under its full-owner
     // local window. The codec and post-entry fees are shared with legacy entry.
     pub(crate) fn from_publication_in_custody(

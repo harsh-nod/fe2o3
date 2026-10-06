@@ -444,6 +444,42 @@ fn conditional_subject_v3_real_publication_consumption_and_donor_refusal() {
 }
 
 #[test]
+fn original_publication_quote_covers_exact_and_one_short_resources() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    let fixture = Fixture::new();
+    let mut setup_work = Work::new(usize::MAX);
+    let mut setup = Budget::new(&mut setup_work, LIMIT);
+    fixture.reserve(&mut setup);
+    let receipt = fixture.publish(&mut setup).unwrap();
+    let inputs =
+        handoff_floor(&fixture.handoff).unwrap() + size_of::<CompilerModuleHandoffReceiptV5>();
+    let scratch = Subject::composed_publication_storage_v3(&fixture.handoff).unwrap();
+    let outside = LIMIT + 17;
+    for (work_short, storage_short) in [(false, false), (true, false), (false, true)] {
+        let total = outside + inputs + scratch;
+        let mut owned = Owned::new(
+            Work::new(Subject::COMPOSED_PUBLICATION_WORK_V3 - usize::from(work_short)),
+            total - usize::from(storage_short),
+        );
+        owned.with_budget(|budget| {
+            budget.reserve_storage(outside + inputs).unwrap();
+            let identity = budget.storage_account_identity_v1();
+            let ledger = budget.work_ledger_identity_v1();
+            let result =
+                Subject::from_publication_in_original_account_v3(receipt, &fixture.handoff, budget);
+            assert_eq!(result.is_ok(), !work_short && !storage_short);
+            if let Ok((subject, _)) = result {
+                assert_eq!(subject.attempt(), receipt.attempt());
+                assert_eq!(budget.peak_storage(), total);
+            }
+            assert_eq!(budget.storage(), outside + inputs);
+            assert_eq!(budget.storage_account_identity_v1(), identity);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+        });
+    }
+}
+
+#[test]
 fn conditional_subject_v3_replay_occurrence_and_carrier_are_not_omitted() {
     let a = outer();
     let b = outer_variant(false, 19);
