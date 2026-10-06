@@ -118,6 +118,10 @@ fn original_terminal_map_and_consume_keep_actual_pair_and_account() {
         assert_eq!(b.storage(), before);
         b.reserve_storage(charge.0).unwrap();
         assert_eq!(backing_snapshot(mapped.handoff()), original);
+        assert!(mapped.revalidate_locked_currentness(b).is_err());
+        mapped
+            .revalidate_locked_currentness_in_original_account_v5(b)
+            .unwrap();
         let before = b.storage();
         let consumed =
             consume_compiler_module_handoff_in_original_account_v5(&lease, mapped, b).unwrap();

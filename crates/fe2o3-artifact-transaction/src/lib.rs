@@ -82,6 +82,7 @@ pub use compiler_module_handoff::conditional_v5::receipt_transport_v3::{
     MAX_COMPILER_EXECUTION_RECEIPT_ENVELOPE_BYTES_V3,
     MAX_COMPILER_EXECUTION_RECEIPT_TRANSPORT_BYTES_V3,
     RecoveredCompilerExecutionReceiptTransportV3, publish_compiler_execution_receipt_transport_v3,
+    recover_compiler_execution_receipt_transport_in_original_account_v3,
     recover_compiler_execution_receipt_transport_v3,
     recover_compiler_execution_receipt_transport_with_currentness_v3,
 };

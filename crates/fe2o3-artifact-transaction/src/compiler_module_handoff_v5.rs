@@ -300,6 +300,26 @@ impl<T> CompilerModuleHandoffConsumptionTokenV5<T> {
         })
     }
 
+    /// Same locked metadata revalidation on an original owned account. Counts
+    /// this complete actual token (including any mapped owner) again under an
+    /// additional <=256 MiB window. This does not authenticate mapped evidence.
+    pub fn revalidate_locked_currentness_in_original_account_v5(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<()> {
+        let floor = budget.storage();
+        let overlap = self
+            .storage
+            .0
+            .checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1)
+            .ok_or(Resource::Arithmetic)?;
+        budget.with_additional_storage_window_v1(MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5, |b| {
+            b.with_prepaid_scope(floor.max(self.storage.0), 0, 0, overlap, |b| {
+                composition::entry_composed(b, self.storage.0, |r| self.revalidate_locked_in(r))
+            })
+        })
+    }
+
     fn revalidate_locked_in(&self, resources: &mut Resources<'_, '_>) -> Result<()> {
         custody::prepay_currentness(&self.binding, resources)?;
         currentness::metadata(&self.binding, resources)?;

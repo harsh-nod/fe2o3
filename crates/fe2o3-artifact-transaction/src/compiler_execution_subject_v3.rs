@@ -204,6 +204,29 @@ impl InertCompilerExecutionSubjectV3 {
         })
     }
 
+    /// Same inert reconstruction on the original owned account. The actual
+    /// complete handoff backing/metadata and fixed receipt are counted again
+    /// inside an additional <=256 MiB window. This does not establish currentness
+    /// or compiler origin; those remain duties of the actual retained caller.
+    pub fn from_publication_in_original_account_v3(
+        receipt: CompilerModuleHandoffReceiptV5,
+        handoff: &Handoff,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, InertCompilerExecutionSubjectStorageV3)> {
+        let inputs = handoff_floor(handoff)?
+            .checked_add(size_of::<CompilerModuleHandoffReceiptV5>())
+            .ok_or(Resource::Arithmetic)?;
+        let floor = budget.storage();
+        let overlap = inputs
+            .checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1)
+            .ok_or(Resource::Arithmetic)?;
+        budget.with_additional_storage_window_v1(MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5, |b| {
+            b.with_prepaid_scope(floor.max(inputs), 0, 0, overlap, |b| {
+                Self::from_publication_in_custody(receipt, handoff, b)
+            })
+        })
+    }
+
     // Only exact-pair custody composition enters here, under its full-owner
     // local window. The codec and post-entry fees are shared with legacy entry.
     pub(crate) fn from_publication_in_custody(
