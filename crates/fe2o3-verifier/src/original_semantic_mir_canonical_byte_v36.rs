@@ -830,6 +830,8 @@ mod tests {
             + 5 * size_of::<Result<()>>()
             + size_of::<Option<Resource>>()
             + size_of::<FormalIndexWidth>()
+            + size_of::<(OperatorV30, u32, bool, u128, u128, i128)>()
+            + size_of::<std::iter::Enumerate<std::slice::Iter<'static, (usize, ScalarV30)>>>()
             + primitive;
         assert_eq!(headers(), expected);
         for limit in [expected, expected - 1] {
