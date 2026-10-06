@@ -6,9 +6,10 @@ use crate::{
 use fe2o3_build_authority::{
     COMPILER_RUNTIME_MANIFEST_MAX_BYTES_V1 as MAX_BYTES,
     COMPILER_RUNTIME_MANIFEST_MAX_ENTRIES_V1 as MAX_ENTRIES,
-    COMPILER_RUNTIME_MANIFEST_STORAGE_V1 as CODEC_STORAGE, CompilerApprovalPolicyV2,
-    CompilerClosureV2, CompilerRuntimeEntryV1, CompilerRuntimeManifestErrorV1,
-    CompilerRuntimeManifestV1,
+    COMPILER_RUNTIME_MANIFEST_MAX_TOTAL_BYTES_V1 as MAX_CODE_BYTES,
+    COMPILER_RUNTIME_MANIFEST_STORAGE_V1 as CODEC_STORAGE,
+    COMPILER_RUNTIME_MANIFEST_WORK_V1 as CODEC_WORK, CompilerApprovalPolicyV2, CompilerClosureV2,
+    CompilerRuntimeEntryV1, CompilerRuntimeManifestErrorV1, CompilerRuntimeManifestV1,
 };
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
@@ -138,6 +139,43 @@ impl fmt::Display for RetainedCompilerRuntimeErrorV1 {
 impl std::error::Error for RetainedCompilerRuntimeErrorV1 {}
 
 impl RetainedCompilerRuntimeV1 {
+    /// Operation-frame ceiling only. Retained approval, manifest and complete
+    /// code backing must be funded separately and kept charged by the caller.
+    pub const MAX_OPERATION_SCRATCH: usize =
+        2 * CODEC_STORAGE + 2 * size_of::<Self>() + 2 * CHUNK + 16 * 1024;
+
+    /// One complete code hash/origin pass at the existing manifest limits.
+    /// Checked arithmetic refuses hosts unable to represent the fixed bounds.
+    pub fn maximum_file_pass_work() -> std::result::Result<usize, Resource> {
+        let bytes = usize::try_from(MAX_CODE_BYTES).map_err(|_| Resource::Arithmetic)?;
+        MAX_ENTRIES
+            .checked_mul(ENTRY_IO_WORK)
+            .and_then(|origins| bytes.checked_mul(8)?.checked_add(origins))
+            .ok_or(Resource::Arithmetic)
+    }
+
+    /// Conservative work ceiling for one admission, revalidation, or full
+    /// compiler comparison, including nested fixed-origin policy checks.
+    /// This is a quote, not new accounting state or execution evidence.
+    pub fn maximum_operation_work() -> std::result::Result<usize, Resource> {
+        let entries = MAX_ENTRIES
+            .checked_mul(ENTRY_IO_WORK)
+            .ok_or(Resource::Arithmetic)?;
+        [
+            3 * ApprovedCompilerPolicyV2::MAX_OPERATION_WORK,
+            IO_WORK,
+            2048,
+            2 * CODEC_WORK,
+            MAX_BYTES,
+            entries,
+            Self::maximum_file_pass_work()?,
+        ]
+        .into_iter()
+        .try_fold(0usize, |total, part| {
+            total.checked_add(part).ok_or(Resource::Arithmetic)
+        })
+    }
+
     /// Open only the two fixed origins, after revalidating the consumed policy.
     /// All file bytes must match the independently approved manifest, with root
     /// ownership, a single link, exact closed role mode, no ACL/capability xattrs,

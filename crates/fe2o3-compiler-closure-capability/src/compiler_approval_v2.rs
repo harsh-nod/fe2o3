@@ -4,11 +4,14 @@ use crate::{
     CompilerExecutionClientProfileCapabilityV3 as ProfileCapability, trusted_profile_tree as tree,
 };
 use fe2o3_build_authority::{
-    COMPILER_APPROVAL_POLICY_BYTES_V2 as POLICY_BYTES, CompilerApprovalPolicyErrorV2,
+    COMPILER_APPROVAL_POLICY_BYTES_V2 as POLICY_BYTES,
+    COMPILER_APPROVAL_POLICY_WORK_V2 as POLICY_WORK, CompilerApprovalPolicyErrorV2,
     CompilerApprovalPolicyV2, CompilerClosureV2,
 };
 use fe2o3_compiler_execution_protocol::{
     COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V3 as PROFILE_BYTES,
+    COMPILER_EXECUTION_CLIENT_PROFILE_STORAGE_V3 as PROFILE_STORAGE,
+    COMPILER_EXECUTION_CLIENT_PROFILE_WORK_V3 as PROFILE_WORK,
     CompilerExecutionClientProfileV3 as Profile,
 };
 use fe2o3_kernel_ir::{
@@ -100,6 +103,27 @@ impl fmt::Display for CompilerApprovalErrorV2 {
 impl std::error::Error for CompilerApprovalErrorV2 {}
 
 impl ApprovedCompilerPolicyV2 {
+    /// Conservative work ceiling for one load, revalidation, or full compiler
+    /// comparison. This quotes existing charges; it neither reserves resources
+    /// nor admits a policy. Repeated operations must each be funded upstream.
+    pub const MAX_OPERATION_WORK: usize = 8
+        + IO_WORK
+        + POLICY_WORK
+        + PROFILE_WORK
+        + 2 * ProfileCapability::IO_WORK
+        + POLICY_BYTES
+        + PROFILE_BYTES
+        + 1024;
+
+    /// Additional peak storage for one operation, including newly returned
+    /// approval when loading. Existing caller-owned inputs remain prepaid.
+    pub const MAX_OPERATION_SCRATCH: usize = FRAME
+        + PROFILE_STORAGE
+        + 2 * ProfileCapability::IO_STORAGE
+        + size_of::<(Self, CompilerApprovalStorageV2)>()
+        + POLICY_BYTES
+        + PROFILE_BYTES;
+
     const HEADER: usize = size_of::<Self>() - size_of::<ProfileCapability>()
         + size_of::<CompilerApprovalStorageV2>()
         + POLICY_BYTES

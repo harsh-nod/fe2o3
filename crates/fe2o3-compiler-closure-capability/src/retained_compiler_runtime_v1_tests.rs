@@ -245,6 +245,46 @@ fn revalidate_work() -> usize {
 }
 
 #[test]
+fn shared_runtime_quotes_preserve_the_closed_schedule() {
+    let code = usize::try_from(MAX_CODE_BYTES).unwrap();
+    let files = MAX_ENTRIES * ENTRY_IO_WORK + code * 8;
+    assert_eq!(
+        RetainedCompilerRuntimeV1::maximum_file_pass_work().unwrap(),
+        files
+    );
+    assert_eq!(
+        RetainedCompilerRuntimeV1::maximum_operation_work().unwrap(),
+        3 * ApprovedCompilerPolicyV2::MAX_OPERATION_WORK
+            + IO_WORK
+            + 2048
+            + 2 * CODEC_WORK
+            + MAX_BYTES
+            + MAX_ENTRIES * ENTRY_IO_WORK
+            + files
+    );
+    assert!(RetainedCompilerRuntimeV1::MAX_OPERATION_SCRATCH >= FRAME);
+}
+
+#[test]
+fn shared_runtime_work_quote_covers_synthetic_inventory_operations() {
+    let t = Tree::new();
+    let limit = 2 * RetainedCompilerRuntimeV1::maximum_operation_work().unwrap();
+    let (result, usage) = observe(limit, LIMIT, |b| {
+        let inventory = t.retain(b);
+        t.revalidate(&inventory, b)?;
+        let retained = inventory.additional_storage();
+        drop(inventory);
+        b.release_storage(retained)?;
+        Ok(())
+    });
+    result.unwrap();
+    assert_eq!(usage.work, load_work() + revalidate_work());
+    assert_eq!(usage.storage, FLOOR);
+    assert_eq!(usage.failed_work, None);
+    assert_eq!(usage.failed_storage, None);
+}
+
+#[test]
 fn synthetic_intake_binds_full_policy_and_retains_every_exact_origin() {
     let t = Tree::new();
     let mut w = Work::new(LIMIT);
