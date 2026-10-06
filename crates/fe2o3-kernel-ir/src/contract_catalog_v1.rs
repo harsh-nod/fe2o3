@@ -776,3 +776,7 @@ mod tests {
 #[path = "contract_catalog_retained_storage_v1.rs"]
 mod retained_storage_v1;
 pub use retained_storage_v1::KernelIrContractCatalogRetainedStorageV1;
+
+#[path = "contract_catalog_resources_v1.rs"]
+mod resources_v1;
+pub use resources_v1::KernelIrContractCatalogDecodeQuoteV1;
