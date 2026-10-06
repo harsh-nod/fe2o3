@@ -3253,3 +3253,26 @@ from authorization to launch.
 
 Milestone acceptance remains 7/18: M1, M2, V1, V2, U1, U2 and U3. No additional
 milestone or tutorial is declared complete by this checkpoint.
+
+## Actual same-count V22 source hazards — 2026-10-06 20:51 UTC
+
+The new seven-case source ladder passed all fourteen real-rustc sessions: the
+two positive register layouts and five same-count hazards, each through the
+observe and diagnostic routes. The ten negative sessions reached the expected
+VM/LGKM readiness, publication or masked-suffix refusal, rather than the earlier
+operation-count guard. Positive canonical, inert LLVM and observation bytes
+joined across the two routes; every session recorded its actual callback and
+unchanged source. The original removed-row controls remain separate.
+
+This supersedes the earlier pending actual-source result for these five
+fixtures, not the complete M3 exit. The selected historical test binary was
+507,446,200 bytes, SHA256
+`297f1e31ec487f2fc761ca13b61880f1e687e063a56188a773fe6c6c45862a4f`.
+The four relevant source leaves match public commit
+`a4d8625791f2dddb898fde3235ebbb410133959c`; this is not a claim that the
+entire public commit was built or tested by that historical binary.
+
+See [V22 evidence and limits](physical-lds-exchange-source-v22.md#actual-same-count-source-ladder--2026-10-06).
+No native LLVM execution, GPU execution, general divergent-barrier/race proof
+or protected artifact/launch authority is established. Accepted milestones
+remain **M1/M2/V1/V2/U1/U2/U3 (7/18)**; M3 remains pending.
