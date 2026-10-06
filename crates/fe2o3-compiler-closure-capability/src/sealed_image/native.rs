@@ -24,6 +24,24 @@ impl From<ImageError> for Error {
 }
 
 impl SealedCapabilityImage {
+    /// Borrows a live prepaid descriptor without duplicating it or changing its
+    /// offset. This is fixed-image inspection, not a retained capability.
+    pub(crate) fn read_borrowed_fixed<const N: usize>(image: &File) -> Result<[u8; N]> {
+        let rule = ImageLength::Exact(N);
+        let (before, _) = validate_file_checked(image, rule)?;
+        let mut bytes = [0; N];
+        let read = rustix::io::pread(image, bytes.as_mut_slice(), 0)
+            .map_err(|e| Error::io("read sealed policy family", e))?;
+        if read != N {
+            return Err(Error::Rejected("short sealed policy family read"));
+        }
+        let (after, _) = validate_file_checked(image, rule)?;
+        if before.dev() != after.dev() || before.ino() != after.ino() {
+            return Err(Error::Rejected("sealed policy family object changed"));
+        }
+        Ok(bytes)
+    }
+
     /// Admission for the bounded V3 invocation role. The caller meters metadata
     /// before entry and prepays the admitted length before requesting any bytes.
     pub(crate) fn from_file_bounded_native(

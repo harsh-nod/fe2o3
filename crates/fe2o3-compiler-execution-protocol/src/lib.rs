@@ -48,6 +48,8 @@ pub use external_anchor_transaction_v3::{
 };
 mod issuer_policy_adapter;
 mod issuer_policy_codec;
+mod issuer_policy_family_v1;
+pub use issuer_policy_family_v1::CompilerExecutionPolicyFamilyV1;
 mod issuer_policy_v2;
 mod issuer_policy_v3;
 mod launch_manifest;

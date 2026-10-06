@@ -147,6 +147,70 @@ fn native_loader_copies_enter_the_same_account_without_consuming_caller_slots() 
 }
 
 #[test]
+fn selected_native_session_keeps_the_original_budget_and_consumes_once() {
+    use super::super::{
+        CompilerExecutionStartupInputV1 as Startup, OwnedExecutionInputs, dispatch,
+    };
+    use rustix::net::{AddressFamily, SocketFlags, SocketType, socketpair};
+    use std::sync::Mutex;
+    let mut work = Work::new(usize::MAX);
+    let mut b = Budget::new(&mut work, 4 * 1024 * 1024);
+    b.reserve_storage(91).unwrap();
+    b.charge_work(19).unwrap();
+    let policy = valid_native_policy(&mut b);
+    let (file, charge) = policy.try_clone_for_transfer(&mut b).unwrap();
+    b.reserve_storage(charge.additional_storage()).unwrap();
+    let (client, _server) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::SEQPACKET,
+        SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    let startup = Startup(Mutex::new(Some(Ok(OwnedExecutionInputs {
+        policy: file.into(),
+        service: client,
+    }))));
+    let ledger = b.work_ledger_identity_v1();
+    let address = &b as *const Budget<'_> as usize;
+    let floor = b.storage();
+    {
+        let selected = startup.admit_selected(&mut b).unwrap();
+        let dispatch::Admitted::Native(Admitted {
+            policy: retained,
+            client,
+        }) = selected
+        else {
+            panic!("native image selected legacy");
+        };
+        assert_eq!(retained.policy(), policy.policy());
+        let (client, ()) = client
+            .prepare::<_, Error>(|budget| {
+                assert!(budget.work_ledger_identity_v1() == ledger);
+                assert_eq!(budget as *const Budget<'_> as usize, address);
+                assert!(budget.storage() > floor && budget.work() > 19);
+                retained.revalidate(budget)?;
+                budget.charge_work(7)?;
+                Ok(())
+            })
+            .unwrap();
+        drop(client);
+    }
+    assert!(b.work_ledger_identity_v1() == ledger && b.work() > 26);
+    assert!(matches!(
+        startup.admit_selected(&mut b),
+        Err(Error::Startup(
+            super::super::ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed
+        ))
+    ));
+    assert!(matches!(
+        startup.admit(),
+        Err(super::super::ProtectedCompilerExecutionErrorV1::InputAlreadyConsumed)
+    ));
+    policy.revalidate(&mut b).unwrap();
+}
+
+#[test]
 fn native_session_refusal_closes_both_inputs_without_resetting_the_account() {
     if isolated(concat!(
         module_path!(),
