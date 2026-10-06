@@ -2,6 +2,17 @@
 //! so backend rejection is not confused with macro compile-time validation.
 use fe2o3_device::{DisjointSlice, amdgpu_asm, amdgpu_ordered_program, kernel, thread};
 
+#[cfg(feature = "ordered-program-nested-v32")]
+macro_rules! ordered_program_wrapper {
+    ($a:expr, $b:expr, $c:expr) => {
+        amdgpu_ordered_program! {
+            gfx942_xnack_off_wave64;
+            scratch(32); out(33); in(34) = $a; in(35) = $b; in(36) = $c;
+            mov(out, input0);
+        }
+    };
+}
+
 #[cfg_attr(feature = "ordered-program-wrong-launch-v32",
     kernel(typed, launch(required = [32, 1, 1], max = [32, 1, 1])))]
 #[cfg_attr(not(feature = "ordered-program-wrong-launch-v32"),
@@ -15,6 +26,9 @@ pub fn ordered_u32_program(mut output: DisjointSlice<u32>, a: u32, b: u32, c: u3
         scratch(32); out(33); in(34) = a; in(35) = b; in(36) = c;
         mov(out, input0);
     };
+
+    #[cfg(feature = "ordered-program-nested-v32")]
+    let region_value = ordered_program_wrapper!(a, b, c);
 
     #[cfg(feature = "ordered-program-sixteen-v32")]
     let region_value = amdgpu_ordered_program! {
@@ -84,6 +98,7 @@ pub fn ordered_u32_program(mut output: DisjointSlice<u32>, a: u32, b: u32, c: u3
 
     #[cfg(not(any(
         feature = "ordered-program-one-v32",
+        feature = "ordered-program-nested-v32",
         feature = "ordered-program-sixteen-v32",
         feature = "ordered-program-dynamic-v32",
         feature = "ordered-program-alias-v32",

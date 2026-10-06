@@ -55,7 +55,7 @@ fn digest_field(value: &Value) -> Result<String, &'static str> {
     }
     Ok(super::super::super::lower_hex_v1(&bytes))
 }
-fn validate(origin: &Value, frames: &Value, source: &[u8]) -> Result<(), &'static str> {
+fn validate_binding(origin: &Value, frames: &Value) -> Result<(), &'static str> {
     if origin["schema"] != "fe2o3-diagnostic-ordered-program-origin-v1"
         || frames["schema"] != "fe2o3-diagnostic-ordered-region-macro-frames-v1"
         || origin["canonical_sha256"] != digest_field(&frames["canonical_sha256"])?
@@ -82,6 +82,10 @@ fn validate(origin: &Value, frames: &Value, source: &[u8]) -> Result<(), &'stati
             return Err("macro report authority or granularity");
         }
     }
+    Ok(())
+}
+fn validate(origin: &Value, frames: &Value, source: &[u8]) -> Result<(), &'static str> {
+    validate_binding(origin, frames)?;
     let rows = frames["frames"].as_array().ok_or("macro frame array")?;
     // Independent fixed fixture expectation, not a repeat-count-derived depth.
     if rows.len() != 1
@@ -135,9 +139,195 @@ fn validate(origin: &Value, frames: &Value, source: &[u8]) -> Result<(), &'stati
     }
     Ok(())
 }
+
+#[derive(Clone, Copy)]
+enum FixtureCase {
+    One,
+    Nested,
+}
+impl FixtureCase {
+    fn depth(self) -> usize {
+        match self {
+            Self::One => 1,
+            Self::Nested => 2,
+        }
+    }
+    fn validate(self, origin: &Value, frames: &Value, source: &[u8]) -> Result<(), &'static str> {
+        match self {
+            Self::One => validate(origin, frames, source),
+            Self::Nested => validate_nested(origin, frames, source),
+        }
+    }
+}
+const DEVICE_MACRO_SOURCE: &[u8] = include_bytes!("../../../fe2o3-device/src/ordered_program.rs");
+const WRAPPER_NAME: &str = "ordered_program_wrapper";
+const WRAPPER_HEAD: &str = "macro_rules! ordered_program_wrapper";
+fn unique_range(source: &[u8], needle: &str) -> Result<(usize, usize), &'static str> {
+    let text = std::str::from_utf8(source).map_err(|_| "nested source UTF8")?;
+    if text.matches(needle).count() != 1 {
+        return Err("nested source anchor not unique");
+    }
+    let start = text.find(needle).ok_or("nested source anchor absent")?;
+    Ok((start, start + needle.len()))
+}
+fn nested_ranges(source: &[u8]) -> Result<[(usize, usize); 4], &'static str> {
+    if source != FIXTURE {
+        return Err("nested fixture is not current embedded source");
+    }
+    let wrapper = unique_range(source, WRAPPER_HEAD)?;
+    let text = std::str::from_utf8(source).map_err(|_| "nested source UTF8")?;
+    let prefix = "#[cfg(feature = \"ordered-program-nested-v32\")]\nmacro_rules! ordered_program_wrapper {\n    ($a:expr, $b:expr, $c:expr) => {\n        ";
+    let (at, _) = unique_range(source, prefix)?;
+    let inner_start = at + prefix.len();
+    if !text[inner_start..].starts_with("amdgpu_ordered_program! {") {
+        return Err("nested inner spelling");
+    }
+    let inner_end = inner_start
+        + text[inner_start..]
+            .find("\n        }\n    };")
+            .ok_or("nested inner close")?
+        + "\n        }".len();
+    let outer = unique_range(source, "ordered_program_wrapper!(a, b, c)")?;
+    let inner_definition =
+        unique_range(DEVICE_MACRO_SOURCE, "macro_rules! amdgpu_ordered_program")?;
+    Ok([(inner_start, inner_end), outer, wrapper, inner_definition])
+}
+fn exact_interval(value: &Value, source: &[u8], range: (usize, usize)) -> Result<(), &'static str> {
+    let (line_start, column_start) = coordinate(source, range.0)?;
+    let (line_end, column_end) = coordinate(source, range.1)?;
+    if value["availability"] != "available"
+        || value["byte_start"] != range.0 as u64
+        || value["byte_end"] != range.1 as u64
+        || value["line_start"] != line_start
+        || value["column_start"] != column_start
+        || value["line_end"] != line_end
+        || value["column_end"] != column_end
+    {
+        return Err("nested exact source interval differs");
+    }
+    digest_field(&value["file_identity"])?;
+    Ok(())
+}
+fn same_interval(left: &Value, right: &Value) -> Result<(), &'static str> {
+    for key in [
+        "byte_start",
+        "byte_end",
+        "line_start",
+        "column_start",
+        "line_end",
+        "column_end",
+    ] {
+        if left[key] != right[key] {
+            return Err("nested compiler interval mismatch");
+        }
+    }
+    Ok(())
+}
+fn validate_nested(origin: &Value, frames: &Value, source: &[u8]) -> Result<(), &'static str> {
+    validate_binding(origin, frames)?;
+    let rows = frames["frames"].as_array().ok_or("macro frame array")?;
+    if rows.len() != 2
+        || frames["expansion_depth"] != 2
+        || rows[0]["ordinal"] != 0
+        || rows[1]["ordinal"] != 1
+        || rows[0]["kind"] != "macro"
+        || rows[1]["kind"] != "macro"
+        || rows[0]["macro_name"] != "amdgpu_ordered_program"
+        || rows[1]["macro_name"] != WRAPPER_NAME
+    {
+        return Err("nested actual fixture frame mismatch");
+    }
+    let [inner, outer, wrapper_definition, inner_definition] = nested_ranges(source)?;
+    exact_interval(&rows[0]["call_site"], source, inner)?;
+    exact_interval(&rows[1]["call_site"], source, outer)?;
+    exact_interval(&rows[1]["definition_site"], source, wrapper_definition)?;
+    exact_interval(
+        &rows[0]["definition_site"],
+        DEVICE_MACRO_SOURCE,
+        inner_definition,
+    )?;
+    exact_interval(&rows[1]["expansion"], source, inner)?;
+    // The original origin report records source_callsite() (outermost) but
+    // expansion() remains the innermost actual MIR call span.
+    same_interval(&origin["call_site"], &rows[1]["call_site"])?;
+    same_interval(&origin["expansion"], &rows[0]["expansion"])?;
+    if rows[0]["expansion"]["availability"] != "available"
+        || origin["call_site"]["file_identity"]
+            != digest_field(&rows[1]["call_site"]["file_identity"])?
+        || origin["expansion"]["file_identity"]
+            != digest_field(&rows[0]["expansion"]["file_identity"])?
+    {
+        return Err("nested compiler file identity mismatch");
+    }
+    let fixture_file = digest_field(&rows[1]["call_site"]["file_identity"])?;
+    for span in [
+        &rows[0]["call_site"],
+        &rows[1]["definition_site"],
+        &rows[1]["expansion"],
+    ] {
+        if digest_field(&span["file_identity"])? != fixture_file {
+            return Err("nested fixture file identity mismatch");
+        }
+    }
+    if digest_field(&rows[0]["definition_site"]["file_identity"])?
+        != digest_field(&rows[0]["expansion"]["file_identity"])?
+        || digest_field(&rows[0]["expansion_identity"])?
+            == digest_field(&rows[1]["expansion_identity"])?
+    {
+        return Err("nested frame identity mismatch");
+    }
+    Ok(())
+}
+fn nested_refusal_controls(
+    origin: &Value,
+    frames: &Value,
+    source: &[u8],
+) -> Result<(), &'static str> {
+    validate_nested(origin, frames, source)?;
+    for fault in 0..6 {
+        let mut changed = frames.clone();
+        match fault {
+            0 => {
+                changed["frames"]
+                    .as_array_mut()
+                    .ok_or("macro frame array")?
+                    .reverse();
+                changed["frames"][0]["ordinal"] = json!(0);
+                changed["frames"][1]["ordinal"] = json!(1);
+            }
+            1 => {
+                changed["frames"]
+                    .as_array_mut()
+                    .ok_or("macro frame array")?
+                    .pop();
+            }
+            2 => {
+                changed["frames"][1]["call_site"]["byte_start"] = json!(0);
+            }
+            3 => {
+                let first = changed["frames"][0]["call_site"].clone();
+                changed["frames"][1]["call_site"] = first;
+            }
+            4 => {
+                changed["frames"][1]["definition_site"]["byte_end"] = json!(0);
+            }
+            5 => {
+                let first = changed["frames"][0]["expansion_identity"].clone();
+                changed["frames"][1]["expansion_identity"] = first;
+            }
+            _ => unreachable!(),
+        }
+        if validate_nested(origin, &changed, source).is_ok() {
+            return Err("nested mutated frame accepted");
+        }
+    }
+    Ok(())
+}
+
 struct MacroCallbacks<'a> {
     baseline: &'a [u8],
     source: &'a [u8],
+    case: FixtureCase,
     calls: usize,
     result: Option<Result<Value, String>>,
 }
@@ -158,37 +348,43 @@ impl Callbacks for MacroCallbacks<'_> {
                 .map_err(|_| "macro unchanged original baseline or actual profile differs")?;
             let origin_bytes = origin.bytes()?;
             let frame_bytes = frames.bytes()?;
-            if frames.frame_count() != 1 {
-                return Err("macro fixture expected exactly one actual frame".into());
+            if frames.frame_count() != self.case.depth() {
+                return Err("macro fixture actual frame count differs from fixed case".into());
             }
             let origin: Value =
                 serde_json::from_slice(&origin_bytes).map_err(|_| "macro origin JSON")?;
             let frames: Value =
                 serde_json::from_slice(&frame_bytes).map_err(|_| "macro frames JSON")?;
-            validate(&origin, &frames, self.source)?;
+            self.case.validate(&origin, &frames, self.source)?;
             // Mutate only inert copies; none can reconstruct the actual owner.
             let mut stale = frames.clone();
             stale["canonical_sha256"][0] = json!(256);
-            if validate(&origin, &stale, self.source).is_ok() {
+            if self.case.validate(&origin, &stale, self.source).is_ok() {
                 return Err("stale macro canonical accepted".into());
             }
             let mut stale = frames.clone();
             stale["frames"][0]["call_site"]["byte_start"] = json!(0);
-            if validate(&origin, &stale, self.source).is_ok() {
+            if self.case.validate(&origin, &stale, self.source).is_ok() {
                 return Err("stale macro callsite accepted".into());
             }
             let mut stale = frames.clone();
             stale["is_llvm_inline_stack"] = json!(true);
-            if validate(&origin, &stale, self.source).is_ok() {
+            if self.case.validate(&origin, &stale, self.source).is_ok() {
                 return Err("macro inline relabel accepted".into());
             }
             // The actual original owner remains live through baseline equality,
             // both bounded reports and all inert refusal controls.
-            Ok(
-                json!({"origin":origin,"macro_frames":frames,"actual":actual,
+            if matches!(self.case, FixtureCase::Nested) {
+                nested_refusal_controls(&origin, &frames, self.source)?;
+            }
+            let mut result = json!({"origin":origin,"macro_frames":frames,"actual":actual,
                 "full_original_baseline_equal_while_owner_live":true,
-                "inert_stale_canonical_callsite_inline_refusals":true}),
-            )
+                "inert_stale_canonical_callsite_inline_refusals":true});
+            if matches!(self.case, FixtureCase::Nested) {
+                result["inert_nested_order_omission_outer_definition_identity_refusals"] =
+                    json!(true);
+            }
+            Ok(result)
         })());
         Compilation::Stop
     }
@@ -211,6 +407,7 @@ fn actual_ordered_macro_frames() {
     let mut callbacks = MacroCallbacks {
         baseline: &baseline.bytes,
         source: &source.bytes,
+        case: FixtureCase::One,
         calls: 0,
         result: None,
     };
@@ -249,6 +446,62 @@ fn actual_ordered_macro_frames() {
     println!("\n{PREFIX}{}", std::str::from_utf8(&bytes).unwrap());
 }
 #[test]
+#[ignore = "root-supervised separate nested fixture; use nested preparation and unchanged original baseline"]
+fn actual_ordered_nested_macro_frames() {
+    let directory = root();
+    let before = checked_record(&directory, "nested");
+    verify_environment(&before);
+    let mut source =
+        RetainedBytes::open(&fixture().join("src/ordered_program_v32.rs"), 64 * 1024).unwrap();
+    nested_ranges(&source.bytes).unwrap();
+    let mut baseline =
+        RetainedBytes::open(&directory.join("nested.baseline-v17.bin"), BASELINE_CAP).unwrap();
+    assert!(
+        !CLAIMED.swap(true, Ordering::SeqCst),
+        "one compiler session per process"
+    );
+    let mut callbacks = MacroCallbacks {
+        baseline: &baseline.bytes,
+        source: &source.bytes,
+        case: FixtureCase::Nested,
+        calls: 0,
+        result: None,
+    };
+    let fatal = rustc_driver::catch_fatal_errors(|| {
+        rustc_driver::run_compiler(&before.args, &mut callbacks)
+    })
+    .is_err();
+    assert!(!fatal, "original compiler failure is not macro evidence");
+    assert_eq!(callbacks.calls, 1);
+    let observation = callbacks
+        .result
+        .take()
+        .expect("actual callback absent")
+        .expect("actual macro observation refused");
+    drop(callbacks);
+    baseline.recheck().unwrap();
+    source.recheck().unwrap();
+    assert_eq!(checked_record(&directory, "nested"), before);
+    verify_environment(&before);
+    assert!(
+        fs::read_dir(directory.join("analysis-output"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    let value = json!({
+        "schema":"fe2o3-actual-ordered-macro-frames-fixture-v1",
+        "invocation":before,"observation":observation,
+        "source_sha256":digest(&source.bytes),"baseline_sha256":digest(&baseline.bytes),
+        "source_rechecked_after_callback":true,"compiler_sessions":1,
+        "native_emitted":false,"hardware_observed":false,"artifact_or_launch_authority":false
+    });
+    let bytes = serde_json::to_vec(&value).unwrap();
+    assert!(bytes.len() <= OUTPUT_CAP);
+    write_new(&directory, "nested.macro-frames.json", &value);
+    println!("\n{PREFIX}{}", std::str::from_utf8(&bytes).unwrap());
+}
+#[test]
 fn current_real_fixture_range_is_unique_and_normalized() {
     let (start, end) = expected_callsite(FIXTURE).unwrap();
     assert!(FIXTURE[start..].starts_with(b"amdgpu_ordered_program! {"));
@@ -271,4 +524,134 @@ fn macro_digest_decoder_is_exact_32_byte_not_number_coercion() {
     let mut bad = json!(vec![0; 32]);
     bad[0] = json!(256);
     assert!(digest_field(&bad).is_err());
+}
+
+#[test]
+fn nested_real_fixture_has_distinct_inner_outer_and_definition_ranges() {
+    let [inner, outer, definition, device] = nested_ranges(FIXTURE).unwrap();
+    assert!(inner.0 < inner.1 && inner.1 < outer.0 && outer.0 < outer.1);
+    assert_eq!(
+        &FIXTURE[outer.0..outer.1],
+        b"ordered_program_wrapper!(a, b, c)"
+    );
+    assert_eq!(
+        &FIXTURE[definition.0..definition.1],
+        WRAPPER_HEAD.as_bytes()
+    );
+    assert_eq!(
+        &DEVICE_MACRO_SOURCE[device.0..device.1],
+        b"macro_rules! amdgpu_ordered_program"
+    );
+    assert!(
+        expected_callsite(FIXTURE).is_ok(),
+        "old one-step fixture remains selected independently"
+    );
+}
+#[test]
+fn nested_source_guard_rejects_mutation_and_unlisted_anchor() {
+    let mut changed = FIXTURE.to_vec();
+    changed[0] ^= 1;
+    assert_eq!(
+        nested_ranges(&changed),
+        Err("nested fixture is not current embedded source")
+    );
+    assert!(nested_ranges(b"").is_err());
+    assert!(unique_range(b"x x", "x").is_err());
+    assert!(unique_range(b"x", "absent").is_err());
+}
+// These records exercise only the inert validator. They are never offered as
+// compiler/source-owner evidence, unlike the ignored actual nested callback.
+fn inert_nested_reports() -> (Value, Value) {
+    let id = |n: u8| json!(vec![n; 32]);
+    let [inner, outer, wrapper, device] = nested_ranges(FIXTURE).unwrap();
+    let span = |source: &[u8], range: (usize, usize), file: u8| {
+        let start = coordinate(source, range.0).unwrap();
+        let end = coordinate(source, range.1).unwrap();
+        json!({"availability":"available","byte_start":range.0,"byte_end":range.1,
+            "line_start":start.0,"column_start":start.1,"line_end":end.0,"column_end":end.1,
+            "file_identity":id(file)})
+    };
+    let inner_call = span(FIXTURE, inner, 1);
+    let outer_call = span(FIXTURE, outer, 1);
+    let inner_expansion = span(DEVICE_MACRO_SOURCE, device, 2);
+    let mut origin_call = outer_call.clone();
+    origin_call["file_identity"] = json!(digest_field(&id(1)).unwrap());
+    let mut origin_expansion = inner_expansion.clone();
+    origin_expansion["file_identity"] = json!(digest_field(&id(2)).unwrap());
+    let origin = json!({"schema":"fe2o3-diagnostic-ordered-program-origin-v1",
+        "canonical_sha256":digest_field(&id(3)).unwrap(),"declared_source_ids":{
+            "frontend_unit":digest_field(&id(4)).unwrap(),"function":digest_field(&id(5)).unwrap(),
+            "contract":digest_field(&id(6)).unwrap(),"statement":digest_field(&id(7)).unwrap()},
+        "expansion_chain_sha256":digest_field(&id(8)).unwrap(),"expansion_depth":2,
+        "call_site":origin_call,"expansion":origin_expansion});
+    let frames = json!({"schema":"fe2o3-diagnostic-ordered-region-macro-frames-v1",
+        "canonical_sha256":id(3),"source_frontend_unit":id(4),"source_function":id(5),
+        "source_contract":id(6),"source_statement":id(7),"expansion_chain_sha256":id(8),
+        "expansion_depth":2,"frame_order":"innermost_to_outermost","origin_scope":"whole_ordered_region",
+        "is_llvm_inline_stack":false,"instruction_specific_origins_available":false,
+        "allocator_lifetime_trace_available":false,"authenticates_source":false,
+        "grants_artifact_or_launch_authority":false,"frames":[
+            {"ordinal":0,"kind":"macro","macro_name":"amdgpu_ordered_program","expansion_identity":id(9),
+             "call_site":inner_call,"expansion":inner_expansion,
+             "definition_site":span(DEVICE_MACRO_SOURCE,device,2)},
+            {"ordinal":1,"kind":"macro","macro_name":WRAPPER_NAME,"expansion_identity":id(10),
+             "call_site":outer_call,"expansion":span(FIXTURE,inner,1),
+             "definition_site":span(FIXTURE,wrapper,1)}]});
+    (origin, frames)
+}
+#[test]
+fn nested_inert_positive_and_all_six_mutations_are_closed() {
+    let (origin, frames) = inert_nested_reports();
+    assert!(validate_nested(&origin, &frames, FIXTURE).is_ok());
+    assert!(nested_refusal_controls(&origin, &frames, FIXTURE).is_ok());
+}
+#[test]
+fn nested_identity_and_inline_relabel_refuse() {
+    let (origin, frames) = inert_nested_reports();
+    for field in [
+        "canonical_sha256",
+        "source_frontend_unit",
+        "source_function",
+        "source_contract",
+        "source_statement",
+        "expansion_chain_sha256",
+    ] {
+        let mut stale = frames.clone();
+        stale[field][0] = json!(255);
+        assert_eq!(
+            validate_nested(&origin, &stale, FIXTURE),
+            Err("macro report identity or profile mismatch")
+        );
+    }
+    let mut stale = frames;
+    stale["is_llvm_inline_stack"] = json!(true);
+    assert_eq!(
+        validate_nested(&origin, &stale, FIXTURE),
+        Err("macro report authority or granularity")
+    );
+}
+#[test]
+fn nested_outermost_origin_and_expansion_chain_are_not_interchangeable() {
+    let (mut origin, frames) = inert_nested_reports();
+    origin["call_site"]["byte_start"] = frames["frames"][0]["call_site"]["byte_start"].clone();
+    assert_eq!(
+        validate_nested(&origin, &frames, FIXTURE),
+        Err("nested compiler interval mismatch")
+    );
+    let (origin, mut frames) = inert_nested_reports();
+    frames["frames"][1]["expansion"]["file_identity"][0] = json!(255);
+    assert_eq!(
+        validate_nested(&origin, &frames, FIXTURE),
+        Err("nested fixture file identity mismatch")
+    );
+}
+#[test]
+fn nested_case_does_not_expand_old_preparation_roster() {
+    assert_eq!(CASES, ["one", "three", "sixteen", "invalid-count"]);
+    assert_eq!(feature("nested"), Ok("ordered-program-nested-v32"));
+    assert!(positive("nested"));
+    for name in ["nested,one", "../nested", "nested2"] {
+        assert!(feature(name).is_err());
+        assert!(!positive(name));
+    }
 }
