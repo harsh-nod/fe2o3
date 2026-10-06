@@ -66,6 +66,14 @@ fn runtime_step_quote_composes_original_owner_helper_and_controller() {
 }
 
 #[test]
+fn completion_quote_preserves_original_issuer_and_outer_attempt_account() {
+    let quote = Attempt::publication_completion_quota().unwrap();
+    let inner = crate::native_v3::NativeAttempt::<Helper>::publication_completion_quota().unwrap();
+    assert_eq!(quote.work(), LOCAL_WORK + inner.work());
+    assert_eq!(quote.scratch(), FRAME + inner.scratch());
+}
+
+#[test]
 fn runtime_arm_and_cancellation_quotes_include_the_outer_attempt() {
     let arm = Attempt::arm_runtime_quota().unwrap();
     let inner = Trace::runtime_takeover_quota().unwrap();
