@@ -1,6 +1,7 @@
 //! Complete generated component predicates, not an admitted paired step proof.
 use super::super::super::{
     byte_bindings::SourceByteBindings,
+    expanded_execution::ExpandedExecutionBindingsV199,
     paired::ExpandedScalarBindingsV196,
     slots::SourceTagPairsV40,
     tile_target::{TileMicroCutsV180, TileTargetV176},
@@ -28,6 +29,7 @@ fn generate(
     let cuts = TileMicroCutsV180::derive(&target, plan, out)?;
     let bytes = SourceByteBindings::derive_expanded_v188(&target, out)?;
     let values = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+    let execution = ExpandedExecutionBindingsV199::derive(plan, slots, &target, out)?;
     super::super::super::emit_model_prelude_v187(out)?;
     slots.emit_source_tag_contracts(0, out)?;
     tags.emit_expanded_v190(&target, &contracts, width, 0, 1, out)?;
@@ -43,7 +45,7 @@ fn generate(
     let archive = source.source_ssa(out.budget)?;
     let semantic = source.source_semantic(out.budget)?;
     let launches = source.source_launch(out.budget)?;
-    let (mut scalars, mut leaves) = (0usize, 0usize);
+    let (mut scalars, mut leaves, mut scopes, mut payloads) = (0usize, 0usize, 0usize, 0usize);
     for root in 0..source.root_count(out.budget)? {
         let (function, _) = source.root(root, out.budget)?;
         let launch = launches
@@ -85,6 +87,28 @@ fn generate(
                 let endpoint =
                     relation.ssa_typed_endpoint_v36(root, instance, value, out.budget)?;
                 let ty = endpoint.physical_type(out.budget)?;
+                let nominal = &semantic.types()[endpoint.source_type(out.budget)?.index() as usize];
+                let role = match nominal.rust_type_kind() {
+                    SemanticRustTypeKindV1::Execution(role) => Some(role),
+                    _ => match nominal.shape() {
+                        SemanticTypeShapeV1::Pointer(pointer) => {
+                            match semantic.types()[pointer.pointee().index() as usize]
+                                .rust_type_kind()
+                            {
+                                SemanticRustTypeKindV1::Execution(role) => Some(role),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    },
+                };
+                let scope = matches!(
+                    role,
+                    Some(
+                        SemanticExecutionRoleV29::KernelContext
+                            | SemanticExecutionRoleV29::Workgroup
+                    )
+                );
                 let scalar = ssa
                     .entry_definitions()
                     .iter()
@@ -100,17 +124,24 @@ fn generate(
                             | ExecutionRoleV15::LaneFragmentU32 { .. }
                     ))
                 ) && endpoint.execution_borrow_v163(out.budget)?.is_none();
-                if !scalar && !payload {
+                if !scalar && !payload && !scope {
                     continue;
                 }
                 // Each SSA definition gets a separate predicate. Conjoining
                 // different dynamic cuts would incorrectly require dead values.
-                write!(out, "spec fn expanded_source_component_{root}_{instance}_{ordinal}_v210(source: InvocationSourceByteStateV36, target: MemoryStateV30, map: InvocationByteMapV36) -> bool {{ true")
+                write!(out, "spec fn expanded_source_component_{root}_{instance}_{ordinal}_v210(source: InvocationSourceByteStateV36, target: MemoryStateV30, map: InvocationByteMapV36, execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>) -> bool {{ true")
                     .map_err(|_| out.error())?;
-                if scalar {
+                if scope {
+                    write!(out, " && ").map_err(|_| out.error())?;
+                    execution.emit_mapped_conjunct_v205(root, instance, value, out)?;
+                    scopes += 1;
+                } else if scalar {
                     values.emit_source_conjunct(plan, root, instance, value, width, out)?;
                     scalars += 1;
                 } else {
+                    write!(out, " && ").map_err(|_| out.error())?;
+                    execution.emit_payload_lease_conjunct_v209(root, instance, value, out)?;
+                    payloads += 1;
                     let ty = endpoint.source_type(out.budget)?;
                     let count = slots.aggregate_leaf_count(ty, out)?.unwrap();
                     for leaf in 0..count {
@@ -124,7 +155,7 @@ fn generate(
             }
         }
     }
-    assert!(scalars > 0 && leaves > 0);
+    assert!(scalars > 0 && leaves > 0 && scopes > 0 && payloads > 0);
     super::super::super::support_closure::retain_referenced(out)?;
     writeln!(out, "}}").map_err(|_| out.error())?;
     assert!(
@@ -144,6 +175,22 @@ fn expanded_source_components_emit_complete_source_and_actual_target_models() {
         run_fixture_with_plan(layout, LIMIT, LIMIT, generate)
             .0
             .unwrap();
+    }
+}
+
+#[test]
+fn expanded_execution_maps_and_payload_laws_are_registered_in_the_production_prelude() {
+    let shared = super::super::super::expanded_execution::SHARED;
+    let prelude = super::super::super::source_bytes::SOURCE_BYTES_V36;
+    assert_eq!(prelude.matches(shared).count(), 1);
+    for name in [
+        "struct InvocationExecutionOriginV205",
+        "spec fn invocation_execution_mapped_v205(",
+        "spec fn invocation_execution_payload_related_v209(",
+        "proof fn invocation_execution_empty_map_grants_no_binding_v205(",
+        "proof fn invocation_execution_payload_missing_context_is_not_related_v209(",
+    ] {
+        assert_eq!(prelude.matches(name).count(), 1);
     }
 }
 
