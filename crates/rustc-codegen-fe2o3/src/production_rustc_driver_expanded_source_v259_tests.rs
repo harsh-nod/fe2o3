@@ -1,10 +1,19 @@
 //! Ordinary rustc entry through the owner-bound expanded production stage.
 use super::*;
+use crate::collector::CollectedTileTerminalKindV259 as TileKind;
 use crate::production_pipeline::source_owned_v29::Error as SourceError;
 use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, ExecutionTileLayoutV1};
 
+#[path = "production_rustc_driver_tile_census_v259_tests.rs"]
+mod tile_census_tests;
+
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_source_child";
 const CASE: &str = "FE2O3_TEST_EXPANDED_SOURCE_CASE_V259";
+const TILE_KINDS: [TileKind; 3] = [
+    TileKind::MaskedLoad,
+    TileKind::IntoFragment,
+    TileKind::IntoParts,
+];
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 enum ExpandedCase {
@@ -33,6 +42,7 @@ struct ExpandedObservation {
     neutral: [u8; 32],
     expanded: [u8; 32],
     definitions: usize,
+    collected_tile_calls: [u64; 3],
     refused_consumer: bool,
 }
 
@@ -55,6 +65,11 @@ impl Callbacks for MultiRootCallbacks {
             )?;
             let mut work = Work::new(500_000_000);
             let mut budget = Budget::new(&mut work, 20_000_000);
+            let census = transaction
+                .collected_tile_terminals_v259(&mut budget)
+                .map_err(|error| format!("context-only collected census: {error:?}"))?;
+            assert!(!census.has_tile_operations());
+            assert_eq!(TILE_KINDS.map(|kind| census.call_occurrences(kind)), [0; 3]);
             let mut calls = 0;
             let refused = transaction.with_original_source_expanded_v259::<(), _>(
                 &mut budget,
@@ -107,6 +122,12 @@ impl Callbacks for ExpandedCallbacks {
             )?;
             let mut work = Work::new(500_000_000);
             let mut budget = Budget::new(&mut work, 20_000_000);
+            let census = transaction
+                .collected_tile_terminals_v259(&mut budget)
+                .map_err(|error| format!("tile collected census: {error:?}"))?;
+            assert!(census.has_tile_operations());
+            let collected_tile_calls = TILE_KINDS.map(|kind| census.call_occurrences(kind));
+            assert!(collected_tile_calls.into_iter().all(|count| count > 0));
             if matches!(self.case, ExpandedCase::Observe) {
                 let observation = transaction
                     .with_original_source_expanded_v259(
@@ -131,6 +152,7 @@ impl Callbacks for ExpandedCallbacks {
                                 neutral: *neutral.output_inventory(budget)?.identity_v18().digest(),
                                 expanded: *tile.output(budget)?.identity().digest(),
                                 definitions: neutral.output_inventory(budget)?.definitions().len(),
+                                collected_tile_calls,
                                 refused_consumer: false,
                             };
                             Ok((observation, 0))
