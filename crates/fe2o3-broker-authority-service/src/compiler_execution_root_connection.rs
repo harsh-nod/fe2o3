@@ -1,5 +1,5 @@
 //! Original-root association and the closed measured-issuer admission handshake.
-//! Publication custody, retirement and the production attempt remain separate.
+//! Publication custody survives replacement of the measured issuer connection.
 use crate::compiler_execution_root_exchange::{
     RootControlReplayErrorV3 as ReplayError, RootControlReplayWindowV3 as Replay,
 };
@@ -75,8 +75,8 @@ impl RootConnectionStorageV3 {
 }
 
 /// Move-only root-attempt association. It retains an actual trace allocation and
-/// fresh epoch independently of replaceable issuer connections. It does NOT yet
-/// own a publication occurrence or implement retirement/recovery.
+/// fresh epoch independently of replaceable issuer connections. The original
+/// publication and complete retirement tombstone are never connection state.
 /// Keep its full charge, original Work and Budget address through destruction.
 /// No namespace, epoch, identity or authority is accepted from decoded input.
 ///
@@ -97,6 +97,9 @@ pub struct RootControlSessionV3<'work> {
     process: process::Pid,
     thread: process::Pid,
     retained: usize,
+    publication: Option<crate::RootPublicationCustodyV3>,
+    retirement: Option<fe2o3_compiler_execution_protocol::CompilerExecutionReceiptCarriageV3>,
+    publication_failed: bool,
     _work: PhantomData<(&'work Work, Rc<()>)>,
 }
 
@@ -134,6 +137,9 @@ impl<'work> RootControlSessionV3<'work> {
                     process: process::getpid(),
                     thread: rustix::thread::gettid(),
                     retained,
+                    publication: None,
+                    retirement: None,
+                    publication_failed: false,
                     _work: PhantomData,
                 },
                 RootConnectionStorageV3(retained),
@@ -272,6 +278,7 @@ impl<'work> RootControlSessionV3<'work> {
                     credentials,
                     epoch: self.epoch,
                     retained,
+                    reply_pending: false,
                 },
                 RootConnectionStorageV3(retained),
             ))
@@ -292,8 +299,8 @@ impl<'work> RootControlSessionV3<'work> {
 
 /// An actual challenge-completed issuer connection, not compiler occurrence,
 /// receipt, proof or GPU authority. No arbitrary-FD/PID/receipt constructor exists.
-/// Drop closes transport only; a future root-owned occurrence/tombstone must
-/// remain outside this replaceable owner. Revalidate before every later use.
+/// Drop closes transport only; the root-owned occurrence and tombstone remain
+/// outside this replaceable owner. Revalidate before every later use.
 ///
 /// ```compile_fail
 /// use fe2o3_broker_authority_service::RootConnectionV3 as C;
@@ -324,6 +331,7 @@ pub struct RootConnectionV3<'work> {
     credentials: Credentials,
     epoch: [u8; 32],
     retained: usize,
+    reply_pending: bool,
 }
 impl RootConnectionV3<'_> {
     pub const MAX_HANDSHAKE_ATTEMPTS: usize = launch_io::MAX_PHASE_ATTEMPTS;
@@ -528,6 +536,8 @@ pub enum RootConnectionErrorV3 {
     Observation(observations::Error),
     Protocol(ProtocolError),
     Ready(ReadyError),
+    Publication(crate::RootPublicationCustodyErrorV3),
+    Carriage(fe2o3_compiler_execution_protocol::CompilerExecutionReceiptPublicationErrorV3),
     Io(io::Errno),
     Transport(launch_io::Failure),
     Refused(&'static str),
@@ -541,7 +551,9 @@ macro_rules! errors {
 }
 errors!(Resource => Resource, ChannelError => Channel, ImageError => Image, SpawnError => Spawn,
     ProfileError => Profile, observations::Error => Observation, ProtocolError => Protocol,
-    ReadyError => Ready, io::Errno => Io);
+    ReadyError => Ready, io::Errno => Io,
+    crate::RootPublicationCustodyErrorV3 => Publication,
+    fe2o3_compiler_execution_protocol::CompilerExecutionReceiptPublicationErrorV3 => Carriage);
 impl From<ReplayError> for Error {
     fn from(e: ReplayError) -> Self {
         match e {
@@ -561,6 +573,8 @@ impl fmt::Display for Error {
             Self::Observation(e) => e.fmt(f),
             Self::Protocol(e) => e.fmt(f),
             Self::Ready(e) => e.fmt(f),
+            Self::Publication(e) => e.fmt(f),
+            Self::Carriage(e) => e.fmt(f),
             Self::Io(e) => e.fmt(f),
             Self::Transport(e) => write!(f, "root control transport: {e:?}"),
             Self::Refused(e) => f.write_str(e),
@@ -578,6 +592,8 @@ impl std::error::Error for Error {
             Self::Observation(e) => Some(e),
             Self::Protocol(e) => Some(e),
             Self::Ready(e) => Some(e),
+            Self::Publication(e) => Some(e),
+            Self::Carriage(e) => Some(e),
             Self::Io(e) => Some(e),
             Self::Transport(_) | Self::Refused(_) => None,
         }
@@ -587,6 +603,9 @@ impl std::error::Error for Error {
 #[path = "compiler_execution_root_connection_quota.rs"]
 mod quota;
 pub use quota::RootConnectionQuotaV3;
+
+#[path = "compiler_execution_root_publication_service.rs"]
+mod publication_service;
 
 #[cfg(test)]
 #[path = "compiler_execution_root_connection_tests.rs"]

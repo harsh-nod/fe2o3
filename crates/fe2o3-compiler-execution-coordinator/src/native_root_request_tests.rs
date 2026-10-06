@@ -51,6 +51,10 @@ fn runtime_turn_and_one_time_issuer_schedule_cover_each_actual_phase() {
     let policy = compiler_attempt::Attempt::original_policy_identity_quota().unwrap();
     let continuity = compiler_attempt::Attempt::maximum_continuity_quota().unwrap();
     let step = compiler_attempt::Attempt::runtime_step_quota().unwrap();
+    let rpc = compiler_attempt::Attempt::publication_service_quota(
+        fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_BYTES_V5,
+    )
+    .unwrap();
     let completion = compiler_attempt::Attempt::publication_completion_quota().unwrap();
     let capture = quota::runtime_capture().unwrap();
     assert!(
@@ -62,6 +66,14 @@ fn runtime_turn_and_one_time_issuer_schedule_cover_each_actual_phase() {
                 + completion.work()
     );
     assert!(turn.work() >= capture.work());
+    assert!(
+        turn.work()
+            >= RootCompilerRequest::LOCAL_WORK
+                + 2 * policy.work()
+                + 2 * continuity.work()
+                + step.work()
+                + rpc.work()
+    );
     assert!(turn.scratch() >= step.scratch() + capture.scratch() + completion.scratch());
     assert!(startup.work() >= Prepared::maximum_cleanup_guard_quota().unwrap().work());
     let one =
@@ -72,7 +84,7 @@ fn runtime_turn_and_one_time_issuer_schedule_cover_each_actual_phase() {
     let (first, first_storage) = RootCompilerRequest::runtime_cleanup_growth(1, 1).unwrap();
     let (next, next_storage) = RootCompilerRequest::runtime_cleanup_growth(1, 2).unwrap();
     let late = fe2o3_broker_authority_service::RootPublicationCustodyV3::observation_cleanup_quota(
-        fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5,
+        fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_BYTES_V5,
     )
     .unwrap();
     assert_eq!(

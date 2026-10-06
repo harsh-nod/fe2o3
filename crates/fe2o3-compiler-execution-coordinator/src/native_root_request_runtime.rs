@@ -1,7 +1,7 @@
 //! Original-owner execution transitions. No caller status can complete a request.
 use super::*;
 use crate::native_runtime_controller::Progress;
-use fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5;
+use fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_BYTES_V5;
 use fe2o3_compiler_execution_protocol::CompilerExecutionRootPublicationCompletionErrorV1 as CompletionError;
 pub(super) use fe2o3_compiler_execution_protocol::{
     CompilerExecutionRootPublicationCompletionV1 as Completion,
@@ -105,17 +105,22 @@ impl<'work> RootCompilerRequest<'work> {
                 self.reserve_growth(growth, b)?;
                 State::Running
             }
-            State::Running => match self.attempt_mut()?.step_runtime(b).map_err(helper_error)? {
-                Progress::Pending | Progress::Advanced => State::Running,
-                Progress::RootExitHeld => State::RootExitHeld,
-                _ => return Err(rejected("compiler terminated before publication custody")),
-            },
-            State::RootExitHeld => {
+            State::Running => {
                 let growth = self
                     .attempt_mut()?
-                    .observe_publication(cleanup, MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5, b)
+                    .service_publication(cleanup, MAX_COMPILER_MODULE_HANDOFF_BYTES_V5, b)
                     .map_err(helper_error)?;
                 self.reserve_growth(growth, b)?;
+                match self.attempt_mut()?.step_runtime(b).map_err(helper_error)? {
+                    Progress::Pending | Progress::Advanced => State::Running,
+                    Progress::RootExitHeld => State::RootExitHeld,
+                    _ => return Err(rejected("compiler terminated before durable publication")),
+                }
+            }
+            State::RootExitHeld => {
+                self.attempt_mut()?
+                    .confirm_retired_publication(b)
+                    .map_err(helper_error)?;
                 State::PublicationObserved
             }
             State::PublicationObserved => {

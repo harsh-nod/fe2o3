@@ -1007,6 +1007,26 @@ live native qualification and default activation remain separate open gates.
 The inventory changes record only these reviewed sites and do not refresh the
 unrelated pre-existing GPU/memory inventory differences.
 
+## Original Root Publication Retirement
+
+The private unsafe function and forwarding block in
+`compiler_execution_root_publication.rs` prepare retirement of the actual
+publication holder in its original runtime cleanup slot. The sole caller block
+in `compiler_execution_root_publication_service.rs` first authenticates the
+original measured issuer, connection binding and runtime identity. That issuer
+sends Retire only after its closed durable Worker/anchor/Ready/ACK join. The
+root then matches the complete canonical policy, Subject and occurrence against
+its still-locked publication. Decoding a carriage alone cannot reach retirement.
+
+The prepared token holds custody on Drop. Complete reply/tombstone preparation
+and the root service's accounting scope precede its infallible commit. The
+session keeps the full carriage independently of the replaceable connection;
+reply sends and exact retirement replays never reacquire locks. Partial
+acquisition, refusal and unwind retain the original funded cleanup obligation.
+Production pumps this channel before runtime steps and requires the same
+retirement tombstone at held exit, rather than allocating a second late holder.
+Native end-to-end qualification and default activation remain separate gates.
+
 ## Initial Reduction
 
 The three unsafe functions and three blocks in

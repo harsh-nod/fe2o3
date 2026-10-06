@@ -165,13 +165,17 @@
     "block": 4
   },
   "crates/fe2o3-broker-authority-service/src/compiler_execution_root_publication.rs": {
-    "block": 3
+    "block": 4,
+    "function": 1
   },
   "crates/fe2o3-broker-authority-service/src/compiler_execution_root_publication_payload.rs": {
     "impl": 3
   },
   "crates/fe2o3-broker-authority-service/src/compiler_execution_root_publication_payload_tests.rs": {
     "block": 2
+  },
+  "crates/fe2o3-broker-authority-service/src/compiler_execution_root_publication_service.rs": {
+    "block": 1
   },
   "crates/fe2o3-broker-authority-service/src/compiler_execution_root_publication_trace.rs": {
     "block": 2,

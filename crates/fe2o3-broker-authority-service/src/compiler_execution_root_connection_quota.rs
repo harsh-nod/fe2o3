@@ -4,8 +4,8 @@ use super::*;
 /// No fresh account, storage reservation, deadline or authority is supplied.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RootConnectionQuotaV3 {
-    work: usize,
-    scratch: usize,
+    pub(super) work: usize,
+    pub(super) scratch: usize,
 }
 impl RootConnectionQuotaV3 {
     pub const fn work(&self) -> usize {

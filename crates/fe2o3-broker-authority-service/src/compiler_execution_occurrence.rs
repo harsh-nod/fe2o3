@@ -31,6 +31,7 @@ pub(crate) use native::{NativeOccurrence, NativeOccurrenceError};
 mod native_v3;
 pub(crate) use native_v3::{
     NativeOccurrence as NativeOccurrenceV3, NativeOccurrenceError as NativeOccurrenceErrorV3,
+    PreparedRootPublicationRetirementV3,
 };
 pub use native_v3::{
     RootPublicationCustodyErrorV3, RootPublicationCustodyV3, RootPublicationQuotaV3,

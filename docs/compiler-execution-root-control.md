@@ -1,12 +1,10 @@
 # Root-to-Issuer Control
 
-Status: **direct startup integrated; production issuance pending**. The native dispatcher currently retains a local
-issuer-owned occurrence, as described in [Native Issuer Session
-Custody](compiler-execution-native-session.md). The original-root observation API
-and bounded authenticated receive primitive now join the direct launch's measured
-issuer handshake. The private launch primitive is not yet connected to the
-production owning attempt. These components do not yet form an
-end-to-end root-owned issuance path or qualify a tutorial kernel.
+Status: **root RPC and production-pump candidate; end-to-end qualification pending**.
+The V3 dispatcher now uses its authenticated root channel for Observe, Validate
+and Retire; V2 retains its existing local occurrence path. The original runtime
+request pumps those RPCs while the compiler runs. These source integrations are
+not a default-activation, protected-proof or tutorial-kernel qualification claim.
 
 ## Transport Boundary
 
@@ -67,14 +65,14 @@ establishes currentness.
 Every codec operation prepays its fixed work and scratch on the original budget;
 successful constructors/decoders return the full retained charge unreserved.
 The framing API does not own sockets, retry, advance a sequence, maintain a
-retirement tombstone, or activate the FD12 ABI. A root RPC consumer is still
-required.
+retirement tombstone, or activate the FD12 ABI. The closed broker consumer owns
+those checks independently of decoding.
 
 ## Connection Replay
 
 The private broker `RootControlReplayWindowV3` orders inert records for one
-connection. The challenge-completed connection retains an empty window for the
-future RPC dispatcher; no publication operation uses it yet. It retains a
+connection. The challenge-completed connection retains the window used by the
+closed publication dispatcher. It retains a
 binding and at most one request/reply pair, with the full maximum storage charge
 prepaid even while empty. Admission, queries, request acceptance, and reply
 preparation check the original ledger, Budget address, process and kernel thread.
@@ -179,8 +177,9 @@ frame and writer EOF before starting that exchange.
 
 `RootControlSessionV3` retains the actual original trace's opaque allocation
 identity, root namespaces and a fresh random epoch on the original Work lifetime,
-Budget address, process and kernel thread. It is an association owner, **not yet
-an occurrence or retirement owner**.
+Budget address, process and kernel thread. Publication observation then installs
+the original occurrence, and durable retirement retains its complete carriage
+tombstone in this same session, independently of the connection.
 
 After the one-use input callback completes, the compiler remains held. Within
 its original scoped observation, the direct launcher checks the actual retained
@@ -259,11 +258,34 @@ limit. The [resource-window checkpoint](evidence/root-resource-window-20260929.m
 records the seven publication and ten startup cases, their exact limits and
 the remaining production boundaries.
 
-The production dispatcher and authenticated RPC integration remain unfinished.
+The production dispatcher now proxies V3 occurrences through the root, with no
+local observation fallback. Observe retains the sole original late holder;
+repeated Observe validates that same holder without reacquisition. Validate
+requires exact Subject and occurrence bytes and fresh original currentness.
+Observe or Validate after retirement refuses. Retire requires the measured
+issuer's durable join below and retains the complete canonical carriage, not
+only a digest. Root epoch/generation/order are checked by the retained replay
+window. Reconcile remains the startup handshake, not a publication operation.
+
+Reply and retirement tokens are fully prepared before the root service's
+accounting scope exits. Dropping either retains its prior state. Infallible
+commit releases both artifact owners and installs the tombstone/cached reply
+before any send. Would-block retains that reply; a transport error poisons the
+session and cancels the original attempt. Exact same-carriage Retire on a new
+admitted connection uses the tombstone, without re-observing an exited compiler.
+Replacing the issuer itself still requires a separately admitted launch.
+
+The original request services one RPC/send before each running runtime step,
+sharing its absolute deadline, finite turn schedule and original resource
+accounts. At held exit and final completion it requires the original retired
+Subject; it must never allocate a second late holder. The public completion
+record remains inert and the parent must still join its actual locked V5 token,
+signed carriage, fixed compiler approval and source-verification pipeline.
+
 The controlled native fixture exercises actual process descriptors and V5 locks
 over inert handoff content, not production rustc, protected proof or GPU execution.
-There is no explicit publication-retirement API until the durable join below is
-implemented; connection authentication alone cannot authorize retirement.
+Joined positive/negative RPC, exact-budget, recovery, parent and tutorial tests
+remain required before default activation.
 
 Retirement needs an exact durable publication join, fresh original custody
 validation, and destruction of both lock owners before acknowledgment. A

@@ -380,7 +380,7 @@ pub(super) fn cleanup_growth() -> Result<(usize, usize)> {
     ))
 }
 
-const MAX_HANDOFF: usize = fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5;
+const MAX_HANDOFF: usize = fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_BYTES_V5;
 
 impl RootCompilerRequest<'_> {
     /// One closed runtime turn, including both original-policy queries and
@@ -396,6 +396,8 @@ impl RootCompilerRequest<'_> {
         let validation = refusal()?;
         let gate = Attempt::runtime_gate_quota().map_err(helper_error)?;
         let terminal = Attempt::runtime_step_quota().map_err(helper_error)?;
+        let publication_rpc =
+            Attempt::publication_service_quota(MAX_HANDOFF).map_err(helper_error)?;
         let completion = Attempt::publication_completion_quota().map_err(helper_error)?;
         let phases = [
             runtime_interrupt()?,
@@ -408,7 +410,11 @@ impl RootCompilerRequest<'_> {
             from_native(Attempt::first_exec_poll_quota().map_err(helper_error)?),
             runtime_capture()?,
             from_native(Attempt::runtime_confirmation_quota().map_err(helper_error)?),
-            from_native(Attempt::publication_observation_quota(MAX_HANDOFF).map_err(helper_error)?),
+            Quota {
+                work: sum(&[terminal.work(), publication_rpc.work()])?,
+                scratch: sum(&[terminal.scratch(), publication_rpc.scratch()])?,
+            },
+            from_native(Attempt::retired_publication_confirmation_quota().map_err(helper_error)?),
             from_native(
                 Attempt::maximum_root_exit_release_quota(MAX_HANDOFF).map_err(helper_error)?,
             ),

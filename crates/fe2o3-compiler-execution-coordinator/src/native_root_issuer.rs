@@ -746,6 +746,8 @@ mod quota {
 }
 #[path = "native_root_issuer_completion.rs"]
 mod completion;
+#[path = "native_root_issuer_publication_service.rs"]
+mod publication_service;
 #[cfg(test)]
 mod tests {
     include!("native_root_issuer_tests.rs");

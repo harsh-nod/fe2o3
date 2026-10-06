@@ -495,36 +495,58 @@ impl<'work> Attempt<'work> {
         result
     }
 
-    /// Publication must be captured before the original compiler can exit and
-    /// close its FDs/locks. Recheck the actual held exit before consuming the same
-    /// existing issuer owner; preserve its original late-custody cleanup contract.
-    pub(in super::super) fn observe_publication(
+    /// Pump the original issuer while rustc waits for Prepare/Issue/Publish.
+    /// This shares the request's original deadline, account and runtime owner.
+    pub(in super::super) fn service_publication(
         &mut self,
         cleanup: &mut Cleanup,
         maximum_handoff_bytes: usize,
         b: &mut Budget<'_>,
     ) -> AttemptResult<usize> {
+        let result = b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            require_deadline(self.deadline)?;
+            if self.phase != Phase::Issued || self.controller.is_none() {
+                return Err(Failure::Invalid(
+                    "root RPC lacks original running controller",
+                ));
+            }
+            let Some(Owner::Issued(attempt)) = &mut self.owner else {
+                return Err(Failure::Invalid("root RPC lost original issued owner"));
+            };
+            let growth = attempt.service_publication(cleanup, maximum_handoff_bytes, b)?;
+            b.reserve_storage(growth.additional_storage())?;
+            self.retained = native::sum(&[self.retained, growth.additional_storage()])?;
+            require_deadline(self.deadline)?;
+            Ok(growth.additional_storage())
+        });
+        if result.is_err() {
+            self.cancel();
+        }
+        result
+    }
+
+    /// Require the original durable retirement before permitting terminal exit.
+    /// No second late holder or post-retirement publication lock is acquired.
+    pub(in super::super) fn confirm_retired_publication(
+        &mut self,
+        b: &mut Budget<'_>,
+    ) -> AttemptResult<()> {
         let result = (|| {
             if self.phase != Phase::RootExitHeld {
                 return Err(Failure::Invalid(
-                    "publication requires original held root exit",
+                    "retirement requires original held root exit",
                 ));
             }
             if self.step_runtime(b)? != crate::native_runtime_controller::Progress::RootExitHeld {
                 return Err(Failure::Invalid("publication lost original held root exit"));
             }
             b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
-                let Some(Owner::Issued(attempt)) = self.owner.take() else {
+                let Some(Owner::Issued(attempt)) = &mut self.owner else {
                     return Err(Failure::Invalid("publication lost original issued owner"));
                 };
-                self.phase = Phase::Cancelled;
-                let (attempt, growth) =
-                    attempt.observe_publication(cleanup, maximum_handoff_bytes, b)?;
-                self.owner = Some(Owner::Issued(attempt));
-                b.reserve_storage(growth.additional_storage())?;
-                self.retained = native::sum(&[self.retained, growth.additional_storage()])?;
+                attempt.require_retired_publication(b)?;
                 self.phase = Phase::PublicationObserved;
-                Ok(growth.additional_storage())
+                Ok(())
             })
         })();
         if result.is_err() {
@@ -533,7 +555,7 @@ impl<'work> Attempt<'work> {
         result
     }
 
-    /// Revalidate the actual owned publication while its original root remains
+    /// Recheck the original durable tombstone while its original root remains
     /// held, then let only that exact terminal syscall proceed. This returns no
     /// completion or publication authority; consuming terminal waits are next.
     pub(in super::super) fn release_root_exit(&mut self, b: &mut Budget<'_>) -> AttemptResult<()> {
@@ -546,7 +568,7 @@ impl<'work> Attempt<'work> {
             let Some(Owner::Issued(attempt)) = &mut self.owner else {
                 return Err(Failure::Invalid("root exit lost original issued owner"));
             };
-            attempt.revalidate_publication(b)?;
+            attempt.require_retired_publication(b)?;
             let controller = self
                 .controller
                 .as_mut()
@@ -577,13 +599,33 @@ impl<'work> Attempt<'work> {
         })
     }
 
+    pub(in super::super) fn publication_service_quota(
+        maximum_handoff_bytes: usize,
+    ) -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let rpc = Issued::<Helper>::publication_service_quota(maximum_handoff_bytes)?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, rpc.work()])?,
+            scratch: native::sum(&[FRAME, rpc.scratch()])?,
+        })
+    }
+
+    pub(in super::super) fn retired_publication_confirmation_quota()
+    -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let step = Self::runtime_step_quota()?;
+        let retired = Issued::<Helper>::retired_publication_quota()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[step.work(), LOCAL_WORK, retired.work()])?,
+            scratch: native::sum(&[step.scratch(), FRAME, retired.scratch()])?,
+        })
+    }
+
     pub(in super::super) fn root_exit_release_quota(
         &self,
     ) -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
-        let Some(Owner::Issued(attempt)) = &self.owner else {
+        let Some(Owner::Issued(_)) = &self.owner else {
             return Err(Failure::Invalid("root exit has no original issued owner"));
         };
-        let publication = attempt.publication_revalidation_quota()?;
+        let publication = Issued::<Helper>::retired_publication_quota()?;
         // The same fixed step ceiling conservatively funds the exact held-entry
         // recheck, fresh census, mapping validation and selected syscall step.
         let step = Self::runtime_step_quota()?;
@@ -697,10 +739,9 @@ impl<'work> Attempt<'work> {
     }
 
     pub(in super::super) fn maximum_root_exit_release_quota(
-        maximum_handoff_bytes: usize,
+        _maximum_handoff_bytes: usize,
     ) -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
-        let publication =
-            Issued::<Helper>::maximum_publication_revalidation_quota(maximum_handoff_bytes)?;
+        let publication = Issued::<Helper>::retired_publication_quota()?;
         let step = Self::runtime_step_quota()?;
         Ok(native::CompilerExecutionLaunchQuotaV2 {
             work: native::sum(&[step.work(), publication.work()])?,

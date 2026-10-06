@@ -31,6 +31,7 @@ include!("compiler_execution_occurrence_native_body.rs");
 
 #[path = "compiler_execution_root_publication.rs"]
 mod root_publication;
+pub(crate) use root_publication::PreparedRootPublicationRetirementV3;
 pub use root_publication::{
     RootPublicationCustodyErrorV3, RootPublicationCustodyV3, RootPublicationQuotaV3,
 };
