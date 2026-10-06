@@ -100,6 +100,22 @@ impl AccountMode {
     pub(crate) const fn is_original(self) -> bool {
         self.0.is_some()
     }
+    pub(crate) fn operation_quote(
+        self,
+        inputs: usize,
+    ) -> Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
+        if !self.is_original() {
+            return Ok(crate::ConditionalWorkerOperationQuoteV5::new(0, 0));
+        }
+        let scratch = inputs
+            .checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1)
+            .and_then(|n| n.checked_add(4 * size_of::<Self>()))
+            .ok_or(Resource::Arithmetic)?;
+        Ok(crate::ConditionalWorkerOperationQuoteV5::new(
+            8 + Budget::STORAGE_WINDOW_WORK_V1,
+            scratch,
+        ))
+    }
     pub(crate) fn run<T, E: From<Resource>>(
         self,
         b: &mut Budget<'_>,
@@ -117,10 +133,7 @@ impl AccountMode {
             return Err(Resource::Accounting.into());
         }
         let floor = b.storage();
-        let overlap = inputs
-            .checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1)
-            .and_then(|n| n.checked_add(4 * std::mem::size_of::<Self>()))
-            .ok_or(Resource::Arithmetic)?;
+        let overlap = self.operation_quote(inputs)?.additional_storage();
         b.with_additional_storage_window_v1(
             fe2o3_compiler_ffi::MAX_INERT_REFINED_FORWARDING_STORAGE_V1,
             |b| b.with_prepaid_scope(floor.max(inputs), 0, 0, overlap, operation),

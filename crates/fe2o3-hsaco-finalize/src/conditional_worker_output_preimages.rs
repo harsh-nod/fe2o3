@@ -28,6 +28,43 @@ pub struct ConditionalWorkerReplayPreimagesV5<'a> {
 }
 
 impl Published {
+    /// Finite extraction quote using actual request lengths and the existing
+    /// closed provider-capacity ceiling. Includes both source/result checks and
+    /// the returned owner while it coexists with extraction scratch. This may
+    /// conservatively refuse an oversized input under the unchanged local cap.
+    pub fn replay_preimages_quote(
+        &self,
+    ) -> std::result::Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
+        use crate::ConditionalWorkerOperationQuoteV5 as Q;
+        let source = self.recovered.finalized().source();
+        let (work, scratch) = extraction_quote(
+            source.bootstrap_request_bytes().len(),
+            source.replay_request_bytes().len(),
+        )
+        .map_err(|_| Resource::Arithmetic)?;
+        let retained = fe2o3_artifact_transaction::MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_BYTES_V1
+            .checked_add(
+                fe2o3_artifact_transaction::MAX_WORKER_V3_REPLAY_EXTERNAL_PROVIDER_PAYLOADS_V1
+                    .checked_mul(size_of::<Vec<u8>>())
+                    .ok_or(Resource::Arithmetic)?,
+            )
+            .and_then(|n| n.checked_add(size_of::<ConditionalWorkerReplayPreimagesV5<'_>>()))
+            .ok_or(Resource::Arithmetic)?;
+        let record_work = source
+            .recovered_handoff()
+            .handoff()
+            .canonical_bytes()
+            .len()
+            .checked_add(self.recovered.transcript().canonical_bytes().len())
+            .and_then(|n| n.checked_add(32))
+            .ok_or(Resource::Arithmetic)?;
+        let validation = super::retained_validation_quote(&self.recovered)?;
+        self.account
+            .operation_quote(self.retained_storage)?
+            .nested(Q::new(work, scratch))?
+            .nested(validation.sequential(validation)?)?
+            .nested(Q::new(record_work, retained))
+    }
     /// Re-extracts providers with the existing canonical Worker request parser.
     /// Source and lease checks bracket extraction. The complete returned Rust
     /// backing is unreserved: reserve `required_retained_storage()` before
@@ -99,6 +136,28 @@ fn provider_owner(parts: OwnedWorkerV3RequestReplayPartsV1) -> Result<(Providers
 }
 
 impl ConditionalWorkerReplayPreimagesV5<'_> {
+    pub fn revalidation_quote(
+        &self,
+    ) -> std::result::Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
+        use crate::ConditionalWorkerOperationQuoteV5 as Q;
+        let inputs = self
+            .published
+            .retained_storage
+            .checked_add(self.retained_storage)
+            .ok_or(Resource::Arithmetic)?;
+        let record_work = self
+            .outer_handoff()
+            .len()
+            .checked_add(self.transcript().len())
+            .and_then(|n| n.checked_add(32))
+            .ok_or(Resource::Arithmetic)?;
+        self.published
+            .account
+            .operation_quote(inputs)?
+            .nested(Q::new(8, FRAME))?
+            .nested(self.published.revalidation_quote()?)?
+            .nested(Q::new(record_work, 0))
+    }
     pub fn publication(&self) -> &Published {
         self.published
     }

@@ -90,6 +90,17 @@ pub struct PublishedConditionalWorkerHsacoV5 {
 }
 type Published = PublishedConditionalWorkerHsacoV5;
 impl Published {
+    /// Complete logical meter quote for `revalidate`: source binding, exact
+    /// bytes, original-account scopes and all simultaneously live scratch.
+    /// This does not include filesystem I/O or confer currentness itself.
+    pub fn revalidation_quote(
+        &self,
+    ) -> std::result::Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
+        self.account
+            .operation_quote(self.retained_storage)?
+            .nested(crate::ConditionalWorkerOperationQuoteV5::new(WORK, FRAME))?
+            .nested(retained_validation_quote(&self.recovered)?)
+    }
     pub fn recovered_evidence(&self) -> &Recovered {
         &self.recovered
     }
@@ -133,6 +144,25 @@ impl Published {
             })
         })
     }
+}
+
+// Retained::new plus validate_result, without a new outer account/scratch scope.
+fn retained_validation_quote(
+    owner: &Recovered,
+) -> std::result::Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
+    let byte_work = owner
+        .finalized()
+        .finalized()
+        .as_bytes()
+        .len()
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(2 * WORK))
+        .ok_or(Resource::Arithmetic)?;
+    owner
+        .finalized()
+        .source()
+        .revalidation_quote()?
+        .nested(crate::ConditionalWorkerOperationQuoteV5::new(byte_work, 0))
 }
 
 /// Publishes only an independently replayed actual conditional owner. The

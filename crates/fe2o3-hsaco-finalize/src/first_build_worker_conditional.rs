@@ -120,6 +120,19 @@ pub struct InertConditionalFirstBuildWorkerEvidenceV2 {
 }
 type Evidence = InertConditionalFirstBuildWorkerEvidenceV2;
 impl Evidence {
+    pub(crate) fn revalidation_quote(
+        &self,
+    ) -> Result<crate::ConditionalWorkerOperationQuoteV5, Resource> {
+        self.account
+            .operation_quote(self.retained_storage)?
+            .nested(crate::ConditionalWorkerOperationQuoteV5::new(
+                ENTRY_WORK, FRAME,
+            ))?
+            .nested(Binding::operation_quote(
+                self.source.content(),
+                self.account,
+            )?)
+    }
     pub const fn custody(&self) -> crate::NativeWorkerEvidenceCustodyV1 {
         use crate::NativeWorkerEvidenceCustodyV1 as Custody;
         match &self.source {
