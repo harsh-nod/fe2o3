@@ -5,8 +5,19 @@ use fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1 as Function;
 
 pub(super) fn headers() -> usize {
     // The caller's original endpoint remains live throughout this query.
-    12 * size_of::<&()>()
-        + 5 * size_of::<usize>()
+    type Owner<'a, 'b, 'c, 'd> = ExpandedScalarBindingsV196<'a, 'b, 'c, 'd>;
+    let wrapper = size_of::<(&Owner<'_, '_, '_, '_>, &mut Writer<'_, '_>, usize)>();
+    let callback = size_of::<(&Owner<'_, '_, '_, '_>, &usize, &mut Writer<'_, '_>)>();
+    let query_owners_and_rows = 6 * size_of::<&()>();
+    let incoming_rows = 2 * size_of::<&()>();
+    let borrowed_rosters = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>()
+        + size_of::<&[EdgeArgument]>();
+    wrapper
+        + callback
+        + query_owners_and_rows
+        + incoming_rows
+        + borrowed_rosters
+        + 4 * size_of::<usize>()
         + size_of::<Option<usize>>()
         + size_of::<Function>()
         + size_of::<Definition>()

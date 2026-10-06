@@ -64,8 +64,15 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + 2 * size_of::<Result<Option<usize>>>()
         + size_of::<Result<()>>()
         + 14 * size_of::<usize>();
-    let forwarding_owners = 12 * size_of::<&()>();
-    let forwarding_indices = 5 * size_of::<usize>() + size_of::<Option<usize>>();
+    type ForwardingOwner<'a, 'b, 'c, 'd> = ExpandedScalarBindingsV196<'a, 'b, 'c, 'd>;
+    let forwarding_wrapper = size_of::<(&ForwardingOwner<'_, '_, '_, '_>, &mut Writer<'_, '_>, usize)>();
+    let forwarding_callback = size_of::<(&ForwardingOwner<'_, '_, '_, '_>, &usize, &mut Writer<'_, '_>)>();
+    let forwarding_inventory_tile_neutral = 3 * size_of::<&()>();
+    let forwarding_source_current_function = 3 * size_of::<&()>();
+    let forwarding_edge_and_predecessor = 2 * size_of::<&()>();
+    let forwarding_descendants = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>();
+    let forwarding_edges = size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1]>();
+    let forwarding_indices = 4 * size_of::<usize>() + size_of::<Option<usize>>();
     let forwarding_coordinates = size_of::<fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1>()
         + size_of::<Definition>();
     let forwarding_iteration = size_of::<std::ops::Range<usize>>()
@@ -81,7 +88,13 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + source_relation_scratch
         + source_leaf_scratch
         + checked_replacement_scratch
-        + forwarding_owners
+        + forwarding_wrapper
+        + forwarding_callback
+        + forwarding_inventory_tile_neutral
+        + forwarding_source_current_function
+        + forwarding_edge_and_predecessor
+        + forwarding_descendants
+        + forwarding_edges
         + forwarding_indices
         + forwarding_coordinates
         + forwarding_iteration
@@ -778,6 +791,7 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
             let actual = target.inventory(out)?;
             let mut forwarded = 0;
             let mut missing_computations = 0;
+            let mut ambiguous_inputs = 0;
             for (index, row) in original.definitions().iter().enumerate() {
                 if !matches!(row.ty, Type::Scalar(_))
                     || !neutral.definition_descendants(row.coordinate, out.budget)?.is_empty()
@@ -825,6 +839,7 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
                             edge.incoming_definition
                         }).collect::<std::collections::BTreeSet<_>>();
                     if incoming.len() != 1 {
+                        ambiguous_inputs += usize::from(incoming.len() > 1);
                         break None;
                     }
                     current = *incoming.first().unwrap();
@@ -848,6 +863,7 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
             }
             assert!(forwarded > 0, "fixture must have actual unambiguous scalar forwarding");
             assert!(missing_computations > 0, "erased computations must remain refused");
+            assert!(ambiguous_inputs > 0, "distinct actual incoming definitions must remain refused");
             refusal(pairs.source_transport_definition(original.definitions().len(), out))?;
             refusal(pairs.source_transport_definition(usize::MAX, out))?;
             Ok(())
