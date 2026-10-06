@@ -9,6 +9,7 @@ use fe2o3_kernel_ir::{
     CanonicalKirDefinitionDescendantKindV1 as Descendant,
     CanonicalKirOperationCoordinateV1 as Operation, Type,
 };
+use fe2o3_lower_mir_kernel::ProductionSourceTileLeafV162 as TileLeaf;
 use std::{cmp::Ordering, mem::size_of};
 
 pub(in super::super) struct ExpandedScalarBindingsV196<'target, 'slots, 'view, 'source> {
@@ -29,6 +30,8 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             + 2 * size_of::<Result<Self>>()
             + 3 * size_of::<Definition>()
             + size_of::<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>()
+            + size_of::<TileLeaf>()
+            + 2 * size_of::<Result<Option<usize>>>()
             + 24 * size_of::<usize>()
     }
 
@@ -162,6 +165,42 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
                 return Err(mismatch());
             }
             Ok(index)
+        })
+    }
+
+    pub(in super::super) fn tile_leaf(
+        &self,
+        original: usize,
+        path: &[u32],
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<usize>> {
+        self.slots.with_source_query_v42(out, |out| {
+            self.check(out)?;
+            let original_inventory = self.slots.correspondence(out)?.inventory(out.budget)?;
+            out.budget.charge_work(1)?;
+            let original = original_inventory
+                .definitions()
+                .get(original)
+                .ok_or_else(mismatch)?;
+            match self.slots.tile_leaf_v162(original.coordinate, path, out)? {
+                TileLeaf::Unit => Ok(None),
+                TileLeaf::Scalar {
+                    function,
+                    value,
+                    scalar,
+                } => {
+                    let actual = self.target.inventory(out)?;
+                    let index = actual
+                        .definition_index_for_value(function, value, out.budget)?
+                        .ok_or_else(mismatch)?;
+                    out.budget.charge_work(2)?;
+                    let row = actual.definitions().get(index).ok_or_else(mismatch)?;
+                    if row.value != Some(value) || row.ty != &Type::Scalar(scalar) {
+                        return Err(mismatch());
+                    }
+                    Ok(Some(index))
+                }
+            }
         })
     }
 }
