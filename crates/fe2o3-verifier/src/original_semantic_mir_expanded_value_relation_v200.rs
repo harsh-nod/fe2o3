@@ -43,7 +43,7 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
         })
     }
 
-    fn emit_actual_relation(
+    pub(super) fn emit_actual_relation(
         &self,
         actual: Option<usize>,
         width: FormalIndexWidth,
