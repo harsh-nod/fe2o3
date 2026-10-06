@@ -639,6 +639,30 @@ impl<'work> Attempt<'work> {
         })
     }
 
+    pub(in super::super) fn maximum_runtime_issuer_quota(
+        compiler_payload: usize,
+    ) -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        use crate::native_v3::PreparedCompilerExecutionSupervisorV3 as Prepared;
+        let launch = Prepared::maximum_issuer_launch_quota::<Helper>(compiler_payload)?;
+        let ready = Prepared::maximum_issuer_continuity_quota::<Helper>()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[LOCAL_WORK, launch.work(), ready.work()])?,
+            scratch: native::sum(&[FRAME, launch.scratch(), ready.scratch()])?,
+        })
+    }
+
+    pub(in super::super) fn maximum_root_exit_release_quota(
+        maximum_handoff_bytes: usize,
+    ) -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
+        let publication =
+            Issued::<Helper>::maximum_publication_revalidation_quota(maximum_handoff_bytes)?;
+        let step = Self::runtime_step_quota()?;
+        Ok(native::CompilerExecutionLaunchQuotaV2 {
+            work: native::sum(&[step.work(), publication.work()])?,
+            scratch: native::sum(&[step.scratch(), publication.scratch()])?,
+        })
+    }
+
     pub(in super::super) fn runtime_gate_quota()
     -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
         let trace = Trace::runtime_backing_quota()?;
@@ -684,6 +708,11 @@ impl<'work> Attempt<'work> {
                 "compiler has no original issued continuity",
             ));
         }
+        Self::maximum_continuity_quota()
+    }
+
+    pub(in super::super) fn maximum_continuity_quota()
+    -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
         let inner = Issued::<Helper>::original_validation_quota();
         Ok(native::CompilerExecutionLaunchQuotaV2 {
             work: native::sum(&[LOCAL_WORK, inner.work()])?,

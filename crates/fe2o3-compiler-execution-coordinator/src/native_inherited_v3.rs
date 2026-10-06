@@ -53,18 +53,28 @@ impl InheritedCompilerExecutionDeploymentV3 {
         let (cleanup_work, cleanup_storage) = RootCompilerRequest::cleanup_growth()?;
         let refusal = RootCompilerRequest::refusal_quota()?;
         let cancellation = RootCompilerRequest::cancellation_quota()?;
+        let runtime = RootCompilerRequest::runtime_turn_quota()?;
+        let issuer = RootCompilerRequest::runtime_startup_quota()?;
+        let (runtime_cleanup_work, runtime_cleanup_storage) =
+            RootCompilerRequest::runtime_cleanup_growth(turns, cleanup_turns)?;
         quota.request_work = root::sum(&[
             quota.request_work,
             root::LOCAL_WORK,
             Inputs::WORK,
             request.work(),
             launch.work(),
+            issuer.work(),
             // One immediate foreground retirement attempt, then at most one
             // per original cleanup turn. No new account or renewed deadline.
             root::repeated(root::sum(&[cleanup_turns, 1])?, cancellation.work())?,
             root::repeated(
                 turns,
-                root::sum(&[Receiver::TURN_WORK, continuity.work(), refusal.work()])?,
+                root::sum(&[
+                    Receiver::TURN_WORK,
+                    continuity.work(),
+                    refusal.work(),
+                    runtime.work(),
+                ])?,
             )?,
         ])?;
         quota.request_storage = root::sum(&[
@@ -81,9 +91,15 @@ impl InheritedCompilerExecutionDeploymentV3 {
             refusal.scratch(),
             continuity.scratch(),
             cancellation.scratch(),
+            runtime.scratch(),
+            issuer.scratch(),
         ])?;
-        quota.cleanup_work = root::sum(&[quota.cleanup_work, cleanup_work])?;
-        quota.cleanup_storage = root::sum(&[quota.cleanup_storage, cleanup_storage])?;
+        quota.cleanup_work = root::sum(&[quota.cleanup_work, cleanup_work, runtime_cleanup_work])?;
+        quota.cleanup_storage = root::sum(&[
+            quota.cleanup_storage,
+            cleanup_storage,
+            runtime_cleanup_storage,
+        ])?;
         Ok(quota)
     }
 

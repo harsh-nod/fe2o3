@@ -180,8 +180,19 @@ impl<T: Send + 'static> RetainedResourcesV2<T> {
     }
 
     pub(crate) fn dependency_quota(&self) -> Result<RetainedDependencyQuotaV2, Resource> {
-        let retained = self
-            .charge
+        Self::dependency_quota_for_charge(self.charge)
+    }
+
+    /// Pre-construction arithmetic for the same declared payload. This neither
+    /// retains a dependency nor validates the payload's declared storage.
+    pub(crate) fn dependency_quota_for_payload(
+        payload: usize,
+    ) -> Result<RetainedDependencyQuotaV2, Resource> {
+        Self::dependency_quota_for_charge(Self::storage_for(payload)?)
+    }
+
+    fn dependency_quota_for_charge(charge: usize) -> Result<RetainedDependencyQuotaV2, Resource> {
+        let retained = charge
             .checked_sub(size_of::<(Self, usize)>())
             .ok_or(Resource::Accounting)?
             .checked_add(size_of::<(RetainedDependencyV2<T>, usize)>())

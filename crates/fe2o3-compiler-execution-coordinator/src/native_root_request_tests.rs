@@ -18,13 +18,15 @@ fn request_quotes_fund_original_inputs_two_native_slots_and_every_refusal_turn()
     let old_first = crate::InheritedCompilerExecutionDeploymentV3::startup_quota(1, 1).unwrap();
     let old_next = crate::InheritedCompilerExecutionDeploymentV3::startup_quota(2, 1).unwrap();
     let (cleanup_work, cleanup_storage) = RootCompilerRequest::cleanup_growth().unwrap();
+    let (runtime_cleanup_work, runtime_cleanup_storage) =
+        RootCompilerRequest::runtime_cleanup_growth(1, 1).unwrap();
     assert_eq!(
         first.cleanup_storage(),
-        old_first.cleanup_storage() + cleanup_storage
+        old_first.cleanup_storage() + cleanup_storage + runtime_cleanup_storage
     );
     assert_eq!(
         first.cleanup_work(),
-        old_first.cleanup_work() + cleanup_work
+        old_first.cleanup_work() + cleanup_work + runtime_cleanup_work
     );
     assert!(RootCompilerRequest::launch_quota().unwrap().scratch() > admission.scratch());
     let guard = Prepared::maximum_cleanup_guard_quota().unwrap();
@@ -38,7 +40,54 @@ fn request_quotes_fund_original_inputs_two_native_slots_and_every_refusal_turn()
             + Receiver::TURN_WORK
             + Prepared::maximum_revalidation_quota().unwrap().work()
             + refusal.work()
+            + RootCompilerRequest::runtime_turn_quota().unwrap().work()
     );
+}
+
+#[test]
+fn runtime_turn_and_one_time_issuer_schedule_cover_each_actual_phase() {
+    let turn = RootCompilerRequest::runtime_turn_quota().unwrap();
+    let startup = RootCompilerRequest::runtime_startup_quota().unwrap();
+    let policy = compiler_attempt::Attempt::original_policy_identity_quota().unwrap();
+    let continuity = compiler_attempt::Attempt::maximum_continuity_quota().unwrap();
+    let step = compiler_attempt::Attempt::runtime_step_quota().unwrap();
+    let capture = quota::runtime_capture().unwrap();
+    assert!(
+        turn.work()
+            >= RootCompilerRequest::LOCAL_WORK
+                + 2 * policy.work()
+                + 2 * continuity.work()
+                + step.work()
+    );
+    assert!(turn.work() >= capture.work());
+    assert!(turn.scratch() >= step.scratch() + capture.scratch());
+    assert!(startup.work() >= Prepared::maximum_cleanup_guard_quota().unwrap().work());
+    let one =
+        crate::InheritedCompilerExecutionDeploymentV3::original_root_startup_quota(1, 1).unwrap();
+    let two =
+        crate::InheritedCompilerExecutionDeploymentV3::original_root_startup_quota(2, 1).unwrap();
+    assert_eq!(one.request_storage(), two.request_storage());
+    let (first, first_storage) = RootCompilerRequest::runtime_cleanup_growth(1, 1).unwrap();
+    let (next, next_storage) = RootCompilerRequest::runtime_cleanup_growth(1, 2).unwrap();
+    let late = fe2o3_broker_authority_service::RootPublicationCustodyV3::observation_cleanup_quota(
+        fe2o3_artifact_transaction::MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5,
+    )
+    .unwrap();
+    assert_eq!(
+        next - first,
+        Cleanup::pump_work(fe2o3_protected_service_spawn::MAX_PROTECTED_SERVICE_PROCESSES_V2)
+            .unwrap()
+            + Cleanup::shutdown_work()
+            + late.retirement_work()
+    );
+    assert_eq!(next_storage, first_storage);
+    assert!(first_storage > late.persistent_storage());
+    let (monitor, monitor_storage) = RootCompilerRequest::runtime_cleanup_growth(2, 1).unwrap();
+    assert_eq!(monitor - first, late.retirement_work());
+    assert_eq!(monitor_storage, first_storage);
+    for (monitor, cleanup) in [(0, 1), (1, 0), (usize::MAX, 1), (1, usize::MAX)] {
+        assert!(RootCompilerRequest::runtime_cleanup_growth(monitor, cleanup).is_err());
+    }
 }
 
 #[test]

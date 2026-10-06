@@ -13,6 +13,34 @@ mod process {
 const LIMIT: usize = 1 << 30;
 
 #[test]
+fn maximum_issuer_schedule_is_inert_monotone_and_checks_declared_payloads() {
+    let small = Prepared::maximum_issuer_launch_quota::<[u8; 32]>(32).unwrap();
+    let large = Prepared::maximum_issuer_launch_quota::<[u8; 32]>(4096).unwrap();
+    assert!(large.work() >= small.work());
+    assert!(large.scratch() > small.scratch());
+    assert!(small.scratch() > Prepared::maximum_retained_storage().unwrap());
+    let ready = Prepared::maximum_issuer_continuity_quota::<[u8; 32]>().unwrap();
+    assert!(ready.work() > LOCAL_WORK);
+    assert!(ready.scratch() > FRAME);
+    let first = Prepared::maximum_issuer_cleanup_quota::<[u8; 32]>(32, 1).unwrap();
+    let next = Prepared::maximum_issuer_cleanup_quota::<[u8; 32]>(32, 2).unwrap();
+    assert_eq!(
+        next.work() - first.work(),
+        Cleanup::pump_work(fe2o3_protected_service_spawn::MAX_PROTECTED_SERVICE_PROCESSES_V2)
+            .unwrap()
+            + Cleanup::shutdown_work()
+    );
+    assert_eq!(next.additional_storage(), first.additional_storage());
+    for payload in [31, usize::MAX] {
+        assert!(Prepared::maximum_issuer_launch_quota::<[u8; 32]>(payload).is_err());
+        assert!(Prepared::maximum_issuer_cleanup_quota::<[u8; 32]>(payload, 1).is_err());
+    }
+    for turns in [0, usize::MAX] {
+        assert!(Prepared::maximum_issuer_cleanup_quota::<[u8; 32]>(32, turns).is_err());
+    }
+}
+
+#[test]
 fn issuer_account_scope_preserves_original_charges_and_history() {
     let floor = 256;
     let prefix = 17;
