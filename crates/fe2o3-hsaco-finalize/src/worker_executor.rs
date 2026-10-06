@@ -1010,6 +1010,333 @@ mod platform {
     mod tests {
         use super::*;
 
+        // Test-only fixed decoder probe. This is not execute_v2 admission and never
+        // constructs a WorkerRequest, invokes LLVM, or returns artifact authority.
+        mod captured_probe_v1 {
+            use super::*;
+            use std::os::unix::process::ExitStatusExt;
+            use std::time::{SystemTime, UNIX_EPOCH};
+
+            const ENABLED: bool = false;
+            const SCOPE: Option<Scope> = None;
+            const CEILING_MS: u64 = 1791257400000;
+            const REQUEST: &[u8; 8] = b"F3LREQ02";
+            const STREAM_CAP: usize = 64 * 1024;
+            const NORMAL_LIMIT: Duration = Duration::from_secs(10);
+            const WORKER: &str = "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-bf16-direct-worker-cpu-build-r71-r1/build/fe2o3-llvm-link-worker";
+            const ELF_BYTES: u64 = 107567128;
+            const ELF_SHA: [u8; 32] = [
+                0x88, 0x87, 0xfc, 0x5a, 0x09, 0xbd, 0xc6, 0x2c, 0x53, 0x2c, 0x79, 0xb2, 0x2f, 0x03,
+                0x13, 0x91, 0xd6, 0x2b, 0xe9, 0xc7, 0x93, 0x6f, 0xd4, 0xca, 0xc1, 0xde, 0xe5, 0x0b,
+                0x4e, 0xbe, 0x04, 0x2c,
+            ];
+            const BUILD: &str = "fe2o3-worker-v1-sha256-2dbbc2b31070d2b4580acf9e3b6fabe2fbd8a48970c0ad002eed7eb404eb2bdf";
+            const LLVM: &str = "rocm7.2.1-packages-sha256:eb02c62693d6697017195f0abf5ebcf7e58f60e4d2acf8356de2e944bceec540";
+
+            // A future independently reviewed source binding must set both slots;
+            // the external owner must separately issue/consume a one-use lease
+            // binding the actual test ELF, closure, source, nonce and cgroup.
+            #[derive(Clone, Copy, Debug)]
+            struct Scope {
+                nonce: &'static str,
+                not_before_ms: u64,
+                not_after_ms: u64,
+            }
+            fn admit(enabled: bool, scope: Option<Scope>, now: u64) -> Result<Scope, &'static str> {
+                if !enabled {
+                    return Err("captured probe disabled");
+                }
+                let scope = scope.ok_or("captured probe scope absent")?;
+                if scope.nonce.len() != 32
+                    || !scope
+                        .nonce
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                    || scope.nonce.bytes().all(|b| b == b'0')
+                    || scope.not_after_ms <= scope.not_before_ms
+                    || scope.not_after_ms - scope.not_before_ms > 300_000
+                    || scope.not_after_ms > CEILING_MS
+                    || now < scope.not_before_ms
+                    || now >= scope.not_after_ms
+                {
+                    return Err("captured probe scope binding");
+                }
+                Ok(scope)
+            }
+            fn now_ms() -> u64 {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("clock before epoch")
+                    .as_millis()
+                    .try_into()
+                    .expect("clock overflow")
+            }
+            fn cgroup(scope: Scope) -> String {
+                format!(
+                    "/user.slice/user-9661.slice/user@9661.service/app.slice/fe2o3-worker-captured-decode-probe-{}.scope/workload",
+                    scope.nonce
+                )
+            }
+            fn bounded(path: &Path, cap: usize) -> io::Result<Vec<u8>> {
+                let mut bytes = Vec::new();
+                File::open(path)?
+                    .take((cap + 1) as u64)
+                    .read_to_end(&mut bytes)?;
+                if bytes.len() > cap {
+                    return Err(io::Error::other("probe observation cap"));
+                }
+                Ok(bytes)
+            }
+            fn member(pid: u32, expected: &str) -> io::Result<bool> {
+                Ok(bounded(Path::new(&format!("/proc/{pid}/cgroup")), 4096)?
+                    == format!("0::{expected}\n").as_bytes())
+            }
+            #[derive(Debug, Eq, PartialEq)]
+            struct ScopeSnapshot {
+                device: u64,
+                inode: u64,
+                uid: u32,
+                gid: u32,
+                credentials: Vec<String>,
+            }
+            fn observe_scope(scope: Scope) -> io::Result<ScopeSnapshot> {
+                let expected = cgroup(scope);
+                let pid = std::process::id();
+                if !member(pid, &expected)? {
+                    return Err(io::Error::other("probe cgroup membership"));
+                }
+                let path = PathBuf::from(format!("/sys/fs/cgroup{expected}"));
+                let meta = std::fs::symlink_metadata(&path)?;
+                if !meta.is_dir() || meta.file_type().is_symlink() {
+                    return Err(io::Error::other("probe cgroup directory"));
+                }
+                if bounded(&path.join("cgroup.procs"), 4096)? != format!("{pid}\n").as_bytes() {
+                    return Err(io::Error::other("probe workload is not exclusive"));
+                }
+                let status = bounded(Path::new("/proc/self/status"), 16384)?;
+                let status = std::str::from_utf8(&status)
+                    .map_err(|_| io::Error::other("probe credentials utf8"))?;
+                let mut credentials = Vec::new();
+                for key in ["Uid:", "Gid:", "Groups:", "CapEff:"] {
+                    let rows: Vec<_> = status
+                        .lines()
+                        .filter(|line| line.starts_with(key))
+                        .collect();
+                    if rows.len() != 1 {
+                        return Err(io::Error::other("probe credentials shape"));
+                    }
+                    credentials.push(rows[0].to_string());
+                }
+                for row in &credentials[..2] {
+                    if row.split_whitespace().skip(1).collect::<Vec<_>>() != ["9661"; 4] {
+                        return Err(io::Error::other("probe owner credentials"));
+                    }
+                }
+                if credentials[3].split_whitespace().collect::<Vec<_>>()
+                    != ["CapEff:", "0000000000000000"]
+                {
+                    return Err(io::Error::other("probe effective capabilities"));
+                }
+                Ok(ScopeSnapshot {
+                    device: meta.dev(),
+                    inode: meta.ino(),
+                    uid: meta.uid(),
+                    gid: meta.gid(),
+                    credentials,
+                })
+            }
+            fn command(path: &Path) -> Command {
+                let mut command = Command::new(path);
+                command
+                    .arg0("fe2o3-llvm-link-worker")
+                    .env_clear()
+                    .envs(WORKER_ENVIRONMENT_ALLOWLIST_V1.iter().copied())
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .process_group(0);
+                command
+            }
+            fn exact_refusal(capture: &ProcessCapture) -> bool {
+                capture.status.code() == Some(65)
+                    && capture.status.signal().is_none()
+                    && capture.request_written == REQUEST.len()
+                    && capture.stdout.eof
+                    && capture.stderr.eof
+                    && !capture.stdout.overflow
+                    && !capture.stderr.overflow
+                    && capture.stdout.bytes.is_empty()
+                    && capture.stderr.bytes.is_empty()
+            }
+
+            #[test]
+            #[ignore = "disabled source-only probe; requires separately reviewed fresh scope and owner release"]
+            fn actual_captured_worker_decode_refusal_v1() {
+                // Disabled/absent/expired scope refuses before any filesystem access.
+                let scope = admit(ENABLED, SCOPE, now_ms()).expect("no probe authority");
+                let before = observe_scope(scope).expect("pre-capture scope");
+                let measurement = WorkerMeasurementV1::new(
+                    ContentIdentityV1::from_parts(ELF_SHA, ELF_BYTES),
+                    BUILD,
+                    LLVM,
+                )
+                .unwrap();
+                let worker =
+                    PinnedWorkerV1::open(WORKER, measurement).expect("exact captured Worker");
+                validate_image(&worker.image, &worker.descriptor_path, worker.snapshot).unwrap();
+                require_image_digest(&worker.image, ELF_BYTES, ELF_SHA).unwrap();
+                // Only the private sealed copy is challenged, never the source ELF.
+                let mut alias = worker.image.try_clone().unwrap();
+                assert!(alias.write_all(b"X").is_err());
+                assert!(alias.set_len(0).is_err());
+                drop(alias);
+                require_image_digest(&worker.image, ELF_BYTES, ELF_SHA).unwrap();
+                assert_eq!(before, observe_scope(scope).expect("pre-spawn scope"));
+                let now = now_ms();
+                admit(ENABLED, SCOPE, now).expect("scope expired during capture");
+                assert!(
+                    scope.not_after_ms.saturating_sub(now) >= 10_000,
+                    "no full normal interval remains"
+                );
+
+                let mut command = command(&worker.descriptor_path);
+                let mut child = spawn_worker(&mut command).expect("captured memfd spawn");
+                let worker_pid = child.id();
+                // stdin is still open with no bytes written. The ordinary Worker
+                // blocks in readBoundedStdin; verify inherited membership first.
+                if !member(worker_pid, &cgroup(scope)).unwrap_or(false) {
+                    terminate_process_tree(&mut child, &BTreeSet::new());
+                    let _ = child.wait();
+                    panic!("captured Worker outside fixed workload");
+                }
+                let limits =
+                    WorkerExecutionLimitsV1::new(NORMAL_LIMIT, STREAM_CAP, STREAM_CAP).unwrap();
+                let capture =
+                    supervise(&mut child, REQUEST, limits).expect("bounded captured probe");
+                assert!(
+                    exact_refusal(&capture),
+                    "not the exact ordinary V2 decode refusal"
+                );
+                validate_image(&worker.image, &worker.descriptor_path, worker.snapshot).unwrap();
+                require_image_digest(&worker.image, ELF_BYTES, ELF_SHA).unwrap();
+                assert_eq!(before, observe_scope(scope).expect("post-probe scope"));
+                admit(ENABLED, SCOPE, now_ms()).expect("scope expired during probe");
+                drop(worker);
+                println!(
+                    "fe2o3-captured-worker-decode-refusal-v1 nonce={} worker_pid={} request_bytes=8 exit=65 stdout_bytes=0 stderr_bytes=0 stdout_eof=true stderr_eof=true image_bytes={} image_sha256=8887fc5a09bdc62c532c79b22f031391d62be9c7936fd4cac1dee50b4ebe042c sealed=true ordinary_v2_decode_refused=true engineering_observations=0 artifact_authority=false launch_authority=false",
+                    scope.nonce, worker_pid, ELF_BYTES
+                );
+            }
+
+            fn example() -> Scope {
+                Scope {
+                    nonce: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    not_before_ms: CEILING_MS - 2000,
+                    not_after_ms: CEILING_MS - 1000,
+                }
+            }
+            fn capture() -> ProcessCapture {
+                ProcessCapture {
+                    status: ExitStatus::from_raw(65 << 8),
+                    request_written: 8,
+                    stdout: Capture {
+                        bytes: Vec::new(),
+                        eof: true,
+                        overflow: false,
+                    },
+                    stderr: Capture {
+                        bytes: Vec::new(),
+                        eof: true,
+                        overflow: false,
+                    },
+                }
+            }
+            #[test]
+            fn captured_probe_disabled_and_missing_scope_refuse() {
+                assert!(admit(false, Some(example()), CEILING_MS - 1500).is_err());
+                assert!(admit(true, None, CEILING_MS - 1500).is_err());
+            }
+            #[test]
+            fn captured_probe_scope_time_is_closed() {
+                let s = example();
+                assert!(admit(true, Some(s), s.not_before_ms).is_ok());
+                for now in [s.not_before_ms - 1, s.not_after_ms, CEILING_MS] {
+                    assert!(admit(true, Some(s), now).is_err());
+                }
+                let mut s = example();
+                s.not_after_ms = CEILING_MS + 1;
+                assert!(admit(true, Some(s), CEILING_MS - 1500).is_err());
+                let mut s = example();
+                s.not_before_ms = s.not_after_ms;
+                assert!(admit(true, Some(s), s.not_before_ms).is_err());
+                let mut s = example();
+                s.not_before_ms = s.not_after_ms - 300_001;
+                assert!(admit(true, Some(s), s.not_before_ms).is_err());
+            }
+            #[test]
+            fn captured_probe_nonce_is_closed() {
+                for nonce in [
+                    "",
+                    "../x",
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "00000000000000000000000000000000",
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                ] {
+                    let mut s = example();
+                    s.nonce = nonce;
+                    assert!(admit(true, Some(s), CEILING_MS - 1500).is_err());
+                }
+                assert_eq!(
+                    cgroup(example()),
+                    "/user.slice/user-9661.slice/user@9661.service/app.slice/fe2o3-worker-captured-decode-probe-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope/workload"
+                );
+            }
+            #[test]
+            fn captured_probe_command_has_no_arguments_or_inherited_environment_entries() {
+                let command = command(Path::new("/proc/self/fd/123"));
+                assert_eq!(command.get_program(), "/proc/self/fd/123");
+                assert_eq!(command.get_args().count(), 0);
+                assert_eq!(
+                    command
+                        .get_envs()
+                        .map(|(k, v)| (k.to_str().unwrap(), v.unwrap().to_str().unwrap()))
+                        .collect::<Vec<_>>(),
+                    WORKER_ENVIRONMENT_ALLOWLIST_V1
+                );
+                assert_eq!(REQUEST, b"F3LREQ02");
+                let limits =
+                    WorkerExecutionLimitsV1::new(NORMAL_LIMIT, STREAM_CAP, STREAM_CAP).unwrap();
+                assert_eq!(limits.timeout(), Duration::from_secs(10));
+                assert_eq!(limits.stdout_bytes(), 65536);
+                assert_eq!(limits.stderr_bytes(), 65536);
+            }
+            #[test]
+            fn captured_probe_exact_decode_refusal_oracle() {
+                assert!(exact_refusal(&capture()));
+                for raw in [0, 64 << 8, 66 << 8, 9] {
+                    let mut c = capture();
+                    c.status = ExitStatus::from_raw(raw);
+                    assert!(!exact_refusal(&c));
+                }
+            }
+            #[test]
+            fn captured_probe_incomplete_or_nonempty_streams_refuse() {
+                for field in 0..7 {
+                    let mut c = capture();
+                    match field {
+                        0 => c.request_written = 7,
+                        1 => c.stdout.eof = false,
+                        2 => c.stderr.eof = false,
+                        3 => c.stdout.overflow = true,
+                        4 => c.stderr.overflow = true,
+                        5 => c.stdout.bytes.push(0),
+                        _ => c.stderr.bytes.push(0),
+                    }
+                    assert!(!exact_refusal(&c));
+                }
+            }
+        }
+
         #[test]
         fn sealed_worker_image_is_exact_and_digest_checked() {
             let bytes = b"\x7fELFworker-image";
