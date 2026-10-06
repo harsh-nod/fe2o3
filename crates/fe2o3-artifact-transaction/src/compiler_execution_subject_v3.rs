@@ -153,6 +153,46 @@ pub struct InertCompilerExecutionSubjectV3 {
     encoded: codec::Encoded,
 }
 impl InertCompilerExecutionSubjectV3 {
+    /// Complete fixed work for inert decoding on an original owned account.
+    /// This adds a bounded local window, not a new account or authority.
+    pub const COMPOSED_DECODE_WORK: usize =
+        Budget::STORAGE_WINDOW_WORK_V1 + INERT_COMPILER_EXECUTION_SUBJECT_WORK_V3;
+    /// Complete local overlap including the fixed input and window bookkeeping.
+    pub const COMPOSED_DECODE_SCRATCH: usize = Budget::STORAGE_WINDOW_SCRATCH_V1
+        + codec::BYTES
+        + INERT_COMPILER_EXECUTION_SUBJECT_STORAGE_V3;
+
+    /// Exact inert codec on the same original Owned::with_budget account, with
+    /// a fixed local overlap <=256 MiB above its actual entry floor. Larger
+    /// external owners remain paid; no total cap, work history or account is
+    /// reset. The complete fixed input must already be paid, and is counted
+    /// again inside the local window. No caller can select the excluded floor.
+    ///
+    /// Success returns additional UNRESERVED storage, exactly like decode().
+    /// Framing failure refunds only this codec's temporary storage. This is not
+    /// terminal source recovery or protected compiler/receipt admission.
+    pub fn decode_in_original_account_v3(
+        bytes: &[u8],
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, InertCompilerExecutionSubjectStorageV3)> {
+        let floor = budget.storage();
+        budget.with_additional_storage_window_v1(Self::COMPOSED_DECODE_SCRATCH, |budget| {
+            budget.with_prepaid_scope(
+                floor.max(input_floor(bytes)),
+                8,
+                INERT_COMPILER_EXECUTION_SUBJECT_WORK_V3,
+                Self::COMPOSED_DECODE_SCRATCH,
+                |_| {
+                    let (fields, encoded) = SCHEMA.decode(bytes)?;
+                    Ok((
+                        Self { fields, encoded },
+                        InertCompilerExecutionSubjectStorageV3(RETAINED),
+                    ))
+                },
+            )
+        })
+    }
+
     /// Reconstructs from the exact V5 receipt and cached immutable V5 axes.
     pub fn from_publication(
         receipt: CompilerModuleHandoffReceiptV5,
@@ -359,6 +399,11 @@ impl InertCompilerExecutionSubjectV3 {
         false
     }
 }
+
+const _: () = assert!(
+    InertCompilerExecutionSubjectV3::COMPOSED_DECODE_SCRATCH
+        <= MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5
+);
 impl fmt::Debug for InertCompilerExecutionSubjectV3 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("InertCompilerExecutionSubjectV3")
