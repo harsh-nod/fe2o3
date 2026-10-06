@@ -1560,8 +1560,8 @@ fn validate_expected_build_config_identity(
 
 // The native profile decoder and later intake borrow this ONE wrapper request
 // account. This is not the separate root process's original launch account.
-// These terms cover intake and pre-root preparation. Complete source replay,
-// Worker and publication funding remains a default-activation prerequisite.
+// Prelude quotes and one fixed continuation allowance establish the initial
+// ceiling. Later stages share it; none may replenish or replace this account.
 fn native_intake_account()
 -> Result<crate::authority_release::profile::ClientProfileAccountV3, BindingWrapperError> {
     use crate::authority_release::profile::{
@@ -1571,6 +1571,7 @@ fn native_intake_account()
     use fe2o3_compiler_closure_capability::{
         ApprovedCompilerPolicyV2 as Approval, RetainedCompilerRuntimeV1 as Runtime,
     };
+    use fe2o3_hsaco_finalize::NativeConditionalContinuationAllowanceV1 as Allowance;
     use fe2o3_kernel_ir::{
         CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account,
         CanonicalKernelIrWorkBudgetV1 as Work,
@@ -1616,6 +1617,9 @@ fn native_intake_account()
         .and_then(|n| n.checked_add(size_of::<capability_broker::BrokeredInvocationAuthorityV1>()))
         .and_then(|n| n.checked_add(header))
         .ok_or_else(overflow)?;
+    let (work, storage) = Allowance::production_v1()
+        .and_then(|plan| plan.compose_startup(work, storage))
+        .map_err(native_continuation_error)?;
     let mut account = Account::new(Work::new(work), storage);
     account
         .with_budget(|b| b.reserve_storage(header))
@@ -3065,6 +3069,50 @@ mod lifecycle_tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn native_intake_funds_one_continuation_without_resetting_exhausted_account() {
+        use fe2o3_hsaco_finalize::NativeConditionalContinuationAllowanceV1 as Allowance;
+        use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1 as Resource;
+
+        let allowance = Allowance::production_v1().unwrap();
+        let account = native_intake_account().unwrap();
+        let alias = std::sync::Arc::clone(&account);
+        let mut original = account.lock().unwrap();
+        let work_limit = original.work_limit();
+        let storage_limit = original.storage_limit();
+        assert!(work_limit > allowance.work());
+        assert!(storage_limit > allowance.storage());
+        assert_eq!(original.work(), 0);
+        let floor = original.storage();
+        assert!(floor > 0 && floor < storage_limit);
+        let (ledger, owner) = original.with_budget(|budget| {
+            budget.charge_work(work_limit).unwrap();
+            budget.reserve_storage(storage_limit - floor).unwrap();
+            assert!(matches!(budget.charge_work(1), Err(Resource::Work(_))));
+            assert!(matches!(
+                budget.reserve_storage(1),
+                Err(Resource::Storage(_))
+            ));
+            budget.release_storage(storage_limit - floor).unwrap();
+            (
+                budget.work_ledger_identity_v1(),
+                budget.storage_account_identity_v1(),
+            )
+        });
+        drop(original);
+        alias.lock().unwrap().with_budget(|budget| {
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(budget.storage_account_identity_v1(), owner);
+            assert_eq!((budget.work(), budget.storage()), (work_limit, floor));
+            assert_eq!(budget.peak_storage(), storage_limit);
+            assert_eq!(budget.failed_work(), Some(work_limit + 1));
+            assert_eq!(budget.failed_storage(), Some(storage_limit + 1));
+            assert!(matches!(budget.charge_work(2), Err(Resource::Work(_))));
+            assert_eq!(budget.failed_work(), Some(work_limit + 1));
+        });
+    }
 
     struct TestDirectory(PathBuf);
 
