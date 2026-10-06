@@ -94,8 +94,26 @@ fn source_execution_owner_endpoint_exact_and_one_short_resources() {
     let (result, used, retained_peak) = run(work, peak);
     result.unwrap();
     assert_eq!((used, retained_peak), (work, peak));
-    assert!(run(work - 1, peak).0.is_err());
-    assert!(run(work, peak - 1).0.is_err());
+    let resource = |error| {
+        use ProductionSourceOptimizationErrorV18 as Error;
+        use fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1 as Adoption;
+        match error {
+            Error::Source(ProductionSourceOwnedViewErrorV18::Resource(error))
+            | Error::Adoption(Adoption::Resource(error))
+            | Error::Adoption(Adoption::Origin(ProductionSourceOwnedViewErrorV18::Resource(
+                error,
+            ))) => error,
+            Error::Observation(error) => match observed_optimizer_refusal_v18(&error) {
+                SourceOwnedQueryFailureV18::Resource(error) => error,
+                _ => panic!("one-short budget produced a non-resource observation: {error:?}"),
+            },
+            error => panic!("one-short budget produced a non-resource error: {error:?}"),
+        }
+    };
+    assert!(matches!(resource(run(work - 1, peak).0.unwrap_err()),
+        ArgumentResourceV1::Work(error) if error.actual() == work && error.limit() == work - 1));
+    assert!(matches!(resource(run(work, peak - 1).0.unwrap_err()),
+        ArgumentResourceV1::Storage(error) if error.actual() == peak && error.limit() == peak - 1));
 }
 
 #[test]
