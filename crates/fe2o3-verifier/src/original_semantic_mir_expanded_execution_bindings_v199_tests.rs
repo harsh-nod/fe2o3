@@ -381,7 +381,7 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 7);
+    assert_eq!(source.matches("proof fn ").count(), 8);
     for name in [
         "invocation_context_marker_aggregate_well_formed_v260",
         "invocation_checked_add_aggregate_complete_v260",
@@ -426,6 +426,26 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         requires,
         "invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),\n        invocation_execution_map_current_v205(source, target, execution_map),\n"
     );
+    let inputs = |name: &str| {
+        source
+            .split_once(&format!("proof fn {name}("))
+            .unwrap()
+            .1
+            .split_once("    requires ")
+            .unwrap()
+            .1
+            .split_once("    ensures ")
+            .unwrap()
+            .0
+    };
+    assert_eq!(
+        inputs("invocation_source_checked_add_replays_install_v260"),
+        inputs("invocation_source_checked_add_reconstruction_step_v259").replacen(
+            "source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),\n",
+            "source.machine.valid,\n",
+            1,
+        )
+    );
     for exact in [
         "values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined)",
         "values: target.values.update(destination, next.target.values[destination])",
@@ -445,7 +465,10 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "reveal(invocation_source_aggregate_install_v42);",
         "hide(invocation_source_checked_pair_v44);",
         "hide(invocation_source_logical_write_v38);",
-        "reveal(invocation_source_checked_v42);",
+        "hide(invocation_source_context_shape_v161);",
+        "hide(byte_execution_next_epoch_v178);",
+        "reveal(byte_execution_step_v178);",
+        "invocation_source_checked_add_replays_install_v260(source, destination, source_type,",
         "invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);",
         "invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);",
         "invocation_context_marker_aggregate_well_formed_v260(issue.source_type);",
