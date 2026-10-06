@@ -29,7 +29,7 @@ pub use compiler_native_conditional_handoff_v5::{
 };
 pub use compiler_native_conditional_policy_roster_v1::{
     InertNativeConditionalPolicyRosterV1, NativeConditionalPolicyReconstructionErrorV1,
-    NativeConditionalPolicyRosterStorageV1,
+    NativeConditionalPolicyRosterStorageV1, native_conditional_root_policy_input_storage_v2,
     reconstruct_inert_native_conditional_policy_roster_in_original_account_v1,
     reconstruct_inert_native_conditional_policy_roster_v1,
 };
