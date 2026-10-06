@@ -81,6 +81,15 @@ fn original_helper_instances(
     let function = &semantic.functions()[helper.index() as usize];
     assert!(!function.blocks().is_empty());
     assert!(function.blocks().len() < 256);
+    // This fixture's straight-line helper has no entry predecessors, so the
+    // importer needs no synthetic invocation preheader for either instance.
+    for block in function.blocks() {
+        block.terminator().kind().try_for_each_edge(|edge| {
+            budget.charge_work(1)?;
+            assert_ne!(edge.target(), function.entry());
+            Ok::<_, SourceError>(())
+        })?;
+    }
     let canonical = source.canonical(budget)?;
     let mut mapped_operations = [0; 2];
     for (root, instance) in instances.into_iter().enumerate() {
@@ -95,7 +104,7 @@ fn original_helper_instances(
             original.defined_call_instance(root, caller, call_block, budget)?,
             instance
         );
-        assert!(source.invocation_entry(root, instance, budget)?.is_some());
+        assert!(source.invocation_entry(root, instance, budget)?.is_none());
         let root_function = source.root(root, budget)?.1;
         for (block, source_block) in function.blocks().iter().enumerate() {
             assert!(source_block.statements().len() < 512);
