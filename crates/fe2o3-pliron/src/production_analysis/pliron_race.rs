@@ -124,7 +124,8 @@ fn checked_race_sum_v1(items: &[usize]) -> Result<usize, ProductionAnalysisResou
     })
 }
 
-const RACE_NAME_CENSUS_SCRATCH_V1: usize = 16;
+// Scan/result fields plus traversal and direct-view classification temporaries.
+const RACE_NAME_CENSUS_SCRATCH_V1: usize = 24;
 // "allocation origin " plus the full decimal u64 origin.
 const RACE_ALLOCATION_NAME_BYTES_V1: usize = 18 + 20;
 
@@ -133,6 +134,7 @@ struct RaceNameCensusV1 {
     name_storage: usize,
     scan_work: usize,
     execution_lookup_work: usize,
+    private_ranked_accesses: usize,
 }
 
 #[derive(Default)]
@@ -142,6 +144,7 @@ struct RaceNameScanV1 {
     arguments: usize,
     attributes: usize,
     ranked_accesses: usize,
+    private_ranked_accesses: usize,
     allocation_effects: usize,
     max_view_name: usize,
     max_index_name: usize,
@@ -185,6 +188,10 @@ fn race_name_scan_work_v1(
         checked_race_mul_v1(census.blocks, 8)?,
         checked_race_mul_v1(census.operations, 12)?,
         checked_race_mul_v1(census.operands, 4)?,
+        checked_race_mul_v1(
+            census.ranked_accesses,
+            checked_race_sum_v1(&[census.attributes, 8])?,
+        )?,
         checked_race_mul_v1(
             checked_race_sum_v1(&[census.operands, census.operations])?,
             checked_race_sum_v1(&[race_name_lookup_work_v1(census)?, 80])?,
@@ -328,6 +335,14 @@ fn collect_race_name_census_with_observation_v1(
             for operand in raw.operands() {
                 require_race_name_value_v1(context, function, operand, census)?;
             }
+            // Match only the executor's unconditional private-view skip. Keep
+            // unknown, malformed and non-private views conservatively charged.
+            if let Some(definition) = raw.get_operand(0).defining_op()
+                && let Some(view) = Operation::get_op::<RankedViewOp>(definition, context)
+                && view.memory_space(context) == Some(MemorySpaceAttr::Private)
+            {
+                race_name_prefix_v1(&mut scan.private_ranked_accesses, 1, scan.ranked_accesses)?;
+            }
             // checked_success performs a type query; its last-operand search was
             // bounded above. Borrow the same index range without allocating indices().
             let end =
@@ -364,6 +379,7 @@ fn collect_race_name_census_with_observation_v1(
                 .max(RACE_ALLOCATION_NAME_BYTES_V1),
             scan_work: work,
             execution_lookup_work: race_name_lookup_work_v1(census)?,
+            private_ranked_accesses: scan.private_ranked_accesses,
         })
     })
 }
@@ -407,7 +423,8 @@ fn raw_index_evaluation_resource_upper_bound_v1(
 /// Bounds symbolic pair reasoning and the exact-address fallback before the
 /// race pass collects effects. The authenticated census counts both ranked
 /// accesses and whole-allocation effects, including non-global effects that
-/// the pass may later discard. Pair work
+/// the pass may later discard. Only the address-map storage bound discounts
+/// authenticated private ranked accesses skipped by the executor. Pair work
 /// is bounded by the same Presburger ceiling checked by the implementation;
 /// exact enumeration is bounded by the authenticated static launch and the
 /// effect-instance cap. A successful report is clean and retains no findings.
@@ -757,8 +774,17 @@ fn calculate_race_resource_upper_bound_for_shape_v1(
             .checked_add(1)
             .ok_or_else(race_resource_overflow_v1)?,
     );
-    let retained_effect_instances =
-        potential_effect_instances.min(MAX_PLIRON_RACE_EFFECT_INSTANCES_V1);
+    if names.private_ranked_accesses > census.ranked_accesses {
+        return Err(race_name_census_error_v1());
+    }
+    let address_effects = effects
+        .checked_sub(names.private_ranked_accesses)
+        .ok_or_else(race_name_census_error_v1)?;
+    let retained_effect_instances = if exact_fallback_reachable {
+        checked_race_mul_v1(invocations, address_effects)?.min(MAX_PLIRON_RACE_EFFECT_INSTANCES_V1)
+    } else {
+        0
+    };
     let rank = launch_rank.max(MAX_RANKED_MEMORY_RANK);
     let (raw_evaluation_work, raw_evaluation_temporary) = if exact_fallback_reachable {
         let raw_evaluation_queries = checked_race_mul_v1(
@@ -816,11 +842,11 @@ fn calculate_race_resource_upper_bound_for_shape_v1(
             .and_then(|items| items.checked_add(name_storage))
             .ok_or_else(race_resource_overflow_v1)?,
     )?;
+    // One address key uses the ranked-memory bound; the four witness pairs
+    // clone only the authenticated launch coordinates, never address indices.
     let address_state = checked_race_mul_v1(
         retained_effect_instances,
-        rank.checked_mul(9)
-            .and_then(|n| n.checked_add(64))
-            .ok_or_else(race_resource_overflow_v1)?,
+        checked_race_sum_v1(&[rank, checked_race_mul_v1(launch_rank, 8)?, 64])?,
     )?;
     let per_finding_storage = checked_race_sum_v1(&[
         checked_race_mul_v1(rank, 3)?,
@@ -1174,3 +1200,6 @@ include!("pliron_race/execution_v1.rs");
 include!("pliron_race/disjointness_v1.rs");
 include!("pliron_race/affine_invocations_v1.rs");
 include!("pliron_race/resource_tests.rs");
+#[cfg(test)]
+#[path = "pliron_race/private_access_storage_v1_tests.rs"]
+mod private_access_storage_v1_tests;

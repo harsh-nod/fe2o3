@@ -704,8 +704,9 @@ mod race_observer_actual_ir_tests {
             + 8 * census.blocks
             + 12 * census.operations
             + 4 * census.operands
+            + census.ranked_accesses * (census.attributes + 8)
             + (census.operands + census.operations) * (lookup + 80);
-        let prefix = Bound::checked_phase(PHASE, scan, 0, 16).unwrap();
+        let prefix = Bound::checked_phase(PHASE, scan, 0, RACE_NAME_CENSUS_SCRATCH_V1).unwrap();
         let full = preflight_race_resource_upper_bound_v1(
             &context,
             &function,
@@ -716,7 +717,7 @@ mod race_observer_actual_ir_tests {
             UNLIMITED,
         )
         .unwrap();
-        assert!(full.peak_storage_upper_bound() > 16);
+        assert!(full.peak_storage_upper_bound() > RACE_NAME_CENSUS_SCRATCH_V1);
         for names_only in [true, false] {
             let call = |input, limits, observer: RaceObserverV1<'_, '_, '_>| {
                 if names_only {

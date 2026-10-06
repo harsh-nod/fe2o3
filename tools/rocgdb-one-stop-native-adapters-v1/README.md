@@ -110,3 +110,7 @@ The additive [physical-v10](physical-v10/README.md) layer follows physical-v9 an
 ## Disabled physical-v11 diagnostic successor
 
 physical-v11/ retains the disabled v10 query-separation layer and adds only a fixed first-denied-budget record and bounded refusal fields. No cap or public authority gate changes; no native success or behavioral fix is claimed. New private products require fresh build, type measurement, startup and one-use readiness authority.
+
+## Disabled proc-record logical-work candidate
+
+The separate [proc-record-work-v1 candidate](proc-record-work-v1/README.md) changes one helper to charge the admitted record extent before parsing. It preserves the full requested-I/O debit, guards and caps, but explicitly changes logical work accounting. Its exact-source and mocked-parser controls do not qualify a native fix or replace the physical-v11 selected-source package.

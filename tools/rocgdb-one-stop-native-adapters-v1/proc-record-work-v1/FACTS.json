@@ -1,0 +1,23 @@
+{
+  "schema": "proc-record-logical-work-candidate-v1",
+  "source_only": true,
+  "native_authority": false,
+  "cpu_execution": false,
+  "base": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-paired-native-query-context-root-r70-r1/files/source/gdb/amd-dbgapi-one-stop-native-owner-v1.inc",
+    "bytes": 14923,
+    "sha256": "954472f0a2f40cf01c0200fef33ae4d5d3bcf9e41e8f8b4269703323d0a6cc4d"
+  },
+  "owner": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-first-budget-denial-source-r72-r1/postimages/gdb/amd-dbgapi-owned-one-stop-v1.h",
+    "bytes": 37019,
+    "sha256": "5159f5682c2b875014d9a80a9516cfed6772d64330e0fda4773f793105a213c8"
+  },
+  "full_requested_bytes": 1024,
+  "max_accepted_return": 1023,
+  "work_cap": 131072,
+  "proc_requested_cap": 16384,
+  "storage_change": 0,
+  "changed_charge_semantics": true,
+  "charge_unit": "logical admitted record extent, not byte visits or CPU instructions"
+}

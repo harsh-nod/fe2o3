@@ -1,0 +1,17 @@
+import test from 'node:test';
+import a from 'node:assert/strict';
+import fs from 'node:fs';
+import crypto from 'node:crypto';
+const root=new URL('../',import.meta.url),read=p=>fs.readFileSync(new URL(p,root),'utf8');
+const before=read('preimages/gdb/amd-dbgapi-one-stop-native-owner-v1.inc'),after=read('postimages/gdb/amd-dbgapi-one-stop-native-owner-v1.inc'),edits=JSON.parse(read('EDITS.json')),facts=JSON.parse(read('FACTS.json'));
+const part=s=>s.slice(s.indexOf('std::uint64_t native_adapter::read_start_ticks () {'),s.indexOf('void native_adapter::current_executable () {'));
+test('base pin',()=>{a.equal(Buffer.byteLength(before),edits.base.bytes);a.equal(crypto.createHash('sha256').update(before).digest('hex'),edits.base.sha256);});
+test('two reversible edits',()=>{let s=before;a.equal(edits.edits.length,2);for(const e of edits.edits){a.equal(s.indexOf(e.before),e.offset);s=s.slice(0,e.offset)+e.after+s.slice(e.offset+e.before.length);}a.equal(s,after);for(const e of [...edits.edits].reverse()){a.equal(s.slice(e.offset,e.offset+e.after.length),e.after);s=s.slice(0,e.offset)+e.before+s.slice(e.offset+e.after.length);}a.equal(s,before);});
+test('new fragment exact',()=>a.equal(read('tests/read-start-ticks.inc'),part(after)));
+test('reference exact except method name',()=>a.equal(read('tests/legacy-read-start-ticks.inc'),part(before).replace('native_adapter::read_start_ticks','native_adapter::legacy_read_start_ticks')));
+test('numeric admission and debit precede byte inspection',()=>{const p=part(after);a(p.indexOf('require (got>0')<p.indexOf('debit (counter::work,end)'));a(p.indexOf('debit (counter::work,end)')<p.indexOf("require (m_proc[end-1]"));a(!p.slice(0,p.indexOf('debit (counter::work,end)')).includes('m_proc['));});
+test('IO prepayment and one read',()=>{const p=part(after);a(p.indexOf('debit (counter::proc_requested_bytes,m_proc.size ())')<p.indexOf('::open'));a.equal((p.match(/::read /g)||[]).length,1);a(!p.includes('debit (counter::work,m_proc.size ())'));});
+test('parser suffix identical',()=>a.equal(part(before).slice(part(before).indexOf('  std::size_t at=0')),part(after).slice(part(after).indexOf('  std::size_t at=0'))));
+test('remaining include identical',()=>a.equal(after.replace(part(after),'FUNCTION'),before.replace(part(before),'FUNCTION')));
+test('caps and storage unchanged',()=>{a.equal(facts.full_requested_bytes,1024);a.equal(facts.max_accepted_return,1023);a.equal(facts.work_cap,131072);a.equal(facts.proc_requested_cap,16384);a.equal(facts.storage_change,0);a.equal(facts.changed_charge_semantics,true);});
+test('no execution or authority',()=>{a.equal(facts.native_authority,false);a.equal(facts.cpu_execution,false);a(read('DIAGNOSIS.md').includes('does not guarantee'));});

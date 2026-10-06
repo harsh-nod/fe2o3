@@ -1,0 +1,21 @@
+{
+  "schema": "exact-reversible-source-edits-v1",
+  "base": {
+    "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-paired-native-query-context-root-r70-r1/files/source/gdb/amd-dbgapi-one-stop-native-owner-v1.inc",
+    "bytes": 14923,
+    "sha256": "954472f0a2f40cf01c0200fef33ae4d5d3bcf9e41e8f8b4269703323d0a6cc4d"
+  },
+  "postimage": "postimages/gdb/amd-dbgapi-one-stop-native-owner-v1.inc",
+  "edits": [
+    {
+      "before": "  debit (counter::work,m_proc.size ());\n",
+      "after": "",
+      "offset": 2632
+    },
+    {
+      "before": "  require (got>0 && static_cast<std::size_t> (got)<m_proc.size ()\n           && m_proc[static_cast<std::size_t> (got)-1]=='\\n',failure::owner_changed);\n  const auto end=static_cast<std::size_t> (got);\n",
+      "after": "  require (got>0 && static_cast<std::size_t> (got)<m_proc.size (),\n           failure::owner_changed);\n  const auto end=static_cast<std::size_t> (got);\n  // Work here measures admitted record extent, not byte visits or instructions.\n  // Requested I/O was prepaid above; no buffer byte is inspected before this debit.\n  debit (counter::work,end);\n  require (m_proc[end-1]=='\\n',failure::owner_changed);\n",
+      "offset": 2825
+    }
+  ]
+}
