@@ -23,6 +23,7 @@ const CASES: [&str; 4] = ["one", "three", "sixteen", "invalid-count"];
 fn feature(name: &str) -> Result<&'static str, &'static str> {
     match name {
         "one" => Ok("ordered-program-one-v32"),
+        "nested" => Ok("ordered-program-nested-v32"),
         "three" => Ok("ordered-program-v32"),
         "sixteen" => Ok("ordered-program-sixteen-v32"),
         "invalid-count" => Ok("ordered-program-invalid-count-v32"),
@@ -30,7 +31,7 @@ fn feature(name: &str) -> Result<&'static str, &'static str> {
     }
 }
 fn positive(name: &str) -> bool {
-    matches!(name, "one" | "three" | "sixteen")
+    matches!(name, "one" | "three" | "sixteen" | "nested")
 }
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -122,7 +123,7 @@ fn sources() -> Vec<Pin> {
     result
 }
 fn check_feature(metadata: &Value, selected: &str) -> Result<(), &'static str> {
-    if !CASES.iter().any(|name| feature(name) == Ok(selected)) {
+    if selected != feature("nested")? && !CASES.iter().any(|name| feature(name) == Ok(selected)) {
         return Err("unlisted actual feature");
     }
     let packages = metadata
@@ -250,6 +251,31 @@ fn prepare_invocations() {
         "prepared.json",
         &json!({
             "schema":"fe2o3-ordered-stage-preparation-v1", "records":&records,
+            "source_authentication_exported":false, "artifact_or_launch_authority":false,
+            "dependency_closure_owner":"root independently pins and rechecks the fresh whole tree",
+            "requires_root_provenance_for_preparation_commands":true,
+            "compiler_sessions_in_this_preparation":0
+        }),
+    );
+}
+
+#[test]
+#[ignore = "root prepares a separate fresh nested dependency directory and exact Cargo/sysroot outputs"]
+fn prepare_nested_macro_invocation() {
+    let directory = root();
+    assert!(
+        fs::read_dir(directory.join("analysis-output"))
+            .unwrap()
+            .next()
+            .is_none()
+    );
+    let record = derive(&directory, "nested");
+    write_new(&directory, "nested.invocation.json", &record);
+    write_new(
+        &directory,
+        "nested-prepared.json",
+        &json!({
+            "schema":"fe2o3-ordered-stage-preparation-v1", "records":[&record],
             "source_authentication_exported":false, "artifact_or_launch_authority":false,
             "dependency_closure_owner":"root independently pins and rechecks the fresh whole tree",
             "requires_root_provenance_for_preparation_commands":true,

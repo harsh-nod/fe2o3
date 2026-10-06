@@ -200,6 +200,7 @@ mod ordered_region_v31;
 #[cfg(any(
     feature = "ordered-program-v32",
     feature = "ordered-program-one-v32",
+    feature = "ordered-program-nested-v32",
     feature = "ordered-program-sixteen-v32",
     feature = "ordered-program-unused-v32",
     feature = "ordered-program-dynamic-v32",
@@ -391,6 +392,7 @@ mod physical_entry_v20;
     feature = "ordered-region-wrong-launch-v31",
     feature = "ordered-program-v32",
     feature = "ordered-program-one-v32",
+    feature = "ordered-program-nested-v32",
     feature = "ordered-program-sixteen-v32",
     feature = "ordered-program-unused-v32",
     feature = "ordered-program-dynamic-v32",
