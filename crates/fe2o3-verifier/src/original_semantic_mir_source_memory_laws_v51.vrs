@@ -57,4 +57,11 @@ proof fn invocation_source_typed_memory_invalid_array_element_refuses_v71(
             MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer },
             element, (fuel - 1) as nat, little_endian),
     ensures !invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian),
-{}
+{
+    reveal_with_fuel(invocation_source_memory_value_valid_v51, 1);
+    if invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian) {
+        assert(invocation_source_memory_value_valid_v51(source,
+            MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer },
+            element, (fuel - 1) as nat, little_endian));
+    }
+}

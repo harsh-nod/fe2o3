@@ -453,7 +453,18 @@ fn typed_array_invalid_element_law_is_in_complete_source_model() {
     assert!(law.contains(
         "ensures !invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian),"
     ));
-    assert!(law.trim_end().ends_with("{}"));
+    assert_eq!(
+        law.split_once("\n{\n").unwrap().1.trim_end(),
+        concat!(
+            "    reveal_with_fuel(invocation_source_memory_value_valid_v51, 1);\n",
+            "    if invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian) {\n",
+            "        assert(invocation_source_memory_value_valid_v51(source,\n",
+            "            MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer },\n",
+            "            element, (fuel - 1) as nat, little_endian));\n",
+            "    }\n",
+            "}",
+        ),
+    );
     assert!(!law.contains("admit"));
     assert!(!law.contains("assume"));
     assert!(!law.contains("external_body"));
