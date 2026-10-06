@@ -218,10 +218,25 @@ fn complete_tile_roots_keep_mixed_rosters_and_one_whole_module() {
             let count = if second_tile { 3 } else { 2 };
             assert_eq!(view.original_source(budget)?.root_count(budget)?, count);
             let mut layouts = vec![Some(ExecutionTileLayoutV1::Blocked); count];
+            if second_tile {
+                layouts[1] = Some(ExecutionTileLayoutV1::Striped);
+            }
             layouts[count - 1] = None;
             let floor = budget.storage();
             let ledger = budget.work_ledger_identity_v1();
-            let original = view.output_inventory(budget)?.owner();
+            let inventory = view.output_inventory(budget)?;
+            let original = inventory.owner();
+            let shared: Vec<_> = inventory.functions().iter().filter(|function| {
+                !inventory.kernels().iter().any(|kernel| kernel.entry == function.coordinate)
+                    && inventory.kernels().iter().all(|kernel| {
+                        inventory.calls().iter().filter(|call| {
+                            call.target == Some(function.coordinate)
+                                && call.coordinate.block.function == kernel.entry
+                        }).count() == 1
+                    })
+            }).collect();
+            assert_eq!(shared.len(), 1, "one actual shared helper with an incoming call from every root must survive the neutral prefix");
+            let helper = shared[0];
             let mut first_identity = None;
             for _ in 0..2 {
                 let expanded = view.prepare_tile_expansion_roots_v260(&layouts, budget)?;
@@ -234,12 +249,20 @@ fn complete_tile_roots_keep_mixed_rosters_and_one_whole_module() {
                     let policy = expanded.root_policy_v162(root, budget)?;
                     assert_eq!(policy.is_some(), root != count - 1);
                     if let Some((_, layout, lanes)) = policy {
-                        assert_eq!((layout, lanes), (ExecutionTileLayoutV1::Blocked, 64));
+                        assert_eq!((Some(layout), lanes), (layouts[root], 64));
                     }
                 }
                 let output = expanded.output(budget)?.module();
                 assert_eq!(output.kernels, original.module().kernels);
                 assert_eq!(output.functions.len(), original.module().functions.len());
+                assert_eq!(output.functions.iter().filter(|function| function.id == helper.function.id).count(), 1);
+                assert_eq!(&output.functions[helper.coordinate.0 as usize], helper.function);
+                for kernel in &output.kernels {
+                    let root = output.functions.iter().find(|function| function.id == kernel.entry).unwrap();
+                    let calls = root.body.as_ref().unwrap().blocks.iter().flat_map(|block| &block.operations)
+                        .filter(|operation| matches!(&operation.kind, OperationKind::Call { callee, .. } if callee == &helper.function.id)).count();
+                    assert_eq!(calls, 1, "the same actual helper remains linked from every root");
+                }
                 for (index, function) in original.module().functions.iter().enumerate() {
                     if !expanded
                         .selections(budget)?
