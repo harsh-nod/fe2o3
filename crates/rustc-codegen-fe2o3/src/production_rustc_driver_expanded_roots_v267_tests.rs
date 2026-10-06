@@ -158,12 +158,21 @@ impl Callbacks for RootsCallbacks {
                 }
                 Err(error) => {
                     assert_eq!(calls, 0, "refusal must precede the borrowed consumer");
-                    let detail = format!("{error:?}");
-                    if detail.contains("source tile helper requires interprocedural expansion") {
+                    use fe2o3_lower_mir_kernel::{
+                        ProductionSourceOptimizationErrorV18 as OptimizationError,
+                        ProductionSourceOwnedViewErrorV18 as OwnerError,
+                    };
+                    use fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1 as AdoptionError;
+                    if matches!(&error, SourceError::ExpandedSource(error)
+                    if matches!(error.as_ref(), OptimizationError::Adoption(
+                        AdoptionError::Origin(SourceError::Source(OwnerError::Binding(
+                            "source tile helper requires interprocedural expansion"
+                        )))
+                    ))) {
                         Ok(RootsOutcome::TileHelperRefused)
                     } else {
                         Err(format!(
-                            "multi-root refused at a different boundary: {detail}"
+                            "multi-root refused at a different boundary: {error:?}"
                         ))
                     }
                 }
