@@ -5,6 +5,7 @@ use crate::{
     NativeWorkerEvidenceCustodyV1 as Custody,
     PreparedFinalizedConditionalWorkerHsacoV5 as Artifact,
     first_build_worker_v3::extract_worker_v3_request_replay_parts_v1 as extract,
+    revalidate_conditional_worker_finalizer_in_original_account_v5 as replay_original,
     revalidate_conditional_worker_finalizer_v5 as replay,
 };
 use fe2o3_compiler_ffi::{
@@ -510,7 +511,7 @@ fn validate_recovered_using(
     b.release_storage(input_storage)?;
     let output_storage = exact_output.capacity();
     b.reserve_storage(output_storage)?;
-    let (finalized, replay_storage) = replay(
+    let (finalized, replay_storage) = (if original { replay_original } else { replay })(
         producer,
         attempt,
         source,

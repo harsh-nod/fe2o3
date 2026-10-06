@@ -160,7 +160,10 @@ pub use conditional_worker_finalization::{
     ConditionalWorkerFinalizationStorageV5, PreparedFinalizedConditionalWorkerHsacoV5,
     finalize_conditional_worker_hsaco_v5,
 };
-pub use conditional_worker_replay::revalidate_conditional_worker_finalizer_v5;
+pub use conditional_worker_replay::{
+    revalidate_conditional_worker_finalizer_in_original_account_v5,
+    revalidate_conditional_worker_finalizer_v5,
+};
 pub use engineering_hsaco::{
     EngineeringHsacoErrorV1, EngineeringHsacoObservationV1, EngineeringProviderObservationV1,
     observe_engineering_hsaco_v1,
@@ -184,8 +187,11 @@ pub use first_build_worker_conditional::{
     PreparedConditionalFirstBuildWorkerV2,
     execute_preflighted_conditional_reproducible_first_build_worker_v2,
     preflight_conditional_reproducible_first_build_worker_v2,
+    preflight_conditional_worker_in_original_account_v2,
 };
-pub use first_build_worker_conditional_binding::ProtectedCompilerConditionalHandoffBindingV2;
+pub use first_build_worker_conditional_binding::{
+    ProtectedCompilerConditionalHandoffBindingV2, conditional_worker_configuration_storage_v2,
+};
 pub use first_build_worker_native::{
     InertNativeFirstBuildWorkerEvidenceV1, NativeFirstBuildWorkerErrorV1,
     NativeFirstBuildWorkerIdentityV1, NativeFirstBuildWorkerStorageV1, NativeWorkerDiagnosticV1,

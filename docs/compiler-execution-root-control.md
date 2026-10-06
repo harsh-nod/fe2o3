@@ -306,6 +306,28 @@ connection changes and refusal paths.
 Parser, journal, startup, and compile-only tests establish their individual
 properties. They do not substitute for the later gates.
 
+## Original-Account Worker Continuation
+
+The original-root parent can retain more than 256 MiB of compiler resources.
+Its explicit conditional Worker APIs use the same owned resource account and
+non-widening, at-most-256-MiB additional storage windows. They do not increase
+the legacy artifact ceiling or the separate Worker process/LLVM limits.
+
+Preflight retains private account, ledger, and callback-address coordinates in
+its move-only owner; execution and subsequent artifact checks compare those
+coordinates before using the original-account path. Replay does the same for
+independently recovered evidence. These coordinates select accounting only:
+the actual source, occurrence, measured Worker, transcript, and artifact checks
+remain required, and neither mode creates execution or publication authority.
+
+Callers prepay actual configuration backing, including provider vector spare
+capacity, linker strings, and the pinned Worker's Rust metadata. The public
+`conditional_worker_configuration_storage_v2` quote reports this logical storage;
+it is not a sealed executable-page or child-RSS charge. The complete borrowed
+inputs are charged again inside the local window. Ordinary APIs keep their
+strict legacy limit checks. This implementation still requires coherent suite
+and end-to-end qualification before enabling the default native callback.
+
 The [checkpoint evidence](evidence/root-control-foundations-20260929.md) records
 the tested source, observed failures, and remaining validation limits.
 The subsequent [envelope/intake evidence](evidence/root-control-envelope-20260929.md)

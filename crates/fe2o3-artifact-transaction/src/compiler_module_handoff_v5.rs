@@ -478,18 +478,61 @@ pub fn rederive_compiler_module_handoff_receipt_for_replay_v5(
     budget: &mut Budget<'_>,
 ) -> Result<CompilerModuleHandoffReceiptV5> {
     entry(budget, payload_storage(handoff)?, |resources| {
-        resources.reserve(REPLAY_SCRATCH_STORAGE)?;
-        currentness::rederive_receipt::<Schema>(
+        rederive_in(
             producer,
             attempt,
             slot,
-            expected_transaction.as_bytes(),
+            expected_transaction,
             handoff,
-            handoff.canonical_bytes(),
             resources,
         )
-        .map_err(Error::from)
     })
+}
+
+/// Explicit original-account inert replay. The actual complete handoff remains
+/// prepaid and is counted again under the unchanged <=256 MiB local ceiling.
+/// This performs the same occurrence hash, without observing currentness.
+pub fn rederive_compiler_module_handoff_receipt_in_original_account_v5(
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV5,
+    expected_transaction: CompilerModuleHandoffTransactionIdentityV5,
+    handoff: &Handoff,
+    budget: &mut Budget<'_>,
+) -> Result<CompilerModuleHandoffReceiptV5> {
+    let input = payload_storage(handoff)?;
+    let floor = budget.storage();
+    let overlap = input
+        .checked_add(Budget::STORAGE_WINDOW_SCRATCH_V1)
+        .ok_or(Resource::Arithmetic)?;
+    budget.with_additional_storage_window_v1(MAX_COMPILER_MODULE_HANDOFF_STORAGE_V5, |b| {
+        b.with_prepaid_scope(floor.max(input), 0, 0, overlap, |b| {
+            composition::entry_composed(b, input, |r| {
+                rederive_in(producer, attempt, slot, expected_transaction, handoff, r)
+            })
+        })
+    })
+}
+
+fn rederive_in(
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    slot: CompilerModuleHandoffSlotV5,
+    expected_transaction: CompilerModuleHandoffTransactionIdentityV5,
+    handoff: &Handoff,
+    resources: &mut Resources<'_, '_>,
+) -> Result<CompilerModuleHandoffReceiptV5> {
+    resources.reserve(REPLAY_SCRATCH_STORAGE)?;
+    currentness::rederive_receipt::<Schema>(
+        producer,
+        attempt,
+        slot,
+        expected_transaction.as_bytes(),
+        handoff,
+        handoff.canonical_bytes(),
+        resources,
+    )
+    .map_err(Error::from)
 }
 
 /// The returned lease/header storage is admitted but unreserved; reserve it

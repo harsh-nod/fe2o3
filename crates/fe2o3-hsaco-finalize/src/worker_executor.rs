@@ -81,6 +81,12 @@ impl WorkerMeasurementV1 {
     pub fn llvm_build_identity(&self) -> &str {
         &self.llvm_build_identity
     }
+
+    fn backing_capacity(&self) -> Option<usize> {
+        self.worker_build_identity
+            .capacity()
+            .checked_add(self.llvm_build_identity.capacity())
+    }
 }
 
 /// Resource limits for one worker execution.
@@ -499,6 +505,12 @@ mod platform {
 
         pub const fn measurement(&self) -> &WorkerMeasurementV1 {
             &self.measurement
+        }
+
+        pub(crate) fn rust_storage(&self) -> Option<usize> {
+            std::mem::size_of::<Self>()
+                .checked_add(self.descriptor_path.capacity())?
+                .checked_add(self.measurement.backing_capacity()?)
         }
 
         /// Runs one sealed compiler-FFI V2 request under bounded supervisor limits.

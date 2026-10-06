@@ -35,6 +35,7 @@ use fe2o3_hsaco_finalize::{
     persist_prepared_conditional_worker_hsaco_publication_in_original_account_v5 as persist_original,
     persist_prepared_conditional_worker_hsaco_publication_v5 as persist_publication,
     preflight_conditional_reproducible_first_build_worker_v2 as preflight,
+    preflight_conditional_worker_in_original_account_v2 as preflight_original,
     prepare_conditional_worker_compact_finalizer_replay_v5 as prepare_transcript,
     prepare_conditional_worker_hsaco_publication_in_original_account_v5 as prepare_original,
     prepare_conditional_worker_hsaco_publication_v5 as prepare_publication,
@@ -531,7 +532,11 @@ impl<'b, 'w> Readiness<'b, 'w> {
                 };
                 // Each branch retains the mapped owner before any lent policy view dies.
                 let receipt = token.receipt();
-                let (prepared, storage) = preflight(
+                let (prepared, storage) = (if original {
+                    preflight_original
+                } else {
+                    preflight
+                })(
                     &token,
                     receipt,
                     closure,
