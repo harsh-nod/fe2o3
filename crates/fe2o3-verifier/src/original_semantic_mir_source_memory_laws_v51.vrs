@@ -60,15 +60,15 @@ proof fn invocation_source_typed_memory_invalid_array_element_refuses_v71(
 {
     hide(invocation_source_memory_layout_v51);
     hide(invocation_source_memory_value_valid_v51);
-    if invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian) {
-        assert forall|element_index: int| 0 <= element_index < count implies
-            #[trigger] invocation_source_memory_value_valid_v51(source,
-                MemoryPointerV30 { byte_offset: pointer.byte_offset + element_index * stride, ..pointer },
-                element, (fuel - 1) as nat, little_endian) by {
-            reveal_with_fuel(invocation_source_memory_value_valid_v51, 2);
-        }
+    if forall|element_index: int| 0 <= element_index < count ==>
+        #[trigger] invocation_source_memory_value_valid_v51(source,
+            MemoryPointerV30 { byte_offset: pointer.byte_offset + element_index * stride, ..pointer },
+            element, (fuel - 1) as nat, little_endian) {
         assert(invocation_source_memory_value_valid_v51(source,
             MemoryPointerV30 { byte_offset: pointer.byte_offset + index * stride, ..pointer },
             element, (fuel - 1) as nat, little_endian));
+    }
+    assert(!invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian)) by {
+        reveal_with_fuel(invocation_source_memory_value_valid_v51, 1);
     }
 }
