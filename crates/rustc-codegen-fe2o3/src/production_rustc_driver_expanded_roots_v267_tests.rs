@@ -1,6 +1,11 @@
 //! One ordinary source owner and one expansion retain the complete root module.
 use super::*;
-use fe2o3_kernel_ir::OperationKind;
+use fe2o3_lower_mir_kernel::{
+    ProductionSourceCorrespondenceV18, ProductionSourceOperationV18, ProductionSourceOwnedViewV18,
+};
+use fe2o3_mir_model::semantic_mir_v1::{
+    SemanticBlockIdV1, SemanticFunctionIdV1, SemanticScalarTypeV1, SemanticTypeShapeV1,
+};
 
 const ROOTS_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_roots_tests::expanded_roots_child";
 
@@ -11,7 +16,8 @@ struct RootsObservation {
     expanded: [u8; 32],
     roots: usize,
     selected: usize,
-    helpers: usize,
+    helper_instances: [usize; 2],
+    helper_mapped_operations: [usize; 2],
     collected_tile_calls: [u64; 3],
 }
 
@@ -24,6 +30,121 @@ enum RootsOutcome {
 #[derive(Default)]
 struct RootsCallbacks {
     result: Option<Result<RootsOutcome, String>>,
+}
+
+fn original_helper_instances(
+    source: &ProductionSourceOwnedViewV18<'_>,
+    original: &ProductionSourceCorrespondenceV18<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<([usize; 2], [usize; 2]), SourceError> {
+    let semantic = source.source_semantic(budget)?;
+    assert_ne!(source.root(0, budget)?.0, source.root(1, budget)?.0);
+    assert_ne!(source.root(0, budget)?.1, source.root(1, budget)?.1);
+    assert!(semantic.functions().len() < 256);
+    let u32_type = |ty: fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdV1| {
+        matches!(
+            semantic.types()[ty.index() as usize].shape(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                signed: false,
+                bits: 32
+            })
+        )
+    };
+    let mut selected = None;
+    for (index, function) in semantic.functions().iter().enumerate() {
+        let signature = function.abi().source_signature();
+        if function.kernel_entry().is_some()
+            || signature.inputs().len() != 1
+            || !u32_type(signature.inputs()[0])
+            || !u32_type(signature.output())
+        {
+            continue;
+        }
+        let function_id = SemanticFunctionIdV1::from_index(index.try_into().unwrap());
+        let mut instances = [None; 2];
+        for (root, found) in instances.iter_mut().enumerate() {
+            let count = source.instance_count(root, budget)?;
+            assert!(count < 256);
+            for instance in 0..count {
+                if source.instance(root, instance, budget)?.0 == function_id
+                    && source.instance_active(root, instance, budget)?
+                {
+                    assert!(
+                        found.replace(instance).is_none(),
+                        "one helper call per root"
+                    );
+                }
+            }
+        }
+        if let [Some(first), Some(second)] = instances {
+            assert!(
+                selected.replace((function_id, [first, second])).is_none(),
+                "unique genuine shared u32 helper"
+            );
+        }
+    }
+    let (helper, instances) = selected.expect("shared original helper remains represented");
+    let function = &semantic.functions()[helper.index() as usize];
+    assert!(!function.blocks().is_empty());
+    assert!(function.blocks().len() < 256);
+    let canonical = source.canonical(budget)?;
+    let mut mapped_operations = [0; 2];
+    for (root, instance) in instances.into_iter().enumerate() {
+        let (actual, incoming) = source.instance(root, instance, budget)?;
+        assert_eq!(actual, helper);
+        let (caller, call_block) = incoming.expect("helper has an authentic caller");
+        assert_eq!(
+            source.instance(root, caller, budget)?.0,
+            source.root(root, budget)?.0
+        );
+        assert_eq!(
+            original.defined_call_instance(root, caller, call_block, budget)?,
+            instance
+        );
+        assert!(source.invocation_entry(root, instance, budget)?.is_some());
+        let root_function = source.root(root, budget)?.1;
+        for (block, source_block) in function.blocks().iter().enumerate() {
+            assert!(source_block.statements().len() < 512);
+            let block = SemanticBlockIdV1::from_index(block.try_into().unwrap());
+            for statement in (0..source_block.statements().len())
+                .map(|i| Some(i as u32))
+                .chain(std::iter::once(None))
+            {
+                original.visit_source_operations(
+                    root,
+                    instance,
+                    block,
+                    statement,
+                    budget,
+                    |operation, budget| {
+                        budget.charge_work(1)?;
+                        if let ProductionSourceOperationV18::Operation(coordinate) = operation {
+                            assert_eq!(coordinate.block.function.0 as usize, root_function);
+                            let body = canonical.module().functions[root_function]
+                                .body
+                                .as_ref()
+                                .unwrap();
+                            assert!(
+                                body.blocks[coordinate.block.block as usize]
+                                    .operations
+                                    .get(coordinate.operation as usize)
+                                    .is_some()
+                            );
+                            mapped_operations[root] += 1;
+                        }
+                        Ok(())
+                    },
+                )?;
+            }
+        }
+        assert!(
+            mapped_operations[root] > 0,
+            "helper has genuine flattened operations"
+        );
+    }
+    // Numeric instance ordinals are root-local; the two distinct root owners
+    // above qualify their separate instances of one original helper identity.
+    Ok((instances, mapped_operations))
 }
 
 impl Callbacks for RootsCallbacks {
@@ -82,7 +203,6 @@ impl Callbacks for RootsCallbacks {
                         }
                     }
                     assert_eq!(selected, selections.len());
-                    let mut helpers = 0;
                     for (index, function) in input.functions().iter().enumerate() {
                         assert_eq!(output.module().functions[index].id, function.function.id);
                         if !selections
@@ -91,51 +211,10 @@ impl Callbacks for RootsCallbacks {
                         {
                             assert_eq!(&output.module().functions[index], function.function);
                         }
-                        if function.function.role != fe2o3_kernel_ir::FunctionRole::KernelEntry
-                            && function.function.body.is_some()
-                        {
-                            let calls_to_helper = |caller: &fe2o3_kernel_ir::Function| {
-                                caller
-                                    .body
-                                    .as_ref()
-                                    .into_iter()
-                                    .flat_map(|body| &body.blocks)
-                                    .flat_map(|block| &block.operations)
-                                    .filter(|operation| {
-                                        matches!(&operation.kind,
-                                        OperationKind::Call { callee, .. }
-                                        if callee == &function.function.id)
-                                    })
-                                    .count()
-                            };
-                            // Canonical helper identifiers are hashes, not Rust names.
-                            // Select the genuine shared callee through every root's CFG.
-                            let mut called_by_every_root = true;
-                            for root in 0..roots.len() {
-                                let cfg = neutral.output_root_cfg_v18(root, budget)?;
-                                called_by_every_root &=
-                                    calls_to_helper(cfg.function().function) > 0;
-                            }
-                            if !called_by_every_root {
-                                continue;
-                            }
-                            helpers += 1;
-                            for (before, after) in input
-                                .owner()
-                                .module()
-                                .functions
-                                .iter()
-                                .zip(&output.module().functions)
-                            {
-                                assert_eq!(calls_to_helper(before), calls_to_helper(after));
-                            }
-                        }
                     }
                     budget.release_storage(cfg_header)?;
-                    assert_eq!(
-                        helpers, 1,
-                        "the shared scalar helper is retained exactly once"
-                    );
+                    let (helper_instances, helper_mapped_operations) =
+                        original_helper_instances(source, original, budget)?;
                     assert!(!tile.grants_artifact_or_launch_authority());
                     let observation = RootsObservation {
                         original: *source.canonical(budget)?.identity().digest(),
@@ -143,7 +222,8 @@ impl Callbacks for RootsCallbacks {
                         expanded: *output.identity().digest(),
                         roots: roots.len(),
                         selected,
-                        helpers,
+                        helper_instances,
+                        helper_mapped_operations,
                         collected_tile_calls,
                     };
                     tile.replay(budget)?;
@@ -265,7 +345,12 @@ pub(super) fn run_actual_root_matrix() {
                 panic!("supported roots refused: {label}");
             };
             assert_eq!(observation.roots, 2);
-            assert!(observation.helpers > 0);
+            assert!(
+                observation
+                    .helper_mapped_operations
+                    .into_iter()
+                    .all(|n| n > 0)
+            );
             assert_eq!(
                 observation.selected,
                 match label {
