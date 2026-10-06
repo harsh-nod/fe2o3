@@ -171,6 +171,9 @@ pub(super) struct LinuxCpuMapping {
 }
 
 #[cfg(feature = "engineering-gfx950")]
+#[path = "memory_linux_combined_mlp_state_v1.rs"]
+mod combined_mlp_state_v1;
+#[cfg(feature = "engineering-gfx950")]
 #[path = "memory_linux_wave_mlp_tiles_v2.rs"]
 mod wave_mlp_tiles_v2;
 #[cfg(feature = "engineering-gfx950")]

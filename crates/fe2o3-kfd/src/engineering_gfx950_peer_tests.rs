@@ -20,6 +20,7 @@ fn only_dependency_arena_presence_selects_queue_first_close() {
         BufferKind::WaveMlpTilesStateV2,
         BufferKind::WaveQkvAttentionOutputTilesStateV6,
         BufferKind::PeerDependencyArena,
+        BufferKind::CombinedMlpStateV1,
     ] {
         group.buffers.insert(
             1,
@@ -37,7 +38,10 @@ fn only_dependency_arena_presence_selects_queue_first_close() {
         );
         assert_eq!(
             group.has_peer_dependency_arena(),
-            kind == BufferKind::PeerDependencyArena
+            matches!(
+                kind,
+                BufferKind::PeerDependencyArena | BufferKind::CombinedMlpStateV1
+            )
         );
     }
     group.buffers.clear();

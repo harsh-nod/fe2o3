@@ -38,6 +38,13 @@ pub use wave_output_state_v5::Gfx950EngineeringPeerWaveOutputStateV5;
 #[path = "engineering_gfx950_peer_wave_mlp_state_v1.rs"]
 mod wave_mlp_state_v1;
 pub use wave_mlp_state_v1::Gfx950EngineeringPeerWaveMlpStateV1;
+#[path = "engineering_gfx950_peer_combined_mlp_state_v1.rs"]
+mod combined_mlp_state_v1;
+pub use combined_mlp_state_v1::paired::{
+    Gfx950EngineeringPeerGuardedMlpBankEntryV1, Gfx950EngineeringPeerGuardedMlpInputsV1,
+    Gfx950EngineeringPeerGuardedMlpObservationV1, Gfx950EngineeringPeerGuardedMlpRankInputsV1,
+    Gfx950EngineeringPeerRetainedGuardedMlpPairV1, Gfx950EngineeringPeerUnboundGuardedMlpPairV1,
+};
 #[path = "engineering_gfx950_peer_wave_mlp_tiles_state_v2.rs"]
 mod wave_mlp_tiles_state_v2;
 pub use wave_mlp_tiles_state_v2::Gfx950EngineeringPeerWaveMlpTilesStateV2;
@@ -238,6 +245,7 @@ impl PeerMapping {
 enum BufferKind {
     PublicVram,
     PeerDependencyArena,
+    CombinedMlpStateV1,
     WaveOutputStateV5,
     WaveMlpStateV1,
     WaveMlpTilesStateV2,
@@ -849,6 +857,7 @@ impl Gfx950EngineeringPeerGroupV1 {
         let mut fixups = Vec::with_capacity(pointers.len());
         for pointer in pointers {
             let record = self.validate_token(pointer.buffer)?;
+            combined_mlp_state_v1::validate_pointer(record, pointer, kernel.rank)?;
             require_peer_access(
                 pointer.buffer.owner,
                 kernel.rank,
@@ -900,9 +909,12 @@ impl Gfx950EngineeringPeerGroupV1 {
     }
 
     fn has_peer_dependency_arena(&self) -> bool {
-        self.buffers
-            .values()
-            .any(|record| record.kind == BufferKind::PeerDependencyArena)
+        self.buffers.values().any(|record| {
+            matches!(
+                record.kind,
+                BufferKind::PeerDependencyArena | BufferKind::CombinedMlpStateV1
+            )
+        })
     }
 
     fn close_peer_dependency_contexts(
@@ -915,7 +927,7 @@ impl Gfx950EngineeringPeerGroupV1 {
         })
     }
 
-    /// Dependency arenas require all queues destroyed before peer unmapping.
+    /// Dependency arenas and combined atomic owners require queue-first Close.
     /// Other groups retain the original peer-release then context-close order.
     pub fn close(&mut self) -> Result<()> {
         self.require_active()?;

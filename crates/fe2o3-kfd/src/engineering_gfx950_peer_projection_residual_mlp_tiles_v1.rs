@@ -96,7 +96,7 @@ fn deadline_check(now: Instant, deadline: Instant) -> Result<()> {
     Ok(())
 }
 
-fn validate_projection_metadata(m: &KernelMetadataV1, sha: [u8; 32]) -> Result<()> {
+pub(super) fn validate_projection_metadata(m: &KernelMetadataV1, sha: [u8; 32]) -> Result<()> {
     if sha == [0; 32]
         || m.object_sha256 != sha
         || m.symbol != PROJECTION_SYMBOL
@@ -139,7 +139,7 @@ fn validate_projection_metadata(m: &KernelMetadataV1, sha: [u8; 32]) -> Result<(
     Ok(())
 }
 
-fn projection_bytes() -> Vec<u8> {
+pub(super) fn projection_bytes() -> Vec<u8> {
     let mut bytes = vec![0; 424];
     for slot in [0usize, 1, 8, 9] {
         bytes[slot * 16 + 8..slot * 16 + 16].copy_from_slice(&4096u64.to_le_bytes());
