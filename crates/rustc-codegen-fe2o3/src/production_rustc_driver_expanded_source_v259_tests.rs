@@ -19,6 +19,63 @@ struct ExpandedCallbacks {
     result: Option<Result<ExpandedObservation, String>>,
 }
 
+#[derive(Default)]
+struct MultiRootCallbacks {
+    result: Option<Result<bool, String>>,
+}
+
+impl Callbacks for MultiRootCallbacks {
+    fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
+        self.result = Some((|| {
+            let transaction = transaction_in_active_session_v1(
+                tcx,
+                crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+            )?;
+            let mut work = Work::new(500_000_000);
+            let mut budget = Budget::new(&mut work, 20_000_000);
+            let mut calls = 0;
+            let refused = transaction.with_original_source_expanded_v259::<(), _>(
+                &mut budget,
+                |_, _, _, _, _, _| {
+                    calls += 1;
+                    Ok(((), 0))
+                },
+            );
+            assert_eq!(calls, 0);
+            match refused {
+                Err(SourceError::Unsupported(
+                    "expanded production selection requires one complete kernel root",
+                )) => Ok(true),
+                Err(error) => Err(format!(
+                    "multi-root refused at a different boundary: {error:?}"
+                )),
+                Ok(_) => Err("multi-root selection silently omitted a root".into()),
+            }
+        })());
+        Compilation::Stop
+    }
+}
+
+#[test]
+#[ignore = "process helper; requires an exact actual-source request from its parent"]
+fn expanded_multi_root_child() {
+    let Some(path) = env::var_os(ARGS) else {
+        return;
+    };
+    let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let mut callbacks = MultiRootCallbacks::default();
+    rustc_driver::run_compiler(&args, &mut callbacks);
+    let result = callbacks
+        .result
+        .expect("ordinary multi-root rustc callback");
+    std::fs::write(
+        env::var_os(RESULT).unwrap(),
+        serde_json::to_vec(&result).unwrap(),
+    )
+    .unwrap();
+    assert!(result.is_ok(), "expanded multi-root refusal: {result:?}");
+}
+
 impl Callbacks for ExpandedCallbacks {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.result = Some((|| {
@@ -70,6 +127,37 @@ impl Callbacks for ExpandedCallbacks {
             );
             assert!(refusal.is_err());
             assert_eq!(calls, 1, "the genuine owner must precede consumer refusal");
+            for (reserve, report, refund) in [(0, 1, false), (1, 0, false), (0, 0, true)] {
+                let mut work = Work::new(500_000_000);
+                let mut account = Budget::new(&mut work, 20_000_000);
+                let mut called = false;
+                let refused = transaction()?.with_original_source_expanded_v259::<(), _>(
+                    &mut account,
+                    |_, _, _, _, _, budget| {
+                        called = true;
+                        if refund {
+                            budget.release_storage(1)?;
+                        } else {
+                            budget.reserve_storage(reserve)?;
+                        }
+                        Ok(((), report))
+                    },
+                );
+                assert!(called);
+                assert!(refused.is_err(), "misreported or refunded owner credit");
+            }
+            let mut work = Work::new(500_000_000);
+            let mut account = Budget::new(&mut work, 20_000_000);
+            let transaction = transaction()?;
+            let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                transaction.with_original_source_expanded_v259::<(), _>(
+                    &mut account,
+                    |_, _, _, _, _, _| std::panic::panic_any(259usize),
+                )
+            }))
+            .err()
+            .expect("expanded consumer unwind must propagate");
+            assert_eq!(*panic.downcast::<usize>().unwrap(), 259);
             observation.refused_consumer = true;
             Ok(observation)
         })());
@@ -129,5 +217,21 @@ pub fn expanded_probe(mut ctx: KernelContext<'_>, input: &[u32], base: u64) {
                 observations.insert(label.to_owned(), observation);
             }
         },
+    );
+    run_actual_sources::<bool>(
+        &[("multiple", "")],
+        &[(0, 0)],
+        &CHILD.replace("expanded_source_child", "expanded_multi_root_child"),
+        "EXPANDED_MULTI_ROOT_V259",
+        |_| {
+            r#"use fe2o3_device::{kernel, KernelContext};
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn first(_ctx: KernelContext<'_>, _seed: u32) {}
+#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]
+pub fn second(_ctx: KernelContext<'_>, _seed: u32) {}
+"#
+            .to_owned()
+        },
+        |_, _, _, refused, _| assert!(refused),
     );
 }
