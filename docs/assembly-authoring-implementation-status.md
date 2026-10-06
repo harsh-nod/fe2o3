@@ -11,6 +11,40 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Worker loader and debugger containment checkpoint — 2026-10-06
+
+The retained direct Worker outputs passed a separate read-only reconciliation:
+all five dependency lists, the correct generated-header owner, exact compile
+and link commands, 71 SDK archives, and the complete linker map were checked.
+Inputs and all 94 generated outputs passed full content/identity checks before
+and after this new interval. Twenty reconciliation controls passed. This does
+not restore the missing postflight of the earlier failed build check.
+
+The Worker ELF also passed readelf inspection and two ordered loader-resolution
+observations, with seven required libraries and the same resolved paths.
+Thirty-four loader controls passed, including the actual interpreter-basename
+regression. The first loader check's refusal remains preserved. No Worker main
+function or protocol session ran; sealed execution, process containment and
+ordinary frontend integration remain pending. Independent reviews accepted
+both the new reconciliation and the loader-only evidence.
+
+Debugger preparation advanced through 37 census controls, 20 data-binding
+controls, 15 scope-rendering controls, 36 Rust containment-owner tests, 23
+currentness controls and 16 unbound-wrapper controls. The owner built and its
+32 runtime modules were deployed. The complete currentness check read all
+684 selected files (420,200,555 content bytes) within the unchanged 512 MiB
+and 16,384-operation limits. Native input coverage remains 631 rows; no source
+or historical evidence was dropped to fit that ceiling.
+
+The wrapper is still deliberately unbound to a native deadline. Its passing
+unbound tests are not tests of a launchable wrapper. Fresh host/source/provider
+checks, a separately bound wrapper and a one-use native attempt remain next.
+The original CPU window and all failed generations are preserved; a distinct
+CPU-only continuation window does not grant native execution authority.
+
+No milestone or tutorial exit is newly accepted:
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**.
+
 ## Fresh debugger startup and retained Worker build — 2026-10-06
 
 The rebuilt private debugger passed its ELF/runtime-closure checks and a fresh
