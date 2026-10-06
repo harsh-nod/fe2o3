@@ -288,6 +288,12 @@ fn publication_artifact(output: &Path) -> PathBuf {
 fn exact_publication_retry_and_restart_recovery_are_idempotent_and_inert() {
     let state = setup(1);
     let first = state.publish_readiness();
+    assert!(
+        first.retained_rust_storage().unwrap()
+            >= std::mem::size_of_val(&first)
+                + first.exact_envelope_bytes().len()
+                + first.envelope_path().as_os_str().len()
+    );
     assert_eq!(first.outcome(), WorkerV3LoadReadinessOutcomeV1::Published);
     assert_eq!(fs::read(first.envelope_path()).unwrap(), state.envelope);
     assert!(!first.authenticates_descriptor_source());
@@ -300,6 +306,12 @@ fn exact_publication_retry_and_restart_recovery_are_idempotent_and_inert() {
     assert_eq!(retry.outcome(), WorkerV3LoadReadinessOutcomeV1::Recovered);
     assert_eq!(retry.receipt(), first.receipt());
     let recovered = recover_worker_v3_load_readiness_v1(&state.output(), &state.claim).unwrap();
+    assert!(
+        recovered.retained_rust_storage().unwrap()
+            >= std::mem::size_of_val(&recovered)
+                + recovered.exact_envelope_bytes().len()
+                + recovered.envelope_path().as_os_str().len()
+    );
     assert_eq!(recovered.receipt(), first.receipt());
     let reconstructed = recover_published_hsaco_claim_for_attempt_v3(
         &state.output(),

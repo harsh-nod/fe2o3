@@ -1311,6 +1311,9 @@
   "crates/fe2o3-protected-service-spawn/tests/fixtures/runtime-checkpoint-v1.rs": {
     "block": 3
   },
+  "crates/fe2o3-runtime-protocol/src/conditional_worker_readiness.rs": {
+    "block": 1
+  },
   "crates/fe2o3-runtime-protocol/src/worker_v3_load_envelope.rs": {
     "block": 1
   },
