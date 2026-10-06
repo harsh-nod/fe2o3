@@ -27,7 +27,9 @@ use fe2o3_kernel_descriptor::{
 
 mod compiler_ffi_bridge;
 mod compiler_ffi_observation;
+mod conditional_native_continuation_allowance_v1;
 mod conditional_worker_finalization;
+pub use conditional_native_continuation_allowance_v1::NativeConditionalContinuationAllowanceV1;
 mod conditional_worker_operation_quote;
 pub use conditional_worker_operation_quote::ConditionalWorkerOperationQuoteV5;
 mod conditional_worker_replay;
