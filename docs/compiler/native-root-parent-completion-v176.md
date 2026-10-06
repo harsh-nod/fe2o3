@@ -68,12 +68,31 @@ required before activation.
 
 ## Remaining Integration
 
-The wrapper now exposes the consuming continuation, but its selected callback
-still refuses until the authenticated recipe, independent runtime approval,
-complete downstream resource schedule and terminal artifact flow are wired and
-qualified. The default profile selection has not changed. Original-root RPC
-dispatch, ordinary compiler failure handling and complete native end-to-end
-qualification remain separate gates.
+The fresh native wrapper callback now reconstructs the admitted build recipe,
+checks independent runtime approval, and consumes the original-account V5
+continuation through finalization, durable publication and attempt completion.
+Legacy recovery receipts cannot enter that callback. This wiring still requires
+complete joined qualification; the default profile selection has not changed.
+
+The wrapper creates its request account once, before receiving its native client
+profile. Its initial ceiling combines the existing intake/preparation quotes
+with one `NativeConditionalContinuationAllowanceV1`. The continuation shares
+the existing canonical-phase values of 2^54 logical work units and 2 GiB logical
+storage across all roots, source/F replay, Worker, finalization, publication and
+readiness. The original compiler process retains its separate TARGET and SOURCE
+accounts; this wrapper account does not replace them.
+
+The allowance is a fixed exhaustion policy, not a worst-case cost proof or a
+guarantee that every accepted wire format fits. It is never replenished at phase
+boundaries. Existing narrower storage windows, input limits, Worker limits and
+the protected-proof timeout remain unchanged. Exhaustion refuses the transaction
+without a fresh-budget retry, unverified result or fallback. Logical storage
+does not measure allocator capacity or process RSS.
+
+The backend's native startup admission can consume the loader's owned descriptor
+copies without consuming the caller's original slots. The installed driver
+still requires a coordinated native switch, general source/target refinement,
+and admitted native end-to-end qualification before default activation.
 
 The late-custody component fixture exercised real task birth/exit, an installed
 late payload, three cleanup pumps before release, and explicit final cleanup.
