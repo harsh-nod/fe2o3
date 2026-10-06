@@ -48,6 +48,11 @@ mod ordered_composition_publish_v1;
     feature = "physical-lds-exchange-foreign-input-v22",
     feature = "physical-lds-exchange-foreign-marker-v22",
     feature = "physical-lds-exchange-mixed-marker-v22",
+    feature = "physical-lds-exchange-wrong-vm-wait-v22",
+    feature = "physical-lds-exchange-wrong-write-wait-v22",
+    feature = "physical-lds-exchange-wrong-publication-v22",
+    feature = "physical-lds-exchange-wrong-read-wait-v22",
+    feature = "physical-lds-exchange-masked-barrier-v22",
 ))]
 mod physical_lds_exchange_v22;
 
@@ -277,6 +282,11 @@ mod physical_entry_v20;
     feature = "physical-lds-exchange-foreign-input-v22",
     feature = "physical-lds-exchange-foreign-marker-v22",
     feature = "physical-lds-exchange-mixed-marker-v22",
+    feature = "physical-lds-exchange-wrong-vm-wait-v22",
+    feature = "physical-lds-exchange-wrong-write-wait-v22",
+    feature = "physical-lds-exchange-wrong-publication-v22",
+    feature = "physical-lds-exchange-wrong-read-wait-v22",
+    feature = "physical-lds-exchange-masked-barrier-v22",
     feature = "physical-global-copy-one-v21",
     feature = "physical-global-copy-registers-v21",
     feature = "physical-global-copy-wrong-launch-v21",

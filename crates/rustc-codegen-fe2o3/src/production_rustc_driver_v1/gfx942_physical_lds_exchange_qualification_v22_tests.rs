@@ -60,6 +60,17 @@ const FEATURES: [&str; 19] = [
     "physical-lds-exchange-mixed-marker-v22",
 ];
 
+// Separate stronger source ladder; the original nineteen-case ladder is unchanged.
+const HAZARD_FEATURES: [&str; 7] = [
+    "physical-lds-exchange-one-v22",
+    "physical-lds-exchange-registers-v22",
+    "physical-lds-exchange-wrong-vm-wait-v22",
+    "physical-lds-exchange-wrong-write-wait-v22",
+    "physical-lds-exchange-wrong-publication-v22",
+    "physical-lds-exchange-wrong-read-wait-v22",
+    "physical-lds-exchange-masked-barrier-v22",
+];
+
 fn fixture() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/production-extraction-device")
@@ -112,8 +123,7 @@ fn require_current_source() {
 }
 
 fn checked_feature(feature: &str) -> Result<(), &'static str> {
-    FEATURES
-        .contains(&feature)
+    (FEATURES.contains(&feature) || HAZARD_FEATURES.contains(&feature))
         .then_some(())
         .ok_or("unknown or combined physical-lds-exchange feature")
 }
@@ -168,12 +178,27 @@ fn rejection_fragment(feature: &str) -> Result<&'static str, &'static str> {
             Ok("physical-lds-exchange requires exact static_u32_frame(0,512,4,1)")
         }
         // These intentionally remove a row. The actual block has31 operations,
-        // so the block-size check precedes the declaration native-count check
-        // and instruction-state checks. Same-count readiness mutants are unit tests.
+        // so the block-size check precedes later instruction-state checks.
+        // HAZARD_FEATURES separately exercises same-count actual source refusals.
         "physical-lds-exchange-missing-write-wait-v22"
         | "physical-lds-exchange-missing-barrier-v22"
         | "physical-lds-exchange-missing-read-wait-v22"
         | "physical-lds-exchange-missing-vm-v22" => Ok("LDS exchange block/operation bounds"),
+        "physical-lds-exchange-wrong-vm-wait-v22" => {
+            Ok("LDS exchange global load requires immediate VM wait")
+        }
+        "physical-lds-exchange-wrong-write-wait-v22" => {
+            Ok("LDS exchange issue requires immediate LGKM wait")
+        }
+        "physical-lds-exchange-wrong-publication-v22" => {
+            Ok("LDS exchange waited write requires immediate publication")
+        }
+        "physical-lds-exchange-wrong-read-wait-v22" => {
+            Ok("LDS exchange issue requires immediate LGKM wait")
+        }
+        "physical-lds-exchange-masked-barrier-v22" => {
+            Ok("LDS exchange masked suffix requires store")
+        }
         "physical-lds-exchange-wrong-peer-v22" => Ok("LDS exchange xor64 actual localX"),
         "physical-lds-exchange-wrong-lds-address-v22" => Ok("LDS exchange local write offset"),
         "physical-lds-exchange-wrong-store-v22" => {
@@ -351,6 +376,17 @@ fn actual_physical_lds_exchange_source_child() {
 #[test]
 #[ignore = "pinned-nightly real-source ladder; serialize Cargo and provide a fresh absolute output directory"]
 fn actual_physical_lds_exchange_source_ladder() {
+    run_source_ladder(&FEATURES);
+}
+
+#[test]
+#[ignore = "pinned-nightly same-count source hazards; serialize Cargo and use a fresh absolute output directory"]
+fn actual_physical_lds_exchange_source_hazard_ladder() {
+    run_source_ladder(&HAZARD_FEATURES);
+}
+
+fn run_source_ladder(features: &[&str]) {
+    assert!(features == FEATURES.as_slice() || features == HAZARD_FEATURES.as_slice());
     let started = std::time::Instant::now();
     let directory = PathBuf::from(
         std::env::var_os(OUTPUT_ENV).expect("set a fresh task-owned output directory"),
@@ -407,7 +443,7 @@ fn actual_physical_lds_exchange_source_ladder() {
       &directory, "dependencies", Some(&target));
     fs::create_dir(directory.join("analysis-output")).unwrap();
     let mut observations = Vec::new();
-    for feature in FEATURES {
+    for &feature in features {
         let record = derive_record(&directory, feature);
         fs::write(
             directory.join(format!("{feature}.invocation.json")),
@@ -488,14 +524,14 @@ fn actual_physical_lds_exchange_source_ladder() {
         }
     }
     require_current_source();
-    assert_eq!(observations.len(), 38);
+    assert_eq!(observations.len(), features.len() * MODES.len());
     timely(started.elapsed(), 1200).unwrap();
     fs::write(
         directory.join("observation.json"),
         serde_json::to_vec_pretty(&json!({
             "schema": "fe2o3-test-source-physical-lds-exchange-ladder-v22", "observations": observations,
             "public_driver_output_relation": "exact_bytes_same_current_source",
-            "cpu_positive_cases": 64, "cpu_observed_barrier_cases": 2, "cpu_exact_negative_cases": 12, "exact_negative_runs": 34,
+            "cpu_positive_cases": 64, "cpu_observed_barrier_cases": 2, "cpu_exact_negative_cases": 12, "exact_negative_runs": (features.len() - 2) * MODES.len(),
             "ranked_formal_descriptor_continuation": "unavailable; pre-ranked diagnostics only",
             "protected_finalizer_admitted": false, "native_llvm_executed": false,
             "grants_artifact_or_launch_authority": false, "hardware_observed": false,
@@ -591,4 +627,141 @@ fn physical_lds_exchange_foreign_input_requires_actual_root_transport_rejection(
     ] {
         assert!(expected_rejection(feature, other).is_err());
     }
+}
+
+#[test]
+fn physical_lds_exchange_hazard_ladder_preserves_the_original_case_roster() {
+    assert_eq!(FEATURES.len(), 19);
+    assert_eq!(HAZARD_FEATURES.len(), 7);
+    assert_eq!(&HAZARD_FEATURES[..2], &FEATURES[..2]);
+    for feature in &HAZARD_FEATURES[2..] {
+        assert!(!FEATURES.contains(feature));
+        checked_feature(feature).unwrap();
+        assert!(checked_feature(&format!("{feature},{}", FEATURES[0])).is_err());
+    }
+}
+
+fn source_native_rows(feature: &str) -> Vec<&'static str> {
+    // Test-only bounded inspection of the actual compiled source fixture.
+    let source = include_str!(
+        "../../tests/fixtures/production-extraction-device/src/physical_lds_exchange_v22.rs"
+    );
+    assert!(source.len() <= 64 * 1024);
+    let marker = format!("#[cfg(feature = \"{feature}\")]");
+    let (_, tail) = source.split_once(&marker).expect("exact source case");
+    let body = tail.split("\n#[cfg(").next().unwrap();
+    body.lines()
+        .map(str::trim)
+        .filter(|line| {
+            ["s_", "v_", "global_", "ds_"]
+                .iter()
+                .any(|prefix| line.starts_with(prefix))
+        })
+        .collect()
+}
+
+#[test]
+fn physical_lds_exchange_same_count_hazards_change_one_actual_instruction() {
+    let positive = source_native_rows(FEATURES[0]);
+    assert_eq!(positive.len(), 32);
+    for (feature, at, before, after) in [
+        (
+            HAZARD_FEATURES[2],
+            13,
+            "s_waitcnt_vmcnt0();",
+            "s_waitcnt_lgkmcnt0();",
+        ),
+        (
+            HAZARD_FEATURES[3],
+            16,
+            "s_waitcnt_lgkmcnt0();",
+            "s_waitcnt_vmcnt0();",
+        ),
+        (
+            HAZARD_FEATURES[4],
+            17,
+            "s_barrier();",
+            "s_waitcnt_lgkmcnt0();",
+        ),
+        (
+            HAZARD_FEATURES[5],
+            21,
+            "s_waitcnt_lgkmcnt0();",
+            "s_waitcnt_vmcnt0();",
+        ),
+        (
+            HAZARD_FEATURES[6],
+            28,
+            "global_store_dword(v_pair(10), v(18));",
+            "s_barrier();",
+        ),
+    ] {
+        let rows = source_native_rows(feature);
+        assert_eq!(rows.len(), 32, "{feature}");
+        assert_eq!(positive[at], before);
+        assert_eq!(rows[at], after);
+        assert_eq!(
+            positive.iter().zip(&rows).filter(|(a, b)| a != b).count(),
+            1,
+            "{feature}"
+        );
+    }
+}
+
+#[test]
+fn physical_lds_exchange_original_removed_row_cases_stay_separate() {
+    for feature in [
+        "physical-lds-exchange-missing-write-wait-v22",
+        "physical-lds-exchange-missing-barrier-v22",
+        "physical-lds-exchange-missing-read-wait-v22",
+        "physical-lds-exchange-missing-vm-v22",
+    ] {
+        assert_eq!(source_native_rows(feature).len(), 31);
+        assert_eq!(
+            rejection_fragment(feature).unwrap(),
+            "LDS exchange block/operation bounds"
+        );
+    }
+}
+
+#[test]
+fn physical_lds_exchange_same_count_refusals_require_the_semantic_boundary() {
+    for feature in &HAZARD_FEATURES[2..] {
+        let expected = rejection_fragment(feature).unwrap();
+        expected_rejection(feature, &format!("canonical: {expected}")).unwrap();
+        for wrong in [
+            "LDS exchange block/operation bounds",
+            "LDS exchange exact initial32 native rows",
+            "generic unsupported KIR operation",
+            "actual compiler process failed",
+        ] {
+            assert!(
+                expected_rejection(feature, wrong).is_err(),
+                "{feature}: {wrong}"
+            );
+        }
+        for other in &HAZARD_FEATURES[2..] {
+            let wrong = rejection_fragment(other).unwrap();
+            if wrong != expected {
+                assert!(expected_rejection(feature, wrong).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn physical_lds_exchange_masked_barrier_is_an_explicit_bounded_suffix_refusal() {
+    let rows = source_native_rows(HAZARD_FEATURES[6]);
+    assert_eq!(rows[17], "s_barrier();"); // Earlier full-participation publication remains.
+    assert_eq!(rows[26], "v_cmp_gt_u64_e32(s_pair(14), v_pair(2));");
+    assert_eq!(rows[27], "s_and_saveexec_b64(s_pair(18));");
+    assert_eq!(rows[28], "s_barrier();"); // A second barrier in the masked output suffix.
+    assert_eq!(rows.iter().filter(|row| **row == "s_barrier();").count(), 2);
+    assert_eq!(
+        rejection_fragment(HAZARD_FEATURES[6]).unwrap(),
+        "LDS exchange masked suffix requires store"
+    );
+    assert!(
+        expected_rejection(HAZARD_FEATURES[6], "LDS exchange vector requires full EXEC").is_err()
+    );
 }

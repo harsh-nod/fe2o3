@@ -14,7 +14,8 @@ exports source custody, or authorizes a launch.
 ## Source shape
 
 The [complete fixture](../crates/rustc-codegen-fe2o3/tests/fixtures/production-extraction-device/src/physical_lds_exchange_v22.rs)
-contains two positive physical-register layouts and seventeen negative controls.
+contains two positive physical-register layouts, the original seventeen negative
+controls and five additional same-count source hazard controls.
 The root has exactly these logical arguments and a finite authored launch:
 
 ```rust
@@ -104,7 +105,31 @@ does not satisfy the control.
 
 The removed-row examples currently fail the earlier block/operation-count
 boundary. They do not pretend to isolate the later readiness check; separate
-same-count canonical/formal mutations test those relations. The foreign-input
+same-count canonical/formal mutations test those relations. The new test-only
+same-count source ladder retains all nineteen original cases and adds a separate
+seven-case selection (the two positives plus five hazards):
+
+| New fixture suffix | Single instruction substitution | Required refusal |
+| --- | --- | --- |
+| wrong-vm-wait | global-load VM wait becomes LGKM wait | global load requires immediate VM wait |
+| wrong-write-wait | LDS-write LGKM wait becomes VM wait | issue requires immediate LGKM wait |
+| wrong-publication | full-participation barrier becomes another LGKM wait | waited write requires immediate publication |
+| wrong-read-wait | LDS-read LGKM wait becomes VM wait | issue requires immediate LGKM wait |
+| masked-barrier | masked output store becomes a second barrier | masked suffix requires store |
+
+Every new case retains32 authored native instructions. The last case retains
+the earlier full-participation publication and rejects a second barrier after
+the output-length-dependent EXEC mask. It is a bounded masked-suffix refusal,
+not qualification of arbitrary divergent control flow or a runtime deadlock.
+These names are test fixtures, not additional public-wrapper commands. Run the
+ignored actual_physical_lds_exchange_source_hazard_ladder selector in the
+existing qualification test module after rebuilding the fixture-owning backend.
+It uses the original300-second child and1200-second whole-ladder limits, two
+real-source modes per case, source/dependency pre/post checks, and fresh output.
+Pure source-shape/error controls do not substitute for that actual execution.
+No result for these new cases is claimed until the root-owned gate passes.
+
+The foreign-input
 fixture uses a fixed foreign constant slice and fails actual root-argument
 transport, not a reachable slice-bounds panic.
 
