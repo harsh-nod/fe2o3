@@ -324,6 +324,154 @@ fn nested_refusal_controls(
     Ok(())
 }
 
+// Refusal-only diagnostics. This does not participate in acceptance or source
+// authority and never writes an observation artifact.
+const NESTED_REFUSAL_DIAGNOSTIC_CAP: usize = 4096;
+#[derive(serde::Serialize)]
+struct NestedExpectedInterval {
+    availability: &'static str,
+    byte_start: usize,
+    byte_end: usize,
+    line_start: u64,
+    column_start: u64,
+    line_end: u64,
+    column_end: u64,
+}
+#[derive(serde::Serialize)]
+struct NestedIntervalDiagnostic<'a> {
+    label: &'static str,
+    source: &'static str,
+    expected: NestedExpectedInterval,
+    observed: &'a Value,
+}
+#[derive(serde::Serialize)]
+struct NestedRefusalDiagnostic<'a> {
+    schema: &'static str,
+    refused: bool,
+    reason: &'a str,
+    file_identity_constraint: &'static str,
+    intervals: [NestedIntervalDiagnostic<'a>; 5],
+}
+struct NestedDiagnosticWriter {
+    bytes: [u8; NESTED_REFUSAL_DIAGNOSTIC_CAP],
+    len: usize,
+}
+impl std::io::Write for NestedDiagnosticWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.bytes.len().saturating_sub(self.len) {
+            return Err(std::io::Error::other("nested refusal diagnostic bound"));
+        }
+        self.bytes[self.len..self.len + bytes.len()].copy_from_slice(bytes);
+        self.len += bytes.len();
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+fn nested_interval_diagnostic<'a>(
+    label: &'static str,
+    source_name: &'static str,
+    source: &[u8],
+    range: (usize, usize),
+    observed: &'a Value,
+) -> Result<NestedIntervalDiagnostic<'a>, &'static str> {
+    let (line_start, column_start) = coordinate(source, range.0)?;
+    let (line_end, column_end) = coordinate(source, range.1)?;
+    Ok(NestedIntervalDiagnostic {
+        label,
+        source: source_name,
+        expected: NestedExpectedInterval {
+            availability: "available",
+            byte_start: range.0,
+            byte_end: range.1,
+            line_start,
+            column_start,
+            line_end,
+            column_end,
+        },
+        observed,
+    })
+}
+fn nested_refusal_diagnostic(
+    reason: &str,
+    frames: &Value,
+    source: &[u8],
+) -> Result<String, &'static str> {
+    let rows = frames["frames"].as_array().ok_or("macro frame array")?;
+    if rows.len() != 2 {
+        return Err("nested diagnostic frame count");
+    }
+    let [inner, outer, wrapper, device] = nested_ranges(source)?;
+    let diagnostic = NestedRefusalDiagnostic {
+        schema: "fe2o3-refused-nested-macro-intervals-v1",
+        refused: true,
+        reason,
+        // Expected file identities are not invented from source text. Existing
+        // digest shape, actual origin and cross-frame identity joins stay exact.
+        file_identity_constraint: "32-byte digest; unchanged actual-origin and cross-frame joins",
+        intervals: [
+            nested_interval_diagnostic(
+                "frame0.call_site",
+                "fixture",
+                source,
+                inner,
+                &rows[0]["call_site"],
+            )?,
+            nested_interval_diagnostic(
+                "frame1.call_site",
+                "fixture",
+                source,
+                outer,
+                &rows[1]["call_site"],
+            )?,
+            nested_interval_diagnostic(
+                "frame1.definition_site",
+                "fixture",
+                source,
+                wrapper,
+                &rows[1]["definition_site"],
+            )?,
+            nested_interval_diagnostic(
+                "frame0.definition_site",
+                "device_macro",
+                DEVICE_MACRO_SOURCE,
+                device,
+                &rows[0]["definition_site"],
+            )?,
+            nested_interval_diagnostic(
+                "frame1.expansion",
+                "fixture",
+                source,
+                inner,
+                &rows[1]["expansion"],
+            )?,
+        ],
+    };
+    let mut out = NestedDiagnosticWriter {
+        bytes: [0; NESTED_REFUSAL_DIAGNOSTIC_CAP],
+        len: 0,
+    };
+    // Serialize borrowed observed objects directly into fixed storage: even
+    // malformed inert inputs cannot allocate a copied unbounded report.
+    serde_json::to_writer(&mut out, &diagnostic).map_err(|_| "nested refusal diagnostic bound")?;
+    let text =
+        std::str::from_utf8(&out.bytes[..out.len]).map_err(|_| "nested refusal diagnostic UTF8")?;
+    Ok(text.to_owned())
+}
+fn macro_refusal_detail(
+    case: FixtureCase,
+    reason: &'static str,
+    frames: &Value,
+    source: &[u8],
+) -> String {
+    if matches!(case, FixtureCase::Nested) {
+        nested_refusal_diagnostic(reason, frames, source).unwrap_or_else(|_| reason.to_owned())
+    } else {
+        reason.to_owned()
+    }
+}
+
 struct MacroCallbacks<'a> {
     baseline: &'a [u8],
     source: &'a [u8],
@@ -355,7 +503,9 @@ impl Callbacks for MacroCallbacks<'_> {
                 serde_json::from_slice(&origin_bytes).map_err(|_| "macro origin JSON")?;
             let frames: Value =
                 serde_json::from_slice(&frame_bytes).map_err(|_| "macro frames JSON")?;
-            self.case.validate(&origin, &frames, self.source)?;
+            self.case
+                .validate(&origin, &frames, self.source)
+                .map_err(|reason| macro_refusal_detail(self.case, reason, &frames, self.source))?;
             // Mutate only inert copies; none can reconstruct the actual owner.
             let mut stale = frames.clone();
             stale["canonical_sha256"][0] = json!(256);
@@ -654,4 +804,114 @@ fn nested_case_does_not_expand_old_preparation_roster() {
         assert!(feature(name).is_err());
         assert!(!positive(name));
     }
+}
+
+#[test]
+fn nested_refusal_diagnostic_has_five_fixed_complete_intervals() {
+    let (_, frames) = inert_nested_reports();
+    let text = nested_refusal_diagnostic("nested exact source interval differs", &frames, FIXTURE)
+        .unwrap();
+    assert!(text.len() <= NESTED_REFUSAL_DIAGNOSTIC_CAP);
+    let report: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(report["schema"], "fe2o3-refused-nested-macro-intervals-v1");
+    assert_eq!(report["refused"], true);
+    assert_eq!(report["reason"], "nested exact source interval differs");
+    let rows = report["intervals"].as_array().unwrap();
+    assert_eq!(rows.len(), 5);
+    let expected = [
+        ("frame0.call_site", &frames["frames"][0]["call_site"]),
+        ("frame1.call_site", &frames["frames"][1]["call_site"]),
+        (
+            "frame1.definition_site",
+            &frames["frames"][1]["definition_site"],
+        ),
+        (
+            "frame0.definition_site",
+            &frames["frames"][0]["definition_site"],
+        ),
+        ("frame1.expansion", &frames["frames"][1]["expansion"]),
+    ];
+    for (row, (label, observed)) in rows.iter().zip(expected) {
+        assert_eq!(row["label"], label);
+        assert_eq!(&row["observed"], observed);
+        for field in [
+            "availability",
+            "byte_start",
+            "byte_end",
+            "line_start",
+            "column_start",
+            "line_end",
+            "column_end",
+        ] {
+            assert_eq!(row["expected"][field], observed[field]);
+        }
+    }
+}
+#[test]
+fn nested_refusal_diagnostic_preserves_all_five_numeric_mismatches() {
+    let (origin, original) = inert_nested_reports();
+    for (index, (frame, site)) in [
+        (0, "call_site"),
+        (1, "call_site"),
+        (1, "definition_site"),
+        (0, "definition_site"),
+        (1, "expansion"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut frames = original.clone();
+        frames["frames"][frame][site]["byte_start"] = json!(0);
+        let result = validate_nested(&origin, &frames, FIXTURE);
+        assert_eq!(result, Err("nested exact source interval differs"));
+        let detail =
+            macro_refusal_detail(FixtureCase::Nested, result.unwrap_err(), &frames, FIXTURE);
+        let report: Value = serde_json::from_str(&detail).unwrap();
+        assert_eq!(report["intervals"][index]["observed"]["byte_start"], 0);
+        assert_ne!(report["intervals"][index]["expected"]["byte_start"], 0);
+        assert_eq!(validate_nested(&origin, &frames, FIXTURE), result);
+    }
+}
+#[test]
+fn nested_refusal_diagnostic_bounds_payload_and_falls_back_to_original_error() {
+    let (_, mut frames) = inert_nested_reports();
+    frames["frames"][0]["call_site"]["extra"] =
+        json!("x".repeat(NESTED_REFUSAL_DIAGNOSTIC_CAP + 1));
+    assert_eq!(
+        nested_refusal_diagnostic("original refusal", &frames, FIXTURE),
+        Err("nested refusal diagnostic bound")
+    );
+    assert_eq!(
+        macro_refusal_detail(FixtureCase::Nested, "original refusal", &frames, FIXTURE),
+        "original refusal"
+    );
+    frames["frames"].as_array_mut().unwrap().pop();
+    assert_eq!(
+        nested_refusal_diagnostic("original refusal", &frames, FIXTURE),
+        Err("nested diagnostic frame count")
+    );
+    assert_eq!(
+        macro_refusal_detail(FixtureCase::Nested, "original refusal", &frames, FIXTURE),
+        "original refusal"
+    );
+}
+#[test]
+fn nested_refusal_diagnostic_keeps_one_step_and_source_rejections_unchanged() {
+    let (origin, frames) = inert_nested_reports();
+    assert_eq!(
+        macro_refusal_detail(
+            FixtureCase::One,
+            "one-step original refusal",
+            &frames,
+            FIXTURE
+        ),
+        "one-step original refusal"
+    );
+    assert_eq!(
+        macro_refusal_detail(FixtureCase::Nested, "source original refusal", &frames, b""),
+        "source original refusal"
+    );
+    assert!(validate_nested(&origin, &frames, FIXTURE).is_ok());
+    let _ = nested_refusal_diagnostic("inert diagnostic only", &frames, FIXTURE).unwrap();
+    assert!(validate_nested(&origin, &frames, FIXTURE).is_ok());
 }
