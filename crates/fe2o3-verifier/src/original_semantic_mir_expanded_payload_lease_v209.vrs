@@ -1,0 +1,78 @@
+// The scalar payload relation and this parent-identity conjunct are independent.
+// Neither grants a history invariant or permission to erase source loan effects.
+struct InvocationExecutionPayloadBindingV209 {
+    local: int,
+    source_type: int,
+    source_frame: int,
+    source_owner: int,
+    context_definition: int,
+    context_site: MemorySourceOperationV30,
+    lease_recipe: InvocationSourceExecutionRecipeV168,
+}
+
+spec fn invocation_execution_payload_related_v209(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    binding: InvocationExecutionPayloadBindingV209,
+) -> bool {
+    source.machine.valid && target.valid
+        && invocation_source_byte_state_well_formed_v36(source)
+        && byte_state_memory_well_formed_v30(target)
+        && source.machine.frames.execution == target.frames.execution
+        && 0 <= binding.source_frame < source.machine.frames.active.len()
+        && source.machine.frames.active[binding.source_frame].owner == binding.source_owner
+        && source.logical.aggregates.contains_key(binding.local)
+        && source.logical.aggregates[binding.local].source_type == binding.source_type
+        && invocation_source_execution_aggregate_current_v170(source, binding.local)
+        && invocation_execution_map_current_v205(source, target, execution_map)
+        && match (source.logical.aggregates[binding.local].execution_lease,
+            byte_execution_capability_v178(target, binding.context_definition, 0)) {
+            (Some(lease), Some(context)) => lease.recipe == binding.lease_recipe
+                && context.site == binding.context_site
+                && execution_map.contains_key(context.identity)
+                && execution_map[context.identity]
+                    == invocation_execution_reference_origin_v205(lease),
+            _ => false,
+        }
+}
+
+proof fn invocation_execution_payload_wrong_recipe_is_not_related_v209(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    binding: InvocationExecutionPayloadBindingV209, lease: InvocationSourceExecutionReferenceV168,
+)
+    requires source.logical.aggregates[binding.local].execution_lease == Some(lease),
+        lease.recipe != binding.lease_recipe,
+    ensures !invocation_execution_payload_related_v209(source, target, execution_map, binding),
+{ }
+
+proof fn invocation_execution_payload_wrong_context_origin_is_not_related_v209(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    binding: InvocationExecutionPayloadBindingV209, lease: InvocationSourceExecutionReferenceV168,
+    context: MemoryExecutionCapabilityV178,
+)
+    requires source.logical.aggregates[binding.local].execution_lease == Some(lease),
+        byte_execution_capability_v178(target, binding.context_definition, 0) == Some(context),
+        execution_map.contains_key(context.identity),
+        execution_map[context.identity] != invocation_execution_reference_origin_v205(lease),
+    ensures !invocation_execution_payload_related_v209(source, target, execution_map, binding),
+{ }
+
+proof fn invocation_execution_payload_missing_context_is_not_related_v209(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    binding: InvocationExecutionPayloadBindingV209,
+)
+    requires byte_execution_capability_v178(target, binding.context_definition, 0).is_none(),
+    ensures !invocation_execution_payload_related_v209(source, target, execution_map, binding),
+{ }
+
+proof fn invocation_execution_payload_relation_keeps_source_lease_current_v209(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    binding: InvocationExecutionPayloadBindingV209,
+)
+    requires invocation_execution_payload_related_v209(source, target, execution_map, binding),
+    ensures invocation_source_execution_aggregate_current_v170(source, binding.local),
+{ }
