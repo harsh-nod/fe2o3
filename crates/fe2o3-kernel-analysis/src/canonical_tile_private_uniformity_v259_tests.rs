@@ -109,7 +109,7 @@ fn private_uniformity_exact_scalar_spill_and_single_edge_aliases() {
 
 #[test]
 fn private_uniformity_refuses_competing_missing_and_undominated_writes() {
-    for mode in 0..3 {
+    for mode in 0..4 {
         let mut input = spill();
         let blocks = &mut input.functions[0].body.as_mut().unwrap().blocks;
         match mode {
@@ -126,7 +126,7 @@ fn private_uniformity_refuses_competing_missing_and_undominated_writes() {
             1 => {
                 blocks[1].operations.remove(0);
             }
-            _ => {
+            2 => {
                 blocks[0].operations.push(value(
                     90,
                     Type::Scalar(ScalarType::U64),
@@ -135,6 +135,35 @@ fn private_uniformity_refuses_competing_missing_and_undominated_writes() {
                         access: MemoryAccess::new(AddressSpace::Private, 8),
                     }),
                 ));
+            }
+            _ => {
+                // The pointer itself dominates every use, but one path to the
+                // reader bypasses the sole writer. Alias identity is not enough.
+                let restriction = blocks[1].operations.remove(1);
+                blocks[0].operations.push(restriction);
+                blocks[0].terminator = Some(Terminator::ConditionalBranch {
+                    condition: ValueId(2),
+                    then_target: BlockId(62),
+                    then_arguments: vec![],
+                    else_target: BlockId(17),
+                    else_arguments: vec![],
+                });
+                blocks[1].terminator = Some(Terminator::Branch {
+                    target: BlockId(17),
+                    arguments: vec![],
+                });
+                blocks[2].parameters.clear();
+                blocks[2].terminator = Some(Terminator::Branch {
+                    target: BlockId(7),
+                    arguments: vec![],
+                });
+                blocks[3].parameters.clear();
+                let Kind::Storage(Storage::ReadValue { address, .. }) =
+                    &mut blocks[3].operations[0].kind
+                else {
+                    unreachable!()
+                };
+                *address = ValueId(41);
             }
         }
         assert!(
@@ -241,13 +270,14 @@ fn private_uniformity_stored_lane_value_and_divergent_writer_stay_varying() {
     let blocks = &mut divergent.functions[0].body.as_mut().unwrap().blocks;
     blocks[0].operations.extend([
         index(50, IndexKind::Local),
+        value(52, Type::INDEX, Kind::Constant(Constant::Index(0))),
         value(
             51,
             Type::BOOL,
             Kind::Compare {
                 predicate: ComparePredicate::Equal,
                 lhs: ValueId(50),
-                rhs: ValueId(50),
+                rhs: ValueId(52),
             },
         ),
     ]);
