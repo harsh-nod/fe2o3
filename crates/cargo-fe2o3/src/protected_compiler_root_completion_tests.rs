@@ -68,15 +68,17 @@ fn completion_packet_refuses_legacy_short_extra_rights_and_wrong_peer() {
         net::sockopt::set_socket_passcred(&pair.1, true).unwrap();
         pair
     };
+    let malformed = [0xa5; COMPLETION_BYTES + 1];
     for length in [N, COMPLETION_BYTES - 1, COMPLETION_BYTES + 1] {
         let (tx, rx) = pair();
-        io::send_packet(tx.as_fd(), &vec![0xa5; length])
-            .unwrap()
-            .unwrap();
+        assert_eq!(
+            net::send(tx.as_fd(), &malformed[..length], net::SendFlags::empty()).unwrap(),
+            length
+        );
         assert!(io::receive_authenticated_packet::<COMPLETION_BYTES>(rx.as_fd(), sender).is_err());
     }
     let (tx, rx) = pair();
-    let file = tempfile::tempfile().unwrap();
+    let file = std::fs::File::open("/dev/null").unwrap();
     io::send_packet_with_descriptor(tx.as_fd(), &[0xa5; COMPLETION_BYTES], file.as_fd())
         .unwrap()
         .unwrap();

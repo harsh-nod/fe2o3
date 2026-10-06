@@ -151,11 +151,14 @@ mod tests {
 
     #[test]
     fn original_root_constructor_consumes_its_exclusive_account_borrow() {
-        let _: for<'b, 'work> fn(
-            RootCompleted<'b, 'work>,
-        )
-            -> Result<ParentCompilerExecutionReadinessCustodyV3<'b, 'work>> =
-            ParentCompilerExecutionReadinessCustodyV3::from_original_root;
+        // The budget's work ledger must outlive the exclusive account borrow;
+        // an unconstrained higher-ranked function pointer cannot express that.
+        fn consume<'b, 'work: 'b>(
+            completed: RootCompleted<'b, 'work>,
+        ) -> Result<ParentCompilerExecutionReadinessCustodyV3<'b, 'work>> {
+            ParentCompilerExecutionReadinessCustodyV3::from_original_root(completed)
+        }
+        let _ = consume;
     }
 
     #[test]
