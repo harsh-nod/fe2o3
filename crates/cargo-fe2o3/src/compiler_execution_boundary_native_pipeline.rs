@@ -384,7 +384,8 @@ impl ParentPublishedConditionalArtifact<'_, '_, '_> {
             Self::HEADER,
         )?;
         self.publication
-            .revalidate(producer, self.custody.readiness.budget)
+            .revalidate(producer, self.custody.readiness.budget)?;
+        Ok(())
     }
 }
 
