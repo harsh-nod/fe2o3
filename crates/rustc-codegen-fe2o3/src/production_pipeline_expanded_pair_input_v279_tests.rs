@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn expanded_pair_preparation_frame_exact_short_and_unwind_restore_floor() {
+    for short in [false, true] {
+        let reached = std::cell::Cell::new(false);
+        let operation = |_: &mut Budget<'_>| {
+            reached.set(true);
+            Ok(())
+        };
+        let scratch = headers().unwrap()
+            + 2 * std::mem::size_of_val(&operation)
+            + std::mem::align_of_val(&operation);
+        let mut work = Work::new(1);
+        let mut budget = Budget::new(&mut work, 17 + scratch - usize::from(short));
+        budget.reserve_storage(17).unwrap();
+        let result = preparation_scope(&mut budget, operation);
+        assert_eq!(result.is_ok(), !short);
+        assert_eq!(reached.get(), !short);
+        assert_eq!(budget.storage(), 17);
+        if short {
+            assert!(matches!(result, Err(Error::Resource(Resource::Storage(_)))));
+        }
+    }
+    let mut work = Work::new(1);
+    let mut budget = Budget::new(&mut work, 17 + headers().unwrap() + 256);
+    budget.reserve_storage(17).unwrap();
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        preparation_scope::<()>(&mut budget, |_| std::panic::panic_any(279usize))
+    }))
+    .unwrap_err();
+    assert_eq!(*panic.downcast::<usize>().unwrap(), 279);
+    assert_eq!(budget.storage(), 17);
+}
+
+#[test]
+fn expanded_pair_launch_roots_require_the_authenticated_order() {
+    use fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1 as Root;
+    let roots = [Root::from_index(17), Root::from_index(3)];
+    for (&expected, &actual) in roots.iter().zip(&roots) {
+        join_root(expected, actual).unwrap();
+    }
+    for (expected, actual) in [
+        (roots[0], roots[1]),
+        (roots[1], roots[0]),
+        (roots[0], Root::from_index(2)),
+    ] {
+        assert!(matches!(
+            join_root(expected, actual),
+            Err(Error::Unsupported(
+                "expanded pair input owner or runtime differs"
+            ))
+        ));
+    }
+}
+
+#[test]
 fn expanded_pair_equal_bytes_do_not_substitute_owner_custody() {
     let first = Box::new([7u8; 32]);
     let second = Box::new([7u8; 32]);

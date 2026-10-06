@@ -74,6 +74,7 @@ fn query_headers() -> usize {
         + size_of::<Result<SubjectV279, Error>>()
         + size_of::<Result<&[RootInputV279], Error>>()
         + size_of::<Result<(FormalIndexWidth, EndiannessV2), Error>>()
+        + size_of::<Result<usize, Error>>()
         + 4 * size_of::<Result<(), Error>>()
         + 3 * size_of::<Result<(), ProductionSourceOwnedViewErrorV18>>()
         + 3 * size_of::<usize>()
@@ -167,6 +168,30 @@ fn join_launch(
     Ok(actual)
 }
 
+fn join_root(
+    expected: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    retained: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+) -> Result<(), Error> {
+    if expected != retained {
+        return Err(binding());
+    }
+    Ok(())
+}
+
+fn preparation_scope<T>(
+    budget: &mut Budget<'_>,
+    operation: impl FnOnce(&mut Budget<'_>) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let captures = std::mem::size_of_val(&operation)
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(std::mem::align_of_val(&operation)))
+        .ok_or(Resource::Arithmetic)?;
+    let scratch = headers()?
+        .checked_add(captures)
+        .ok_or(Resource::Arithmetic)?;
+    budget.with_prepaid_scope(budget.storage(), 1, 1, scratch, operation)
+}
+
 /// Returns unreserved storage, adopted immediately by the private stage. No
 /// caller supplies identities, policy rows, launches or reference-input hashes.
 pub(super) fn prepare<'b, 's, 'o, 'scope>(
@@ -179,7 +204,7 @@ pub(super) fn prepare<'b, 's, 'o, 'scope>(
     let floor = budget.storage();
     let slot = std::ptr::from_ref(budget) as usize;
     let ledger = budget.work_ledger_identity_v1();
-    budget.with_prepaid_scope(floor, 1, 1, headers()?, |budget| {
+    preparation_scope(budget, |budget| {
         same_owner(original.source(budget)?, source)?;
         same_owner(tile.original_source_v162(budget)?, original)?;
         let neutral = tile.neutral_source_v162(budget)?;
@@ -249,16 +274,8 @@ pub(super) fn prepare<'b, 's, 'o, 'scope>(
         for (ordinal, checked) in launches.iter().enumerate() {
             budget.charge_work(4)?;
             let (source_root, original_function) = source.root(ordinal, budget)?;
-            let mut selected_launch = None;
-            for launch in retained_launches.roots() {
-                budget.charge_work(1)?;
-                if launch.selected_root() == source_root {
-                    if selected_launch.replace(launch).is_some() {
-                        return Err(binding());
-                    }
-                }
-            }
-            let retained_launch = selected_launch.ok_or_else(binding)?;
+            let retained_launch = retained_launches.roots().get(ordinal).ok_or_else(binding)?;
+            join_root(source_root, retained_launch.selected_root())?;
             let launch = join_launch(
                 *checked,
                 retained_launch.source_rank(),
@@ -408,6 +425,11 @@ impl Input<'_, '_, '_, '_> {
     ) -> Result<(FormalIndexWidth, EndiannessV2), Error> {
         self.check(self.source, self.original, self.tile, budget)?;
         Ok((self.width, self.endian))
+    }
+
+    pub(crate) fn reference_count(&self, budget: &mut Budget<'_>) -> Result<usize, Error> {
+        self.check(self.source, self.original, self.tile, budget)?;
+        Ok(self.bindings.reference_effect_bindings.as_slice().len())
     }
 
     pub(super) fn discard(

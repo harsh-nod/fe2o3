@@ -229,6 +229,11 @@ impl Callbacks for RootsCallbacks {
                     assert_eq!(selected, selections.len());
                     assert_eq!(pair.roots(budget)?.len(), roots.len());
                     let subject = pair.subject(budget)?;
+                    let ssa = source.source_ssa(budget)?;
+                    assert_eq!(subject.semantic, *ssa.source_semantic_sha256());
+                    assert_eq!(subject.ssa, *ssa.identity().as_bytes());
+                    assert_eq!(pair.reference_count(budget)?, 0);
+                    assert_eq!(subject.references, empty_reference_input_identity());
                     assert_eq!(subject.graphs[0], *source.canonical(budget)?.identity());
                     assert_eq!(subject.graphs[1], *input.owner().identity());
                     assert_eq!(subject.graphs[2], *output.identity());
