@@ -1,0 +1,161 @@
+//! Complete generated component predicates, not an admitted paired step proof.
+use super::super::super::{
+    byte_bindings::SourceByteBindings,
+    paired::ExpandedScalarBindingsV196,
+    slots::SourceTagPairsV40,
+    tile_target::{TileMicroCutsV180, TileTargetV176},
+};
+use super::*;
+use crate::mixed_optimizer_refinement_v26::semantics::target_view_contracts_v38::TargetByteViewContractsV38 as TargetContracts;
+use fe2o3_kernel_ir::{ExecutionRoleV15, FormalIndexWidth, Type};
+use fe2o3_mir_model::{SsaBlockIdV1 as Block, SsaEdgeIdV1 as Edge, SsaResolvedEventV1 as Event};
+use std::fmt::Write as _;
+
+const LIMIT: usize = 512 * 1024 * 1024;
+
+fn generate(
+    plan: &InvocationPlan<'_, '_>,
+    slots: &SourceSlots<'_, '_>,
+    tile: &TileExpansion<'_, '_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    let width = FormalIndexWidth::Bits64;
+    let relation = slots.correspondence(out)?;
+    let original = TargetContracts::derive(relation.inventory(out.budget)?, width, out)?;
+    let tags = SourceTagPairsV40::derive(slots, &original, out)?;
+    let target = TileTargetV176::derive(slots, out)?;
+    let contracts = TargetContracts::derive(target.inventory(out)?, width, out)?;
+    let cuts = TileMicroCutsV180::derive(&target, plan, out)?;
+    let bytes = SourceByteBindings::derive_expanded_v188(&target, out)?;
+    let values = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+    super::super::super::emit_model_prelude_v187(out)?;
+    slots.emit_source_tag_contracts(0, out)?;
+    tags.emit_expanded_v190(&target, &contracts, width, 0, 1, out)?;
+    slots.emit(out)?;
+    super::generate_actual_tile_source_v168(plan, slots, tile, out)?;
+    bytes.emit(out)?;
+    writeln!(out, "spec fn invocation_runtime_index_bytes_v36() -> int {{ 8 }}\nspec fn invocation_runtime_little_endian_v36() -> bool {{ true }}")
+        .map_err(|_| out.error())?;
+    target.emit(width, out)?;
+    cuts.emit(out)?;
+
+    let source = relation.source(out.budget)?;
+    let archive = source.source_ssa(out.budget)?;
+    let semantic = source.source_semantic(out.budget)?;
+    let (mut scalars, mut leaves) = (0usize, 0usize);
+    for root in 0..source.root_count(out.budget)? {
+        for instance in 0..plan.root(root, out)?.instances.len() {
+            let row = plan.instance(root, instance, out)?;
+            if !row.active {
+                continue;
+            }
+            let ssa = archive.plan_for_function(row.function).unwrap().plan();
+            let function = &semantic.functions()[row.function.index() as usize];
+            let mut definitions = std::collections::BTreeSet::new();
+            definitions.extend(ssa.entry_definitions().iter().map(|entry| entry.value()));
+            for (block, declaration) in function.blocks().iter().enumerate() {
+                let block = Block::new(block.try_into().unwrap());
+                for (_, event) in ssa.resolved_events(block).into_iter().flatten() {
+                    if let Event::Define { value, .. } = event {
+                        definitions.insert(*value);
+                    }
+                }
+                for edge in 0..declaration.terminator().kind().edge_count() {
+                    definitions.extend(
+                        ssa.edge_definitions(Edge::new(block, edge.try_into().unwrap()))
+                            .into_iter()
+                            .flatten()
+                            .map(|entry| entry.value()),
+                    );
+                }
+            }
+            for (ordinal, value) in definitions.into_iter().enumerate() {
+                let endpoint =
+                    relation.ssa_typed_endpoint_v36(root, instance, value, out.budget)?;
+                let ty = endpoint.physical_type(out.budget)?;
+                let scalar = ssa
+                    .entry_definitions()
+                    .iter()
+                    .any(|entry| entry.value() == value)
+                    && matches!(
+                        ty,
+                        Some(Type::Unit | Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_))
+                    );
+                let payload = matches!(
+                    ty,
+                    Some(Type::Execution(
+                        ExecutionRoleV15::MaskedTileU32 { .. }
+                            | ExecutionRoleV15::LaneFragmentU32 { .. }
+                    ))
+                ) && endpoint.execution_borrow_v163(out.budget)?.is_none();
+                if !scalar && !payload {
+                    continue;
+                }
+                // Each SSA definition gets a separate predicate. Conjoining
+                // different dynamic cuts would incorrectly require dead values.
+                write!(out, "spec fn expanded_source_component_{root}_{instance}_{ordinal}_v210(source: InvocationSourceByteStateV36, target: MemoryStateV30, map: InvocationByteMapV36) -> bool {{ true")
+                    .map_err(|_| out.error())?;
+                if scalar {
+                    values.emit_source_conjunct(plan, root, instance, value, width, out)?;
+                    scalars += 1;
+                } else {
+                    let ty = endpoint.source_type(out.budget)?;
+                    let count = slots.aggregate_leaf_count(ty, out)?.unwrap();
+                    for leaf in 0..count {
+                        values.emit_source_leaf_conjunct(
+                            plan, root, instance, value, leaf, width, out,
+                        )?;
+                        leaves += 1;
+                    }
+                }
+                writeln!(out, " }}").map_err(|_| out.error())?;
+            }
+        }
+    }
+    assert!(scalars > 0 && leaves > 0);
+    super::super::super::support_closure::retain_referenced(out)?;
+    writeln!(out, "}}").map_err(|_| out.error())?;
+    assert!(
+        out.text
+            .contains("spec fn invocation_source_byte_block_0_v36(")
+    );
+    assert!(out.text.contains("spec fn byte_micro_step_0_v30("));
+    assert!(out.text.contains("spec fn expanded_source_component_0_0_"));
+    assert!(!out.text.contains("proof fn invocation_paired_"));
+    assert!(!out.text.contains("assume("));
+    Ok(())
+}
+
+#[test]
+fn expanded_source_components_emit_complete_source_and_actual_target_models() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture_with_plan(layout, LIMIT, LIMIT, generate)
+            .0
+            .unwrap();
+    }
+}
+
+#[test]
+#[ignore = "complete component models; no full source refinement or production authority"]
+fn diagnostic_complete_expanded_source_component_models_export_v210() {
+    use sha2::{Digest, Sha256};
+    use std::io::{BufWriter, Write as _};
+    for (layout, label) in [(Layout::Blocked, "blocked"), (Layout::Striped, "striped")] {
+        run_fixture_with_plan(layout, LIMIT, LIMIT, |plan, slots, tile, out| {
+            generate(plan, slots, tile, out)?;
+            assert!(out.text.len() <= 16 * 1024 * 1024);
+            let mut output = BufWriter::new(std::io::stdout().lock());
+            write!(output, "{{\"kind\":\"fe2o3-expanded-source-component-model-v210\",\"scope\":\"necessary source value components only\",\"layout\":\"{label}\",\"bytes\":{},\"sha256\":\"", out.text.len()).unwrap();
+            for byte in Sha256::digest(out.text.as_bytes()) {
+                write!(output, "{byte:02x}").unwrap();
+            }
+            write!(output, "\",\"model_hex\":\"").unwrap();
+            for byte in out.text.as_bytes() {
+                write!(output, "{byte:02x}").unwrap();
+            }
+            writeln!(output, "\"}}").unwrap();
+            output.flush().unwrap();
+            Ok(())
+        }).0.unwrap();
+    }
+}
