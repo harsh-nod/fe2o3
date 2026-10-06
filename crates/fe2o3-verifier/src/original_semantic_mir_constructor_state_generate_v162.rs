@@ -273,7 +273,7 @@ fn source_runtime(
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     out.budget.reserve_storage(20 * size_of::<usize>())?;
-    out.budget.charge_work(23)?;
+    out.budget.charge_work(24)?;
     if entry.arguments.len() != call.arguments.len() {
         return Err(mismatch());
     }
@@ -301,7 +301,7 @@ fn source_runtime(
     );
     emit!(
         out,
-        "{{\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_entry_refuses_{root}_{}_v167);\n hide(invocation_source_entry_body_{root}_{}_v167);\n hide(invocation_source_entry_select_v167);\n hide(invocation_source_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_byte_value_typed_v36);\n hide(invocation_source_entry_initialize_v166);\n hide(invocation_source_byte_put_local_v36);\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}\n",
+        "{{\n hide(invocation_source_local_observation_v180);\n hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_source_enter_{root}_{}_v36);\n hide(invocation_source_entry_refuses_{root}_{}_v167);\n hide(invocation_source_entry_body_{root}_{}_v167);\n hide(invocation_source_entry_select_v167);\n hide(invocation_source_observations_v39);\n hide(invocation_source_value_evaluate_v42);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_byte_value_typed_v36);\n hide(invocation_source_entry_initialize_v166);\n hide(invocation_source_byte_put_local_v36);\n assert(invocation_paired_source_step_{root}_v36(source).state.machine.valid) by {{\n reveal_with_fuel(invocation_paired_source_defined_{root}_v36, 2);\n }}\n",
         call.child,
         call.child,
         call.child
@@ -367,9 +367,20 @@ fn source_runtime(
     out.budget.charge_work(5)?;
     emit!(
         out,
-        " && invocation_source_block_runtime_{root}_v36(source).observations.len() == 0) by {{\n reveal(invocation_source_enter_{root}_{}_v36);\n reveal(invocation_source_entry_body_{root}_{}_v167);\n }}\n assert forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() implies invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i]) by {{\n",
+        " && invocation_source_block_runtime_{root}_v36(source).observations.len() == 0) by {{\n reveal(invocation_source_enter_{root}_{}_v36);\n reveal(invocation_source_entry_body_{root}_{}_v167);\n }}\n",
         call.child,
         call.child
+    );
+    for ordinal in 0..call.arguments.len() {
+        out.budget.charge_work(1)?;
+        emit!(
+            out,
+            " invocation_source_local_observation_intro_v183(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}]);\n"
+        );
+    }
+    emit!(
+        out,
+        " assert forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() implies invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i]) by {{\n"
     );
     for ordinal in 0..call.arguments.len() {
         out.budget.charge_work(2)?;
