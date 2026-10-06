@@ -251,6 +251,11 @@ fn continuation_errors_cannot_expose_nested_refundable_resources() {
         ContinuationError::from(
             fe2o3_hsaco_finalize::ConditionalWorkerOutputErrorV5::Resource(Resource::Accounting),
         ),
+        ContinuationError::from(
+            fe2o3_runtime_protocol::ConditionalWorkerReadinessErrorV5::Resource(
+                Resource::Accounting,
+            ),
+        ),
     ] {
         assert!(std::error::Error::source(&error).is_none());
         assert!(!error.to_string().is_empty());
