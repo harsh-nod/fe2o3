@@ -69,6 +69,6 @@ proof fn invocation_source_typed_memory_invalid_array_element_refuses_v71(
             element, (fuel - 1) as nat, little_endian));
     }
     assert(!invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian)) by {
-        reveal_with_fuel(invocation_source_memory_value_valid_v51, 1);
+        reveal_with_fuel(invocation_source_memory_value_valid_v51, 2);
     }
 }

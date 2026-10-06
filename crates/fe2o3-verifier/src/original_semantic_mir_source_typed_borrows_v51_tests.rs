@@ -467,7 +467,7 @@ fn typed_array_invalid_element_law_is_in_complete_source_model() {
             "            element, (fuel - 1) as nat, little_endian));\n",
             "    }\n",
             "    assert(!invocation_source_memory_value_valid_v51(source, pointer, ty, fuel, little_endian)) by {\n",
-            "        reveal_with_fuel(invocation_source_memory_value_valid_v51, 1);\n",
+            "        reveal_with_fuel(invocation_source_memory_value_valid_v51, 2);\n",
             "    }\n",
             "}",
         ),
