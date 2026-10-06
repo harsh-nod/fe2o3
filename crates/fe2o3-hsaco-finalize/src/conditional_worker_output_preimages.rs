@@ -1,7 +1,8 @@
 //! Complete compact replay bytes borrowed from an actual conditional publication.
 use super::{Budget, Error, Published, Resource, Result};
 use crate::first_build_worker_v3::{
-    OwnedWorkerV3ProviderReplayPartV1, extract_worker_v3_request_replay_parts_v1 as extract,
+    OwnedWorkerV3ProviderReplayPartV1, OwnedWorkerV3RequestReplayPartsV1,
+    extract_worker_v3_request_replay_parts_v1 as extract,
 };
 use fe2o3_artifact_transaction::{
     DurablePublishedHsacoClaimV3, ProducerIdentity,
@@ -51,29 +52,7 @@ impl Published {
                 super::validate_result(&retained, producer, &self.publication, b)?;
                 let parts = extract(bootstrap, replay)
                     .map_err(|_| Error::Mismatch("canonical provider replay requests"))?;
-                let mut payloads = Vec::new();
-                payloads
-                    .try_reserve_exact(parts.external_providers.len())
-                    .map_err(|_| Resource::Allocation)?;
-                if payloads.capacity() > crate::MAX_LINK_INPUTS {
-                    return Err(Resource::Accounting.into());
-                }
-                let mut storage = size_of::<ConditionalWorkerReplayPreimagesV5<'_>>()
-                    .checked_add(
-                        payloads
-                            .capacity()
-                            .checked_mul(size_of::<Vec<u8>>())
-                            .ok_or(Resource::Arithmetic)?,
-                    )
-                    .ok_or(Resource::Arithmetic)?;
-                for part in parts.external_providers {
-                    storage = storage
-                        .checked_add(part.bytes.capacity())
-                        .ok_or(Resource::Arithmetic)?;
-                    payloads.push(part.bytes);
-                }
-                let providers = Providers::new(payloads)
-                    .map_err(|_| Error::Mismatch("provider replay owner bounds"))?;
+                let (providers, storage) = provider_owner(parts)?;
                 b.reserve_storage(storage)?;
                 let result = ConditionalWorkerReplayPreimagesV5 {
                     published: self,
@@ -90,6 +69,33 @@ impl Published {
             })
         })
     }
+}
+
+fn provider_owner(parts: OwnedWorkerV3RequestReplayPartsV1) -> Result<(Providers, usize)> {
+    let mut payloads = Vec::new();
+    payloads
+        .try_reserve_exact(parts.external_providers.len())
+        .map_err(|_| Resource::Allocation)?;
+    if payloads.capacity() > crate::MAX_LINK_INPUTS {
+        return Err(Resource::Accounting.into());
+    }
+    let mut storage = size_of::<ConditionalWorkerReplayPreimagesV5<'_>>()
+        .checked_add(
+            payloads
+                .capacity()
+                .checked_mul(size_of::<Vec<u8>>())
+                .ok_or(Resource::Arithmetic)?,
+        )
+        .ok_or(Resource::Arithmetic)?;
+    for part in parts.external_providers {
+        storage = storage
+            .checked_add(part.bytes.capacity())
+            .ok_or(Resource::Arithmetic)?;
+        payloads.push(part.bytes);
+    }
+    let providers =
+        Providers::new(payloads).map_err(|_| Error::Mismatch("provider replay owner bounds"))?;
+    Ok((providers, storage))
 }
 
 impl ConditionalWorkerReplayPreimagesV5<'_> {
@@ -220,6 +226,110 @@ fn require_coordinates(expected: Coordinates, actual: Coordinates) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        ContentIdentityV1, WorkerInputKindV1, WorkerInputV1, WorkerOptimizationLevelV1,
+        WorkerOptionsV1, WorkerOutputConstraintsV1,
+        worker_protocol_v2::{
+            SealedWorkerRequestV2Parts, WorkerCompilerFfiEnvelopeIdentityV2, WorkerRequestV2,
+        },
+    };
+    use fe2o3_kernel_descriptor::{CodeObjectVersion, DeviceTargetV1};
+
+    fn request(id: u8, changed: bool) -> WorkerRequestV2 {
+        let mut providers: Vec<_> = [
+            b"provider-one".as_slice(),
+            b"provider-two",
+            b"provider-three",
+        ]
+        .into_iter()
+        .map(|bytes| WorkerInputV1::new(WorkerInputKindV1::LlvmBitcode, bytes.to_vec()).unwrap())
+        .collect();
+        providers.sort_by_key(|input| (input.identity(), input.kind()));
+        WorkerRequestV2::from_sealed_parts(SealedWorkerRequestV2Parts {
+            request_id: [id; 32],
+            llvm_build_identity: "llvm-test".into(),
+            worker_build_identity: if changed {
+                "other-worker"
+            } else {
+                "worker-test"
+            }
+            .into(),
+            worker_executable: ContentIdentityV1::from_parts([42; 32], 4096),
+            target: DeviceTargetV1::parse("amdgcn-amd-amdhsa--gfx942").unwrap(),
+            code_object_version: CodeObjectVersion::V6,
+            options: WorkerOptionsV1::new(WorkerOptimizationLevelV1::O2, true, true),
+            compiler_envelope: WorkerCompilerFfiEnvelopeIdentityV2::from_test_bytes([43; 32]),
+            compiler_module: WorkerInputV1::new(WorkerInputKindV1::LlvmTextIr, b"module".to_vec())
+                .unwrap(),
+            external_providers: providers,
+            import_symbols: Vec::new(),
+            export_symbols: vec!["kernel".into()],
+            final_symbols: vec!["kernel".into()],
+            output: WorkerOutputConstraintsV1::new(4096).unwrap(),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn actual_parser_retains_all_providers_and_refuses_changed_request() {
+        let bootstrap = request(1, false);
+        let replay = request(2, false);
+        let parts = extract(bootstrap.canonical_bytes(), replay.canonical_bytes()).unwrap();
+        let expected: Vec<_> = parts
+            .external_providers
+            .iter()
+            .map(|part| part.bytes.clone())
+            .collect();
+        let (providers, storage) = provider_owner(parts).unwrap();
+        assert_eq!(providers.len(), 3);
+        assert_eq!(
+            providers.iter().collect::<Vec<_>>(),
+            expected.iter().map(Vec::as_slice).collect::<Vec<_>>()
+        );
+        assert!(
+            storage
+                >= size_of::<ConditionalWorkerReplayPreimagesV5<'_>>()
+                    + 3 * size_of::<Vec<u8>>()
+                    + providers.payload_length()
+        );
+        assert!(
+            extract(
+                bootstrap.canonical_bytes(),
+                request(2, true).canonical_bytes()
+            )
+            .is_err()
+        );
+        let mut corrupt = bootstrap.canonical_bytes().to_vec();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 1;
+        assert!(extract(&corrupt, replay.canonical_bytes()).is_err());
+    }
+
+    #[test]
+    fn provider_move_retains_original_allocations_and_spare_capacity_charge() {
+        let mut payload = Vec::with_capacity(257);
+        payload.extend_from_slice(b"payload");
+        let capacity = payload.capacity();
+        let pointer = payload.as_ptr();
+        let part = OwnedWorkerV3ProviderReplayPartV1 {
+            kind: WorkerInputKindV1::LlvmBitcode,
+            identity: ContentIdentityV1::calculate(&payload),
+            bytes: payload,
+        };
+        let (providers, storage) = provider_owner(OwnedWorkerV3RequestReplayPartsV1 {
+            bootstrap_output_bound: 4096,
+            external_providers: vec![part],
+        })
+        .unwrap();
+        assert_eq!(providers.get(0).unwrap().as_ptr(), pointer);
+        assert!(
+            storage
+                >= size_of::<ConditionalWorkerReplayPreimagesV5<'_>>()
+                    + size_of::<Vec<u8>>()
+                    + capacity
+        );
+        assert_eq!(providers.payload_length(), 7);
+    }
     #[test]
     fn every_compact_preimage_coordinate_is_required() {
         let expected = Coordinates {
