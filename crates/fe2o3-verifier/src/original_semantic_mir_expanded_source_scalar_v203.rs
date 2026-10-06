@@ -60,22 +60,12 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                     if original_inventory.definitions().get(definition).map(|row| row.ty) != Some(ty) {
                         return Err(mismatch());
                     }
-                    Some(self.source_transport_definition(definition, out)?)
+                    Some(definition)
                 }
                 (None, None) if endpoint.carrier_shape(out.budget)? == Carrier::Unit
                     && ScalarV30::from_source(semantic.types(), source_type)? == ScalarV30::Unit => None,
                 _ => return Err(mismatch()),
             };
-            if let Some(actual) = actual {
-                let function = self.target.root_function(root, out)?;
-                let inventory = self.target.inventory(out)?;
-                out.budget.charge_work(2)?;
-                if !inventory.functions().get(function.0 as usize)
-                    .is_some_and(|row| row.definitions.contains(&actual))
-                {
-                    return Err(mismatch());
-                }
-            }
             let logical = LogicalBinding::derive(self.slots, plan, root, &endpoint, out)?;
             let private = match self.slots.legacy_descriptor_by_source(root, instance,
                 u32::try_from(local).map_err(|_| Resource::Arithmetic)?, out)? {
@@ -106,11 +96,11 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
             if let Some((descriptor, bits)) = private {
                 let bytes = if bits == 1 { 1 } else { bits / 8 };
                 emit!(out, "source.slots.contains_key({descriptor}) && ({{ let slot = invocation_source_slot_{descriptor}_v36(); let pointer = source.slots[{descriptor}]; (match pointer.allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, .. }} => owner == source.machine.frames.active[{frame}].owner && invocation == source.machine.frames.active[{frame}].invocation && owner == slot.owner && site == slot.site, _ => false }}) && invocation_source_read_enabled_v36(source.machine, pointer, {bytes}, slot.alignment) && ({{ let original = MemoryValueV30::Scalar(byte_load_v30(source.machine.memory, pointer, {bytes}, invocation_runtime_little_endian_v36())); invocation_source_byte_value_typed_v36(original, {bits}) && ");
-                self.emit_actual_relation(actual, width, out)?;
+                self.emit_source_original_relation(root, actual, width, out)?;
                 emit!(out, " }}) }})");
             } else {
                 emit!(out, "let original = source.machine.values[{local}]; ");
-                self.emit_actual_relation(actual, width, out)?;
+                self.emit_source_original_relation(root, actual, width, out)?;
                 logical.emit_current(local, out)?;
             }
             emit!(out, " }}))");

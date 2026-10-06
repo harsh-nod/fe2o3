@@ -63,7 +63,8 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + size_of::<super::super::super::slots::SourceAggregateLeafV42<'_, '_, '_>>()
         + 2 * size_of::<Result<Option<usize>>>()
         + size_of::<Result<()>>()
-        + 14 * size_of::<usize>();
+        + 14 * size_of::<usize>()
+        + size_of::<Option<usize>>();
     type ForwardingOwner<'a, 'b, 'c, 'd> = ExpandedScalarBindingsV196<'a, 'b, 'c, 'd>;
     let forwarding_wrapper = size_of::<(&ForwardingOwner<'_, '_, '_, '_>, &mut Writer<'_, '_>, usize)>();
     let forwarding_callback = size_of::<(&ForwardingOwner<'_, '_, '_, '_>, &usize, &mut Writer<'_, '_>)>();
@@ -78,6 +79,34 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     let forwarding_iteration = size_of::<std::ops::Range<usize>>()
         + size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1>>();
     let forwarding_results = 2 * size_of::<Result<usize>>();
+    use reconstruction::Recipe;
+    use fe2o3_kernel_ir::{CanonicalKirBlockCoordinateV1 as RebuildBlock,
+        CanonicalKirFunctionCoordinateV1 as RebuildFunction};
+    let reconstruction_vectors = size_of::<Vec<Option<Recipe>>>() + size_of::<Vec<u8>>()
+        + size_of::<Vec<(usize, u8)>>() + size_of::<Vec<usize>>();
+    let reconstruction_allocation_results = 2 * size_of::<Result<Vec<Option<Recipe>>>>()
+        + 2 * size_of::<Result<Vec<u8>>>() + 2 * size_of::<Result<Vec<(usize, u8)>>>()
+        + 2 * size_of::<Result<Vec<usize>>>();
+    let reconstruction_query_frames = 4 * size_of::<Recipe>() + 4 * size_of::<Result<Recipe>>()
+        + 4 * size_of::<Option<usize>>() + 4 * size_of::<Option<RebuildBlock>>()
+        + 4 * size_of::<RebuildBlock>() + 3 * size_of::<RebuildFunction>()
+        + 3 * size_of::<Definition>() + 3 * size_of::<std::ops::Range<usize>>()
+        + size_of::<[Option<(RebuildBlock, usize)>; 2]>();
+    let reconstruction_wrapper_borrows = 6 * size_of::<&()>();
+    let reconstruction_recipe_borrows = 10 * size_of::<&()>();
+    let reconstruction_phi_borrows = 9 * size_of::<&()>();
+    let reconstruction_operand_borrows = 4 * size_of::<&()>();
+    let reconstruction_slice_borrows = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>()
+        + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1]>()
+        + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>]>();
+    let reconstruction_indices = (14 + 8 + 8 + 2) * size_of::<usize>();
+    let reconstruction_values = 2 * size_of::<Type>() + 2 * size_of::<fe2o3_kernel_ir::ScalarType>()
+        + 2 * size_of::<fe2o3_kernel_ir::ValueId>() + size_of::<FormalIndexWidth>()
+        + size_of::<[bool; 2]>() + 2 * size_of::<bool>() + size_of::<u8>() + size_of::<u64>()
+        + 3 * size_of::<Result<()>>();
+    let reconstruction_iterators = 3 * size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>>>()
+        + size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1>>()
+        + size_of::<std::slice::Iter<'_, usize>>();
     let header = retained
         + construction_and_query_results
         + input_predecessor_and_actual_coordinates
@@ -99,6 +128,13 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + forwarding_coordinates
         + forwarding_iteration
         + forwarding_results
+        + reconstruction_vectors
+        + reconstruction_allocation_results
+        + reconstruction_query_frames
+        + reconstruction_wrapper_borrows + reconstruction_recipe_borrows
+        + reconstruction_phi_borrows + reconstruction_operand_borrows
+        + reconstruction_slice_borrows + reconstruction_indices + reconstruction_values
+        + reconstruction_iterators
         + bounded_query_scratch;
     assert_eq!(out.budget.storage() - before, header);
     let original = slots.correspondence(out)?.inventory(out.budget)?;
@@ -885,6 +921,71 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
 }
 
 #[test]
+fn expanded_scalar_reconstruction_uses_original_diamonds_and_retained_snapshots() {
+    use fe2o3_kernel_ir::{ExecutionOperationV15 as Execution, OperationKind};
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let run = |work, storage| run_fixture(layout, work, storage, |slots, _, out| {
+            let target = TileTargetV176::derive(slots, out)?;
+            let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+            let original = slots.correspondence(out)?.inventory(out.budget)?;
+            let tile = slots.tile_owner_v176(out)?;
+            let neutral = tile.neutral_source_v162(out.budget)?;
+            let mut parts = 0;
+            let mut diamonds = 0;
+            for (index, row) in original.definitions().iter().enumerate() {
+                if let Definition::Result { operation, result } = row.coordinate {
+                    let op = &original.operations()[crate::mixed_optimizer_refinement_v26::semantics::operation_index(original, operation)?];
+                    if let OperationKind::Execution(Execution::FragmentIntoPartsU32 { fragment, elements, .. }) = op.operation.kind {
+                        let fragment = original.definitions().iter().enumerate().find(|(index, row)| {
+                            original.functions()[operation.block.function.0 as usize].definitions.contains(index)
+                                && row.value == Some(fragment)
+                        }).map(|(index, _)| index).unwrap();
+                        let elements = u32::from(elements);
+                        let expected = pairs.tile_leaf(fragment, &[result / elements, result % elements], out)?.unwrap();
+                        let start = out.text.len();
+                        pairs.emit_source_original_relation(0, Some(index), FormalIndexWidth::Bits64, out)?;
+                        let text = &out.text[start..];
+                        assert!(text.contains(&format!("let actual = target.values[{expected}];")));
+                        assert!(!text.contains("byte_load"));
+                        parts += 1;
+                    }
+                }
+                if !matches!(row.coordinate, Definition::BlockArgument { .. })
+                    || !matches!(row.ty, Type::Scalar(fe2o3_kernel_ir::ScalarType::U32))
+                    || !neutral.definition_descendants(row.coordinate, out.budget)?.is_empty() { continue; }
+                let incoming = original.edge_arguments().iter().filter(|edge| edge.target_definition == index)
+                    .map(|edge| edge.incoming_definition).collect::<std::collections::BTreeSet<_>>();
+                if incoming.len() != 2 { continue; }
+                let start = out.text.len();
+                pairs.emit_source_original_relation(0, Some(index), FormalIndexWidth::Bits64, out)?;
+                let text = &out.text[start..];
+                assert!(text.contains("reconstructed_branch_"));
+                assert!(text.contains("reconstructed_sum_"));
+                assert!(text.contains("% 4294967296"));
+                assert!(text.contains(&format!("invocation_value_related_v36(original, reconstructed_{index}, map, source.machine.memory, target.memory)")));
+                assert!(!text.contains("byte_load") && !text.contains("assume("));
+                diamonds += 1;
+            }
+            assert!(parts > 0 && diamonds > 0);
+            Ok(())
+        });
+        let measured = run(LIMIT, LIMIT);
+        measured.0.unwrap();
+        let exact = run(measured.1, measured.3);
+        exact.0.unwrap();
+        assert_eq!((exact.1, exact.2, exact.3), (measured.1, measured.2, measured.3));
+        assert!(matches!(run(measured.1 - 1, measured.3).0,
+            Err(Error::Resource(Resource::Work(error)))
+            | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+            if error.actual() == measured.1 && error.limit() == measured.1 - 1));
+        assert!(matches!(run(measured.1, measured.3 - 1).0,
+            Err(Error::Resource(Resource::Storage(error)))
+            | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+            if error.actual() == measured.3 && error.limit() == measured.3 - 1));
+    }
+}
+
+#[test]
 fn expanded_scalar_bindings_retain_foreign_and_refunded_account_refusals() {
     for foreign in [false, true] {
         let mut reached = false;
@@ -910,6 +1011,7 @@ fn expanded_scalar_bindings_retain_foreign_and_refunded_account_refusals() {
             assert!(pairs.definition_counts(out).is_err());
             assert!(pairs.definition(0, out).is_err());
             assert!(pairs.source_transport_definition(0, out).is_err());
+            assert!(pairs.emit_source_original_relation(0, Some(0), FormalIndexWidth::Bits64, out).is_err());
             Err(error)
         });
         assert!(reached);

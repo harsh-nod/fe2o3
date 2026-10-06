@@ -20,6 +20,7 @@ pub(super) fn headers() -> usize {
         + 2 * size_of::<Result<Option<usize>>>()
         + size_of::<Result<()>>()
         + 14 * size_of::<usize>()
+        + size_of::<Option<usize>>()
 }
 
 impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
@@ -69,6 +70,7 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                     SemanticExecutionRoleV29::MaskedTileU32 { .. }
                     | SemanticExecutionRoleV29::LaneFragmentU32 { .. }
                 ));
+            let mut original_scalar = None;
             let actual = if execution {
                 // Borrowed execution carriers require the separate loan relation.
                 if endpoint.execution_borrow_v163(out.budget)?.is_some() {
@@ -108,7 +110,8 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                         {
                             return Err(mismatch());
                         }
-                        Some(self.source_transport_definition(original, out)?)
+                        original_scalar = Some(original);
+                        None
                     }
                     _ => return Err(mismatch()),
                 }
@@ -117,6 +120,7 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
             let function = self.target.root_function(root, out)?;
             out.budget.charge_work(3)?;
             match actual {
+                None if original_scalar.is_some() => (),
                 Some(actual) if inventory.functions().get(function.0 as usize)
                     .is_some_and(|row| row.definitions.contains(&actual))
                     && inventory.definitions().get(actual)
@@ -148,7 +152,12 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                 emit!(out, "{field}int,");
             }
             emit!(out, "]) {{ Some(original) => {{ ");
-            self.emit_actual_relation(actual, width, out)?;
+            out.budget.charge_work(1)?;
+            if let Some(original) = original_scalar {
+                self.emit_source_original_relation(root, Some(original), width, out)?;
+            } else {
+                self.emit_actual_relation(actual, width, out)?;
+            }
             emit!(out, " }}, None => false }}))");
             Ok(())
         })
