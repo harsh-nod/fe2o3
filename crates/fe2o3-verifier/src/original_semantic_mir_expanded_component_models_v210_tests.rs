@@ -45,7 +45,8 @@ fn generate(
     let archive = source.source_ssa(out.budget)?;
     let semantic = source.source_semantic(out.budget)?;
     let launches = source.source_launch(out.budget)?;
-    let (mut scalars, mut leaves, mut scopes, mut payloads) = (0usize, 0usize, 0usize, 0usize);
+    let (mut scalars, mut leaves, mut scopes, mut payloads, mut issues) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
     for root in 0..source.root_count(out.budget)? {
         let (function, _) = source.root(root, out.budget)?;
         let launch = launches
@@ -152,10 +153,21 @@ fn generate(
                     }
                 }
                 writeln!(out, " }}").map_err(|_| out.error())?;
+                if matches!(
+                    nominal.rust_type_kind(),
+                    SemanticRustTypeKindV1::Execution(SemanticExecutionRoleV29::KernelContext)
+                ) && endpoint.execution_borrow_v163(out.budget)?.is_none()
+                {
+                    write!(out, "spec fn expanded_source_context_issue_{root}_{instance}_{ordinal}_v211(source: InvocationSourceByteStateV36, target: MemoryStateV30, execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>) -> InvocationContextIssueCoupledV211 {{ ")
+                        .map_err(|_| out.error())?;
+                    execution.emit_context_issue_step_v211(root, instance, value, out)?;
+                    writeln!(out, " }}").map_err(|_| out.error())?;
+                    issues += 1;
+                }
             }
         }
     }
-    assert!(scalars > 0 && leaves > 0 && scopes > 0 && payloads > 0);
+    assert!(scalars > 0 && leaves > 0 && scopes > 0 && payloads > 0 && issues > 0);
     super::super::super::paired::emit_source_cut_values_v213(plan, slots, &target, width, out)?;
     super::super::super::support_closure::retain_referenced(out)?;
     writeln!(out, "}}").map_err(|_| out.error())?;
@@ -190,6 +202,8 @@ fn expanded_execution_maps_and_payload_laws_are_registered_in_the_production_pre
         "spec fn invocation_execution_payload_related_v209(",
         "proof fn invocation_execution_empty_map_grants_no_binding_v205(",
         "proof fn invocation_execution_payload_missing_context_is_not_related_v209(",
+        "spec fn invocation_context_issue_coupled_v211(",
+        "proof fn invocation_context_issue_fresh_has_exact_updates_v211(",
     ] {
         assert_eq!(prelude.matches(name).count(), 1);
     }

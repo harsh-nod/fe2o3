@@ -32,6 +32,8 @@ fn headers() -> usize {
         + size_of::<Carrier>()
         + size_of::<Value>()
         + size_of::<Result<()>>()
+        + 4 * size_of::<std::ops::Range<usize>>()
+        + 2 * size_of::<std::slice::Iter<'_, Block>>()
         + 24 * size_of::<usize>()
         + 12 * size_of::<&()>()
 }

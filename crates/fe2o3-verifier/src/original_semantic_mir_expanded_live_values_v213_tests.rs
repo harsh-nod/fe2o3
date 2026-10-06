@@ -4,6 +4,46 @@ use fe2o3_kernel_ir::ExecutionTileLayoutV1 as Layout;
 
 const LIMIT: usize = 512 * 1024 * 1024;
 
+#[test]
+fn expanded_live_value_headers_cover_named_traversal_state() {
+    let vectors = size_of::<Vec<Vec<Block>>>() + size_of::<Vec<Block>>();
+    let vector_results =
+        2 * size_of::<Result<Vec<Vec<Block>>>>() + 2 * size_of::<Result<Vec<Block>>>();
+    let endpoints = size_of::<Endpoint<'_, '_>>() + 2 * size_of::<Result<Endpoint<'_, '_>>>();
+    let typed_value = size_of::<Option<Role>>()
+        + size_of::<Carrier>()
+        + size_of::<Value>()
+        + size_of::<Result<()>>();
+    let root_instance_block_leaf_ranges = 4 * size_of::<std::ops::Range<usize>>();
+    let successor_and_live_iterators = 2 * size_of::<std::slice::Iter<'_, Block>>();
+    let coordinates = [
+        ("root and instance", 2),
+        ("source block and PC", 2),
+        ("ancestor and depth", 2),
+        ("cut ancestor and frame", 2),
+        ("local and component", 2),
+        ("component count", 1),
+        ("analysis floor and extent", 2),
+        ("query temporaries", 11),
+    ];
+    let references = [
+        ("input plan, slots, target, writer", 4),
+        ("relation, source, archive, semantic", 4),
+        ("instance, function, SSA plan, nominal type", 4),
+    ];
+    assert_eq!(
+        headers(),
+        vectors
+            + vector_results
+            + endpoints
+            + typed_value
+            + root_instance_block_leaf_ranges
+            + successor_and_live_iterators
+            + coordinates.iter().map(|(_, count)| count).sum::<usize>() * size_of::<usize>()
+            + references.iter().map(|(_, count)| count).sum::<usize>() * size_of::<&()>()
+    );
+}
+
 fn run(layout: Layout, work: usize, storage: usize) -> (Result<()>, usize, usize, usize) {
     run_fixture_with_plan(layout, work, storage, |plan, slots, _, out| {
         let target = TileTargetV176::derive(slots, out)?;
@@ -114,5 +154,57 @@ fn expanded_live_values_refuse_unknown_width_before_emission() {
         })
         .0
         .unwrap();
+    }
+}
+
+#[test]
+fn expanded_live_values_refuse_foreign_plans_and_targets_before_emission() {
+    for foreign_plan in [false, true] {
+        let mut reached = false;
+        run_fixture_with_plan(Layout::Blocked, LIMIT, LIMIT, |plan, slots, _, out| {
+            let target = TileTargetV176::derive(slots, out)?;
+            let nested =
+                run_fixture_with_plan(
+                    Layout::Striped,
+                    LIMIT,
+                    LIMIT,
+                    |other_plan, other_slots, _, other_out| {
+                        let other_target = TileTargetV176::derive(other_slots, other_out)?;
+                        let before = other_out.text.len();
+                        reached = true;
+                        let result = if foreign_plan {
+                            emit_source_cut_values_v213(
+                                plan,
+                                other_slots,
+                                &other_target,
+                                FormalIndexWidth::Bits64,
+                                other_out,
+                            )
+                        } else {
+                            emit_source_cut_values_v213(
+                                other_plan,
+                                other_slots,
+                                &target,
+                                FormalIndexWidth::Bits64,
+                                other_out,
+                            )
+                        };
+                        assert_eq!(other_out.text.len(), before);
+                        match result {
+                        Err(error @ Error::Resource(Resource::Accounting))
+                        | Err(error @ Error::Source(
+                            fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                                Resource::Accounting))) => Err(error),
+                        Err(error) => panic!("unexpected foreign-owner error: {error:?}"),
+                        Ok(()) => panic!("foreign source owner admitted"),
+                    }
+                    },
+                );
+            assert!(nested.0.is_err());
+            Ok(())
+        })
+        .0
+        .unwrap();
+        assert!(reached);
     }
 }
