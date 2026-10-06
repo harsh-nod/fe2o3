@@ -105,7 +105,9 @@ void closedAtomicCollectiveOpcodeGrammarIsExact() {
   require(classifyGfx942DsCollectiveOpcode("DS_READ_B32") &&
               classifyGfx942DsCollectiveOpcode("DS_BPERMUTE_B32_vi") &&
               !classifyGfx942DsCollectiveOpcode("DS_READ_B32_FUTURE_vi") &&
-              !classifyGfx942DsCollectiveOpcode("DS_READ2_B32_vi"),
+              !classifyGfx942DsCollectiveOpcode("DS_READ2_B32_vi") &&
+              !classifyGfx942DsCollectiveOpcode("DS_BPERMUTE_B32_FUTURE_vi") &&
+              !classifyGfx942DsCollectiveOpcode("DS_BPERMUTE_B64_vi"),
           "closed DS-collective spellings changed");
   require(classifyGfx942WorkgroupBarrierOpcode("S_BARRIER_vi") &&
               !classifyGfx942WorkgroupBarrierOpcode("S_BARRIER_SIGNAL_vi"),
@@ -376,6 +378,44 @@ std::vector<uint8_t> makeAtomicBarrierKernelBitcode() {
       ZetaType, InlineAsm::get(ZetaType, "s_barrier", "", true), {});
   ZetaBuilder.CreateRetVoid();
 
+  SmallVector<char, 0> Bytes;
+  raw_svector_ostream Stream(Bytes);
+  WriteBitcodeToFile(ModuleValue, Stream);
+  return std::vector<uint8_t>(Bytes.begin(), Bytes.end());
+}
+
+std::vector<uint8_t> makeDsPermutationAndMemoryKernelBitcode(bool WithWait) {
+  LLVMContext Context;
+  Module ModuleValue("physical-machine-ds-permutation-memory-fixture", Context);
+  auto Machine = createMachine();
+  ModuleValue.setTargetTriple(Triple(TripleName));
+  ModuleValue.setDataLayout(Machine->createDataLayout());
+  ModuleValue.addModuleFlag(Module::Error, "amdhsa_code_object_version", 600);
+  Type *I32 = Type::getInt32Ty(Context);
+  auto *GlobalPointer = PointerType::get(Context, 1);
+  auto *KernelType = FunctionType::get(Type::getVoidTy(Context),
+                                      {GlobalPointer, I32}, false);
+  auto *AsmType = FunctionType::get(I32, {I32, I32}, false);
+  for (StringRef Name : {"alpha", "zeta"}) {
+    auto *Kernel = Function::Create(KernelType, GlobalValue::ExternalLinkage,
+                                    Name, ModuleValue);
+    configureKernel(*Kernel, Context);
+    IRBuilder<> Builder(BasicBlock::Create(Context, "entry", Kernel));
+    std::string Assembly =
+        Name == "alpha" ? "ds_bpermute_b32 $0, $1, $2"
+                        : "ds_write_b32 $1, $2\n\ts_waitcnt lgkmcnt(0)"
+                          "\n\tds_read_b32 $0, $1";
+    if (WithWait)
+      Assembly += "\n\ts_waitcnt lgkmcnt(0)";
+    auto *Result = Builder.CreateCall(
+        AsmType, InlineAsm::get(AsmType, Assembly,
+                               "=&{v34},{v32},{v33}", true),
+        {ConstantInt::get(I32, 0), Kernel->getArg(1)});
+    Result->setConvergent();
+    Result->setCannotDuplicate();
+    Builder.CreateStore(Result, Kernel->getArg(0));
+    Builder.CreateRetVoid();
+  }
   SmallVector<char, 0> Bytes;
   raw_svector_ostream Stream(Bytes);
   WriteBitcodeToFile(ModuleValue, Stream);
@@ -694,6 +734,78 @@ void atomicAndBarrierSitesRetainExactClosedClassifications() {
     fail(takeError(TraceBytes.takeError()));
   require(!TraceBytes->empty(),
           "atomic/barrier canonical trace encoding is empty");
+}
+
+void dsPermutationIsNotLdsMemoryAndDoesNotInventReadiness() {
+  // These are real LLVM/object/LLD/MC observations, not fabricated trace rows.
+  // The generic analyzer must preserve (not prove) a missing LGKM wait.
+  for (bool WithWait : {false, true}) {
+    auto Payload = finalize(makeDsPermutationAndMemoryKernelBitcode(WithWait));
+    auto Result = analyzeGfx942PhysicalMachineEffects(directRequest(Payload));
+    if (!Result)
+      fail(takeError(Result.takeError()));
+    unsigned Permutations = 0, Reads = 0, Writes = 0, AlphaWaits = 0;
+    uint64_t PermuteEnd = 0;
+    for (const auto &Instruction : Result->Instructions) {
+      bool Permute = Instruction.Opcode == "DS_BPERMUTE_B32_vi";
+      bool Read = Instruction.Opcode == "DS_READ_B32_vi";
+      bool Write = Instruction.Opcode == "DS_WRITE_B32_vi";
+      if (Instruction.FunctionSymbol == "alpha" && Permutations == 1 &&
+          Instruction.InstructionOffset == PermuteEnd &&
+          Instruction.Opcode == "S_WAITCNT_vi" &&
+          Instruction.Operands.size() == 1 &&
+          Instruction.Operands[0].Kind ==
+              PhysicalMachineOperandKind::SignedImmediate &&
+          Instruction.Operands[0].Value == 0xc07f)
+        ++AlphaWaits;
+      if (!Permute && !Read && !Write)
+        continue;
+      require(!llvm::any_of(Result->Effects, [&](const auto &Effect) {
+                return Effect.EntrySymbol == Instruction.FunctionSymbol &&
+                       Effect.InstructionOffset == Instruction.InstructionOffset;
+              }),
+              "DS lane/LDS site acquired a global-memory effect");
+      if (Permute) {
+        ++Permutations;
+        PermuteEnd = Instruction.InstructionOffset + Instruction.Encoding.size();
+        require(Instruction.FunctionSymbol == "alpha" &&
+                    Instruction.MemoryAccess == PhysicalMachineMemoryAccess::None &&
+                    Instruction.MemoryWidth == 0 &&
+                    (Instruction.Flags & 3) == 0 &&
+                    Instruction.Encoding.size() == 8 &&
+                    Instruction.ExplicitDefinitionCount == 1 &&
+                    Instruction.Operands.size() == 4 &&
+                    llvm::is_contained(Instruction.ImplicitUses, "EXEC"),
+                "BPERMUTE lost its exact non-memory DS trace");
+      } else if (Read) {
+        ++Reads;
+        require(Instruction.FunctionSymbol == "zeta" &&
+                    Instruction.MemoryAccess ==
+                        PhysicalMachineMemoryAccess::WorkgroupRead &&
+                    Instruction.MemoryWidth == 4 &&
+                    (Instruction.Flags & 3) == 1,
+                "DS_READ lost its actual LDS-memory classification");
+      } else {
+        ++Writes;
+        require(Instruction.FunctionSymbol == "zeta" &&
+                    Instruction.MemoryAccess ==
+                        PhysicalMachineMemoryAccess::WorkgroupWrite &&
+                    Instruction.MemoryWidth == 4 &&
+                    (Instruction.Flags & 3) == 2,
+                "DS_WRITE lost its actual LDS-memory classification");
+      }
+    }
+    require(Permutations == 1 && Reads == 1 && Writes == 1 &&
+                AlphaWaits == unsigned(WithWait),
+            "DS test did not retain exact opcodes/explicit LGKM waits");
+    auto Effects = encodePhysicalMachineEffectEvidence(*Result);
+    if (!Effects)
+      fail(takeError(Effects.takeError()));
+    auto Trace = encodePhysicalMachineTraceEvidence(*Result, *Effects);
+    if (!Trace)
+      fail(takeError(Trace.takeError()));
+    require(!Trace->empty(), "DS canonical trace is empty");
+  }
 }
 
 void identityProbeBindsFreshChallenge() {
@@ -1763,6 +1875,7 @@ int main(int ArgumentCount, char **ArgumentValues) {
   backwardLoopCfgIsAcceptedGenerically();
   trapSitesAreRetainedForSemanticDischarge();
   atomicAndBarrierSitesRetainExactClosedClassifications();
+  dsPermutationIsNotLdsMemoryAndDoesNotInventReadiness();
   decoderBindsBytesSymbolsAndIdentities();
   targetDescriptorAndEffectExpansionFailClosed();
   loaderViewMutationsFailClosed();
