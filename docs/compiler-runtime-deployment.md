@@ -182,6 +182,14 @@ provisions an approved release, runs Verus or launches a GPU kernel.
 
 The existing fixed-origin production approval/runtime constructors remain the
 only admission path. `RuntimeEnforcementUnavailable` is not removed by packaging.
+
+The separately pinned proof runtime accepts its external system interpreter in
+exact mode `0555` or `0755`. It retains the observed mode, so switching between
+those modes after admission still refuses. Root ownership, one link, complete
+hash, canonical symlink chain and no-cross-device final-file lookup remain
+mandatory. This compatibility does not permit a bind-file alias, change the
+compiler inventory's `0555` role mode, or solve deployment path/inode joins.
+
 ## Observe The Canonical Rustc Library Tree
 
 `cargo fe2o3 engineering rustc-runtime --lib-tree /absolute/toolchain/lib`

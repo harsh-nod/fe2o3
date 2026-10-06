@@ -128,13 +128,18 @@ verify_file() {
 }
 
 verify_interpreter() {
-    local record requested canonical size digest
+    local record requested canonical size digest mode
     record="$(header_value interpreter)"
     IFS='|' read -r requested canonical size digest <<<"$record"
     [[ "$requested" == /lib64/ld-linux-x86-64.so.2 ]] || die "PT_INTERP path differs"
     [[ "$canonical" == /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]] \
         || die "canonical interpreter path differs"
-    verify_file "$canonical" 0755 "$size" "$digest" true
+    mode="$(stat -Lc %a -- "$canonical")"
+    case "$mode" in
+        555|755) ;;
+        *) die "interpreter mode is neither 0555 nor 0755: $canonical" ;;
+    esac
+    verify_file "$canonical" "$mode" "$size" "$digest" true
     while IFS='|' read -r _ link target; do
         [[ -L "$link" ]] || die "interpreter link is not a symbolic link: $link"
         [[ "$(readlink -- "$link")" == "$target" ]] || die "interpreter link target differs: $link"
