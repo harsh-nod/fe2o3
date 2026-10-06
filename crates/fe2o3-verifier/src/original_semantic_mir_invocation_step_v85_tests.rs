@@ -2,6 +2,12 @@ use super::super::source_function::tests::with_slots;
 use super::*;
 
 const LIMIT: usize = 512 * 1024 * 1024;
+const RETIRED_OBSERVATION_HELPERS: [&str; 4] = [
+    "invocation_source_local_observation_intro_v183",
+    "invocation_source_local_observation_conditional_v184",
+    "invocation_source_scalar_copy_observation_v185",
+    "invocation_source_scalar_copy_observation_checked_v188",
+];
 
 fn theorem<'a>(text: &'a str, name: &str) -> &'a str {
     text.split_once(&format!("proof fn {name}("))
@@ -75,115 +81,11 @@ fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_dom
             "        }",
         )
     );
-    assert_eq!(text.matches("proof fn ").count(), 8);
-    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 7);
-    assert_eq!(
-        theorem(text, "invocation_source_local_observation_intro_v183")
-            .split_once("\n}\n")
-            .unwrap()
-            .0,
-        concat!(
-            "\n    observation: InvocationSourceOperandObservationV36,\n)",
-            "\n    requires observation.before.machine.valid, observation.after.machine.valid,",
-            "\n        match observation.operand {",
-            "\n            InvocationSourceOperandV36::Scalar {",
-            "\n                value: InvocationSourceByteValueV36::Local { .. }, ..",
-            "\n            } => true,",
-            "\n            _ => false,",
-            "\n        },",
-            "\n    ensures invocation_source_local_observation_v180(observation),",
-            "\n{",
-        )
-    );
-    let conditional = theorem(text, "invocation_source_local_observation_conditional_v184")
-        .split_once("\n}\n")
-        .unwrap()
-        .0;
-    assert!(!conditional.contains("requires"));
-    assert_eq!(
-        conditional,
-        concat!(
-            "\n    observation: InvocationSourceOperandObservationV36,\n)",
-            "\n    ensures",
-            "\n        observation.before.machine.valid && observation.after.machine.valid",
-            "\n            && (match observation.operand {",
-            "\n                InvocationSourceOperandV36::Scalar {",
-            "\n                    value: InvocationSourceByteValueV36::Local { .. }, ..",
-            "\n                } => true,",
-            "\n                _ => false,",
-            "\n            }) ==> invocation_source_local_observation_v180(observation),",
-            "\n{",
-            "\n    if observation.before.machine.valid && observation.after.machine.valid",
-            "\n        && (match observation.operand {",
-            "\n            InvocationSourceOperandV36::Scalar {",
-            "\n                value: InvocationSourceByteValueV36::Local { .. }, ..",
-            "\n            } => true,",
-            "\n            _ => false,",
-            "\n        })",
-            "\n    {",
-            "\n        invocation_source_local_observation_intro_v183(observation);",
-            "\n    }",
-        )
-    );
-    let copy = theorem(text, "invocation_source_scalar_copy_observation_v185")
-        .split_once("\n}\n")
-        .unwrap()
-        .0;
-    let (header, body) = copy.split_once("\n{\n").unwrap();
-    assert_eq!(
-        header,
-        concat!(
-            "\n    source: InvocationSourceByteStateV36, observation: InvocationSourceOperandObservationV36,",
-            "\n    local: int, bits: int, root: int, instance: int, little_endian: bool,\n)",
-            "\n    ensures ({",
-            "\n        let operand = InvocationSourceOperandV36::Scalar {",
-            "\n            value: InvocationSourceByteValueV36::Local { local, moved: false }, bits,",
-            "\n        };",
-            "\n        let evaluated = invocation_source_value_evaluate_v42(",
-            "\n            source, operand, root, instance, little_endian);",
-            "\n        evaluated.source.machine.valid && observation.before == source",
-            "\n            && observation.after == evaluated.source && observation.operand == operand",
-            "\n            ==> invocation_source_local_observation_v180(observation)",
-            "\n    }),",
-        )
-    );
-    assert!(!header.contains("requires"));
-    for fact in [
-        "hide(invocation_source_value_evaluate_v42);",
-        "hide(invocation_source_local_observation_v180);",
-        "invocation_source_scalar_copy_valid_identity_v164(\n        source, local, bits, root, instance, little_endian);",
-        "if evaluated.source.machine.valid && observation.before == source\n        && observation.after == evaluated.source && observation.operand == operand",
-        "invocation_source_local_observation_intro_v183(observation);",
-    ] {
-        assert_eq!(body.matches(fact).count(), 1, "{fact}");
+    assert_eq!(text.matches("proof fn ").count(), 4);
+    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 3);
+    for retired in RETIRED_OBSERVATION_HELPERS {
+        assert!(!text.contains(retired));
     }
-    let checked = theorem(
-        text,
-        "invocation_source_scalar_copy_observation_checked_v188",
-    )
-    .split_once("\n}\n")
-    .unwrap()
-    .0;
-    let (checked_header, checked_body) = checked.split_once("\n{\n").unwrap();
-    assert_eq!(
-        checked_header,
-        header
-            .replace("\n    ensures ({", "\n    requires ({")
-            .replace(
-                "\n            ==> invocation_source_local_observation_v180(observation)",
-                "",
-            )
-            + "\n    ensures invocation_source_local_observation_v180(observation),"
-    );
-    assert_eq!(
-        checked_body,
-        concat!(
-            "    hide(invocation_source_value_evaluate_v42);",
-            "\n    hide(invocation_source_local_observation_v180);",
-            "\n    invocation_source_scalar_copy_observation_v185(",
-            "\n        source, observation, local, bits, root, instance, little_endian);",
-        )
-    );
     assert_eq!(
         theorem(text, "invocation_source_local_observations_extend_v186")
             .split_once("\n}\n")
@@ -240,6 +142,9 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                     // Copied proof coordinates do not prevent the original owner from emitting.
                     program.emit(out)?;
                     paired.emit(out)?;
+                    for retired in RETIRED_OBSERVATION_HELPERS {
+                        assert!(!out.text.contains(retired), "retired helper reference: {retired}");
+                    }
                     let copy_law = theorem(&out.text, "invocation_source_scalar_copy_valid_identity_v164");
                     assert_eq!(out.text.matches("proof fn invocation_source_scalar_copy_valid_identity_v164(").count(), 1);
                     assert!(!copy_law.contains(" requires "));
