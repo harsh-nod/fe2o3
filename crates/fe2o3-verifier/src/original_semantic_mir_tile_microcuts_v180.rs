@@ -75,7 +75,8 @@ fn ranks(cuts: &[Cut], edges: &[(usize, usize)], out: &mut Writer<'_, '_>) -> Re
     let mut degree = vector(cuts.len(), out)?;
     let mut queue = vector(cuts.len(), out)?;
     let mut rank = vector(cuts.len(), out)?;
-    out.budget.charge_work(cuts.len())?;
+    out.budget
+        .charge_work(cuts.len().checked_mul(2).ok_or(Resource::Arithmetic)?)?;
     degree.resize(cuts.len(), 0usize);
     rank.resize(cuts.len(), 0usize);
     for &(from, to) in edges {
