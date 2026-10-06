@@ -391,6 +391,47 @@ fn native_configuration_resource_denials_precede_their_io_and_parse_operations()
 }
 
 #[test]
+fn native_configuration_maximum_quote_matches_the_actual_debit_schedule() {
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    let limits = native::maximum_preparation_quota().unwrap();
+    for case in 0..3 {
+        let mut work = Work::new(limits.0 - usize::from(case == 1));
+        let mut b = Budget::new(&mut work, limits.1 - usize::from(case == 2));
+        let result = (|| {
+            native::prepay_preparation(&mut b)?;
+            native::prepay_read(MAX_CONFIG_BYTES, &mut b)?;
+            native::prepay_manifest(MAX_CONFIG_BYTES, &mut b)?;
+            native::prepay_providers(
+                fe2o3_hsaco_finalize::MAX_WORKER_TOTAL_INPUT_BYTES,
+                MAX_LINK_INPUTS - 1,
+                &mut b,
+            )
+        })();
+        if case == 0 {
+            assert_eq!(result, Ok(()));
+            assert_eq!((b.work(), b.storage()), limits);
+        } else {
+            assert!(matches!(
+                result,
+                Err(Resource::Work(_) | Resource::Storage(_))
+            ));
+        }
+    }
+}
+
+#[test]
+fn native_environment_preparation_denies_before_inspecting_configuration() {
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    let mut work = Work::new(0);
+    let mut b = Budget::new(&mut work, 0);
+    assert!(matches!(
+        PreparedProductionBuildConfig::from_environment_with_metered_manifest(&mut b),
+        Err(BuildConfigError::Resource(Resource::Work(_)))
+    ));
+    assert_eq!(b.storage(), 0);
+}
+
+#[test]
 fn native_configuration_quote_overflow_keeps_the_original_account() {
     use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
     let mut work = Work::new(100);

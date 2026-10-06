@@ -3555,6 +3555,11 @@ mod unsupported {
         pub(crate) fn authenticated_client_profile_v3_identity(&self) -> Option<[u8; 32]> {
             None
         }
+        pub(crate) fn compiler_execution_profile_v3(
+            &self,
+        ) -> Result<&FundedClientProfileV3, String> {
+            Err("Cargo capability transport requires Linux x86_64".to_owned())
+        }
         pub(crate) fn take_compiler_execution_profile_v3(
             &mut self,
         ) -> Result<FundedClientProfileV3, String> {

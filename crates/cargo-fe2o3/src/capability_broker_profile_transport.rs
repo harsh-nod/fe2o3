@@ -121,9 +121,7 @@ impl BrokeredCapabilities {
             .and_then(|binding| binding.native_profile_identity)
     }
 
-    pub(crate) fn take_compiler_execution_profile_v3(
-        &mut self,
-    ) -> Result<FundedClientProfileV3, String> {
+    pub(crate) fn compiler_execution_profile_v3(&self) -> Result<&FundedClientProfileV3, String> {
         if self.authenticated_client_profile_v3_identity().is_none()
             || self.compiler_execution_profile.is_some()
         {
@@ -131,6 +129,15 @@ impl BrokeredCapabilities {
                 "broker response is not the authenticated native profile family".to_owned(),
             );
         }
+        self.compiler_execution_profile_v3
+            .as_ref()
+            .ok_or_else(|| "authenticated native profile has already been consumed".to_owned())
+    }
+
+    pub(crate) fn take_compiler_execution_profile_v3(
+        &mut self,
+    ) -> Result<FundedClientProfileV3, String> {
+        self.compiler_execution_profile_v3()?;
         self.compiler_execution_profile_v3
             .take()
             .ok_or_else(|| "authenticated native profile has already been consumed".to_owned())

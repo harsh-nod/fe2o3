@@ -194,6 +194,22 @@ pub(crate) enum BuildCompileEnvironmentProfileV1 {
 
 impl PreparedProductionBuildConfig {
     pub(crate) fn from_environment() -> Result<Option<Self>, BuildConfigError> {
+        Self::from_environment_with_account(None)
+    }
+
+    /// Meters manifest parsing and provider preparation on the caller's account.
+    /// Environment selection still uses the existing unmetered ingress; this
+    /// does not establish a bound for environment copies or their diagnostics.
+    pub(crate) fn from_environment_with_metered_manifest(
+        b: &mut Budget<'_>,
+    ) -> Result<Option<Self>, BuildConfigError> {
+        native::prepay_preparation(b)?;
+        Self::from_environment_with_account(Some(b))
+    }
+
+    fn from_environment_with_account(
+        budget: Option<&mut Budget<'_>>,
+    ) -> Result<Option<Self>, BuildConfigError> {
         if let Some(value) = std::env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV) {
             return Err(BuildConfigError::Invalid(format!(
                 "{OBSOLETE_CODEGEN_PIPELINE_ENV} has been removed; production compilation has no selector; found {value:?}"
@@ -227,11 +243,7 @@ impl PreparedProductionBuildConfig {
         if path.is_empty() {
             return Err(BuildConfigError::MissingConfiguration);
         }
-        match version {
-            ProductionBuildConfigVersion::V1 => Self::from_manifest(Path::new(&path)),
-            ProductionBuildConfigVersion::V2(_) => Self::from_manifest_v2(Path::new(&path)),
-        }
-        .map(Some)
+        prepare_production_manifest(Path::new(&path), version, budget).map(Some)
     }
 
     pub(crate) fn from_environment_for_cargo_setup() -> Result<Option<Self>, BuildConfigError> {

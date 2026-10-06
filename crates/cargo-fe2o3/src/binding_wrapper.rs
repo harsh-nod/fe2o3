@@ -389,8 +389,18 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             // before opening the configuration or any transitive provider input.
             let transferred =
                 receive_validated_compiler_capabilities(capability_binding, profile_family)?;
-            let build_config = PreparedProductionBuildConfig::from_environment()
-                .map_err(BindingWrapperError::BuildConfiguration)?;
+            let build_config = match profile_family {
+                capability_broker::CompilerExecutionProfileFamily::LegacyV1 => {
+                    PreparedProductionBuildConfig::from_environment()
+                }
+                capability_broker::CompilerExecutionProfileFamily::NativeV3 => transferred
+                    .compiler_execution_profile_v3()
+                    .map_err(BindingWrapperError::CapabilityBroker)?
+                    .with_profile_budget(|_, b| {
+                        PreparedProductionBuildConfig::from_environment_with_metered_manifest(b)
+                    }),
+            }
+            .map_err(BindingWrapperError::BuildConfiguration)?;
             validate_expected_build_config_identity(
                 build_config.as_ref(),
                 capability_binding.config_identity(),
@@ -1496,17 +1506,22 @@ fn native_intake_account()
         || BindingWrapperError::CapabilityBroker("native intake request quota overflow".to_owned());
     let (profile_work, profile_storage) =
         client_profile_receive_quota_v3().map_err(BindingWrapperError::CapabilityBroker)?;
+    let (configuration_work, configuration_storage) =
+        crate::build_config::native::maximum_preparation_quota()
+            .map_err(|error| BindingWrapperError::CapabilityBroker(error.to_string()))?;
     let header = size_of::<Account>()
         + size_of::<Mutex<Account>>()
         + size_of::<FundedClientProfileV3>()
         + 2 * size_of::<usize>();
     let work = profile_work
-        .checked_add(root_intake::WORK)
+        .checked_add(configuration_work)
+        .and_then(|n| n.checked_add(root_intake::WORK))
         .and_then(|n| n.checked_add(root_intake::CAPTURE_WORK))
         .and_then(|n| n.checked_add(NativeReadiness::ROOT_ADMISSION_WORK))
         .ok_or_else(overflow)?;
     let storage = profile_storage
-        .checked_add(root_intake::SCRATCH)
+        .checked_add(configuration_storage)
+        .and_then(|n| n.checked_add(root_intake::SCRATCH))
         .and_then(|n| n.checked_add(root_intake::CAPTURE_SCRATCH))
         .and_then(|n| n.checked_add(NativeReadiness::ROOT_ADMISSION_SCRATCH))
         .and_then(|n| n.checked_add(root_intake::PARENT_MAX_STORAGE))

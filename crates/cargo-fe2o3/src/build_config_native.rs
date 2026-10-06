@@ -63,8 +63,7 @@ impl PreparedNativeProductionBuildConfig {
         b: &mut Budget<'_>,
     ) -> Result<Self, BuildConfigError> {
         let entry = b.storage();
-        b.charge_work(ENTRY_WORK)?;
-        b.reserve_storage(FRAME)?;
+        prepay_preparation(b)?;
         let config = prepare_production_manifest(path, version, Some(&mut *b))?;
         if config.identity().as_bytes() != expected_identity {
             return Err(BuildConfigError::Invalid(
@@ -134,6 +133,45 @@ fn scaled(bytes: usize, factor: usize, extra: usize) -> Result<usize, Resource> 
         .checked_mul(factor)
         .and_then(|n| n.checked_add(extra))
         .ok_or(Resource::Arithmetic)
+}
+
+pub(super) fn prepay_preparation(b: &mut Budget<'_>) -> Result<(), Resource> {
+    b.charge_work(ENTRY_WORK)?;
+    b.reserve_storage(FRAME)
+}
+
+/// Closed quote for one configuration/provider preparation under the existing
+/// parser limits, not environment acquisition/diagnostics. Worker image capture
+/// retains its separate bounded OS domain.
+pub(crate) fn maximum_preparation_quota() -> Result<(usize, usize), Resource> {
+    let bytes = super::MAX_CONFIG_BYTES;
+    let providers = fe2o3_hsaco_finalize::MAX_WORKER_TOTAL_INPUT_BYTES;
+    let count = super::MAX_LINK_INPUTS
+        .checked_sub(1)
+        .ok_or(Resource::Arithmetic)?;
+    let work = [
+        ENTRY_WORK,
+        scaled(bytes, 4, 4)?,
+        scaled(bytes, 1024, 0)?,
+        scaled(providers, 8, scaled(count, 256, 0)?)?,
+    ]
+    .into_iter()
+    .try_fold(0_usize, usize::checked_add)
+    .ok_or(Resource::Arithmetic)?;
+    let storage = [
+        FRAME,
+        scaled(bytes, 2, 2 + size_of::<Vec<u8>>())?,
+        scaled(bytes, 256, 0)?,
+        scaled(
+            providers,
+            2,
+            scaled(count, 2 + size_of::<WorkerInputV1>(), 0)?,
+        )?,
+    ]
+    .into_iter()
+    .try_fold(0_usize, usize::checked_add)
+    .ok_or(Resource::Arithmetic)?;
+    Ok((work, storage))
 }
 
 pub(super) fn prepay_read(bytes: usize, b: &mut Budget<'_>) -> Result<(), Resource> {
