@@ -1,5 +1,7 @@
 //! Protected rustc custody for one exact compiler-execution receipt session.
 
+#[path = "protected_compiler_execution_dispatch_v236.rs"]
+pub(crate) mod dispatch;
 #[path = "protected_compiler_execution_native_v3.rs"]
 pub(crate) mod native_v3;
 
@@ -34,6 +36,18 @@ pub(crate) struct AdmittedProtectedCompilerExecutionV1 {
 }
 
 impl AdmittedProtectedCompilerExecutionV1 {
+    fn from_owned(inputs: OwnedExecutionInputs) -> Result<Self, ProtectedCompilerExecutionErrorV1> {
+        let policy = CompilerExecutionPolicyCapabilityV1::from_file(inputs.policy.into())
+            .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
+        let client =
+            CompilerExecutionClientV1::admit(inputs.service, RECEIPT_ACQUISITION_TIMEOUT_V1)
+                .map_err(ProtectedCompilerExecutionErrorV1::Client)?;
+        policy
+            .revalidate()
+            .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
+        Ok(Self { policy, client })
+    }
+
     /// Acquires and independently revalidates the receipt for one exact published subject.
     pub(crate) fn acquire(
         self,
@@ -90,16 +104,7 @@ impl CompilerExecutionStartupInputV1 {
     pub(crate) fn admit(
         &self,
     ) -> Result<AdmittedProtectedCompilerExecutionV1, ProtectedCompilerExecutionErrorV1> {
-        let inputs = self.take()?;
-        let policy = CompilerExecutionPolicyCapabilityV1::from_file(inputs.policy.into())
-            .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
-        let client =
-            CompilerExecutionClientV1::admit(inputs.service, RECEIPT_ACQUISITION_TIMEOUT_V1)
-                .map_err(ProtectedCompilerExecutionErrorV1::Client)?;
-        policy
-            .revalidate()
-            .map_err(ProtectedCompilerExecutionErrorV1::Policy)?;
-        Ok(AdmittedProtectedCompilerExecutionV1 { policy, client })
+        AdmittedProtectedCompilerExecutionV1::from_owned(self.take()?)
     }
 
     /// Consumes the same one-shot captured inputs as legacy admission. A failed
