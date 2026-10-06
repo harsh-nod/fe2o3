@@ -1,4 +1,4 @@
-//! Consuming preparation on the original root account; still refusal-only.
+//! Consuming native execution on the original root account and deadline.
 use super::*;
 use crate::compiler_invocation_backing::{
     CompilerInvocationBacking as Backing, CompilerInvocationBackingError as BackingError,
@@ -24,6 +24,9 @@ pub(crate) use compiler_attempt::CompilerConfinement;
 #[path = "native_root_request_quota.rs"]
 mod quota;
 
+#[path = "native_root_request_runtime.rs"]
+mod execution;
+
 #[cfg(test)]
 #[path = "native_root_request_fault_tests.rs"]
 mod faults;
@@ -34,7 +37,20 @@ enum State {
     Prepared,
     HelperReady,
     CompilerGated,
-    Refused,
+    Interrupting,
+    Interrupted,
+    Armed,
+    AwaitingExec,
+    FirstExec,
+    HeldExec,
+    ConfirmedExec,
+    Running,
+    RootExitHeld,
+    PublicationObserved,
+    AwaitingTerminal,
+    Retiring,
+    SendingCompletion,
+    Completed,
     Failed,
     Cancelled,
 }
@@ -49,6 +65,8 @@ pub(crate) struct RootCompilerRequest<'work> {
     backing: Option<Backing>,
     helper: Option<ManagedProofHelper>,
     attempt: Option<compiler_attempt::Attempt<'work>>,
+    terminal: Option<execution::Termination>,
+    completion: Option<execution::Completion>,
     state: State,
     ledger: Ledger,
     address: usize,
@@ -96,6 +114,8 @@ impl<'work> RootCompilerRequest<'work> {
             backing: None,
             helper: None,
             attempt: None,
+            terminal: None,
+            completion: None,
             state: State::Received,
             ledger: b.work_ledger_identity_v1(),
             address: b as *const Budget<'_> as usize,
@@ -105,15 +125,26 @@ impl<'work> RootCompilerRequest<'work> {
 
     pub(crate) fn continuity(&self, b: &mut Budget<'_>) -> Result<()> {
         self.check_account(b)?;
-        self.prepared
-            .as_ref()
-            .ok_or_else(|| rejected("original preparation already cancelled"))?
-            .revalidate(b)?;
+        if let Some(prepared) = &self.prepared {
+            prepared.revalidate(b)?;
+        } else {
+            self.check_complete(b)?;
+            // Once the checked terminal syscall is released, live-process
+            // validation is no longer possible. The original controller still
+            // owes the actual root wait and every acquired task's retirement.
+            if !matches!(
+                self.state,
+                State::AwaitingTerminal | State::Retiring | State::SendingCompletion
+            ) {
+                self.attempt()?.continuity(b).map_err(helper_error)?;
+            }
+        }
         Ok(())
     }
 
     /// Native supplies its original creator's pool. Helper exec is permitted by
-    /// that dedicated deployment contract, but the compiler gate NEVER opens.
+    /// that dedicated deployment contract. Only the original native attempt can
+    /// release its gate, validate first exec and control subsequent checkpoints.
     ///
     /// # Safety
     /// Preserve the entrypoint's actual outside whole-domain custodian, unique
@@ -129,11 +160,11 @@ impl<'work> RootCompilerRequest<'work> {
         self.state = State::Failed;
         b.charge_work(Self::LOCAL_WORK)?;
         self.check_account(b)?;
-        self.check_complete()?;
+        self.check_complete(b)?;
         match state {
             State::Received => {
                 self.prepare(b)?;
-                self.check_complete()?;
+                self.check_complete(b)?;
                 self.state = State::Prepared;
                 Ok(false)
             }
@@ -247,30 +278,9 @@ impl<'work> RootCompilerRequest<'work> {
                 self.state = State::CompilerGated;
                 Ok(false)
             }
-            State::CompilerGated => {
-                let finished = b.with_prepaid_scope(
-                    self.reserved,
-                    8,
-                    EXCHANGE_WORK,
-                    FRAME + io::packet_receive_scratch(N),
-                    |b| {
-                        self.attempt
-                            .as_ref()
-                            .ok_or_else(|| rejected("missing original compiler attempt"))?
-                            .revalidate(&self.receiver, b)
-                            .map_err(helper_error)?;
-                        self.check_complete()?;
-                        self.receiver.send_refusal_packet()
-                    },
-                )?;
-                self.state = if finished {
-                    State::Refused
-                } else {
-                    State::CompilerGated
-                };
-                Ok(finished)
-            }
-            _ => Err(rejected("compiler request cannot be reused")),
+            // SAFETY: exactly the same original creator, pool, account and
+            // outside-domain custody supplied to this one consuming request.
+            _ => unsafe { self.execution_step(state, cleanup, b) },
         }
     }
 
@@ -351,7 +361,7 @@ impl<'work> RootCompilerRequest<'work> {
         Ok(())
     }
 
-    fn check_complete(&self) -> Result<()> {
+    fn check_complete(&self, b: &mut Budget<'_>) -> Result<()> {
         if self.receiver.phase != Phase::Ack
             || self.receiver.connection.is_none()
             || self.receiver.sender.is_none()
@@ -367,11 +377,14 @@ impl<'work> RootCompilerRequest<'work> {
             .challenge
             .as_ref()
             .ok_or_else(|| rejected("missing original challenge"))?;
-        let prepared = self
-            .prepared
-            .as_ref()
-            .ok_or_else(|| rejected("missing original preparation"))?;
-        if challenge.policy_identity() != prepared.trust.policy().policy().identity().as_bytes() {
+        let policy = match &self.prepared {
+            Some(prepared) => *prepared.trust.policy().policy().identity().as_bytes(),
+            None => self
+                .attempt()?
+                .original_policy_identity(b)
+                .map_err(helper_error)?,
+        };
+        if challenge.policy_identity() != &policy {
             return Err(rejected(
                 "received request differs from original root policy",
             ));
