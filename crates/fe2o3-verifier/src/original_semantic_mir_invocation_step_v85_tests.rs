@@ -75,8 +75,8 @@ fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_dom
             "        }",
         )
     );
-    assert_eq!(text.matches("proof fn ").count(), 5);
-    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 4);
+    assert_eq!(text.matches("proof fn ").count(), 6);
+    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 5);
     assert_eq!(
         theorem(text, "invocation_source_local_observation_intro_v183")
             .split_once("\n}\n")
@@ -125,6 +125,38 @@ fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_dom
             "\n    }",
         )
     );
+    let copy = theorem(text, "invocation_source_scalar_copy_observation_v185")
+        .split_once("\n}\n")
+        .unwrap()
+        .0;
+    let (header, body) = copy.split_once("\n{\n").unwrap();
+    assert_eq!(
+        header,
+        concat!(
+            "\n    source: InvocationSourceByteStateV36, observation: InvocationSourceOperandObservationV36,",
+            "\n    local: int, bits: int, root: int, instance: int, little_endian: bool,\n)",
+            "\n    ensures ({",
+            "\n        let operand = InvocationSourceOperandV36::Scalar {",
+            "\n            value: InvocationSourceByteValueV36::Local { local, moved: false }, bits,",
+            "\n        };",
+            "\n        let evaluated = invocation_source_value_evaluate_v42(",
+            "\n            source, operand, root, instance, little_endian);",
+            "\n        evaluated.source.machine.valid && observation.before == source",
+            "\n            && observation.after == evaluated.source && observation.operand == operand",
+            "\n            ==> invocation_source_local_observation_v180(observation)",
+            "\n    }),",
+        )
+    );
+    assert!(!header.contains("requires"));
+    for fact in [
+        "hide(invocation_source_value_evaluate_v42);",
+        "hide(invocation_source_local_observation_v180);",
+        "invocation_source_scalar_copy_valid_identity_v164(\n        source, local, bits, root, instance, little_endian);",
+        "if evaluated.source.machine.valid && observation.before == source\n        && observation.after == evaluated.source && observation.operand == operand",
+        "invocation_source_local_observation_intro_v183(observation);",
+    ] {
+        assert_eq!(body.matches(fact).count(), 1, "{fact}");
+    }
     for required in [
         "decreases observations.len(),",
         "assert(tail[i] == observations[i + 1]);",
@@ -316,10 +348,11 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert_eq!(runtime_state.matches("hide(invocation_source_local_observation_v180);").count(), 1);
                                     assert!(!runtime_state.contains("reveal(invocation_source_local_observation_v180)"));
                                     assert!(!runtime_state.contains("invocation_source_local_observation_intro_v183("));
-                                    assert_eq!(runtime_state.matches("invocation_source_local_observation_conditional_v184(").count(), call.arguments.len());
+                                    assert!(!runtime_state.contains("invocation_source_local_observation_conditional_v184("));
+                                    assert_eq!(runtime_state.matches("invocation_source_scalar_copy_observation_v185(").count(), call.arguments.len());
                                     let quantified = runtime_state.find(" assert forall|i: int|").unwrap();
-                                    for ordinal in 0..call.arguments.len() {
-                                        let introduction = format!(" invocation_source_local_observation_conditional_v184(invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}]);");
+                                    for (ordinal, (local, _, bits)) in call.arguments.iter().enumerate() {
+                                        let introduction = format!(" invocation_source_scalar_copy_observation_v185(copied_{ordinal}, invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}], {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance);
                                         assert_eq!(runtime_state.matches(&introduction).count(), 1);
                                         assert!(runtime_state.find(&introduction).unwrap() < quantified);
                                     }
