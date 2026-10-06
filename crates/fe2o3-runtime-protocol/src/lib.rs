@@ -6,6 +6,7 @@ mod conditional_worker_readiness;
 mod conditional_worker_readiness_codec;
 pub use conditional_worker_readiness::{
     ConditionalWorkerReadinessEnvelopeV5, ConditionalWorkerReadinessErrorV5,
+    ConditionalWorkerReadinessQuoteV5,
 };
 pub use conditional_worker_readiness_codec::{
     CONDITIONAL_WORKER_READINESS_MAGIC_V5, ConditionalWorkerReadinessCodecErrorV5,
