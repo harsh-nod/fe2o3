@@ -320,7 +320,7 @@ fn owner_with_live_context_reborrow_v170() -> ProductionSemanticSsaOwnerV1 {
     .unwrap()
 }
 
-fn run_fixture(
+pub(in super::super) fn run_fixture(
     layout: Layout,
     work: usize,
     storage: usize,

@@ -25,6 +25,10 @@ use std::{mem::size_of, ops::Range};
 #[path = "original_semantic_mir_invocation_paired_generate_v36.rs"]
 mod generate;
 
+#[path = "original_semantic_mir_expanded_scalar_bindings_v196.rs"]
+mod expanded_scalar;
+pub(super) use expanded_scalar::ExpandedScalarBindingsV196;
+
 #[path = "original_semantic_mir_invocation_logical_bindings_v38.rs"]
 mod logical;
 use logical::LogicalBinding;
@@ -170,6 +174,17 @@ fn check_root_census(
 }
 
 impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
+    pub(super) fn expanded_scalar_bindings<'target>(
+        &self,
+        target: &'target super::tile_target::TileTargetV176<'slots, 'view, 'source>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<ExpandedScalarBindingsV196<'target, 'slots, 'view, 'source>> {
+        self.slots.with_source_query_v42(out, |out| {
+            self.check(out)?;
+            ExpandedScalarBindingsV196::derive(self.slots, target, out)
+        })
+    }
+
     pub(super) fn derive(
         plan: &InvocationPlan<'_, '_>,
         program: &SourceByteProgram<'slots, 'view, 'source>,
