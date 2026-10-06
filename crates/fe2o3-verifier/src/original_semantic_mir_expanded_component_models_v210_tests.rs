@@ -42,8 +42,20 @@ fn generate(
     let source = relation.source(out.budget)?;
     let archive = source.source_ssa(out.budget)?;
     let semantic = source.source_semantic(out.budget)?;
+    let launches = source.source_launch(out.budget)?;
     let (mut scalars, mut leaves) = (0usize, 0usize);
     for root in 0..source.root_count(out.budget)? {
+        let (function, _) = source.root(root, out.budget)?;
+        let launch = launches
+            .roots()
+            .iter()
+            .find(|launch| launch.selected_root() == function)
+            .expect("fixture has an authenticated source launch");
+        let [x, y, z] = launch.layout().global_extents();
+        assert!(x > 0 && y > 0 && z > 0, "fixture launch must be finite");
+        writeln!(out, "spec fn invocation_runtime_launch_{root}_v36() -> (int, Seq<int>) {{ ({}, seq![{x}int, {y}int, {z}int]) }}", launch.source_rank())
+            .map_err(|_| out.error())?;
+        super::super::super::emit_execution_v37(relation, root, out)?;
         for instance in 0..plan.root(root, out)?.instances.len() {
             let row = plan.instance(root, instance, out)?;
             if !row.active {
