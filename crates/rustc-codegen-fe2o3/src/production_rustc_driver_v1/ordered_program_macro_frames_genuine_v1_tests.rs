@@ -174,7 +174,19 @@ fn nested_ranges(source: &[u8]) -> Result<[(usize, usize); 4], &'static str> {
     if source != FIXTURE {
         return Err("nested fixture is not current embedded source");
     }
-    let wrapper = unique_range(source, WRAPPER_HEAD)?;
+    let (wrapper_start, _) = unique_range(source, WRAPPER_HEAD)?;
+    // rustc reports the complete local macro definition, unlike the external
+    // diagnostic macro's definition-head span. Derive its end independently
+    // from the unique exact fixture closing sequence and following attribute.
+    let (wrapper_close, _) = unique_range(
+        source,
+        "\n    };\n}\n\n#[cfg_attr(feature = \"ordered-program-wrong-launch-v32\",",
+    )?;
+    let wrapper_end = wrapper_close + "\n    };\n}".len();
+    if wrapper_start >= wrapper_end {
+        return Err("nested wrapper definition range");
+    }
+    let wrapper = (wrapper_start, wrapper_end);
     let text = std::str::from_utf8(source).map_err(|_| "nested source UTF8")?;
     let prefix = "#[cfg(feature = \"ordered-program-nested-v32\")]\nmacro_rules! ordered_program_wrapper {\n    ($a:expr, $b:expr, $c:expr) => {\n        ";
     let (at, _) = unique_range(source, prefix)?;
@@ -684,10 +696,25 @@ fn nested_real_fixture_has_distinct_inner_outer_and_definition_ranges() {
         &FIXTURE[outer.0..outer.1],
         b"ordered_program_wrapper!(a, b, c)"
     );
+    assert_eq!(definition, (290, 558));
     assert_eq!(
         &FIXTURE[definition.0..definition.1],
-        WRAPPER_HEAD.as_bytes()
+        concat!(
+            "macro_rules! ordered_program_wrapper {\n",
+            "    ($a:expr, $b:expr, $c:expr) => {\n",
+            "        amdgpu_ordered_program! {\n",
+            "            gfx942_xnack_off_wave64;\n",
+            "            scratch(32); out(33); in(34) = $a; in(35) = $b; in(36) = $c;\n",
+            "            mov(out, input0);\n",
+            "        }\n",
+            "    };\n",
+            "}"
+        )
+        .as_bytes()
     );
+    assert_eq!(coordinate(FIXTURE, definition.0), Ok((6, 1)));
+    assert_eq!(coordinate(FIXTURE, definition.1), Ok((14, 2)));
+    assert_eq!(device, (7894, 7929));
     assert_eq!(
         &DEVICE_MACRO_SOURCE[device.0..device.1],
         b"macro_rules! amdgpu_ordered_program"
@@ -914,4 +941,78 @@ fn nested_refusal_diagnostic_keeps_one_step_and_source_rejections_unchanged() {
     assert!(validate_nested(&origin, &frames, FIXTURE).is_ok());
     let _ = nested_refusal_diagnostic("inert diagnostic only", &frames, FIXTURE).unwrap();
     assert!(validate_nested(&origin, &frames, FIXTURE).is_ok());
+}
+
+
+// Independent literal source coordinates: do not derive this observed record
+// using nested_ranges() or coordinate(), whose expectations it exercises.
+fn literal_local_wrapper_definition() -> Value {
+    json!({"availability":"available","byte_start":290,"byte_end":558,
+        "line_start":6,"column_start":1,"line_end":14,"column_end":2,
+        "file_identity":vec![1_u8;32]})
+}
+#[test]
+fn nested_wrapper_literal_body_endpoints_pass_without_generated_span_oracle() {
+    let (origin, mut frames) = inert_nested_reports();
+    frames["frames"][1]["definition_site"] = literal_local_wrapper_definition();
+    assert_eq!(validate_nested(&origin, &frames, FIXTURE), Ok(()));
+    assert_eq!(&FIXTURE[290..326], WRAPPER_HEAD.as_bytes());
+    assert_eq!(&FIXTURE[549..558], b"\n    };\n}");
+    assert_eq!(&FIXTURE[558..561], b"\n\n#");
+}
+#[test]
+fn nested_wrapper_header_only_definition_is_not_the_local_body() {
+    let (origin, mut frames) = inert_nested_reports();
+    let mut header = literal_local_wrapper_definition();
+    header["byte_end"] = json!(326);
+    header["line_end"] = json!(6);
+    header["column_end"] = json!(37);
+    frames["frames"][1]["definition_site"] = header;
+    assert_eq!(
+        validate_nested(&origin, &frames, FIXTURE),
+        Err("nested exact source interval differs")
+    );
+}
+#[test]
+fn nested_wrapper_wrong_end_or_line_refuses_even_with_other_coordinates_exact() {
+    let (origin, original) = inert_nested_reports();
+    for (field, value) in [
+        ("byte_end", 557),
+        ("byte_end", 559),
+        ("line_end", 13),
+        ("line_end", 15),
+        ("column_end", 1),
+        ("column_end", 3),
+    ] {
+        let mut frames = original.clone();
+        frames["frames"][1]["definition_site"] = literal_local_wrapper_definition();
+        frames["frames"][1]["definition_site"][field] = json!(value);
+        assert_eq!(
+            validate_nested(&origin, &frames, FIXTURE),
+            Err("nested exact source interval differs")
+        );
+    }
+}
+#[test]
+fn nested_wrapper_literal_span_cannot_change_file_macro_or_expansion_identity() {
+    let (origin, original) = inert_nested_reports();
+    let mut frames = original.clone();
+    frames["frames"][1]["definition_site"] = literal_local_wrapper_definition();
+    frames["frames"][1]["definition_site"]["file_identity"] = json!(vec![2_u8;32]);
+    assert_eq!(
+        validate_nested(&origin, &frames, FIXTURE),
+        Err("nested fixture file identity mismatch")
+    );
+    let mut frames = original.clone();
+    frames["frames"][1]["macro_name"] = json!("amdgpu_ordered_program");
+    assert_eq!(
+        validate_nested(&origin, &frames, FIXTURE),
+        Err("nested actual fixture frame mismatch")
+    );
+    let mut frames = original;
+    frames["frames"][1]["expansion_identity"] = frames["frames"][0]["expansion_identity"].clone();
+    assert_eq!(
+        validate_nested(&origin, &frames, FIXTURE),
+        Err("nested frame identity mismatch")
+    );
 }
