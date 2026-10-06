@@ -11,6 +11,44 @@ and implementation assessments, including their 6/18 statements. The dated
 acceptance record below supersedes those counts and the bounded M2 assessment;
 it does not retroactively change their evidence or accept pending owner contracts.
 
+## Fresh debugger startup and retained Worker build — 2026-10-06
+
+The rebuilt private debugger passed its ELF/runtime-closure checks and a fresh
+supervised, no-inferior startup. Five cleanup scenarios also passed: normal
+exit, timeout, double-fork, stdout holder and failed exec. The startup exchanged
+two MI2 commands and 14 records; all six service cgroups were independently
+observed absent afterward. These are startup and point-in-time cleanup results,
+not kernel execution or global process exclusion.
+
+The complete startup evidence now passes 91 semantic/source controls, including
+the original outer build-record duties. Its seven derived products retain all
+119 historical roles. The fresh controller passed 27 binding/renderer controls,
+then 64 protocol and 97 native-CPU tests and an offline build. Its 27 source
+files select 372 distinct readable inputs; the public profile remains disabled.
+The current-consumer embedding passed another 27 controls, including complete
+119-role replay and exact semantic-result comparison. Fresh currentness,
+owned native capture/resume and public-debugger qualification remain pending.
+
+The direct compiler Worker configured successfully with the pinned LLVM SDK,
+five translation units and both optional device-library providers disabled.
+The actual compile/link command completed and produced a 107,567,128-byte ELF,
+SHA256 `8887fc5a09bdc62c532c79b22f031391d62be9c7936fd4cac1dee50b4ebe042c`.
+The enclosing build check nevertheless **failed**: it incorrectly expected
+`WorkerBuildConfig.h` in the pipeline translation unit's dependency list.
+The actual source and depfiles place it in `WorkerDeviceLibraryPolicy.cpp`.
+The failed run and its missing complete postflight remain preserved.
+
+A separate read-only snapshot retained all 94 current generated files and the
+complete linker map, with the configured immutable inputs unchanged. That
+snapshot does not retroactively turn the failed build check into a pass.
+Read-only dependency/link reconciliation, loader closure and actual owning
+frontend Worker sessions remain to be qualified. The Worker has not executed.
+
+No milestone or tutorial exit is newly accepted. The count remains
+**M1/M2/V1/V2/U1/U2/U3 (7/18)**. This checkpoint advances the startup/build
+prerequisites listed in the preceding implementation work, without promoting
+private tests into ordinary compiler or debugger support.
+
 ## Worker-entry refusals and debugger query separation — 2026-10-06
 
 The private BF16 continuation now has a test-only entry guard immediately before
