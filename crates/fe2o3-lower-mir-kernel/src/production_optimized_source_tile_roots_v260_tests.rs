@@ -348,6 +348,71 @@ fn prepared_multi_tile(
     .unwrap()
 }
 
+fn assert_shared_source_instances_v260(
+    source: &ProductionSourceOwnedViewV18<'_>,
+    budget: &mut ArgumentBudgetV1<'_>,
+) -> SourceOwnedResultV18<()> {
+    let semantic = source.source_semantic(budget)?;
+    let shared = SemanticFunctionIdV1::from_index(4);
+    let shared_function = &semantic.functions()[shared.index() as usize];
+    assert_eq!(
+        shared_function.identity(),
+        SemanticFunctionIdentityV1::from_sha256([200; 32])
+    );
+    assert_eq!(
+        shared_function.role(),
+        SemanticFunctionRoleV1::InternalHelper
+    );
+    assert_eq!(source.root_count(budget)?, semantic.roots().len());
+    for (ordinal, &root) in semantic.roots().iter().enumerate() {
+        assert_eq!(source.root(ordinal, budget)?, (root, ordinal));
+        assert_eq!(source.instance(ordinal, 0, budget)?, (root, None));
+        let calls: Vec<_> = semantic.functions()[root.index() as usize]
+            .blocks()
+            .iter()
+            .enumerate()
+            .filter_map(|(block, row)| match row.terminator().kind() {
+                SemanticTerminatorKindV1::Call(call)
+                    if semantic.callables()[call.callee().index() as usize]
+                        == SemanticCallableDeclV1::defined(shared) =>
+                {
+                    Some(SemanticBlockIdV1::from_index(block as u32))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 1, "each original root calls the shared helper");
+        let mut matched = 0;
+        for instance in 0..source.instance_count(ordinal, budget)? {
+            let (function, incoming) = source.instance(ordinal, instance, budget)?;
+            if function != shared {
+                continue;
+            }
+            matched += 1;
+            assert_eq!(incoming, Some((0, calls[0])));
+            assert!(source.instance_active(ordinal, instance, budget)?);
+            let active = source.active_ordinal(ordinal, instance, budget)?.unwrap();
+            let row = source.root_row(ordinal)?;
+            let coordinate = &row.coordinates.sources.rows[instance];
+            let slots = &row.source_slots.instances[active];
+            let sidecar = &row.sidecars.rows[active];
+            assert_eq!(coordinate.identity, shared_function.identity());
+            assert_eq!(slots.instance, coordinate.instance);
+            assert_eq!(slots.function, shared);
+            assert_eq!(slots.incoming, coordinate.incoming);
+            assert_eq!(sidecar.source_call_instance, Some(coordinate.instance));
+            assert_eq!(row.source_slots.source.root, root);
+            assert_eq!(
+                row.source_slots.source.semantic,
+                row.coordinates.semantic_sha256
+            );
+            assert!(row.source_slots.ledger == budget.work_ledger_identity_v1());
+        }
+        assert_eq!(matched, 1, "one active original helper instance per root");
+    }
+    Ok(())
+}
+
 #[test]
 fn complete_tile_roots_keep_mixed_rosters_and_one_whole_module() {
     for second_tile in [false, true] {
@@ -357,7 +422,11 @@ fn complete_tile_roots_keep_mixed_rosters_and_one_whole_module() {
         let prepared = prepared_multi_tile(second_tile, &mut budget);
         with_actual_optimized_source_v18(prepared, &mut budget, |view, budget| {
             let count = if second_tile { 3 } else { 2 };
-            assert_eq!(view.original_source(budget)?.root_count(budget)?, count);
+            let source = view.original_source(budget)?;
+            assert_eq!(source.root_count(budget)?, count);
+            // Ordinary helper calls are flattened into each root. Their actual
+            // source instances remain retained, not residual KIR helper calls.
+            assert_shared_source_instances_v260(source, budget)?;
             let mut layouts = vec![Some(ExecutionTileLayoutV1::Blocked); count];
             if second_tile {
                 layouts[1] = Some(ExecutionTileLayoutV1::Striped);
@@ -367,17 +436,6 @@ fn complete_tile_roots_keep_mixed_rosters_and_one_whole_module() {
             let ledger = budget.work_ledger_identity_v1();
             let inventory = view.output_inventory(budget)?;
             let original = inventory.owner();
-            let shared: Vec<_> = inventory.functions().iter().filter(|function| {
-                !inventory.kernels().iter().any(|kernel| kernel.entry == function.coordinate)
-                    && inventory.kernels().iter().all(|kernel| {
-                        inventory.calls().iter().filter(|call| {
-                            call.target == Some(function.coordinate)
-                                && call.coordinate.block.function == kernel.entry
-                        }).count() == 1
-                    })
-            }).collect();
-            assert_eq!(shared.len(), 1, "one actual shared helper with an incoming call from every root must survive the neutral prefix");
-            let helper = shared[0];
             let mut first_identity = None;
             for _ in 0..2 {
                 let expanded = view.prepare_tile_expansion_roots_v260(&layouts, budget)?;
@@ -386,6 +444,11 @@ fn complete_tile_roots_keep_mixed_rosters_and_one_whole_module() {
                 assert_eq!(budget.storage() - floor, expanded.retained_storage(budget)?);
                 assert_eq!(expanded.selections(budget)?.len(), count - 1);
                 assert!(std::ptr::eq(expanded.neutral_source_v162(budget)?, view));
+                assert!(std::ptr::eq(
+                    expanded.original_source_v162(budget)?.source(budget)?,
+                    source
+                ));
+                assert_shared_source_instances_v260(source, budget)?;
                 for root in 0..count {
                     let policy = expanded.root_policy_v162(root, budget)?;
                     assert_eq!(policy.is_some(), root != count - 1);
@@ -396,14 +459,6 @@ fn complete_tile_roots_keep_mixed_rosters_and_one_whole_module() {
                 let output = expanded.output(budget)?.module();
                 assert_eq!(output.kernels, original.module().kernels);
                 assert_eq!(output.functions.len(), original.module().functions.len());
-                assert_eq!(output.functions.iter().filter(|function| function.id == helper.function.id).count(), 1);
-                assert_eq!(&output.functions[helper.coordinate.0 as usize], helper.function);
-                for kernel in &output.kernels {
-                    let root = output.functions.iter().find(|function| function.id == kernel.entry).unwrap();
-                    let calls = root.body.as_ref().unwrap().blocks.iter().flat_map(|block| &block.operations)
-                        .filter(|operation| matches!(&operation.kind, OperationKind::Call { callee, .. } if callee == &helper.function.id)).count();
-                    assert_eq!(calls, 1, "the same actual helper remains linked from every root");
-                }
                 for (index, function) in original.module().functions.iter().enumerate() {
                     if !expanded
                         .selections(budget)?
