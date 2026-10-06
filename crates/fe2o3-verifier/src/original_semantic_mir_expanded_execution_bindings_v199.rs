@@ -67,6 +67,11 @@ impl<'plan, 'target, 'slots, 'view, 'source>
             + 32 * size_of::<usize>()
             + size_of::<bool>()
             + size_of::<&str>()
+            + size_of::<&Self>()
+            + 2 * size_of::<usize>()
+            + size_of::<Value>()
+            + size_of::<&mut Writer<'_, '_>>()
+            + size_of::<Result<()>>()
     }
 
     pub(super) fn derive(
@@ -353,6 +358,7 @@ impl<'plan, 'target, 'slots, 'view, 'source>
             } else { None };
             let frame = self.frame(root, instance, out)?;
             let local = row.locals.start.checked_add(local).ok_or(Resource::Arithmetic)?;
+            out.budget.charge_work(1)?;
             let predicate = if mapped {
                 "invocation_execution_mapped_v205(source, target, execution_map, "
             } else {
