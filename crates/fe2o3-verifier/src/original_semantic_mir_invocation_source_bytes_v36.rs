@@ -1825,6 +1825,7 @@ pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_execution_correspondence_v205.vrs"),
     include_str!("original_semantic_mir_expanded_payload_lease_v209.vrs"),
     include_str!("original_semantic_mir_context_issue_coupling_v211.vrs"),
+    include_str!("original_semantic_mir_expanded_transition_v259.vrs"),
     include_str!("original_semantic_mir_source_tile_v161.vrs"),
     include_str!("original_semantic_mir_source_entry_initialize_v166.vrs"),
     include_str!("original_semantic_mir_source_entry_select_v167.vrs"),
