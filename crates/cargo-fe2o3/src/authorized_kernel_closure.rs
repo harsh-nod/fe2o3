@@ -204,12 +204,22 @@ const TRUSTED_REGISTRY_PROC_MACROS: [(&str, &str, &str); 9] = [
         "2b03916e618b74694c727ea32ae011c0d183faf846fd6d11bd6917aae0dc13f4",
     ),
 ];
-const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 1] = [(
-    "pliron-derive",
-    "0.17.0",
-    "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092",
-    "18abd61218886753068c38294931388e53e90f17b85cd8660b83ec93280bc824",
-)];
+// These exact revisions have identical reviewed pliron-derive trees. Keep the
+// prior admission while admitting the workspace pin; neither allows Git drift.
+const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 2] = [
+    (
+        "pliron-derive",
+        "0.17.0",
+        "git+https://github.com/harsh-nod/pliron.git?rev=e054e5b2e53c7330470f9202c35c8c0e4e102092#e054e5b2e53c7330470f9202c35c8c0e4e102092",
+        "18abd61218886753068c38294931388e53e90f17b85cd8660b83ec93280bc824",
+    ),
+    (
+        "pliron-derive",
+        "0.17.0",
+        "git+https://github.com/harsh-nod/pliron.git?rev=90ef1c11647cc33bbadc83c29d21525cbd8e4c2c#90ef1c11647cc33bbadc83c29d21525cbd8e4c2c",
+        "18abd61218886753068c38294931388e53e90f17b85cd8660b83ec93280bc824",
+    ),
+];
 // The complete reviewed workspace tree includes macro source, the manifest and
 // nested fixture lockfiles. Source changes require review and a fresh tree pin;
 // they do not change the independent external-source admission below.
@@ -1526,6 +1536,63 @@ mod tests {
             )
             .unwrap_err()
             .contains("registry proc-macro closure content changed")
+        );
+    }
+
+    #[test]
+    fn reviewed_workspace_pliron_macro_requires_exact_pinned_source_and_content() {
+        let manifest: toml::Value = toml::from_str(include_str!("../../../Cargo.toml")).unwrap();
+        let dependency = &manifest["workspace"]["dependencies"]["pliron"];
+        let repository = dependency["git"].as_str().unwrap();
+        let revision = dependency["rev"].as_str().unwrap();
+        let source = format!("git+{repository}?rev={revision}#{revision}");
+        let lock: toml::Value = toml::from_str(include_str!("../../../Cargo.lock")).unwrap();
+        let macros: Vec<_> = lock["package"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|package| package["name"].as_str() == Some("pliron-derive"))
+            .collect();
+        assert_eq!(macros.len(), 1);
+        assert_eq!(macros[0]["source"].as_str(), Some(source.as_str()));
+        assert_eq!(macros[0]["version"].as_str(), Some("0.17.0"));
+
+        let reviewed =
+            decode_digest("18abd61218886753068c38294931388e53e90f17b85cd8660b83ec93280bc824");
+        let package = serde_json::json!({
+            "name": "pliron-derive",
+            "version": "0.17.0",
+            "source": source,
+            "links": Value::Null,
+            "manifest_path": "/cargo/git/checkouts/pliron/revision/pliron-derive/Cargo.toml",
+            "targets": [{"kind": ["proc-macro"]}],
+        });
+        validate_host_code_package(&package, &reviewed).unwrap();
+
+        for (field, value) in [
+            ("name", serde_json::json!("substituted-macro")),
+            ("version", serde_json::json!("0.17.1")),
+            ("source", Value::Null),
+            (
+                "source",
+                serde_json::json!(format!("git+{repository}?branch=main#{revision}")),
+            ),
+            (
+                "source",
+                serde_json::json!(format!(
+                    "git+{repository}?rev={revision}#{}",
+                    "0".repeat(40)
+                )),
+            ),
+        ] {
+            let mut substituted = package.clone();
+            substituted[field] = value;
+            assert!(validate_host_code_package(&substituted, &reviewed).is_err());
+        }
+        assert!(
+            validate_host_code_package(&package, &[0_u8; 32])
+                .unwrap_err()
+                .contains("git proc-macro closure content changed")
         );
     }
 
