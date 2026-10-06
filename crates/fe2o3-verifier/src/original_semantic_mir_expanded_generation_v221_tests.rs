@@ -13,6 +13,11 @@ fn expanded_generation_headers_cover_context_and_runtime_queries() {
     let runtime =
         2 * size_of::<FormalIndexWidth>() + size_of::<EndiannessV2>() + size_of::<[u64; 3]>();
     let selected_launch = size_of::<Option<usize>>();
+    let launch_iterator = size_of::<
+        std::iter::Enumerate<
+            std::slice::Iter<'_, fe2o3_lower_mir_kernel::ProductionSourceLaunchRootV1>,
+        >,
+    >();
     let coordinates = [
         ("root, count and launch index", 3),
         ("query temporaries", 9),
@@ -27,6 +32,7 @@ fn expanded_generation_headers_cover_context_and_runtime_queries() {
             + results
             + runtime
             + selected_launch
+            + launch_iterator
             + coordinates.iter().map(|(_, count)| count).sum::<usize>() * size_of::<usize>()
             + references.iter().map(|(_, count)| count).sum::<usize>() * size_of::<&()>()
     );
@@ -34,13 +40,13 @@ fn expanded_generation_headers_cover_context_and_runtime_queries() {
 
 fn run(
     layout: Layout,
+    width: FormalIndexWidth,
     endianness: EndiannessV2,
     work: usize,
     storage: usize,
 ) -> (Result<()>, usize, usize, usize) {
     run_fixture_with_plan(layout, work, storage, |plan, slots, _, out| {
-        let model =
-            ExpandedGenerationV221::derive(plan, slots, FormalIndexWidth::Bits64, endianness, out)?;
+        let model = ExpandedGenerationV221::derive(plan, slots, width, endianness, out)?;
         assert!(std::ptr::eq(model.target(out)?.source_slots(out)?, slots));
         let original = slots.correspondence(out)?.inventory(out.budget)?;
         assert!(!std::ptr::eq(
@@ -80,6 +86,7 @@ fn run(
         );
         assert!(!generated.contains(&format!("layout: InvocationSourceTileLayoutV161::{absent}")));
         assert!(!generated.contains("proof fn invocation_paired_"));
+        assert!(generated.contains("proof fn invocation_context_issue_segment_"));
         assert!(!generated.contains("assume("));
         Ok(())
     })
@@ -88,8 +95,10 @@ fn run(
 #[test]
 fn expanded_generation_uses_actual_owners_layout_and_runtime() {
     for layout in [Layout::Blocked, Layout::Striped] {
-        for endianness in [EndiannessV2::Little, EndiannessV2::Big] {
-            run(layout, endianness, LIMIT, LIMIT).0.unwrap();
+        for width in [FormalIndexWidth::Bits32, FormalIndexWidth::Bits64] {
+            for endianness in [EndiannessV2::Little, EndiannessV2::Big] {
+                run(layout, width, endianness, LIMIT, LIMIT).0.unwrap();
+            }
         }
     }
 }
@@ -97,22 +106,34 @@ fn expanded_generation_uses_actual_owners_layout_and_runtime() {
 #[test]
 fn expanded_generation_has_exact_and_one_short_resource_bounds() {
     for layout in [Layout::Blocked, Layout::Striped] {
-        let baseline = run(layout, EndiannessV2::Little, LIMIT, LIMIT);
+        let baseline = run(
+            layout,
+            FormalIndexWidth::Bits64,
+            EndiannessV2::Little,
+            LIMIT,
+            LIMIT,
+        );
         baseline.0.unwrap();
-        let exact = run(layout, EndiannessV2::Little, baseline.1, baseline.3);
+        let exact = run(
+            layout,
+            FormalIndexWidth::Bits64,
+            EndiannessV2::Little,
+            baseline.1,
+            baseline.3,
+        );
         exact.0.unwrap();
         assert_eq!(
             (exact.1, exact.2, exact.3),
             (baseline.1, baseline.2, baseline.3)
         );
         assert!(
-            matches!(run(layout, EndiannessV2::Little, baseline.1 - 1, baseline.3).0,
+            matches!(run(layout, FormalIndexWidth::Bits64, EndiannessV2::Little, baseline.1 - 1, baseline.3).0,
             Err(Error::Resource(Resource::Work(error)))
             | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
             if error.actual() == baseline.1 && error.limit() == baseline.1 - 1)
         );
         assert!(
-            matches!(run(layout, EndiannessV2::Little, baseline.1, baseline.3 - 1).0,
+            matches!(run(layout, FormalIndexWidth::Bits64, EndiannessV2::Little, baseline.1, baseline.3 - 1).0,
             Err(Error::Resource(Resource::Storage(error)))
             | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
             if error.actual() == baseline.3 && error.limit() == baseline.3 - 1)

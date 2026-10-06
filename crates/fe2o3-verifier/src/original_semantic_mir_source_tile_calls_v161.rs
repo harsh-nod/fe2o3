@@ -64,6 +64,13 @@ fn local(operand: &Operand, move_only: bool) -> Result<(usize, bool)> {
 }
 
 impl TileCall {
+    pub(super) fn context_issue_v222(self) -> Option<(usize, TypeId, usize)> {
+        match self.action {
+            Action::ContextIssue => Some((self.destination, self.output_type, self.continuation)),
+            _ => None,
+        }
+    }
+
     /// Policy comes only from the retained source slots' live expansion owner.
     /// A missing selection always refuses an original tile load.
     #[allow(clippy::too_many_arguments)]

@@ -4,6 +4,7 @@ use super::super::invocations::InvocationPlan;
 use super::{
     Error, Resource, Result, TargetContracts, Writer,
     byte_bindings::SourceByteBindings,
+    expanded_execution::ExpandedExecutionBindingsV199,
     slots::{SourceSlots, SourceTagPairsV40},
     source_function::SourceByteProgram,
     tile_target::{TileMicroCutsV180, TileTargetV176},
@@ -37,6 +38,11 @@ impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view,
             + size_of::<Option<usize>>()
             + 2 * size_of::<Result<()>>()
             + size_of::<[u64; 3]>()
+            + size_of::<
+                std::iter::Enumerate<
+                    std::slice::Iter<'_, fe2o3_lower_mir_kernel::ProductionSourceLaunchRootV1>,
+                >,
+            >()
             + 12 * size_of::<usize>()
             + 16 * size_of::<&()>()
     }
@@ -111,6 +117,7 @@ impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view,
             self.slots.emit(out)?;
             program.emit(out)?;
             bytes.emit(out)?;
+            out.budget.charge_work(2)?;
             let index_bytes = match self.width {
                 FormalIndexWidth::Bits32 => 4,
                 FormalIndexWidth::Bits64 => 8,
@@ -148,6 +155,8 @@ impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view,
                     .map_err(|_| out.error())?;
                 super::emit_execution_v37(relation, root, out)?;
             }
+            let execution = ExpandedExecutionBindingsV199::derive(self.plan, self.slots, &self.target, out)?;
+            program.emit_context_issue_segments_v222(self.plan, &execution, out)?;
             self.check(out)
         })
     }

@@ -65,6 +65,13 @@ fn exercise(
         + size_of::<Option<usize>>()
         + size_of::<Result<()>>()
         + 10 * size_of::<usize>();
+    let issue_segment_frame = size_of::<super::super::source_function::ContextIssueSiteV222>()
+        + size_of::<Site>()
+        + size_of::<Owner>()
+        + size_of::<fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>>()
+        + size_of::<Result<()>>()
+        + 12 * size_of::<usize>()
+        + 12 * size_of::<&()>();
     assert_eq!(
         out.budget.storage() - before,
         retained
@@ -79,6 +86,7 @@ fn exercise(
             + outer_frame
             + payload_frame
             + issue_frame
+            + issue_segment_frame
     );
     bindings.check_owner(plan, slots, &target, out)?;
     let source = plan.source(out)?;

@@ -35,6 +35,8 @@ pub(super) const SHARED: &str = concat!(
 
 #[path = "original_semantic_mir_context_issue_coupling_v211.rs"]
 mod context_issue;
+#[path = "original_semantic_mir_context_issue_segment_v222.rs"]
+mod context_issue_segment;
 #[path = "original_semantic_mir_expanded_payload_lease_v209.rs"]
 mod payload_lease;
 
@@ -81,6 +83,7 @@ impl<'plan, 'target, 'slots, 'view, 'source>
             + size_of::<Result<()>>()
             + payload_lease::headers()
             + context_issue::headers()
+            + context_issue_segment::headers()
     }
 
     pub(super) fn derive(

@@ -165,6 +165,10 @@ pub(super) struct SourceByteProgram<'slots, 'view, 'source> {
     required: usize,
 }
 
+#[path = "original_semantic_mir_source_context_issue_sites_v222.rs"]
+mod context_issue_sites;
+pub(super) use context_issue_sites::ContextIssueSiteV222;
+
 impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
     pub(super) fn emit_thread_write_normal_proofs_v94(
         &self,
