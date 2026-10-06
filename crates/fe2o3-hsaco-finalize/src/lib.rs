@@ -70,6 +70,7 @@ mod nominal_descriptor_common;
 mod nominal_descriptor_finalization_v3;
 mod nominal_descriptor_finalization_v4;
 mod nominal_descriptor_finalization_v5;
+mod nominal_descriptor_resources_v5;
 pub use mixed_descriptor_finalization_v53::{
     FinalizedNominalHsacoV53, NOMINAL_DESCRIPTOR_SCRATCH_STORAGE_V53,
     NominalDescriptorInspectionV53, NominalFinalizationErrorV53,
@@ -82,6 +83,7 @@ pub use mixed_descriptor_finalization_v89::{
     derive_unfinalized_nominal_hsaco_v89, finalize_unfinalized_nominal_hsaco_v89,
     inspect_finalized_nominal_hsaco_v89, inspect_unfinalized_nominal_hsaco_v89,
 };
+pub use nominal_descriptor_resources_v5::NominalDescriptorWorkBoundsV5;
 mod mixed_worker_finalization_family;
 mod mixed_worker_finalization_v53;
 mod mixed_worker_finalization_v89;

@@ -22,6 +22,7 @@ mod elf {
 
 #[test]
 fn conditional_artifact_preserves_complete_contract_for_both_targets() {
+    let quote = crate::NominalDescriptorWorkBoundsV5::admitted_limits().unwrap();
     for target in ["gfx942:xnack-", "gfx950:xnack-"] {
         let (abi, _) = descriptor::wires(target, 1, 0, Some(256), "conditional-worker");
         let raw = elf::artifact(&abi, target, 5);
@@ -31,22 +32,29 @@ fn conditional_artifact_preserves_complete_contract_for_both_targets() {
         b.reserve_storage(floor).unwrap();
         b.charge_work(19).unwrap();
         let ledger = b.work_ledger_identity_v1();
+        let before = b.work();
         derive_launch(&raw, &mut b).unwrap();
+        assert!(b.work() - before <= quote.launch_derivation());
+        let before = b.work();
         let output = finalize_artifact(&raw, &abi, &mut b).unwrap();
-        let checked = crate::inspect_finalized_nominal_hsaco_v5(
-            output.as_bytes(),
-            SCRATCH,
-            &mut descriptor::free,
-        )
-        .unwrap();
+        assert!(b.work() - before <= quote.finalization());
+        let before = b.work();
+        let checked =
+            crate::inspect_finalized_nominal_hsaco_v5(output.as_bytes(), SCRATCH, &mut |w| {
+                b.charge_work(w)
+            })
+            .unwrap();
+        assert!(b.work() - before <= quote.finalized_inspection());
         let offset = checked.location().digest_offset();
         assert_eq!(&output.as_bytes()[..offset], &raw[..offset]);
         assert_eq!(&output.as_bytes()[offset + 32..], &raw[offset + 32..]);
         assert_eq!(output.digest(), checked.digest());
+        let before = b.work();
         assert_eq!(
             reconstruct_artifact(output.as_bytes(), &mut b).unwrap(),
             raw
         );
+        assert!(b.work() - before <= quote.reconstruction());
         assert!(!checked.grants_launch_authority());
         assert_eq!(b.storage(), floor);
         assert_eq!(b.peak_storage(), floor + SCRATCH);
