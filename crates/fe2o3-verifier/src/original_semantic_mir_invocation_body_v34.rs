@@ -61,6 +61,9 @@ mod tile_target;
 #[path = "original_semantic_mir_expanded_execution_bindings_v199.rs"]
 mod expanded_execution;
 
+#[path = "original_semantic_mir_expanded_generation_v221.rs"]
+mod expanded_generation;
+
 #[path = "original_semantic_mir_reference_expressions_v69.rs"]
 mod reference_expressions;
 

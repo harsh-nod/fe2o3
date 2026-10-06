@@ -1,14 +1,10 @@
 //! Complete generated component predicates, not an admitted paired step proof.
 use super::super::super::{
-    byte_bindings::SourceByteBindings,
-    expanded_execution::ExpandedExecutionBindingsV199,
+    expanded_execution::ExpandedExecutionBindingsV199, expanded_generation::ExpandedGenerationV221,
     paired::ExpandedScalarBindingsV196,
-    slots::SourceTagPairsV40,
-    tile_target::{TileMicroCutsV180, TileTargetV176},
 };
 use super::*;
-use crate::mixed_optimizer_refinement_v26::semantics::target_view_contracts_v38::TargetByteViewContractsV38 as TargetContracts;
-use fe2o3_kernel_ir::{ExecutionRoleV15, FormalIndexWidth, Type};
+use fe2o3_kernel_ir::{EndiannessV2, ExecutionRoleV15, FormalIndexWidth, Type};
 use fe2o3_mir_model::{SsaBlockIdV1 as Block, SsaEdgeIdV1 as Edge, SsaResolvedEventV1 as Event};
 use std::fmt::Write as _;
 
@@ -17,48 +13,23 @@ const LIMIT: usize = 512 * 1024 * 1024;
 fn generate(
     plan: &InvocationPlan<'_, '_>,
     slots: &SourceSlots<'_, '_>,
-    tile: &TileExpansion<'_, '_>,
+    _tile: &TileExpansion<'_, '_>,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     let width = FormalIndexWidth::Bits64;
     let relation = slots.correspondence(out)?;
-    let original = TargetContracts::derive(relation.inventory(out.budget)?, width, out)?;
-    let tags = SourceTagPairsV40::derive(slots, &original, out)?;
-    let target = TileTargetV176::derive(slots, out)?;
-    let contracts = TargetContracts::derive(target.inventory(out)?, width, out)?;
-    let cuts = TileMicroCutsV180::derive(&target, plan, out)?;
-    let bytes = SourceByteBindings::derive_expanded_v188(&target, out)?;
-    let values = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
-    let execution = ExpandedExecutionBindingsV199::derive(plan, slots, &target, out)?;
-    super::super::super::emit_model_prelude_v187(out)?;
-    slots.emit_source_tag_contracts(0, out)?;
-    tags.emit_expanded_v190(&target, &contracts, width, 0, 1, out)?;
-    slots.emit(out)?;
-    super::generate_actual_tile_source_v168(plan, slots, tile, out)?;
-    bytes.emit(out)?;
-    writeln!(out, "spec fn invocation_runtime_index_bytes_v36() -> int {{ 8 }}\nspec fn invocation_runtime_little_endian_v36() -> bool {{ true }}")
-        .map_err(|_| out.error())?;
-    target.emit(width, out)?;
-    cuts.emit(out)?;
+    let model = ExpandedGenerationV221::derive(plan, slots, width, EndiannessV2::Little, out)?;
+    model.emit_support(out)?;
+    let target = model.target(out)?;
+    let values = ExpandedScalarBindingsV196::derive(slots, target, out)?;
+    let execution = ExpandedExecutionBindingsV199::derive(plan, slots, target, out)?;
 
     let source = relation.source(out.budget)?;
     let archive = source.source_ssa(out.budget)?;
     let semantic = source.source_semantic(out.budget)?;
-    let launches = source.source_launch(out.budget)?;
     let (mut scalars, mut leaves, mut scopes, mut payloads, mut issues) =
         (0usize, 0usize, 0usize, 0usize, 0usize);
     for root in 0..source.root_count(out.budget)? {
-        let (function, _) = source.root(root, out.budget)?;
-        let launch = launches
-            .roots()
-            .iter()
-            .find(|launch| launch.selected_root() == function)
-            .expect("fixture has an authenticated source launch");
-        let [x, y, z] = launch.layout().global_extents();
-        assert!(x > 0 && y > 0 && z > 0, "fixture launch must be finite");
-        writeln!(out, "spec fn invocation_runtime_launch_{root}_v36() -> (int, Seq<int>) {{ ({}, seq![{x}int, {y}int, {z}int]) }}", launch.source_rank())
-            .map_err(|_| out.error())?;
-        super::super::super::emit_execution_v37(relation, root, out)?;
         for instance in 0..plan.root(root, out)?.instances.len() {
             let row = plan.instance(root, instance, out)?;
             if !row.active {
@@ -180,9 +151,8 @@ fn generate(
         }
     }
     assert!(scalars > 0 && leaves > 0 && scopes > 0 && payloads > 0 && issues > 0);
-    super::super::super::paired::emit_source_cut_values_v213(plan, slots, &target, width, out)?;
-    super::super::super::support_closure::retain_referenced(out)?;
-    writeln!(out, "}}").map_err(|_| out.error())?;
+    model.emit_live_values(out)?;
+    model.finish(out)?;
     assert!(
         out.text
             .contains("spec fn invocation_source_byte_block_0_v36(")
