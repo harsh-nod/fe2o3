@@ -26,8 +26,10 @@ use fe2o3_mir_model::{
 };
 use std::{fmt::Write as _, mem::size_of};
 
-pub(super) const SHARED: &str =
-    include_str!("original_semantic_mir_expanded_execution_bindings_v199.vrs");
+pub(super) const SHARED: &str = concat!(
+    include_str!("original_semantic_mir_expanded_execution_bindings_v199.vrs"),
+    include_str!("original_semantic_mir_execution_correspondence_v205.vrs"),
+);
 
 pub(super) struct ExpandedExecutionBindingsV199<'plan, 'target, 'slots, 'view, 'source> {
     plan: &'plan InvocationPlan<'view, 'source>,
@@ -63,6 +65,8 @@ impl<'plan, 'target, 'slots, 'view, 'source>
             + 2 * size_of::<Definition>()
             + size_of::<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>()
             + 32 * size_of::<usize>()
+            + size_of::<bool>()
+            + size_of::<&str>()
     }
 
     pub(super) fn derive(
@@ -279,6 +283,30 @@ impl<'plan, 'target, 'slots, 'view, 'source>
         value: Value,
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
+        self.emit_relation(root, instance, value, false, out)
+    }
+
+    /// Emits the necessary relation with an explicit `execution_map` witness.
+    /// Its initialization and updates must be proved by coupled transitions;
+    /// neither this emitter nor the map's shape grants a history invariant.
+    pub(super) fn emit_mapped_conjunct_v205(
+        &self,
+        root: usize,
+        instance: usize,
+        value: Value,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.emit_relation(root, instance, value, true, out)
+    }
+
+    fn emit_relation(
+        &self,
+        root: usize,
+        instance: usize,
+        value: Value,
+        mapped: bool,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
         self.slots.with_source_query_v42(out, |out| {
             self.check(out)?;
             let relation = self.slots.correspondence(out)?;
@@ -325,7 +353,12 @@ impl<'plan, 'target, 'slots, 'view, 'source>
             } else { None };
             let frame = self.frame(root, instance, out)?;
             let local = row.locals.start.checked_add(local).ok_or(Resource::Arithmetic)?;
-            write!(out, "invocation_execution_related_v199(source, target, InvocationExecutionBindingV199 {{ local: {local}, source_type: {}, context_type: {}, role: {number}, source_frame: {frame}, source_owner: {}, definition: {}, context_definition: {}, site: MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }}, context_site: MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }}, recipe: ",
+            let predicate = if mapped {
+                "invocation_execution_mapped_v205(source, target, execution_map, "
+            } else {
+                "invocation_execution_related_v199(source, target, "
+            };
+            write!(out, "{predicate}InvocationExecutionBindingV199 {{ local: {local}, source_type: {}, context_type: {}, role: {number}, source_frame: {frame}, source_owner: {}, definition: {}, context_definition: {}, site: MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }}, context_site: MemorySourceOperationV30 {{ function: {}, block: {}, operation: {} }}, recipe: ",
                 owner.identity.source_type.index(), owner.context.source_type.index(), row.function.index(),
                 scope.definition, context.definition, scope.operation.block.function.0,
                 scope.operation.block.block, scope.operation.operation, context.operation.block.function.0,

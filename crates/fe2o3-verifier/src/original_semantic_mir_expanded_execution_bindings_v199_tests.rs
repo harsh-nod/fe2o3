@@ -36,7 +36,15 @@ fn exercise(
         + size_of::<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>();
     assert_eq!(
         out.budget.storage() - before,
-        retained + results + producers + sites + loans + coordinates + 32 * size_of::<usize>()
+        retained
+            + results
+            + producers
+            + sites
+            + loans
+            + coordinates
+            + 32 * size_of::<usize>()
+            + size_of::<bool>()
+            + size_of::<&str>()
     );
     bindings.check_owner(plan, slots, &target, out)?;
     let source = plan.source(out)?;
@@ -176,6 +184,17 @@ fn exercise(
                             ));
                         }
                     }
+                    let end = out.text.len();
+                    bindings.emit_mapped_conjunct_v205(0, instance, value, out)?;
+                    let original = out.text[before..end]
+                        .strip_prefix("invocation_execution_related_v199(source, target, ")
+                        .unwrap();
+                    let mapped = out.text[end..]
+                        .strip_prefix(
+                            "invocation_execution_mapped_v205(source, target, execution_map, ",
+                        )
+                        .unwrap();
+                    assert_eq!(original, mapped);
                     if is_borrowed {
                         borrowed += 1;
                     } else {
@@ -191,6 +210,14 @@ fn exercise(
                         Ok(()) => panic!("payload silently treated as a scope token"),
                     }
                     assert_eq!(out.text.len(), before);
+                    match bindings.emit_mapped_conjunct_v205(0, instance, value, out) {
+                        Err(Error::Statement(
+                            "tile payload needs its separate aggregate leaf relation",
+                        )) => (),
+                        Err(error) => return Err(error),
+                        Ok(()) => panic!("execution map silently admitted a tile payload"),
+                    }
+                    assert_eq!(out.text.len(), before);
                     payloads += 1;
                 }
             }
@@ -203,6 +230,49 @@ fn exercise(
     assert!(SHARED.contains("binding.lease_recipe == Some(lease.recipe)"));
     assert!(!SHARED.contains("origin_version == scope.identity.epoch"));
     Ok(())
+}
+
+#[test]
+fn expanded_execution_map_support_keeps_dynamic_identity_and_history_separate() {
+    let source = include_str!("original_semantic_mir_execution_correspondence_v205.vrs");
+    assert!(source.contains(
+        "execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>"
+    ));
+    for guard in [
+        "source.logical.versions[origin.local] == origin.version",
+        "source.machine.frames.active.contains(origin.frame)",
+        "capability.identity == identity",
+        "execution_map[scope.identity] == origin",
+        "== invocation_execution_reference_origin_v205(lease)",
+        "invocation_execution_related_v199(source, target, binding)",
+    ] {
+        assert!(
+            source.contains(guard),
+            "missing dynamic identity guard: {guard}"
+        );
+    }
+    for law in [
+        "empty_map_grants_no_binding",
+        "stale_source_version_is_not_current",
+        "departed_source_frame_is_not_current",
+        "stale_target_identity_is_not_an_entry",
+        "wrong_context_lease_is_not_related",
+        "mapped_binding_keeps_original_conjunct",
+    ] {
+        assert!(source.contains(&format!("proof fn invocation_execution_{law}_v205(")));
+    }
+    assert_eq!(source.matches("proof fn ").count(), 6);
+    assert_eq!(source.matches("forall|").count(), 2);
+    assert_eq!(source.matches("#![trigger ").count(), 2);
+    for unsupported in [
+        "assume(",
+        "admit(",
+        "external_body",
+        "Map::new",
+        "epoch == origin.version",
+    ] {
+        assert!(!source.contains(unsupported));
+    }
 }
 
 #[test]
