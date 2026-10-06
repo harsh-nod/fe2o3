@@ -12,10 +12,10 @@ use fe2o3_mir_model::semantic_mir_v1::{
 use std::{fmt::Write as _, mem::size_of, ops::Range};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct Cursor {
-    block: usize,
-    operation: Option<usize>,
-    prefix: usize,
+pub(in super::super) struct Cursor {
+    pub(in super::super) block: usize,
+    pub(in super::super) operation: Option<usize>,
+    pub(in super::super) prefix: usize,
 }
 
 #[cfg(test)]
@@ -25,11 +25,19 @@ mod tests;
 #[path = "original_semantic_mir_tile_microexecution_v181.rs"]
 mod execution;
 
-struct Cut {
-    instance: usize,
-    block: Block,
-    candidates: Range<usize>,
-    edges: Range<usize>,
+pub(in super::super) struct Cut {
+    pub(in super::super) instance: usize,
+    pub(in super::super) block: Block,
+    pub(in super::super) candidates: Range<usize>,
+    pub(in super::super) edges: Range<usize>,
+}
+
+pub(in super::super) struct StaticCutsV280<'a> {
+    pub(in super::super) roots: &'a [Range<usize>],
+    pub(in super::super) cuts: &'a [Cut],
+    pub(in super::super) candidates: &'a [Cursor],
+    pub(in super::super) zero_edges: &'a [(usize, usize)],
+    pub(in super::super) rank: &'a [usize],
 }
 
 pub(in super::super) struct TileMicroCutsV180<'target, 'slots, 'view, 'source> {
@@ -428,6 +436,34 @@ impl<'target, 'slots, 'view, 'source> TileMicroCutsV180<'target, 'slots, 'view, 
         self.target
             .slots
             .check_query_storage_floor(self.required, out.budget)
+    }
+
+    pub(in super::super) fn static_rows_v280(
+        &self,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<StaticCutsV280<'_>> {
+        self.check(out)?;
+        out.budget.charge_work(1)?;
+        Ok(StaticCutsV280 {
+            roots: &self.roots,
+            cuts: &self.cuts,
+            candidates: &self.candidates,
+            zero_edges: &self.zero_edges,
+            rank: &self.rank,
+        })
+    }
+
+    pub(in super::super) fn check_target_v280(
+        &self,
+        target: &TileTargetV176<'_, '_, '_>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.check(out)?;
+        out.budget.charge_work(1)?;
+        if !std::ptr::eq(self.target, target) {
+            return Err(mismatch());
+        }
+        Ok(())
     }
 
     pub(in super::super) fn emit(&self, out: &mut Writer<'_, '_>) -> Result<()> {

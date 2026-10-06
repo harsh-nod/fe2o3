@@ -10,6 +10,9 @@ use fe2o3_lower_mir_kernel::{
 mod pair_input_v279;
 pub(crate) use pair_input_v279::ExpandedPairInputV279;
 
+#[path = "production_pipeline_source_expanded_model_v280.rs"]
+mod model_v280;
+
 struct ExpandedSource;
 type CallbackPanic = Box<dyn std::any::Any + Send>;
 type OptimizerResult<R> = Result<

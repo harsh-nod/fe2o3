@@ -4,6 +4,8 @@ use crate::collector::CollectedTileTerminalKindV259 as TileKind;
 use crate::production_pipeline::source_owned_v29::Error as SourceError;
 use fe2o3_kernel_ir::{CanonicalKernelIrWorkBudgetV1 as Work, ExecutionTileLayoutV1};
 
+#[path = "production_rustc_driver_expanded_model_v280_tests.rs"]
+mod expanded_model_tests;
 #[path = "production_rustc_driver_expanded_roots_v267_tests.rs"]
 mod expanded_roots_tests;
 #[path = "production_rustc_driver_tile_census_v259_tests.rs"]
@@ -43,6 +45,8 @@ struct ExpandedObservation {
     original: [u8; 32],
     neutral: [u8; 32],
     expanded: [u8; 32],
+    runtime_and_instances: [u8; 32],
+    references: [u8; 32],
     definitions: usize,
     collected_tile_calls: [u64; 3],
     refused_consumer: bool,
@@ -151,6 +155,8 @@ impl Callbacks for ExpandedCallbacks {
                                 original: *source.canonical(budget)?.identity().digest(),
                                 neutral: *neutral.output_inventory(budget)?.identity_v18().digest(),
                                 expanded: *tile.output(budget)?.identity().digest(),
+                                runtime_and_instances: subject.runtime_and_instances,
+                                references: subject.references,
                                 definitions: neutral.output_inventory(budget)?.definitions().len(),
                                 collected_tile_calls,
                                 refused_consumer: false,

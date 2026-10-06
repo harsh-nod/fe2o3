@@ -14,6 +14,8 @@ struct RootsObservation {
     original: [u8; 32],
     neutral: [u8; 32],
     expanded: [u8; 32],
+    runtime_and_instances: [u8; 32],
+    references: [u8; 32],
     roots: usize,
     selected: usize,
     helper_instances: [usize; 2],
@@ -26,7 +28,7 @@ struct RootsCallbacks {
     result: Option<Result<RootsObservation, String>>,
 }
 
-fn original_helper_instances(
+pub(super) fn original_helper_instances(
     source: &ProductionSourceOwnedViewV18<'_>,
     original: &ProductionSourceCorrespondenceV18<'_>,
     budget: &mut Budget<'_>,
@@ -270,6 +272,8 @@ impl Callbacks for RootsCallbacks {
                         original_helper_instances(source, original, budget)?;
                     assert!(!tile.grants_artifact_or_launch_authority());
                     let observation = RootsObservation {
+                        runtime_and_instances: subject.runtime_and_instances,
+                        references: subject.references,
                         original: *source.canonical(budget)?.identity().digest(),
                         neutral: *input.identity_v18().digest(),
                         expanded: *output.identity().digest(),
@@ -318,6 +322,10 @@ fn expanded_roots_child() {
 }
 
 fn root_source(case: &str) -> String {
+    root_source_with_grid(case, None)
+}
+
+pub(super) fn root_source_with_grid(case: &str, grid: Option<u32>) -> String {
     let mut source = r#"use fe2o3_device::{kernel, KernelContext};
 use fe2o3_device::tile::MaskedTile1D;
 #[inline(never)]
@@ -338,7 +346,11 @@ fn tile_helper<Kernel>(ctx: &mut KernelContext<'_, Kernel>, input: &[u32], base:
         );
     }
     for (index, name) in ["first", "second"].into_iter().enumerate() {
-        source.push_str("#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]\n");
+        if let Some(grid) = grid {
+            source.push_str(&format!("#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1], max_grid = [{grid}, 1, 1]))]\n"));
+        } else {
+            source.push_str("#[kernel(typed, launch(required = [64, 1, 1], max = [64, 1, 1]))]\n");
+        }
         source.push_str(&format!("pub fn {name}(mut ctx: KernelContext<'_>, input: &[u32], base: u64, seed: u32) {{\n    let _ = shared_scalar(seed);\n"));
         if case == "helper" {
             source.push_str("    tile_helper(&mut ctx, input, base);\n");

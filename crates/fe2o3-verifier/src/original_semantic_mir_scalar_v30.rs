@@ -51,6 +51,12 @@ mod control_generate;
 #[cfg(test)]
 pub(crate) use control::tests::fixture as control_fixture_v31;
 pub(crate) use control_generate::generate as generate_control_v31;
+pub use invocation_body::expanded_model_v280::{
+    ExpandedSupportCallKindV280, ExpandedSupportCallV280, ExpandedSupportCensusV280,
+    ExpandedSupportCursorV280, ExpandedSupportCutV280, ExpandedSupportInstanceV280,
+    ExpandedSupportModelV280, ExpandedSupportRootV280, ExpandedSupportRuntimeV280,
+    with_expanded_support_model_v280,
+};
 pub(crate) use invocation_body::generate_refinement_typed_v49 as generate_invocations_typed_v49;
 pub(crate) use invocation_body::generate_refinement_typed_with_references_v69 as generate_invocations_typed_with_references_v69;
 pub(crate) use invocation_body::generate_refinement_v36 as generate_invocations_v36;

@@ -164,6 +164,22 @@ nonzero physical coordinate envelope. Their join checks the exact original
 descriptor rank, workgroup and grid ceiling, without treating zero as a wildcard
 or clamping the physical envelope to a source layout marker.
 
+The separate private `with_original_source_expanded_model_v280` stage must pass
+through V259 input preparation and then the scoped verifier support generator
+before calling its consumer. It borrows exact support bytes and complete static
+root, instance, call, cut, candidate and zero-edge observations from one derivation.
+Empty cuts and inactive instances remain in that census; incoming caller ancestry
+does not prove suspended-frame values or execution traces. The original empty
+reference owner stays live and is checked before and after the consumer.
+
+V259 still accepts authenticated default physical envelopes. V280 separately
+preserves the generator's model-domain limits, including refusal of physical
+extents above `u32::MAX` for a 32-bit logical Index. It does not clamp those
+envelopes, reinterpret dynamic source zeros, retry a profile, or fall back.
+Its emitted artifact is support/input only: no whole initialization, step, read,
+effect, lifetime or trace proof, executed proof, Policy11 transcript, publication
+receipt, default activation or tutorial qualification is established.
+
 Reference rows come from the existing authenticated binding adapter. The
 expanded stage still refuses every nonempty reference-obligation set before its
 consumer; an owner-backed empty roster is not a discharged reference proof.

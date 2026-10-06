@@ -18,7 +18,7 @@ use std::mem::size_of;
 
 #[path = "original_semantic_mir_tile_microcuts_v180.rs"]
 mod microcuts;
-pub(super) use microcuts::TileMicroCutsV180;
+pub(super) use microcuts::{StaticCutsV280, TileMicroCutsV180};
 
 pub(super) struct TileTargetV176<'slots, 'view, 'source> {
     slots: &'slots SourceSlots<'view, 'source>,

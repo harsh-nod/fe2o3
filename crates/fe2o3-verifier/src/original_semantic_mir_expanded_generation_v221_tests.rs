@@ -142,7 +142,15 @@ fn expanded_generation_headers_cover_context_and_runtime_queries() {
         + 2 * size_of::<Result<()>>();
     let runtime =
         2 * size_of::<FormalIndexWidth>() + size_of::<EndiannessV2>() + size_of::<[u64; 3]>();
-    let selected_launch = size_of::<Option<usize>>();
+    let selected_launch = size_of::<
+        Option<&[super::super::expanded_model_v280::ExpandedSupportRuntimeV280]>,
+    >() + size_of::<Result<(u8, [u64; 3])>>()
+        + size_of::<u8>();
+    let callback_frames = 2 * size_of::<(
+        &ExpandedGenerationV221<'_, '_, '_, '_>,
+        &TileMicroCutsV180<'_, '_, '_, '_>,
+        Option<&[super::super::expanded_model_v280::ExpandedSupportRuntimeV280]>,
+    )>();
     let launch_iterator = size_of::<
         std::iter::Enumerate<
             std::slice::Iter<'_, fe2o3_lower_mir_kernel::ProductionSourceLaunchRootV1>,
@@ -162,6 +170,7 @@ fn expanded_generation_headers_cover_context_and_runtime_queries() {
             + results
             + runtime
             + selected_launch
+            + callback_frames
             + launch_iterator
             + coordinates.iter().map(|(_, count)| count).sum::<usize>() * size_of::<usize>()
             + references.iter().map(|(_, count)| count).sum::<usize>() * size_of::<&()>()

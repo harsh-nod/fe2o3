@@ -64,6 +64,9 @@ mod expanded_execution;
 #[path = "original_semantic_mir_expanded_generation_v221.rs"]
 mod expanded_generation;
 
+#[path = "original_semantic_mir_expanded_model_v280.rs"]
+pub(super) mod expanded_model_v280;
+
 #[path = "original_semantic_mir_reference_expressions_v69.rs"]
 mod reference_expressions;
 

@@ -29,13 +29,42 @@ fn mismatch() -> Error {
     Error::Statement("expanded generation differs from its retained source or runtime")
 }
 
+pub(super) fn check_runtime_domain_v280(
+    width: FormalIndexWidth,
+    rank: u8,
+    [x, y, z]: [u64; 3],
+    budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
+) -> Result<()> {
+    budget.charge_work(8)?;
+    if width == FormalIndexWidth::Unknown
+        || !(1..=3).contains(&rank)
+        || x == 0
+        || y == 0
+        || z == 0
+        || (rank < 2 && y != 1)
+        || (rank < 3 && z != 1)
+        || (width == FormalIndexWidth::Bits32
+            && [x, y, z].iter().any(|extent| *extent > u64::from(u32::MAX)))
+    {
+        return Err(mismatch());
+    }
+    Ok(())
+}
+
 impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view, 'source> {
     fn headers() -> usize {
         size_of::<Self>()
             + 2 * size_of::<Result<Self>>()
             + 2 * size_of::<FormalIndexWidth>()
             + size_of::<EndiannessV2>()
-            + size_of::<Option<usize>>()
+            + size_of::<Option<&[super::expanded_model_v280::ExpandedSupportRuntimeV280]>>()
+            + size_of::<Result<(u8, [u64; 3])>>()
+            + size_of::<u8>()
+            + 2 * size_of::<(
+                &Self,
+                &TileMicroCutsV180<'_, 'slots, 'view, 'source>,
+                Option<&[super::expanded_model_v280::ExpandedSupportRuntimeV280]>,
+            )>()
             + 2 * size_of::<Result<()>>()
             + size_of::<[u64; 3]>()
             + size_of::<
@@ -102,13 +131,23 @@ impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view,
     /// Emit real source-generated support before the target and coupled laws.
     /// No synthetic source declarations or original-target inventory substitutes.
     pub(super) fn emit_support(&self, out: &mut Writer<'_, '_>) -> Result<()> {
+        let cuts = TileMicroCutsV180::derive(&self.target, self.plan, out)?;
+        self.emit_support_with_cuts_v280(&cuts, None, out)
+    }
+
+    pub(super) fn emit_support_with_cuts_v280(
+        &self,
+        cuts: &TileMicroCutsV180<'_, 'slots, 'view, 'source>,
+        runtime: Option<&[super::expanded_model_v280::ExpandedSupportRuntimeV280]>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
         self.slots.with_source_query_v42(out, |out| {
             self.check(out)?;
+            cuts.check_target_v280(&self.target, out)?;
             let relation = self.slots.correspondence(out)?;
             let original = TargetContracts::derive(relation.inventory(out.budget)?, self.width, out)?;
             let tags = SourceTagPairsV40::derive(self.slots, &original, out)?;
             let contracts = TargetContracts::derive(self.target.inventory(out)?, self.width, out)?;
-            let cuts = TileMicroCutsV180::derive(&self.target, self.plan, out)?;
             let bytes = SourceByteBindings::derive_expanded_v188(&self.target, out)?;
             let mut program = SourceByteProgram::derive(self.plan, self.slots, out)?;
             super::emit_model_prelude_v187(out)?;
@@ -129,28 +168,24 @@ impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view,
             cuts.emit(out)?;
             let source = relation.source(out.budget)?;
             let launches = source.source_launch(out.budget)?;
-            for root in 0..source.root_count(out.budget)? {
+            let count = source.root_count(out.budget)?;
+            out.budget.charge_work(2)?;
+            if launches.roots().len() != count
+                || runtime.is_some_and(|rows| rows.len() != count)
+            {
+                return Err(mismatch());
+            }
+            for (root, launch) in launches.roots().iter().enumerate() {
                 out.budget.charge_work(1)?;
                 let (function, _) = source.root(root, out.budget)?;
-                let mut selected = None;
-                for (index, launch) in launches.roots().iter().enumerate() {
-                    out.budget.charge_work(2)?;
-                    if launch.selected_root() == function {
-                        if selected.is_some() { return Err(mismatch()); }
-                        selected = Some(index);
-                    }
-                }
-                let launch = &launches.roots()[selected.ok_or_else(mismatch)?];
-                let [x, y, z] = launch.layout().global_extents();
-                let rank = launch.source_rank();
-                out.budget.charge_work(8)?;
-                if !(1..=3).contains(&rank) || x == 0 || y == 0 || z == 0
-                    || (rank < 2 && y != 1) || (rank < 3 && z != 1)
-                    || (self.width == FormalIndexWidth::Bits32
-                        && [x, y, z].iter().any(|extent| *extent > u64::from(u32::MAX)))
-                {
+                if launch.selected_root() != function {
                     return Err(mismatch());
                 }
+                let (rank, [x, y, z]) = match runtime {
+                    Some(rows) => rows[root].checked_launch(launch, out.budget)?,
+                    None => (launch.source_rank(), launch.layout().global_extents()),
+                };
+                check_runtime_domain_v280(self.width, rank, [x, y, z], out.budget)?;
                 writeln!(out, "spec fn invocation_runtime_launch_{root}_v36() -> (int, Seq<int>) {{ ({rank}, seq![{x}int, {y}int, {z}int]) }}")
                     .map_err(|_| out.error())?;
                 super::emit_execution_v37(relation, root, out)?;
