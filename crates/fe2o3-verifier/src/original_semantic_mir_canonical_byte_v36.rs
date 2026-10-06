@@ -4,11 +4,11 @@
 use super::super::{
     Error, Inventory, Resource, Result, Writer, byte_memory_v30::ByteMemoryStateNamesV30,
 };
-use super::{ExpressionV30, NodeV30, ScalarV30, canonical, emit_graph_v30};
+use super::{ExpressionV30, NodeV30, OperatorV30, ScalarV30, canonical, emit_graph_v30};
 use fe2o3_kernel_ir::{
-    CanonicalKernelIrWorkLedgerIdentityV1 as Ledger,
+    BinaryOp, CanonicalKernelIrWorkLedgerIdentityV1 as Ledger,
     CanonicalKirDefinitionCoordinateV1 as Definition, CanonicalKirUseCoordinateV1 as Use,
-    FormalIndexWidth, Type,
+    FormalIndexWidth, OperationKind, Type,
 };
 use std::{cell::Cell, fmt::Write as _, mem::size_of};
 
@@ -113,7 +113,7 @@ impl<'inventory, 'owner> CanonicalByteScalarV30<'inventory, 'owner> {
             };
         }
         let arguments = row.operands.len();
-        let expression = canonical::operation_expression(
+        let expression = byte_operation_expression_v186(
             &row.operation.kind,
             &[0, 1, 2][..arguments],
             scalar,
@@ -242,7 +242,9 @@ impl<'inventory, 'owner> CanonicalByteScalarV30<'inventory, 'owner> {
             out.budget.charge_work(1)?;
             write!(out, " && match {}[{definition}] {{ MemoryValueV30::Scalar(v) => 0 <= v < {}int, _ => false }}", before.values, 1u128 << scalar.width()).map_err(|_| out.error())?;
         }
-        write!(out, ";\n let canonical_scalar_result_{key}: int = if canonical_scalar_ok_{key} {{ original_canonical_byte_scalar_trace_{key}_v30(seq![").map_err(|_| out.error())?;
+        write!(out, ";\n").map_err(|_| out.error())?;
+        self.emit_core_definedness_v186(key, before, out)?;
+        write!(out, " let canonical_scalar_result_{key}: int = if canonical_scalar_ok_{key} {{ original_canonical_byte_scalar_trace_{key}_v30(seq![").map_err(|_| out.error())?;
         for &(definition, _) in &self.inputs[..self.arguments] {
             out.budget.charge_work(1)?;
             write!(
@@ -255,6 +257,89 @@ impl<'inventory, 'owner> CanonicalByteScalarV30<'inventory, 'owner> {
         write!(out, "])[0] }} else {{ 0int }};\n let canonical_scalar_ok_{key} = canonical_scalar_ok_{key} && 0 <= canonical_scalar_result_{key} < {}int;\n", 1u128 << self.nodes[self.arguments].scalar.width()).map_err(|_| out.error())?;
         write!(out, " let {} = if canonical_scalar_ok_{key} {{ {}.update({}int, MemoryValueV30::Scalar(canonical_scalar_result_{key})) }} else {{ {} }};\n let {} = {};\n let {} = {};\n let {} = {};\n let {} = canonical_scalar_ok_{key};\n", after.values, before.values, self.destination, before.values, after.memory, before.memory, after.generations, before.generations, after.frames, before.frames, after.valid).map_err(|_| out.error())
     }
+
+    fn emit_core_definedness_v186(
+        &self,
+        key: usize,
+        before: ByteMemoryStateNamesV30<'_>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        out.budget.charge_work(1)?;
+        let ExpressionV30::Binary { operation, .. } = self.nodes[self.arguments].expression else {
+            return Ok(());
+        };
+        let symbol = match operation {
+            OperatorV30::WrappingAdd => "+",
+            OperatorV30::WrappingSubtract => "-",
+            OperatorV30::WrappingMultiply => "*",
+            _ => return Ok(()),
+        };
+        let ScalarV30::Integer { width, signed } = self.nodes[self.arguments].scalar else {
+            return Err(mismatch());
+        };
+        if self.arguments != 2 || !matches!(width, 8 | 16 | 32 | 64) {
+            return Err(mismatch());
+        }
+        let modulus = 1u128 << width;
+        let upper = if signed { modulus / 2 } else { modulus };
+        let lower = if signed { -(upper as i128) } else { 0 };
+        write!(
+            out,
+            " let canonical_scalar_math_{key}: int = if canonical_scalar_ok_{key} {{\n"
+        )
+        .map_err(|_| out.error())?;
+        for (ordinal, &(definition, scalar)) in self.inputs[..2].iter().enumerate() {
+            out.budget.charge_work(1)?;
+            if scalar != (ScalarV30::Integer { width, signed }) {
+                return Err(mismatch());
+            }
+            write!(out, " let a{ordinal}: int = match {}[{definition}] {{ MemoryValueV30::Scalar(v) => v, _ => 0int }};\n", before.values).map_err(|_| out.error())?;
+            if signed {
+                write!(out, " let a{ordinal}: int = if a{ordinal} < {upper}int {{ a{ordinal} }} else {{ a{ordinal} - {modulus}int }};\n").map_err(|_| out.error())?;
+            }
+        }
+        write!(out, " a0 {symbol} a1 }} else {{ 0int }};\n let canonical_scalar_ok_{key} = canonical_scalar_ok_{key} && {lower}int <= canonical_scalar_math_{key} < {upper}int;\n").map_err(|_| out.error())
+    }
+}
+
+// Core arithmetic has a partial, no-overflow contract. Only this byte plan
+// admits its raw-bit expression because its transition emits the range guard.
+fn byte_operation_expression_v186(
+    kind: &OperationKind,
+    inputs: &[usize],
+    scalar: ScalarV30,
+    nodes: &[NodeV30],
+) -> Result<ExpressionV30> {
+    let OperationKind::Binary { op, .. } = kind else {
+        return canonical::operation_expression(kind, inputs, scalar, nodes);
+    };
+    let operation = match op {
+        BinaryOp::Add => OperatorV30::WrappingAdd,
+        BinaryOp::Subtract => OperatorV30::WrappingSubtract,
+        BinaryOp::Multiply => OperatorV30::WrappingMultiply,
+        _ => return canonical::operation_expression(kind, inputs, scalar, nodes),
+    };
+    if inputs.len() != 2
+        || !matches!(
+            scalar,
+            ScalarV30::Integer {
+                width: 8 | 16 | 32 | 64,
+                ..
+            }
+        )
+        || inputs
+            .iter()
+            .any(|input| nodes.get(*input).map(|node| node.scalar) != Some(scalar))
+    {
+        return Err(Error::Statement(
+            "canonical core arithmetic integer types differ",
+        ));
+    }
+    Ok(ExpressionV30::Binary {
+        operation,
+        left: inputs[0],
+        right: inputs[1],
+    })
 }
 
 fn scalar_type(ty: &Type, width: FormalIndexWidth) -> Result<ScalarV30> {
@@ -304,6 +389,8 @@ fn headers() -> usize {
         + 5 * size_of::<Result<()>>()
         + size_of::<Option<Resource>>()
         + size_of::<FormalIndexWidth>()
+        + size_of::<(OperatorV30, u32, bool, u128, u128, i128)>()
+        + size_of::<std::iter::Enumerate<std::slice::Iter<'static, (usize, ScalarV30)>>>()
         + canonical::operation_headers_v31()
 }
 

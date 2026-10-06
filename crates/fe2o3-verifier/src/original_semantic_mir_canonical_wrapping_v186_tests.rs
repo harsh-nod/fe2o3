@@ -54,7 +54,7 @@ fn operators() -> [(BinaryOp, Operator, &'static str); 3] {
 }
 
 #[test]
-fn canonical_wrapping_actual_typed_operations_emit_modular_target_contracts() {
+fn canonical_core_arithmetic_actual_typed_operations_guard_modular_results() {
     for (ty, width, bits, signed) in types() {
         for (operator, expected, symbol) in operators() {
             with_module(
@@ -84,10 +84,32 @@ fn canonical_wrapping_actual_typed_operations_emit_modular_target_contracts() {
                     .0
                     .unwrap();
                     assert!(text.contains(&format!("(m0 {symbol} m1) % {}int", 1u128 << bits)));
+                    let upper = 1u128 << (bits - u32::from(signed));
+                    let lower = if signed { -(upper as i128) } else { 0 };
+                    let range = format!(
+                        "canonical_scalar_ok_0 && {lower}int <= canonical_scalar_math_0 < {upper}int"
+                    );
+                    let guard = text.find(&range).unwrap();
+                    let result = text.find("let canonical_scalar_result_0:").unwrap();
+                    let update = text
+                        .find("v0.update(2int, MemoryValueV30::Scalar(")
+                        .unwrap();
+                    assert!(guard < result && result < update);
+                    assert!(text.contains(&format!("a0 {symbol} a1 }} else {{ 0int }};")));
+                    for (ordinal, definition) in [(0, 0), (1, 1)] {
+                        assert!(
+                            text.contains(&format!("let a{ordinal}: int = match v0[{definition}]"))
+                        );
+                        if signed {
+                            assert!(text.contains(&format!("if a{ordinal} < {upper}int {{ a{ordinal} }} else {{ a{ordinal} - {}int }}", 1u128 << bits)));
+                        }
+                    }
                     assert!(text.contains("let m1 = m0;"));
                     assert!(text.contains("let g1 = g0;"));
                     assert!(text.contains("let f1 = f0;"));
                     assert!(text.contains("v0.update(2int, MemoryValueV30::Scalar("));
+                    assert!(text.contains(")) } else { v0 };"));
+                    assert!(text.contains("let ok1 = canonical_scalar_ok_0;"));
                 },
             );
         }
@@ -95,7 +117,7 @@ fn canonical_wrapping_actual_typed_operations_emit_modular_target_contracts() {
 }
 
 #[test]
-fn canonical_wrapping_modulus_matches_signed_and_unsigned_boundary_oracles() {
+fn canonical_core_arithmetic_definedness_matches_signed_unsigned_boundary_oracles() {
     for (_, _, bits, signed) in types() {
         let modulus = 1u128 << bits;
         let mask = modulus - 1;
@@ -122,7 +144,7 @@ fn canonical_wrapping_modulus_matches_signed_and_unsigned_boundary_oracles() {
                         value as i128
                     }
                 };
-                let expected = if signed {
+                let (expected, defined, checked) = if signed {
                     let lhs = signed_value(left);
                     let rhs = signed_value(right);
                     let raw = match operator {
@@ -131,23 +153,51 @@ fn canonical_wrapping_modulus_matches_signed_and_unsigned_boundary_oracles() {
                         BinaryOp::Multiply => lhs * rhs,
                         _ => unreachable!(),
                     };
-                    raw.rem_euclid(modulus as i128) as u128
+                    let minimum = -(sign as i128);
+                    let maximum = sign as i128 - 1;
+                    let checked = match operator {
+                        BinaryOp::Add => lhs.checked_add(rhs),
+                        BinaryOp::Subtract => lhs.checked_sub(rhs),
+                        BinaryOp::Multiply => lhs.checked_mul(rhs),
+                        _ => unreachable!(),
+                    }
+                    .filter(|value| (minimum..=maximum).contains(value));
+                    (
+                        raw.rem_euclid(modulus as i128) as u128,
+                        minimum <= raw && raw < sign as i128,
+                        checked.map(|value| value as u128 & mask),
+                    )
                 } else {
-                    match operator {
+                    let expected = match operator {
                         BinaryOp::Add => (left + right) % modulus,
                         BinaryOp::Subtract => (left + modulus - right) % modulus,
                         BinaryOp::Multiply => (left * right) % modulus,
                         _ => unreachable!(),
+                    };
+                    let checked = match operator {
+                        BinaryOp::Add => left.checked_add(right),
+                        BinaryOp::Subtract => left.checked_sub(right),
+                        BinaryOp::Multiply => left.checked_mul(right),
+                        _ => unreachable!(),
                     }
+                    .filter(|value| *value < modulus);
+                    let defined = match operator {
+                        BinaryOp::Add => left + right < modulus,
+                        BinaryOp::Subtract => left >= right,
+                        BinaryOp::Multiply => left * right < modulus,
+                        _ => unreachable!(),
+                    };
+                    (expected, defined, checked)
                 };
                 assert_eq!(actual, expected);
+                assert_eq!(defined.then_some(expected), checked);
             }
         }
     }
 }
 
 #[test]
-fn canonical_wrapping_refuses_other_contracts_and_noninteger_types() {
+fn canonical_core_arithmetic_refuses_other_contracts_and_noninteger_types() {
     use fe2o3_kernel_ir::CheckedBinaryOperator;
     let scalar = ScalarV30::Integer {
         width: 32,
@@ -171,7 +221,7 @@ fn canonical_wrapping_refuses_other_contracts_and_noninteger_types() {
             lhs: ValueId(0),
             rhs: ValueId(1),
         };
-        assert!(canonical::operation_expression(&kind, &[0, 1], scalar, &nodes).is_err());
+        assert!(byte_operation_expression_v186(&kind, &[0, 1], scalar, &nodes).is_err());
     }
     for (operator, _, _) in operators() {
         let kind = OperationKind::Binary {
@@ -179,6 +229,8 @@ fn canonical_wrapping_refuses_other_contracts_and_noninteger_types() {
             lhs: ValueId(0),
             rhs: ValueId(1),
         };
+        // The old whole-graph scalar model has no trap-state component.
+        assert!(canonical::operation_expression(&kind, &[0, 1], scalar, &nodes).is_err());
         for scalar in [
             ScalarV30::Unit,
             ScalarV30::Bool,
@@ -196,14 +248,14 @@ fn canonical_wrapping_refuses_other_contracts_and_noninteger_types() {
                 scalar,
                 expression: ExpressionV30::Argument(0),
             }; 2];
-            assert!(canonical::operation_expression(&kind, &[0, 1], scalar, &nodes).is_err());
+            assert!(byte_operation_expression_v186(&kind, &[0, 1], scalar, &nodes).is_err());
         }
         let mut wrong = nodes;
         wrong[1].scalar = ScalarV30::Integer {
             width: 32,
             signed: true,
         };
-        assert!(canonical::operation_expression(&kind, &[0, 1], scalar, &wrong).is_err());
+        assert!(byte_operation_expression_v186(&kind, &[0, 1], scalar, &wrong).is_err());
     }
     with_module(
         &wrapping_module(Type::INDEX, BinaryOp::Add),
@@ -221,7 +273,7 @@ fn canonical_wrapping_refuses_other_contracts_and_noninteger_types() {
 }
 
 #[test]
-fn canonical_wrapping_has_exact_and_one_short_resource_boundaries() {
+fn canonical_core_arithmetic_has_exact_and_one_short_resource_boundaries() {
     for (operator, _, _) in operators() {
         with_module(
             &wrapping_module(Type::Scalar(ScalarType::I64), operator),

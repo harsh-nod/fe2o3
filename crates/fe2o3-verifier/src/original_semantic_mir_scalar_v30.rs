@@ -112,6 +112,8 @@ impl ScalarV30 {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum OperatorV30 {
+    // Raw-bit result components only. Core arithmetic admission also requires
+    // the byte transition's signed/unsigned no-overflow guard.
     WrappingAdd,
     WrappingSubtract,
     WrappingMultiply,
