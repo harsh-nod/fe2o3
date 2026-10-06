@@ -75,8 +75,8 @@ fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_dom
             "        }",
         )
     );
-    assert_eq!(text.matches("proof fn ").count(), 6);
-    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 5);
+    assert_eq!(text.matches("proof fn ").count(), 7);
+    assert_eq!(text.matches("#[verifier::spinoff_prover]").count(), 6);
     assert_eq!(
         theorem(text, "invocation_source_local_observation_intro_v183")
             .split_once("\n}\n")
@@ -157,6 +157,31 @@ fn original_mir_step_local_observation_law_keeps_validity_and_closed_operand_dom
     ] {
         assert_eq!(body.matches(fact).count(), 1, "{fact}");
     }
+    assert_eq!(
+        theorem(text, "invocation_source_local_observations_extend_v186")
+            .split_once("\n}\n")
+            .unwrap()
+            .0,
+        concat!(
+            "\n    observations: Seq<InvocationSourceOperandObservationV36>, bound: int,\n)",
+            "\n    requires 0 <= bound < observations.len(),",
+            "\n        forall|i: int| 0 <= i < bound ==>",
+            "\n            invocation_source_local_observation_v180(observations[i]),",
+            "\n        invocation_source_local_observation_v180(observations[bound]),",
+            "\n    ensures forall|i: int| 0 <= i < bound + 1 ==>",
+            "\n        invocation_source_local_observation_v180(observations[i]),",
+            "\n{",
+            "\n    hide(invocation_source_local_observation_v180);",
+            "\n    assert forall|i: int| 0 <= i < bound + 1 implies",
+            "\n        invocation_source_local_observation_v180(observations[i]) by {",
+            "\n        if i < bound {",
+            "\n            assert(invocation_source_local_observation_v180(observations[i]));",
+            "\n        } else {",
+            "\n            assert(i == bound);",
+            "\n        }",
+            "\n    }",
+        )
+    );
     for required in [
         "decreases observations.len(),",
         "assert(tail[i] == observations[i + 1]);",
@@ -344,17 +369,27 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert_eq!(runtime_state.matches(&observed).count(), 1);
                                     assert!(runtime_state.find(&no_trap).unwrap() < runtime_state.find(&observed).unwrap());
                                     assert!(runtime_state.contains(&format!(" && invocation_source_block_runtime_{root}_v36(source).observations.len() == 0")));
-                                    assert!(runtime_state.contains(&format!("assert forall|i: int| 0 <= i < invocation_source_block_runtime_{root}_v36(source).operands.len() implies invocation_source_local_observation_v180(invocation_source_block_runtime_{root}_v36(source).operands[i]) by {{")));
+                                    assert!(!runtime_state.contains("assert forall|i: int|"));
                                     assert_eq!(runtime_state.matches("hide(invocation_source_local_observation_v180);").count(), 1);
                                     assert!(!runtime_state.contains("reveal(invocation_source_local_observation_v180)"));
                                     assert!(!runtime_state.contains("invocation_source_local_observation_intro_v183("));
                                     assert!(!runtime_state.contains("invocation_source_local_observation_conditional_v184("));
                                     assert_eq!(runtime_state.matches("invocation_source_scalar_copy_observation_v185(").count(), call.arguments.len());
-                                    let quantified = runtime_state.find(" assert forall|i: int|").unwrap();
+                                    assert_eq!(runtime_state.matches(" invocation_source_local_observations_extend_v186(").count(), call.arguments.len());
+                                    let observed_at = runtime_state.find(&observed).unwrap();
+                                    let mut previous_extension = None;
                                     for (ordinal, (local, _, bits)) in call.arguments.iter().enumerate() {
                                         let introduction = format!(" invocation_source_scalar_copy_observation_v185(copied_{ordinal}, invocation_source_block_runtime_{root}_v36(source).operands[{ordinal}], {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance);
                                         assert_eq!(runtime_state.matches(&introduction).count(), 1);
-                                        assert!(runtime_state.find(&introduction).unwrap() < quantified);
+                                        let extension = format!(" invocation_source_local_observations_extend_v186(invocation_source_block_runtime_{root}_v36(source).operands, {ordinal});");
+                                        assert_eq!(runtime_state.matches(&extension).count(), 1);
+                                        let extension_at = runtime_state.find(&extension).unwrap();
+                                        assert!(runtime_state.find(&introduction).unwrap() < extension_at);
+                                        assert!(extension_at < observed_at);
+                                        if let Some(previous) = previous_extension {
+                                            assert!(previous < extension_at);
+                                        }
+                                        previous_extension = Some(extension_at);
                                     }
                                     assert!(!runtime_state.contains("reveal(invocation_source_observations_v39);"));
                                     assert!(!runtime_state.contains("reveal_with_fuel(invocation_source_operands_observations_v39,"));

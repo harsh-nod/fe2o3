@@ -83,6 +83,28 @@ proof fn invocation_source_scalar_copy_observation_v185(
 }
 
 #[verifier::spinoff_prover]
+proof fn invocation_source_local_observations_extend_v186(
+    observations: Seq<InvocationSourceOperandObservationV36>, bound: int,
+)
+    requires 0 <= bound < observations.len(),
+        forall|i: int| 0 <= i < bound ==>
+            invocation_source_local_observation_v180(observations[i]),
+        invocation_source_local_observation_v180(observations[bound]),
+    ensures forall|i: int| 0 <= i < bound + 1 ==>
+        invocation_source_local_observation_v180(observations[i]),
+{
+    hide(invocation_source_local_observation_v180);
+    assert forall|i: int| 0 <= i < bound + 1 implies
+        invocation_source_local_observation_v180(observations[i]) by {
+        if i < bound {
+            assert(invocation_source_local_observation_v180(observations[i]));
+        } else {
+            assert(i == bound);
+        }
+    }
+}
+
+#[verifier::spinoff_prover]
 proof fn invocation_source_local_observations_empty_v180(
     observations: Seq<InvocationSourceOperandObservationV36>, little_endian: bool,
 )
