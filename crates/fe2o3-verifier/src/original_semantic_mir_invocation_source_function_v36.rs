@@ -33,7 +33,7 @@ mod tile_calls;
 
 #[cfg(test)]
 #[path = "original_semantic_mir_tile_fixture_v166_tests.rs"]
-mod tile_fixture_tests;
+pub(in super::super) mod tile_fixture_tests;
 
 #[path = "original_semantic_mir_source_assert_control_v40.rs"]
 mod assertions;
