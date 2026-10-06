@@ -484,7 +484,10 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "assert(invocation_source_aggregate_well_formed_v42(aggregate)) by {\n        invocation_context_marker_aggregate_well_formed_v260(issue.source_type);",
         "&& invocation_source_aggregate_complete_v42(aggregate)) by {\n        invocation_checked_add_aggregate_complete_v260(source_type, left, right);",
         "let installed = invocation_source_aggregate_install_v42(source, destination, aggregate);",
-        "assert(after == installed);",
+        "assert(after == installed) by {\n        invocation_source_checked_add_replays_install_v260(",
+        "assert(installed.machine.valid);",
+        "assert(invocation_source_aggregate_complete_v42(aggregate)\n        && installed == (InvocationSourceByteStateV36 {",
+        "..source })) by {\n        invocation_source_checked_add_install_frame_v262(source, destination, source_type, left, right);",
         "invocation_source_checked_pair_v44(lhs.value, rhs.value, 0, 32, false)",
         "invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);",
         "invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);",
@@ -516,6 +519,13 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
             .next()
             .unwrap();
         assert!(!body.contains("let leaves ="));
+        for hidden in [
+            "invocation_source_aggregate_leaf_count_v42",
+            "invocation_source_aggregate_leaf_path_v42",
+            "invocation_source_aggregate_leaf_bits_v42",
+        ] {
+            assert!(body.contains(&format!("hide({hidden});")));
+        }
         assert!(body.contains("assert(invocation_source_aggregate_well_formed_v42(aggregate)"));
         assert!(body.contains(
             "assert(aggregate.execution_lease.is_none());\n    invocation_source_plain_aggregate_install_frame_v260("

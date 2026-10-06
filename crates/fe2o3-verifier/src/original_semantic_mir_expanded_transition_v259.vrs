@@ -132,6 +132,9 @@ proof fn invocation_source_context_issue_frame_v262(
     hide(invocation_source_byte_state_well_formed_v36);
     hide(invocation_source_context_shape_v161);
     hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
     hide(invocation_source_aggregate_install_v42);
     hide(invocation_source_context_issue_v161);
     hide(invocation_source_logical_write_v38);
@@ -149,9 +152,11 @@ proof fn invocation_source_context_issue_frame_v262(
     }
     assert(aggregate.execution_lease.is_none());
     invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);
+    let installed = invocation_source_aggregate_install_v42(source, issue.destination, aggregate);
+    assert(installed.machine.valid);
     assert(invocation_source_context_issue_v161(source, issue)
         == (InvocationSourceTileResultV161 {
-            source: invocation_source_aggregate_install_v42(source, issue.destination, aggregate),
+            source: installed,
             observations: Seq::empty() })) by {
         reveal(invocation_source_context_issue_v161);
     }
@@ -474,9 +479,6 @@ proof fn invocation_source_checked_add_reconstruction_step_v259(
     hide(invocation_source_checked_pair_v44);
     hide(invocation_source_checked_v42);
     hide(invocation_source_logical_write_v38);
-    invocation_source_checked_add_install_frame_v262(source, destination, source_type, left, right);
-    invocation_source_checked_add_replays_install_v260(source, destination, source_type,
-        left_operand, right_operand, left, right, root, instance, little_endian);
     let aggregate = InvocationSourceAggregateV42 {
         source_type, execution_lease: None,
         leaves: Map::empty()
@@ -484,16 +486,22 @@ proof fn invocation_source_checked_add_reconstruction_step_v259(
             .insert(seq![1int], MemoryValueV30::Scalar(
                 if left + right >= 4294967296 { 1int } else { 0int })) };
     let installed = invocation_source_aggregate_install_v42(source, destination, aggregate);
-    assert(installed == (InvocationSourceByteStateV36 {
-        machine: MemoryStateV30 {
-            values: source.machine.values.update(destination, MemoryValueV30::Undefined),
-            ..source.machine },
-        logical: InvocationSourceLogicalV38 {
-            aggregates: source.logical.aggregates.insert(destination, aggregate),
-            ..invocation_source_logical_write_v38(source.logical, destination) }, ..source }));
+    assert(invocation_source_aggregate_complete_v42(aggregate)
+        && installed == (InvocationSourceByteStateV36 {
+            machine: MemoryStateV30 {
+                values: source.machine.values.update(destination, MemoryValueV30::Undefined),
+                ..source.machine },
+            logical: InvocationSourceLogicalV38 {
+                aggregates: source.logical.aggregates.insert(destination, aggregate),
+                ..invocation_source_logical_write_v38(source.logical, destination) }, ..source })) by {
+        invocation_source_checked_add_install_frame_v262(source, destination, source_type, left, right);
+    }
     let after = invocation_source_checked_v42(source, destination, source_type,
         0, 32, false, left_operand, right_operand, root, instance, little_endian);
-    assert(after == installed);
+    assert(after == installed) by {
+        invocation_source_checked_add_replays_install_v260(source, destination, source_type,
+            left_operand, right_operand, left, right, root, instance, little_endian);
+    }
     assert(after.machine == (MemoryStateV30 {
         values: source.machine.values.update(destination, MemoryValueV30::Undefined),
         ..source.machine }));
