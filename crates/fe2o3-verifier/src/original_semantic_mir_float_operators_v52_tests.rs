@@ -18,7 +18,7 @@ fn original_float_operators_have_exact_width_class_and_closed_distinct_codes() {
     ];
     for (operation, code) in operations {
         let operator = Operator::float_binary(operation).unwrap();
-        assert_eq!(operator.code(), code);
+        assert_eq!(operator.code().unwrap(), code);
         for width in [32, 64] {
             let input = ScalarV30::Float { width };
             assert_eq!(
