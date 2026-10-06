@@ -822,6 +822,154 @@ fn generate_actual_tile_target_v176(
     Ok(())
 }
 
+fn generate_actual_tile_microcuts_v180(
+    plan: &InvocationPlan<'_, '_>,
+    slots: &SourceSlots<'_, '_>,
+    tile: &TileExpansion<'_, '_>,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    use super::super::tile_target::{TileMicroCutsV180, TileTargetV176};
+    let target = TileTargetV176::derive(slots, out)?;
+    let cuts = TileMicroCutsV180::derive(&target, plan, out)?;
+    target.emit(fe2o3_kernel_ir::FormalIndexWidth::Bits64, out)?;
+    cuts.emit(out)?;
+    let inventory = target.inventory(out)?;
+    let mut actual_candidates = 0usize;
+    for instance in 0..plan.root(0, out)?.instances.len() {
+        let row = plan.instance(0, instance, out)?;
+        for block in 0..row.blocks.len() {
+            let pc = row.blocks.start + block;
+            assert_eq!(
+                out.text.matches(&format!("source_pc == {pc} &&")).count(),
+                1
+            );
+            let Some(gap) = tile.source_block_entry_gap_v177(
+                0,
+                instance,
+                SemanticBlockIdV1::from_index(block.try_into().unwrap()),
+                out.budget,
+            )?
+            else {
+                continue;
+            };
+            if !matches!(
+                gap.prefix_disposition(out.budget)?,
+                fe2o3_lower_mir_kernel::ProductionOptimizedSourceGapV18::Reachable(_)
+            ) {
+                continue;
+            }
+            for candidate in 0..gap.candidate_count(out.budget)? {
+                let point = gap.candidate(candidate, out.budget)?;
+                let (physical, owner) = inventory
+                    .blocks()
+                    .iter()
+                    .enumerate()
+                    .find(|(_, row)| row.coordinate == point.block)
+                    .unwrap();
+                let operation = if point.first as usize == owner.operations.len() {
+                    -1
+                } else {
+                    (owner.operations.start + point.first as usize) as i128
+                };
+                assert!(out.text.contains(&format!(
+                    "m.state.pc == {physical} && m.next_operation == {operation} && m.observations.len() == {}", point.first)));
+                actual_candidates += 1;
+            }
+        }
+    }
+    assert!(actual_candidates > 0);
+    assert!(
+        out.text
+            .contains("proof fn invocation_tile_zero_edge_decreases_0_v180(")
+    );
+    assert!(!out.text.contains("assume("));
+    Ok(())
+}
+
+#[test]
+fn original_execution_tile_microcuts_bind_actual_source_and_microstate_boundaries() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture_with_plan(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            generate_actual_tile_microcuts_v180,
+        )
+        .0
+        .unwrap();
+    }
+}
+
+#[test]
+fn original_execution_tile_microcuts_have_exact_and_one_short_resource_boundaries() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let baseline = run_fixture_with_plan(
+            layout,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            generate_actual_tile_microcuts_v180,
+        );
+        baseline.0.unwrap();
+        run_fixture_with_plan(
+            layout,
+            baseline.1,
+            baseline.3,
+            generate_actual_tile_microcuts_v180,
+        )
+        .0
+        .unwrap();
+        use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+        assert!(
+            matches!(run_fixture_with_plan(layout, baseline.1 - 1, baseline.3, generate_actual_tile_microcuts_v180).0,
+            Err(Error::Resource(Resource::Work(error))) | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+            if error.actual() == baseline.1 && error.limit() == baseline.1 - 1)
+        );
+        assert!(
+            matches!(run_fixture_with_plan(layout, baseline.1, baseline.3 - 1, generate_actual_tile_microcuts_v180).0,
+            Err(Error::Resource(Resource::Storage(error))) | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+            if error.actual() == baseline.3 && error.limit() == baseline.3 - 1)
+        );
+    }
+}
+
+#[test]
+fn original_execution_tile_microcuts_reject_foreign_and_refunded_accounts() {
+    use super::super::tile_target::{TileMicroCutsV180, TileTargetV176};
+    use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    for foreign in [false, true] {
+        let mut reached = false;
+        let result = run_fixture_with_plan(
+            Layout::Blocked,
+            512 * 1024 * 1024,
+            512 * 1024 * 1024,
+            |plan, slots, _, out| {
+                let target = TileTargetV176::derive(slots, out)?;
+                let cuts = TileMicroCutsV180::derive(&target, plan, out)?;
+                reached = true;
+                let error = if foreign {
+                    let mut work = Work::new(512 * 1024 * 1024);
+                    let mut budget = Budget::new(&mut work, 512 * 1024 * 1024);
+                    budget.reserve_storage(out.budget.storage())?;
+                    let mut other = Writer::new(&mut budget)?;
+                    cuts.emit(&mut other).unwrap_err()
+                } else {
+                    out.budget.release_storage(1)?;
+                    cuts.emit(out).unwrap_err()
+                };
+                assert!(matches!(
+                    error,
+                    Error::Resource(Resource::Accounting)
+                        | Error::Source(SourceError::Resource(Resource::Accounting))
+                ));
+                assert!(cuts.emit(out).is_err());
+                Err(error)
+            },
+        );
+        assert!(reached && result.0.is_err());
+    }
+}
+
 #[test]
 fn original_execution_tile_target_emits_the_actual_expanded_graph() {
     for layout in [Layout::Blocked, Layout::Striped] {
