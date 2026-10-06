@@ -94,6 +94,19 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                         || !function.definitions.contains(&edge.incoming_definition)
                         || incoming.is_some_and(|prior| prior != edge.incoming_definition)
                     {
+                        #[cfg(test)]
+                        {
+                            assert!(input.definitions().len() <= 4096);
+                            assert!(input.blocks().len() <= 4096);
+                            assert!(input.operations().len() <= 16384);
+                            assert!(input.edges().len() <= 16384);
+                            assert!(input.edge_arguments().len() <= 16384);
+                            eprintln!("source forwarding graph requested={original} current={current}");
+                            eprintln!("source forwarding definitions={:?}", input.definitions());
+                            eprintln!("source forwarding blocks={:?}", input.blocks());
+                            eprintln!("source forwarding edges={:?}", input.edges());
+                            eprintln!("source forwarding bindings={:?}", input.edge_arguments());
+                        }
                         return Err(mismatch());
                     }
                     let predecessor = input
