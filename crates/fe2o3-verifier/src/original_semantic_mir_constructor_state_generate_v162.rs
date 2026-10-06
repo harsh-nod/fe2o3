@@ -230,7 +230,7 @@ fn source_state(
     entry: &SourceEntryHintsV85,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
-    source_runtime(root, pc, hints, hint, call, out)?;
+    source_runtime(root, pc, hints, hint, call, entry, out)?;
     out.budget.reserve_storage(13 * size_of::<usize>())?;
     out.budget.charge_work(12)?;
     emit!(
@@ -268,10 +268,14 @@ fn source_runtime(
     hints: &SourceStepHintsV85,
     hint: &SourceCutHintsV85,
     call: &SourceCallHintsV85,
+    entry: &SourceEntryHintsV85,
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
-    out.budget.reserve_storage(13 * size_of::<usize>())?;
-    out.budget.charge_work(25)?;
+    out.budget.reserve_storage(20 * size_of::<usize>())?;
+    out.budget.charge_work(26)?;
+    if entry.arguments.len() != call.arguments.len() {
+        return Err(mismatch());
+    }
     let fuel = add(hint.statements, 1)?;
     if fuel > *hints.fuels.get(hint.instance).ok_or_else(mismatch)? {
         return Err(mismatch());
@@ -341,6 +345,36 @@ fn source_runtime(
         call.arguments.len(),
         call.child,
         call.arguments.len()
+    );
+    // Empty observations also exclude a trap. Derive that PC fact without
+    // unfolding the state-wide initializer or the installed argument values.
+    out.budget.charge_work(5)?;
+    emit!(
+        out,
+        " invocation_source_entry_initialize_pc_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));\n let installed_0 = invocation_source_entry_initialize_v166(source, {}, {}, {}, byte_enter_frame_v30(source.machine.frames, {}));\n",
+        entry.pc,
+        entry.locals.start,
+        entry.locals.end,
+        entry.owner,
+        entry.pc,
+        entry.locals.start,
+        entry.locals.end,
+        entry.owner
+    );
+    for (ordinal, (destination, (local, _, _))) in
+        entry.arguments.iter().zip(&call.arguments).enumerate()
+    {
+        out.budget.charge_work(4)?;
+        let next = add(ordinal, 1)?;
+        emit!(
+            out,
+            " invocation_source_entry_put_local_pc_v179(installed_{ordinal}, {destination}, source.machine.values[{local}]);\n let installed_{next} = invocation_source_byte_put_local_v36(installed_{ordinal}, {destination}, source.machine.values[{local}]);\n"
+        );
+    }
+    emit!(
+        out,
+        " assert(invocation_constructor_source_{root}_{pc}_v162(source).machine.pc == {});\n",
+        entry.pc
     );
     emit!(
         out,
