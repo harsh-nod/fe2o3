@@ -63,6 +63,124 @@ fn locked(f: &Fixture, held: bool) {
     );
 }
 
+fn original_pair(
+    f: &Fixture,
+    receipt: CompilerModuleHandoffReceiptV5,
+    barrier: &Barrier,
+    b: &mut Budget<'_>,
+) -> (Lease, Token) {
+    let quote = quote_compiler_module_handoff_currentness_custody_v5(&f.path, &f.producer, receipt)
+        .unwrap();
+    b.reserve_storage(
+        quote.retained_storage() + size_of::<CompilerModuleHandoffCustodyResourcesV5>(),
+    )
+    .unwrap();
+    let mut resources = CompilerModuleHandoffCustodyResourcesV5::prepare(quote, b).unwrap();
+    let mut lease = None;
+    let mut token = None;
+    resources
+        .with_acquisition(barrier, b, |scope| {
+            let (owner, charge) = scope.acquire_lease(&f.path, &f.producer)?;
+            lease = Some(owner);
+            scope.reserve_retained(charge)?;
+            let (owner, charge) = scope.acquire_token(lease.as_ref().unwrap())?;
+            token = Some(owner);
+            scope.reserve_retained(charge)
+        })
+        .unwrap();
+    (lease.unwrap(), token.unwrap())
+}
+
+#[test]
+fn original_terminal_map_and_consume_keep_actual_pair_and_account() {
+    if isolated("original_terminal_map_and_consume_keep_actual_pair_and_account") {
+        return;
+    }
+    let f = Fixture::new();
+    let receipt = published(&f);
+    let barrier = crate::try_acquire_artifact_lock_retirement_barrier_v1().unwrap();
+    let mut owned = Owned::new(Work::new(usize::MAX), EXTERNAL + LIMIT);
+    owned.with_budget(|b| {
+        b.reserve_storage(EXTERNAL).unwrap();
+        let identity = Account::capture(b).unwrap();
+        let (lease, token) = original_pair(&f, receipt, &barrier, b);
+        let original = backing_snapshot(token.handoff());
+        let before = b.storage();
+        let token_charge = token.storage().0;
+        let (mapped, charge) = token
+            .try_map_handoff_in_original_account_v5(b, |h, b| {
+                assert!(b.storage() >= before + token_charge + Budget::STORAGE_WINDOW_SCRATCH_V1);
+                locked(&f, true);
+                b.charge_work(17).unwrap();
+                Ok::<_, ()>((h, 37))
+            })
+            .unwrap();
+        assert_eq!(b.storage(), before);
+        b.reserve_storage(charge.0).unwrap();
+        assert_eq!(backing_snapshot(mapped.handoff()), original);
+        let before = b.storage();
+        let consumed =
+            consume_compiler_module_handoff_in_original_account_v5(&lease, mapped, b).unwrap();
+        assert_eq!(b.storage(), before);
+        assert_eq!(consumed.receipt(), receipt);
+        assert_eq!(backing_snapshot(consumed.handoff()), original);
+        identity.require(b).unwrap();
+        assert_eq!(b.storage_limit(), EXTERNAL + LIMIT);
+        assert!(f.slot().join(CONSUMED_ENTRY).exists());
+        locked(&f, false);
+    });
+}
+
+#[test]
+fn original_terminal_refusal_unwind_and_legacy_cap_do_not_refund_or_unlock() {
+    if isolated("original_terminal_refusal_unwind_and_legacy_cap_do_not_refund_or_unlock") {
+        return;
+    }
+    for mode in 0..4 {
+        let f = Fixture::new();
+        let receipt = published(&f);
+        let barrier = crate::try_acquire_artifact_lock_retirement_barrier_v1().unwrap();
+        let mut owned = Owned::new(Work::new(usize::MAX), EXTERNAL + LIMIT);
+        owned.with_budget(|b| {
+            b.reserve_storage(EXTERNAL).unwrap();
+            let identity = Account::capture(b).unwrap();
+            let (lease, token) = original_pair(&f, receipt, &barrier, b);
+            let before = b.storage();
+            let mut checkpoint = None;
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                if mode == 3 {
+                    return token.try_map_handoff(b, |h, _| Ok::<_, ()>((h, 0)));
+                }
+                token.try_map_handoff_in_original_account_v5(b, |h, b| {
+                    checkpoint = Some(b.storage());
+                    assert!(matches!(b.release_storage(b.storage() - before + 1), Err(Resource::Accounting)));
+                    b.reserve_storage(37).unwrap();
+                    match mode {
+                        0 => Err(()),
+                        1 => panic!("original terminal opaque custody"),
+                        _ => Ok((h, 0)), // Refuse unreported callback storage.
+                    }
+                })
+            }));
+            if mode == 3 {
+                assert!(matches!(&result, Ok(Err(error)) if matches!(error.cause(),
+                    CompilerModuleHandoffAdmissionCauseV5::Transaction(Error::Resource(Resource::Accounting)))));
+                assert_eq!(checkpoint, None);
+                assert_eq!(b.storage(), before);
+            } else {
+                assert!(matches!(&result, Ok(Err(_)) | Err(_)));
+                assert_eq!(b.storage(), checkpoint.unwrap() + 37);
+            }
+            identity.require(b).unwrap();
+            f.ready();
+            locked(&f, true);
+            drop(result);
+            locked(&f, false);
+            drop(lease);
+        });
+    }
+}
+
 #[test]
 fn composed_recovery_exact_one_short_and_legacy_cap() {
     if isolated("composed_recovery_exact_one_short_and_legacy_cap") {
