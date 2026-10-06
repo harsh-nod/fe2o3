@@ -1283,7 +1283,8 @@
     "function": 4
   },
   "crates/fe2o3-protected-service-spawn/src/native_runtime_trace_process_tests.rs": {
-    "block": 3
+    "block": 4,
+    "impl": 1
   },
   "crates/fe2o3-protected-service-spawn/src/native_spawn.rs": {
     "function": 3
