@@ -289,6 +289,66 @@ fn complete_tile_roots_keep_mixed_rosters_and_one_whole_module() {
 }
 
 #[test]
+fn fixed_layout_matches_explicit_complete_root_policies_and_output() {
+    for second_tile in [false, true] {
+        for layout in [
+            ExecutionTileLayoutV1::Blocked,
+            ExecutionTileLayoutV1::Striped,
+        ] {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+            let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+            budget.reserve_storage(MODULE_FLOOR).unwrap();
+            let prepared = prepared_multi_tile(second_tile, &mut budget);
+            with_actual_optimized_source_v18(prepared, &mut budget, |view, budget| {
+                let count = if second_tile { 3 } else { 2 };
+                let mut layouts = vec![Some(layout); count];
+                layouts[count - 1] = None;
+                let floor = budget.storage();
+                let ledger = budget.work_ledger_identity_v1();
+                let mut first_identity = None;
+                let mut first_policy = vec![];
+                for fixed in [false, true] {
+                    let expanded = if fixed {
+                        view.prepare_tile_expansion_with_layout_v260(layout, budget)?
+                    } else {
+                        view.prepare_tile_expansion_roots_v260(&layouts, budget)?
+                    };
+                    assert!(std::ptr::eq(expanded.neutral_source_v162(budget)?, view));
+                    assert!(budget.work_ledger_identity_v1() == ledger);
+                    assert_eq!(budget.storage() - floor, expanded.retained_storage(budget)?);
+                    assert!(!expanded.grants_artifact_or_launch_authority());
+                    assert_eq!(expanded.selections(budget)?.len(), count - 1);
+                    for (root, expected) in layouts.iter().enumerate() {
+                        let policy = expanded.root_policy_v162(root, budget)?;
+                        assert_eq!(
+                            policy.map(|(_, layout, lanes)| (layout, lanes)),
+                            expected.map(|layout| (layout, 64))
+                        );
+                        if fixed {
+                            assert_eq!(policy, first_policy[root]);
+                        } else {
+                            first_policy.push(policy);
+                        }
+                    }
+                    let identity = *expanded.output(budget)?.identity().digest();
+                    if fixed {
+                        assert_eq!(Some(identity), first_identity);
+                    } else {
+                        first_identity = Some(identity);
+                    }
+                    expanded.replay(budget)?;
+                    expanded.discard(budget)?;
+                    assert_eq!(budget.storage(), floor);
+                }
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(budget.storage(), MODULE_FLOOR);
+        }
+    }
+}
+
+#[test]
 fn complete_tile_roots_refuse_missing_extra_omitted_and_phantom_layouts() {
     for layouts in [
         vec![],
@@ -333,14 +393,23 @@ fn complete_tile_roots_preserve_scalar_roots_without_tile_geometry_or_policy() {
     with_actual_optimized_source_v18(prepared, &mut budget, |view, budget| {
         let floor = budget.storage();
         let original = view.output_inventory(budget)?.owner();
-        let expanded = view.prepare_tile_expansion_roots_v260(&[None, None], budget)?;
-        assert!(expanded.selections(budget)?.is_empty());
-        assert!(expanded.root_policy_v162(0, budget)?.is_none());
-        assert!(expanded.root_policy_v162(1, budget)?.is_none());
-        assert_eq!(expanded.output(budget)?.module(), original.module());
-        expanded.replay(budget)?;
-        expanded.discard(budget)?;
-        assert_eq!(budget.storage(), floor);
+        for fixed in [false, true] {
+            let expanded = if fixed {
+                view.prepare_tile_expansion_with_layout_v260(
+                    ExecutionTileLayoutV1::Blocked,
+                    budget,
+                )?
+            } else {
+                view.prepare_tile_expansion_roots_v260(&[None, None], budget)?
+            };
+            assert!(expanded.selections(budget)?.is_empty());
+            assert!(expanded.root_policy_v162(0, budget)?.is_none());
+            assert!(expanded.root_policy_v162(1, budget)?.is_none());
+            assert_eq!(expanded.output(budget)?.module(), original.module());
+            expanded.replay(budget)?;
+            expanded.discard(budget)?;
+            assert_eq!(budget.storage(), floor);
+        }
         Ok(())
     })
     .unwrap();
@@ -350,6 +419,7 @@ fn complete_tile_roots_preserve_scalar_roots_without_tile_geometry_or_policy() {
 fn complete_roots_resource_run(
     work_limit: usize,
     storage_limit: usize,
+    fixed: bool,
 ) -> (
     Result<(), ProductionSourceOptimizationErrorV18<ProductionSourceOwnedViewErrorV18>>,
     usize,
@@ -364,10 +434,17 @@ fn complete_roots_resource_run(
         prepared.with_source_consumer_v18(&mut budget, |source, budget| {
             let (output, (), _) =
                 source.with_checked_optimization_v18(budget, |_, view, budget| {
-                    let expanded = view.prepare_tile_expansion_roots_v260(
-                        &[Some(ExecutionTileLayoutV1::Striped)],
-                        budget,
-                    )?;
+                    let expanded = if fixed {
+                        view.prepare_tile_expansion_with_layout_v260(
+                            ExecutionTileLayoutV1::Striped,
+                            budget,
+                        )?
+                    } else {
+                        view.prepare_tile_expansion_roots_v260(
+                            &[Some(ExecutionTileLayoutV1::Striped)],
+                            budget,
+                        )?
+                    };
                     expanded.root_policy_v162(0, budget)?;
                     let replay = expanded.replay(budget);
                     let settled = expanded.discard(budget);
@@ -385,35 +462,37 @@ fn complete_roots_resource_run(
 
 #[test]
 fn complete_tile_root_owner_has_exact_and_one_short_work_storage_boundaries() {
-    let (result, work, storage) =
-        complete_roots_resource_run(OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT);
-    result.unwrap();
-    let (result, used, peak) = complete_roots_resource_run(work, storage);
-    result.unwrap();
-    assert_eq!((used, peak), (work, storage));
-    for (work_limit, storage_limit, work_short) in
-        [(work - 1, storage, true), (work, storage - 1, false)]
-    {
-        let (result, _, _) = complete_roots_resource_run(work_limit, storage_limit);
-        let error = match result {
-            Err(ProductionSourceOptimizationErrorV18::Source(
-                ProductionSourceOwnedViewErrorV18::Resource(error),
-            ))
-            | Err(ProductionSourceOptimizationErrorV18::Adoption(
-                fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(
+    for fixed in [false, true] {
+        let (result, work, storage) =
+            complete_roots_resource_run(OPTIMIZED_SOURCE_WORK_LIMIT_V18, MODULE_LIMIT, fixed);
+        result.unwrap();
+        let (result, used, peak) = complete_roots_resource_run(work, storage, fixed);
+        result.unwrap();
+        assert_eq!((used, peak), (work, storage));
+        for (work_limit, storage_limit, work_short) in
+            [(work - 1, storage, true), (work, storage - 1, false)]
+        {
+            let (result, _, _) = complete_roots_resource_run(work_limit, storage_limit, fixed);
+            let error = match result {
+                Err(ProductionSourceOptimizationErrorV18::Source(
                     ProductionSourceOwnedViewErrorV18::Resource(error),
-                ),
-            ))
-            | Err(ProductionSourceOptimizationErrorV18::Adoption(
-                fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Resource(error),
-            )) => error,
-            other => panic!("expected exact resource refusal: {other:?}"),
-        };
-        assert!(if work_short {
-            matches!(error, ArgumentResourceV1::Work(_))
-        } else {
-            matches!(error, ArgumentResourceV1::Storage(_))
-        });
+                ))
+                | Err(ProductionSourceOptimizationErrorV18::Adoption(
+                    fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Origin(
+                        ProductionSourceOwnedViewErrorV18::Resource(error),
+                    ),
+                ))
+                | Err(ProductionSourceOptimizationErrorV18::Adoption(
+                    fe2o3_pliron::KirCheckedNeutralOptimizationErrorV1::Resource(error),
+                )) => error,
+                other => panic!("expected exact resource refusal: {other:?}"),
+            };
+            assert!(if work_short {
+                matches!(error, ArgumentResourceV1::Work(_))
+            } else {
+                matches!(error, ArgumentResourceV1::Storage(_))
+            });
+        }
     }
 }
 

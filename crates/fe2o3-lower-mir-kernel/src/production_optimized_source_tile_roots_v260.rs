@@ -61,6 +61,48 @@ struct FunctionPlan {
     selected: Option<Policy>,
 }
 
+#[derive(Clone, Copy)]
+enum RootLayouts<'a> {
+    Explicit(&'a [Option<ExecutionTileLayoutV1>]),
+    Fixed(ExecutionTileLayoutV1),
+}
+
+impl RootLayouts<'_> {
+    fn borrowed_storage(self) -> Result<usize, ArgumentResourceV1> {
+        match self {
+            Self::Explicit(rows) => {
+                argument_product_v1(rows.len(), size_of::<Option<ExecutionTileLayoutV1>>())
+            }
+            Self::Fixed(_) => Ok(0),
+        }
+    }
+
+    fn at(
+        self,
+        root: usize,
+        function: CanonicalKirFunctionCoordinateV1,
+        plans: &[FunctionPlan],
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<Option<ExecutionTileLayoutV1>> {
+        budget.charge_work(1)?;
+        match self {
+            Self::Explicit(rows) => {
+                rows.get(root)
+                    .copied()
+                    .ok_or(ProductionSourceOwnedViewErrorV18::Binding(
+                        "source tile root layout absent",
+                    ))
+            }
+            Self::Fixed(layout) => {
+                let plan = plans.get(function.0 as usize).ok_or(
+                    ProductionSourceOwnedViewErrorV18::Binding("source tile root function absent"),
+                )?;
+                Ok(plan.tile.then_some(layout))
+            }
+        }
+    }
+}
+
 impl FunctionPlan {
     fn selected_policy(&self) -> SourceOwnedResultV18<Option<Policy>> {
         if self.tile && self.selected.is_none() {
@@ -329,6 +371,54 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn fixed_layout_reads_actual_plan_with_exact_work_and_no_policy_mutation() {
+        for limit in [0, 1] {
+            for tile in [false, true] {
+                let mut plan = tile_plan();
+                plan.tile = tile;
+                let plans = [plan];
+                let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(limit);
+                let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+                let result = RootLayouts::Fixed(ExecutionTileLayoutV1::Striped).at(
+                    0,
+                    CanonicalKirFunctionCoordinateV1(0),
+                    &plans,
+                    &mut budget,
+                );
+                if limit == 1 {
+                    assert_eq!(
+                        result.unwrap(),
+                        tile.then_some(ExecutionTileLayoutV1::Striped)
+                    );
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(ProductionSourceOwnedViewErrorV18::Resource(
+                            ArgumentResourceV1::Work(_)
+                        ))
+                    ));
+                }
+                assert!(plans[0].selected.is_none());
+                assert_eq!(budget.storage(), 0);
+            }
+        }
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 0);
+        assert!(matches!(
+            RootLayouts::Fixed(ExecutionTileLayoutV1::Blocked).at(
+                0,
+                CanonicalKirFunctionCoordinateV1(1),
+                &[tile_plan()],
+                &mut budget,
+            ),
+            Err(ProductionSourceOwnedViewErrorV18::Binding(
+                "source tile root function absent"
+            ))
+        ));
+        assert_eq!(budget.work(), 1);
+    }
 }
 
 impl<'source> ProductionOptimizedSourceCorrespondenceV18<'source> {
@@ -346,6 +436,32 @@ impl<'source> ProductionOptimizedSourceCorrespondenceV18<'source> {
         root_layouts: &[Option<ExecutionTileLayoutV1>],
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> SourceOwnedResultV18<ProductionSourceTileExpansionV159<'view, 'source>> {
+        self.prepare_complete_tile_expansion_v260(RootLayouts::Explicit(root_layouts), budget)
+    }
+
+    /// Applies one provisional layout to every actual tile-bearing original
+    /// root, retaining all scalar roots without tile geometry or tile policy.
+    /// Selection uses the same checked function inventory as the explicit-root
+    /// entrypoint; no second source collection or separate classification scan
+    /// is performed.
+    ///
+    /// An all-scalar module returns an identity expansion with empty selections.
+    /// Tile-bearing non-root helpers still refuse. The original complete module,
+    /// account and root roster are retained, with no proof, import-profile,
+    /// artifact or launch authority granted by this layout request.
+    pub fn prepare_tile_expansion_with_layout_v260<'view>(
+        &'view self,
+        layout: ExecutionTileLayoutV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<ProductionSourceTileExpansionV159<'view, 'source>> {
+        self.prepare_complete_tile_expansion_v260(RootLayouts::Fixed(layout), budget)
+    }
+
+    fn prepare_complete_tile_expansion_v260<'view>(
+        &'view self,
+        root_layouts: RootLayouts<'_>,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> SourceOwnedResultV18<ProductionSourceTileExpansionV159<'view, 'source>> {
         self.query(budget)?;
         let floor = budget.storage();
         let result =
@@ -361,27 +477,25 @@ impl<'source> ProductionOptimizedSourceCorrespondenceV18<'source> {
                     size_of::<Option<Policy>>(),
                     size_of::<Vec<FunctionPlan>>(),
                     size_of::<FunctionPlan>(),
-                    size_of::<&[Option<ExecutionTileLayoutV1>]>(),
-                    argument_product_v1(
-                        root_layouts.len(),
-                        size_of::<Option<ExecutionTileLayoutV1>>(),
-                    )?,
+                    size_of::<RootLayouts<'_>>(),
+                    root_layouts.borrowed_storage()?,
                     size_of::<SourceOwnedResultV18<Tail>>(),
                 ])?;
                 budget.reserve_storage(argument_sum_v1(&[header, scratch])?)?;
                 let count = self.original.source.root_count(budget)?;
                 budget.charge_work(1)?;
-                if root_layouts.len() != count {
+                if matches!(root_layouts, RootLayouts::Explicit(rows) if rows.len() != count) {
                     return resources::binding("source tile complete root roster differs");
                 }
                 let mut rows = resources::vector::<RootRow>(count, budget)?;
                 let inventory = self.output_inventory(budget)?;
                 let mut plans = function_plans(inventory, budget)?;
-                for (root, layout) in root_layouts.iter().enumerate() {
+                for root in 0..count {
                     budget.charge_work(1)?;
                     let cfg = self.output_root_cfg_v18(root, budget)?;
                     let function = cfg.function().coordinate;
-                    rows.push(select_root(function, *layout, &mut plans, budget)?);
+                    let layout = root_layouts.at(root, function, &plans, budget)?;
+                    rows.push(select_root(function, layout, &mut plans, budget)?);
                 }
                 let selections = selections(inventory, &plans, count, budget)?;
                 let selection_bytes =
