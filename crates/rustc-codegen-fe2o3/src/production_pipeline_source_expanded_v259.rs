@@ -410,8 +410,12 @@ mod tests {
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     /// Imports ordinary rustc source, runs the checked fixed-point prefix and
     /// retains its actual expanded successor on the caller's existing account.
-    /// The consumer returns its measured owned payload credit, never graph
-    /// borrows. Refinement, native completion and publication remain separate.
+    /// The consumer returns `(value, dynamic_bytes)`: exactly the storage growth
+    /// it reserved for the returned value's owned backing, excluding `size_of::<R>()`
+    /// and never including borrowed graph owners. The stage transfers that credit
+    /// to the optimizer as an unreserved `size_of::<R>() + dynamic_bytes` receipt,
+    /// then restores only the surviving backing credit; outer inline frames stay
+    /// prepaid. Refinement, native completion and publication remain separate.
     pub(crate) fn with_original_source_expanded_v259<R: 'static, F>(
         self,
         budget: &mut Budget<'_>,
