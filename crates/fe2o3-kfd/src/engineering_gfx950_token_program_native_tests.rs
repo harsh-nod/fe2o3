@@ -158,6 +158,11 @@ fn native_arena_lifecycle_keeps_default_storage_and_validation_separate() {
     assert!(!source.contains("self.context.internal[SIGNAL]"));
     assert!(context.contains("token_program_native: false"));
     assert!(context.contains("token_program_boundary_fences: false"));
+    assert!(context.contains("token_program_slot_policy: TokenProgramSlotPolicyV1::Standard256"));
+    assert!(
+        include_str!("engineering_gfx950_debug_cold_v1.rs")
+            .contains("token_program_slot_policy: TokenProgramSlotPolicyV1::Standard256")
+    );
     for section in ["fn rollover_queue(", "fn close_inner("] {
         let body = context
             .split(section)

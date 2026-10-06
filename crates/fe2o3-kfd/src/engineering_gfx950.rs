@@ -146,6 +146,7 @@ struct Context {
     token_program_enabled: bool,
     token_program_native: bool,
     token_program_boundary_fences: bool,
+    token_program_slot_policy: TokenProgramSlotPolicyV1,
     token_program_storage: ordered_batch::native_program::ProgramStorage,
     token_program_counters: TokenProgramCountersV1,
     next_token_program: u64,
@@ -360,6 +361,7 @@ impl Context {
             token_program_enabled: false,
             token_program_native: false,
             token_program_boundary_fences: false,
+            token_program_slot_policy: TokenProgramSlotPolicyV1::Standard256,
             token_program_storage: Default::default(),
             token_program_counters: Default::default(),
             next_token_program: 1,
@@ -1521,12 +1523,59 @@ pub unsafe fn run_gfx950_engineering_worker_token_program_boundary_fences_unchec
     }
 }
 
+/// Runs the separate native system-fence worker with an opt-in 512-slot family.
+/// Legacy commands remain limited to 256 slots, even in this process.
+///
+/// # Safety
+/// All obligations of [`run_gfx950_engineering_worker_unchecked_v1`] apply.
+/// Any error is terminal; no service or protected execution authority is granted.
+///
+/// ```compile_fail
+/// fe2o3_kfd::run_gfx950_engineering_worker_token_program_native_slots512_unchecked_v1(1).unwrap();
+/// ```
+pub unsafe fn run_gfx950_engineering_worker_token_program_native_slots512_unchecked_v1(
+    unique_id: u64,
+) -> Result<()> {
+    // SAFETY: the additive entry retains the disposable-process trust boundary.
+    unsafe {
+        run_worker_with_slot_policy(
+            unique_id,
+            Ordered64WaitPolicy::Sleep50usV1,
+            true,
+            true,
+            false,
+            TokenProgramSlotPolicyV1::Extended512,
+        )
+    }
+}
+
 unsafe fn run_worker_with_wait_policy(
     unique_id: u64,
     wait_policy: Ordered64WaitPolicy,
     token_program_enabled: bool,
     token_program_native: bool,
     token_program_boundary_fences: bool,
+) -> Result<()> {
+    // SAFETY: callers retain all obligations; legacy entries cannot select 512.
+    unsafe {
+        run_worker_with_slot_policy(
+            unique_id,
+            wait_policy,
+            token_program_enabled,
+            token_program_native,
+            token_program_boundary_fences,
+            TokenProgramSlotPolicyV1::Standard256,
+        )
+    }
+}
+
+unsafe fn run_worker_with_slot_policy(
+    unique_id: u64,
+    wait_policy: Ordered64WaitPolicy,
+    token_program_enabled: bool,
+    token_program_native: bool,
+    token_program_boundary_fences: bool,
+    token_program_slot_policy: TokenProgramSlotPolicyV1,
 ) -> Result<()> {
     let kfd = OpenedKfd::open_default()
         .map_err(explain)?
@@ -1541,6 +1590,7 @@ unsafe fn run_worker_with_wait_policy(
     context.token_program_enabled = token_program_enabled;
     context.token_program_native = token_program_native;
     context.token_program_boundary_fences = token_program_boundary_fences;
+    context.token_program_slot_policy = token_program_slot_policy;
     let mut input = std::io::stdin().lock();
     let mut output = std::io::stdout().lock();
     let mut fatal_response_written = false;
@@ -1560,6 +1610,7 @@ unsafe fn run_worker_with_wait_policy(
             let Some(command) = read_header_v1::<CommandV1>(&mut input).map_err(explain)? else {
                 return context.close_inner();
             };
+            context.require_token_program_command_policy(&command)?;
             let payload_bytes = command.payload_bytes().map_err(explain)?;
             let mut payload = vec![0; payload_bytes];
             input.read_exact(&mut payload).map_err(explain)?;
@@ -1576,7 +1627,21 @@ unsafe fn run_worker_with_wait_policy(
                 CommandV1::RegisterTokenProgram {
                     definition_bytes,
                     kernarg_bytes,
-                } => context.register_token_program(definition_bytes, kernarg_bytes, payload)?,
+                } => context.register_token_program(
+                    TokenProgramSlotPolicyV1::Standard256,
+                    definition_bytes,
+                    kernarg_bytes,
+                    payload,
+                )?,
+                CommandV1::RegisterTokenProgramSlots512V1 {
+                    definition_bytes,
+                    kernarg_bytes,
+                } => context.register_token_program(
+                    TokenProgramSlotPolicyV1::Extended512,
+                    definition_bytes,
+                    kernarg_bytes,
+                    payload,
+                )?,
                 CommandV1::ExecuteTokenProgram {
                     program,
                     expected_epoch,
@@ -1584,6 +1649,21 @@ unsafe fn run_worker_with_wait_policy(
                     timeout_ms,
                     updates,
                 } => context.execute_token_program(
+                    TokenProgramSlotPolicyV1::Standard256,
+                    program,
+                    expected_epoch,
+                    expected_completed_packets,
+                    timeout_ms,
+                    updates,
+                )?,
+                CommandV1::ExecuteTokenProgramSlots512V1 {
+                    program,
+                    expected_epoch,
+                    expected_completed_packets,
+                    timeout_ms,
+                    updates,
+                } => context.execute_token_program(
+                    TokenProgramSlotPolicyV1::Extended512,
                     program,
                     expected_epoch,
                     expected_completed_packets,

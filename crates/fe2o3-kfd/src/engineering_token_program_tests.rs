@@ -538,7 +538,7 @@ fn counted_encoding_preserves_structural_rejection_order_and_messages() {
     assert_counted_encoding_equivalent(&value, &[0; 16], Some("token program scalar slot"));
 }
 
-fn definition_at_json_length(target: usize) -> TokenProgramDefinitionV1 {
+pub(super) fn definition_at_json_length(target: usize) -> TokenProgramDefinitionV1 {
     let mut value = definition();
     value.slots.clear();
     value.dispatches[0].payload_bytes = 0;

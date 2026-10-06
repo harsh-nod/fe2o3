@@ -178,38 +178,40 @@ fn invalid_binding_after_first_64_preparations_yields_zero_publications() {
             access: BufferAccessV1::Read,
         }],
     };
-    for bad_index in [64, 128] {
-        for bad_range in [false, true] {
-            let mut commands = vec![command.clone(); 129];
-            if bad_range {
-                commands[bad_index].pointers[0].buffer_offset = 16;
-            } else {
-                commands[bad_index].pointers[0].buffer = 2;
+    for (count, bad_indexes) in [(129, &[64, 128][..]), (649, &[64, 128, 511, 648][..])] {
+        for &bad_index in bad_indexes {
+            for bad_range in [false, true] {
+                let mut commands = vec![command.clone(); count];
+                if bad_range {
+                    commands[bad_index].pointers[0].buffer_offset = 16;
+                } else {
+                    commands[bad_index].pointers[0].buffer = 2;
+                }
+                let deadline = Instant::now() + Duration::from_secs(60);
+                let mut preparations = 0;
+                let mut publications = 0;
+                let result = prepare_program_commands(
+                    commands,
+                    vec![0; count * 8],
+                    Some(deadline),
+                    |command, mut bytes| {
+                        preparations += 1;
+                        patch_pointer_arguments(&metadata, &mut bytes, &command.pointers, |id| {
+                            (id == 1).then_some((0x1000, 16))
+                        })?;
+                        Ok(bytes)
+                    },
+                )
+                .and_then(|prepared| {
+                    run_prepared_groups(prepared, deadline, |_, _| {
+                        publications += 1;
+                        Ok(())
+                    })
+                });
+                assert!(result.is_err());
+                assert_eq!(preparations, bad_index + 1);
+                assert_eq!(publications, 0);
             }
-            let deadline = Instant::now() + Duration::from_secs(60);
-            let mut preparations = 0;
-            let mut publications = 0;
-            let result = prepare_program_commands(
-                commands,
-                vec![0; 129 * 8],
-                Some(deadline),
-                |command, mut bytes| {
-                    preparations += 1;
-                    patch_pointer_arguments(&metadata, &mut bytes, &command.pointers, |id| {
-                        (id == 1).then_some((0x1000, 16))
-                    })?;
-                    Ok(bytes)
-                },
-            )
-            .and_then(|prepared| {
-                run_prepared_groups(prepared, deadline, |_, _| {
-                    publications += 1;
-                    Ok(())
-                })
-            });
-            assert!(result.is_err());
-            assert_eq!(preparations, bad_index + 1);
-            assert_eq!(publications, 0);
         }
     }
 }
@@ -227,6 +229,12 @@ fn worker_orchestration_orders_full_preparation_and_registration_lifecycle() {
         .split("pub(super)fnexecute_token_program(")
         .nth(1)
         .unwrap();
+    assert!(
+        execute
+            .find("require_registration_policy(registered.slot_policy,slot_policy)?")
+            .unwrap()
+            < execute.find(".materialize(&updates)").unwrap()
+    );
     assert!(
         execute.find(".materialize(&updates)").unwrap()
             < execute.find("self.prepare_token_dispatches(").unwrap()
@@ -270,6 +278,13 @@ fn worker_orchestration_orders_full_preparation_and_registration_lifecycle() {
             < release.find("self.token_program=None").unwrap()
     );
     let worker = compact(include_str!("engineering_gfx950.rs"));
+    assert!(
+        worker
+            .find("context.require_token_program_command_policy(&command)?")
+            .unwrap()
+            < worker.find("letmutpayload=vec![0;payload_bytes]").unwrap()
+    );
+    assert!(register.contains("epoch:self.queue_epoch,slot_policy,template,"));
     for (operation, action) in [
         ("Allocate", "context.allocate("),
         ("Free", "context.free("),
@@ -289,4 +304,128 @@ fn worker_orchestration_orders_full_preparation_and_registration_lifecycle() {
                 < arm.find(action).unwrap()
         );
     }
+}
+
+#[test]
+fn extended_capacity_requires_its_native_system_fence_entry() {
+    use TokenProgramSlotPolicyV1::{Extended512, Standard256};
+    for native in [false, true] {
+        for boundary in [false, true] {
+            assert!(require_slot_policy(Standard256, Extended512, native, boundary).is_err());
+            assert_eq!(
+                require_slot_policy(Extended512, Extended512, native, boundary).is_ok(),
+                native && !boundary
+            );
+            assert_eq!(
+                require_slot_policy(Extended512, Standard256, native, boundary).is_ok(),
+                native && !boundary
+            );
+        }
+    }
+    assert!(require_slot_policy(Standard256, Standard256, false, false).is_ok());
+    assert!(require_slot_policy(Standard256, Standard256, true, true).is_ok());
+}
+
+#[test]
+fn registration_family_is_exact_even_for_small_or_empty_programs() {
+    use TokenProgramSlotPolicyV1::{Extended512, Standard256};
+    for registered in [Standard256, Extended512] {
+        for requested in [Standard256, Extended512] {
+            assert_eq!(
+                require_registration_policy(registered, requested).is_ok(),
+                registered == requested
+            );
+        }
+    }
+}
+
+#[test]
+fn extended_backend_identity_is_positive_and_legacy_identities_stay_exact() {
+    use TokenProgramSlotPolicyV1::{Extended512, Standard256};
+    assert_eq!(
+        backend_name(true, true, false, Extended512),
+        "native-whole-program-slots512-v1"
+    );
+    assert_eq!(
+        backend_name(true, true, false, Standard256),
+        "native-whole-program-v1"
+    );
+    assert_eq!(
+        backend_name(true, true, true, Standard256),
+        "native-boundary-fences-v1"
+    );
+    assert_eq!(
+        backend_name(true, false, false, Standard256),
+        "ordered64-groups-v1"
+    );
+    for (enabled, native, boundary) in [
+        (false, false, false),
+        (false, true, false),
+        (true, false, false),
+        (true, true, true),
+    ] {
+        assert_eq!(
+            backend_name(enabled, native, boundary, Extended512),
+            "disabled"
+        );
+    }
+}
+
+#[test]
+fn both_extended_commands_require_positive_entry_before_payload_allocation() {
+    use TokenProgramSlotPolicyV1::{Extended512, Standard256};
+    let commands = [
+        CommandV1::RegisterTokenProgramSlots512V1 {
+            definition_bytes: 1,
+            kernarg_bytes: 0,
+        },
+        CommandV1::ExecuteTokenProgramSlots512V1 {
+            program: 1,
+            expected_epoch: 0,
+            expected_completed_packets: 0,
+            timeout_ms: 1,
+            updates: Vec::new(),
+        },
+    ];
+    for command in &commands {
+        for enabled in [false, true] {
+            for native in [false, true] {
+                for boundary in [false, true] {
+                    for capacity in [Standard256, Extended512] {
+                        for wait in [
+                            Ordered64WaitPolicy::Sleep50usV1,
+                            Ordered64WaitPolicy::ActivePoll10msV1,
+                        ] {
+                            assert_eq!(
+                                require_command_policy(
+                                    command, enabled, wait, capacity, native, boundary
+                                )
+                                .is_ok(),
+                                enabled
+                                    && native
+                                    && !boundary
+                                    && capacity == Extended512
+                                    && wait == Ordered64WaitPolicy::Sleep50usV1
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Legacy commands keep their original later admission and framing behavior.
+    assert!(
+        require_command_policy(
+            &CommandV1::RegisterTokenProgram {
+                definition_bytes: 1,
+                kernarg_bytes: 0
+            },
+            false,
+            Ordered64WaitPolicy::Sleep50usV1,
+            Standard256,
+            false,
+            false
+        )
+        .is_ok()
+    );
 }

@@ -1,6 +1,33 @@
 // Kept outside src/bin so Cargo does not discover a second worker binary.
 use super::{WorkerMode, parse_args};
 
+#[test]
+fn slots512_requires_one_exact_noncomposable_diagnostic_flag() {
+    let mut values = args(&[
+        "--device-unique-id",
+        "7",
+        "--allow-unauthenticated-machine-code",
+        "--diagnostic-token-program-native-slots512-v1",
+    ]);
+    assert_eq!(
+        parse_args(&values),
+        Some((7, WorkerMode::NativeTokenProgramSlots512))
+    );
+    for other in [
+        "--diagnostic-token-program-native-v1",
+        "--diagnostic-token-program-boundary-fences-v1",
+        "--diagnostic-active-poll-10ms",
+        "--diagnostic-token-program-v1",
+        "--diagnostic-token-program-native-slots512-v1",
+    ] {
+        let mut invalid = values.clone();
+        invalid.push(other.into());
+        assert_eq!(parse_args(&invalid), None);
+    }
+    values.remove(2);
+    assert_eq!(parse_args(&values), None);
+}
+
 fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_owned()).collect()
 }

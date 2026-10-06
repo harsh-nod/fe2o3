@@ -6,6 +6,7 @@ use super::debug_metadata::{OwnedPreparedDebugMetadataV1, PreparedMetadataFactsV
 use super::{Allocation, Backend, Context, Kernel, PerformanceCountersV1, Result, explain};
 use crate::CheckedGfx950XnackMinusDevice;
 use crate::engineering_gfx950_profile::{PAGE_BYTES, RING_BYTES, validate_profile};
+use crate::engineering_wire::TokenProgramSlotPolicyV1;
 use crate::memory::MemoryBackend;
 use crate::queue_linux::ProcessGlobalKfdDebugReservationV1;
 use fe2o3_aql::{AqlRingCapacityV1, AqlSingleProducerRingModelV1};
@@ -284,6 +285,7 @@ impl Context {
             token_program_enabled: false,
             token_program_native: false,
             token_program_boundary_fences: false,
+            token_program_slot_policy: TokenProgramSlotPolicyV1::Standard256,
             token_program_storage: Default::default(),
             token_program_counters: Default::default(),
             next_token_program: 1,

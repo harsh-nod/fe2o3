@@ -29,8 +29,10 @@ mod token_program;
 pub(crate) use token_program::ProgramTemplate;
 pub use token_program::{
     MAX_TOKEN_PROGRAM_DEFINITION_BYTES_V1, MAX_TOKEN_PROGRAM_DISPATCHES_V1,
-    MAX_TOKEN_PROGRAM_SLOTS_V1, TokenProgramDefinitionV1, TokenProgramSlotV1, TokenProgramUpdateV1,
-    encode_token_program_v1, validate_token_program_encoding_v1,
+    MAX_TOKEN_PROGRAM_SLOTS_V1, MAX_TOKEN_PROGRAM_SLOTS512_V1, TokenProgramDefinitionV1,
+    TokenProgramSlotPolicyV1, TokenProgramSlotV1, TokenProgramUpdateV1,
+    encode_token_program_slots512_v1, encode_token_program_v1, validate_token_program_encoding_v1,
+    validate_token_program_slots512_encoding_v1,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -153,6 +155,20 @@ pub enum CommandV1 {
         timeout_ms: u32,
         updates: Vec<TokenProgramUpdateV1>,
     },
+    /// Separate engineering-only opt-in family; legacy registration stays at 256.
+    /// Definition, transfer, dispatch and pointer limits are not enlarged.
+    RegisterTokenProgramSlots512V1 {
+        definition_bytes: u32,
+        kernarg_bytes: u32,
+    },
+    /// Executes only a registration admitted through the matching 512-slot family.
+    ExecuteTokenProgramSlots512V1 {
+        program: u64,
+        expected_epoch: u64,
+        expected_completed_packets: u64,
+        timeout_ms: u32,
+        updates: Vec<TokenProgramUpdateV1>,
+    },
     ReleaseTokenProgram {
         program: u64,
         expected_epoch: u64,
@@ -230,6 +246,10 @@ impl CommandV1 {
             Self::RegisterTokenProgram {
                 definition_bytes,
                 kernarg_bytes,
+            }
+            | Self::RegisterTokenProgramSlots512V1 {
+                definition_bytes,
+                kernarg_bytes,
             } => {
                 return token_program::token_program_payload_bytes(
                     *definition_bytes,
@@ -248,6 +268,15 @@ impl CommandV1 {
             Self::ReleaseTokenProgram { .. }
             | Self::DescribeTokenProgramBackendV1 { .. }
             | Self::TokenProgramSnapshotV1 { .. } => 0,
+            Self::ExecuteTokenProgramSlots512V1 {
+                timeout_ms,
+                updates,
+                ..
+            } if (1..=600_000).contains(timeout_ms)
+                && updates.len() <= MAX_TOKEN_PROGRAM_SLOTS512_V1 =>
+            {
+                0
+            }
             Self::DispatchSequence { dispatches } => return sequence_payload_bytes(dispatches),
             Self::DispatchOrderedBatch {
                 dispatches,

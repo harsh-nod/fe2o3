@@ -13,6 +13,7 @@ enum WorkerMode {
     TokenProgram,
     NativeTokenProgram,
     BoundaryFenceTokenProgram,
+    NativeTokenProgramSlots512,
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -20,7 +21,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some((unique_id, mode)) = parse_args(&args) else {
         eprintln!(
-            "usage: fe2o3-gfx950-engineering-worker --device-unique-id N --allow-unauthenticated-machine-code [--diagnostic-active-poll-10ms | --diagnostic-token-program-v1 | --diagnostic-token-program-native-v1 | --diagnostic-token-program-boundary-fences-v1]"
+            "usage: fe2o3-gfx950-engineering-worker --device-unique-id N --allow-unauthenticated-machine-code [--diagnostic-active-poll-10ms | --diagnostic-token-program-v1 | --diagnostic-token-program-native-v1 | --diagnostic-token-program-boundary-fences-v1 | --diagnostic-token-program-native-slots512-v1]"
         );
         std::process::exit(2);
     };
@@ -51,6 +52,11 @@ fn main() {
                 )
             }
             WorkerMode::Default => fe2o3_kfd::run_gfx950_engineering_worker_unchecked_v1(unique_id),
+            WorkerMode::NativeTokenProgramSlots512 => {
+                fe2o3_kfd::run_gfx950_engineering_worker_token_program_native_slots512_unchecked_v1(
+                    unique_id,
+                )
+            }
             WorkerMode::BoundaryFenceTokenProgram => {
                 // The explicit mode additionally acknowledges closed single-agent
                 // execution: no host/peer/other-queue communication in a program.
@@ -96,6 +102,16 @@ fn parse_args(args: &[String]) -> Option<(u64, WorkerMode)> {
                 value,
                 acknowledgement,
                 WorkerMode::BoundaryFenceTokenProgram,
+            )
+        }
+        [selector, value, acknowledgement, policy]
+            if policy == "--diagnostic-token-program-native-slots512-v1" =>
+        {
+            (
+                selector,
+                value,
+                acknowledgement,
+                WorkerMode::NativeTokenProgramSlots512,
             )
         }
         _ => return None,

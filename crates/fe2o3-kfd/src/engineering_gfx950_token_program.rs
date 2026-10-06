@@ -5,7 +5,74 @@ use super::*;
 pub(super) struct RegisteredProgram {
     id: u64,
     epoch: u64,
+    slot_policy: TokenProgramSlotPolicyV1,
     template: ProgramTemplate,
+}
+
+fn require_slot_policy(
+    capacity: TokenProgramSlotPolicyV1,
+    requested: TokenProgramSlotPolicyV1,
+    native: bool,
+    boundary_fences: bool,
+) -> Result<()> {
+    if capacity == TokenProgramSlotPolicyV1::Extended512 && (!native || boundary_fences) {
+        return Err("512-slot policy requires its separate native system-fence entry".into());
+    }
+    if requested == TokenProgramSlotPolicyV1::Extended512 && capacity != requested {
+        return Err("512-slot command requires its separate diagnostic process entry".into());
+    }
+    Ok(())
+}
+
+fn require_registration_policy(
+    registered: TokenProgramSlotPolicyV1,
+    requested: TokenProgramSlotPolicyV1,
+) -> Result<()> {
+    if registered != requested {
+        return Err("token program command-family mismatch".into());
+    }
+    Ok(())
+}
+
+fn require_command_policy(
+    command: &CommandV1,
+    enabled: bool,
+    wait: Ordered64WaitPolicy,
+    capacity: TokenProgramSlotPolicyV1,
+    native: bool,
+    boundary_fences: bool,
+) -> Result<()> {
+    if matches!(
+        command,
+        CommandV1::RegisterTokenProgramSlots512V1 { .. }
+            | CommandV1::ExecuteTokenProgramSlots512V1 { .. }
+    ) {
+        require_policy(enabled, wait)?;
+        require_slot_policy(
+            capacity,
+            TokenProgramSlotPolicyV1::Extended512,
+            native,
+            boundary_fences,
+        )?;
+    }
+    Ok(())
+}
+
+fn backend_name(
+    enabled: bool,
+    native: bool,
+    boundary_fences: bool,
+    slots: TokenProgramSlotPolicyV1,
+) -> &'static str {
+    match (enabled, native, boundary_fences, slots) {
+        (true, true, false, TokenProgramSlotPolicyV1::Extended512) => {
+            "native-whole-program-slots512-v1"
+        }
+        (true, true, true, TokenProgramSlotPolicyV1::Standard256) => "native-boundary-fences-v1",
+        (true, true, false, TokenProgramSlotPolicyV1::Standard256) => "native-whole-program-v1",
+        (true, false, false, TokenProgramSlotPolicyV1::Standard256) => "ordered64-groups-v1",
+        _ => "disabled",
+    }
 }
 
 fn require_policy(enabled: bool, policy: Ordered64WaitPolicy) -> Result<()> {
@@ -111,16 +178,23 @@ pub(super) fn run_prepared_groups<T>(
 
 impl Context {
     pub(super) fn token_program_backend(&self) -> &'static str {
-        match (
+        backend_name(
             self.token_program_enabled,
             self.token_program_native,
             self.token_program_boundary_fences,
-        ) {
-            (true, true, true) => "native-boundary-fences-v1",
-            (true, true, false) => "native-whole-program-v1",
-            (true, false, false) => "ordered64-groups-v1",
-            _ => "disabled",
-        }
+            self.token_program_slot_policy,
+        )
+    }
+
+    pub(super) fn require_token_program_command_policy(&self, command: &CommandV1) -> Result<()> {
+        require_command_policy(
+            command,
+            self.token_program_enabled,
+            self.ordered64_wait_policy,
+            self.token_program_slot_policy,
+            self.token_program_native,
+            self.token_program_boundary_fences,
+        )
     }
 
     fn require_token_program_enabled(&self) -> Result<()> {
@@ -163,16 +237,33 @@ impl Context {
 
     pub(super) fn register_token_program(
         &mut self,
+        slot_policy: TokenProgramSlotPolicyV1,
         definition_bytes: u32,
         kernarg_bytes: u32,
         payload: Vec<u8>,
     ) -> Result<ResponseV1> {
         self.require_token_program_enabled()?;
+        require_slot_policy(
+            self.token_program_slot_policy,
+            slot_policy,
+            self.token_program_native,
+            self.token_program_boundary_fences,
+        )?;
         self.check_currentness(true)?;
         self.check_idle()?;
         self.require_program_resource_mutation()?;
-        let template =
-            ProgramTemplate::decode(definition_bytes, kernarg_bytes, &payload).map_err(explain)?;
+        let template = match slot_policy {
+            TokenProgramSlotPolicyV1::Standard256 => {
+                ProgramTemplate::decode(definition_bytes, kernarg_bytes, &payload)
+            }
+            TokenProgramSlotPolicyV1::Extended512 => ProgramTemplate::decode_with_policy(
+                definition_bytes,
+                kernarg_bytes,
+                &payload,
+                slot_policy,
+            ),
+        }
+        .map_err(explain)?;
         for slot in &template.definition.slots {
             match slot {
                 TokenProgramSlotV1::ScalarU32 {
@@ -216,6 +307,7 @@ impl Context {
         self.token_program = Some(RegisteredProgram {
             id,
             epoch: self.queue_epoch,
+            slot_policy,
             template,
         });
         Ok(response)
@@ -241,6 +333,7 @@ impl Context {
 
     pub(super) fn execute_token_program(
         &mut self,
+        slot_policy: TokenProgramSlotPolicyV1,
         program: u64,
         epoch: u64,
         completed: u64,
@@ -249,6 +342,12 @@ impl Context {
     ) -> Result<ResponseV1> {
         let result = (|| {
             self.require_token_program_enabled()?;
+            require_slot_policy(
+                self.token_program_slot_policy,
+                slot_policy,
+                self.token_program_native,
+                self.token_program_boundary_fences,
+            )?;
             if !(1..=600_000).contains(&timeout_ms) {
                 return Err("token program timeout".into());
             }
@@ -264,6 +363,7 @@ impl Context {
                 .ok_or("token program not registered")?;
             require_identity(registered.id, registered.epoch, program, epoch)?;
             require_identity(registered.id, self.queue_epoch, program, epoch)?;
+            require_registration_policy(registered.slot_policy, slot_policy)?;
             require_frontier(
                 self.ring.write(),
                 self.completed_write,

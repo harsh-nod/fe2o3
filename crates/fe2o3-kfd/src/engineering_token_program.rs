@@ -5,7 +5,26 @@ use std::collections::BTreeSet;
 
 pub const MAX_TOKEN_PROGRAM_DISPATCHES_V1: usize = 1024;
 pub const MAX_TOKEN_PROGRAM_SLOTS_V1: usize = 256;
+pub const MAX_TOKEN_PROGRAM_SLOTS512_V1: usize = 512;
 pub const MAX_TOKEN_PROGRAM_DEFINITION_BYTES_V1: u32 = 512 * 1024;
+
+/// Closed limits for unauthenticated engineering commands, not service authority.
+/// Only the slot count differs; definition, transfer and dispatch limits remain
+/// shared. The legacy family always remains at 256 slots.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TokenProgramSlotPolicyV1 {
+    Standard256,
+    Extended512,
+}
+
+impl TokenProgramSlotPolicyV1 {
+    pub const fn max_slots(self) -> usize {
+        match self {
+            Self::Standard256 => MAX_TOKEN_PROGRAM_SLOTS_V1,
+            Self::Extended512 => MAX_TOKEN_PROGRAM_SLOTS512_V1,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -56,8 +75,20 @@ fn validate_program_template(
     definition: &TokenProgramDefinitionV1,
     payload_bytes: usize,
 ) -> io::Result<Vec<usize>> {
+    validate_program_template_with_policy(
+        definition,
+        payload_bytes,
+        TokenProgramSlotPolicyV1::Standard256,
+    )
+}
+
+fn validate_program_template_with_policy(
+    definition: &TokenProgramDefinitionV1,
+    payload_bytes: usize,
+    policy: TokenProgramSlotPolicyV1,
+) -> io::Result<Vec<usize>> {
     if !(1..=MAX_TOKEN_PROGRAM_DISPATCHES_V1).contains(&definition.dispatches.len())
-        || definition.slots.len() > MAX_TOKEN_PROGRAM_SLOTS_V1
+        || definition.slots.len() > policy.max_slots()
         || payload_bytes > MAX_TRANSFER_BYTES_V1 as usize
     {
         return Err(invalid("token program count limits"));
@@ -184,6 +215,52 @@ pub fn encode_token_program_v1(
     ))
 }
 
+/// Validates the explicit engineering-only 512-slot family.
+/// All serialized definition, transfer and per-dispatch limits remain unchanged.
+pub fn validate_token_program_slots512_encoding_v1(
+    definition: &TokenProgramDefinitionV1,
+    kernargs: &[u8],
+) -> io::Result<()> {
+    drop(validate_program_template_with_policy(
+        definition,
+        kernargs.len(),
+        TokenProgramSlotPolicyV1::Extended512,
+    )?);
+    let mut count = JsonByteCount::default();
+    serde_json::to_writer(&mut count, definition).map_err(|_| invalid("token program JSON"))?;
+    let definition_bytes = u32::try_from(count.bytes).map_err(|_| invalid("definition length"))?;
+    let kernarg_bytes = u32::try_from(kernargs.len()).map_err(|_| invalid("kernarg length"))?;
+    token_program_payload_bytes(definition_bytes, kernarg_bytes)?;
+    Ok(())
+}
+
+/// Encodes only the separately admitted engineering-only 512-slot command.
+/// This does not opt a worker in or grant execution authority. The worker must
+/// positively identify its explicit native-slots512 entry before use.
+pub fn encode_token_program_slots512_v1(
+    definition: &TokenProgramDefinitionV1,
+    kernargs: &[u8],
+) -> io::Result<(CommandV1, Vec<u8>)> {
+    ProgramTemplate::new_with_policy(
+        definition.clone(),
+        kernargs.to_vec(),
+        TokenProgramSlotPolicyV1::Extended512,
+    )?;
+    let mut payload = serde_json::to_vec(definition).map_err(|_| invalid("token program JSON"))?;
+    let definition_bytes =
+        u32::try_from(payload.len()).map_err(|_| invalid("definition length"))?;
+    let kernarg_bytes = u32::try_from(kernargs.len()).map_err(|_| invalid("kernarg length"))?;
+    token_program_payload_bytes(definition_bytes, kernarg_bytes)?;
+    payload.extend_from_slice(kernargs);
+    Ok((
+        CommandV1::RegisterTokenProgramSlots512V1 {
+            definition_bytes,
+            kernarg_bytes,
+        },
+        payload,
+    ))
+}
+
 pub(crate) struct ProgramTemplate {
     pub(crate) definition: TokenProgramDefinitionV1,
     payload: Vec<u8>,
@@ -195,6 +272,20 @@ impl ProgramTemplate {
         definition_bytes: u32,
         kernarg_bytes: u32,
         payload: &[u8],
+    ) -> io::Result<Self> {
+        Self::decode_with_policy(
+            definition_bytes,
+            kernarg_bytes,
+            payload,
+            TokenProgramSlotPolicyV1::Standard256,
+        )
+    }
+
+    pub(crate) fn decode_with_policy(
+        definition_bytes: u32,
+        kernarg_bytes: u32,
+        payload: &[u8],
+        policy: TokenProgramSlotPolicyV1,
     ) -> io::Result<Self> {
         if token_program_payload_bytes(definition_bytes, kernarg_bytes)? != payload.len() {
             return Err(invalid("token program exact payload length"));
@@ -209,11 +300,19 @@ impl ProgramTemplate {
         {
             return Err(invalid("token program unrecognized definition"));
         }
-        Self::new(definition, kernargs.to_vec())
+        Self::new_with_policy(definition, kernargs.to_vec(), policy)
     }
 
     fn new(definition: TokenProgramDefinitionV1, payload: Vec<u8>) -> io::Result<Self> {
-        let offsets = validate_program_template(&definition, payload.len())?;
+        Self::new_with_policy(definition, payload, TokenProgramSlotPolicyV1::Standard256)
+    }
+
+    fn new_with_policy(
+        definition: TokenProgramDefinitionV1,
+        payload: Vec<u8>,
+        policy: TokenProgramSlotPolicyV1,
+    ) -> io::Result<Self> {
+        let offsets = validate_program_template_with_policy(&definition, payload.len(), policy)?;
         Ok(Self {
             definition,
             payload,
@@ -267,6 +366,14 @@ impl ProgramTemplate {
         Ok((commands, payload))
     }
 }
+
+#[cfg(test)]
+#[path = "engineering_token_program_slots512_tests.rs"]
+mod slots512_tests;
+
+#[cfg(test)]
+#[path = "engineering_token_program_slots512_wire_edges_tests.rs"]
+mod slots512_wire_edges_tests;
 
 #[cfg(test)]
 #[path = "engineering_token_program_tests.rs"]
