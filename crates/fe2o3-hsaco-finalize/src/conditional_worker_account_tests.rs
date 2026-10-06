@@ -23,7 +23,7 @@ fn retained_worker_account_exact_and_one_short_work_and_storage() {
             let mode = AccountMode::original(b).unwrap();
             let result = mode.run(b, 7, |b| -> Result<_, Resource> {
                 assert_eq!(b.storage_account_identity_v1(), identity);
-                assert_eq!(b.work_ledger_identity_v1(), ledger);
+                assert!(b.work_ledger_identity_v1() == ledger);
                 assert_eq!(b as *const Budget<'_> as usize, address);
                 b.charge_work(5)?;
                 b.reserve_storage(11)?;

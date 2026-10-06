@@ -69,7 +69,7 @@ fn original_policy_reconstruction_exact_one_short_and_partial_failure() {
                 assert!(b.storage() > floor);
             }
             assert_eq!(b.storage_account_identity_v1(), identity);
-            assert_eq!(b.work_ledger_identity_v1(), ledger);
+            assert!(b.work_ledger_identity_v1() == ledger);
             assert_eq!(b.storage_limit(), storage);
             (success, b.work(), b.peak_storage())
         })

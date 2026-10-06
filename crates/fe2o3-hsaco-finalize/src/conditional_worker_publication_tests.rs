@@ -51,7 +51,7 @@ fn original_publication_terminal_exact_one_short_and_partial_failure_accounting(
                 }
             }
             assert_eq!(b.storage_account_identity_v1(), identity);
-            assert_eq!(b.work_ledger_identity_v1(), ledger);
+            assert!(b.work_ledger_identity_v1() == ledger);
             assert_eq!(b.storage_limit(), storage_limit);
         });
     }

@@ -47,7 +47,7 @@ fn original_locked_transport_and_subject_exact_one_short_preserve_pair() {
                 Ok(())
             })();
             assert_eq!(b.storage_account_identity_v1(), identity);
-            assert_eq!(b.work_ledger_identity_v1(), ledger);
+            assert!(b.work_ledger_identity_v1() == ledger);
             assert_eq!(b.storage_limit(), storage);
             assert!(b.storage() >= floor);
             if result.is_ok() {
