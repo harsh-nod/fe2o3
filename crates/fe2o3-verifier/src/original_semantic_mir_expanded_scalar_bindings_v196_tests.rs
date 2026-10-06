@@ -50,6 +50,14 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + 12 * size_of::<usize>()
         + super::super::logical::headers();
     let bounded_query_scratch = 24 * size_of::<usize>();
+    let checked_replacement_scratch = size_of::<Definition>()
+        + size_of::<fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1>()
+        + size_of::<fe2o3_kernel_ir::ValueId>()
+        + size_of::<Option<fe2o3_kernel_ir::ValueId>>()
+        + 2 * size_of::<Result<usize>>()
+        + size_of::<Result<Option<usize>>>()
+        + 4 * size_of::<usize>()
+        + 12 * size_of::<&()>();
     let source_leaf_scratch = 2 * size_of::<Endpoint<'_, '_>>()
         + 2 * size_of::<Result<Endpoint<'_, '_>>>()
         + size_of::<super::super::super::slots::SourceAggregateLeafV42<'_, '_, '_>>()
@@ -65,6 +73,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + relation_scratch
         + source_relation_scratch
         + source_leaf_scratch
+        + checked_replacement_scratch
         + bounded_query_scratch;
     assert_eq!(out.budget.storage() - before, header);
     let original = slots.correspondence(out)?.inventory(out.budget)?;
@@ -664,6 +673,63 @@ fn expanded_scalar_bindings_join_actual_definitions_in_both_tile_layouts() {
         run_fixture(layout, LIMIT, LIMIT, |slots, _, out| exercise(slots, out))
             .0
             .unwrap();
+    }
+}
+
+#[test]
+fn expanded_source_values_follow_authenticated_scalar_substitutions_with_exact_bounds() {
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let run = |work, storage| run_fixture(layout, work, storage, |slots, _, out| {
+            let target = TileTargetV176::derive(slots, out)?;
+            let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+            let original = slots.correspondence(out)?.inventory(out.budget)?;
+            let tile = slots.tile_owner_v176(out)?;
+            let neutral = tile.neutral_source_v162(out.budget)?;
+            let predecessor = neutral.output_inventory(out.budget)?;
+            let actual = target.inventory(out)?;
+            let mut substitutions = 0;
+            for (index, row) in original.definitions().iter().enumerate() {
+                if !matches!(row.ty, Type::Unit | Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_)) {
+                    continue;
+                }
+                let descendants = neutral.definition_descendants(row.coordinate, out.budget)?;
+                let [descendant] = descendants else { continue; };
+                if descendant.kind != Descendant::Substituted {
+                    continue;
+                }
+                let predecessor = &predecessor.definitions()[definition_index(predecessor, descendant.output)?];
+                let function = match predecessor.coordinate {
+                    Definition::FunctionArgument { function, .. } => function,
+                    Definition::BlockArgument { block, .. } => block.function,
+                    Definition::Result { operation, .. } => operation.block.function,
+                };
+                let expected = actual.definitions().iter().enumerate().filter(|(index, candidate)| {
+                    actual.functions()[function.0 as usize].definitions.contains(index)
+                        && candidate.value == predecessor.value && candidate.ty == row.ty
+                }).map(|(index, _)| index).collect::<Vec<_>>();
+                assert_eq!(expected.len(), 1);
+                assert_eq!(pairs.source_definition(index, out)?, expected[0]);
+                refusal(pairs.definition(index, out))?;
+                substitutions += 1;
+            }
+            assert!(substitutions > 0, "fixture must contain genuine checked replacements");
+            refusal(pairs.source_definition(original.definitions().len(), out))?;
+            refusal(pairs.source_definition(usize::MAX, out))?;
+            Ok(())
+        });
+        let baseline = run(LIMIT, LIMIT);
+        baseline.0.unwrap();
+        let exact = run(baseline.1, baseline.3);
+        exact.0.unwrap();
+        assert_eq!((exact.1, exact.2, exact.3), (baseline.1, baseline.2, baseline.3));
+        assert!(matches!(run(baseline.1 - 1, baseline.3).0,
+            Err(Error::Resource(Resource::Work(error)))
+            | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+            if error.actual() == baseline.1 && error.limit() == baseline.1 - 1));
+        assert!(matches!(run(baseline.1, baseline.3 - 1).0,
+            Err(Error::Resource(Resource::Storage(error)))
+            | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+            if error.actual() == baseline.3 && error.limit() == baseline.3 - 1));
     }
 }
 

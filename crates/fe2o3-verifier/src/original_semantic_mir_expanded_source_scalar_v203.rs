@@ -60,7 +60,7 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                     if original_inventory.definitions().get(definition).map(|row| row.ty) != Some(ty) {
                         return Err(mismatch());
                     }
-                    Some(self.definition(definition, out)?)
+                    Some(self.source_definition(definition, out)?)
                 }
                 (None, None) if endpoint.carrier_shape(out.budget)? == Carrier::Unit
                     && ScalarV30::from_source(semantic.types(), source_type)? == ScalarV30::Unit => None,

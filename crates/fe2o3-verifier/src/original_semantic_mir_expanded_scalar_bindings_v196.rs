@@ -44,6 +44,14 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             + relation::headers()
             + source_relation::headers()
             + source_leaf::headers()
+            + size_of::<Definition>()
+            + size_of::<fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1>()
+            + size_of::<fe2o3_kernel_ir::ValueId>()
+            + size_of::<Option<fe2o3_kernel_ir::ValueId>>()
+            + 2 * size_of::<Result<usize>>()
+            + size_of::<Result<Option<usize>>>()
+            + 4 * size_of::<usize>()
+            + 12 * size_of::<&()>()
             + 24 * size_of::<usize>()
     }
 
@@ -188,6 +196,60 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             let index = definition_index(actual, coordinate)?;
             let actual = &actual.definitions()[index];
             if actual.value != predecessor.value
+                || compare_type(predecessor.ty, actual.ty, out)? != Ordering::Equal
+            {
+                return Err(mismatch());
+            }
+            Ok(index)
+        })
+    }
+
+    /// A checked replacement is a value locator, not a discharged equality law.
+    /// The emitted source relation still requires equality at the original cut.
+    pub(in super::super) fn source_definition(
+        &self,
+        original: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<usize> {
+        self.slots.with_source_query_v42(out, |out| {
+            self.check(out)?;
+            let input = self.slots.correspondence(out)?.inventory(out.budget)?;
+            out.budget.charge_work(2)?;
+            let source = input.definitions().get(original).ok_or_else(mismatch)?;
+            if !matches!(source.ty, Type::Unit | Type::Scalar(_) | Type::Pointer(_) | Type::Slice(_)) {
+                return Err(Error::Statement(
+                    "expanded scalar binding requires a scalar, pointer, slice or unit endpoint",
+                ));
+            }
+            let tile = self.slots.tile_owner_v176(out)?;
+            let neutral = tile.neutral_source_v162(out.budget)?;
+            let descendants = neutral.definition_descendants(source.coordinate, out.budget)?;
+            out.budget.charge_work(2)?;
+            let [descendant] = descendants else { return Err(mismatch()); };
+            if descendant.kind == Descendant::Retained {
+                return self.definition(original, out);
+            }
+            let predecessor = neutral.output_inventory(out.budget)?;
+            out.budget.charge_work(3)?;
+            let index = definition_index(predecessor, descendant.output)?;
+            let predecessor = &predecessor.definitions()[index];
+            if compare_type(source.ty, predecessor.ty, out)? != Ordering::Equal {
+                return Err(mismatch());
+            }
+            let function = match predecessor.coordinate {
+                Definition::FunctionArgument { function, .. } => function,
+                Definition::BlockArgument { block, .. } => block.function,
+                Definition::Result { operation, .. } => operation.block.function,
+            };
+            let value = predecessor.value.ok_or_else(mismatch)?;
+            // The authenticated tile tail retains scalar value identities even
+            // when expansion changes operation coordinates and dense indices.
+            let actual = self.target.inventory(out)?;
+            let index = actual.definition_index_for_value(function, value, out.budget)?
+                .ok_or_else(mismatch)?;
+            out.budget.charge_work(2)?;
+            let actual = actual.definitions().get(index).ok_or_else(mismatch)?;
+            if actual.value != Some(value)
                 || compare_type(predecessor.ty, actual.ty, out)? != Ordering::Equal
             {
                 return Err(mismatch());
