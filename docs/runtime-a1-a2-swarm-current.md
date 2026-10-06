@@ -2,7 +2,7 @@
 
 ## Milestone Snapshot
 
-Status snapshot: 2026-10-05 UTC. Earlier qualification results below retain their
+Status snapshot: 2026-10-06 UTC. Earlier qualification results below retain their
 original source, target and campaign scope.
 The [#182](https://github.com/harsh-nod/fe2o3/issues/182) API was refreshed on
 2026-10-03: the issue remained Open. Published baseline `bafbfe739` includes
@@ -59,6 +59,14 @@ gfx950 analysis and the existing gfx942 authenticated fill regression on the
 MI350-built ROCm 7.2.1 worker. Retained gfx950 records reopen offline. These are
 data/analysis foundations, not native gfx950 application execution, a gfx950
 semantic theorem or milestone closure. Existing gfx942 authority is not widened.
+The [gfx950 model/planning checkpoint](evidence/dev-gfx950-model-planning-2026-10-05/README.md)
+adds closed target-bound model admission, projection and queue invariants, plus
+an independent read-only queue/CWSR planner and C oracle. Planning passes on all
+eight MI350 GPUs without device opens or native effects. Its 35 model proof
+obligations and 22 affected negative controls pass. The full Verus runner remains
+blocked by an unchanged baseline reader-proof source-pin mismatch; that proof's
+attempted requalification hit a mutation timeout. Native gfx950
+device/memory/queue authority is still the next implementation gate.
 These are exit-criteria statuses, not API implementation counts.
 No full HIP/HSA behavioral or performance parity is accepted.
 
@@ -80,15 +88,16 @@ and debugger handoffs remain separate open work under [Later Milestones](#later-
 
 ## Current Priority: Working Multi-GPU
 
-Expedited work order (2026-10-05): distinguish usable native multi-GPU from
+Expedited work order (2026-10-06 UTC): distinguish usable native multi-GPU from
 protected admission of ordinary application kernels. The existing finite
 gfx942 compute and production copy-only paths are functional; adding compiler evidence
 must not become a prerequisite for running their already-admitted smoke tests.
 
 The current MI350 path requires exact-target authority before GPU execution:
 
-1. Implement the separate gfx950 device model and read-only queue/CWSR planning,
-   with explicit queue-target/device-profile agreement and independent contracts.
+1. Preserve the now-qualified separate gfx950 device model and read-only
+   queue/CWSR planning, including queue-target/device-profile agreement. These
+   model contracts and inert plans grant no native authority.
 2. Add native device/memory/queue custody and a bounded barrier-only probe, then
    directional peer/SDMA admission. Preserve the qualified cross-target rejection;
    read-only topology and parsed machine facts do not grant these capabilities.
@@ -102,8 +111,8 @@ The current MI350 path requires exact-target authority before GPU execution:
 Follow the [current multi-GPU work order](runtime-multi-gpu-critical-path.md) for
 the deployment and hardware gates. The
 [gfx950 native-admission work order](runtime-gfx950-native-admission-work-order.md)
-maps the unimplemented device/model and queue/CWSR slices, including mandatory
-queue-target/device-target agreement. No full HIP/HSA parity, performance advantage
+maps the remaining native device, memory and queue/CWSR slices, including
+mandatory target agreement at every native join. No full HIP/HSA parity, performance advantage
 or order-of-magnitude speedup is established by this work.
 
 ### Retained October 3 Checkpoints

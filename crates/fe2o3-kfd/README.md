@@ -19,6 +19,18 @@ partition constant without losing the observed values. The fixed
 kernel-owned render and PCI symlinks are resolved deliberately; symlinks in
 the KFD topology tree and regular-file inputs remain prohibited.
 
+The explicit `discover_default_topology_for_target(GfxTarget::Gfx950)` path
+additionally observes the closed gfx950 inventory; default discovery remains
+gfx942. `gfx950_queue_resources::plan_gfx950_aql_queue_resources_v1` derives
+read-only ring, control, EOP and CWSR geometry for the separately pinned MI350
+SPX/NPS1 profile. Its checked context, debug, header and shadow-page offsets
+come from independent KFD/ROCr source observations, not gfx942 constants.
+The separately branded plan cannot enter gfx942 native APIs. It performs no
+device admission, allocation, mmap, ioctl, header write or queue submission.
+Source hashes do not authenticate the loaded module, and a topology snapshot
+does not establish XNACK state or native currentness. Native gfx950 device,
+memory, queue and directional SDMA authority remain unimplemented.
+
 The public safe API does not expose file descriptors or raw ioctl arguments.
 The R1 composition path consumes an explicitly selected unique ID and returns a
 non-cloneable `CheckedGfx942XnackMinusDevice`. It retains `/dev/kfd` and the

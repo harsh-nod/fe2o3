@@ -1,14 +1,22 @@
 # Gfx950 Native Admission Work Order
 
-Status: **not implemented or qualified** as of 2026-10-05. This document maps
-the next device/model and queue/CWSR implementation slices. Proposed types and
-tests below are work orders, not existing capabilities or accepted evidence.
+Status: **model and read-only planning implemented and scoped-qualified**
+as of 2026-10-06 UTC (October 5 local time). Native gfx950 device, memory, queue and SDMA
+capabilities remain unimplemented. This document separates the completed code
+boundaries from the next native implementation slices.
 
 The [gfx950 foundations checkpoint](evidence/dev-gfx950-foundations-2026-10-05/README.md)
 owns the current topology, loader and machine-analyzer results and their limits.
 Those foundations grant neither native gfx950 queue/dispatch authority nor
 conditional-fill machine semantic refinement. Existing gfx942 capabilities,
 manifest identities and evidence scopes must remain unchanged.
+
+The [model/planning checkpoint](evidence/dev-gfx950-model-planning-2026-10-05/README.md)
+records CPU tests, 35 model proof obligations, 22 affected negative controls and
+read-only planning on all eight MI350 GPUs. The broad Verus runner remains
+blocked by an unchanged baseline reader-proof source pin; an attempted
+requalification timed out under unchanged limits. No broad-suite pass or
+whole-adapter refinement is claimed.
 
 ## Retained Facts And Missing Inputs
 
@@ -20,30 +28,36 @@ SDMA firmware12, two ordinary and 14 XGMI SDMA engines, eight queues per engine,
 module source version `703B1127E578BC5D4BD6615`, and `mes=0`, `sched_policy=0`,
 `cwsr_enable=1`.
 
-The source directory `/usr/src/amdgpu-6.16.13-2303411.24.04` was observed on MI350.
-Its presence and the module source version do not establish a reviewed source
-closure or prove which source built the loaded module. Before admitting a native
-profile, retain the exact kernel/module and source identities, KFD/DRM UAPI
-observations, PCI revision, and full DRM device tuple. The current host-observation
-JSON does not retain the kernel release or full DRM tuple. Do not infer these
-from the gfx942 profile or accept arbitrary versions.
+Fresh observation-only KFD/DRM ioctls confirm KFD 1.18, DRM 3.64.0, acceleration
+enabled, PCI `0x75a0`, chip revision 0, external revision 80, PCI revision 0 and
+family 141 on all eight render nodes. Fresh sysfs observations confirm kernel
+`6.8.0-124-generic`, module `6.16.13`, source version
+`703B1127E578BC5D4BD6615`, SPX/NPS1 and the driver parameters above. The probe
+does not observe process XNACK mode, apertures, reset subscriptions or native
+admission/currentness. The gfx950 model's disabled-XNACK premise remains an
+explicit untrusted input, not a hardware result.
 
-Review the deployed kernel queue, MQD, doorbell, event and gfx950 CWSR/trap paths
-and the matching ROCr queue-resource derivation. The existing gfx942 queue
-manifest's source hashes do not qualify those paths. In particular, derive CWSR
-from reviewed target policy and observed CU/XCC/LDS inputs, including any
-kernel-reported size precedence; do not copy MI300X constants or claim an
-unreviewed calculated size as hardware evidence.
+The source directory `/usr/src/amdgpu-6.16.13-2303411.24.04` was observed on MI350.
+The independent gfx950 queue manifest now retains reviewed KFD queue/topology,
+MQD/UAPI and ROCr 7.2.1 resource/header source identities. Those source files and
+the module source version do not authenticate the loaded module or ROCr binary.
+
+The new read-only geometry derives CWSR from observed CU/XCC/LDS inputs and
+reviewed target policy. It covers independent positive kernel context/control
+size precedence; the observed deployed sysfs exports neither property, so the
+public closed planner admits only the derived fallback. Geometry/oracle
+agreement is not native allocation or CWSR execution evidence. Complete the
+doorbell, event and gfx950 trap/currentness review before native admission.
 
 ## Current Code Boundaries
 
 | Boundary | Exact code and required change |
 | --- | --- |
 | Native device admission | [device.rs](../crates/fe2o3-kfd/src/device.rs): `DEVICE_ADMISSION_PROFILE_MANIFEST_V1`, `bind_gfx942_xnack_minus`, `validate_platform_provenance`, `validate_render_profile`, `model_profile` and `model_admission` pin gfx942, PCI `0x74a1`, firmware192/25, SIMD1216 and the MI300X platform. Add an independent exact gfx950 profile and separately branded capability; do not broaden `CheckedGfx942XnackMinusDevice`. |
-| Device model | [device_identity.rs](../crates/fe2o3-runtime-model/src/device_identity.rs): `DeviceAdmissionProfileV1` stores profile/UAPI identities, while `correlate_model_only_v1` hardcodes the single target. Retain an exact profile/target discriminator through correlation and admission. |
-| Projection contract | [device_projection.rs](../crates/fe2o3-runtime-model/src/device_projection.rs): `validate_device_projection_model_only_v1` independently pins platform, firmware, capacity and complete inventory to gfx942. Add separate gfx950 premises and preserve selected-device/inventory/aperture correspondence. |
-| Queue model | [queue_lifecycle.rs](../crates/fe2o3-runtime-model/src/queue_lifecycle.rs): `ComputeAqlTargetProfileV1` has one variant; `validate_plan_shape` does not compare it with the admitted device target. Apply the safety gate below before adding a second variant. |
-| Resource geometry | [queue_resources.rs](../crates/fe2o3-kfd/src/queue_resources.rs): `plan_gfx942_aql_queue_resources` pins the old source/platform/topology profile, and zero-sized `ContextSaveResourcePlanV1` returns fixed gfx942 dimensions. Add a gfx950-branded checked plan carrying its actual geometry and independent manifest. |
+| Device model | [device_identity.rs](../crates/fe2o3-runtime-model/src/device_identity.rs): implemented closed `DeviceAdmissionTargetProfileV1`, separate gfx950 constructor, and retained target through model-only correlation/admission. Caller digests do not substitute for the target. |
+| Projection contract | [device_projection.rs](../crates/fe2o3-runtime-model/src/device_projection.rs): implemented separate exact platform, firmware, capacity and DRM tuples; selected-device/inventory/aperture correspondence remains checked. This is not native observation authentication. |
+| Queue model | [queue_lifecycle.rs](../crates/fe2o3-runtime-model/src/queue_lifecycle.rs): implemented gfx950 variant and mandatory target/profile equality in shared plan validation and lifecycle invariant replay. |
+| Resource geometry | [gfx950_queue_resources.rs](../crates/fe2o3-kfd/src/gfx950_queue_resources.rs): implemented separate read-only `Gfx950AqlQueueResourcePlanV1`, checked CWSR/header/debug/shadow offsets and independent manifest/oracle. Old [queue_resources.rs](../crates/fe2o3-kfd/src/queue_resources.rs) types and bytes remain unchanged. |
 | CWSR layout | [queue_submit.rs](../crates/fe2o3-kfd/src/queue_submit.rs): `gfx942_cwsr_header_bytes` and `initialize_gfx942_cwsr_headers` fix XCC, context and debug offsets. [queue_linux.rs](../crates/fe2o3-kfd/src/queue_linux.rs): `CwsrShadowPlanV1` and shadow ownership independently fix mapping sizes and 24 shadow pages. All must consume the same target-bound geometry; changing only the planner is insufficient. |
 | Native ownership | [memory_linux.rs](../crates/fe2o3-kfd/src/memory_linux.rs) retains `CheckedGfx942XnackMinusDevice`; [shared_memory.rs](../crates/fe2o3-kfd/src/shared_memory.rs) exposes acquisition from that token. [currentness/full.rs](../crates/fe2o3-kfd/src/currentness/full.rs) reobserves through default gfx942 discovery. Add exact-target custody and currentness without converting gfx950 into a gfx942 token. |
 | Queue construction | [construction_primary.rs](../crates/fe2o3-kfd/src/queue_live/construction_primary.rs) consumes `Gfx942AqlQueueResourcePlanV1`; [queue_live.rs](../crates/fe2o3-kfd/src/queue_live.rs) constructs a gfx942 model queue plan. The new path must join matching device, memory, geometry, queue and output profiles before publication. |
@@ -51,16 +65,16 @@ unreviewed calculated size as hardware evidence.
 
 ## Mandatory Queue-Target Safety Gate
 
-**Do not add a gfx950 queue-model variant until queue target and admitted device
-profile are checked together.** The current single-variant model makes that
-relationship implicit. `validate_plan_shape` currently checks schema, domain,
-device key and resource ownership, but not target agreement.
+**Implemented for the model; still required at every future native join.**
+`validate_plan_shape` checks queue target and admitted device profile together,
+in addition to schema, domain, device key and resource ownership.
 
-The new model must reject a gfx942 queue plan carrying a gfx950 admission and
-the reverse, even when all domain, VM, resource and generation identifiers
-otherwise agree. Retain the discriminator in correlated/admitted device facts;
-an arbitrary caller-supplied profile digest must not substitute for it. Keep
-this condition in lifecycle invariant validation, not only at one constructor.
+The model rejects a gfx942 queue plan carrying a gfx950 admission and the
+reverse, even when all domain, VM, resource and generation identifiers
+otherwise agree. The discriminator is retained in correlated/admitted device
+facts; an arbitrary caller-supplied profile digest cannot substitute for it.
+The same check applies during lifecycle invariant validation, not only at one
+constructor. Reciprocal admission and invariant-replay tests cover both targets.
 The native adapter must additionally match its device token, loader profile,
 geometry profile and native queue outputs. Existing gfx942 loader guards remain
 closed to gfx950.
@@ -69,26 +83,26 @@ closed to gfx950.
 
 ### 1. Model And Read-Only Planning
 
-This is the smallest next implementation slice. It adds no native token, ioctl,
-allocation, mmap, doorbell store or dispatch entry point.
+This slice is implemented and scoped-qualified. It adds no native token,
+ioctl, allocation, mmap, doorbell store or dispatch entry point.
 
-1. Add an independent gfx950 model/profile discriminator and exact projection
-   admission. Preserve gfx942 constructors and manifest bytes. Implement the
-   queue-target safety gate before exposing the second queue target.
-2. Add a proposed `Gfx950AqlQueueResourcePlanV1` with checked geometry and a
-   separate source/profile manifest. Derive its expected bytes using a distinct
-   C oracle against the reviewed sources. Keep the
+1. Closed gfx950 model/profile discriminator and exact projection admission;
+   gfx942 constructors and manifest bytes preserved; queue-target safety gate
+   shared by initial admission and invariant replay.
+2. `Gfx950AqlQueueResourcePlanV1` with checked geometry and a separate
+   source/profile manifest. A distinct C oracle checks expected bytes against
+   reviewed source/header identities. The
    [gfx942 oracle](../crates/fe2o3-kfd-uapi/tests/oracles/kfd_gfx942_queue_resources_1_18.c)
-   unchanged as a regression oracle, not a gfx950 witness.
-3. Extend the corresponding identity/projection/queue contracts in
+   remains unchanged as a regression oracle, not a gfx950 witness.
+3. Target-bound identity/projection/queue contracts in
    [device_identity_generation_v1.rs](../crates/fe2o3-runtime-model/verus/device_identity_generation_v1.rs),
    [device_projection_refinement_v1.rs](../crates/fe2o3-runtime-model/verus/device_projection_refinement_v1.rs)
    and [queue_lifecycle_v1.rs](../crates/fe2o3-runtime-model/verus/queue_lifecycle_v1.rs),
    with explicit target-mismatch negative controls. Proofs of model predicates
    are not authentication of the running kernel or whole-native-adapter refinement.
 
-Model/projection and geometry/oracle work can proceed independently, then join
-at the exact profile identity and target agreement tests.
+The planner's source-profile digest is not a native device-admission identity.
+No caller-supplied model digest or read-only plan can create a native token.
 
 ### 2. Native Device And Barrier-Only Queue
 
@@ -104,6 +118,22 @@ gfx950 profile. First qualify a bounded barrier-only create, publish, completion
 and confirmed destroy/release probe. That probe must expose no arbitrary kernel
 dispatch, fixed compute or SDMA authority. Timeout or process exit is not proof
 of native settlement; retain existing quarantine/termination semantics.
+
+Proposed next swarm split, not implemented in the read-only checkpoint:
+
+- Device/currentness: factor private target-bound retained custody beneath
+  separate gfx942/gfx950 wrappers. Reobserve the retained target instead of
+  default gfx942; keep directional gfx942 XGMI checks specialized.
+- Memory: reuse `MemoryBackend` and `SharedMemoryEngine` behind private
+  target-typed custody. Preserve the gfx942 session API; expose only the memory
+  operations needed by the gfx950 barrier probe.
+- Queue/UAPI: make private construction, header and shadow ownership consume
+  checked geometry; join it to the admitted device, current VM and exact owned
+  reservation before any mapping. Review doorbell/PQM/mmap contracts and add
+  distinct gfx950 output/doorbell admission, not gfx942 output relabeling.
+- Primary integration: check device/queue/geometry/output target agreement
+  before effects; run constructor/currentness/failure-custody controls, then
+  qualify one GPU's barrier/completion/destroy before two independent GPUs.
 
 ### 3. One- And Two-GPU Application Join
 

@@ -287,6 +287,8 @@ pub use currentness_diagnostic::{
 pub use device::*;
 
 #[cfg(target_os = "linux")]
+pub mod gfx950_queue_resources;
+#[cfg(target_os = "linux")]
 pub mod topology;
 
 /// Default device node for the Linux KFD process interface.

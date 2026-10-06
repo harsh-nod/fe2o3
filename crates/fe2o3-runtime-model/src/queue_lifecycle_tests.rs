@@ -20,7 +20,21 @@ fn profile() -> DeviceAdmissionProfileV1 {
     )
 }
 
-fn correlation() -> ModelCorrelatedDeviceV1 {
+fn correlation_for_target(target: ComputeAqlTargetProfileV1) -> ModelCorrelatedDeviceV1 {
+    let profile = match target {
+        ComputeAqlTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18 => profile(),
+        ComputeAqlTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18 => {
+            DeviceAdmissionProfileV1::gfx950_xnack_minus_spx_nps1_kfd_1_18_drm_3_64_0(
+                profile().identity(),
+                profile().kfd_schema_identity(),
+                profile().drm_schema_identity(),
+            )
+        }
+    };
+    let device_id = match target {
+        ComputeAqlTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18 => MI300X_PCI_DEVICE_ID_V1,
+        ComputeAqlTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18 => GFX950_PCI_DEVICE_ID_V1,
+    };
     let domain_id = domain(1);
     let epoch = ObservationEpochV1(9);
     let pci = PciAddressV1 {
@@ -51,8 +65,8 @@ fn correlation() -> ModelCorrelatedDeviceV1 {
             drm_render_minor: DRM_RENDER_MIN_MINOR_V1,
             pci,
             vendor_id: AMD_PCI_VENDOR_ID_V1,
-            device_id: MI300X_PCI_DEVICE_ID_V1,
-            target: GpuTargetObservationV1::Gfx942,
+            device_id,
+            target: profile.target(),
             compute_partition: ComputePartitionObservationV1::Spx,
             memory_partition: MemoryPartitionObservationV1::Nps1,
         }],
@@ -66,7 +80,7 @@ fn correlation() -> ModelCorrelatedDeviceV1 {
             gpu_unique_id: 0x6ced_1647_a296_545c,
             pci,
             vendor_id: AMD_PCI_VENDOR_ID_V1,
-            device_id: MI300X_PCI_DEVICE_ID_V1,
+            device_id,
             pci_revision_id: 0,
             drm_schema_identity: digest(4),
             driver_name: DrmDriverNameObservationV1::Amdgpu,
@@ -78,7 +92,7 @@ fn correlation() -> ModelCorrelatedDeviceV1 {
         }],
     )
     .unwrap()
-    .correlate_model_only(&profile())
+    .correlate_model_only(&profile)
     .unwrap()
 }
 
@@ -110,9 +124,13 @@ struct QueueFixture {
 }
 
 fn fixture() -> QueueFixture {
+    fixture_for_target(ComputeAqlTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18)
+}
+
+fn fixture_for_target(target: ComputeAqlTargetProfileV1) -> QueueFixture {
     let identity = DeviceIdentityStateV1::new(domain(1));
     let (identity, device) = identity
-        .register_device_model_only(correlation(), DeviceGenerationV1(1))
+        .register_device_model_only(correlation_for_target(target), DeviceGenerationV1(1))
         .unwrap();
     let (identity, vm) = identity
         .register_vm_model_only(device, vm_observation(device))
@@ -209,7 +227,7 @@ fn fixture() -> QueueFixture {
     };
     let plan = ComputeAqlQueuePlanV1 {
         schema_version: QUEUE_LIFECYCLE_SCHEMA_VERSION_V1,
-        target: ComputeAqlTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18,
+        target,
         domain_id: domain(1),
         plan_id: QueuePlanIdV1::from_untrusted_digest(digest(5)),
         current_device: device,
@@ -381,6 +399,90 @@ fn create_active(
             },
         },
     )
+}
+
+pub(crate) fn active_target_fixture(
+    target: ComputeAqlTargetProfileV1,
+) -> (
+    QueueLifecycleStateV1,
+    DeviceIdentityStateV1,
+    MemoryLifecycleStateV1,
+) {
+    let fixture = fixture_for_target(target);
+    let (queue, memory) = admit(&fixture).into_states();
+    let queue = create_active(queue, &fixture, &memory);
+    (queue, fixture.identity, memory)
+}
+
+#[test]
+fn queue_target_cannot_substitute_for_admitted_device_target() {
+    let targets = [
+        ComputeAqlTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18,
+        ComputeAqlTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18,
+    ];
+    for target in targets {
+        let mut fixture = fixture_for_target(target);
+        assert_eq!(
+            fixture.device.correlation().target_profile(),
+            target.device_target_profile()
+        );
+        let original_memory = fixture.memory.clone();
+        fixture.plan.target = targets.into_iter().find(|other| *other != target).unwrap();
+        let state = QueueLifecycleStateV1::new(domain(1));
+        assert_eq!(
+            state.admit_compute_aql_plan(&fixture.identity, &fixture.memory, fixture.plan),
+            Err(QueueTransitionErrorV1::InvalidPlan(
+                QueueInvariantViolationV1::TargetProfileMismatch(fixture.plan.queue)
+            ))
+        );
+        assert_eq!(fixture.memory, original_memory);
+        assert!(state.queues().is_empty());
+        assert!(fixture.memory.publications().is_empty());
+    }
+}
+
+#[test]
+fn gfx950_model_queue_retains_target_through_create_and_destroy() {
+    let target = ComputeAqlTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18;
+    let fixture = fixture_for_target(target);
+    let admission = admit(&fixture);
+    assert_eq!(admission.authority_domain(), AuthorityDomainV1::ModelOnly);
+    let (queue, memory) = admission.into_states();
+    let queue = create_active(queue, &fixture, &memory);
+    assert_eq!(queue.queues()[0].plan.target, target);
+    assert_eq!(
+        queue.queues()[0]
+            .plan
+            .current_device
+            .correlation()
+            .target_profile(),
+        target.device_target_profile()
+    );
+    let key = fixture.plan.queue;
+    let queue = advance(
+        queue,
+        &fixture,
+        &memory,
+        QueueTransitionV1::BeginDestroy { queue: key },
+    );
+    let queue = advance(
+        queue,
+        &fixture,
+        &memory,
+        QueueTransitionV1::ObserveDestroy {
+            queue: key,
+            status: QueueSyscallStatusV1::Succeeded,
+        },
+    );
+    assert_eq!(queue.queues()[0].phase, ComputeAqlQueuePhaseV1::Destroyed);
+    assert_eq!(queue.queues()[0].plan.target, target);
+    let memory = queue.release_resource_publications(&memory, key).unwrap();
+    assert!(
+        memory
+            .publications()
+            .iter()
+            .all(|record| record.state == MemoryPublicationStateV1::Released)
+    );
 }
 
 #[test]

@@ -183,6 +183,64 @@ fn gfx950_selection_keeps_closed_property_and_wave_width_checks() {
 }
 
 #[test]
+fn gfx950_queue_planner_consumes_exact_correlated_host_observations() {
+    use crate::gfx950_queue_resources::{
+        Gfx950QueueResourcePlanningErrorV1 as Error, plan_gfx950_aql_queue_resources_v1 as plan,
+    };
+    let fixture = Fixture::valid(1);
+    let render = RenderFixture::valid();
+    set_gfx950_node(&fixture, 1);
+    fixture.replace_property(1, "location_id 4096", "location_id 1280");
+    fixture.replace_property(1, "unique_id 2001", "unique_id 4660");
+    fs::write(render.pci_path.join("device"), "0x75a0\n").unwrap();
+    fs::write(
+        render.module_root.join("srcversion"),
+        "703B1127E578BC5D4BD6615\n",
+    )
+    .unwrap();
+    fs::create_dir(render.module_root.join("parameters")).unwrap();
+    for (name, value) in [
+        ("mes", "0\n"),
+        ("sched_policy", "0\n"),
+        ("cwsr_enable", "1\n"),
+    ] {
+        fs::write(render.module_root.join("parameters").join(name), value).unwrap();
+    }
+    let mut paths = render.paths();
+    paths.topology_root = &fixture.root;
+    let (snapshot, ()) =
+        discover_host_topology_with::<Disabled>(&paths, GfxTarget::Gfx950).unwrap();
+    let observed = plan(&snapshot, 4660, 4096).unwrap();
+    assert_eq!(observed.context_save().mapping_bytes(), 181829632);
+    assert_eq!(observed.gpu_id(), 1001);
+    assert_eq!(observed.topology_generation(), 7);
+    assert_eq!(plan(&snapshot, 0, 4096), Err(Error::SelectedGpuNotFound));
+    assert!(crate::plan_gfx942_aql_queue_resources(&snapshot, 4660, 4096).is_err());
+    let mut changed = snapshot.clone();
+    changed.render_nodes.clear();
+    assert_eq!(
+        plan(&changed, 4660, 4096),
+        Err(Error::CorrelatedRenderNotFound)
+    );
+    let mut changed = snapshot;
+    changed.topology.gpu_nodes[0].target = GfxTarget::Gfx942;
+    assert_eq!(plan(&changed, 4660, 4096), Err(Error::TargetMismatch));
+}
+
+#[test]
+fn gfx950_queue_planning_rejects_unreviewed_kernel_size_properties() {
+    for key in ["cwsr_size", "ctl_stack_size"] {
+        let fixture = Fixture::valid(1);
+        set_gfx950_node(&fixture, 1);
+        fixture.replace_property(1, "num_xcc 8", &format!("num_xcc 8\n{key} 12288"));
+        assert!(
+            matches!(discover_topology_at(&fixture.root, GfxTarget::Gfx950),
+            Err(TopologyError::UnknownProperty { key: observed, .. }) if observed == key)
+        );
+    }
+}
+
+#[test]
 #[ignore = "requires an explicitly selected live gfx950 host; read-only sysfs and procfs discovery"]
 fn live_gfx950_topology_is_observed_without_gfx942_route_authority() {
     let observed = discover_default_topology_for_target(GfxTarget::Gfx950).unwrap();

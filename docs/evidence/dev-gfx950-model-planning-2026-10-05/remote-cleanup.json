@@ -1,0 +1,21 @@
+{
+  "host": "mi350",
+  "owned_directory": "/dev/shm/fe2o3-gfx950-identity-20261005-1X0uGqWh",
+  "remove_command": "rm -rf -- /dev/shm/fe2o3-gfx950-identity-20261005-1X0uGqWh",
+  "remove_result": {
+    "chunk_id": "d8d61a",
+    "wall_time_seconds": 0.001425976,
+    "exit_code": 0,
+    "original_token_count": 405,
+    "output": ""
+  },
+  "absence_check_command": "test ! -e /dev/shm/fe2o3-gfx950-identity-20261005-1X0uGqWh",
+  "absence_check_result": {
+    "chunk_id": "1cedd1",
+    "wall_time_seconds": 0.000035223,
+    "exit_code": 0,
+    "original_token_count": 405,
+    "output": ""
+  },
+  "scope": "All observation probe and live planner files removed; no GPU allocation, queue or submission was created."
+}

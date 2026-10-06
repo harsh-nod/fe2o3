@@ -1,6 +1,6 @@
 # Working Multi-GPU Critical Path
 
-Priority refresh: 2026-10-05. This is an implementation work order, not an A3
+Priority refresh: 2026-10-06 UTC. This is an implementation work order, not an A3
 completion claim. Native agents reviewed Context admission, backend custody and
 existing MI300X evidence independently. Primary owns integration and final qualification.
 
@@ -21,13 +21,22 @@ groups, real authenticated gfx950 analysis and the existing authenticated gfx942
 fill regression pass on the MI350-built ROCm 7.2.1 worker. Retained gfx950 records
 also reopen offline. Existing gfx942 authority and evidence scopes remain
 unchanged. **No native gfx950 application execution is claimed.** Native gfx950
-device/model, queue/CWSR and SDMA admission, separate
+device, memory, queue/CWSR and SDMA admission, separate
 conditional-fill machine semantic refinement and runtime authority, a protected
 gfx950 source campaign and the actual two-GPU application remain open.
 The [native-admission work order](runtime-gfx950-native-admission-work-order.md)
 maps the exact code boundaries, smallest unimplemented slices and required tests.
-Its queue-target/device-target agreement gate must precede any second queue-model
-target; gfx950 must not enter gfx942-named authority.
+
+The [model/planning checkpoint](evidence/dev-gfx950-model-planning-2026-10-05/README.md)
+now implements closed gfx950 model/profile projection, retained queue-target
+binding and a separately branded read-only CWSR planner. The model gate rejects
+cross-target substitution during both admission and invariant replay. CPU tests,
+the independent C oracle and a read-only live planner on all eight MI350 GPUs
+pass; 35 model proof obligations and 22 affected negative controls pass. The
+broader proof run is blocked by an unchanged baseline source pin, and its
+reader-proof mutation requalification timed out. These results do not refine
+the whole Rust adapter or grant native authority. Gfx950 must not enter
+gfx942-named capabilities.
 
 ### Retained Application Prerequisites
 
@@ -74,9 +83,9 @@ two-GPU execution gate.
 
 ### Current Work Order
 
-1. Implement exact gfx950 model/profile admission and read-only queue/CWSR
-   planning, including the queue-target/device-profile safety gate. Preserve the
-   now-qualified loader/analyzer cross-target and old gfx942 identity controls.
+1. Preserve the now-qualified exact gfx950 model/profile admission, read-only
+   queue/CWSR planning and queue-target/device-profile safety gate, alongside
+   loader/analyzer cross-target and old gfx942 identity controls.
    Parsed code objects and authenticated traces grant no native launch or machine
    semantic authority.
 2. Implement native gfx950 device/memory/queue custody, qualify a bounded

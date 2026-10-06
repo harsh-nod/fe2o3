@@ -188,10 +188,12 @@ negative_lifecycle="$script_dir/negative/runtime_lifecycle_v1_release_while_publ
 negative_vm="$script_dir/negative/device_identity_generation_v1_vm_substitution.rs"
 negative_stale="$script_dir/negative/device_identity_generation_v1_stale_reuse.rs"
 negative_render="$script_dir/negative/device_identity_generation_v1_render_substitution.rs"
+negative_identity_target="$script_dir/negative/device_identity_generation_v1_target_substitution.rs"
 negative_projection_schema="$script_dir/negative/device_projection_refinement_v1_schema_drop.rs"
 negative_projection_history="$script_dir/negative/device_projection_refinement_v1_history_link.rs"
 negative_projection_identity="$script_dir/negative/device_projection_refinement_v1_identity_mix.rs"
 negative_projection_currentness="$script_dir/negative/device_projection_refinement_v1_currentness_drop.rs"
+negative_projection_inventory_target="$script_dir/negative/device_projection_refinement_v1_inventory_target.rs"
 negative_memory_free="$script_dir/negative/memory_lifecycle_v1_free_while_partial.rs"
 negative_memory_unmap="$script_dir/negative/memory_lifecycle_v1_unmap_prefix.rs"
 negative_memory_failed_full="$script_dir/negative/memory_lifecycle_v1_failed_full_release.rs"
@@ -207,6 +209,7 @@ negative_queue_illegal_ambiguity="$script_dir/negative/queue_lifecycle_v1_illega
 negative_queue_generic_create_ambiguity="$script_dir/negative/queue_lifecycle_v1_generic_create_ambiguity.rs"
 negative_queue_cancel_retention="$script_dir/negative/queue_lifecycle_v1_cancel_retention.rs"
 negative_queue_pending_create_overlap="$script_dir/negative/queue_lifecycle_v1_pending_create_overlap.rs"
+negative_queue_target="$script_dir/negative/queue_lifecycle_v1_target_substitution.rs"
 negative_load_page_overlap="$script_dir/negative/load_plan_v1_page_overlap.rs"
 negative_load_descriptor_delta="$script_dir/negative/load_plan_v1_descriptor_delta.rs"
 negative_materialization_source="$script_dir/negative/materialization_v1_source_substitution.rs"
@@ -990,10 +993,12 @@ expected_negative_r61_queue_credit_duplication=$(read_pin "$pin_dir/NEGATIVE_R61
 expected_negative_vm=$(read_pin "$pin_dir/NEGATIVE_VM_SUBSTITUTION_SHA256")
 expected_negative_stale=$(read_pin "$pin_dir/NEGATIVE_STALE_REUSE_SHA256")
 expected_negative_render=$(read_pin "$pin_dir/NEGATIVE_RENDER_SUBSTITUTION_SHA256")
+expected_negative_identity_target=$(read_pin "$pin_dir/NEGATIVE_IDENTITY_TARGET_SUBSTITUTION_SHA256")
 expected_negative_projection_schema=$(read_pin "$pin_dir/NEGATIVE_PROJECTION_SCHEMA_SHA256")
 expected_negative_projection_history=$(read_pin "$pin_dir/NEGATIVE_PROJECTION_HISTORY_SHA256")
 expected_negative_projection_identity=$(read_pin "$pin_dir/NEGATIVE_PROJECTION_IDENTITY_SHA256")
 expected_negative_projection_currentness=$(read_pin "$pin_dir/NEGATIVE_PROJECTION_CURRENTNESS_SHA256")
+expected_negative_projection_inventory_target=$(read_pin "$pin_dir/NEGATIVE_PROJECTION_INVENTORY_TARGET_SHA256")
 expected_negative_memory_free=$(read_pin "$pin_dir/NEGATIVE_MEMORY_FREE_SHA256")
 expected_negative_memory_unmap=$(read_pin "$pin_dir/NEGATIVE_MEMORY_UNMAP_SHA256")
 expected_negative_memory_failed_full=$(read_pin "$pin_dir/NEGATIVE_MEMORY_FAILED_FULL_SHA256")
@@ -1009,6 +1014,7 @@ expected_negative_queue_illegal_ambiguity=$(read_pin "$pin_dir/NEGATIVE_QUEUE_IL
 expected_negative_queue_generic_create_ambiguity=$(read_pin "$pin_dir/NEGATIVE_QUEUE_GENERIC_CREATE_AMBIGUITY_SHA256")
 expected_negative_queue_cancel_retention=$(read_pin "$pin_dir/NEGATIVE_QUEUE_CANCEL_RETENTION_SHA256")
 expected_negative_queue_pending_create_overlap=$(read_pin "$pin_dir/NEGATIVE_QUEUE_PENDING_CREATE_OVERLAP_SHA256")
+expected_negative_queue_target=$(read_pin "$pin_dir/NEGATIVE_QUEUE_TARGET_SUBSTITUTION_SHA256")
 expected_negative_load_page_overlap=$(read_pin "$pin_dir/NEGATIVE_LOAD_PAGE_OVERLAP_SHA256")
 expected_negative_load_descriptor_delta=$(read_pin "$pin_dir/NEGATIVE_LOAD_DESCRIPTOR_DELTA_SHA256")
 expected_negative_materialization_source=$(read_pin "$pin_dir/NEGATIVE_MATERIALIZATION_SOURCE_SHA256")
@@ -1797,10 +1803,12 @@ check_sources() {
     check_digest "$expected_negative_r61_queue_credit_duplication" "$negative_r61_queue_credit_duplication"
     check_digest "$expected_negative_stale" "$negative_stale"
     check_digest "$expected_negative_render" "$negative_render"
+    check_digest "$expected_negative_identity_target" "$negative_identity_target"
     check_digest "$expected_negative_projection_schema" "$negative_projection_schema"
     check_digest "$expected_negative_projection_history" "$negative_projection_history"
     check_digest "$expected_negative_projection_identity" "$negative_projection_identity"
     check_digest "$expected_negative_projection_currentness" "$negative_projection_currentness"
+    check_digest "$expected_negative_projection_inventory_target" "$negative_projection_inventory_target"
     check_digest "$expected_negative_memory_free" "$negative_memory_free"
     check_digest "$expected_negative_memory_unmap" "$negative_memory_unmap"
     check_digest "$expected_negative_memory_failed_full" "$negative_memory_failed_full"
@@ -1816,6 +1824,7 @@ check_sources() {
     check_digest "$expected_negative_queue_generic_create_ambiguity" "$negative_queue_generic_create_ambiguity"
     check_digest "$expected_negative_queue_cancel_retention" "$negative_queue_cancel_retention"
     check_digest "$expected_negative_queue_pending_create_overlap" "$negative_queue_pending_create_overlap"
+    check_digest "$expected_negative_queue_target" "$negative_queue_target"
     check_digest "$expected_negative_load_page_overlap" "$negative_load_page_overlap"
     check_digest "$expected_negative_load_descriptor_delta" "$negative_load_descriptor_delta"
     check_digest "$expected_negative_materialization_source" "$negative_materialization_source"
@@ -2562,10 +2571,12 @@ check_sources
     "$negative_r61_stop_promotes_completion" \
     "$negative_r61_queue_credit_duplication" \
     "$negative_render" \
+    "$negative_identity_target" \
     "$negative_projection_schema" \
     "$negative_projection_history" \
     "$negative_projection_identity" \
     "$negative_projection_currentness" \
+    "$negative_projection_inventory_target" \
     "$negative_memory_free" \
     "$negative_memory_unmap" \
     "$negative_memory_failed_full" \
@@ -2581,6 +2592,7 @@ check_sources
     "$negative_queue_generic_create_ambiguity" \
     "$negative_queue_cancel_retention" \
     "$negative_queue_pending_create_overlap" \
+    "$negative_queue_target" \
     "$negative_load_page_overlap" \
     "$negative_load_descriptor_delta" \
     "$negative_materialization_source" \
@@ -3293,10 +3305,10 @@ check_positive "$journal_issuance_proof" 'verification results:: 69 verified, 0 
     "$producer_journal_issuance_proof" "$verus_path" "$timeout_seconds" "$tmp_dir/producer-journal-issuance"
 
 check_positive "$lifecycle_proof" 'verification results:: 2 verified, 0 errors' lifecycle
-check_positive "$identity_proof" 'verification results:: 4 verified, 0 errors' identity-generation
-check_positive "$projection_proof" 'verification results:: 4 verified, 0 errors' device-projection-refinement
+check_positive "$identity_proof" 'verification results:: 8 verified, 0 errors' identity-generation
+check_positive "$projection_proof" 'verification results:: 11 verified, 0 errors' device-projection-refinement
 check_positive "$memory_proof" 'verification results:: 6 verified, 0 errors' memory-lifecycle
-check_positive "$queue_proof" 'verification results:: 11 verified, 0 errors' queue-lifecycle
+check_positive "$queue_proof" 'verification results:: 16 verified, 0 errors' queue-lifecycle
 check_positive "$load_plan_proof" 'verification results:: 3 verified, 0 errors' load-plan
 check_positive "$materialization_proof" 'verification results:: 8 verified, 0 errors' materialization
 check_positive "$aql_proof" 'verification results:: 11 verified, 0 errors' aql-publication
@@ -3359,10 +3371,12 @@ check_negative "$negative_lifecycle" mutated_release_while_published_is_safe_v1 
 check_negative "$negative_vm" mutated_vm_generation_substitution_is_exact_v1 vm-generation-substitution
 check_negative "$negative_stale" mutated_stale_generation_reuse_advances_v1 stale-generation-reuse
 check_negative "$negative_render" mutated_render_substitution_correlates_v1 render-substitution
+check_negative "$negative_identity_target" mutated_identity_target_substitution_is_rejected_v1 identity-target-substitution
 check_negative "$negative_projection_schema" mutated_projection_drops_drm_schema_v1 projection-schema-drop
 check_negative "$negative_projection_history" mutated_history_forgets_predecessor_v1 projection-history-link
 check_negative "$negative_projection_identity" mutated_cross_source_identity_mix_is_equal_v1 projection-identity-mix
 check_negative "$negative_projection_currentness" mutated_projection_drops_reset_fence_v1 projection-currentness-drop
+check_negative "$negative_projection_inventory_target" mutated_projection_inventory_target_substitution_is_rejected_v1 projection-inventory-target
 check_negative "$negative_memory_free" mutated_free_while_partial_is_safe_v1 memory-free-while-partial
 check_negative "$negative_memory_unmap" mutated_unmap_uses_absolute_cumulative_progress_v1 memory-unmap-cumulative
 check_negative "$negative_memory_failed_full" mutated_failed_full_unmap_is_unreleasable_v1 memory-unmap-failed-full
@@ -3378,6 +3392,7 @@ check_negative "$negative_queue_illegal_ambiguity" mutated_illegal_indeterminate
 check_negative "$negative_queue_generic_create_ambiguity" mutated_generic_create_ambiguity_is_excluded_v1 queue-generic-create-ambiguity
 check_negative "$negative_queue_cancel_retention" mutated_cancelled_plan_is_nonretaining_v1 queue-cancel-retention
 check_negative "$negative_queue_pending_create_overlap" mutated_pending_create_blocks_second_begin_v1 queue-pending-create-overlap
+check_negative "$negative_queue_target" mutated_queue_target_substitution_is_rejected_v1 queue-target-substitution
 check_negative "$negative_load_page_overlap" mutated_memory_only_check_rejects_page_overlap_v1 load-page-overlap
 check_negative "$negative_load_descriptor_delta" mutated_descriptor_delta_substitution_is_bound_v1 load-descriptor-delta
 check_negative "$negative_materialization_source" mutated_source_substitution_preserves_exact_byte_v1 materialization-source-substitution
@@ -4054,7 +4069,7 @@ check_sources
 check_digest "$expected_verus" "$verus_path"
 "$closure_checker" "$verus_root" "$closure_manifest"
 
-transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=4 projection_obligations=4 memory_obligations=6 queue_obligations=11 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 r67_resource_credits_obligations=14 r67_resource_credits_mutations=8 r68_device_backing_credits_obligations=4 r68_device_backing_credits_mutations=5 r69_host_capture_obligations=4 r69_host_capture_mutations=5 r70_resource_batch_obligations=9 r70_resource_batch_mutations=9 r71_device_pool_obligations=15 r71_device_pool_mutations=10 r72_host_visible_backing_credits_obligations=5 r72_host_visible_backing_credits_mutations=9 r73_generated_result_storage_obligations=7 r73_generated_result_storage_mutations=8 r74_ordered_peer_copy_obligations=10 r74_ordered_peer_copy_mutations=5 journal_issuance_obligations=69 journal_issuance_executable_mutations=21 expected_negative_files=691'
+transcript='FE2O3_RUNTIME_MODEL_VERUS_OK lifecycle_obligations=2 identity_obligations=8 projection_obligations=11 memory_obligations=6 queue_obligations=16 load_plan_obligations=3 materialization_obligations=8 aql_obligations=11 r7_async_resource_obligations=8 r8_execution_contract_obligations=10 r9_native_evidence_obligations=14 r10_closed_execution_obligations=20 r11_runtime_semantics_obligations=18 r12_native_concurrency_obligations=23 r13_logical_scheduler_obligations=20 r14_async_observer_obligations=10 r16_worker_semantic_boundary_obligations=21 r17_persistent_native_allocation_obligations=32 r18_persistent_local_sdma_adapter_obligations=34 r19_directional_persistent_local_sdma_adapter_obligations=46 r20_runtime_facade_directional_chunking_obligations=31 r21_runtime_scripted_failure_seam_obligations=37 r22_batched_directional_persistent_sdma_windows_obligations=41 r23_same_device_d2d_persistent_sdma_windows_obligations=46 r24_portable_progress_obligations=34 r25_persistent_compute_storage_bridge_obligations=38 r27_persistent_dispatch_control_obligations=20 r28_persistent_hot_currentness_scope_obligations=31 r30_bound_host_content_certificate_obligations=38 r31_single_packet_window_refinement_obligations=41 r32_directional_sdma_currentness_handoff_obligations=34 r33_fused_synchronous_directional_sdma_obligations=45 r34_fused_asynchronous_directional_sdma_obligations=54 r35_fused_retained_control_replay_projected_obligations=13 r36_fused_completion_poll_recycle_projected_obligations=15 r37_typed_native_sdma_wait_activation_obligations=15 r38_bounded_persistent_compute_wait_recycle_obligations=19 r39_scoped_persistent_sdma_wait_policy_obligations=20 r40_gfx942_striped_sdma_aggregate_obligations=25 r41_persistent_striped_sdma_aggregate_obligations=43 r42_compute_event_signal_custody_obligations=21 r44_live_foundation_invariant_certificate_obligations=27 r45_compute_dependency_publisher_obligations=39 r46_gfx942_striped_sdma_tail_wait_obligations=32 r48_retryable_striped_sdma_tail_wait_obligations=43 r51_native_compute_dependency_lifecycle_obligations=31 r56_two_native_sdma_mux_obligations=41 r57_three_binding_compute_obligations=35 r57_three_binding_compute_mutations=23 r60_ordinary_fixed_dispatch_pipeline_obligations=46 r60_ordinary_fixed_dispatch_pipeline_mutations=26 r61_owner_async_custody_obligations=8 r61_owner_async_custody_mutations=8 r62_operation_control_obligations=8 r62_operation_control_mutations=8 r63_graph_reservation_obligations=8 r63_graph_reservation_mutations=8 r64_payload_budget_obligations=8 r64_payload_budget_mutations=8 r65_graph_versions_obligations=8 r65_graph_versions_mutations=8 r66_compute_sdma_coexistence_obligations=16 r66_compute_sdma_coexistence_mutations=8 r67_resource_credits_obligations=14 r67_resource_credits_mutations=8 r68_device_backing_credits_obligations=4 r68_device_backing_credits_mutations=5 r69_host_capture_obligations=4 r69_host_capture_mutations=5 r70_resource_batch_obligations=9 r70_resource_batch_mutations=9 r71_device_pool_obligations=15 r71_device_pool_mutations=10 r72_host_visible_backing_credits_obligations=5 r72_host_visible_backing_credits_mutations=9 r73_generated_result_storage_obligations=7 r73_generated_result_storage_mutations=8 r74_ordered_peer_copy_obligations=10 r74_ordered_peer_copy_mutations=5 journal_issuance_obligations=69 journal_issuance_executable_mutations=21 expected_negative_files=694'
 transcript="$transcript reader_preflight_obligations=103 reader_preflight_inherited=69 reader_preflight_new=34 reader_preflight_executable_mutations=21"
 transcript="$transcript reader_commit_obligations=128 reader_commit_inherited=103 reader_commit_new=25 reader_commit_executable_mutations=15"
 transcript="$transcript reader_invariant_obligations=156 reader_invariant_inherited=128 reader_invariant_new=28 reader_invariant_test_obligations=1 reader_invariant_mutations=16"

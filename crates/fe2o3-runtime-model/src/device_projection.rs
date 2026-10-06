@@ -5,13 +5,13 @@ use alloc::vec::Vec;
 use crate::{
     AMD_PCI_VENDOR_ID_V1, AuthorityDomainV1, ComputePartitionObservationV1, DRM_DEVICE_MAJOR_V1,
     DRM_DRIVER_MAJOR_V1, DRM_DRIVER_MINOR_V1, DRM_DRIVER_PATCH_V1, DeviceAdmissionProfileIdV1,
-    DeviceAdmissionProfileV1, DeviceGenerationV1, DeviceKeyV1, DeviceNodeV1,
-    DeviceObservationDomainIdV1, DrmDriverNameObservationV1, DrmFamilyObservationV1,
+    DeviceAdmissionProfileV1, DeviceAdmissionTargetProfileV1, DeviceGenerationV1, DeviceKeyV1,
+    DeviceNodeV1, DeviceObservationDomainIdV1, DrmDriverNameObservationV1, DrmFamilyObservationV1,
     GpuTargetObservationV1, IdentityDigestV1, KFD_DEVICE_MINOR_V1, KFD_UAPI_MAJOR_V1,
-    KFD_UAPI_MINOR_V1, MAX_MODEL_DEVICE_ADMISSIONS_V1, MI300X_PCI_DEVICE_ID_V1,
-    MemoryPartitionObservationV1, ModelCorrelatedDeviceV1, ObservationEpochV1, PciAddressV1,
-    UntrustedDeviceInventoryV1, UntrustedKfdObservationV1, UntrustedRenderObservationV1,
-    UntrustedTopologyObservationV1, XnackObservationV1, correlate_model_only_v1,
+    KFD_UAPI_MINOR_V1, MAX_MODEL_DEVICE_ADMISSIONS_V1, MemoryPartitionObservationV1,
+    ModelCorrelatedDeviceV1, ObservationEpochV1, PciAddressV1, UntrustedDeviceInventoryV1,
+    UntrustedKfdObservationV1, UntrustedRenderObservationV1, UntrustedTopologyObservationV1,
+    XnackObservationV1, correlate_model_only_v1,
 };
 
 pub const DEVICE_PROJECTION_SCHEMA_VERSION_V1: u16 = 1;
@@ -25,6 +25,14 @@ pub const MI300X_SDMA_FIRMWARE_VERSION_V1: u32 = 25;
 pub const AMDGPU_FAMILY_AI_V1: u32 = 141;
 pub const MI300X_CHIP_REVISION_V1: u32 = 1;
 pub const MI300X_EXTERNAL_REVISION_V1: u32 = 71;
+pub const GFX950_PCI_REVISION_V1: u8 = 0;
+pub const GFX950_WAVEFRONT_SIZE_V1: u32 = 64;
+pub const GFX950_SPX_SIMD_COUNT_V1: u32 = 1024;
+pub const GFX950_SPX_XCC_COUNT_V1: u32 = 8;
+pub const GFX950_KFD_FIRMWARE_VERSION_V1: u32 = 41;
+pub const GFX950_SDMA_FIRMWARE_VERSION_V1: u32 = 12;
+pub const GFX950_CHIP_REVISION_V1: u32 = 0;
+pub const GFX950_EXTERNAL_REVISION_V1: u32 = 80;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum KernelReleaseObservationV1 {
@@ -35,7 +43,52 @@ pub enum KernelReleaseObservationV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AmdgpuModuleObservationV1 {
     Version6_16_13SourceA6f143bec60c0afc3263226,
+    Version6_16_13Source703b1127e578bc5d4bd6615,
     Other,
+}
+
+struct ProjectionTargetProfile {
+    kernel: KernelReleaseObservationV1,
+    module: AmdgpuModuleObservationV1,
+    pci_revision: u8,
+    firmware: u32,
+    sdma_firmware: u32,
+    wavefront: u32,
+    simds: u32,
+    xccs: u32,
+    chip_revision: u32,
+    external_revision: u32,
+}
+
+impl ProjectionTargetProfile {
+    const fn for_target(target: DeviceAdmissionTargetProfileV1) -> Self {
+        match target {
+            DeviceAdmissionTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0 => Self {
+                kernel: KernelReleaseObservationV1::Linux6_8_0_124Generic,
+                module: AmdgpuModuleObservationV1::Version6_16_13SourceA6f143bec60c0afc3263226,
+                pci_revision: MI300X_PCI_REVISION_V1,
+                firmware: MI300X_KFD_FIRMWARE_VERSION_V1,
+                sdma_firmware: MI300X_SDMA_FIRMWARE_VERSION_V1,
+                wavefront: MI300X_WAVEFRONT_SIZE_V1,
+                simds: MI300X_SPX_SIMD_COUNT_V1,
+                xccs: MI300X_SPX_XCC_COUNT_V1,
+                chip_revision: MI300X_CHIP_REVISION_V1,
+                external_revision: MI300X_EXTERNAL_REVISION_V1,
+            },
+            DeviceAdmissionTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18Drm3_64_0 => Self {
+                kernel: KernelReleaseObservationV1::Linux6_8_0_124Generic,
+                module: AmdgpuModuleObservationV1::Version6_16_13Source703b1127e578bc5d4bd6615,
+                pci_revision: GFX950_PCI_REVISION_V1,
+                firmware: GFX950_KFD_FIRMWARE_VERSION_V1,
+                sdma_firmware: GFX950_SDMA_FIRMWARE_VERSION_V1,
+                wavefront: GFX950_WAVEFRONT_SIZE_V1,
+                simds: GFX950_SPX_SIMD_COUNT_V1,
+                xccs: GFX950_SPX_XCC_COUNT_V1,
+                chip_revision: GFX950_CHIP_REVISION_V1,
+                external_revision: GFX950_EXTERNAL_REVISION_V1,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -235,6 +288,7 @@ pub fn validate_device_projection_model_only_v1(
     record: DeviceProjectionRecordV1,
     profile: &DeviceAdmissionProfileV1,
 ) -> Result<ValidatedDeviceProjectionV1, DeviceProjectionErrorV1> {
+    let target = ProjectionTargetProfile::for_target(profile.target_profile());
     if record.schema_version != DEVICE_PROJECTION_SCHEMA_VERSION_V1 {
         return Err(DeviceProjectionErrorV1::SchemaVersionMismatch);
     }
@@ -257,10 +311,7 @@ pub fn validate_device_projection_model_only_v1(
     {
         return Err(DeviceProjectionErrorV1::SourceIdentityInvalid);
     }
-    if source.kernel_release != KernelReleaseObservationV1::Linux6_8_0_124Generic
-        || source.amdgpu_module
-            != AmdgpuModuleObservationV1::Version6_16_13SourceA6f143bec60c0afc3263226
-    {
+    if source.kernel_release != target.kernel || source.amdgpu_module != target.module {
         return Err(DeviceProjectionErrorV1::UnsupportedPlatform);
     }
     let kfd = record.kfd;
@@ -282,15 +333,15 @@ pub fn validate_device_projection_model_only_v1(
         || topology.gpu_unique_id == 0
         || !topology.pci.is_well_formed()
         || topology.vendor_id != AMD_PCI_VENDOR_ID_V1
-        || topology.device_id != MI300X_PCI_DEVICE_ID_V1
-        || topology.target != GpuTargetObservationV1::Gfx942
+        || topology.device_id != profile.target_profile().pci_device_id()
+        || topology.target != profile.target()
         || topology.compute_partition != ComputePartitionObservationV1::Spx
         || topology.memory_partition != MemoryPartitionObservationV1::Nps1
-        || topology.firmware_version != MI300X_KFD_FIRMWARE_VERSION_V1
-        || topology.sdma_firmware_version != MI300X_SDMA_FIRMWARE_VERSION_V1
-        || topology.wavefront_size != MI300X_WAVEFRONT_SIZE_V1
-        || topology.simd_count != MI300X_SPX_SIMD_COUNT_V1
-        || topology.xcc_count != MI300X_SPX_XCC_COUNT_V1
+        || topology.firmware_version != target.firmware
+        || topology.sdma_firmware_version != target.sdma_firmware
+        || topology.wavefront_size != target.wavefront
+        || topology.simd_count != target.simds
+        || topology.xcc_count != target.xccs
     {
         return Err(DeviceProjectionErrorV1::TopologyProfileMismatch);
     }
@@ -305,7 +356,7 @@ pub fn validate_device_projection_model_only_v1(
             || device.vendor_id != AMD_PCI_VENDOR_ID_V1
             || device.device_id == 0
             || device.drm_render_minor < crate::DRM_RENDER_MIN_MINOR_V1
-            || device.target != GpuTargetObservationV1::Gfx942
+            || device.target != profile.target()
         {
             return Err(DeviceProjectionErrorV1::InvalidInventory);
         }
@@ -350,8 +401,8 @@ pub fn validate_device_projection_model_only_v1(
     }
     if !render.pci.is_well_formed()
         || render.vendor_id != AMD_PCI_VENDOR_ID_V1
-        || render.device_id != MI300X_PCI_DEVICE_ID_V1
-        || render.pci_revision_id != MI300X_PCI_REVISION_V1
+        || render.device_id != profile.target_profile().pci_device_id()
+        || render.pci_revision_id != target.pci_revision
         || render.driver_name != DrmDriverNameObservationV1::Amdgpu
         || render.driver_major != DRM_DRIVER_MAJOR_V1
         || render.driver_minor != DRM_DRIVER_MINOR_V1
@@ -359,8 +410,8 @@ pub fn validate_device_projection_model_only_v1(
         || !render.acceleration_working
         || render.family != DrmFamilyObservationV1::AmdgpuFamilyAi
         || render.family_id != AMDGPU_FAMILY_AI_V1
-        || render.chip_revision != MI300X_CHIP_REVISION_V1
-        || render.external_revision != MI300X_EXTERNAL_REVISION_V1
+        || render.chip_revision != target.chip_revision
+        || render.external_revision != target.external_revision
     {
         return Err(DeviceProjectionErrorV1::RenderProfileMismatch);
     }
