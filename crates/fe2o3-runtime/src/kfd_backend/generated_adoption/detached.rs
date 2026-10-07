@@ -158,6 +158,26 @@ impl GeneratedNativeAdoptionV1 {
 }
 
 impl KfdRuntimeBackendV1 {
+    pub(crate) fn retain_scoped_completed_producer_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        submission: u64,
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.require_live()?;
+        // Other profiles and CPU-only control records retain their existing
+        // one-call completion. No synthetic detached owner is constructed.
+        if plan.profile != crate::generated_source::GeneratedProfileV1::Singleton
+            || self
+                .generated_shells
+                .get(&plan.key)
+                .is_some_and(|record| record.native.is_none())
+        {
+            return Ok(false);
+        }
+        self.retain_generated_completed_data_v1(plan, submission)?;
+        Ok(true)
+    }
+
     /// Retains the actual lower detached owner on the same original shell.
     /// This private entry neither releases DATA nor admits a consumer, and its
     /// caller must retain the original source authority and Context graph hold.

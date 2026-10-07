@@ -7,6 +7,7 @@ use std::{future::Future, pin::Pin, task::Poll};
 
 mod rejected;
 mod replicas;
+mod retained_producer;
 mod staging;
 
 type Backend = KfdMultiDeviceRuntimeBackendV1;

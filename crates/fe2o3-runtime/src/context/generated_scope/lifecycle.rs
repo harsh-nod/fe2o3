@@ -5,6 +5,7 @@ pub(super) enum Phase {
     Adopting,
     Issuing,
     Completing,
+    RetainedProducer,
     Settled,
     Cancelled,
     CancelledUnpublished,
@@ -78,13 +79,17 @@ impl<T, O> Lifecycle<T, O> {
             (Phase::Issuing, false) => Phase::Issuing,
             (Phase::Issuing, true) => Phase::Completing,
             (Phase::Completing, true) => Phase::Settled,
+            // Only the private completion hook may return false here: it has
+            // retained the original producer but has not disposed DATA yet.
+            (Phase::Completing, false) => Phase::RetainedProducer,
+            (Phase::RetainedProducer, true) => Phase::Settled,
             _ => Phase::Unknown,
         };
         if self.phase == Phase::Settled {
             // Only host decoding remains after exact native and Context settlement.
             self.outcome = Some(decode(self.value.take().expect("settled scoped owner")));
         }
-        Ok(advanced)
+        Ok(advanced || self.phase == Phase::RetainedProducer)
     }
 
     pub fn cancel_unpublished<C, E>(
@@ -316,7 +321,12 @@ mod tests {
 
     #[test]
     fn refusal_and_unwind_retain_owner_and_never_retry_or_decode() {
-        for phase in [Phase::Adopting, Phase::Issuing, Phase::Completing] {
+        for phase in [
+            Phase::Adopting,
+            Phase::Issuing,
+            Phase::Completing,
+            Phase::RetainedProducer,
+        ] {
             let owner = Cell::new(7);
             let mut slot = Lifecycle::<_, ()>::new(&owner);
             slot.phase = phase;

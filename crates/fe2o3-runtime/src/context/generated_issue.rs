@@ -20,6 +20,7 @@ enum PhaseV1 {
     Entering,
     Active,
     PhysicallyComplete,
+    RetainedProducer,
     DisposedWithoutResult,
     Unknown,
     RegistryActive,

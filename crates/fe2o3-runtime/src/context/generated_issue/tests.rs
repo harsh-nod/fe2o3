@@ -18,7 +18,7 @@ fn install(
     (hold, plan, roster)
 }
 
-fn install_with_graph(
+pub(super) fn install_with_graph(
     context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
     graph: bool,
 ) -> (
@@ -70,7 +70,7 @@ fn install_with_access(
     (hold, plan, roster, access)
 }
 
-fn context() -> RuntimeContextV1<KfdRuntimeBackendV1> {
+pub(super) fn context() -> RuntimeContextV1<KfdRuntimeBackendV1> {
     let mut context =
         RuntimeContextV1::open(KfdRuntimeBackendV1::mock_worker_v3_generated_only_v1()).unwrap();
     context

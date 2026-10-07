@@ -201,7 +201,7 @@ struct Hooks<B: RuntimeBackendV1, P> {
     progress: Progress<B, P>,
     rejected: fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
     retire_rejected: Step<B, P>,
-    complete: Step<B, P>,
+    complete: Progress<B, P>,
     unpublished:
         fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
     retire_unpublished:
@@ -381,9 +381,8 @@ where
                         Phase::Issuing => {
                             (hooks.progress)(context, prepared, &slot.roster, &slot.hold)
                         }
-                        Phase::Completing => {
-                            (hooks.complete)(context, prepared, &slot.roster, &slot.hold)?;
-                            Ok(true)
+                        Phase::Completing | Phase::RetainedProducer => {
+                            (hooks.complete)(context, prepared, &slot.roster, &slot.hold)
                         }
                         _ => unreachable!("lifecycle rejects terminal transitions"),
                     },
@@ -650,7 +649,7 @@ macro_rules! impl_scoped_generated {
                         progress: Self::progress_gfx942_issue_preserving_rejection_v1::<P>,
                         rejected: Self::gfx942_issue_rejected_v1,
                         retire_rejected: Self::settle_gfx942_rejected_v1::<P>,
-                        complete: Self::complete_gfx942_issue_v1::<P>,
+                        complete: Self::complete_gfx942_scoped_issue_v1::<P>,
                         unpublished: Self::gfx942_adoption_unpublished_v1,
                         retire_unpublished: Self::retire_gfx942_unpublished_v1,
                         copy_progress: Self::progress_stream_v1,

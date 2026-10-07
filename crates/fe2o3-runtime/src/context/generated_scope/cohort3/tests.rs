@@ -56,6 +56,7 @@ fn cpu_scope<'scope, 'env, 'owners>(
             complete: |context, _, _, hold| {
                 context
                     .release_unpublished_hold_v1(hold)
+                    .map(|()| true)
                     .map_err(Into::into)
             },
             unpublished: |_, _| panic!("aggregate cancellation not exposed"),

@@ -325,6 +325,20 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         })
     }
 
+    pub(crate) fn retain_scoped_completed_producer_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        id: u64,
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let route = self.checked_generated_submission_v1(id, Some(plan))?;
+        self.with_generated_issue_child_v1(route.shell.scope, |child| {
+            child.retain_scoped_completed_producer_v1(
+                &route.shell.local,
+                route.local.expect("validated receipt"),
+            )
+        })
+    }
+
     pub(in crate::kfd_backend) fn poll_generated_submission_v1(
         &mut self,
         id: u64,

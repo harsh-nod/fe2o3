@@ -154,7 +154,10 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 retire_rejected: |_, _, _, _| {
                     Err(RuntimeValidationErrorV1::InvalidBackendDescription.into())
                 },
-                complete: Self::complete_gfx942_cohort3_issue_v1::<P>,
+                complete: |context, prepared, roster, hold| {
+                    context.complete_gfx942_cohort3_issue_v1(prepared, roster, hold)?;
+                    Ok(true)
+                },
                 unpublished: Self::gfx942_adoption_unpublished_v1,
                 retire_unpublished: Self::retire_gfx942_unpublished_v1,
                 copy_progress: Self::progress_stream_v1,

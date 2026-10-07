@@ -12,6 +12,7 @@ use std::{
 type Scope<'a> = RuntimeGfx942GeneratedScopeV1<'a, 'a, KfdRuntimeBackendV1, Borrowed<'a>>;
 
 mod cooperative;
+mod retained_producer;
 mod scale;
 
 fn fixture<'a>(

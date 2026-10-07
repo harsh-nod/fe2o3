@@ -3,6 +3,8 @@
 use super::*;
 use crate::{RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1};
 mod cohort3;
+mod retained_producer;
+use retained_producer::{CompletionDispositionV1, RetainedProducerV1};
 
 pub(super) struct NativeSettlementV1 {
     submission: RuntimeSubmissionIdV1,
@@ -38,6 +40,15 @@ pub(super) fn require_completion_view_v1<T: RuntimeGfx942GeneratedCompletionCarr
         RuntimeErrorV1<KfdRuntimeBackendErrorV1>,
     >,
 ) -> Result<NativeSettlementV1, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+    with_completion_view_result_v1(carrier, complete)
+}
+
+fn with_completion_view_result_v1<T: RuntimeGfx942GeneratedCompletionCarrierV1, O>(
+    carrier: &mut T,
+    complete: impl for<'a> FnOnce(
+        RuntimeGfx942GeneratedCompletionViewV1<'a, T::CurrentnessError>,
+    ) -> Result<O, RuntimeErrorV1<KfdRuntimeBackendErrorV1>>,
+) -> Result<O, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
     let mut settled = None;
     carrier.with_completion_view_v1(|view| {
         settled = Some(complete(view)?);
@@ -55,8 +66,31 @@ macro_rules! impl_generated_completion_context {
                 roster: &GeneratedHostRosterV1,
                 hold: &ContextUnpublishedHoldV1,
             ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                self.complete_gfx942_issue_mode_v1(prepared, roster, hold, false)
+                    .map(|_| ())
+            }
+
+            pub(crate) fn complete_gfx942_scoped_issue_v1<
+                T: RuntimeGfx942GeneratedCompletionCarrierV1,
+            >(
+                &mut self,
+                prepared: &mut RuntimeGfx942PreparedV1<T>,
+                roster: &GeneratedHostRosterV1,
+                hold: &ContextUnpublishedHoldV1,
+            ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                self.complete_gfx942_issue_mode_v1(prepared, roster, hold, true)
+            }
+
+            fn complete_gfx942_issue_mode_v1<T: RuntimeGfx942GeneratedCompletionCarrierV1>(
+                &mut self,
+                prepared: &mut RuntimeGfx942PreparedV1<T>,
+                roster: &GeneratedHostRosterV1,
+                hold: &ContextUnpublishedHoldV1,
+                retain_producer: bool,
+            ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
                 self.validate_unpublished_hold_v1(hold)?;
                 let scope = self.generated_adoption_scope_for_hold_v1(hold)?;
+                let mut completed = false;
                 let result = catch_unwind(AssertUnwindSafe(|| {
                     self.validate_gfx942_prepared_v1(prepared)?;
                     let plan = self.generated_plan_for_hold_v1(hold)?;
@@ -67,9 +101,10 @@ macro_rules! impl_generated_completion_context {
                         .generated_issues
                         .get(&hold.stream())
                         .ok_or(RuntimeValidationErrorV1::InvalidBackendDescription)?;
+                    let retained = retain_producer && attempt.phase == PhaseV1::RetainedProducer;
                     if attempt.plan != plan
                         || !attempt.roster.matches(roster)
-                        || attempt.phase != PhaseV1::PhysicallyComplete
+                        || !(attempt.phase == PhaseV1::PhysicallyComplete || retained)
                     {
                         return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
                     }
@@ -87,50 +122,89 @@ macro_rules! impl_generated_completion_context {
                         .get_mut(&hold.stream())
                         .expect("retained attempt")
                         .phase = PhaseV1::Unknown;
-                    let settled = require_completion_view_v1(prepared.value_mut_v1(), |view| {
-                        let (source, destinations) = view.into_parts();
-                        source
-                            .with_current_source_v1(uid, roster, || {
-                                self.backend
-                                    .read_generated_submission_v1(
-                                        &plan,
-                                        backend_submission,
-                                        roster,
-                                        destinations,
+                    let disposition =
+                        with_completion_view_result_v1(prepared.value_mut_v1(), |view| {
+                            let (source, destinations) = view.into_parts();
+                            let mut retained_now = false;
+                            source
+                                .with_current_source_v1(uid, roster, || {
+                                    if !retained {
+                                        self.backend
+                                            .read_generated_submission_v1(
+                                                &plan,
+                                                backend_submission,
+                                                roster,
+                                                destinations,
+                                            )
+                                            .map_err(map_backend_error)?;
+                                    }
+                                    source
+                                        .validate_completed_readback_v1(destinations)
+                                        .map_err(|_| {
+                                            RuntimeErrorV1::Validation(
+                                                RuntimeValidationErrorV1::InvalidBackendDescription,
+                                            )
+                                        })?;
+                                    if retain_producer
+                                        && !retained
+                                        && self
+                                            .backend
+                                            .retain_scoped_completed_producer_v1(
+                                                &plan,
+                                                backend_submission,
+                                            )
+                                            .map_err(map_backend_error)?
+                                    {
+                                        retained_now = true;
+                                        return Ok(());
+                                    }
+                                    self.backend
+                                        .retire_generated_data_v1(&plan)
+                                        .map_err(map_backend_error)?;
+                                    self.backend
+                                        .release_submission_v1(backend_submission)
+                                        .map_err(map_backend_error)?;
+                                    Ok::<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>(())
+                                })
+                                .map_err(|_| {
+                                    RuntimeErrorV1::Validation(
+                                        RuntimeValidationErrorV1::InvalidBackendDescription,
                                     )
-                                    .map_err(map_backend_error)?;
-                                source
-                                    .validate_completed_readback_v1(destinations)
-                                    .map_err(|_| {
-                                        RuntimeErrorV1::Validation(
-                                            RuntimeValidationErrorV1::InvalidBackendDescription,
-                                        )
-                                    })?;
-                                self.backend
-                                    .retire_generated_data_v1(&plan)
-                                    .map_err(map_backend_error)?;
-                                self.backend
-                                    .release_submission_v1(backend_submission)
-                                    .map_err(map_backend_error)?;
-                                Ok::<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>>(())
+                                })??;
+                            Ok(if retained_now {
+                                CompletionDispositionV1::Retained(RetainedProducerV1 {
+                                    submission: id,
+                                    backend_submission,
+                                    stream: hold.stream(),
+                                    hold: hold.identity(),
+                                    expected_writer,
+                                    expected_reader,
+                                })
+                            } else {
+                                CompletionDispositionV1::Settled(NativeSettlementV1 {
+                                    submission: id,
+                                    backend_submission,
+                                    stream: hold.stream(),
+                                    hold: hold.identity(),
+                                    expected_writer,
+                                    expected_reader,
+                                })
                             })
-                            .map_err(|_| {
-                                RuntimeErrorV1::Validation(
-                                    RuntimeValidationErrorV1::InvalidBackendDescription,
-                                )
-                            })??;
-                        Ok(NativeSettlementV1 {
-                            submission: id,
-                            backend_submission,
-                            stream: hold.stream(),
-                            hold: hold.identity(),
-                            expected_writer,
-                            expected_reader,
-                        })
-                    })?;
-                    self.settle_completed_gfx942_context_v1(hold, settled)
+                        })?;
+                    match disposition {
+                        CompletionDispositionV1::Retained(original) => {
+                            self.retain_completed_gfx942_context_v1(hold, original)?;
+                            Ok(())
+                        }
+                        CompletionDispositionV1::Settled(settled) => {
+                            self.settle_completed_gfx942_context_v1(hold, settled)?;
+                            completed = true;
+                            Ok(())
+                        }
+                    }
                 }));
-                self.finish_generated_issue_scoped_v1(hold, scope, result)
+                self.finish_generated_issue_scoped_v1(hold, scope, result)?;
+                Ok(completed)
             }
 
             // Called only after required lending, closing currentness and native
