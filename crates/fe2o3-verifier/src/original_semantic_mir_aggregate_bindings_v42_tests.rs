@@ -104,6 +104,11 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  && invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}) == Some({event})) by {{
  checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
  }}
+ let checked_event = {event};
+ assert(invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap() == checked_event);
+ assert(invocation_source_byte_step_v36(source,
+ invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian)
+ == invocation_source_byte_step_v36(source, checked_event, {root}, {instance}, little_endian));
  invocation_source_checked_add_local_step_v266(source, {destination}, {ty},
  {left}, {right}, left, right, {root}, {instance}, little_endian);
 }}
@@ -141,12 +146,17 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
             let body = step.split("\nproof fn ").next().unwrap();
             assert!(body.contains("hide(invocation_source_byte_event_"));
             assert_eq!(body.matches("invocation_source_checked_add_local_step_v266(source,").count(), 1);
+            assert_eq!(body.matches("let checked_event = InvocationSourceByteEventV36::Checked {").count(), 1);
+            assert_eq!(body.matches(".unwrap() == checked_event);").count(), 1);
+            assert_eq!(body.matches("== invocation_source_byte_step_v36(source, checked_event,").count(), 1);
             assert!(!body.contains("reveal(invocation_source_byte_step_v36);"));
             assert!(!body.contains("hide(invocation_source_byte_evaluate_v36);"));
             assert!(!body.contains("invocation_source_local_evaluates_v265(source,"));
             assert!(!body.contains("let reconstructed ="));
             assert!(!body.contains("reveal(invocation_source_byte_evaluate_v36);"));
             assert!(body.find("checked_add_actual_schema_").unwrap()
+                < body.find("let checked_event =").unwrap());
+            assert!(body.find("== invocation_source_byte_step_v36(source, checked_event,").unwrap()
                 < body.find("invocation_source_checked_add_local_step_v266(source,").unwrap());
         }
         assert!(model.contains("assert(after.machine == (MemoryStateV30"));
