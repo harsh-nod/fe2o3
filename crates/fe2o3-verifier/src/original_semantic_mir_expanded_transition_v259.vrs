@@ -372,8 +372,6 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
         && next.source == source_step && next.target == target_step) by {
         invocation_context_issue_fresh_preserves_current_map_v238(
             source, target, execution_map, issue, site, destination);
-        invocation_context_issue_fresh_has_exact_updates_v211(
-            source, target, execution_map, issue, site, destination);
         invocation_context_issue_coupling_replays_both_actual_steps_v211(
             source, target, execution_map, issue, site, destination);
     }

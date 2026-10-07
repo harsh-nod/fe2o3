@@ -436,6 +436,14 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         requires,
         "invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),\n        invocation_execution_map_current_v205(source, target, execution_map),\n"
     );
+    let frame_body = source
+        .split_once("proof fn invocation_context_issue_fresh_preserves_frame_v259(")
+        .unwrap().1
+        .split_once("proof fn invocation_context_issue_preserves_snapshot_v259(")
+        .unwrap().0;
+    assert!(!frame_body.contains("invocation_context_issue_fresh_has_exact_updates_v211("));
+    assert_eq!(frame_body.matches("invocation_context_issue_fresh_preserves_current_map_v238(").count(), 1);
+    assert_eq!(frame_body.matches("invocation_context_issue_coupling_replays_both_actual_steps_v211(").count(), 1);
     let inputs = |name: &str| {
         source
             .split_once(&format!("proof fn {name}("))
