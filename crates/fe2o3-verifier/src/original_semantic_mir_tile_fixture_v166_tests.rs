@@ -352,6 +352,100 @@ pub(in super::super) fn run_fixture_with_plan(
     run_fixture_with_preparation(layout, work, storage, prepared, examine)
 }
 
+pub(in super::super) fn run_fixture_with_unreachable_root_v281(
+    layout: Layout,
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(
+        &InvocationPlan<'_, '_>,
+        &SourceSlots<'_, '_>,
+        &TileExpansion<'_, '_>,
+        &mut Writer<'_, '_>,
+    ) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_fixture_with_preparation(
+        layout,
+        work,
+        storage,
+        |budget| {
+            prepared_with_owner(budget, || {
+                let original = owner();
+                let semantic = original.source_semantic();
+                let mut functions = semantic.functions().to_vec();
+                let root = &functions[0];
+                let mut blocks = root.blocks().to_vec();
+                let unreachable = SemanticBlockIdV1::from_index(blocks.len() as u32);
+                for block in &blocks {
+                    block
+                        .terminator()
+                        .kind()
+                        .try_for_each_edge(|edge| {
+                            assert_ne!(edge.target(), unreachable);
+                            Ok::<_, ()>(())
+                        })
+                        .unwrap();
+                }
+                blocks.push(
+                    SemanticBasicBlockV1::new(
+                        SemanticBlockIdentityV1::from_sha256([255; 32]),
+                        root.source(),
+                        vec![],
+                        SemanticTerminatorV1::new(root.source(), SemanticTerminatorKindV1::Return),
+                    )
+                    .unwrap(),
+                );
+                functions[0] = SemanticFunctionDeclV1::new(
+                    root.identity(),
+                    root.role(),
+                    root.item_definition_identity(),
+                    root.monomorphization_identity(),
+                    root.generic_type_arguments_identity(),
+                    root.const_generic_arguments_identity(),
+                    root.source(),
+                    root.abi().clone(),
+                    root.locals().to_vec(),
+                    root.entry(),
+                    blocks,
+                )
+                .unwrap()
+                .with_kernel_entry(root.kernel_entry().unwrap().clone());
+                let semantic = InertSemanticMirRequestV1::new_with_callables(
+                    semantic.target(),
+                    semantic.types().to_vec(),
+                    semantic.allocations().to_vec(),
+                    semantic.statics().to_vec(),
+                    semantic.vtables().to_vec(),
+                    functions,
+                    semantic.callables().to_vec(),
+                    semantic.roots().to_vec(),
+                )
+                .unwrap()
+                .admit_exact_v29(SemanticMirLimitsV1::default())
+                .unwrap();
+                let result = ProductionSemanticSsaOwnerV1::try_new(
+                    ProductionSemanticMirOwnerV1::try_new(
+                        semantic,
+                        ProductionSemanticMirLimitsV1::default(),
+                    )
+                    .unwrap(),
+                    ProductionSemanticSsaLimitsV1::default(),
+                )
+                .unwrap();
+                assert!(
+                    result
+                        .plan_for_function(SemanticFunctionIdV1::from_index(0))
+                        .unwrap()
+                        .plan()
+                        .live_in(fe2o3_mir_model::SsaBlockIdV1::new(unreachable.index()))
+                        .is_none()
+                );
+                result
+            })
+        },
+        examine,
+    )
+}
+
 fn run_fixture_with_preparation(
     layout: Layout,
     work: usize,
