@@ -1,0 +1,16 @@
+profile=fe2o3.runtime.gfx942-inplace-transform-qualification.v1
+target=gfx942:xnack-
+code-object-version=6
+kernel=inplace_transform
+workgroup=256,1,1
+element=u32
+element-count=262144
+buffer-bytes=1048576
+arg0=offset:0,length-offset:8,name:data,length-name:data.len,effect:read-write,alignment:4
+binding=one-exact-whole-device-local-allocation
+initial-a-u32=(index*0x045d9f3b)^0xa5a55a5a
+initial-b-u32=(index*0x27d4eb2d)^0x5a5aa5a5
+iteration-input=warmup-or-measured-global-iteration-even:a,odd:b,starting-a-at-zero
+transform-u32=(rotate-left(initial,13)^0x9e3779b9)+index-mod-2^32
+validation=exact-full-buffer-byte-equality,no-prefix-or-sampled-acceptance
+completion=successful-dispatch-before-validation-read-or-reuse

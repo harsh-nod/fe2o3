@@ -4,15 +4,26 @@ use std::error::Error;
 use std::fmt;
 use std::fs::File;
 use std::io;
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use fe2o3_broker_authority_service::{
     ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1, ProtectedServiceAdmissionErrorV1,
-    current_process_start_time_ticks_v1,
+    RegisteredApplicationObserverV1, RegisteredCompilerObserverV1,
+    RegisteredCustodianApplicationObserverV1, current_process_start_time_ticks_v1,
 };
 use fe2o3_compiler_closure_capability::CompilerExecutionServiceLaunchCapabilityV1;
+use fe2o3_compiler_execution_issuer::{
+    COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1, COMPILER_EXECUTION_ISSUER_OBSERVER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_OBSERVER_ROOT_PIDFD_V1, COMPILER_EXECUTION_ISSUER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_POLICY_FD_V1, COMPILER_EXECUTION_ISSUER_READY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_ROOT_FD_V1, COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1,
+};
 use fe2o3_compiler_execution_protocol::CompilerExecutionServiceLaunchManifestV1;
 use fe2o3_static_preexec_manifest::{
     PREEXEC_MANIFEST_BYTES_V1, StaticPreexecDescriptorV1, StaticPreexecManifestErrorV1,
@@ -20,25 +31,70 @@ use fe2o3_static_preexec_manifest::{
 };
 use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
 
-use crate::authority::ExternalAnchorLaunchClonesV1;
+use crate::application_route::RegisteredApplicationRouteV1;
+use crate::authority::{ExternalAnchorLaunchClonesV1, observer_error};
 use crate::handoff::validate_service_peer;
 use crate::launch_checks::{
-    self as checks, CLIENT_PIDFD_SOURCE_INDEX, DESTINATION_FDS_V1,
-    EXTERNAL_ANCHOR_PEER_SOURCE_INDEX, EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX,
-    LAUNCH_MANIFEST_SOURCE_INDEX, POLICY_SOURCE_INDEX, READINESS_SOURCE_INDEX, ROOT_SOURCE_INDEX,
-    SERVICE_PEER_SOURCE_INDEX, SIGNING_KEY_SOURCE_INDEX, SOURCE_COUNT_V1, STDERR_SOURCE_INDEX,
-    STDIN_SOURCE_INDEX, STDOUT_SOURCE_INDEX, object_identity, protected_pipe,
-    require_launcher_non_aliasing, source_identities, validate_pipe_end, validate_pipe_pair,
+    self as checks, object_identity, protected_pipe, validate_pipe_end, validate_pipe_pair,
 };
 use crate::{
-    AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1,
-    ProtectedIssuerSupervisorErrorV1, ProtectedIssuerSupervisorV1,
+    AcceptedApplicationHandoffV1, AcceptedCompilerExecutionHandoffV1,
+    AcceptedCustodianApplicationHandoffV1, ProtectedApplicationHandoffErrorV1,
+    ProtectedIssuerHandoffErrorV1, ProtectedIssuerSupervisorErrorV1, ProtectedIssuerSupervisorV1,
 };
+
+const SOURCE_COUNT_V1: usize = 14;
+const STDIN_SOURCE_INDEX: usize = 0;
+const STDOUT_SOURCE_INDEX: usize = 1;
+const STDERR_SOURCE_INDEX: usize = 2;
+const ROOT_SOURCE_INDEX: usize = 3;
+const SERVICE_PEER_SOURCE_INDEX: usize = 4;
+const CLIENT_PIDFD_SOURCE_INDEX: usize = 5;
+const POLICY_SOURCE_INDEX: usize = 6;
+const SIGNING_KEY_SOURCE_INDEX: usize = 7;
+const LAUNCH_MANIFEST_SOURCE_INDEX: usize = 8;
+const READINESS_SOURCE_INDEX: usize = 9;
+const EXTERNAL_ANCHOR_PEER_SOURCE_INDEX: usize = 10;
+const EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX: usize = 11;
+const OBSERVER_PEER_SOURCE_INDEX: usize = 12;
+const OBSERVER_ROOT_PIDFD_SOURCE_INDEX: usize = 13;
+
+const DESTINATION_FDS_V1: [i32; SOURCE_COUNT_V1] = [
+    libc::STDIN_FILENO,
+    libc::STDOUT_FILENO,
+    libc::STDERR_FILENO,
+    COMPILER_EXECUTION_ISSUER_ROOT_FD_V1,
+    COMPILER_EXECUTION_ISSUER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_POLICY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_LAUNCH_MANIFEST_FD_V1,
+    COMPILER_EXECUTION_ISSUER_READY_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
+    COMPILER_EXECUTION_ISSUER_OBSERVER_PEER_FD_V1,
+    COMPILER_EXECUTION_ISSUER_OBSERVER_ROOT_PIDFD_V1,
+];
+
+const _: () = assert!(DESTINATION_FDS_V1[0] == 0);
+const _: () = assert!(DESTINATION_FDS_V1[1] == 1);
+const _: () = assert!(DESTINATION_FDS_V1[2] == 2);
+const _: () = assert!(DESTINATION_FDS_V1[3] == 3);
+const _: () = assert!(DESTINATION_FDS_V1[4] == 4);
+const _: () = assert!(DESTINATION_FDS_V1[5] == 5);
+const _: () = assert!(DESTINATION_FDS_V1[6] == 6);
+const _: () = assert!(DESTINATION_FDS_V1[7] == 7);
+const _: () = assert!(DESTINATION_FDS_V1[8] == 8);
+const _: () = assert!(DESTINATION_FDS_V1[9] == 9);
+const _: () = assert!(DESTINATION_FDS_V1[10] == 10);
+const _: () = assert!(DESTINATION_FDS_V1[11] == 11);
+const _: () = assert!(DESTINATION_FDS_V1[12] == 12);
+const _: () = assert!(DESTINATION_FDS_V1[13] == 13);
 
 /// Move-only, fully materialized input to the static protected-issuer launcher.
 ///
 /// This value retains the authenticated handoff, exact launcher and issuer
-/// images, sealed 704-byte pre-exec manifest, all twelve ordered source objects,
+/// images, sealed 704-byte pre-exec manifest, all fourteen ordered source objects,
 /// and the supervisor sides of output and readiness pipes. It exposes only
 /// inert canonical manifests. Process creation consumes this value in the next
 /// supervisor checkpoint.
@@ -56,17 +112,156 @@ use crate::{
 /// require_as_fd::<PreparedProtectedIssuerLaunchV1>();
 /// ```
 pub struct PreparedProtectedIssuerLaunchV1 {
-    pub(super) accepted: AcceptedCompilerExecutionHandoffV1,
+    pub(super) route: PreparedRouteV1,
     pub(super) launch_capability: CompilerExecutionServiceLaunchCapabilityV1,
     pub(super) launcher: File,
     pub(super) issuer: File,
     pub(super) static_manifest_file: File,
-    pub(super) sources: [File; SOURCE_COUNT_V1],
+    pub(super) sources: Vec<File>,
     pub(super) stdout_reader: OwnedFd,
     pub(super) stderr_reader: OwnedFd,
     pub(super) readiness_reader: OwnedFd,
     pub(super) static_manifest: StaticPreexecManifestV1,
     manifest_object: StaticPreexecObjectIdentityV1,
+}
+
+pub(super) enum PreparedRouteV1 {
+    CustodianApplication {
+        accepted: Box<AcceptedCustodianApplicationHandoffV1>,
+        registration: Box<RegisteredCustodianApplicationObserverV1>,
+        deadline: Instant,
+    },
+    Compiler {
+        accepted: Box<AcceptedCompilerExecutionHandoffV1>,
+        registration: Option<Box<RegisteredCompilerObserverV1>>,
+    },
+    Application {
+        accepted: Box<AcceptedApplicationHandoffV1>,
+        registration: Box<RegisteredApplicationObserverV1>,
+        deadline: Instant,
+    },
+}
+
+impl PreparedRouteV1 {
+    fn compiler(&self) -> &AcceptedCompilerExecutionHandoffV1 {
+        match self {
+            Self::Compiler { accepted, .. } => accepted,
+            Self::Application { accepted, .. } => accepted.compiler(),
+            Self::CustodianApplication { accepted, .. } => accepted.compiler(),
+        }
+    }
+
+    pub(super) fn application_deadline(&self) -> Option<Instant> {
+        match self {
+            Self::Application { deadline, .. } | Self::CustodianApplication { deadline, .. } => {
+                Some(*deadline)
+            }
+            _ => None,
+        }
+    }
+
+    fn has_registration(&self) -> bool {
+        !matches!(
+            self,
+            Self::Compiler {
+                registration: None,
+                ..
+            }
+        )
+    }
+
+    fn revalidate(
+        &self,
+        supervisor: &ProtectedIssuerSupervisorV1,
+    ) -> Result<(), ProtectedIssuerLaunchPreparationErrorV1> {
+        use ProtectedIssuerLaunchPreparationErrorV1 as E;
+        match self {
+            Self::CustodianApplication {
+                accepted,
+                registration,
+                deadline,
+            } => {
+                accepted
+                    .revalidate(supervisor)
+                    .map_err(E::ApplicationHandoff)?;
+                if registration.binding() != accepted.binding() {
+                    return Err(E::LaunchManifestMismatch);
+                }
+                if Instant::now() >= *deadline {
+                    return Err(E::Handoff(ProtectedIssuerHandoffErrorV1::Timeout));
+                }
+            }
+            Self::Compiler {
+                accepted,
+                registration,
+            } => {
+                accepted.revalidate(supervisor).map_err(E::Handoff)?;
+                if registration
+                    .as_ref()
+                    .is_some_and(|r| !r.matches_launch(accepted.manifest()))
+                {
+                    return Err(E::LaunchManifestMismatch);
+                }
+            }
+            Self::Application {
+                accepted,
+                registration,
+                deadline,
+            } => {
+                accepted
+                    .revalidate(supervisor)
+                    .map_err(E::ApplicationHandoff)?;
+                if registration.binding() != accepted.binding() {
+                    return Err(E::LaunchManifestMismatch);
+                }
+                if Instant::now() >= *deadline {
+                    return Err(E::Handoff(ProtectedIssuerHandoffErrorV1::Timeout));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn observer_transfers(
+        &self,
+    ) -> Result<Option<[OwnedFd; 2]>, ProtectedIssuerLaunchPreparationErrorV1> {
+        let result = match self {
+            Self::Compiler {
+                registration: Some(registration),
+                ..
+            } => registration.try_clone_for_launch(),
+            Self::Compiler {
+                registration: None, ..
+            } => return Ok(None),
+            Self::Application { registration, .. } => registration.try_clone_for_launch(),
+            Self::CustodianApplication { registration, .. } => registration.try_clone_for_launch(),
+        };
+        result.map(Some).map_err(|error| {
+            ProtectedIssuerLaunchPreparationErrorV1::Supervisor(observer_error(error))
+        })
+    }
+
+    pub(super) fn into_serving_inputs(self) -> (OwnedFd, Option<RegisteredApplicationRouteV1>) {
+        match self {
+            Self::Compiler { accepted, .. } => (accepted.into_control(), None),
+            Self::Application {
+                accepted,
+                registration,
+                ..
+            } => (
+                accepted.into_control(),
+                Some(RegisteredApplicationRouteV1::Legacy(*registration)),
+            ),
+            Self::CustodianApplication {
+                accepted,
+                registration,
+                ..
+            } => (
+                accepted.into_control(),
+                Some(RegisteredApplicationRouteV1::Custodian(*registration)),
+            ),
+        }
+    }
 }
 
 impl fmt::Debug for PreparedProtectedIssuerLaunchV1 {
@@ -79,7 +274,7 @@ impl fmt::Debug for PreparedProtectedIssuerLaunchV1 {
                 "descriptor_count",
                 &self.static_manifest.descriptors().len(),
             )
-            .field("launch_identity", &self.accepted.handoff.identity())
+            .field("launch_identity", &self.route.compiler().handoff.identity())
             .finish_non_exhaustive()
     }
 }
@@ -100,17 +295,41 @@ impl PreparedProtectedIssuerLaunchV1 {
         &self,
         supervisor: &ProtectedIssuerSupervisorV1,
     ) -> Result<(), ProtectedIssuerLaunchPreparationErrorV1> {
+        let expected_count = if self.route.has_registration() {
+            SOURCE_COUNT_V1
+        } else {
+            12
+        };
+        if self.sources.len() != expected_count || (!cfg!(test) && !self.route.has_registration()) {
+            return Err(ProtectedIssuerLaunchPreparationErrorV1::DescriptorChanged(
+                "observer source table",
+            ));
+        }
         supervisor
             .revalidate()
             .map_err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor)?;
-        self.accepted
-            .revalidate(supervisor)
-            .map_err(ProtectedIssuerLaunchPreparationErrorV1::Handoff)?;
+        self.route.revalidate(supervisor)?;
         self.launch_capability
             .revalidate()
             .map_err(|source| capability_error("service launch manifest", source))?;
-        if self.launch_capability.manifest() != self.accepted.manifest() {
+        if self.launch_capability.manifest() != self.route.compiler().manifest() {
             return Err(ProtectedIssuerLaunchPreparationErrorV1::LaunchManifestMismatch);
+        }
+        if let Some(transfers) = self.route.observer_transfers()? {
+            for (offset, transfer) in transfers.into_iter().enumerate() {
+                let index = OBSERVER_PEER_SOURCE_INDEX + offset;
+                let source = &self.sources[index];
+                if rustix::io::fcntl_getfd(source)
+                    .map_err(|e| io_error("inspect observer source flags", e.into()))?
+                    != rustix::io::FdFlags::CLOEXEC
+                    || source_object_identity(index, source)?
+                        != source_object_identity(index, &File::from(transfer))?
+                {
+                    return Err(ProtectedIssuerLaunchPreparationErrorV1::DescriptorChanged(
+                        "observer transfer",
+                    ));
+                }
+            }
         }
         revalidate_parent(&self.static_manifest)?;
 
@@ -129,12 +348,12 @@ impl PreparedProtectedIssuerLaunchV1 {
             .map_err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor)?;
         validate_service_peer(
             &self.sources[SERVICE_PEER_SOURCE_INDEX],
-            self.accepted.manifest().client(),
+            self.route.compiler().manifest().client(),
         )
         .map_err(ProtectedIssuerLaunchPreparationErrorV1::Handoff)?;
         validate_client_pidfd(
             &self.sources[CLIENT_PIDFD_SOURCE_INDEX],
-            self.accepted.manifest().client(),
+            self.route.compiler().manifest().client(),
         )?;
         validate_launch_capability_source(
             &self.sources[LAUNCH_MANIFEST_SOURCE_INDEX],
@@ -194,12 +413,20 @@ impl PreparedProtectedIssuerLaunchV1 {
 impl ProtectedIssuerSupervisorV1 {
     /// Materializes one admitted rustc handoff into the exact static-launcher input set.
     ///
-    /// The ordered source table is fixed to destinations `0..=11`: isolated
+    /// The ordered source table is fixed to destinations `0..=13`: isolated
     /// standard streams, root, service peer, rustc pidfd, policy, signing key,
     /// service launch manifest, readiness writer, external-anchor endpoint, and
-    /// external-anchor pidfd. Every source descriptor is close-on-exec until the
+    /// external-anchor pidfd, root observer endpoint, and original root pidfd.
+    /// Every source descriptor is close-on-exec until the
     /// static launcher installs its destination table.
     pub fn prepare_launch(
+        &self,
+        accepted: AcceptedCompilerExecutionHandoffV1,
+    ) -> Result<PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1> {
+        self.prepare_launch_inner::<true>(accepted)
+    }
+
+    pub(crate) fn prepare_launch_inner<const PRODUCTION: bool>(
         &self,
         accepted: AcceptedCompilerExecutionHandoffV1,
     ) -> Result<PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1> {
@@ -208,7 +435,77 @@ impl ProtectedIssuerSupervisorV1 {
         accepted
             .revalidate(self)
             .map_err(ProtectedIssuerLaunchPreparationErrorV1::Handoff)?;
+        let registration = if PRODUCTION || !cfg!(test) {
+            Some(
+                self.observer_registry(
+                    std::time::Instant::now() + std::time::Duration::from_secs(30),
+                )
+                .map_err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor)?
+                .register(
+                    accepted.manifest(),
+                    accepted.service_peer.as_fd(),
+                    accepted.client_pidfd.as_fd(),
+                )
+                .map_err(|error| {
+                    ProtectedIssuerLaunchPreparationErrorV1::Supervisor(observer_error(error))
+                })?,
+            )
+        } else {
+            None
+        };
 
+        self.materialize_launch(PreparedRouteV1::Compiler {
+            accepted: Box::new(accepted),
+            registration: registration.map(Box::new),
+        })
+    }
+
+    /// Prepares an application issuer with mandatory original root observation custody.
+    pub fn prepare_application_launch(
+        &self,
+        accepted: AcceptedApplicationHandoffV1,
+        deadline: Instant,
+    ) -> Result<PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() || remaining > Duration::from_secs(120) {
+            return Err(ProtectedIssuerLaunchPreparationErrorV1::Handoff(
+                ProtectedIssuerHandoffErrorV1::InvalidTimeout,
+            ));
+        }
+        let registration = accepted.register(self, deadline)?;
+        self.materialize_launch(PreparedRouteV1::Application {
+            accepted: Box::new(accepted),
+            registration: Box::new(registration),
+            deadline,
+        })
+    }
+
+    /// Prepares an issuer retaining mandatory custodian registration through publication.
+    pub fn prepare_custodian_application_launch(
+        &self,
+        accepted: AcceptedCustodianApplicationHandoffV1,
+        deadline: Instant,
+    ) -> Result<PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() || remaining > Duration::from_secs(120) {
+            return Err(ProtectedIssuerLaunchPreparationErrorV1::Handoff(
+                ProtectedIssuerHandoffErrorV1::InvalidTimeout,
+            ));
+        }
+        let registration = accepted.register(self, deadline)?;
+        self.materialize_launch(PreparedRouteV1::CustodianApplication {
+            accepted: Box::new(accepted),
+            registration: Box::new(registration),
+            deadline,
+        })
+    }
+
+    fn materialize_launch(
+        &self,
+        route: PreparedRouteV1,
+    ) -> Result<PreparedProtectedIssuerLaunchV1, ProtectedIssuerLaunchPreparationErrorV1> {
+        route.revalidate(self)?;
+        let accepted = route.compiler();
         let launcher = self
             .clone_launcher_for_launch()
             .map_err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor)?;
@@ -249,7 +546,7 @@ impl ProtectedIssuerSupervisorV1 {
         let (stderr_reader, stderr_writer) = protected_pipe("stderr")?;
         let (readiness_reader, readiness_writer) = protected_pipe("readiness")?;
 
-        let sources = [
+        let mut sources = vec![
             File::from(stdin_reader),
             File::from(stdout_writer),
             File::from(stderr_writer),
@@ -263,6 +560,9 @@ impl ProtectedIssuerSupervisorV1 {
             external_anchor_peer,
             external_anchor_pidfd,
         ];
+        if let Some(transfers) = route.observer_transfers()? {
+            sources.extend(transfers.into_iter().map(File::from));
+        }
         let source_objects = source_identities(&sources)?;
         let descriptors = DESTINATION_FDS_V1
             .into_iter()
@@ -287,7 +587,7 @@ impl ProtectedIssuerSupervisorV1 {
         let (static_manifest_file, manifest_object) = create_manifest_file(&static_manifest)?;
 
         let prepared = PreparedProtectedIssuerLaunchV1 {
-            accepted,
+            route,
             launch_capability,
             launcher,
             issuer,
@@ -313,17 +613,87 @@ fn clone_owned_descriptor(
         .map_err(|source| io_error(operation, source.into()))
 }
 
+fn source_identities(
+    sources: &[File],
+) -> Result<Vec<StaticPreexecObjectIdentityV1>, ProtectedIssuerLaunchPreparationErrorV1> {
+    if sources.len() != SOURCE_COUNT_V1 && !(cfg!(test) && sources.len() == 12) {
+        return Err(ProtectedIssuerLaunchPreparationErrorV1::DescriptorChanged(
+            "source table cardinality",
+        ));
+    }
+    sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| source_object_identity(index, source))
+        .collect()
+}
+
+fn source_object_identity(
+    index: usize,
+    source: &File,
+) -> Result<StaticPreexecObjectIdentityV1, ProtectedIssuerLaunchPreparationErrorV1> {
+    let identity = object_identity(source, source_role(index))?;
+    if matches!(
+        index,
+        CLIENT_PIDFD_SOURCE_INDEX
+            | EXTERNAL_ANCHOR_PIDFD_SOURCE_INDEX
+            | OBSERVER_ROOT_PIDFD_SOURCE_INDEX
+    ) {
+        return Ok(StaticPreexecObjectIdentityV1::new_process_pidfd(
+            identity.device(),
+            identity.inode(),
+            identity.size(),
+            identity.mode(),
+        ));
+    }
+    Ok(identity)
+}
+
+fn source_role(index: usize) -> &'static str {
+    const ROLES: [&str; SOURCE_COUNT_V1] = [
+        "stdin",
+        "stdout",
+        "stderr",
+        "issuer root",
+        "rustc service peer",
+        "rustc pidfd",
+        "issuer policy",
+        "issuer signing key",
+        "service launch manifest",
+        "readiness writer",
+        "external-anchor peer",
+        "external-anchor pidfd",
+        "root observer peer",
+        "root observer pidfd",
+    ];
+    ROLES[index]
+}
+
 fn validate_static_manifest_sources(
     manifest: &StaticPreexecManifestV1,
     issuer: &File,
-    sources: &[StaticPreexecObjectIdentityV1; SOURCE_COUNT_V1],
+    sources: &[StaticPreexecObjectIdentityV1],
 ) -> Result<(), ProtectedIssuerLaunchPreparationErrorV1> {
-    checks::validate_static_manifest_sources(
-        manifest.executable(),
-        manifest.descriptors(),
-        issuer,
-        sources,
-    )?;
+    if (sources.len() != SOURCE_COUNT_V1 && !(cfg!(test) && sources.len() == 12))
+        || manifest.descriptors().len() != sources.len()
+        || manifest.executable() != &object_identity(issuer, "compiler issuer")?
+        || manifest
+            .descriptors()
+            .iter()
+            .zip(DESTINATION_FDS_V1)
+            .zip(sources)
+            .enumerate()
+            .any(|(index, ((entry, destination), source))| {
+                entry.source_fd()
+                    != fe2o3_static_preexec_manifest::PREEXEC_SOURCE_FD_BASE + index as i32
+                    || entry.destination_fd() != destination
+                    || entry.object() != source
+            })
+    {
+        return Err(ProtectedIssuerLaunchPreparationErrorV1::DescriptorChanged(
+            "static pre-exec source table",
+        ));
+    }
     let decoded = StaticPreexecManifestV1::decode(&manifest.encode())
         .map_err(ProtectedIssuerLaunchPreparationErrorV1::StaticManifest)?;
     if decoded != *manifest {
@@ -441,6 +811,40 @@ fn revalidate_parent(
     Ok(())
 }
 
+fn require_launcher_non_aliasing(
+    launcher: &File,
+    issuer: &File,
+    manifest: &File,
+    sources: &[File],
+) -> Result<(), ProtectedIssuerLaunchPreparationErrorV1> {
+    let launcher = object_identity(launcher, "static launcher")?;
+    if same_object(&launcher, &object_identity(issuer, "compiler issuer")?)
+        || same_object(
+            &launcher,
+            &object_identity(manifest, "static pre-exec manifest")?,
+        )
+        || sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| object_identity(source, source_role(index)))
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .any(|source| same_object(&launcher, source))
+    {
+        return Err(ProtectedIssuerLaunchPreparationErrorV1::DescriptorAlias(
+            "static launcher aliases another launch role",
+        ));
+    }
+    Ok(())
+}
+
+const fn same_object(
+    left: &StaticPreexecObjectIdentityV1,
+    right: &StaticPreexecObjectIdentityV1,
+) -> bool {
+    left.device() == right.device() && left.inode() == right.inode()
+}
+
 fn capability_error(role: &'static str, source: String) -> ProtectedIssuerLaunchPreparationErrorV1 {
     ProtectedIssuerLaunchPreparationErrorV1::Capability { role, source }
 }
@@ -470,6 +874,8 @@ pub enum ProtectedIssuerLaunchPreparationErrorV1 {
     Supervisor(ProtectedIssuerSupervisorErrorV1),
     /// The authenticated rustc handoff changed or its client exited.
     Handoff(ProtectedIssuerHandoffErrorV1),
+    /// The original application profile changed or its process custody expired.
+    ApplicationHandoff(ProtectedApplicationHandoffErrorV1),
     /// The canonical static pre-exec manifest is invalid.
     StaticManifest(StaticPreexecManifestErrorV1),
     /// Current supervisor process identity could not be observed.
@@ -516,6 +922,10 @@ impl fmt::Display for ProtectedIssuerLaunchPreparationErrorV1 {
             Self::Handoff(error) => {
                 write!(formatter, "authenticated rustc handoff changed: {error}")
             }
+            Self::ApplicationHandoff(error) => write!(
+                formatter,
+                "authenticated application handoff changed: {error}"
+            ),
             Self::StaticManifest(error) => {
                 write!(formatter, "invalid static pre-exec manifest: {error}")
             }
@@ -553,6 +963,7 @@ impl Error for ProtectedIssuerLaunchPreparationErrorV1 {
         match self {
             Self::Supervisor(error) => Some(error),
             Self::Handoff(error) => Some(error),
+            Self::ApplicationHandoff(error) => Some(error),
             Self::StaticManifest(error) => Some(error),
             Self::ParentIdentity(error) | Self::ClientPidfd(error) => Some(error),
             Self::Io { source, .. } => Some(source),

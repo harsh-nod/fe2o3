@@ -335,6 +335,7 @@ fn native_invocation_stream_and_original_account_survive_profile_transfer() {
     let authority = BrokeredInvocationAuthorityV1::from_authenticated_stream_with_account(
         stream,
         Some(Arc::clone(&account)),
+        None,
     )
     .unwrap();
     assert!(Arc::ptr_eq(

@@ -366,6 +366,8 @@ fn isolated_raw_source_cases() {
         "unwind",
         "close-error",
         "startup-missing",
+        "native-mode-budget-refusal",
+        "native-mode-wrong-object",
     ] {
         // Named paths pin inode identities through all child closure assertions.
         let files: [_; 11] = std::array::from_fn(|_| tempfile::NamedTempFile::new().unwrap());
@@ -464,6 +466,35 @@ fn raw_source_subprocess() {
         assert!(raw_open(fd));
     }
     match case.as_str() {
+        "native-mode-budget-refusal" | "native-mode-wrong-object" => {
+            use crate::{
+                NATIVE_ISSUER_PROCESS_STORAGE_V2, NATIVE_ISSUER_PROCESS_WORK_V2,
+                NATIVE_ISSUER_STARTUP_INPUT_STORAGE_V3 as INPUT,
+                ProtectedIssuerCleanupServiceV2 as Cleanup,
+                ProtectedIssuerDispatchLimitsV3 as Dispatch,
+                ProtectedIssuerSessionLimitsV3 as Session, ProtectedIssuerWaitV3 as Wait,
+                run_inherited_native_supervisor_v3 as run,
+            };
+            use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Account;
+            let wait = Wait::new(1, Duration::from_millis(1)).unwrap();
+            let session = Session::new(Duration::from_millis(1), wait, wait, wait, wait).unwrap();
+            let dispatch = Dispatch::new(1, wait, 1).unwrap();
+            let mut cleanup =
+                Cleanup::admit(Account::new(Work::new(1 << 30), Cleanup::STORAGE)).unwrap();
+            let work = if case == "native-mode-budget-refusal" {
+                0
+            } else {
+                NATIVE_ISSUER_PROCESS_WORK_V2
+            };
+            let mut work = Work::new(work);
+            let mut budget = Budget::new(&mut work, NATIVE_ISSUER_PROCESS_STORAGE_V2);
+            budget.reserve_storage(INPUT).unwrap();
+            // SAFETY: exact isolated child owns all eleven original raw slots;
+            // selection must close them even before ordinary intake is reached.
+            assert!(unsafe { run(session, dispatch, &mut cleanup, &mut budget) }.is_err());
+            assert_eq!(budget.storage(), INPUT);
+            cleanup.shutdown().unwrap();
+        }
         "startup-missing" => {
             use crate::{
                 NATIVE_ISSUER_PROCESS_STORAGE_V2, NATIVE_ISSUER_PROCESS_WORK_V2,

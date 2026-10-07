@@ -50,6 +50,7 @@ umask 077
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly repo_root
 readonly target_root="${FE2O3_STATIC_DEPLOYMENT_TARGET_DIR:-${repo_root}/target/static-deployment${cache_suffix}}"
+readonly cargo_target_dir="${target_root}/cargo"
 readonly target="x86_64-unknown-linux-musl"
 
 output="$(realpath -m -- "$1")"
@@ -101,24 +102,25 @@ fi
 mkdir -p -- "${target_root}"
 chmod 0700 -- "${target_root}"
 
-FE2O3_STATIC_COORDINATOR_TARGET_DIR="${target_root}/coordinator" \
+# Serial helpers share Cargo's fingerprinted dependencies, never premeasured images.
+FE2O3_STATIC_COORDINATOR_TARGET_DIR="${cargo_target_dir}" \
   "${repo_root}/scripts/build-static-compiler-execution-coordinator.sh" "${family}"
 if [[ ${family} == v1 ]]; then
-  FE2O3_STATIC_CLIENT_CHECK_TARGET_DIR="${target_root}/client-check" \
+  FE2O3_STATIC_CLIENT_CHECK_TARGET_DIR="${cargo_target_dir}" \
     "${repo_root}/scripts/build-static-compiler-execution-client-check.sh"
 fi
-FE2O3_STATIC_SUPERVISOR_TARGET_DIR="${target_root}/supervisor" \
+FE2O3_STATIC_SUPERVISOR_TARGET_DIR="${cargo_target_dir}" \
   "${repo_root}/scripts/build-static-compiler-execution-supervisor.sh" "${family}"
-FE2O3_STATIC_ISSUER_TARGET_DIR="${target_root}/issuer" \
-FE2O3_STATIC_CONDITIONAL_ISSUER_TARGET_DIR="${target_root}/issuer" \
+FE2O3_STATIC_ISSUER_TARGET_DIR="${cargo_target_dir}" \
+FE2O3_STATIC_CONDITIONAL_ISSUER_TARGET_DIR="${cargo_target_dir}" \
   "${repo_root}/scripts/build-static-compiler-execution-issuer.sh" "${issuer_arguments[@]}"
-FE2O3_STATIC_ANCHOR_HELPER_TARGET_DIR="${target_root}/anchor-helper" \
+FE2O3_STATIC_ANCHOR_HELPER_TARGET_DIR="${cargo_target_dir}" \
   "${repo_root}/scripts/build-static-external-anchor-provisioning-helper.sh" "${family}"
-FE2O3_STATIC_ANCHOR_TARGET_DIR="${target_root}/anchor" \
+FE2O3_STATIC_ANCHOR_TARGET_DIR="${cargo_target_dir}" \
   "${repo_root}/scripts/build-static-external-anchor-service.sh" "${family}"
-FE2O3_STATIC_PROVISIONER_TARGET_DIR="${target_root}/provisioner" \
+FE2O3_STATIC_PROVISIONER_TARGET_DIR="${cargo_target_dir}" \
   "${repo_root}/scripts/build-static-compiler-execution-provisioner.sh" "${family}"
-FE2O3_STATIC_DEPLOYMENT_VERIFIER_TARGET_DIR="${target_root}/deployment-verifier" \
+FE2O3_STATIC_DEPLOYMENT_VERIFIER_TARGET_DIR="${cargo_target_dir}" \
   "${repo_root}/scripts/build-static-compiler-execution-deployment-verifier.sh"
 
 cmake \
@@ -135,8 +137,8 @@ readonly image_dir="${libexec_dir}/fe2o3"
 readonly systemd_dir="${partial}/systemd"
 readonly sysusers_dir="${partial}/sysusers.d"
 readonly tmpfiles_dir="${partial}/tmpfiles.d"
-readonly manifest_generator="${target_root}/deployment-verifier/${target}/release/fe2o3-compiler-execution-manifest"
-readonly deployment_verifier="${target_root}/deployment-verifier/${target}/release/fe2o3-compiler-execution-deployment-verify"
+readonly manifest_generator="${cargo_target_dir}/${target}/release/fe2o3-compiler-execution-manifest"
+readonly deployment_verifier="${cargo_target_dir}/${target}/release/fe2o3-compiler-execution-deployment-verify"
 install -d -m 0700 -- \
   "${usr_dir}" \
   "${libexec_dir}" \
@@ -146,30 +148,30 @@ install -d -m 0700 -- \
   "${tmpfiles_dir}"
 
 install -m 0555 -- \
-  "${target_root}/coordinator/${target}/release/fe2o3-compiler-execution-coordinator${entrypoint_suffix}" \
+  "${cargo_target_dir}/${target}/release/fe2o3-compiler-execution-coordinator${entrypoint_suffix}" \
   "${image_dir}/fe2o3-compiler-execution-coordinator"
 if [[ ${family} == v1 ]]; then
   install -m 0555 -- \
-    "${target_root}/client-check/${target}/release/fe2o3-compiler-execution-client-check" \
+    "${cargo_target_dir}/${target}/release/fe2o3-compiler-execution-client-check" \
     "${image_dir}/fe2o3-compiler-execution-client-check"
 fi
 install -m 0555 -- \
-  "${target_root}/supervisor/${target}/release/fe2o3-compiler-execution-supervisor${image_suffix}" \
+  "${cargo_target_dir}/${target}/release/fe2o3-compiler-execution-supervisor${image_suffix}" \
   "${image_dir}/fe2o3-compiler-execution-supervisor${image_suffix}"
 install -m 0555 -- \
   "${target_root}/launcher/fe2o3-static-preexec-launcher" \
   "${image_dir}/fe2o3-static-preexec-launcher"
 install -m 0555 -- \
-  "${target_root}/issuer/${target}/release/fe2o3-compiler-execution-issuer${issuer_suffix}" \
+  "${cargo_target_dir}/${target}/release/fe2o3-compiler-execution-issuer${issuer_suffix}" \
   "${image_dir}/fe2o3-compiler-execution-issuer${issuer_suffix}"
 install -m 0555 -- \
-  "${target_root}/anchor-helper/${target}/release/fe2o3-external-anchor-provisioning-helper${image_suffix}" \
+  "${cargo_target_dir}/${target}/release/fe2o3-external-anchor-provisioning-helper${image_suffix}" \
   "${image_dir}/fe2o3-external-anchor-provisioning-helper${image_suffix}"
 install -m 0555 -- \
-  "${target_root}/anchor/${target}/release/fe2o3-external-anchor-service${image_suffix}" \
+  "${cargo_target_dir}/${target}/release/fe2o3-external-anchor-service${image_suffix}" \
   "${image_dir}/fe2o3-external-anchor-service${image_suffix}"
 install -m 0555 -- \
-  "${target_root}/provisioner/${target}/release/fe2o3-compiler-execution-provision${entrypoint_suffix}" \
+  "${cargo_target_dir}/${target}/release/fe2o3-compiler-execution-provision${entrypoint_suffix}" \
   "${image_dir}/fe2o3-compiler-execution-provision"
 
 install -m 0444 -- \

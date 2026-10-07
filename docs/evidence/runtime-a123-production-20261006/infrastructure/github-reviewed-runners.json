@@ -1,0 +1,18 @@
+{
+  "schema": "fe2o3.runtime-a123.infrastructure-observation.v1",
+  "authority": false,
+  "observed_at_utc": "2026-10-07T02:14:16Z",
+  "repository": "harsh-nod/fe2o3",
+  "command": "gh api repos/harsh-nod/fe2o3/actions/runners --jq '{total_count, runners: [.runners[] | {name, status, busy, labels: [.labels[].name]}]}'",
+  "exit_status": 0,
+  "response": {
+    "total_count": 0,
+    "runners": []
+  },
+  "scope": "Repository-visible self-hosted runners at this observation, not future capacity or an execution result.",
+  "limitations": [
+    "The new reviewed-host runtime proof job has not executed in GitHub Actions.",
+    "No runner was registered and no persistent service was installed on a shared host.",
+    "A local campaign does not establish successful production pipeline execution."
+  ]
+}

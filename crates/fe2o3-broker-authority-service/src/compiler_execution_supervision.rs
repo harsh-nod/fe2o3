@@ -23,8 +23,8 @@ use fe2o3_rustc_invocation::{
 };
 use sha2::{Digest, Sha256};
 
-use crate::ProtectedServiceAdmissionV1;
 use crate::linux::{ProtectedServiceAdmissionErrorV1, require_procfs};
+use crate::{ProtectedServiceAdmissionV1, RetainedCompilerClientSessionV1};
 
 const SUPERVISION_IDENTITY_DOMAIN_V1: &[u8] = b"FE2O3/REMOTE-RUSTC-PROCESS-OBSERVATION/V1\0";
 const PROC_CMDLINE: &str = "cmdline";
@@ -65,7 +65,7 @@ pub(crate) use native::{NativeObservation, NativeObservationError, NativeObserva
 /// require_serialize::<ValidatedRemoteRustcProcessObservationV1>();
 /// ```
 pub struct ValidatedRemoteRustcProcessObservationV1 {
-    client_session: ProtectedServiceAdmissionV1,
+    client_session: ObservationClientV1,
     pid: u32,
     start_time_ticks: u64,
     proc_dir: RetainedDirectoryV1,
@@ -77,6 +77,38 @@ pub struct ValidatedRemoteRustcProcessObservationV1 {
     canonical_working_directory: String,
     compile_environment: CompileEnvironmentV2,
     identity: [u8; 32],
+}
+
+enum ObservationClientV1 {
+    Service(ProtectedServiceAdmissionV1),
+    Observer(RetainedCompilerClientSessionV1),
+}
+
+impl ObservationClientV1 {
+    fn validate_session_continuity(&self) -> Result<(), ProtectedServiceAdmissionErrorV1> {
+        match self {
+            Self::Service(service) => service.validate_session_continuity(),
+            Self::Observer(client) => client.revalidate(),
+        }
+    }
+
+    fn client_process_identity(&self) -> (u32, u64) {
+        match self {
+            Self::Service(service) => service.client_process_identity(),
+            Self::Observer(client) => client.process_identity(),
+        }
+    }
+
+    fn matches_client_process(&self, pid: u32, start_time_ticks: u64) -> bool {
+        self.client_process_identity() == (pid, start_time_ticks)
+    }
+
+    fn client_pidfd(&self) -> std::os::fd::BorrowedFd<'_> {
+        match self {
+            Self::Service(service) => service.client_pidfd(),
+            Self::Observer(client) => client.pidfd(),
+        }
+    }
 }
 
 impl fmt::Debug for ValidatedRemoteRustcProcessObservationV1 {
@@ -102,6 +134,25 @@ impl ValidatedRemoteRustcProcessObservationV1 {
     ) -> Result<Self, CompilerExecutionSupervisionErrorV1> {
         admission.validate_session_continuity()?;
         let client_session = admission.retain_session()?;
+        let observation = Self::observe_session(ObservationClientV1::Service(client_session))?;
+        admission.validate_session_continuity()?;
+        Ok(observation)
+    }
+
+    /// Consumes an independently retained compiler client for out-of-issuer observation.
+    ///
+    /// OS inspection permissions are still required. This does not authenticate a root
+    /// coordinator or convert observation into signing-service admission.
+    pub fn observe_client(
+        client: RetainedCompilerClientSessionV1,
+    ) -> Result<Self, CompilerExecutionSupervisionErrorV1> {
+        Self::observe_session(ObservationClientV1::Observer(client))
+    }
+
+    fn observe_session(
+        client_session: ObservationClientV1,
+    ) -> Result<Self, CompilerExecutionSupervisionErrorV1> {
+        client_session.validate_session_continuity()?;
         let (pid, start_time_ticks) = client_session.client_process_identity();
         let proc_dir = open_process_directory(pid)?;
         let (argv, canonical_working_directory, compile_environment) =
@@ -164,7 +215,6 @@ impl ValidatedRemoteRustcProcessObservationV1 {
             compile_environment,
             identity,
         };
-        admission.validate_session_continuity()?;
         observed.revalidate()?;
         Ok(observed)
     }
@@ -309,7 +359,7 @@ fn validate_descriptor_observation(
 }
 
 fn duplicate_remote_descriptor(
-    client_session: &ProtectedServiceAdmissionV1,
+    client_session: &ObservationClientV1,
     descriptor: i32,
 ) -> Result<OwnedFd, CompilerExecutionSupervisionErrorV1> {
     rustix::process::pidfd_getfd(
@@ -908,13 +958,13 @@ mod tests {
         header.msg_iov = &mut io_vector;
         header.msg_iovlen = 1;
         header.msg_control = control.as_mut_ptr().cast();
-        header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as usize;
+        header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as _;
         // SAFETY: the aligned control buffer has room for exactly one SCM_RIGHTS descriptor.
         unsafe {
             let message = libc::CMSG_FIRSTHDR(&header);
             (*message).cmsg_level = libc::SOL_SOCKET;
             (*message).cmsg_type = libc::SCM_RIGHTS;
-            (*message).cmsg_len = libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as usize;
+            (*message).cmsg_len = libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as _;
             ptr::write_unaligned(libc::CMSG_DATA(message).cast::<RawFd>(), descriptor);
         }
         let sent = unsafe { libc::sendmsg(socket, &header, libc::MSG_NOSIGNAL) };
@@ -939,7 +989,7 @@ mod tests {
         header.msg_iov = &mut io_vector;
         header.msg_iovlen = 1;
         header.msg_control = control.as_mut_ptr().cast();
-        header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as usize;
+        header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as _;
         // SAFETY: all pointers in the header name live, writable, correctly sized storage.
         let received = unsafe { libc::recvmsg(socket, &mut header, libc::MSG_CMSG_CLOEXEC) };
         if received < 0 {
@@ -957,7 +1007,8 @@ mod tests {
             if message.is_null()
                 || (*message).cmsg_level != libc::SOL_SOCKET
                 || (*message).cmsg_type != libc::SCM_RIGHTS
-                || (*message).cmsg_len != libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as usize
+                || (*message).cmsg_len as usize
+                    != libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as usize
                 || !libc::CMSG_NXTHDR(&header, message).is_null()
             {
                 return Err(io::Error::from_raw_os_error(libc::EBADMSG));
@@ -1013,6 +1064,7 @@ mod tests {
         control: Option<OwnedFd>,
         child: Option<Child>,
         admission: Option<ProtectedServiceAdmissionV1>,
+        client: Option<RetainedCompilerClientSessionV1>,
         producer: Option<ProducerIdentity>,
         attempt: Option<BuildAttempt>,
         _service_root: TempDir,
@@ -1203,6 +1255,13 @@ fn main() {
     }
 
     fn spawn_remote_rustc(mutation: RemoteFixtureMutation) -> RemoteRustcFixture {
+        spawn_remote_rustc_as(mutation, None)
+    }
+
+    fn spawn_remote_rustc_as(
+        mutation: RemoteFixtureMutation,
+        client_ids: Option<(u32, u32)>,
+    ) -> RemoteRustcFixture {
         let published = matches!(
             mutation,
             RemoteFixtureMutation::PublishedExact
@@ -1337,6 +1396,25 @@ fn main() {
             closure,
         )
         .unwrap();
+        if let Some((uid, gid)) = client_ids {
+            assert_eq!(rustix::process::geteuid().as_raw(), 0);
+            fs::set_permissions(artifact_directory.path(), fs::Permissions::from_mode(0o700))
+                .unwrap();
+            fn chown_tree(path: &std::path::Path, uid: u32, gid: u32) {
+                let metadata = fs::symlink_metadata(path).unwrap();
+                assert!(!metadata.file_type().is_symlink());
+                if metadata.is_dir() {
+                    for entry in fs::read_dir(path).unwrap() {
+                        chown_tree(&entry.unwrap().path(), uid, gid);
+                    }
+                }
+                std::os::unix::fs::chown(path, Some(uid), Some(gid)).unwrap();
+            }
+            chown_tree(artifact_directory.path(), uid, gid);
+            if let Some(directory) = &rustc_executable_directory {
+                chown_tree(directory.path(), uid, gid);
+            }
+        }
         if let Some(attempt) = attempt {
             let published_descriptor = if mutation
                 == RemoteFixtureMutation::PublishedInvocationMismatch
@@ -1385,13 +1463,26 @@ fn main() {
             } else {
                 descriptor.clone()
             };
-            publish_compiler_module_handoff_v3(
-                artifact_directory.path(),
-                publication_producer.as_ref().unwrap(),
-                attempt,
-                &compiler_handoff(published_descriptor, 0xb1),
-            )
-            .unwrap();
+            let handoff = compiler_handoff(published_descriptor, 0xb1);
+            if let Some(ids) = client_ids {
+                // Publish as the client. Chown after publication changes the payload ctime
+                // committed in its ready record and is not a valid cross-UID fixture.
+                observer::publish_cross_uid_fixture(
+                    artifact_directory.path(),
+                    attempt,
+                    &handoff,
+                    mutation == RemoteFixtureMutation::PublishedWrongProducer,
+                    ids,
+                );
+            } else {
+                publish_compiler_module_handoff_v3(
+                    artifact_directory.path(),
+                    publication_producer.as_ref().unwrap(),
+                    attempt,
+                    &handoff,
+                )
+                .unwrap();
+            }
         }
         let invocation = RustcInvocationCapabilityV1::create(descriptor.clone()).unwrap();
         let invocation_file = invocation.try_clone_for_transfer().unwrap();
@@ -1410,6 +1501,20 @@ fn main() {
         // and retains the other at HELD_PEER_FD while the fixture waits on CONTROL_FD.
         unsafe {
             command.pre_exec(move || {
+                if let Some((uid, gid)) = client_ids {
+                    if libc::setgroups(0, std::ptr::null()) != 0
+                        || libc::setresgid(gid, gid, gid) != 0
+                        || libc::setresuid(uid, uid, uid) != 0
+                    {
+                        return Err(io::Error::last_os_error());
+                    }
+                    // Explicitly clear caps even when the namespace launcher kept securebits.
+                    let header = [0x20080522_u32, 0];
+                    let data = [0_u32; 6];
+                    if libc::syscall(libc::SYS_capset, header.as_ptr(), data.as_ptr()) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                }
                 for (source, target) in [
                     (child_control_fd, CONTROL_FD),
                     (artifact_fd, ARTIFACT_DIRECTORY_FD),
@@ -1461,12 +1566,17 @@ fn main() {
         let retained_peer = receive_descriptor(control.as_raw_fd()).unwrap();
         let expected = crate::ExpectedClientProcessIdentityV1::new(
             child.id(),
-            rustix::process::geteuid().as_raw(),
-            rustix::process::getegid().as_raw(),
+            client_ids.map_or_else(|| rustix::process::geteuid().as_raw(), |ids| ids.0),
+            client_ids.map_or_else(|| rustix::process::getegid().as_raw(), |ids| ids.1),
         )
         .unwrap();
         let live_client =
             crate::LiveClientPidfdIdentityV1::admit(pidfd_for(child.id()), expected).unwrap();
+        let client = RetainedCompilerClientSessionV1::admit(
+            rustix::io::fcntl_dupfd_cloexec(&retained_peer, 0).unwrap(),
+            crate::LiveClientPidfdIdentityV1::admit(pidfd_for(child.id()), expected).unwrap(),
+        )
+        .unwrap();
         let (service_root, root) = protected_root();
         let admission = ProtectedServiceAdmissionV1::admit_non_authoritative_same_uid_session_test(
             root,
@@ -1480,6 +1590,7 @@ fn main() {
             control: Some(control),
             child: Some(child),
             admission: Some(admission),
+            client: Some(client),
             producer,
             attempt,
             _service_root: service_root,
@@ -1487,6 +1598,8 @@ fn main() {
             _artifact_directory: artifact_directory,
         }
     }
+
+    mod observer;
 
     #[test]
     fn observes_revalidates_and_rejects_exit_of_one_exact_remote_process() {

@@ -140,6 +140,147 @@ fn mir_to_live_pliron_receipt_has_a_distinct_import_boundary() {
 }
 
 #[test]
+fn every_refinement_boundary_is_distinct_and_signed() {
+    let signing = signer(88);
+    use FunctionalRefinementBoundaryV2 as B;
+    let boundaries = [
+        B::SafeReferenceMirToKernelMir,
+        B::SafeReferenceSourceToKernelMir,
+        B::SafeReferenceMirToLivePliron,
+        B::SafeReferenceMirToLivePlironConditionalCoverage,
+        B::SemanticMirToGfx942FillDispatchConditional,
+        B::FinalKernelIrToGfx942FillDispatchConditional,
+    ];
+    for (index, boundary) in boundaries.into_iter().enumerate() {
+        assert_eq!(boundary as usize, index + 1);
+        let policy = FunctionalRefinementImportPolicyV2::new(
+            signing.verifying_key().to_bytes(),
+            toolchain(10),
+            boundary,
+        )
+        .unwrap();
+        let wire = signed(
+            &signing,
+            policy.signer_identity(),
+            binding(),
+            policy.toolchain(),
+            FunctionalRefinementResultV2::Proved,
+            boundary,
+        );
+        let mut importer = FunctionalRefinementReceiptImporterV2::new(policy.clone(), 1).unwrap();
+        let proof = importer
+            .import(
+                FunctionalRefinementImportExpectationV2::new(binding()),
+                &wire,
+            )
+            .unwrap();
+        assert_eq!(proof.boundary(), boundary);
+        for other in boundaries.into_iter().filter(|other| *other != boundary) {
+            let policy = FunctionalRefinementImportPolicyV2::new(
+                signing.verifying_key().to_bytes(),
+                toolchain(10),
+                other,
+            )
+            .unwrap();
+            let mut importer = FunctionalRefinementReceiptImporterV2::new(policy, 1).unwrap();
+            assert_eq!(
+                importer.import(
+                    FunctionalRefinementImportExpectationV2::new(binding()),
+                    &wire
+                ),
+                Err(FunctionalRefinementImportErrorV2::WrongBoundary)
+            );
+            let mut retagged = wire.clone();
+            retagged[11] = other as u8;
+            assert_eq!(
+                importer.import(
+                    FunctionalRefinementImportExpectationV2::new(binding()),
+                    &retagged
+                ),
+                Err(FunctionalRefinementImportErrorV2::SignatureRejected)
+            );
+            assert_eq!(importer.imported_count(), 0);
+        }
+        for unknown in [0, 7, 255] {
+            let mut malformed = wire.clone();
+            malformed[11] = unknown;
+            let mut importer =
+                FunctionalRefinementReceiptImporterV2::new(policy.clone(), 1).unwrap();
+            assert_eq!(
+                importer.import(
+                    FunctionalRefinementImportExpectationV2::new(binding()),
+                    &malformed
+                ),
+                Err(FunctionalRefinementImportErrorV2::UnknownBoundary(unknown))
+            );
+            assert_eq!(importer.imported_count(), 0);
+        }
+    }
+}
+
+#[test]
+fn conditional_machine_boundary_rejects_failed_stale_and_wrong_toolchain_receipts() {
+    let signing = signer(87);
+    let boundary = FunctionalRefinementBoundaryV2::SemanticMirToGfx942FillDispatchConditional;
+    let policy = FunctionalRefinementImportPolicyV2::new(
+        signing.verifying_key().to_bytes(),
+        toolchain(10),
+        boundary,
+    )
+    .unwrap();
+    let stale = FunctionalRefinementBindingV2::new(
+        SafeReferenceKindV2::SourceAndMir,
+        digest(1),
+        digest(2),
+        digest(3),
+        digest(4),
+        digest(5),
+        digest(99),
+    )
+    .unwrap();
+    for (binding, toolchain, result, expected) in [
+        (
+            binding(),
+            toolchain(10),
+            FunctionalRefinementResultV2::Failed,
+            FunctionalRefinementImportErrorV2::ResultNotProved(
+                FunctionalRefinementResultV2::Failed,
+            ),
+        ),
+        (
+            binding(),
+            toolchain(20),
+            FunctionalRefinementResultV2::Proved,
+            FunctionalRefinementImportErrorV2::WrongToolchain,
+        ),
+        (
+            stale,
+            toolchain(10),
+            FunctionalRefinementResultV2::Proved,
+            FunctionalRefinementImportErrorV2::StaleNormalizedObligationEffectIr,
+        ),
+    ] {
+        let wire = signed(
+            &signing,
+            policy.signer_identity(),
+            binding,
+            toolchain,
+            result,
+            boundary,
+        );
+        let mut importer = FunctionalRefinementReceiptImporterV2::new(policy.clone(), 1).unwrap();
+        assert_eq!(
+            importer.import(
+                FunctionalRefinementImportExpectationV2::new(self::binding()),
+                &wire
+            ),
+            Err(expected)
+        );
+        assert_eq!(importer.imported_count(), 0);
+    }
+}
+
+#[test]
 fn caller_forged_proved_and_wrong_signer_are_rejected() {
     let signing = signer(91);
     let pinned = policy(&signing);

@@ -579,13 +579,18 @@ fn check_capacity(
 }
 
 #[cfg(test)]
+pub(crate) fn queue_resource_plan_for_test_v1(ring_bytes: u32) -> Gfx942AqlQueueResourcePlanV1 {
+    plan_from_facts(tests::valid_facts(), ring_bytes).unwrap()
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
 
     type CapacityMutation = (&'static str, fn(&mut TargetFacts));
 
-    fn valid_facts() -> TargetFacts {
+    pub(super) fn valid_facts() -> TargetFacts {
         TargetFacts {
             unique_id: 0x1234,
             gpu_id: 73,

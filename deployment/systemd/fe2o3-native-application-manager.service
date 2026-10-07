@@ -1,0 +1,42 @@
+[Unit]
+Description=fe2o3 joined one-shot native compiler and application proof manager
+Documentation=https://github.com/harsh-nod/fe2o3/blob/main/docs/native-application-manager-v3.md
+ConditionPathExists=/etc/fe2o3/proof-custodian/application-native-deployment-v1
+ConditionPathExists=/etc/fe2o3/proof-custodian/native-manager-deployment-v1
+ConditionPathExists=/etc/fe2o3/proof-custodian/native-conditional-root-policy-v1
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/fe2o3/fe2o3-native-application-manager
+User=root
+Group=root
+UMask=0077
+LimitCORE=0
+TasksMax=256
+Restart=no
+
+# The external service manager must outlive a fail-stopped creator and kill its
+# entire owned subtree. Do not reuse another service's cgroup or runtime owner.
+Slice=system.slice
+Delegate=
+KillMode=control-group
+SendSIGKILL=yes
+TimeoutStopSec=30
+
+# Preserve the native parent profile (no inherited seccomp, securebits or user /
+# PID / cgroup namespace substitution). Child roles install their own profiles.
+# This capability roster follows the shared compiler preparation path; it is not
+# a claim that the minimal native-manager capability set has been qualified.
+CapabilityBoundingSet=CAP_BPF CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_NET_ADMIN CAP_SETFCAP CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE
+AmbientCapabilities=
+NoNewPrivileges=no
+
+# Deliberately no [Install] section: an administrator must first qualify the
+# actual fixed V3 deployment, original runtime roots and external cgroup custody.
+# Type=exec observes exec only, not native application or GPU readiness.
+# Start before exactly one protected Cargo request. Do not run the standalone
+# compiler coordinator concurrently: this manager owns that fixed compiler
+# listener, retires its original compiler/anchor, then starts the application
+# supervisor before releasing successful compiler completion. A failed compiler
+# reports its original terminal status without starting the application phase.
+# No dependency starts or stops a competing service implicitly.

@@ -5,8 +5,13 @@ rocr_source=${1:-/home/harsh/work/rocm-systems-7.2.4-issue137-r4-readonly}
 root=$rocr_source/projects/rocr-runtime/runtime/hsa-runtime
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$here/../../../.." && pwd)
-dispatch_binary=${TMPDIR:-/tmp}/fe2o3-aql-dispatch-oracle
-barrier_binary=${TMPDIR:-/tmp}/fe2o3-aql-barrier-and-oracle
+dispatch_binary=${TMPDIR:-/tmp}/fe2o3-aql-dispatch-oracle.$$
+barrier_binary=${TMPDIR:-/tmp}/fe2o3-aql-barrier-and-oracle.$$
+
+cleanup() {
+    rm -f -- "$dispatch_binary" "$barrier_binary"
+}
+trap cleanup EXIT HUP INT TERM
 
 check() {
     expected=$1
@@ -14,6 +19,19 @@ check() {
     actual=$(sha256sum -- "$file" | awk '{print $1}')
     test "$actual" = "$expected" || {
         printf '%s: expected %s, observed %s\n' "$file" "$expected" "$actual" >&2
+        exit 1
+    }
+}
+
+check_git_blob() {
+    expected=$1
+    commit=$2
+    file=$3
+    object=$(git -C "$repo_root" rev-parse --verify "$commit:$file")
+    actual=$(git -C "$repo_root" cat-file blob "$object" | sha256sum | awk '{print $1}')
+    test "$actual" = "$expected" || {
+        printf '%s:%s: expected %s, observed %s\n' \
+            "$commit" "$file" "$expected" "$actual" >&2
         exit 1
     }
 }
@@ -28,7 +46,9 @@ check 291f2521e2a4758e852ed20c578aca79e379d1effe4dfd83c62e11347eef2b14 "$root/co
 check e6ce094b32e4f300bd574db1a056fdd91740dbcae722da0824eb119a7e6490a2 "$root/core/runtime/amd_blit_kernel.cpp"
 check aa1cd1acea3405e8c18076b406dd91b5433438792f7cbe8ac5bc3d46df25a9ca "$root/core/inc/queue.h"
 check 2f48b1fff5432fb96aa460d3c5ac0bccb2e8996adfa5ecdb508722f3911ff9d0 "$root/inc/amd_hsa_kernel_code.h"
-check 99dc188ad8b12561b66ac4a156fdbcfec068c1797fad75afa43a45d3a830554f "$repo_root/crates/fe2o3-hsa-runtime/native/runtime.c"
+check_git_blob 99dc188ad8b12561b66ac4a156fdbcfec068c1797fad75afa43a45d3a830554f \
+    0f320dd71895599fd9a71fb318665846a4b75d2a \
+    crates/fe2o3-hsa-runtime/native/runtime.c
 
 cc -std=c11 -Wall -Wextra -Werror \
     -I"$root/inc" \

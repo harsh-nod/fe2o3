@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 use std::error::Error;
 use std::fmt;
 
@@ -617,6 +617,7 @@ pub struct CompletionAuthorityV1 {
     remaining_dependencies: Vec<usize>,
     terminal_nodes: usize,
     propagation_queue: BinaryHeap<Reverse<(usize, usize)>>,
+    ready_notifications: VecDeque<CompletionNodeIdV1>,
 }
 
 impl CompletionAuthorityV1 {
@@ -633,12 +634,21 @@ impl CompletionAuthorityV1 {
                 }
             })
             .collect();
+        let mut ready_notifications = VecDeque::with_capacity(graph.nodes.len());
+        ready_notifications.extend(
+            graph
+                .nodes
+                .iter()
+                .zip(&remaining_dependencies)
+                .filter_map(|(node, &remaining)| (remaining == 0).then_some(node.id())),
+        );
         Self {
             graph,
             states,
             remaining_dependencies,
             terminal_nodes: 0,
             propagation_queue: BinaryHeap::new(),
+            ready_notifications,
         }
     }
 
@@ -648,6 +658,14 @@ impl CompletionAuthorityV1 {
 
     pub fn graph_identity(&self) -> CompletionGraphIdentityV1 {
         self.graph.identity()
+    }
+
+    /// Removes one readiness notification without granting submission authority.
+    ///
+    /// Each node is queued at most once. Cancellation can make a notification
+    /// stale; consumers must recheck its state and track issuance separately.
+    pub fn pop_ready_notification(&mut self) -> Option<CompletionNodeIdV1> {
+        self.ready_notifications.pop_front()
     }
 
     pub fn state(
@@ -856,6 +874,8 @@ impl CompletionAuthorityV1 {
             *remaining -= 1;
             if *remaining == 0 {
                 self.states[successor] = CompletionNodeStateV1::Ready;
+                self.ready_notifications
+                    .push_back(self.graph.nodes[successor].id());
             }
         }
     }

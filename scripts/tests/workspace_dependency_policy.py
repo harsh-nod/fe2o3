@@ -207,6 +207,22 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
                 self.assertEqual(expected, violations)
                 self.assertEqual(1, stats["internal_dependencies"])
 
+    def test_runtime_machine_model_edges_are_exact_and_kind_scoped(self) -> None:
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        for source in ("fe2o3-host", "fe2o3-kfd", "fe2o3-proof-custodian", "fe2o3-runtime"):
+            for target in ("fe2o3-kernel-analysis", "fe2o3-pliron", "fe2o3-kernel-opt"):
+                for kind in (None, "dev", "build"):
+                    allowed = target == "fe2o3-kernel-analysis" and (
+                        source in ("fe2o3-host", "fe2o3-proof-custodian") and kind is None
+                        or source == "fe2o3-kfd" and kind in (None, "dev")
+                    )
+                    with self.subTest(source=source, target=target, kind=kind):
+                        packages = [package(source, f"crates/{source}", [
+                            dependency(target, f"crates/{target}", kind)]),
+                            package(target, f"crates/{target}")]
+                        violations, _ = CHECKER.check_policy(metadata(packages), reviewed)
+                        self.assertEqual(0 if allowed else 1, len(violations))
+
     def test_final_f_verifier_exceptions_are_exact_and_kind_scoped(self) -> None:
         reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
         edges = ["fe2o3-kernel-opt", "fe2o3-kernel-analysis", "fe2o3-amdgcn-model"]
@@ -228,6 +244,42 @@ class WorkspaceDependencyPolicyTests(unittest.TestCase):
                     self.assertIn(f"{source} [", violations[0])
                     self.assertIn(f"-> {target} [", violations[0])
                     self.assertIn(f"({kind or 'normal'};", violations[0])
+
+    def test_custodian_source_packet_fixture_edge_is_exact_and_dev_only(self) -> None:
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        for source in ("fe2o3-proof-custodian", "fe2o3-host", "fe2o3-kfd", "fe2o3-runtime"):
+            for target in ("fe2o3-lower-mir-kernel", "fe2o3-pliron", "fe2o3-kernel-opt"):
+                for kind in (None, "dev", "build"):
+                    allowed = (source == "fe2o3-proof-custodian" and
+                               target == "fe2o3-lower-mir-kernel" and kind == "dev")
+                    with self.subTest(source=source, target=target, kind=kind):
+                        packages = [package(source, f"crates/{source}", [
+                            dependency(target, f"crates/{target}", kind)]),
+                            package(target, f"crates/{target}")]
+                        violations, stats = CHECKER.check_policy(metadata(packages), reviewed)
+                        expected = [] if allowed else [
+                            "forbidden dependency: "
+                            f"{source} [host-runtime] -> {target} [pliron-framework] "
+                            f"({kind or 'normal'}; crates/{source}/Cargo.toml)"
+                        ]
+                        self.assertEqual(expected, violations)
+                        self.assertEqual(1, stats["internal_dependencies"])
+
+    def test_custodian_source_packet_fixture_edge_matches_dev_manifest_only(self) -> None:
+        root = CHECKER_PATH.parents[1]
+        manifest = tomllib.loads(
+            (root / "crates/fe2o3-proof-custodian/Cargo.toml").read_text(encoding="utf-8")
+        )
+        target = "fe2o3-lower-mir-kernel"
+        self.assertEqual({"workspace": True}, manifest["dev-dependencies"][target])
+        for table in [manifest, *manifest.get("target", {}).values()]:
+            for kind in ("dependencies", "build-dependencies"):
+                self.assertNotIn(target, table.get(kind, {}))
+        reviewed = json.loads(CHECKER.DEFAULT_POLICY.read_text(encoding="utf-8"))
+        edges = [row for row in reviewed["allowed_dependency_edges"]
+                 if row["from"] == "fe2o3-proof-custodian" and row["to"] == target]
+        self.assertEqual([{"from": "fe2o3-proof-custodian", "to": target,
+                           "kinds": ["dev"]}], edges)
 
     def test_verifier_optimizer_test_edge_matches_declared_manifest(self) -> None:
         root = CHECKER_PATH.parents[1]

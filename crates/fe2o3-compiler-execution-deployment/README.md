@@ -57,3 +57,21 @@ preserves that root, and removes at most one bounded canonical installer staging
 tree while rejecting every ambiguous sibling inventory. No privileged campaign
 has run yet. See the
 [disposable-root V1 contract](../../docs/compiler-execution-disposable-root-v1.md).
+
+## Application Custodian Qualification Family
+
+The application observer/custodian route uses the explicit V1 compiler service
+family. Build its qualification bundle from a clean, pinned checkout with:
+
+```sh
+scripts/build-static-compiler-execution-deployment.sh --v1 /absolute/owned/path/compiler-v1-bundle
+```
+
+This selects the V1 coordinator, supervisor, issuer, provisioner, unit and schema
+together. The default remains native V3; it never falls back to V1. The generated
+manifest pins the selected unit bytes, including the V1 root observer's
+`CAP_DAC_READ_SEARCH` and `CAP_SYS_PTRACE` requirements. Protected child services
+still drop all capabilities. The bundle does not install a proof manager or proof
+worker: their separately measured deployment and isolated qualification remain
+required before a genuine custodian application can run. A successful bundle
+build alone is neither application qualification nor GPU admission.

@@ -152,12 +152,12 @@ class DeploymentFamiliesTests(unittest.TestCase):
         self.assertIn('"${commit}" "${target}" "${manifest_sha256}" "${content_file_count}"', source)
         self.assertEqual(source.count('if [[ ${family} == v1 ]]; then'), 3)
         client_build = '''if [[ ${family} == v1 ]]; then
-  FE2O3_STATIC_CLIENT_CHECK_TARGET_DIR="${target_root}/client-check" \\
+  FE2O3_STATIC_CLIENT_CHECK_TARGET_DIR="${cargo_target_dir}" \\
     "${repo_root}/scripts/build-static-compiler-execution-client-check.sh"
 fi'''
         client_install = '''if [[ ${family} == v1 ]]; then
   install -m 0555 -- \\
-    "${target_root}/client-check/${target}/release/fe2o3-compiler-execution-client-check" \\
+    "${cargo_target_dir}/${target}/release/fe2o3-compiler-execution-client-check" \\
     "${image_dir}/fe2o3-compiler-execution-client-check"
 fi'''
         self.assertEqual(source.count(client_build), 1)

@@ -39,6 +39,10 @@ mod native_work;
 pub mod pre_exec;
 mod process_cleanup;
 mod process_reaper;
+mod proof_controller;
+#[cfg(test)]
+mod test_isolation;
+pub use proof_controller::{RootOwnedProofControllerChildV1, StagedProofControllerExecV1};
 #[allow(unsafe_code)]
 mod syscall;
 

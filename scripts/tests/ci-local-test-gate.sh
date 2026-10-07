@@ -5,6 +5,23 @@ set -Eeuo pipefail
 readonly TEST_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 source "${TEST_SCRIPT_DIR}/../ci-local.sh"
 
+declare -a CUSTODY_FOUNDATION_PACKAGES=()
+load_cpu_package_group foundation CUSTODY_FOUNDATION_PACKAGES
+for package in fe2o3-broker-authority-service fe2o3-compiler-closure-capability \
+  fe2o3-compiler-execution-client fe2o3-compiler-execution-coordinator \
+  fe2o3-compiler-execution-protocol fe2o3-compiler-execution-supervisor \
+  fe2o3-proof-custodian fe2o3-protected-service-profile \
+  fe2o3-protected-service-spawn fe2o3-protected-static-executable; do
+  matches=0
+  for selected in "${CUSTODY_FOUNDATION_PACKAGES[@]}"; do
+    if [[ "$selected" == "$package" ]]; then matches=$((matches + 1)); fi
+  done
+  [[ "$matches" -eq 1 ]] || {
+    printf 'native custody package must have one production CPU gate: %s\n' "$package" >&2
+    exit 1
+  }
+done
+
 TIMEOUT_TEST_ROOT="$(mktemp -d)"
 readonly TIMEOUT_TEST_ROOT
 cleanup_timeout_test_root() {
@@ -12,6 +29,41 @@ cleanup_timeout_test_root() {
   rm -rf -- "${TIMEOUT_TEST_ROOT}"
 }
 trap cleanup_timeout_test_root EXIT
+
+NATIVE_AUXILIARY_DISPATCH="${TIMEOUT_TEST_ROOT}/native-auxiliary-dispatch.log"
+(
+  run_workspace_dependency_bootstrap() { :; }
+  run_step() {
+    printf '%s\t' "$1" >>"${NATIVE_AUXILIARY_DISPATCH}"
+    shift
+    printf '%q ' "$@" >>"${NATIVE_AUXILIARY_DISPATCH}"
+    printf '\n' >>"${NATIVE_AUXILIARY_DISPATCH}"
+  }
+  run_auxiliary_tests
+)
+for step in native-application-manager-systemd-contract \
+  native-application-startup-observer native-manager-packaged-cpu-observer \
+  native-application-qualification-oracle native-cpu-chain-proof-oracle \
+  native-application-fixture-oracles runtime-planner-input-checker-tests \
+  runtime-planner-input-source-check; do
+  [[ "$(rg -c "^${step}"$'\t' "${NATIVE_AUXILIARY_DISPATCH}")" -eq 1 ]]
+done
+rg -F 'python3 -I -B scripts/tests/native-application-manager-systemd.py' \
+  "${NATIVE_AUXILIARY_DISPATCH}" >/dev/null
+rg -F 'python3 -I -B scripts/tests/native_application_startup_test.py' \
+  "${NATIVE_AUXILIARY_DISPATCH}" >/dev/null
+rg -F 'python3 -I -B scripts/tests/qualify_native_manager_cpu_test.py' \
+  "${NATIVE_AUXILIARY_DISPATCH}" >/dev/null
+rg -F 'python3 -I -B scripts/tests/qualify_native_conditional_application_test.py' \
+  "${NATIVE_AUXILIARY_DISPATCH}" >/dev/null
+rg -F 'python3 -I -B scripts/tests/qualify_native_conditional_cpu_chain_test.py' \
+  "${NATIVE_AUXILIARY_DISPATCH}" >/dev/null
+rg -F 'cargo test --locked -p cargo-fe2o3 --test native_v5_case --test native_v5_roster_case --test native_proof_case' \
+  "${NATIVE_AUXILIARY_DISPATCH}" >/dev/null
+rg -F 'python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-planner-input-composition.py' \
+  "${NATIVE_AUXILIARY_DISPATCH}" >/dev/null
+rg -F 'python3 -I -B crates/fe2o3-runtime-model/verus/check-producer-planner-input-composition.py' \
+  "${NATIVE_AUXILIARY_DISPATCH}" >/dev/null
 
 bash "${TEST_SCRIPT_DIR}/rustc-codegen-shards.sh"
 python3 "${TEST_SCRIPT_DIR}/bounded-moe-ci-dispatch.py"
@@ -387,10 +439,28 @@ assert_host_reference_steps() {
 assert_runtime_release_gate() {
   assert_step_count fe2o3-runtime-release-tests 1 \
     'runtime release tests did not run exactly once'
+  assert_step_count fe2o3-resource-accounting-release-tests 1 \
+    'resource accounting release tests did not run exactly once'
+  assert_step_count fe2o3-runtime-scale-cpu-tests 1 \
+    'runtime scale CPU fixtures did not run exactly once'
+  assert_step_count fe2o3-runtime-scoped-ownership-doc-tests 1 \
+    'scoped ownership compile-fail checks did not run exactly once'
   assert_equals \
     'env -u FE2O3_TEST_SCRIPTED_SDMA_ABORT_CHILD -u FE2O3_RUNTIME_TELEMETRY_ABORT_CASE CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=false cargo test --locked --release -p fe2o3-runtime --features hardware-qualification --lib -- --test-threads=1' \
     "$(step_command fe2o3-runtime-release-tests)" \
     'runtime release tests lost their host-only assertion-disabled configuration'
+  assert_equals \
+    'env CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=false cargo test --locked --release -p fe2o3-resource-accounting --lib' \
+    "$(step_command fe2o3-resource-accounting-release-tests)" \
+    'resource accounting release tests lost their assertion-disabled configuration'
+  assert_equals \
+    'cargo test --locked -p fe2o3-runtime --features scale-qualification\,cpu-runtime-fixtures --lib -- --test-threads=1' \
+    "$(step_command fe2o3-runtime-scale-cpu-tests)" \
+    'runtime scale gate lost the CPU-only ownership fixtures'
+  assert_equals \
+    'cargo test --locked -p fe2o3-runtime --features scale-qualification\,cpu-runtime-fixtures --doc generated_scope' \
+    "$(step_command fe2o3-runtime-scoped-ownership-doc-tests)" \
+    'scoped ownership gate lost lifetime and thread escape refusal checks'
   assert_equals 0 "$(ulimit -c)" \
     'runtime release abort tests did not disable core dumps'
 }
@@ -872,6 +942,7 @@ for core_step in \
   workspace-binding-projection-revalidation \
   standalone-tiled-gemm-general-host-check \
   standalone-flash-attention-general-host-check \
+  native-conditional-application-binding-check \
   backend-check-tests \
   backend-build \
   backend-all-features-build \
@@ -894,6 +965,9 @@ for core_step in \
   fe2o3-pliron-default-api-ui \
   fe2o3-artifact-transaction-tests \
   fe2o3-runtime-release-tests \
+  fe2o3-resource-accounting-release-tests \
+  fe2o3-runtime-scale-cpu-tests \
+  fe2o3-runtime-scoped-ownership-doc-tests \
   cpu-tests \
   wrapper-managed-cpu-tests \
   cpu-reference-tiled-gemm-paired-default \
@@ -1027,6 +1101,10 @@ assert_equals \
   "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 check --locked --all-targets --manifest-path examples/flash_attention_general_v1/Cargo.toml" \
   "$(step_command standalone-flash-attention-general-host-check)" \
   'generic core did not check the complete standalone dynamic attention host surface'
+assert_equals \
+  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 check --locked --bins --manifest-path crates/cargo-fe2o3/tests/fixtures/conditional-custodian-application/Cargo.toml" \
+  "$(step_command native-conditional-application-binding-check)" \
+  'generic core omitted the actual native application binding-only async composition'
 assert_equals \
   'env FE2O3_HIP_SYS_DISABLE=1 cargo test --locked -p fe2o3-core --test production_runtime_surface_ui' \
   "$(step_command core-production-runtime-surface-ui)" \

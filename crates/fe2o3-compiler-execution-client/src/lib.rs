@@ -21,6 +21,7 @@ use fe2o3_compiler_execution_protocol::{
     MAX_COMPILER_EXECUTION_SERVICE_RESPONSE_BYTES_V1, VerifiedCompilerExecutionCurrentRecordV3,
 };
 
+mod application_channel;
 mod child_channel;
 mod inherited_admission;
 mod inherited_admission_adapter;
@@ -29,11 +30,27 @@ mod native_adapter;
 mod native_v3;
 mod supervisor_handoff;
 
+pub use application_channel::{
+    ApplicationProofChannelErrorV1, ApplicationProofChildSetupV1, ApplicationProofTransferPeerV1,
+    PreparedApplicationProofChannelV1, RegisteredApplicationCustodianV1,
+    RegisteredApplicationProofEndpointV1, RetainedApplicationProofEndpointV1,
+    RetainedApplicationProofV1,
+};
+#[cfg(target_arch = "x86_64")]
+pub use application_channel::{
+    NativeApplicationChannelErrorV1, NativeApplicationChannelStorageV1,
+    NativeApplicationCurrentRecordV1, NativeCustodianCurrentRecordV1,
+    RegisteredNativeApplicationCustodianV1, RegisteredNativeApplicationProofEndpointV1,
+    RetainedNativeApplicationProofV1,
+};
 pub use child_channel::{
     CompilerExecutionChildChannelErrorV1, CompilerExecutionServiceLaunchV1,
-    PendingCompilerExecutionChildChannelV1,
+    PendingCompilerExecutionChildChannelV1, RetainedApplicationServiceLaunchV1,
+    RetainedCompilerExecutionChildV1,
 };
-pub use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
+pub use fe2o3_compiler_execution_protocol::{
+    COMPILER_EXECUTION_SERVICE_CHILD_FD_V1, CompilerExecutionClientProcessIdentityV1,
+};
 pub use native::{
     CompilerExecutionClientErrorV2, CompilerExecutionClientStorageV2, CompilerExecutionClientV2,
     CompilerExecutionReceiptRecoveryV2,
@@ -44,15 +61,14 @@ pub use native_v3::{
 };
 pub use supervisor_handoff::native_v3::{
     CompilerExecutionHandoffErrorV3, CompilerExecutionHandoffStorageV3,
-    CompilerExecutionSupervisorReadinessV3,
+    CompilerExecutionSupervisorReadinessV3, NativeApplicationSupervisorReadinessV1,
 };
 pub use supervisor_handoff::{
-    CompilerExecutionHandoffErrorV1, CompilerExecutionSupervisorCredentialsV1,
-    MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1, PendingCompilerExecutionSupervisorV1,
+    ApplicationSupervisorHandoffErrorV1, CompilerExecutionHandoffErrorV1,
+    CompilerExecutionSupervisorCredentialsV1, MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1,
+    PendingApplicationSupervisorV1, PendingCompilerExecutionSupervisorV1,
+    PendingCustodianApplicationSupervisorV1,
 };
-
-/// Fixed rustc descriptor reserved for the compiler-execution service peer.
-pub const COMPILER_EXECUTION_SERVICE_CHILD_FD_V1: i32 = 195;
 
 /// Move-only caller-owned challenge for one terminal current-record verification.
 ///

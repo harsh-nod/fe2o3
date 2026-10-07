@@ -5,6 +5,11 @@ on:
     paths:
       - ".github/workflows/runtime-model-verus.yml"
       - "crates/fe2o3-runtime-model/**"
+      - "crates/fe2o3-runtime/**"
+      - "crates/fe2o3-resource-accounting/**"
+      - "crates/fe2o3-kfd/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "examples/row_softmax_v1/verify-verus-closure.sh"
       - "examples/wave64_collectives_v1/check-proof-source.py"
   push:
@@ -12,6 +17,11 @@ on:
     paths:
       - ".github/workflows/runtime-model-verus.yml"
       - "crates/fe2o3-runtime-model/**"
+      - "crates/fe2o3-runtime/**"
+      - "crates/fe2o3-resource-accounting/**"
+      - "crates/fe2o3-kfd/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "examples/row_softmax_v1/verify-verus-closure.sh"
       - "examples/wave64_collectives_v1/check-proof-source.py"
   workflow_dispatch:
@@ -27,7 +37,9 @@ jobs:
   authenticated-runtime-model:
     name: Device identity and lifecycle proofs
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The expanded inventory exceeded 39 minutes before reaching its later
+    # campaigns. This is job-level headroom only; per-proof limits stay fixed.
+    timeout-minutes: 180
 
     steps:
       - name: Check out repository
@@ -54,3 +66,81 @@ jobs:
 
       - name: Verify authenticated runtime model
         run: crates/fe2o3-runtime-model/verus/verify-verus.sh
+
+  producer-live-composition:
+    name: Production producer, live-allocation and planner-input composition
+    # The unchanged proof admission requires 16 GiB available, not total RAM.
+    # Never run unreviewed pull-request code on a protected/shared host.
+    if: ${{ github.repository == 'harsh-nod/fe2o3' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    runs-on: [self-hosted, linux, x64, fe2o3-verus-reviewed-host-v1]
+    timeout-minutes: 300
+    steps:
+      - name: Create private campaign directory
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$(mktemp -d "${RUNNER_TEMP}/fe2o3-producer-live.XXXXXXXX")"
+          printf 'A2_CAMPAIGN_ROOT=%s\n' "${root}" >> "${GITHUB_ENV}"
+
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Install Verus Rust toolchain
+        run: >-
+          rustup toolchain install 1.97.1-x86_64-unknown-linux-gnu
+          --profile minimal --no-self-update
+
+      - name: Install pinned Verus closure
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          readonly version="0.2026.08.09.92f466f"
+          readonly archive="${A2_CAMPAIGN_ROOT}/verus-${version}-x86-linux.zip"
+          readonly install_dir="${A2_CAMPAIGN_ROOT}/pinned-verus"
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "${archive}" \
+            "https://github.com/verus-lang/verus/releases/download/release/${version}/verus-${version}-x86-linux.zip"
+          mkdir -- "${install_dir}"
+          unzip -q "${archive}" -d "${install_dir}"
+          printf 'VERUS=%s\n' "${install_dir}/verus-x86-linux/verus" >> "${GITHUB_ENV}"
+
+      - name: Qualify producer-to-planner input composition
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-planner-input-composition.py
+          python3 -I -B crates/fe2o3-runtime-model/verus/qualify-producer-planner-input-v1.py \
+            --inputs "${GITHUB_WORKSPACE}/crates/fe2o3-runtime-model/verus/pins/PRODUCER_PLANNER_INPUT_CAMPAIGN_V1.json" \
+            --verus "${VERUS}" \
+            --output "${A2_CAMPAIGN_ROOT}/planner-input"
+
+      - name: Qualify whole roots and exact negative controls
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 -I -B crates/fe2o3-runtime-model/verus/qualify-producer-live-composition-v1.py \
+            --verus "${VERUS}" \
+            --output "${A2_CAMPAIGN_ROOT}/campaign"
+
+      - name: Retain complete campaign diagnostics
+        if: ${{ always() && env.A2_CAMPAIGN_ROOT != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: producer-live-composition-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.A2_CAMPAIGN_ROOT }}/campaign
+            ${{ env.A2_CAMPAIGN_ROOT }}/planner-input
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Remove private campaign directory
+        if: ${{ always() && env.A2_CAMPAIGN_ROOT != '' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$(dirname -- "${A2_CAMPAIGN_ROOT}")" == "${RUNNER_TEMP}" ]]
+          [[ "$(basename -- "${A2_CAMPAIGN_ROOT}")" == fe2o3-producer-live.* ]]
+          [[ -d "${A2_CAMPAIGN_ROOT}" && ! -L "${A2_CAMPAIGN_ROOT}" ]]
+          rm -r -- "${A2_CAMPAIGN_ROOT}"

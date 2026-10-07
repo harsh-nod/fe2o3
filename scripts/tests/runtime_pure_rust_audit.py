@@ -27,6 +27,8 @@ VIRTUAL_POLICY = CHECKER.load_policy(
     Path(__file__).resolve().parents[1] / "virtual-runtime-no-gpu-policy.json"
 )
 REVIEWED_BUILD_SCRIPTS = (
+    "curve25519-dalek@4.1.3",
+    "generic-array@0.14.7",
     "libc@0.2.189",
     "proc-macro2@1.0.107",
     "quote@1.0.47",
@@ -397,6 +399,8 @@ class MetadataAuditTests(unittest.TestCase):
     def test_rejects_every_reviewed_build_script_identity_at_another_version(self) -> None:
         registry = CHECKER.CRATES_IO_SOURCE
         prior_versions = {
+            "curve25519-dalek": "4.1.2",
+            "generic-array": "0.14.6",
             "libc": "0.2.188",
             "proc-macro2": "1.0.106",
             "quote": "1.0.46",
@@ -476,6 +480,26 @@ class MetadataAuditTests(unittest.TestCase):
         violations, _ = CHECKER.audit_metadata(value, ("runtime",), POLICY)
         self.assertEqual(1, len(violations))
         self.assertIn("unapproved source", violations[0])
+
+    def test_crypto_configuration_exceptions_reject_links_and_source_substitution(self) -> None:
+        for name, version in (("curve25519-dalek", "4.1.3"), ("generic-array", "0.14.7")):
+            for source, links, expected in (
+                (None, None, "unapproved source"),
+                ("git+https://example.invalid/replacement", None, "unapproved source"),
+                (CHECKER.CRATES_IO_SOURCE, "unreviewed-native-library", "Cargo links package"),
+            ):
+                with self.subTest(name=name, source=source, links=links):
+                    value = metadata(
+                        [package("runtime"), package(
+                            name, source=source, links=links, version=version,
+                            targets=[target(), target("custom-build")],
+                        )],
+                        [node("runtime", [dependency(name, version=version)]),
+                         node(name, version=version)],
+                    )
+                    violations, _ = CHECKER.audit_metadata(value, ("runtime",), POLICY)
+                    self.assertEqual(1, len(violations))
+                    self.assertIn(expected, violations[0])
 
     def test_missing_resolve_graph_fails_closed(self) -> None:
         with self.assertRaisesRegex(CHECKER.AuditInputError, "resolve"):

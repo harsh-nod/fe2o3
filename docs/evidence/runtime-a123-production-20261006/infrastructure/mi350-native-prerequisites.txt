@@ -1,0 +1,174 @@
+MI350 Native V5 Public Prerequisite Audit
+========================================
+
+Observation time: 2026-10-07T00:43:48Z
+SSH alias: mi350
+Observed hostname: smci350-rck-g03-b19-03
+Observed effective UID: 9661
+SSH command exit status: 0
+
+Scope and limitations
+---------------------
+Read-only existence/type/owner/mode/size checks of the exact public fixed
+deployment paths listed below, plus selected NSS name lookups. This was not a
+full-host search, an installed deployment admission, a candidate approval, a
+tool hash audit, or proof/native execution qualification. No service was
+started, no GPU/device was opened, no mount/install/user change was made, and
+no seed or other secret contents were read. No remote scratch was created.
+
+An ABSENT result means both unprivileged test -e and test -L were false at the
+observation. It is not a root syscall ENOENT attestation. Compiler/proof files
+were beneath the /etc/fe2o3 or /usr/libexec/fe2o3 prefixes, which themselves
+reported absent; the exact Verus runtime root was checked separately.
+NO_PASSWD/NO_GROUP
+means the selected getent lookup did not resolve successfully; the command
+did not independently distinguish absence from an NSS backend lookup failure.
+
+fe2o3-compiler and fe2o3-anchor are the actual fixed names used by the native
+V3 provisioner. fe2o3-proof and fe2o3-proof-custodian were additional discovery
+probes, not required hardcoded names. The proof role is a separately configured
+nonzero UID/GID bound in the native proof profile and excluded from the other
+service/application roles.
+
+Exact command
+-------------
+ssh -o BatchMode=yes -o ConnectTimeout=15 -o ConnectionAttempts=1 \
+  -o StrictHostKeyChecking=yes mi350 'sh -s' <<'SH'
+printf 'AUDIT native-v5 public prerequisites UTC='
+date -u +%Y-%m-%dT%H:%M:%SZ
+printf 'HOST '
+hostname
+printf 'EUID '
+id -u
+for p in /run/fe2o3 /var/lib/fe2o3/compiler-execution /var/lib/fe2o3/external-anchor /etc/fe2o3 /etc/fe2o3/compiler-execution /etc/fe2o3/proof-custodian /usr/libexec/fe2o3 /usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor-v3 /usr/libexec/fe2o3/fe2o3-static-preexec-launcher /usr/libexec/fe2o3/fe2o3-compiler-execution-issuer-conditional /usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper-v3 /usr/libexec/fe2o3/fe2o3-external-anchor-service-v3 /usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator /usr/libexec/fe2o3/fe2o3-compiler-execution-provision /usr/libexec/fe2o3/fe2o3-native-application-manager /usr/libexec/fe2o3/fe2o3-native-application-proof-controller /usr/libexec/fe2o3/fe2o3-proof-custodian-provision /usr/libexec/fe2o3/fe2o3-llvm-link-worker /etc/fe2o3/compiler-execution/client-profile-v3 /etc/fe2o3/compiler-execution/supervisor-deployment-v3 /etc/fe2o3/compiler-execution/issuer-policy-v3 /etc/fe2o3/compiler-execution/anchor-deployment-v3 /etc/fe2o3/compiler-execution/anchor-provisioning-v3 /etc/fe2o3/compiler-execution/issuer-signing-key-seed-v3 /etc/fe2o3/compiler-execution/anchor-signing-key-seed-v3 /etc/fe2o3/proof-custodian/application-native-deployment-v1 /etc/fe2o3/proof-custodian/native-manager-deployment-v1 /etc/fe2o3/proof-custodian/native-conditional-root-policy-v1 /opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5
+ do
+ if test -e "$p" || test -L "$p"
+ then
+ stat -c 'PRESENT|%n|%F|%u:%g|%a|%s' -- "$p"
+ else
+ printf 'ABSENT|%s\n' "$p"
+ fi
+ done
+for role in fe2o3-compiler fe2o3-anchor fe2o3-proof fe2o3-proof-custodian
+ do
+ if getent passwd "$role" >/dev/null
+ then
+ getent passwd "$role" | cut -d: -f1,3,4,6,7
+ else
+ printf 'NO_PASSWD|%s\n' "$role"
+ fi
+ if getent group "$role" >/dev/null
+ then
+ getent group "$role" | cut -d: -f1,3
+ else
+ printf 'NO_GROUP|%s\n' "$role"
+ fi
+ done
+SH
+
+Exact task output (SSH login banner omitted)
+-------------------------------------------
+AUDIT native-v5 public prerequisites UTC=2026-10-07T00:43:48Z
+HOST smci350-rck-g03-b19-03
+EUID 9661
+ABSENT|/run/fe2o3
+ABSENT|/var/lib/fe2o3/compiler-execution
+ABSENT|/var/lib/fe2o3/external-anchor
+ABSENT|/etc/fe2o3
+ABSENT|/etc/fe2o3/compiler-execution
+ABSENT|/etc/fe2o3/proof-custodian
+ABSENT|/usr/libexec/fe2o3
+ABSENT|/usr/libexec/fe2o3/fe2o3-compiler-execution-supervisor-v3
+ABSENT|/usr/libexec/fe2o3/fe2o3-static-preexec-launcher
+ABSENT|/usr/libexec/fe2o3/fe2o3-compiler-execution-issuer-conditional
+ABSENT|/usr/libexec/fe2o3/fe2o3-external-anchor-provisioning-helper-v3
+ABSENT|/usr/libexec/fe2o3/fe2o3-external-anchor-service-v3
+ABSENT|/usr/libexec/fe2o3/fe2o3-compiler-execution-coordinator
+ABSENT|/usr/libexec/fe2o3/fe2o3-compiler-execution-provision
+ABSENT|/usr/libexec/fe2o3/fe2o3-native-application-manager
+ABSENT|/usr/libexec/fe2o3/fe2o3-native-application-proof-controller
+ABSENT|/usr/libexec/fe2o3/fe2o3-proof-custodian-provision
+ABSENT|/usr/libexec/fe2o3/fe2o3-llvm-link-worker
+ABSENT|/etc/fe2o3/compiler-execution/client-profile-v3
+ABSENT|/etc/fe2o3/compiler-execution/supervisor-deployment-v3
+ABSENT|/etc/fe2o3/compiler-execution/issuer-policy-v3
+ABSENT|/etc/fe2o3/compiler-execution/anchor-deployment-v3
+ABSENT|/etc/fe2o3/compiler-execution/anchor-provisioning-v3
+ABSENT|/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v3
+ABSENT|/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v3
+ABSENT|/etc/fe2o3/proof-custodian/application-native-deployment-v1
+ABSENT|/etc/fe2o3/proof-custodian/native-manager-deployment-v1
+ABSENT|/etc/fe2o3/proof-custodian/native-conditional-root-policy-v1
+ABSENT|/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5
+NO_PASSWD|fe2o3-compiler
+NO_GROUP|fe2o3-compiler
+NO_PASSWD|fe2o3-anchor
+NO_GROUP|fe2o3-anchor
+NO_PASSWD|fe2o3-proof
+NO_GROUP|fe2o3-proof
+NO_PASSWD|fe2o3-proof-custodian
+NO_GROUP|fe2o3-proof-custodian
+
+Source-bound next steps (not executed by this audit)
+---------------------------------------------------
+1. scripts/build-static-compiler-execution-deployment.sh --v3 OUTPUT requires
+   a clean source checkout. It builds the exact native static images, manifest,
+   verifier, sysusers and tmpfiles definitions; it refuses existing output.
+   Native coordinator admission consumes the exact fourteen paths in
+   crates/fe2o3-compiler-execution-coordinator/src/native_application_sources.rs.
+   The official V3 provisioner (native_provisioner.rs) measures the fixed five
+   images, looks up the two fixed NSS roles, generates or retains its own
+   zeroizing seeds, and publishes the five matching V3 records with no-replace
+   operations. No V1 record upgrade or caller-supplied seed fabrication is needed
+   or permitted. Running it is a separate, reviewed private-root campaign.
+
+2. scripts/build-static-proof-custodian.sh builds and structurally checks the
+   native manager, native proof controller and provisioner along with legacy
+   images. Its invalid-argv checks are not a genuine application qualification.
+   Existing build outputs are candidates, not installed approval. A private
+   root mount namespace may host the same exact production paths without
+   starting or installing shared-host services; the existing fixed-path and
+   namespace admission remains unchanged. No such environment was created here.
+
+3. The fixed LLVM link worker must be the actual build from the reviewed source,
+   with actual pinned LLVM/LLD/analyzer identities. Native proof inspection uses
+   the nonroot probe, not merely file names or captured analyzer output. The
+   fixed functional-refinement runtime must pass
+   scripts/functional-refinement-verus-runtime-v1.sh audit-source/provision/
+   audit-installed and the pinned manifest, Rust target-library closure and
+   interpreter/DSO checks. The script accepts only the existing /opt/fe2o3/
+   verus-runtime-v2 prefix. A standalone Verus executable is insufficient.
+
+4. The native proof provisioner already accepts explicit
+   inspect-native-fixed-resources POLICY EXPECTED_POLICY_SHA256 OUTPUT followed
+   by separately pinned install-native CANDIDATE EXPECTED_SHA256. It requires
+   an actual admitted V3 compiler profile and independent semantic policy file.
+   Nonroot inspection probes the analyzer and admits the exact Verus closure;
+   proof execution remains confined to the nonroot worker. Root installation
+   remeasures the exact fixed images/runtime without executing the candidate,
+   analyzer or Verus. It publishes the exact three-record native directory and
+   refuses an existing legacy two-record inventory or a mismatch.
+
+5. No independently approved native semantic-policy artifact was identified by
+   these fixed-path checks. The verifier exposes
+   encode_native_conditional_root_policy_file_v1 as an INERT codec, not an
+   acceptance or administrative approval. Its production consumers validate or
+   recover under an already pinned file; searched CLI/provisioning call sites do
+   not provide an approved-source policy-export workflow. The file must bind the
+   actual source packet SHA/length and canonical one-root policy roster, with
+   complete signer/toolchain/formula policy, before application recovery. Copying
+   the readiness-embedded roster and automatically approving it would remove
+   the independent gate and is not a valid shortcut. A reviewed source/policy
+   preparation and independent pin is still required for a genuine positive.
+
+6. A genuine CPU-only campaign must use the actual native compiler publication,
+   manager/registration/currentness/ACK/proof-controller path and the native
+   proof-only application entry. It must separately observe terminal controller,
+   issuer, manager and anchor cleanup. The existing legacy private installation
+   script and static/inert tests do not establish this result. No GPU is needed
+   for this content-proof route, and it cannot imply gfx942 execution on MI350.
+
+7. Reviewed-host CI runner availability is a separate production prerequisite.
+   This audit did not inspect runner credentials or register any runner. A
+   persistent shared-host PR runner is not an acceptable substitute for an
+   explicitly bounded, isolated reviewed-source campaign.

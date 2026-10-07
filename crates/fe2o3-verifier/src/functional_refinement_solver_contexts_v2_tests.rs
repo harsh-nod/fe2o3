@@ -1,6 +1,68 @@
 use super::*;
 
 #[test]
+fn closed_fill_enforces_exact_total_and_live_caps_with_sticky_refusal() {
+    let policy = GeneratedProofProcessPolicyV2::ClosedConditionalFillV1;
+    assert_eq!(policy.max_total(), 12);
+    assert_eq!(policy.max_live(), 2);
+    let mut census = SolverContextsV2::with_policy(policy, false);
+    for _ in 0..12 {
+        start(&mut census, 10);
+        census
+            .terminal(TraceeRole::Solver, 10, true, 0, false)
+            .unwrap();
+    }
+    assert_eq!(
+        (census.born, census.executed, census.completed),
+        (12, 12, 12)
+    );
+    census.finish().unwrap();
+    assert!(census.birth(TraceeRole::Verifier, 10).is_err());
+    assert_eq!(
+        (census.born, census.executed, census.completed),
+        (12, 12, 12)
+    );
+    assert!(census.finish().is_err());
+
+    let mut census = SolverContextsV2::with_policy(policy, false);
+    census.birth(TraceeRole::Verifier, 10).unwrap();
+    census.birth(TraceeRole::Verifier, 20).unwrap();
+    assert_eq!((census.born, census.executed), (2, 0));
+    assert!(census.birth(TraceeRole::Verifier, 30).is_err());
+    assert_eq!((census.born, census.executed), (2, 0));
+    assert!(census.executed(10, TraceeRole::Solver).is_err());
+    assert!(census.finish().is_err());
+}
+
+#[test]
+fn closed_fill_authenticates_auxiliary_separately_and_refuses_incomplete_solver_census() {
+    let policy = GeneratedProofProcessPolicyV2::ClosedConditionalFillV1;
+    let mut census = SolverContextsV2::with_policy(policy, true);
+    census.birth(TraceeRole::Verifier, 5).unwrap();
+    census.executed(5, TraceeRole::AuxiliaryVerifier).unwrap();
+    census
+        .terminal(TraceeRole::AuxiliaryVerifier, 5, true, 0, false)
+        .unwrap();
+    assert_eq!((census.born, census.executed, census.completed), (0, 0, 0));
+    for _ in 0..12 {
+        start(&mut census, 10);
+        census
+            .terminal(TraceeRole::Solver, 10, true, 0, false)
+            .unwrap();
+    }
+    census.finish().unwrap();
+
+    let mut incomplete = SolverContextsV2::with_policy(policy, false);
+    start(&mut incomplete, 10);
+    assert!(incomplete.finish().is_err());
+    assert!(
+        incomplete
+            .terminal(TraceeRole::Solver, 10, true, 0, false)
+            .is_err()
+    );
+}
+
+#[test]
 fn interpreter_stack_policy_keeps_pending_live_total_and_sticky_terminal_census() {
     let policy = GeneratedProofProcessPolicyV2::PinnedSingleThreadContextsV3;
     assert_eq!(policy.max_live(), MAX_LIVE_CONTEXTS_V2);

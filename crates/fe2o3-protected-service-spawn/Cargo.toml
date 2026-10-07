@@ -11,6 +11,13 @@ publish = false
 [features]
 test-support = []
 
+[[bin]]
+name = "fe2o3-proof-controller-profile-fixture"
+path = "src/bin/proof_controller_profile_fixture.rs"
+required-features = ["test-support"]
+test = false
+bench = false
+
 [dependencies]
 fe2o3-artifact-transaction.workspace = true
 fe2o3-kernel-ir.workspace = true
@@ -20,6 +27,7 @@ rustix = { workspace = true, features = ["event", "pipe", "process", "thread"] }
 
 [dev-dependencies]
 tempfile = "=3.21.0"
+rustix = { workspace = true, features = ["net", "event"] }
 
 [lints.rust]
 unsafe_code = "deny"

@@ -1,9 +1,5 @@
 use rmpv::{Value, encode::write_value};
 
-#[cfg(test)]
-#[path = "../../runtime_preparation_tests.rs"]
-mod runtime_preparation_tests;
-
 const ELF_HEADER_BYTES: usize = 64;
 const PROGRAM_HEADER_BYTES: usize = 56;
 const PROGRAM_COUNT: usize = 8;
@@ -28,10 +24,79 @@ pub(super) fn module_with_resources(
     private_segment_bytes: u32,
     uniform_work_group_size: Option<bool>,
 ) -> Vec<u8> {
-    let metadata = encode(&metadata_document(
+    module_with_metadata(
+        metadata_document(private_segment_bytes, uniform_work_group_size),
+        272,
         private_segment_bytes,
-        uniform_work_group_size,
-    ));
+    )
+}
+
+/// No-device preparation variant; still contains deliberately nonexecutable entry bytes.
+#[allow(dead_code, reason = "also shared by host invocation custody tests")]
+pub(super) fn preparation_module() -> Vec<u8> {
+    let mut bytes = module_with_metadata(metadata_document(0, None), 272, 0);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 4, 0);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 52, 0x1390);
+    bytes
+}
+
+/// Structurally valid three-global-buffer fixture for the no-device backend.
+pub(super) fn three_binding_module() -> Vec<u8> {
+    module_with_metadata(three_binding_metadata_document(16), 288, 16)
+}
+
+#[allow(dead_code, reason = "shared by nonexecuting projection tests")]
+pub(super) fn three_binding_preparation_module() -> Vec<u8> {
+    let mut bytes = module_with_metadata(three_binding_metadata_document(0), 288, 0);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 4, 0);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 52, 0x1390);
+    bytes
+}
+
+#[allow(dead_code, reason = "shared by nonexecuting projection tests")]
+pub(super) fn dynamic_preparation_module() -> Vec<u8> {
+    preparation_module_with_hidden(16 + 120, 4, "hidden_dynamic_lds_size")
+}
+
+#[allow(dead_code, reason = "shared by nonexecuting projection tests")]
+pub(super) fn service_preparation_module() -> Vec<u8> {
+    preparation_module_with_hidden(16 + 200, 8, "hidden_queue_ptr")
+}
+
+fn preparation_module_with_hidden(offset: u64, size: u64, kind: &str) -> Vec<u8> {
+    let mut metadata = kernel_metadata(0, None);
+    let Value::Map(ref mut fields) = metadata else {
+        unreachable!()
+    };
+    let (_, Value::Array(args)) = fields
+        .iter_mut()
+        .find(|(key, _)| key.as_str() == Some(".args"))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    args.push(argument(None, offset, size, kind, None));
+    let mut document = metadata_document(0, None);
+    let Value::Map(ref mut fields) = document else {
+        unreachable!()
+    };
+    fields
+        .iter_mut()
+        .find(|(key, _)| key.as_str() == Some("amdhsa.kernels"))
+        .unwrap()
+        .1 = Value::Array(vec![metadata]);
+    let mut bytes = module_with_metadata(document, 272, 0);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 4, 0);
+    write_u32(&mut bytes, DESCRIPTOR_OFFSET + 52, 0x1390);
+    bytes
+}
+
+fn module_with_metadata(
+    metadata: Value,
+    kernarg_segment_size: u32,
+    private_segment_bytes: u32,
+) -> Vec<u8> {
+    let metadata = encode(&metadata);
     let note = metadata_note(&metadata);
     assert!(NOTE_OFFSET + note.len() <= DESCRIPTOR_OFFSET);
 
@@ -49,7 +114,7 @@ pub(super) fn module_with_resources(
     write_dynamic_table(&mut bytes);
     write_symbols(&mut bytes);
     write_sections(&mut bytes, note.len(), strtab.len(), shstrtab.len());
-    write_descriptor(&mut bytes, private_segment_bytes);
+    write_descriptor(&mut bytes, kernarg_segment_size, private_segment_bytes);
     bytes
 }
 
@@ -69,6 +134,23 @@ fn metadata_document(private_segment_bytes: u32, uniform_work_group_size: Option
                 private_segment_bytes,
                 uniform_work_group_size,
             )]),
+        ),
+    ])
+}
+
+fn three_binding_metadata_document(private_segment_bytes: u32) -> Value {
+    Value::Map(vec![
+        (
+            Value::from("amdhsa.version"),
+            Value::Array(vec![Value::from(1), Value::from(2)]),
+        ),
+        (
+            Value::from("amdhsa.target"),
+            Value::from("amdgcn-amd-amdhsa--gfx942:xnack-"),
+        ),
+        (
+            Value::from("amdhsa.kernels"),
+            Value::Array(vec![three_binding_kernel_metadata(private_segment_bytes)]),
         ),
     ])
 }
@@ -102,6 +184,35 @@ fn kernel_metadata(private_segment_bytes: u32, uniform_work_group_size: Option<b
         fields.push((".uniform_work_group_size", Value::from(u32::from(uniform))));
     }
     map(fields)
+}
+
+fn three_binding_kernel_metadata(private_segment_bytes: u32) -> Value {
+    let mut arguments = vec![
+        argument(Some("a_ptr"), 0, 8, "global_buffer", Some("global")),
+        argument(Some("b_ptr"), 8, 8, "global_buffer", Some("global")),
+        argument(Some("c_ptr"), 16, 8, "global_buffer", Some("global")),
+        argument(Some("element_count"), 24, 8, "by_value", None),
+    ];
+    arguments.extend(hidden_arguments(32));
+    map(vec![
+        (".name", Value::from("vecadd")),
+        (".symbol", Value::from("vecadd.kd")),
+        (".args", Value::Array(arguments)),
+        (".kernarg_segment_size", Value::from(288)),
+        (".kernarg_segment_align", Value::from(8)),
+        (".group_segment_fixed_size", Value::from(0)),
+        (
+            ".private_segment_fixed_size",
+            Value::from(private_segment_bytes),
+        ),
+        (".wavefront_size", Value::from(64)),
+        (".sgpr_count", Value::from(14)),
+        (".vgpr_count", Value::from(11)),
+        (".agpr_count", Value::from(3)),
+        (".sgpr_spill_count", Value::from(2)),
+        (".vgpr_spill_count", Value::from(4)),
+        (".max_flat_workgroup_size", Value::from(1024)),
+    ])
 }
 
 fn hidden_arguments(base: u64) -> Vec<Value> {
@@ -383,10 +494,10 @@ fn section(
     write_u64(bytes, base + 56, entry_size);
 }
 
-fn write_descriptor(bytes: &mut [u8], private_segment_bytes: u32) {
+fn write_descriptor(bytes: &mut [u8], kernarg_segment_size: u32, private_segment_bytes: u32) {
     write_u32(bytes, DESCRIPTOR_OFFSET, 0);
     write_u32(bytes, DESCRIPTOR_OFFSET + 4, private_segment_bytes);
-    write_u32(bytes, DESCRIPTOR_OFFSET + 8, 272);
+    write_u32(bytes, DESCRIPTOR_OFFSET + 8, kernarg_segment_size);
     write_i64(bytes, DESCRIPTOR_OFFSET + 16, 0x3000);
     write_u32(bytes, DESCRIPTOR_OFFSET + 44, 1);
     write_u32(bytes, DESCRIPTOR_OFFSET + 48, 0x00af_0081);

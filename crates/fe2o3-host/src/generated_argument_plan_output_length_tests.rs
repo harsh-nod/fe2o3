@@ -398,7 +398,8 @@ fn packed_output_slice_binding_checks_buffer_bounds() {
         (16, GeneratedPackingComponentKindV1::SlicePointer),
     ] {
         let mut malformed = plan.clone();
-        malformed.fields[0] = slice_with_access("output", field_offset, Access::WriteOnly, 1);
+        std::sync::Arc::make_mut(&mut malformed.fields)[0] =
+            slice_with_access("output", field_offset, Access::WriteOnly, 1);
         malformed.components[0].offset = field_offset;
         malformed.components[1].offset = field_offset + 8;
         assert_eq!(

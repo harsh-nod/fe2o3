@@ -43,8 +43,25 @@ const WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
 const WORKER_V3_ROSTER_IDENTITY_DOMAIN_V1: &[u8] = b"fe2o3.host.worker-v3-verification-roster.v1\0";
 const WORKER_V3_ROSTER_VERIFICATION_CHALLENGE_DOMAIN_V1: &[u8] =
     b"fe2o3.host.worker-v3-roster-verification-challenge.v1\0";
-const WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V1: &[u8] =
-    b"fe2o3.host.worker-v3-semantic-machine-refinement-receipt.v1\0";
+const WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V2: &[u8] =
+    b"fe2o3.host.worker-v3-semantic-machine-refinement-receipt.v2\0";
+
+mod conditional_fill;
+pub use conditional_fill::{
+    CheckedWorkerV3ConditionalFillAssociationV1, WorkerV3ConditionalFillAssociationErrorV1,
+    derive_worker_v3_conditional_fill_host_contract_v1,
+};
+#[cfg(target_os = "linux")]
+pub use conditional_fill::{
+    InertWorkerV3ConditionalFillSubjectV1, PendingWorkerV3ConditionalFillArtifactV1,
+    RetainedWorkerV3ConditionalFillProofV1, WorkerV3ConditionalFillPendingErrorV1,
+    WorkerV3ConditionalFillRetainedErrorV1, execute_retained_worker_v3_conditional_fill_v1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use conditional_fill::{
+    RemoteConditionalFillArtifactV1, WorkerV3ConditionalFillInvocationErrorV1,
+    WorkerV3RemoteConditionalFillErrorV1,
+};
 
 /// Maximum exact machine-effect artifact retained by one Worker V3 refinement receipt.
 pub const MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1: usize = 64 * 1024 * 1024;
@@ -126,6 +143,7 @@ pub struct WorkerV3VerificationRequestV1<'admission, K> {
     lineage: WorkerV3HostLineageEvidenceV1,
     finalizer_derivation: &'admission RevalidatedProtectedWorkerV3FinalizerDerivationV1,
     finalizer_replay: &'admission WorkerV3LoadEnvelopeWireV1,
+    envelope_evidence: fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'admission>,
     compiler_execution_subject: &'admission InertCompilerExecutionSubjectV1,
     compiler_execution_receipt: &'admission CompilerExecutionReceiptCarriageV1,
     handoff: &'admission fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
@@ -140,6 +158,14 @@ pub struct WorkerV3VerificationRequestV1<'admission, K> {
 }
 
 impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3VerificationRequestV1<'_, K> {
+    /// Borrows the original V2 envelope while this request retains its current artifact bytes.
+    /// Copying these bytes does not transfer the admission's publication or occurrence custody.
+    pub const fn load_envelope_evidence_view(
+        &self,
+    ) -> &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+        &self.envelope_evidence
+    }
+
     pub const fn challenge_identity(&self) -> WorkerV3VerificationChallengeIdentityV1 {
         self.challenge
     }
@@ -659,6 +685,11 @@ impl WorkerV3SemanticMachineRefinementReceiptV1 {
         (&self.host.kir_sha256, self.host.kir_bytes)
     }
 
+    /// Returns the canonical wire version bound into this receipt's identity.
+    pub const fn kir_version(&self) -> u16 {
+        self.host.kir_version
+    }
+
     /// Returns the exact final LLVM module identity covered by the refinement.
     pub const fn llvm_identity(&self) -> (&[u8; 32], u64) {
         (&self.host.llvm_sha256, self.host.llvm_bytes)
@@ -782,6 +813,7 @@ impl WorkerV3SemanticMachineRefinementReceiptV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct WorkerV3SemanticMachineHostCoordinatesV1 {
+    kir_version: u16,
     kir_sha256: [u8; 32],
     kir_bytes: u64,
     llvm_sha256: [u8; 32],
@@ -901,6 +933,7 @@ pub(crate) fn admitted_semantic_machine_refinement_for_test_v1()
 #[cfg(test)]
 fn refinement_host_coordinates_for_test_v1() -> WorkerV3SemanticMachineHostCoordinatesV1 {
     WorkerV3SemanticMachineHostCoordinatesV1 {
+        kir_version: 8,
         kir_sha256: [1; 32],
         kir_bytes: 101,
         llvm_sha256: [2; 32],
@@ -943,7 +976,8 @@ fn semantic_machine_refinement_receipt_identity(
 ) -> [u8; 32] {
     let host = &receipt.host;
     let mut digest = Sha256::new();
-    digest.update(WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V1);
+    digest.update(WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_RECEIPT_DOMAIN_V2);
+    digest.update(host.kir_version.to_le_bytes());
     for (sha256, byte_len) in [
         (host.kir_sha256, host.kir_bytes),
         (host.llvm_sha256, host.llvm_bytes),
@@ -1439,6 +1473,10 @@ impl WorkerV3CompilerExecutionVerificationV1 {
         carriage: &CompilerExecutionReceiptCarriageV1,
         evidence: WorkerV3CompilerCurrentRecordAuditV1,
     ) -> Result<Self, WorkerV3CompilerExecutionEvidenceErrorV1> {
+        #[cfg(target_arch = "x86_64")]
+        evidence
+            .revalidate_optional_production_deployment()
+            .map_err(WorkerV3CompilerExecutionEvidenceErrorV1::ProductionDeployment)?;
         if carriage.request().subject() != subject {
             return Err(WorkerV3CompilerExecutionEvidenceErrorV1::RequestMismatch);
         }
@@ -1740,6 +1778,20 @@ impl WorkerV3CompilerExecutionVerificationV1 {
         self.protected_policy_verification_sha256
     }
 
+    /// Rechecks original installed configuration custody, without another service exchange.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub fn revalidate_production_deployment(
+        &self,
+    ) -> Result<(), crate::WorkerV3CompilerCurrentRecordAuditErrorV1> {
+        match &self._evidence {
+            WorkerV3CompilerExecutionEvidenceV1::CurrentRecord(evidence) => {
+                evidence.revalidate_production_deployment()
+            }
+            #[cfg(feature = "worker-v3-verifier-test-support")]
+            _ => Err(crate::WorkerV3CompilerCurrentRecordAuditErrorV1::MissingProductionDeployment),
+        }
+    }
+
     pub const fn protected_worker_ledger_verification_sha256(&self) -> [u8; 32] {
         self.protected_worker_ledger_verification_sha256
     }
@@ -1795,6 +1847,7 @@ pub enum WorkerV3CompilerExecutionEvidenceErrorV1 {
     RequestMismatch,
     IdentityMismatch(&'static str),
     MissingAuthenticatedEvidence(&'static str),
+    ProductionDeployment(String),
 }
 
 /// Descriptive result returned by a reviewed V3 verifier.
@@ -2183,7 +2236,7 @@ where
 {
     let proof = decision.validated_compiler_proof_inputs()?;
     let target_lineage = decision.validated_compiler_target_lineage()?;
-    let kir = proof.kernel_ir().identity();
+    let kir = proof.kernel_ir();
     let llvm = target_lineage.final_llvm_identity();
     let binding = request.descriptor_binding();
     let isa_start = usize::try_from(binding.entry_file_offset()).ok()?;
@@ -2195,7 +2248,8 @@ where
     let attempt = published.attempt();
     let scope = published.scope();
     let coordinates = WorkerV3SemanticMachineHostCoordinatesV1 {
-        kir_sha256: *kir.digest(),
+        kir_version: kir.wire_version(),
+        kir_sha256: *kir.identity_digest(),
         kir_bytes: kir.canonical_length(),
         llvm_sha256: llvm.sha256(),
         llvm_bytes: llvm.byte_len(),
@@ -4187,12 +4241,17 @@ fn prepare_request<'admission, K: CompilerGeneratedKernelExpectationV1>(
     if generated_host_contract == [0; 32] {
         return Err(WorkerV3VerificationRequestPreparationErrorV1::UnsupportedGeneratedProfile);
     }
-    let challenge = derive_challenge::<K>(lineage.identity(), generated_host_contract);
+    let challenge = derive_challenge(
+        lineage.identity(),
+        admission.descriptor(),
+        generated_host_contract,
+    );
     Ok(WorkerV3VerificationRequestV1 {
         challenge,
         lineage,
         finalizer_derivation: admission.finalizer_derivation(),
         finalizer_replay: admission.finalizer_replay(),
+        envelope_evidence: admission.load_envelope_evidence_view(),
         compiler_execution_subject: admission.compiler_execution_subject(),
         compiler_execution_receipt: admission.compiler_execution_receipt(),
         handoff: admission.outer_handoff(),
@@ -4231,26 +4290,29 @@ fn generated_host_contract<K: CompilerGeneratedKernelExpectationV1>() -> [u8; 32
     K::PROFILE.generated_host_contract_identity()
 }
 
-fn derive_challenge<K: CompilerGeneratedKernelExpectationV1>(
+fn derive_challenge(
     lineage: WorkerV3HostLineageIdentityV1,
+    descriptor: &KernelDescriptorV1,
     generated_host_contract: [u8; 32],
 ) -> WorkerV3VerificationChallengeIdentityV1 {
+    let logical_name = descriptor.logical_name().as_str();
+    let export_name = descriptor.entry_name().as_str();
     let mut digest = Sha256::new();
     digest.update(WORKER_V3_VERIFICATION_CHALLENGE_DOMAIN_V1);
     digest.update(lineage.as_bytes());
-    digest.update(K::KERNEL_BINDING_ID_V1);
+    digest.update(descriptor.kernel_id().as_bytes());
     digest.update(
-        u64::try_from(K::LOGICAL_NAME.len())
+        u64::try_from(logical_name.len())
             .expect("generated marker name length fits u64")
             .to_le_bytes(),
     );
-    digest.update(K::LOGICAL_NAME.as_bytes());
+    digest.update(logical_name.as_bytes());
     digest.update(
-        u64::try_from(K::EXPORT_NAME.len())
+        u64::try_from(export_name.len())
             .expect("generated export name length fits u64")
             .to_le_bytes(),
     );
-    digest.update(K::EXPORT_NAME.as_bytes());
+    digest.update(export_name.as_bytes());
     digest.update(generated_host_contract);
     WorkerV3VerificationChallengeIdentityV1(digest.finalize().into())
 }
@@ -4479,7 +4541,7 @@ fn validate_decision_proof_inputs<K: CompilerGeneratedKernelExpectationV1>(
             "Kernel IR",
         ),
         (
-            inputs.correspondence().canonical_bytes()
+            inputs.exact_correspondence_bytes()
                 == receipts.mir_to_kir_correspondence().canonical_preimage(),
             "MIR-to-KIR correspondence",
         ),
@@ -4514,10 +4576,33 @@ fn validate_decision_target_lineage<K: CompilerGeneratedKernelExpectationV1>(
         WorkerV3TargetLineageEvidenceV1::Validated(lineage) => lineage,
         WorkerV3TargetLineageEvidenceV1::Synthetic => return Ok(()),
     };
-    let capsule = request.handoff.capsule();
+    validate_request_target_lineage(request, lineage)
+}
+
+fn validate_request_target_lineage<K: CompilerGeneratedKernelExpectationV1>(
+    request: &WorkerV3VerificationRequestV1<'_, K>,
+    lineage: &ValidatedCompilerTargetLineageV1,
+) -> Result<(), WorkerV3VerificationDecisionErrorV1> {
+    validate_artifact_target_lineage(
+        request.handoff,
+        request.finalizer_derivation,
+        request.descriptor(),
+        request.code_object_version(),
+        lineage,
+    )
+}
+
+fn validate_artifact_target_lineage(
+    handoff: &fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV3,
+    finalizer: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+    descriptor: &KernelDescriptorV1,
+    code_object_version: CodeObjectVersion,
+    lineage: &ValidatedCompilerTargetLineageV1,
+) -> Result<(), WorkerV3VerificationDecisionErrorV1> {
+    let capsule = handoff.capsule();
     let receipts = capsule.receipts();
-    let module = request.handoff.module_handoff().module_identity();
-    let finalizer_module = request.finalizer_derivation.compiler_module_identity();
+    let module = handoff.module_handoff().module_identity();
+    let finalizer_module = finalizer.compiler_module_identity();
     let final_llvm = lineage.final_llvm_identity();
     let target_binding = lineage.target_binding_receipt_identity();
     let data_layout = lineage.data_layout_receipt_identity();
@@ -4528,7 +4613,7 @@ fn validate_decision_target_lineage<K: CompilerGeneratedKernelExpectationV1>(
             "target-binding transcript inputs",
         )
     })?;
-    let descriptor_workgroup = match request.descriptor().launch().block_size() {
+    let descriptor_workgroup = match descriptor.launch().block_size() {
         BlockSizeV1::Exact(dimensions) => [dimensions.x(), dimensions.y(), dimensions.z()],
         BlockSizeV1::Any | BlockSizeV1::AtMost(_) => {
             return Err(WorkerV3VerificationDecisionErrorV1::TargetLineageMismatch(
@@ -4598,7 +4683,7 @@ fn validate_decision_target_lineage<K: CompilerGeneratedKernelExpectationV1>(
             "final compiler-module commitment",
         ),
         (
-            target_inputs.code_object_version == u16::from(request.code_object_version().number()),
+            target_inputs.code_object_version == u16::from(code_object_version.number()),
             "code-object version",
         ),
         (
@@ -4706,6 +4791,10 @@ impl fmt::Display for WorkerV3CompilerExecutionEvidenceErrorV1 {
                     "compiler current-record {field} evidence is missing"
                 )
             }
+            Self::ProductionDeployment(error) => write!(
+                formatter,
+                "compiler production deployment changed before evidence binding: {error}"
+            ),
         }
     }
 }
@@ -4864,22 +4953,19 @@ mod tests {
 
     #[test]
     fn protected_application_provenance_rejects_synthetic_and_failed_currentness() {
-        assert!(
-            !WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
-                .admits_production_application(true, false)
-        );
-        assert!(
-            WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
-                .admits_production_application(true, true)
-        );
-        assert!(
-            !WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
-                .admits_production_application(false, true)
-        );
-        assert!(
-            !WorkerV3VerifierAuthorityEvidenceV1::Synthetic
-                .admits_production_application(true, true)
-        );
+        for current in [false, true] {
+            for refinement in [false, true] {
+                assert_eq!(
+                    WorkerV3VerifierAuthorityEvidenceV1::ProtectedBackend
+                        .admits_production_application(current, refinement),
+                    current && refinement,
+                );
+                assert!(
+                    !WorkerV3VerifierAuthorityEvidenceV1::Synthetic
+                        .admits_production_application(current, refinement)
+                );
+            }
+        }
     }
 
     fn refinement_host_coordinates() -> WorkerV3SemanticMachineHostCoordinatesV1 {
@@ -4933,7 +5019,8 @@ mod tests {
     #[test]
     fn semantic_machine_refinement_rejects_every_host_coordinate_substitution() {
         let expected = refinement_host_coordinates();
-        for axis in 0..34 {
+        let expected_identity = *refinement_receipt(expected.clone()).identity();
+        for axis in 0..35 {
             let mut substituted = expected.clone();
             match axis {
                 0 => substituted.kir_sha256[0] ^= 1,
@@ -4970,10 +5057,17 @@ mod tests {
                 31 => substituted.publication_kernel_set_identity[0] ^= 1,
                 32 => substituted.publication_target_identity[0] ^= 1,
                 33 => substituted.publication_identity[0] ^= 1,
+                34 => substituted.kir_version = 9,
                 _ => unreachable!(),
             }
+            let receipt = refinement_receipt(substituted);
+            assert_ne!(
+                expected_identity,
+                *receipt.identity(),
+                "unbound coordinate {axis}"
+            );
             assert!(
-                refinement_receipt(substituted).admit(&expected).is_none(),
+                receipt.admit(&expected).is_none(),
                 "substituted host coordinate {axis} was admitted"
             );
         }

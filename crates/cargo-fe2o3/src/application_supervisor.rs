@@ -1,6 +1,5 @@
 //! Dedicated process boundary for descriptor-bearing Cargo applications.
 
-use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
@@ -30,11 +29,9 @@ pub(crate) fn run_frontend(args: &[std::ffi::OsString]) -> Result<ExitStatus, St
     set_cloexec(frontend.as_raw_fd())?;
     set_cloexec(supervisor_channel.as_raw_fd())?;
     let challenge = random_challenge()?;
-    let executable = env::current_exe()
-        .map_err(|error| format!("locate application supervisor executable: {error}"))?;
     let channel_fd = supervisor_channel.as_raw_fd();
     let slot_fd = admission.file.as_raw_fd();
-    let mut command = Command::new(executable);
+    let mut command = supervisor_command();
     command
         .arg(INTERNAL_SUPERVISOR_ARG)
         .arg(channel_fd.to_string())
@@ -93,6 +90,12 @@ pub(crate) fn run_frontend(args: &[std::ffi::OsString]) -> Result<ExitStatus, St
             .map_err(|_| "application supervisor error was not UTF-8".to_string())?),
         _ => unreachable!(),
     }
+}
+
+fn supervisor_command() -> Command {
+    // current_exe() is only a display name for a sealed memfd. Reexec the original image,
+    // including after the child marks all unrelated descriptors close-on-exec.
+    Command::new("/proc/self/exe")
 }
 
 pub(crate) fn run_supervisor(
@@ -732,6 +735,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
     use std::ffi::OsString;
     use std::os::fd::IntoRawFd;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -892,6 +896,29 @@ mod tests {
 
     #[test]
     fn supervisor_process_retains_admission_after_frontend_result() {
+        const SEALED_FRONTEND_ENV: &str = "FE2O3_INTERNAL_TEST_SEALED_FRONTEND";
+        if env::var_os(SEALED_FRONTEND_ENV).is_none() {
+            let original =
+                crate::pinned_executable::PinnedExecutable::open(&env::current_exe().unwrap())
+                    .unwrap();
+            let sealed = original.seal_executable_image().unwrap();
+            let output = sealed
+                .command()
+                .unwrap()
+                .args(["--exact", PROCESS_HELPER_TEST, "--nocapture"])
+                .as_command_mut()
+                .env(SEALED_FRONTEND_ENV, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+        assert!(!env::current_exe().unwrap().exists());
         if env::var_os(PROCESS_HELPER_ENV).is_some() {
             let channel = env::var_os("FE2O3_INTERNAL_TEST_SUPERVISOR_CHANNEL").unwrap();
             let slot = env::var_os("FE2O3_INTERNAL_TEST_SUPERVISOR_SLOT").unwrap();
@@ -923,7 +950,7 @@ mod tests {
         let challenge = [9_u8; 32];
         let channel_fd = supervisor_channel.as_raw_fd();
         let slot_fd = inherited.file.as_raw_fd();
-        let mut command = Command::new(env::current_exe().unwrap());
+        let mut command = supervisor_command();
         command
             .args(["--exact", PROCESS_HELPER_TEST, "--nocapture"])
             .env(PROCESS_HELPER_ENV, "1")

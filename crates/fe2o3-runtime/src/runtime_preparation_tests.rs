@@ -1,4 +1,4 @@
-use super::{module, module_with_resources};
+use crate::synthetic_cov6::{module, module_with_resources};
 use crate::*;
 
 #[path = "runtime_conditional_preparation_tests.rs"]
@@ -65,7 +65,10 @@ fn assert_prepared_contract(
         descriptor_offset,
         &kernarg,
         16,
-        &expected_inputs.buffers,
+        expected_inputs
+            .buffers
+            .iter()
+            .map(|buffer| (buffer.access(), buffer.bytes())),
         &expected_inputs.pointer_fixups,
         geometry,
         0,

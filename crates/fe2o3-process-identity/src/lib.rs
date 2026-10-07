@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 
 mod compiler_image;
 mod native_capture;
+pub mod pidfd;
 mod protected_rustc;
 mod sealed_memfd;
 

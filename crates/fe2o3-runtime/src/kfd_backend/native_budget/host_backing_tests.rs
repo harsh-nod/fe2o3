@@ -1,0 +1,443 @@
+use super::*;
+
+#[test]
+fn multi_device_composition_cannot_erase_required_request_policy() {
+    let mut required = KfdRuntimeBackendV1::mock();
+    required.rooted_backing = Some(RootedBackingV1::Composed(None));
+    let mut other = KfdRuntimeBackendV1::mock();
+    other.description.backend_device = 8;
+    let result = KfdMultiDeviceRuntimeBackendV1::from_backends(vec![required, other]);
+    assert!(
+        matches!(result, Err(error) if error.kind() == KfdRuntimeBackendErrorKindV1::InvalidLaunch)
+    );
+}
+
+#[test]
+fn composed_policy_without_binding_rejects_legacy_allocation_and_startup() {
+    let mut backend = KfdRuntimeBackendV1::mock();
+    backend.rooted_backing = Some(RootedBackingV1::Composed(None));
+    let next = backend.next_handle;
+    assert!(backend.allocation_admission_profile_v1().is_err());
+    assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+    assert_busy(backend.configure_device_backing_budget_v1(device_budget()));
+    assert!(matches!(
+        backend.allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 16, 4),
+        Err(RuntimeBackendFailureV1::Rejected(error))
+            if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
+    ));
+    assert!(matches!(
+        backend.allocate_with_outcome_v1(7, RuntimeMemoryKindV1::DeviceLocal, 16, 4),
+        Err(RuntimeBackendFailureV1::Rejected(error))
+            if error.kind() == KfdRuntimeBackendErrorKindV1::Unsupported
+    ));
+    assert_eq!(backend.next_handle, next);
+    assert!(backend.allocations.is_empty());
+    assert_eq!(backend.staged_context_bytes, 0);
+    assert!(matches!(
+        backend.take_rooted_backing_v1(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(backend.terminal);
+    assert!(backend.queue.is_none());
+    assert!(backend.terminal_memory.is_none());
+    core::mem::forget(backend); // Resource-free terminal mock; Drop would abort.
+}
+
+#[test]
+fn compound_backing_consumed_policy_blocks_both_local_budgets_and_fallback() {
+    let mut backend = KfdRuntimeBackendV1::mock();
+    backend.rooted_backing = Some(RootedBackingV1::Native(None));
+    assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+    assert_busy(backend.configure_device_backing_budget_v1(device_budget()));
+    assert!(backend.host_visible_backing_budget.is_none());
+    assert!(backend.device_backing_budget.is_none());
+    assert!(matches!(
+        backend.take_rooted_backing_v1(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(matches!(
+        backend.rooted_backing,
+        Some(RootedBackingV1::Native(None))
+    ));
+    assert!(backend.queue.is_none());
+    assert!(backend.terminal_memory.is_none());
+    core::mem::forget(backend);
+}
+
+#[test]
+fn rooted_n1_consumed_policy_rejects_replacement_and_never_falls_back() {
+    let mut backend = KfdRuntimeBackendV1::mock();
+    backend.rooted_backing = Some(RootedBackingV1::consumed_for_test());
+    assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+    assert!(backend.host_visible_backing_budget.is_none());
+    assert!(matches!(
+        backend.take_rooted_backing_v1(),
+        Err(RuntimeBackendFailureV1::Terminal(_))
+    ));
+    assert!(backend.rooted_backing.is_some());
+    assert!(backend.terminal);
+    assert!(backend.queue.is_none());
+    assert!(backend.terminal_memory.is_none());
+    core::mem::forget(backend); // Resource-free mock; terminal native Drop aborts.
+}
+
+#[test]
+fn rooted_n1_admission_distinguishes_capacity_from_invalid_binding() {
+    use fe2o3_resource_accounting::ResourceCreditErrorV1 as CreditError;
+    for error in [
+        CreditError::AllocationFailed,
+        CreditError::Capacity,
+        CreditError::RecordCapacity,
+        CreditError::DomainCapacity,
+    ] {
+        assert_eq!(
+            rooted_host_backing_admission_error_v1(error).kind(),
+            KfdRuntimeBackendErrorKindV1::Capacity
+        );
+    }
+    for error in [
+        CreditError::InvalidRecordCapacity,
+        CreditError::GenerationExhausted,
+        CreditError::Invariant,
+        CreditError::InvalidDomainCapacity,
+        CreditError::DomainDepth,
+        CreditError::NotHierarchical,
+    ] {
+        assert_eq!(
+            rooted_host_backing_admission_error_v1(error).kind(),
+            KfdRuntimeBackendErrorKindV1::Terminal
+        );
+    }
+}
+
+#[test]
+fn rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission() {
+    let constructor = include_str!("../native_budget.rs")
+        .split_once("pub fn from_checked_device_with_host_backing_root_v1<A>(")
+        .unwrap()
+        .1
+        .split_once("pub(super) fn take_rooted_backing_v1(")
+        .unwrap()
+        .0;
+    assert!(
+        constructor.find(".admit_session_v1(&device,").unwrap()
+            < constructor
+                .find("Self::from_checked_device(device, authority)")
+                .unwrap()
+    );
+    for (source, marker, end, native) in [
+        (
+            include_str!("../../kfd_backend.rs"),
+            "    fn ensure_sdma_queue_v1(",
+            "    fn directional_sdma_ops_v1(",
+            ".create_compute_aql_queue_with_rooted_host_backing_v1(",
+        ),
+        (
+            crate::kfd_backend::compute_dispatch::TEST_SOURCE_V1,
+            "fn publish(",
+            "fn observe_materialized_dispatch_published_v1(",
+            ".acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(",
+        ),
+        (
+            include_str!("../generated_adoption.rs"),
+            "    fn bind_generated_data_v1(",
+            "    fn observe_generated_queue_creation_v1(",
+            ".acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(",
+        ),
+    ] {
+        let body = source
+            .split_once(marker)
+            .unwrap()
+            .1
+            .split_once(end)
+            .unwrap()
+            .0
+            .split_whitespace()
+            .collect::<String>();
+        let admission = body.find("self.take_rooted_backing_v1()?").unwrap();
+        let take = body.find("self.admitted_device.take()").unwrap();
+        let compound = body
+            .find(&native.replace("rooted_host", "rooted_native"))
+            .unwrap();
+        assert!(take < compound);
+        assert!(
+            body[take..compound]
+                .contains("Some(native_budget::BackingAdmissionV1::Native(admission))=>")
+        );
+        let composed = body
+            .find(&native.replace("rooted_host", "composed"))
+            .unwrap();
+        assert!(take < composed);
+        assert!(
+            body[take..composed]
+                .contains("Some(native_budget::BackingAdmissionV1::Composed(admission))=>")
+        );
+        let native = body.find(native).unwrap();
+        assert!(admission < take && take < native);
+        assert!(
+            body[take..native]
+                .contains("Some(native_budget::BackingAdmissionV1::Host(admission))=>")
+        );
+    }
+}
+
+fn host_budget() -> Gfx942HostVisibleBackingBudgetV1 {
+    Gfx942HostVisibleBackingBudgetV1::new(64 * 1024, 4).unwrap()
+}
+
+fn device_budget() -> Gfx942DeviceBackingBudgetV1 {
+    Gfx942DeviceBackingBudgetV1::new(128 * 1024, 8).unwrap()
+}
+
+fn pool_limits() -> Gfx942DevicePoolLimitsV1 {
+    Gfx942DevicePoolLimitsV1::new(8192, 2).unwrap()
+}
+
+fn assert_busy(result: Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>>) {
+    assert!(matches!(result,
+        Err(RuntimeBackendFailureV1::Rejected(error))
+            if error.kind() == KfdRuntimeBackendErrorKindV1::Busy));
+}
+
+#[test]
+fn host_backing_default_configuration_does_not_imply_native_account_or_residency() {
+    let backend = KfdRuntimeBackendV1::mock();
+    assert_eq!(backend.host_visible_backing_budget_v1(), None);
+    assert_eq!(backend.host_visible_backing_usage_v1(), None);
+    assert_eq!(backend.device_backing_budget_v1(), None);
+    assert_eq!(backend.device_backing_usage_v1(), None);
+    assert_eq!(backend.device_pool_limits_v1(), None);
+    assert_eq!(backend.device_pool_usage_v1().unwrap(), None);
+    assert!(backend.queue.is_none());
+    assert!(!backend.native_available);
+}
+
+#[test]
+fn host_backing_configuration_is_immutable_and_preserves_exact_capabilities() {
+    for mut backend in [
+        KfdRuntimeBackendV1::mock(),
+        KfdRuntimeBackendV1::mock_with_semantic_authority_v1(),
+    ] {
+        let capabilities = backend.description.capabilities;
+        backend
+            .configure_host_visible_backing_budget_v1(host_budget())
+            .unwrap();
+        assert_eq!(
+            backend.host_visible_backing_budget_v1(),
+            Some(host_budget())
+        );
+        assert_eq!(backend.host_visible_backing_usage_v1(), None);
+        assert_eq!(backend.device_backing_budget_v1(), None);
+        assert_eq!(backend.device_pool_limits_v1(), None);
+        assert_eq!(backend.description.capabilities, capabilities);
+        assert_eq!(backend.next_handle, 1);
+        assert!(backend.queue.is_none());
+        assert!(!backend.native_available);
+        assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+        assert_busy(backend.configure_host_visible_backing_budget_v1(
+            Gfx942HostVisibleBackingBudgetV1::new(128 * 1024, 8).unwrap(),
+        ));
+        assert_eq!(
+            backend.host_visible_backing_budget_v1(),
+            Some(host_budget())
+        );
+        assert_eq!(backend.description.capabilities, capabilities);
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Configuration {
+    Host,
+    Device,
+    Pool,
+}
+
+#[test]
+fn host_device_and_pool_limits_are_independent_in_all_six_configuration_orders() {
+    use Configuration::{Device, Host, Pool};
+    for order in [
+        [Host, Device, Pool],
+        [Host, Pool, Device],
+        [Device, Host, Pool],
+        [Device, Pool, Host],
+        [Pool, Host, Device],
+        [Pool, Device, Host],
+    ] {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let capabilities = backend.description.capabilities;
+        let mut configured = [false; 3];
+        for configuration in order {
+            match configuration {
+                Host => {
+                    backend
+                        .configure_host_visible_backing_budget_v1(host_budget())
+                        .unwrap();
+                    configured[0] = true;
+                }
+                Device => {
+                    backend
+                        .configure_device_backing_budget_v1(device_budget())
+                        .unwrap();
+                    configured[1] = true;
+                }
+                Pool => {
+                    backend
+                        .configure_device_pool_limits_v1(pool_limits())
+                        .unwrap();
+                    configured[2] = true;
+                }
+            }
+            assert_eq!(
+                backend.host_visible_backing_budget_v1(),
+                configured[0].then(host_budget),
+                "{order:?}",
+            );
+            assert_eq!(
+                backend.device_backing_budget_v1(),
+                configured[1].then(device_budget),
+                "{order:?}",
+            );
+            assert_eq!(
+                backend.device_pool_limits_v1(),
+                configured[2].then(pool_limits),
+                "{order:?}",
+            );
+            assert_eq!(backend.host_visible_backing_usage_v1(), None);
+            assert_eq!(backend.device_backing_usage_v1(), None);
+            assert_eq!(backend.device_pool_usage_v1().unwrap(), None);
+            assert_eq!(backend.description.capabilities, capabilities);
+            assert_eq!(backend.next_handle, 1);
+            assert!(backend.queue.is_none());
+        }
+        assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+        assert_busy(backend.configure_device_backing_budget_v1(device_budget()));
+        assert_busy(backend.configure_device_pool_limits_v1(pool_limits()));
+        assert_eq!(
+            backend.host_visible_backing_budget_v1(),
+            Some(host_budget())
+        );
+        assert_eq!(backend.device_backing_budget_v1(), Some(device_budget()));
+        assert_eq!(backend.device_pool_limits_v1(), Some(pool_limits()));
+    }
+}
+
+#[test]
+fn host_backing_configuration_rejects_live_and_released_logical_resource_history() {
+    let mut backend = KfdRuntimeBackendV1::mock();
+    let stream = backend.create_stream_v1(7).unwrap();
+    assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+    backend.destroy_stream_v1(stream).unwrap();
+    assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+    assert_eq!(backend.host_visible_backing_budget_v1(), None);
+
+    for kind in [
+        RuntimeMemoryKindV1::HostVisible,
+        RuntimeMemoryKindV1::DeviceLocal,
+    ] {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let allocation = backend.allocate_v1(7, kind, 32, 8).unwrap();
+        assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+        backend.release_allocation_v1(allocation).unwrap();
+        assert_busy(backend.configure_host_visible_backing_budget_v1(host_budget()));
+        assert_eq!(backend.host_visible_backing_budget_v1(), None);
+        assert_eq!(backend.host_visible_backing_usage_v1(), None);
+    }
+}
+
+#[test]
+fn host_backing_configuration_rejects_native_lifecycle_history() {
+    let mut retired = KfdRuntimeBackendV1::mock();
+    retired.queue_retired = true;
+    assert_busy(retired.configure_host_visible_backing_budget_v1(host_budget()));
+    assert_eq!(retired.host_visible_backing_budget_v1(), None);
+
+    let mut enabled = KfdRuntimeBackendV1::mock();
+    enabled.sdma_enabled = true;
+    assert_busy(enabled.configure_host_visible_backing_budget_v1(host_budget()));
+    assert_eq!(enabled.host_visible_backing_budget_v1(), None);
+    enabled.sdma_enabled = false;
+}
+
+#[test]
+fn terminal_host_backing_configuration_cannot_restore_or_replace_limits() {
+    for configured in [false, true] {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        if configured {
+            backend
+                .configure_host_visible_backing_budget_v1(host_budget())
+                .unwrap();
+        }
+        backend.terminal = true;
+        assert!(matches!(
+            backend.configure_host_visible_backing_budget_v1(
+                Gfx942HostVisibleBackingBudgetV1::new(128 * 1024, 8).unwrap(),
+            ),
+            Err(RuntimeBackendFailureV1::Terminal(_)),
+        ));
+        assert_eq!(
+            backend.host_visible_backing_budget_v1(),
+            configured.then(host_budget)
+        );
+        assert_eq!(backend.host_visible_backing_usage_v1(), None);
+        // Terminal Drop deliberately aborts; retain the resource-free mock.
+        core::mem::forget(backend);
+    }
+}
+
+#[test]
+fn zero_device_cache_policy_does_not_disable_host_backing_configuration() {
+    for limits in [
+        Gfx942DevicePoolLimitsV1::new(0, 2).unwrap(),
+        Gfx942DevicePoolLimitsV1::new(8192, 0).unwrap(),
+        Gfx942DevicePoolLimitsV1::new(0, 0).unwrap(),
+    ] {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        backend.configure_device_pool_limits_v1(limits).unwrap();
+        backend
+            .configure_host_visible_backing_budget_v1(host_budget())
+            .unwrap();
+        assert_eq!(backend.device_pool_limits_v1(), Some(limits));
+        assert_eq!(
+            backend.host_visible_backing_budget_v1(),
+            Some(host_budget())
+        );
+        assert_eq!(backend.host_visible_backing_usage_v1(), None);
+        assert_eq!(backend.device_backing_budget_v1(), None);
+    }
+}
+
+#[test]
+fn host_backing_limits_reach_both_combined_native_startup_paths() {
+    // This checks forwarding only. KFD's fake-backend tests independently
+    // exercise actual host charges, coherent bootstrap signals and queue loans.
+    let source = include_str!("../../kfd_backend.rs");
+    let sdma = source
+        .split("    fn ensure_sdma_queue_v1(")
+        .nth(1)
+        .unwrap()
+        .split("    fn directional_sdma_ops_v1(")
+        .next()
+        .unwrap();
+    let create = sdma
+        .find(".create_compute_aql_queue_with_backing_budgets_and_capacity_v1(")
+        .unwrap();
+    let arguments = sdma[create..].split(')').next().unwrap();
+    assert!(arguments.contains("self.device_backing_budget,"));
+    assert!(arguments.contains("self.host_visible_backing_budget,"));
+    assert!(!sdma.contains(".create_compute_aql_queue_with_device_backing_budget_v1("));
+    assert!(!sdma.contains(".create_compute_aql_queue("));
+
+    let compute = crate::kfd_backend::compute_dispatch::TEST_SOURCE_V1;
+    let acquire = compute
+        .find(".acquire_shared_gtt_memory_session_with_backing_budgets_v1(")
+        .unwrap();
+    let materialize = acquire
+        + compute[acquire..]
+            .find("materialize_initial_data_v1(")
+            .unwrap();
+    let arguments = compute[acquire..materialize].split(')').next().unwrap();
+    assert!(arguments.contains("self.device_backing_budget,"));
+    assert!(arguments.contains("self.host_visible_backing_budget,"));
+    assert!(!compute.contains(".acquire_shared_gtt_memory_session_with_device_backing_budget_v1("));
+    assert!(!compute.contains(".acquire_shared_gtt_memory_session()"));
+}

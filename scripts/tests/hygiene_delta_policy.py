@@ -153,6 +153,132 @@ mod tests {
         self.assertEqual(1, result.returncode)
         self.assertIn("exactly duplicates", result.stderr)
 
+    def check_source(self, source: str, expected: int, path: str = "lib.rs") -> str:
+        write(self.repo / "crates/demo/src/lib.rs", "pub fn root() {}\n")
+        base = commit(self.repo, "base")
+        write(self.repo / "crates/demo/src" / path, source)
+        head = commit(self.repo, "head")
+        result = self.checker(base, head)
+        self.assertEqual(expected, result.returncode, result.stderr)
+        return result.stderr
+
+    def test_allows_exact_test_only_functions_methods_and_blocks(self) -> None:
+        self.check_source(
+            """
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) unsafe fn helper(
+    value: u32,
+) {
+    panic!("test helper");
+}
+struct Demo;
+impl Demo {
+    #[cfg(test)]
+    fn fixture(&self) { todo!(); }
+}
+#[cfg(test)]
+impl Default for Demo {
+    fn default() -> Self { unimplemented!(); }
+}
+fn production() {
+    #[cfg(test)]
+    if true { panic!(); }
+    #[cfg(test)]
+    { panic!(); }
+}
+""",
+            0,
+        )
+
+    def test_production_panic_after_test_block_on_same_line_is_rejected(self) -> None:
+        error = self.check_source(
+            '#[cfg(test)] fn helper() { panic!(); } fn bad() { panic!(); }\n',
+            1,
+        )
+        self.assertIn("lib.rs:1: new production panic macro", error)
+
+    def test_test_attribute_does_not_cover_later_production_function(self) -> None:
+        self.check_source(
+            '#[cfg(test)]\nfn helper() { panic!(); }\nfn bad() { todo!(); }\n',
+            1,
+        )
+
+    def test_external_test_module_does_not_cover_following_function(self) -> None:
+        self.check_source(
+            '#[cfg(test)]\nmod tests;\nfn bad() { unimplemented!(); }\n',
+            1,
+        )
+
+    def test_nonliteral_cfg_expression_is_not_exempted(self) -> None:
+        self.check_source(
+            '#[cfg(any(test, feature = "production"))]\nfn bad() { panic!(); }\n',
+            1,
+        )
+
+    def test_unknown_item_does_not_cover_following_production_block(self) -> None:
+        self.check_source(
+            '#[cfg(test)]\nstruct Fixture;\nfn bad() { panic!(); }\n', 1
+        )
+
+    def test_nested_extra_attributes_preserve_exact_test_scope(self) -> None:
+        self.check_source(
+            '#[cfg(test)]\n#[cfg_attr(feature = "x", allow(dead_code))]\n'
+            'fn helper() { panic!(); }\nfn bad() { panic!(); }\n', 1
+        )
+
+    def test_array_type_semicolon_does_not_end_test_function_header(self) -> None:
+        self.check_source(
+            '#[cfg(test)]\nfn helper(value: [u8; 32]) -> [u8; 4] { panic!(); }\n', 0
+        )
+
+    def test_array_type_does_not_mask_production_after_external_declaration(self) -> None:
+        self.check_source(
+            'unsafe extern "C" { #[cfg(test)] fn fixture(value: [u8; 32]); }\n'
+            'fn bad() { panic!(); }\n', 1
+        )
+
+    def test_closure_in_test_condition_is_not_mistaken_for_statement_body(self) -> None:
+        self.check_source(
+            'fn production() {\n#[cfg(test)]\n'
+            'if [true].iter().any(|value| { *value }) { panic!(); }\n}\n', 0
+        )
+
+    def test_production_panic_after_closure_test_condition_is_not_exempted(self) -> None:
+        self.check_source(
+            'fn production() {\n#[cfg(test)]\n'
+            'if [true].iter().any(|value| { *value }) { panic!(); }\npanic!();\n}\n', 1
+        )
+
+    def test_fake_attributes_in_comments_and_strings_do_not_mask_panics(self) -> None:
+        self.check_source(
+            '''
+/* #[cfg(test)] */
+fn bad() { panic!(); }
+const TEXT: &str = r#"#[cfg(test)] fn fake() { panic!(); }"#;
+fn also_bad() { todo!(); }
+''',
+            1,
+        )
+
+    def test_inner_test_attribute_exempts_only_test_only_file(self) -> None:
+        self.check_source('#![cfg(test)]\nfn helper() { panic!(); }\n', 0)
+
+    def test_nested_test_source_paths_are_exempted(self) -> None:
+        write(self.repo / "crates/demo/src/lib.rs", "pub fn root() {}\n")
+        base = commit(self.repo, "base")
+        for path in ("context/tests/lifecycle.rs", "context/owned_tests/settlement.rs"):
+            write(self.repo / "crates/demo/src" / path, "fn fixture() { panic!(); }\n")
+        result = self.checker(base, commit(self.repo, "head"))
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_similarly_named_production_path_is_not_exempted(self) -> None:
+        self.check_source("fn bad() { panic!(); }\n", 1, "context/testing/live.rs")
+
+    def test_size_limit_applies_even_to_test_only_source(self) -> None:
+        error = self.check_source(repeated_source(1201), 1, "context/tests/large.rs")
+        self.assertIn("new production source file", error)
+
     def test_ignores_fixture_and_test_source_paths(self) -> None:
         write(self.repo / "crates/demo/src/lib.rs", "pub fn root() {}\n")
         base = commit(self.repo, "base")

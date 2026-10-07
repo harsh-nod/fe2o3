@@ -4,6 +4,10 @@
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 compile_error!("fe2o3-compiler-execution-coordinator requires Linux x86-64");
 
+use fe2o3_broker_authority_service::{
+    CompilerExecutionObserverErrorV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
+    PreparedRootCompilerObserverRegistryV1, RootCompilerObserverRegistryV1,
+};
 use std::error::Error;
 use std::fmt;
 use std::fs::File;
@@ -31,6 +35,8 @@ use fe2o3_compiler_execution_supervisor::{
     COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1,
     COMPILER_EXECUTION_SUPERVISOR_ISSUER_FD_V1, COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_FD_V1,
     COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1, COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1,
+    COMPILER_EXECUTION_SUPERVISOR_OBSERVER_REGISTRY_FD_V1,
+    COMPILER_EXECUTION_SUPERVISOR_OBSERVER_ROOT_PIDFD_V1,
     COMPILER_EXECUTION_SUPERVISOR_POLICY_FD_V1, COMPILER_EXECUTION_SUPERVISOR_ROOT_FD_V1,
     COMPILER_EXECUTION_SUPERVISOR_SIGNING_KEY_FD_V1, IssuerServiceCredentialProfileV1,
     ProtectedIssuerServiceDeploymentInputsV1, ProtectedIssuerServiceProvisioningErrorV1,
@@ -70,6 +76,7 @@ mod lifecycle;
 mod native;
 mod native_activation;
 mod native_adapter;
+mod native_application_preparation;
 mod native_entrypoint;
 mod native_inherited;
 mod native_inherited_adapter;
@@ -96,10 +103,21 @@ mod provisioning;
 mod provisioning_entrypoint;
 mod runtime_listener;
 
+#[cfg(test)]
+#[allow(unsafe_code)]
+mod composed_startup;
+
 pub use entrypoint::run_inherited_compiler_execution_coordinator_v1;
 pub use native::{
     CompilerExecutionPreparationErrorV2, CompilerExecutionPreparationQuotaV2,
     CompilerExecutionPreparationStorageV2,
+};
+pub use native_application_preparation::{
+    NativeApplicationRootPreparationV3, NativeApplicationRootSourcesV3,
+};
+pub use native_entrypoint::fixed_phase::{
+    NativeCompilerPhaseOutcomeV3, PendingRootCompilerCompletionV3,
+    fixed_native_compiler_phase_quota_v3, with_fixed_native_compiler_phase_v3,
 };
 pub use native_entrypoint::run_inherited_compiler_execution_coordinator_v3;
 pub use native_inherited::{
@@ -126,6 +144,8 @@ pub use native_trust_adapter::{
 pub use native_trust_v2::CompilerExecutionSupervisorTrustV2;
 pub use native_trust_v3::CompilerExecutionSupervisorTrustV3;
 pub use native_v2::{PreparedCompilerExecutionSupervisorV2, RootManagedCompilerExecutionServiceV2};
+pub use native_v3::{ApplicationCurrentnessCleanupQuotaV3, ApplicationCurrentnessIssuerV3};
+pub use native_v3::{NativeApplicationSupervisorChildV3, NativeApplicationSupervisorControlV3};
 pub use native_v3::{PreparedCompilerExecutionSupervisorV3, RootManagedCompilerExecutionServiceV3};
 
 pub use inherited::{
@@ -516,6 +536,13 @@ impl PreparedCompilerExecutionSupervisorV1 {
             None,
         )
         .map_err(|source| io_error("create root-to-supervisor bootstrap", source.into()))?;
+        let (registry, [registry_peer, registry_root_pidfd]) =
+            PreparedRootCompilerObserverRegistryV1::prepare(
+                self.trust.policy.policy().clone(),
+                self.credentials,
+                self.deployment().external_anchor_service(),
+            )
+            .map_err(observer_error)?;
         let (profile_reader, profile_writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK)
             .map_err(|source| io_error("create supervisor-profile channel", source.into()))?;
         let (gate_reader, gate_writer) = pipe_with(PipeFlags::CLOEXEC)
@@ -554,6 +581,14 @@ impl PreparedCompilerExecutionSupervisorV1 {
                 .try_clone_for_transfer()
                 .map_err(CompilerExecutionCoordinatorErrorV1::DeploymentCapability)?;
             let bindings = [
+                binding(
+                    registry_peer.as_fd(),
+                    COMPILER_EXECUTION_SUPERVISOR_OBSERVER_REGISTRY_FD_V1,
+                )?,
+                binding(
+                    registry_root_pidfd.as_fd(),
+                    COMPILER_EXECUTION_SUPERVISOR_OBSERVER_ROOT_PIDFD_V1,
+                )?,
                 binding(
                     listener.as_fd(),
                     COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1,
@@ -605,6 +640,8 @@ impl PreparedCompilerExecutionSupervisorV1 {
             })?
         };
         drop(child_bootstrap);
+        drop(registry_peer);
+        drop(registry_root_pidfd);
         drop(profile_writer);
         drop(gate_reader);
 
@@ -635,10 +672,24 @@ impl PreparedCompilerExecutionSupervisorV1 {
             {
                 return Err(child_exited(&child, "supervisor exited after readiness"));
             }
-            Ok(readiness)
+            let supervisor_identity = LiveClientPidfdIdentityV1::admit(
+                child
+                    .try_clone_pidfd()
+                    .map_err(CompilerExecutionCoordinatorErrorV1::Spawn)?,
+                ExpectedClientProcessIdentityV1::new(
+                    pid_u32(child.pid())?,
+                    self.credentials.uid(),
+                    self.credentials.gid(),
+                )
+                .map_err(|error| observer_error(error.into()))?,
+            )
+            .map_err(|error| observer_error(error.into()))?;
+            let registry = registry.bind(supervisor_identity).map_err(observer_error)?;
+            Ok((readiness, registry))
         })();
         match result {
-            Ok(readiness) => Ok(RootManagedCompilerExecutionServiceV1 {
+            Ok((readiness, registry)) => Ok(RootManagedCompilerExecutionServiceV1 {
+                registry: Some(registry),
                 child,
                 provisioning: Some(self),
                 readiness,
@@ -680,6 +731,7 @@ fn binding<'a>(
 /// require_as_fd::<RootManagedCompilerExecutionServiceV1>();
 /// ```
 pub struct RootManagedCompilerExecutionServiceV1 {
+    registry: Option<RootCompilerObserverRegistryV1>,
     child: RootOwnedProtectedServiceChildV1,
     provisioning: Option<PreparedCompilerExecutionSupervisorV1>,
     readiness: CompilerExecutionSupervisorReadyV1,
@@ -697,6 +749,28 @@ impl fmt::Debug for RootManagedCompilerExecutionServiceV1 {
 }
 
 impl RootManagedCompilerExecutionServiceV1 {
+    /// Moves one fully published custodian registration out of compiler cleanup.
+    /// Capacity and duplicate-occurrence reservations remain in the root registry.
+    pub fn take_published_application_custodian(
+        &mut self,
+    ) -> Option<fe2o3_broker_authority_service::PublishedApplicationCustodianHandoffV1> {
+        self.registry
+            .as_mut()?
+            .take_published_application_custodian()
+    }
+
+    /// Services registered compiler observers without waiting for a complete request exchange.
+    /// Individual issuer failures are contained and reported without stopping other sessions.
+    pub fn step_observers(
+        &mut self,
+        on_session_failure: impl FnMut(CompilerExecutionObserverErrorV1),
+    ) -> Result<bool, CompilerExecutionCoordinatorErrorV1> {
+        self.registry
+            .as_mut()
+            .expect("live service retains observer registry")
+            .step(on_session_failure)
+            .map_err(observer_error)
+    }
     /// Returns the exact child PID without exposing pidfd custody.
     pub const fn pid(&self) -> rustix::process::Pid {
         self.child.pid()
@@ -738,6 +812,8 @@ impl RootManagedCompilerExecutionServiceV1 {
 
     /// Terminates and exactly once reaps the supervisor, then shuts down the retained anchor.
     pub fn shutdown(mut self) -> Result<(), CompilerExecutionCoordinatorErrorV1> {
+        // Observer Drop signals all issuers and waits for exact exits before anchor release.
+        drop(self.registry.take());
         let supervisor = self
             .child
             .cancel_and_reap()
@@ -754,6 +830,7 @@ impl RootManagedCompilerExecutionServiceV1 {
 
 impl Drop for RootManagedCompilerExecutionServiceV1 {
     fn drop(&mut self) {
+        drop(self.registry.take());
         let _ = self.child.cancel_and_reap();
     }
 }
@@ -951,6 +1028,8 @@ fn io_error(operation: &'static str, source: io::Error) -> CompilerExecutionCoor
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CompilerExecutionCoordinatorErrorV1 {
+    /// Authenticated observer registration or containment failed.
+    Observer(Box<CompilerExecutionObserverErrorV1>),
     /// Process arguments or system-manager activation metadata are not exact.
     InvalidActivation(&'static str),
     /// Signal-mask installation or synchronous shutdown waiting failed.
@@ -1052,6 +1131,9 @@ pub enum CompilerExecutionCoordinatorErrorV1 {
 impl fmt::Display for CompilerExecutionCoordinatorErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Observer(error) => {
+                write!(formatter, "compiler observer registry failed: {error}")
+            }
             Self::InvalidActivation(reason) => {
                 write!(formatter, "invalid coordinator activation: {reason}")
             }
@@ -1160,6 +1242,7 @@ impl fmt::Display for CompilerExecutionCoordinatorErrorV1 {
 impl Error for CompilerExecutionCoordinatorErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Observer(error) => Some(error),
             Self::Signal(error) => Some(error),
             Self::InheritedDescriptor { source, .. } => Some(source),
             Self::Credentials(error) => Some(error),
@@ -1176,9 +1259,14 @@ impl Error for CompilerExecutionCoordinatorErrorV1 {
     }
 }
 
+fn observer_error(error: CompilerExecutionObserverErrorV1) -> CompilerExecutionCoordinatorErrorV1 {
+    CompilerExecutionCoordinatorErrorV1::Observer(Box::new(error))
+}
+
 #[cfg(test)]
 mod tests {
     use std::process::{Child, Command};
+    use std::sync::{Mutex, MutexGuard};
 
     use ed25519_dalek::SigningKey;
     use fe2o3_compiler_execution_protocol::{
@@ -1187,6 +1275,14 @@ mod tests {
     use rustix::net::SendFlags;
 
     use super::*;
+
+    pub(super) fn process_spawn_fixture_guard() -> MutexGuard<'static, ()> {
+        // A concurrent pre-exec child can retain a flock's last open description.
+        static GUARD: Mutex<()> = Mutex::new(());
+        GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 
     #[test]
     fn deployment_timeout_is_strictly_bounded() {
@@ -1214,6 +1310,8 @@ mod tests {
             COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1,
             COMPILER_EXECUTION_SUPERVISOR_BOOTSTRAP_FD_V1,
             COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1,
+            COMPILER_EXECUTION_SUPERVISOR_OBSERVER_REGISTRY_FD_V1,
+            COMPILER_EXECUTION_SUPERVISOR_OBSERVER_ROOT_PIDFD_V1,
             COMPILER_EXECUTION_SUPERVISOR_DEPLOYMENT_FD_V1,
         ];
         for (index, destination) in destinations.iter().enumerate() {
@@ -1335,6 +1433,7 @@ mod tests {
     }
 
     fn live_test_child() -> (Child, RootOwnedProtectedServiceChildV1) {
+        let _guard = process_spawn_fixture_guard();
         let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
         let pid = rustix::process::Pid::from_raw(i32::try_from(child.id()).unwrap()).unwrap();
         let pidfd = rustix::process::pidfd_open(pid, rustix::process::PidfdFlags::empty()).unwrap();
@@ -1367,3 +1466,5 @@ mod tests {
         .unwrap()
     }
 }
+#[cfg(test)]
+mod eof_test_process;

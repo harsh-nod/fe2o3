@@ -4,7 +4,7 @@ use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
 use fe2o3_protected_service_profile::{
-    PROTECTED_SERVICE_SECUREBITS_V1, ProtectedServiceCredentialProfileV1,
+    ProofControllerCredentialProfileV1, ProtectedServiceCredentialProfileV1,
 };
 
 use crate::native_spawn::compiler_arguments::CompilerArguments;
@@ -29,6 +29,7 @@ const PR_SET_PDEATHSIG: c_int = 1;
 const PR_GET_PDEATHSIG: c_int = 2;
 const PR_SET_DUMPABLE: c_int = 4;
 const PR_GET_DUMPABLE: c_int = 3;
+const PR_GET_SECCOMP: c_int = 21;
 const PR_CAPBSET_READ: c_int = 23;
 const PR_CAPBSET_DROP: c_int = 24;
 const PR_GET_SECUREBITS: c_int = 27;
@@ -41,6 +42,33 @@ const PR_CAP_AMBIENT_CLEAR_ALL: c_int = 4;
 const RLIMIT_CORE: c_int = 4;
 const LINUX_CAPABILITY_VERSION_3: u32 = 0x2008_0522;
 const FAILURE_BASE: u8 = 0xc0;
+
+#[derive(Clone, Copy)]
+enum ChildCredentials {
+    Protected(ProtectedServiceCredentialProfileV1),
+    ProofController(ProofControllerCredentialProfileV1),
+}
+
+impl ChildCredentials {
+    const fn uid(self) -> u32 {
+        match self {
+            Self::Protected(value) => value.uid(),
+            Self::ProofController(value) => value.uid(),
+        }
+    }
+    const fn gid(self) -> u32 {
+        match self {
+            Self::Protected(value) => value.gid(),
+            Self::ProofController(value) => value.gid(),
+        }
+    }
+    const fn securebits(self) -> u32 {
+        match self {
+            Self::Protected(value) => value.securebits(),
+            Self::ProofController(value) => value.securebits(),
+        }
+    }
+}
 
 #[path = "native_compiler_channel_syscall.rs"]
 mod compiler_channel;
@@ -368,9 +396,51 @@ pub(crate) fn spawn(
     cap_last_cap: u32,
     expected_parent: rustix::process::Pid,
 ) -> io::Result<RootOwnedProtectedServiceChildV1> {
-    let (pid, pidfd, parent_mask) =
-        clone_child(staged, credentials, cap_last_cap, expected_parent).map_err(io::Error::from)?;
-    let child = RootOwnedProtectedServiceChildV1 { pid, pidfd };
+    spawn_with_credentials(
+        staged,
+        ChildCredentials::Protected(credentials),
+        cap_last_cap,
+        expected_parent,
+    )
+}
+
+pub(crate) fn spawn_proof_controller(
+    staged: &StagedProtectedServiceExecV1,
+    credentials: ProofControllerCredentialProfileV1,
+    cap_last_cap: u32,
+    expected_parent: rustix::process::Pid,
+) -> io::Result<RootOwnedProtectedServiceChildV1> {
+    if staged.compiler.is_some() || staged.compiler_child_channel_transfer.is_some() {
+        return Err(io::Error::from_raw_os_error(libc::EINVAL));
+    }
+    spawn_with_credentials(
+        staged,
+        ChildCredentials::ProofController(credentials),
+        cap_last_cap,
+        expected_parent,
+    )
+}
+
+fn spawn_with_credentials(
+    staged: &StagedProtectedServiceExecV1,
+    credentials: ChildCredentials,
+    cap_last_cap: u32,
+    expected_parent: rustix::process::Pid,
+) -> io::Result<RootOwnedProtectedServiceChildV1> {
+    let (pid, pidfd, parent_mask) = clone_child_with_credentials(
+        staged,
+        credentials,
+        cap_last_cap,
+        expected_parent,
+        None,
+        None,
+    )
+    .map_err(io::Error::from)?;
+    let child = RootOwnedProtectedServiceChildV1 {
+        pid,
+        pidfd,
+        reaping_ownership_lost: false,
+    };
     let pidfd = child.pidfd.as_ref();
     let Some(pidfd) = pidfd else {
         let _ = rustix::process::kill_process(pid, rustix::process::Signal::KILL);
@@ -414,6 +484,54 @@ pub(crate) fn clone_child(
 pub(crate) fn clone_child_with_cgroup(
     staged: &StagedProtectedServiceExecV1,
     credentials: ProtectedServiceCredentialProfileV1,
+    cap_last_cap: u32,
+    expected_parent: rustix::process::Pid,
+    cgroup: Option<BorrowedFd<'_>>,
+    mapping_gate: Option<(BorrowedFd<'_>, BorrowedFd<'_>)>,
+) -> rustix::io::Result<(
+    rustix::process::Pid,
+    Option<OwnedFd>,
+    crate::clone_compat::ParentSignalMask,
+)> {
+    clone_child_with_credentials(
+        staged,
+        ChildCredentials::Protected(credentials),
+        cap_last_cap,
+        expected_parent,
+        cgroup,
+        mapping_gate,
+    )
+}
+
+// The native proof launcher adopts the complete clone result into its funded
+// aggregate cleanup slot before restoring the parent mask or checking the pidfd.
+pub(crate) fn clone_proof_controller_with_cgroup(
+    staged: &StagedProtectedServiceExecV1,
+    credentials: ProofControllerCredentialProfileV1,
+    cap_last_cap: u32,
+    expected_parent: rustix::process::Pid,
+    cgroup: BorrowedFd<'_>,
+) -> rustix::io::Result<(
+    rustix::process::Pid,
+    Option<OwnedFd>,
+    crate::clone_compat::ParentSignalMask,
+)> {
+    if staged.compiler.is_some() || staged.compiler_child_channel_transfer.is_some() {
+        return Err(rustix::io::Errno::INVAL);
+    }
+    clone_child_with_credentials(
+        staged,
+        ChildCredentials::ProofController(credentials),
+        cap_last_cap,
+        expected_parent,
+        Some(cgroup),
+        None,
+    )
+}
+
+fn clone_child_with_credentials(
+    staged: &StagedProtectedServiceExecV1,
+    credentials: ChildCredentials,
     cap_last_cap: u32,
     expected_parent: rustix::process::Pid,
     cgroup: Option<BorrowedFd<'_>>,
@@ -509,117 +627,8 @@ fn clone_arguments(
     }
 }
 
-pub(crate) struct RootOwnedProtectedServiceChildV1 {
-    pid: rustix::process::Pid,
-    pidfd: Option<OwnedFd>,
-}
-
-impl RootOwnedProtectedServiceChildV1 {
-    #[cfg(feature = "test-support")]
-    pub(crate) fn admit_non_authoritative_test(
-        pid: rustix::process::Pid,
-        pidfd: OwnedFd,
-    ) -> io::Result<Self> {
-        if !rustix::io::fcntl_getfd(&pidfd)
-            .map_err(io::Error::from)?
-            .contains(rustix::io::FdFlags::CLOEXEC)
-        {
-            return Err(io::Error::from_raw_os_error(libc::EPERM));
-        }
-        Ok(Self {
-            pid,
-            pidfd: Some(pidfd),
-        })
-    }
-
-    pub(crate) const fn pid(&self) -> rustix::process::Pid {
-        self.pid
-    }
-
-    fn pidfd(&self) -> &OwnedFd {
-        self.pidfd.as_ref().expect("live child retains pidfd")
-    }
-
-    pub(crate) fn is_live(&self) -> io::Result<bool> {
-        match rustix::process::waitid(
-            rustix::process::WaitId::PidFd(self.pidfd().as_fd()),
-            rustix::process::WaitIdOptions::EXITED
-                | rustix::process::WaitIdOptions::NOHANG
-                | rustix::process::WaitIdOptions::NOWAIT,
-        ) {
-            Ok(None) | Err(rustix::io::Errno::INTR) => Ok(true),
-            Ok(Some(_)) => Ok(false),
-            Err(source) => Err(source.into()),
-        }
-    }
-
-    pub(crate) fn try_clone_pidfd(&self) -> io::Result<OwnedFd> {
-        rustix::io::fcntl_dupfd_cloexec(self.pidfd(), 0).map_err(io::Error::from)
-    }
-
-    pub(crate) fn exit_description(&self, fallback: &'static str) -> String {
-        rustix::process::waitid(
-            rustix::process::WaitId::PidFd(self.pidfd().as_fd()),
-            rustix::process::WaitIdOptions::EXITED
-                | rustix::process::WaitIdOptions::NOHANG
-                | rustix::process::WaitIdOptions::NOWAIT,
-        )
-        .ok()
-        .flatten()
-        .map_or_else(|| fallback.to_owned(), |status| format!("{status:?}"))
-    }
-
-    pub(crate) fn cancel_and_reap(&mut self) -> Result<(), ReapErrorV1> {
-        let Some(pidfd) = self.pidfd.as_ref() else {
-            return Ok(());
-        };
-        let signal_error =
-            match rustix::process::pidfd_send_signal(pidfd, rustix::process::Signal::KILL) {
-                Ok(()) | Err(rustix::io::Errno::SRCH) => None,
-                Err(pidfd_source) => {
-                    match rustix::process::kill_process(self.pid, rustix::process::Signal::KILL) {
-                        Ok(()) | Err(rustix::io::Errno::SRCH) => {
-                            Some(io::Error::from(pidfd_source))
-                        }
-                        Err(_) => return Err(ReapErrorV1::Io(pidfd_source.into())),
-                    }
-                }
-            };
-        let wait_result = loop {
-            match rustix::process::waitid(
-                rustix::process::WaitId::PidFd(pidfd.as_fd()),
-                rustix::process::WaitIdOptions::EXITED,
-            ) {
-                Ok(Some(_)) => break Ok(()),
-                Ok(None) | Err(rustix::io::Errno::INTR) => {}
-                Err(rustix::io::Errno::CHILD) => break Err(ReapErrorV1::OwnershipLost),
-                Err(source) => break Err(ReapErrorV1::Io(source.into())),
-            }
-        };
-        match wait_result {
-            Ok(()) => {
-                self.pidfd.take();
-                signal_error.map_or(Ok(()), |source| Err(ReapErrorV1::Io(source)))
-            }
-            Err(ReapErrorV1::OwnershipLost) => {
-                self.pidfd.take();
-                Err(ReapErrorV1::OwnershipLost)
-            }
-            Err(error) => Err(error),
-        }
-    }
-}
-
-impl Drop for RootOwnedProtectedServiceChildV1 {
-    fn drop(&mut self) {
-        let _ = self.cancel_and_reap();
-    }
-}
-
-pub(crate) enum ReapErrorV1 {
-    OwnershipLost,
-    Io(io::Error),
-}
+mod child;
+pub(crate) use child::{ReapErrorV1, RootOwnedProtectedServiceChildV1};
 
 fn reap_pid(pid: rustix::process::Pid) {
     loop {
@@ -633,7 +642,7 @@ fn reap_pid(pid: rustix::process::Pid) {
 
 unsafe fn child_exec(
     staged: &StagedProtectedServiceExecV1,
-    credentials: ProtectedServiceCredentialProfileV1,
+    credentials: ChildCredentials,
     cap_last_cap: u32,
     expected_parent: i32,
     mapping_gate: Option<(BorrowedFd<'_>, BorrowedFd<'_>)>,
@@ -911,10 +920,7 @@ unsafe fn establish_guarded_profile(
     Ok(())
 }
 
-unsafe fn establish_profile(
-    credentials: ProtectedServiceCredentialProfileV1,
-    cap_last_cap: u32,
-) -> c_int {
+unsafe fn establish_profile(credentials: ChildCredentials, cap_last_cap: u32) -> c_int {
     let core = LinuxRlimit64V1 {
         current: 0,
         maximum: 0,
@@ -930,7 +936,7 @@ unsafe fn establish_profile(
                 std::ptr::null_mut::<LinuxRlimit64V1>(),
             )
         } != 0
-        || unsafe { libc::prctl(PR_SET_SECUREBITS, PROTECTED_SERVICE_SECUREBITS_V1, 0, 0, 0) } != 0
+        || unsafe { libc::prctl(PR_SET_SECUREBITS, credentials.securebits(), 0, 0, 0) } != 0
         || unsafe { libc::prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) } != 0
     {
         return -1;
@@ -979,10 +985,7 @@ unsafe fn establish_profile(
     unsafe { validate_profile(credentials, cap_last_cap) }
 }
 
-unsafe fn validate_profile(
-    credentials: ProtectedServiceCredentialProfileV1,
-    cap_last_cap: u32,
-) -> c_int {
+unsafe fn validate_profile(credentials: ChildCredentials, cap_last_cap: u32) -> c_int {
     let mut uids = [u32::MAX; 3];
     let mut gids = [u32::MAX; 3];
     let mut header = LinuxCapabilityHeaderV1 {
@@ -1034,8 +1037,9 @@ unsafe fn validate_profile(
             return -1;
         }
     }
-    if unsafe { libc::prctl(PR_GET_SECUREBITS, 0, 0, 0, 0) }
-        != PROTECTED_SERVICE_SECUREBITS_V1 as c_int
+    if unsafe { libc::prctl(PR_GET_SECUREBITS, 0, 0, 0, 0) } != credentials.securebits() as c_int
+        || (matches!(credentials, ChildCredentials::ProofController(_))
+            && unsafe { libc::prctl(PR_GET_SECCOMP, 0, 0, 0, 0) } != 0)
         || unsafe { libc::prctl(PR_GET_NO_NEW_PRIVS, 0, 0, 0, 0) } != 1
         || unsafe { libc::prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) } != 0
         || unsafe {
@@ -1076,3 +1080,6 @@ unsafe fn child_fail(exec_status: RawFd, stage: u8) -> ! {
 #[cfg(test)]
 #[path = "profile_transition_tests.rs"]
 mod profile_tests;
+
+#[cfg(test)]
+mod proof_controller_tests;

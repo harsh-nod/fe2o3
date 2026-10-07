@@ -1,0 +1,423 @@
+{
+  "files": {
+    "crates/fe2o3-runtime-model/src/context_queued_writers/query_bodies.rs": {
+      "current_sha256": "a777f8dd6f9eaaec47f6e79865c7cb3dfc62840f86ea5b53ca4b56ffdf69bc25",
+      "edits": [
+        {
+          "end": 2043,
+          "replacement": "",
+          "start": 1891
+        }
+      ],
+      "predecessor_sha256": "6dadffaf03fccdc22d5f0a005f1b92eb1fffc655a67d593b938a2c5b77107238"
+    },
+    "crates/fe2o3-runtime-model/verus/context_producer_journal_composition_v1.rs": {
+      "current_sha256": "c9a45886ededd88a14c439bb346619f6826c11c22a610338c43cf730983307eb",
+      "edits": [
+        {
+          "end": 88,
+          "replacement": "d live-allocation an",
+          "start": 88
+        },
+        {
+          "end": 713,
+          "replacement": "",
+          "start": 654
+        },
+        {
+          "end": 872,
+          "replacement": "struct Versions<V> { journal: ContextQueuedWriterJournalV1, unread: V }\n\n    ",
+          "start": 872
+        },
+        {
+          "end": 907,
+          "replacement": "No c",
+          "start": 906
+        },
+        {
+          "end": 921,
+          "replacement": ",",
+          "start": 917
+        },
+        {
+          "end": 935,
+          "replacement": "or live-storage\n    // ",
+          "start": 935
+        },
+        {
+          "end": 946,
+          "replacement": "",
+          "start": 945
+        },
+        {
+          "end": 947,
+          "replacement": "is",
+          "start": 947
+        },
+        {
+          "end": 948,
+          "replacement": "asserted",
+          "start": 948
+        },
+        {
+          "end": 949,
+          "replacement": "by",
+          "start": 949
+        },
+        {
+          "end": 952,
+          "replacement": "these two",
+          "start": 950
+        },
+        {
+          "end": 959,
+          "replacement": "ing",
+          "start": 959
+        },
+        {
+          "end": 974,
+          "replacement": "",
+          "start": 960
+        },
+        {
+          "end": 997,
+          "replacement": "",
+          "start": 975
+        },
+        {
+          "end": 1000,
+          "replacement": "back b",
+          "start": 1000
+        },
+        {
+          "end": 1002,
+          "replacement": "und",
+          "start": 1001
+        },
+        {
+          "end": 1004,
+          "replacement": "r",
+          "start": 1003
+        },
+        {
+          "end": 1013,
+          "replacement": "e",
+          "start": 1005
+        },
+        {
+          "end": 1019,
+          "replacement": "",
+          "start": 1014
+        },
+        {
+          "end": 1103,
+          "replacement": "    live: Result<ContextAllocationReferenceV1, ContextVersionJournalErrorV1>,\n    ",
+          "start": 1103
+        },
+        {
+          "end": 1219,
+          "replacement": "",
+          "start": 1171
+        },
+        {
+          "end": 1482,
+          "replacement": "",
+          "start": 1434
+        },
+        {
+          "end": 1546,
+          "replacement": "",
+          "start": 1532
+        },
+        {
+          "end": 2522,
+          "replacement": "",
+          "start": 2516
+        },
+        {
+          "end": 2527,
+          "replacement": "te",
+          "start": 2524
+        },
+        {
+          "end": 2531,
+          "replacement": "nal",
+          "start": 2528
+        },
+        {
+          "end": 2564,
+          "replacement": "",
+          "start": 2532
+        },
+        {
+          "end": 2776,
+          "replacement": "",
+          "start": 2568
+        },
+        {
+          "end": 2920,
+          "replacement": "",
+          "start": 2872
+        },
+        {
+          "end": 2984,
+          "replacement": "",
+          "start": 2970
+        },
+        {
+          "end": 3065,
+          "replacement": "",
+          "start": 3057
+        },
+        {
+          "end": 3086,
+          "replacement": "",
+          "start": 3079
+        },
+        {
+          "end": 3439,
+          "replacement": "",
+          "start": 3424
+        },
+        {
+          "end": 3463,
+          "replacement": "",
+          "start": 3451
+        },
+        {
+          "end": 3500,
+          "replacement": "",
+          "start": 3493
+        },
+        {
+          "end": 4449,
+          "replacement": "",
+          "start": 4435
+        },
+        {
+          "end": 4587,
+          "replacement": "",
+          "start": 4548
+        },
+        {
+          "end": 4613,
+          "replacement": "",
+          "start": 4606
+        },
+        {
+          "end": 7769,
+          "replacement": "",
+          "start": 7744
+        },
+        {
+          "end": 7780,
+          "replacement": "",
+          "start": 7779
+        },
+        {
+          "end": 7791,
+          "replacement": "xte",
+          "start": 7781
+        },
+        {
+          "end": 7814,
+          "replacement": ".",
+          "start": 7795
+        },
+        {
+          "end": 7823,
+          "replacement": "i",
+          "start": 7815
+        },
+        {
+          "end": 7861,
+          "replacement": "",
+          "start": 7825
+        },
+        {
+          "end": 8090,
+          "replacement": "",
+          "start": 8016
+        },
+        {
+          "end": 8177,
+          "replacement": "self.exte",
+          "start": 8177
+        },
+        {
+          "end": 8178,
+          "replacement": "nal.liv",
+          "start": 8178
+        },
+        {
+          "end": 8183,
+          "replacement": "",
+          "start": 8179
+        },
+        {
+          "end": 8230,
+          "replacement": "",
+          "start": 8194
+        },
+        {
+          "end": 8829,
+          "replacement": "",
+          "start": 8822
+        },
+        {
+          "end": 9085,
+          "replacement": "",
+          "start": 9078
+        },
+        {
+          "end": 9341,
+          "replacement": "",
+          "start": 9334
+        },
+        {
+          "end": 9620,
+          "replacement": "",
+          "start": 9613
+        },
+        {
+          "end": 11219,
+          "replacement": "",
+          "start": 11188
+        },
+        {
+          "end": 13986,
+          "replacement": "",
+          "start": 13950
+        },
+        {
+          "end": 16905,
+          "replacement": "",
+          "start": 16882
+        },
+        {
+          "end": 16947,
+          "replacement": "",
+          "start": 16940
+        },
+        {
+          "end": 17882,
+          "replacement": "",
+          "start": 17846
+        },
+        {
+          "end": 22056,
+          "replacement": "\n",
+          "start": 22056
+        }
+      ],
+      "predecessor_sha256": "cae1577d6f5551eb6f541d245b97fc0fdf324505e79a4bb18eaf022976dd8f4e"
+    },
+    "crates/fe2o3-runtime-model/verus/producer_input_composition_logic_v1.rs": {
+      "current_sha256": "9b352a9b980994c08d059fdedb554f2cd9824d1a064bd6aff21ff053582d0bc0",
+      "edits": [
+        {
+          "end": 8409,
+          "replacement": "\n",
+          "start": 8409
+        }
+      ],
+      "predecessor_sha256": "8d2b020e5fd562ace00abd9cd4bb9459eb12410fde6f8e6b51cc2cac19c9214f"
+    },
+    "crates/fe2o3-runtime-model/verus/producer_input_journal_comparison_declarations_v1.rs": {
+      "current_sha256": "2855aafb7e2763d739c4d9c9a80cb24aadb67bf76a40f1eea38eb3c2d5f7b964",
+      "edits": [
+        {
+          "end": 2645,
+          "replacement": "\n",
+          "start": 2645
+        }
+      ],
+      "predecessor_sha256": "5b1ddfe8dea991d6e3a17d98da8774746913e5fc6e65153e4901d6a2d1cee3eb"
+    },
+    "crates/fe2o3-runtime-model/verus/producer_input_outcome_spec_v1.rs": {
+      "current_sha256": "ca1f964234f3fd88ac9a72bbc2b5a33eb8fe77d5c99095cf1d5c0665236c58a6",
+      "edits": [
+        {
+          "end": 1342,
+          "replacement": "C",
+          "start": 1341
+        },
+        {
+          "end": 1350,
+          "replacement": "A",
+          "start": 1348
+        },
+        {
+          "end": 1361,
+          "replacement": "E",
+          "start": 1359
+        },
+        {
+          "end": 1370,
+          "replacement": "V1 {\n        key: ContextAllocationKeyV1 {\n            context",
+          "start": 1370
+        },
+        {
+          "end": 1372,
+          "replacement": "generati",
+          "start": 1371
+        },
+        {
+          "end": 1380,
+          "replacement": "n: ",
+          "start": 1373
+        },
+        {
+          "end": 1382,
+          "replacement": ".context_generation",
+          "start": 1382
+        },
+        {
+          "end": 1383,
+          "replacement": "\n            local: id.local,\n        },\n       ",
+          "start": 1383
+        },
+        {
+          "end": 1390,
+          "replacement": ": ContextJournalDeviceKeyV1 {\n            context_generation: device.context_generation",
+          "start": 1390
+        },
+        {
+          "end": 1391,
+          "replacement": "\n            local: device.local,\n        },\n       ",
+          "start": 1391
+        },
+        {
+          "end": 1404,
+          "replacement": ",\n    }",
+          "start": 1403
+        },
+        {
+          "end": 10852,
+          "replacement": "\n",
+          "start": 10852
+        }
+      ],
+      "predecessor_sha256": "f6fb6dd9739e4a6c30e2053350e66422dded9d9a54e436c8e8dd10495aff7634"
+    },
+    "crates/fe2o3-runtime-model/verus/producer_input_runtime_declarations_v1.rs": {
+      "current_sha256": "1c2dd60498287eedb995425e5b0b7eb1233aa8e7a0ae1c52909618e73a320810",
+      "edits": [
+        {
+          "end": 298,
+          "replacement": "",
+          "start": 218
+        },
+        {
+          "end": 5444,
+          "replacement": "\n\n",
+          "start": 5444
+        }
+      ],
+      "predecessor_sha256": "25221501f5f3d7ec63fad45e14e015c01edb993f57881b5d61cc4274c34469db"
+    }
+  },
+  "predecessor_commit": "4126e75ddb0893b57144de445d608a2d6b026d83",
+  "purpose": "Exact historical diagnostic reconstruction; no current qualification",
+  "schema": 1
+}

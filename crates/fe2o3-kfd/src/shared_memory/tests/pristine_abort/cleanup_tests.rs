@@ -1,0 +1,1104 @@
+use super::super::mapping_snapshot_bytes::MappingBytesV1;
+use super::*;
+use control_cleanup::{CleanupStageV1 as Stage, ControlCleanupObservationV1};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use transitions::ProjectionFaultV1 as Fault;
+
+#[path = "data_tests.rs"]
+mod data;
+#[path = "queue_tests.rs"]
+mod queue;
+#[path = "sdma_tests.rs"]
+mod sdma;
+#[path = "split_tests.rs"]
+mod split;
+
+// Completed controls, unmap progress, partial calls, and the active native state.
+pub(crate) type ControlReleasePrefixV1 = (usize, bool, usize, Option<(bool, usize, bool, bool)>);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MappingSnapshot {
+    address: u64,
+    pointer: usize,
+    capacity: usize,
+    bytes: MappingBytesV1,
+    byte_offset: usize,
+    active: bool,
+    writable: bool,
+    reads: usize,
+}
+
+fn mapping_snapshot(m: &FakeMapping) -> MappingSnapshot {
+    MappingSnapshot {
+        address: m.address,
+        pointer: m.bytes.as_ptr() as usize,
+        capacity: m.bytes.capacity(),
+        bytes: MappingBytesV1::capture(&m.bytes),
+        byte_offset: m.byte_offset,
+        active: m.active,
+        writable: m.writable,
+        reads: m.readback_calls.get(),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RecordSnapshot {
+    id: u64,
+    generation: u64,
+    profile: SharedGttProfileV1,
+    layout: SharedGttAllocationLayoutV1,
+    gpu_va: u64,
+    mmap_offset: u64,
+    userptr: bool,
+    reservation: Option<(u64, usize)>,
+    mapping: Option<MappingSnapshot>,
+    handle: Option<u64>,
+    free_attempted: bool,
+    phase: SharedAllocationPhaseV1,
+    indexed: Option<usize>,
+    charged: bool,
+}
+
+fn allocation_records(e: &SharedMemoryEngine<FakeBackend>) -> Vec<RecordSnapshot> {
+    e.allocations
+        .iter()
+        .map(|r| RecordSnapshot {
+            id: r.id,
+            generation: r.generation,
+            profile: r.profile,
+            layout: r.layout,
+            gpu_va: r.gpu_va,
+            mmap_offset: r.mmap_offset,
+            userptr: r.userptr,
+            reservation: r.reservation,
+            mapping: r.mapping.as_ref().map(mapping_snapshot),
+            handle: r.handle,
+            free_attempted: r.free_attempted,
+            phase: r.phase,
+            indexed: e.allocation_record_slots.get(&r.id).copied(),
+            charged: r.host_backing_charge.is_some(),
+        })
+        .collect()
+}
+
+pub(crate) struct PristineControlRecordSnapshotV1 {
+    session_id: u64,
+    controls: Vec<SharedGttAllocationIdentityV1>,
+    records: Vec<RecordSnapshot>,
+    devices: Vec<DeviceSnapshot>,
+    usage: (
+        Option<Gfx942HostVisibleBackingUsageV1>,
+        Option<Gfx942DeviceBackingUsageV1>,
+    ),
+}
+
+impl PristineAbortMemoryFixtureV1 {
+    pub(crate) fn control_record_snapshot(
+        &self,
+        controls: Vec<SharedGttAllocationIdentityV1>,
+    ) -> PristineControlRecordSnapshotV1 {
+        let e = &self.fixture.engine;
+        let records = allocation_records(e);
+        for (i, identity) in controls.iter().enumerate() {
+            assert_eq!(identity.session_id, e.session_id);
+            assert!(!controls[..i].contains(identity));
+            let r = records.iter().find(|r| r.id == identity.id).unwrap();
+            assert_eq!(r.generation, identity.generation);
+            assert!(matches!(
+                r.phase,
+                SharedAllocationPhaseV1::GpuAccessibleMutable
+                    | SharedAllocationPhaseV1::GpuAccessibleExecutable
+            ));
+        }
+        PristineControlRecordSnapshotV1 {
+            session_id: e.session_id,
+            controls,
+            records,
+            devices: device_records(e),
+            usage: (
+                e.host_backing_account.as_ref().map(|a| a.usage()),
+                self.fixture.usage(),
+            ),
+        }
+    }
+}
+
+impl PristineControlRecordSnapshotV1 {
+    pub(crate) fn assert_after(
+        &self,
+        memory: &PristineAbortMemoryFixtureV1,
+        completed: usize,
+        touched: usize,
+    ) {
+        assert!(completed <= touched && touched <= self.controls.len());
+        assert_eq!(memory.fixture.engine.session_id, self.session_id);
+        assert_eq!(device_records(&memory.fixture.engine), self.devices);
+        assert_eq!(
+            (
+                memory
+                    .fixture
+                    .engine
+                    .host_backing_account
+                    .as_ref()
+                    .map(|a| a.usage()),
+                memory.fixture.usage()
+            ),
+            self.usage
+        );
+        let after = allocation_records(&memory.fixture.engine);
+        assert_eq!(after.len(), self.records.len());
+        for (before, after) in self.records.iter().zip(after) {
+            let index = self.controls.iter().position(|id| id.id == before.id);
+            if index.is_some_and(|i| i < completed) {
+                let mut expected = before.clone();
+                expected.mapping = None;
+                expected.handle = None;
+                expected.reservation = None;
+                expected.free_attempted = true;
+                expected.phase = SharedAllocationPhaseV1::Released;
+                expected.indexed = None;
+                assert_eq!(after, expected, "exact completed control prefix");
+            } else if index.is_some_and(|i| i < touched) {
+                assert_eq!((after.id, after.generation), (before.id, before.generation));
+                assert_ne!(after.phase, SharedAllocationPhaseV1::Released);
+            } else {
+                assert_eq!(after, *before, "untouched native record changed");
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeviceSnapshot {
+    identity: Gfx942DeviceMemoryIdentityV1,
+    layout: Gfx942DeviceMemoryLayoutV1,
+    gpu_va: u64,
+    mmap_offset: u64,
+    reservation: Option<(u64, usize)>,
+    mapping: Option<MappingSnapshot>,
+    handle: Option<u64>,
+    free_attempted: bool,
+    phase: DeviceMemoryPhaseV1,
+    indexed: Option<usize>,
+    charged: bool,
+}
+
+fn device_records(e: &SharedMemoryEngine<FakeBackend>) -> Vec<DeviceSnapshot> {
+    e.device_memory
+        .iter()
+        .map(|r| DeviceSnapshot {
+            identity: Gfx942DeviceMemoryIdentityV1 {
+                id: r.id,
+                generation: r.generation,
+                device: r.device,
+                vm: r.vm,
+            },
+            layout: r.layout,
+            gpu_va: r.gpu_va,
+            mmap_offset: r.mmap_offset,
+            reservation: r.reservation,
+            mapping: r.mapping.as_ref().map(mapping_snapshot),
+            handle: r.handle,
+            free_attempted: r.free_attempted,
+            phase: r.phase,
+            indexed: e.device_memory_record_slots.get(&r.id).copied(),
+            charged: r.backing_charge.is_some(),
+        })
+        .collect()
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Snapshot {
+    model: MemoryLifecycleStateV1,
+    identity: fe2o3_runtime_model::DeviceIdentityStateV1,
+    certificate: Option<crate::queue::QueueCertificateSnapshotV1>,
+    controls: Vec<ControlCleanupObservationV1>,
+    records: Vec<RecordSnapshot>,
+    devices: Vec<DeviceSnapshot>,
+    phase: SharedMemorySessionPhaseV1,
+    retained_va: u64,
+    retained_device_bytes: u64,
+    usage: (
+        Option<Gfx942HostVisibleBackingUsageV1>,
+        Option<Gfx942DeviceBackingUsageV1>,
+    ),
+    calls: Vec<CleanupCallV1>,
+    operations: Vec<&'static str>,
+    currentness: usize,
+    process_poisoned: usize,
+    storage: [(usize, usize); 2],
+}
+
+impl PristineAbortMemoryFixtureV1 {
+    pub(crate) fn memory_snapshot(&self) -> Snapshot {
+        Snapshot::from_fixture(
+            &self.fixture,
+            &self.fixture.foundation,
+            self.process_poisoned,
+        )
+    }
+}
+
+impl crate::shared_memory::PreparationMemoryFixtureV1 {
+    pub(crate) fn retained_cleanup_memory_snapshot_v1(&self) -> Snapshot {
+        assert!(matches!(
+            self.fixture.ownership.phase,
+            QueueModelOwnershipPhaseV1::SessionOwned
+                | QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { .. }
+        ));
+        self.assert_disposed_controls_v1();
+        Snapshot::from_fixture(
+            &self.fixture,
+            &self.fixture.foundation,
+            self.control_release_process_poisoned + self.data_release_process_poisoned,
+        )
+    }
+
+    pub(crate) fn retained_queue_memory_snapshot_v1(
+        &self,
+        queue: &QueueModelFoundationV1,
+    ) -> Snapshot {
+        self.assert_disposed_controls_v1();
+        Snapshot::from_fixture(
+            &self.fixture,
+            self.coherent_active_foundation_v1(queue),
+            self.control_release_process_poisoned + self.data_release_process_poisoned,
+        )
+    }
+
+    pub(crate) fn retained_queue_cleanup_snapshot_v1<const N: usize>(
+        &self,
+        resources: &crate::shared_memory::QueueResourceCleanupCustodyV1<N>,
+    ) -> Snapshot {
+        let mut snapshot = self.retained_cleanup_memory_snapshot_v1();
+        snapshot.controls = resources.observation().controls.into();
+        snapshot
+    }
+
+    pub(crate) fn retained_signal_cleanup_snapshot_v1(
+        &self,
+        signals: &ControlCleanupCustodyV1,
+    ) -> Snapshot {
+        let mut snapshot = self.retained_cleanup_memory_snapshot_v1();
+        snapshot.controls.push(signals.observation());
+        snapshot
+    }
+
+    pub(crate) fn primary_restored_memory_snapshot_v1(&self) -> Snapshot {
+        assert!(matches!(
+            self.fixture.ownership.phase,
+            QueueModelOwnershipPhaseV1::SessionOwned
+        ));
+        self.assert_disposed_controls_v1();
+        Snapshot::from_fixture(
+            &self.fixture,
+            &self.fixture.foundation,
+            self.control_release_process_poisoned + self.data_release_process_poisoned,
+        )
+    }
+
+    pub(crate) fn primary_assert_control_failure_v1(
+        &self,
+        before: &Snapshot,
+        order: &[SharedGttAllocationIdentityV1],
+        completed: usize,
+        step: usize,
+    ) {
+        before.assert_control_transition_snapshot_v1(
+            &self.primary_restored_memory_snapshot_v1(),
+            (self.fixture.vm, self.fixture.engine.session_id),
+            order,
+            (
+                completed,
+                step > 0,
+                step + 1,
+                Some((step > 0, step, false, step == 2)),
+            ),
+        );
+    }
+
+    pub(crate) fn auxiliary_assert_control_failure_v1(
+        &self,
+        queue: &QueueModelFoundationV1,
+        before: &Snapshot,
+        order: &[SharedGttAllocationIdentityV1],
+        completed: usize,
+        step: usize,
+    ) {
+        let after = self.retained_queue_memory_snapshot_v1(queue);
+        before.assert_cleanup_certificate_delta_v1(&after, 2 * completed + usize::from(step > 0));
+        before.assert_control_transition_snapshot_v1(
+            &after,
+            (self.fixture.vm, self.fixture.engine.session_id),
+            order,
+            (
+                completed,
+                step > 0,
+                step + 1,
+                Some((step > 0, step, false, step == 2)),
+            ),
+        );
+    }
+
+    pub(crate) fn primary_release_memory_snapshot_v1(
+        &self,
+        queue: &QueueModelFoundationV1,
+    ) -> Snapshot {
+        self.assert_disposed_controls_v1();
+        let foundation = match self.fixture.ownership.phase {
+            QueueModelOwnershipPhaseV1::SessionOwned => &self.fixture.foundation,
+            QueueModelOwnershipPhaseV1::QueueOwned { .. } => queue,
+            QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { .. } => {
+                panic!("primary release cannot hold a live loan")
+            }
+        };
+        Snapshot::from_fixture(
+            &self.fixture,
+            foundation,
+            self.control_release_process_poisoned + self.data_release_process_poisoned,
+        )
+    }
+
+    pub(crate) fn primary_queue_cleanup_snapshot_v1<const N: usize>(
+        &self,
+        resources: &crate::shared_memory::QueueResourceCleanupCustodyV1<N>,
+    ) -> Snapshot {
+        assert!(matches!(
+            self.fixture.ownership.phase,
+            QueueModelOwnershipPhaseV1::SessionOwned
+        ));
+        let mut snapshot = Snapshot::from_fixture(
+            &self.fixture,
+            &self.fixture.foundation,
+            self.control_release_process_poisoned,
+        );
+        snapshot.controls = resources.observation().controls.into();
+        snapshot
+    }
+
+    pub(crate) fn primary_signal_cleanup_snapshot_v1(
+        &self,
+        signals: &ControlCleanupCustodyV1,
+    ) -> Snapshot {
+        let mut snapshot = self.primary_restored_memory_snapshot_v1();
+        snapshot.controls.push(signals.observation());
+        snapshot
+    }
+
+    pub(crate) fn control_release_snapshot_v1(&self, queue: &QueueModelFoundationV1) -> Snapshot {
+        self.assert_disposed_controls_v1();
+        Snapshot::from_fixture(
+            &self.fixture,
+            self.coherent_active_foundation_v1(queue),
+            self.control_release_process_poisoned,
+        )
+    }
+
+    pub(crate) fn control_release_loan_snapshot_v1(&self) -> Snapshot {
+        assert!(matches!(
+            self.fixture.ownership.phase,
+            QueueModelOwnershipPhaseV1::SessionOwnedLiveLoan { .. }
+        ));
+        self.assert_disposed_controls_v1();
+        Snapshot::from_fixture(
+            &self.fixture,
+            &self.fixture.foundation,
+            self.control_release_process_poisoned,
+        )
+    }
+
+    pub(crate) fn data_release_snapshot_v1(&self, queue: &QueueModelFoundationV1) -> Snapshot {
+        self.assert_disposed_controls_v1();
+        Snapshot::from_fixture(
+            &self.fixture,
+            self.coherent_active_foundation_v1(queue),
+            self.data_release_process_poisoned,
+        )
+    }
+}
+
+impl Snapshot {
+    fn assert_cleanup_certificate_delta_v1(&self, after: &Self, commits: usize) {
+        match (&self.certificate, &after.certificate) {
+            (None, None) => {}
+            (Some(before), Some(after)) => {
+                assert_eq!(
+                    (before.0, before.1, before.2, before.3, before.4, before.5),
+                    (after.0, after.1, after.2, after.3, after.4, after.5)
+                );
+                assert_eq!(after.6, before.6.checked_add(commits as u64).unwrap());
+                // The live snapshot authenticates the new seal against the actual model.
+            }
+            _ => panic!("cleanup changed certificate ownership"),
+        }
+    }
+
+    fn from_fixture(
+        f: &BackingConstructorFixture,
+        foundation: &QueueModelFoundationV1,
+        process_poisoned: usize,
+    ) -> Self {
+        let e = &f.engine;
+        Snapshot {
+            model: foundation.memory().clone(),
+            identity: foundation.identity().clone(),
+            certificate: foundation.certificate_snapshot_for_test(),
+            controls: Vec::new(),
+            records: allocation_records(e),
+            devices: device_records(e),
+            phase: e.phase,
+            retained_va: e.retained_gpu_va_bytes,
+            retained_device_bytes: e.retained_device_memory_bytes,
+            usage: (
+                e.host_backing_account.as_ref().map(|a| a.usage()),
+                f.usage(),
+            ),
+            calls: e.backend.cleanup_calls.clone(),
+            operations: e.backend.operations.clone(),
+            currentness: e.backend.currentness_calls,
+            process_poisoned,
+            storage: [
+                (e.allocations.as_ptr() as usize, e.allocations.capacity()),
+                (
+                    e.device_memory.as_ptr() as usize,
+                    e.device_memory.capacity(),
+                ),
+            ],
+        }
+    }
+}
+
+struct SignalPrefixV1 {
+    stage: Stage,
+    checks: usize,
+    model_unmapped: bool,
+    native_unmapped: bool,
+    native_calls: usize,
+    settled: bool,
+    quarantined: bool,
+}
+
+impl Snapshot {
+    pub(crate) fn assert_auxiliary_signal_currentness_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        queue: &QueueModelFoundationV1,
+        signals: &ControlCleanupCustodyV1,
+        point: usize,
+    ) {
+        assert!((1..=6).contains(&point));
+        let after = memory.retained_queue_memory_snapshot_v1(queue);
+        self.assert_cleanup_certificate_delta_v1(&after, usize::from(point >= 3));
+        self.assert_signal_prefix_between_v1(
+            memory,
+            after,
+            signals,
+            SignalPrefixV1 {
+                stage: if point <= 2 {
+                    Stage::NativeUnmap
+                } else {
+                    Stage::NativeRelease
+                },
+                checks: point,
+                model_unmapped: point >= 3,
+                native_unmapped: point >= 3,
+                native_calls: [0, 1, 1, 2, 3, 4][point - 1],
+                settled: false,
+                quarantined: true,
+            },
+        );
+    }
+
+    pub(crate) fn assert_constructed_signal_currentness_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        signals: &ControlCleanupCustodyV1,
+        point: usize,
+    ) {
+        assert!((1..=6).contains(&point));
+        self.assert_constructed_signal_prefix_v1(
+            memory,
+            signals,
+            SignalPrefixV1 {
+                stage: if point <= 2 {
+                    Stage::NativeUnmap
+                } else {
+                    Stage::NativeRelease
+                },
+                checks: point,
+                model_unmapped: point >= 3,
+                native_unmapped: point >= 3,
+                native_calls: [0, 1, 1, 2, 3, 4][point - 1],
+                settled: false,
+                quarantined: true,
+            },
+        );
+    }
+
+    pub(crate) fn assert_constructed_signal_projection_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        signals: &ControlCleanupCustodyV1,
+        stage: Stage,
+        panicked: bool,
+    ) {
+        let (checks, native_calls, model_unmapped, native_unmapped, settled) = match stage {
+            Stage::UnmapPreflight | Stage::UnmapEvidence => (0, 0, false, false, false),
+            Stage::UnmapProjection | Stage::UnmapCommit => (2, 1, false, true, false),
+            Stage::ReleasePreflight | Stage::ReleaseEvidence | Stage::ReleaseProjection => {
+                (2, 1, true, true, false)
+            }
+            Stage::ReleaseCommit => (6, 4, true, true, true),
+            _ => panic!("not a model failure boundary"),
+        };
+        self.assert_constructed_signal_prefix_v1(
+            memory,
+            signals,
+            SignalPrefixV1 {
+                stage,
+                checks,
+                model_unmapped,
+                native_unmapped,
+                native_calls,
+                settled,
+                quarantined: panicked
+                    || !matches!(stage, Stage::UnmapPreflight | Stage::UnmapEvidence),
+            },
+        );
+    }
+
+    fn assert_constructed_signal_prefix_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        signals: &ControlCleanupCustodyV1,
+        prefix: SignalPrefixV1,
+    ) {
+        let after = memory.primary_signal_cleanup_snapshot_v1(signals);
+        self.assert_signal_prefix_between_v1(memory, after, signals, prefix);
+    }
+
+    fn assert_signal_prefix_between_v1(
+        &self,
+        memory: &crate::shared_memory::PreparationMemoryFixtureV1,
+        after: Self,
+        signals: &ControlCleanupCustodyV1,
+        prefix: SignalPrefixV1,
+    ) {
+        let active = signals.observation();
+        let original = &self.controls[0];
+        assert_eq!(active.identity, original.identity);
+        assert_eq!(active.layout, original.layout);
+        assert_eq!(active.profile_type, original.profile_type);
+        assert_eq!(active.stage, prefix.stage);
+        assert!(active.started && active.failed && !signals.is_complete());
+        assert_eq!(active.native_disposed, prefix.native_calls == 4);
+        assert_eq!(
+            active.owner,
+            if prefix.native_calls == 4 {
+                "NativeDisposed"
+            } else if prefix.native_unmapped {
+                "Unmapped"
+            } else {
+                "Mapped"
+            }
+        );
+        assert_eq!(
+            active.unmap,
+            if prefix.native_calls == 0 {
+                (false, None, None)
+            } else {
+                (true, Some(true), Some(1))
+            }
+        );
+        assert_eq!(
+            active.disposal,
+            std::array::from_fn(|i| if i + 1 < prefix.native_calls {
+                (true, Some(true))
+            } else {
+                (false, None)
+            })
+        );
+        assert_eq!(after.currentness, self.currentness + prefix.checks);
+        assert_eq!(after.retained_device_bytes, self.retained_device_bytes);
+        assert_eq!(
+            after.phase,
+            if prefix.quarantined {
+                SharedMemorySessionPhaseV1::Quarantined
+            } else {
+                self.phase
+            }
+        );
+        self.assert_control_transition_snapshot_v1(
+            &after,
+            (memory.fixture.vm, memory.fixture.engine.session_id),
+            &[active.identity],
+            (
+                0,
+                prefix.model_unmapped,
+                prefix.native_calls,
+                Some((
+                    prefix.native_unmapped,
+                    prefix.native_calls,
+                    prefix.settled,
+                    prefix.native_calls >= 3,
+                )),
+            ),
+        );
+    }
+
+    pub(crate) fn assert_primary_currentness_failure_v1(
+        &self,
+        mut after: Self,
+        checks: usize,
+        panicked: bool,
+    ) {
+        assert_eq!(
+            after.phase,
+            if panicked {
+                self.phase
+            } else {
+                SharedMemorySessionPhaseV1::Quarantined
+            }
+        );
+        after.phase = self.phase;
+        self.assert_currentness_only_v1(after, checks);
+    }
+
+    pub(crate) fn assert_currentness_only_v1(&self, mut after: Self, checks: usize) {
+        assert_eq!(after.currentness, self.currentness + checks);
+        after.currentness = self.currentness;
+        assert_eq!(&after, self);
+    }
+
+    pub(crate) fn assert_currentness_failure_v1(&self, mut after: Self, panicked: bool) {
+        assert_eq!(
+            after.phase,
+            if panicked {
+                self.phase
+            } else {
+                SharedMemorySessionPhaseV1::Quarantined
+            }
+        );
+        after.phase = self.phase;
+        self.assert_currentness_only_v1(after, 1);
+    }
+
+    pub(crate) fn assert_after_retake_v1(&self, mut after: Self, opening: &Self, regressed: bool) {
+        if regressed {
+            // The live snapshot authenticates its active certificate first. The
+            // deliberate revision regression also recomputes that checked seal.
+            let certificate = after.certificate.as_mut().unwrap();
+            assert_eq!(
+                certificate.6,
+                opening
+                    .certificate
+                    .as_ref()
+                    .unwrap()
+                    .6
+                    .checked_sub(1)
+                    .unwrap()
+            );
+            certificate.6 = self.certificate.as_ref().unwrap().6;
+            certificate.7 = self.certificate.as_ref().unwrap().7;
+        }
+        assert_eq!(
+            after.certificate, self.certificate,
+            "exact settled certificate"
+        );
+        assert_eq!(
+            &after, self,
+            "retake and poison preserve the exact completed cleanup state"
+        );
+    }
+
+    pub(crate) fn assert_control_transition(
+        &self,
+        memory: &PristineAbortMemoryFixtureV1,
+        order: &[SharedGttAllocationIdentityV1],
+        completed: usize,
+        unmapped: bool,
+        partial_calls: usize,
+        active_native: Option<(bool, usize, bool, bool)>,
+    ) {
+        let after = memory.memory_snapshot();
+        self.assert_control_transition_snapshot_v1(
+            &after,
+            (memory.fixture.vm, memory.fixture.engine.session_id),
+            order,
+            (completed, unmapped, partial_calls, active_native),
+        );
+    }
+
+    pub(crate) fn assert_control_transition_snapshot_v1(
+        &self,
+        after: &Self,
+        owner: (VmKeyV1, u64),
+        order: &[SharedGttAllocationIdentityV1],
+        prefix: ControlReleasePrefixV1,
+    ) {
+        let (completed, unmapped, partial_calls, active_native) = prefix;
+        let mut expected_model = self.model.clone();
+        for (index, id) in order
+            .iter()
+            .enumerate()
+            .take(completed + usize::from(unmapped))
+        {
+            let (reservation, allocation, mapping) = model_keys(owner.0, id.id, id.generation);
+            expected_model = project_unmap(&expected_model, mapping).unwrap();
+            if index < completed {
+                expected_model =
+                    project_release(&expected_model, reservation, allocation, mapping).unwrap();
+            }
+        }
+        assert_eq!(
+            after.model, expected_model,
+            "exact committed cleanup prefix"
+        );
+        let mut expected_calls = self.calls.clone();
+        for (index, id) in order
+            .iter()
+            .enumerate()
+            .take(completed + usize::from(partial_calls > 0))
+        {
+            assert_eq!(id.session_id, owner.1);
+            let r = self
+                .records
+                .iter()
+                .find(|r| (r.id, r.generation) == (id.id, id.generation))
+                .unwrap();
+            let m = r.mapping.as_ref().unwrap();
+            let reservation = r.reservation.unwrap();
+            let calls = [
+                CleanupCallV1::UnmapGpu(r.handle.unwrap(), 0),
+                CleanupCallV1::UnmapCpu(m.address, m.pointer, m.bytes.len()),
+                CleanupCallV1::Free(r.handle.unwrap()),
+                CleanupCallV1::ReleaseVa(reservation.0, reservation.1),
+            ];
+            expected_calls.extend(calls.into_iter().take(if index < completed {
+                4
+            } else {
+                partial_calls
+            }));
+        }
+        assert_eq!(
+            after.calls, expected_calls,
+            "exact native identities and order"
+        );
+        assert_eq!(after.devices, self.devices);
+        assert_eq!(after.storage, self.storage);
+        assert_eq!(after.identity, self.identity);
+        let mut released_va = 0;
+        let mut usage = self.usage;
+        for r in &self.records {
+            let index = order
+                .iter()
+                .position(|id| id.id == r.id && id.generation == r.generation);
+            let expectation = if index.is_some_and(|i| i < completed) {
+                Some((true, 4, true, true))
+            } else if index == Some(completed) {
+                active_native
+            } else {
+                None
+            };
+            let expected = if let Some((unmapped, prefix, settled, free_attempted)) = expectation {
+                let mut record = expected_native_record(r, unmapped, prefix, settled);
+                record.free_attempted |= free_attempted;
+                if settled {
+                    released_va += r.layout.gpu_va_bytes();
+                    if r.charged {
+                        record.charged = false;
+                        let usage = usage.0.as_mut().expect("charged host control account");
+                        usage.used_backing_bytes -= r.layout.gpu_va_bytes();
+                        usage.used_allocation_records -= 1;
+                        usage.retained_records -= 1;
+                    }
+                }
+                record
+            } else {
+                r.clone()
+            };
+            assert_eq!(
+                after.records.iter().find(|a| a.id == r.id).unwrap(),
+                &expected,
+                "exact native record"
+            );
+        }
+        assert_eq!(after.records.len(), self.records.len());
+        assert_eq!(after.usage, usage);
+        assert_eq!(after.retained_va, self.retained_va - released_va);
+        assert_eq!(after.process_poisoned, self.process_poisoned);
+        match (&self.certificate, &after.certificate) {
+            (Some(a), Some(b)) => {
+                assert_eq!(
+                    (a.0, a.1, a.2, a.3, a.4, a.5),
+                    (b.0, b.1, b.2, b.3, b.4, b.5)
+                );
+            }
+            (None, None) => {}
+            _ => panic!("cleanup changed certificate identity"),
+        }
+    }
+
+    pub(crate) fn assert_certificate_revision(&self, revision: u64) {
+        assert_eq!(self.certificate.as_ref().map(|c| c.6), Some(revision));
+    }
+}
+
+struct Fixture {
+    memory: PristineAbortMemoryFixtureV1,
+    controls: [ControlCleanupCustodyV1; 3],
+    _hosts: [Host; 2],
+    _devices: [Gfx942DeviceMemoryDispatchAuthorityV1; 3],
+}
+
+impl Fixture {
+    fn new(configured: bool) -> Self {
+        let mut memory = PristineAbortMemoryFixtureV1::new_configured(configured);
+        let code0 = memory.code();
+        let code1 = memory.code();
+        let kernarg = memory.kernarg();
+        let hosts = [memory.host(), memory.host()];
+        let devices = [memory.device(), memory.device(), memory.device()];
+        Self {
+            memory,
+            controls: [
+                ControlCleanupCustodyV1::kernarg(kernarg.into_token()),
+                ControlCleanupCustodyV1::code(code1.into_token()),
+                ControlCleanupCustodyV1::code(code0.into_token()),
+            ],
+            _hosts: hosts,
+            _devices: devices,
+        }
+    }
+
+    fn release(&mut self, index: usize) -> Result<(), MemorySessionError> {
+        self.memory.release_control(&mut self.controls[index])
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        let mut snapshot = self.memory.memory_snapshot();
+        snapshot.controls = self
+            .controls
+            .iter()
+            .map(ControlCleanupCustodyV1::observation)
+            .collect();
+        snapshot
+    }
+
+    fn clear_faults(&mut self) {
+        self.memory.control_failure = None;
+        self.memory.control_unmap = None;
+        self.memory.projection_fault = None;
+        let b = &mut self.memory.fixture.engine.backend;
+        b.fail_operation = None;
+        b.panic_operation = None;
+        b.fail_currentness_at = None;
+        b.panic_currentness_at = None;
+        b.unmap_progress = 1;
+        b.unmap_errno = false;
+    }
+
+    fn reject_retry(&mut self, index: usize) {
+        self.clear_faults();
+        let before = self.snapshot();
+        let f = &mut self.memory.fixture;
+        assert!(matches!(
+            control_cleanup::release_v1(
+                &mut f.engine,
+                &mut control_cleanup::ProjectionV1::new(&mut f.foundation, f.vm),
+                &mut self.controls[index],
+                || panic!("retry cannot enter revision preflight"),
+            ),
+            Err(MemorySessionError::InvalidAllocationAuthority)
+        ));
+        assert_eq!(
+            self.snapshot(),
+            before,
+            "retry changed retained cleanup state"
+        );
+    }
+
+    fn expected_model(
+        &self,
+        before: &Snapshot,
+        completed: usize,
+        unmapped: bool,
+    ) -> MemoryLifecycleStateV1 {
+        let mut model = before.model.clone();
+        for (index, control) in before
+            .controls
+            .iter()
+            .enumerate()
+            .take(completed + usize::from(unmapped))
+        {
+            let (reservation, allocation, mapping) = model_keys(
+                self.memory.fixture.vm,
+                control.identity.id,
+                control.identity.generation,
+            );
+            model = project_unmap(&model, mapping).unwrap();
+            if index < completed {
+                model = project_release(&model, reservation, allocation, mapping).unwrap();
+            }
+        }
+        model
+    }
+
+    fn check_unrelated(&self, before: &Snapshot) {
+        let after = self.snapshot();
+        assert_eq!(after.identity, before.identity);
+        if let Some(prior) = &before.certificate {
+            let current = after
+                .certificate
+                .as_ref()
+                .expect("certificate remains retained");
+            assert_eq!(
+                (
+                    current.0, current.1, current.2, current.3, current.4, current.5
+                ),
+                (prior.0, prior.1, prior.2, prior.3, prior.4, prior.5)
+            );
+            let f = &self.memory.fixture;
+            f.foundation
+                .authenticate(f.engine.session_id, f.device, f.vm, prior.0)
+                .unwrap();
+        } else {
+            assert!(after.certificate.is_none());
+        }
+        assert_eq!(after.devices, before.devices);
+        assert_eq!(after.usage, before.usage);
+        assert_eq!(after.storage, before.storage);
+        for record in &before.records {
+            if record.profile == SharedGttProfileV1::HostVisibleCoherent {
+                assert_eq!(
+                    after.records.iter().find(|r| r.id == record.id).unwrap(),
+                    record
+                );
+            }
+        }
+        for (index, control) in after.controls.iter().enumerate() {
+            if !control.started {
+                assert_eq!(control, &before.controls[index]);
+                assert_eq!(
+                    record(&after, index),
+                    record(before, index),
+                    "unvisited native control changed"
+                );
+            } else {
+                assert_eq!(control.identity, before.controls[index].identity);
+                assert_eq!(control.layout, before.controls[index].layout);
+                assert_eq!(control.profile_type, before.controls[index].profile_type);
+                let expected_type = if control.owner == "Mapped" {
+                    before.controls[index].state_type
+                } else if index == 0 {
+                    std::any::TypeId::of::<GttCpuWritableV1>()
+                } else {
+                    std::any::TypeId::of::<GttExecutableImmutableV1>()
+                };
+                assert_eq!(control.state_type, expected_type);
+                assert_eq!(control.native_disposed, control.owner == "NativeDisposed");
+                assert_eq!(control.failed, control.stage != Stage::Complete);
+                if control.stage == Stage::Complete {
+                    assert_eq!(
+                        record(&after, index),
+                        &expected_record(before, index, true, 4, true)
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn record(before: &Snapshot, index: usize) -> &RecordSnapshot {
+    before
+        .records
+        .iter()
+        .find(|r| r.id == before.controls[index].identity.id)
+        .unwrap()
+}
+
+fn expected_calls(before: &Snapshot, completed: usize, partial: usize) -> Vec<CleanupCallV1> {
+    let mut calls = before.calls.clone();
+    for index in 0..(completed + usize::from(partial != 0)) {
+        let r = record(before, index);
+        let mapping = r.mapping.as_ref().unwrap();
+        let reservation = r.reservation.unwrap();
+        let sequence = [
+            CleanupCallV1::UnmapGpu(r.handle.unwrap(), 0),
+            CleanupCallV1::UnmapCpu(mapping.address, mapping.pointer, mapping.bytes.len()),
+            CleanupCallV1::Free(r.handle.unwrap()),
+            CleanupCallV1::ReleaseVa(reservation.0, reservation.1),
+        ];
+        calls.extend(
+            sequence
+                .into_iter()
+                .take(if index < completed { 4 } else { partial }),
+        );
+    }
+    calls
+}
+
+fn expected_record(
+    before: &Snapshot,
+    index: usize,
+    unmapped: bool,
+    native_prefix: usize,
+    settled: bool,
+) -> RecordSnapshot {
+    expected_native_record(record(before, index), unmapped, native_prefix, settled)
+}
+
+fn expected_native_record(
+    before: &RecordSnapshot,
+    unmapped: bool,
+    native_prefix: usize,
+    settled: bool,
+) -> RecordSnapshot {
+    let mut r = before.clone();
+    if unmapped {
+        r.phase = match r.profile {
+            SharedGttProfileV1::Kernarg | SharedGttProfileV1::HostVisibleCoherent => {
+                SharedAllocationPhaseV1::CpuWritable
+            }
+            SharedGttProfileV1::Executable => SharedAllocationPhaseV1::ExecutableImmutable,
+            SharedGttProfileV1::AqlQueue => panic!("queue resources use the two-phase oracle"),
+        };
+    }
+    if native_prefix >= 2 {
+        r.mapping = None;
+    }
+    if native_prefix >= 3 {
+        r.handle = None;
+        r.free_attempted = true;
+    }
+    if native_prefix >= 4 {
+        r.reservation = None;
+    }
+    if settled {
+        r.phase = SharedAllocationPhaseV1::Released;
+        r.indexed = None;
+    }
+    r
+}
+
+fn check_completed_prefix(f: &Fixture, before: &Snapshot, completed: usize) {
+    let after = f.snapshot();
+    for index in 0..completed {
+        assert!(f.controls[index].is_complete());
+        assert_eq!(
+            after.controls[index].identity,
+            before.controls[index].identity
+        );
+        assert_eq!(
+            record(&after, index),
+            &expected_record(before, index, true, 4, true)
+        );
+    }
+    let released: u64 = (0..completed)
+        .map(|i| record(before, i).layout.gpu_va_bytes())
+        .sum();
+    assert_eq!(after.retained_va, before.retained_va - released);
+}
+
+#[path = "cleanup_tests/cleanup_tests.rs"]
+mod cleanup_tests;

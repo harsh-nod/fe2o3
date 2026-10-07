@@ -21,6 +21,12 @@ use crate::handoff_ancillary::Guard;
 use crate::handoff_checks::{self as checks, Snapshot as DescriptorSnapshotV1};
 use crate::{ProtectedIssuerSupervisorErrorV1, ProtectedIssuerSupervisorV1};
 
+mod application;
+pub use application::{
+    AcceptedApplicationHandoffV1, AcceptedCustodianApplicationHandoffV1,
+    ProtectedApplicationHandoffErrorV1,
+};
+
 /// Move-only, fully admitted rustc descriptors and their authenticated control connection.
 ///
 /// The value exposes no descriptor, signing, receipt, publication, loading, or execution API. It
@@ -159,6 +165,30 @@ impl ProtectedIssuerSupervisorV1 {
         let (payload, service_peer, client_pidfd) = receive_handoff(&control, deadline)?;
         let handoff = CompilerExecutionSupervisorHandoffV1::decode(&payload)
             .map_err(ProtectedIssuerHandoffErrorV1::CanonicalHandoff)?;
+        self.admit_received_handoff::<REQUIRE_DISTINCT_UID>(
+            control,
+            handoff,
+            service_peer,
+            client_pidfd,
+            control_snapshot,
+        )
+    }
+
+    fn admit_received_handoff<const REQUIRE_DISTINCT_UID: bool>(
+        &self,
+        control: OwnedFd,
+        handoff: CompilerExecutionSupervisorHandoffV1,
+        service_peer: OwnedFd,
+        client_pidfd: OwnedFd,
+        control_snapshot: DescriptorSnapshotV1,
+    ) -> Result<AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1> {
+        self.revalidate()
+            .map_err(ProtectedIssuerHandoffErrorV1::Supervisor)?;
+        validate_control_shape(&control)?;
+        let submitter = control_peer_identity(&control)?;
+        if REQUIRE_DISTINCT_UID && submitter.uid() == self.credentials().uid() {
+            return Err(ProtectedIssuerHandoffErrorV1::ClientAndSupervisorUidMatch);
+        }
         if !handoff.launch_manifest().matches_policy(self.policy()) {
             return Err(ProtectedIssuerHandoffErrorV1::PolicyMismatch);
         }
@@ -218,52 +248,161 @@ fn receive_handoff(
     ),
     ProtectedIssuerHandoffErrorV1,
 > {
+    match receive_profile(control, deadline)? {
+        ReceivedHandoffV1::Compiler(bytes, [peer, pidfd]) => Ok((bytes, peer, pidfd)),
+        ReceivedHandoffV1::Application(..) | ReceivedHandoffV1::CustodianApplication(..) => {
+            Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer)
+        }
+    }
+}
+
+enum ReceivedHandoffV1 {
+    CustodianApplication(
+        Box<[u8; fe2o3_runtime_protocol::WORKER_V3_APPLICATION_CUSTODIAN_HANDOFF_BYTES_V1]>,
+        [OwnedFd; 4],
+    ),
+    Compiler(
+        [u8; COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1],
+        [OwnedFd; 2],
+    ),
+    Application(
+        Box<[u8; fe2o3_runtime_protocol::WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1]>,
+        [OwnedFd; 4],
+    ),
+}
+
+pub(crate) enum AcceptedHandoffV1 {
+    CustodianApplication(Box<AcceptedCustodianApplicationHandoffV1>),
+    Compiler(Box<AcceptedCompilerExecutionHandoffV1>),
+    Application(Box<AcceptedApplicationHandoffV1>),
+}
+
+impl ProtectedIssuerSupervisorV1 {
+    pub(crate) fn accept_profile_until<const REQUIRE_DISTINCT_UID: bool>(
+        &self,
+        control: OwnedFd,
+        deadline: Instant,
+    ) -> Result<AcceptedHandoffV1, crate::ProtectedIssuerSessionErrorV1> {
+        use crate::ProtectedIssuerSessionErrorV1 as E;
+        let receive = || -> Result<_, ProtectedIssuerHandoffErrorV1> {
+            self.revalidate()
+                .map_err(ProtectedIssuerHandoffErrorV1::Supervisor)?;
+            validate_control_shape(&control)?;
+            if REQUIRE_DISTINCT_UID
+                && control_peer_identity(&control)?.uid() == self.credentials().uid()
+            {
+                return Err(ProtectedIssuerHandoffErrorV1::ClientAndSupervisorUidMatch);
+            }
+            let snapshot = descriptor_snapshot(&control)?;
+            let packet = receive_profile(&control, deadline)?;
+            Ok((snapshot, packet))
+        };
+        let (snapshot, packet) = receive().map_err(E::Handoff)?;
+        match packet {
+            ReceivedHandoffV1::CustodianApplication(bytes, rights) => {
+                let handoff =
+                    fe2o3_runtime_protocol::WorkerV3ApplicationCustodianHandoffV1::decode(&*bytes)
+                        .map_err(|e| {
+                            E::ApplicationHandoff(
+                                ProtectedApplicationHandoffErrorV1::CustodianRoute(e),
+                            )
+                        })?;
+                self.admit_received_custodian_application::<REQUIRE_DISTINCT_UID>(
+                    control, handoff, rights, snapshot, deadline,
+                )
+                .map(|accepted| AcceptedHandoffV1::CustodianApplication(Box::new(accepted)))
+                .map_err(E::ApplicationHandoff)
+            }
+            ReceivedHandoffV1::Compiler(bytes, [peer, pidfd]) => {
+                let handoff = CompilerExecutionSupervisorHandoffV1::decode(&bytes)
+                    .map_err(|e| E::Handoff(ProtectedIssuerHandoffErrorV1::CanonicalHandoff(e)))?;
+                self.admit_received_handoff::<REQUIRE_DISTINCT_UID>(
+                    control, handoff, peer, pidfd, snapshot,
+                )
+                .map(|accepted| AcceptedHandoffV1::Compiler(Box::new(accepted)))
+                .map_err(E::Handoff)
+            }
+            ReceivedHandoffV1::Application(bytes, rights) => {
+                let binding =
+                    fe2o3_runtime_protocol::WorkerV3ApplicationRegistrationBindingV1::decode(
+                        &*bytes,
+                    )
+                    .map_err(|e| {
+                        E::ApplicationHandoff(ProtectedApplicationHandoffErrorV1::Binding(e))
+                    })?;
+                self.admit_received_application::<REQUIRE_DISTINCT_UID>(
+                    control, binding, rights, snapshot, deadline,
+                )
+                .map(|accepted| AcceptedHandoffV1::Application(Box::new(accepted)))
+                .map_err(E::ApplicationHandoff)
+            }
+        }
+    }
+}
+
+// A packet is consumed exactly once. Profile selection never peeks or retries another receiver.
+fn receive_profile(
+    control: &OwnedFd,
+    deadline: Instant,
+) -> Result<ReceivedHandoffV1, ProtectedIssuerHandoffErrorV1> {
+    use fe2o3_runtime_protocol::WORKER_V3_APPLICATION_CUSTODIAN_HANDOFF_BYTES_V1 as CUSTODIAN_BYTES;
+    use fe2o3_runtime_protocol::WORKER_V3_APPLICATION_REGISTRATION_BYTES_V1 as APP_BYTES;
     loop {
         wait_readable(control, deadline)?;
-        let mut payload = [0_u8; COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1];
-        let result = {
-            let mut vectors = [IoSliceMut::new(&mut payload)];
-            let mut guard = Guard::new();
-            let (space, armed) = guard.parts();
-            let mut ancillary = RecvAncillaryBuffer::new(space);
-            let received = recvmsg(
-                control,
-                &mut vectors,
-                &mut ancillary,
-                RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
-            );
-            *armed = received.is_ok();
-            match received {
-                Ok(received) => {
-                    let invalid_packet = received.bytes != payload.len()
-                        || received
-                            .flags
-                            .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC);
-                    let mut descriptors = Vec::with_capacity(2);
-                    let mut invalid_ancillary = false;
-                    for message in ancillary.drain() {
-                        match message {
-                            RecvAncillaryMessage::ScmRights(received) => {
-                                descriptors.extend(received);
-                            }
-                            _ => invalid_ancillary = true,
-                        }
-                    }
-                    drop(ancillary);
-                    invalid_ancillary |= guard.finish();
-                    if invalid_packet || invalid_ancillary || descriptors.len() != 2 {
-                        Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer)
-                    } else {
-                        let client_pidfd = descriptors.pop().expect("length checked");
-                        let service_peer = descriptors.pop().expect("length checked");
-                        Ok((service_peer, client_pidfd))
-                    }
-                }
-                Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => continue,
-                Err(error) => return Err(ProtectedIssuerHandoffErrorV1::Io(error.into())),
+        let mut payload = [0; CUSTODIAN_BYTES];
+        let mut vectors = [IoSliceMut::new(&mut payload)];
+        let mut guard = Guard::new();
+        let (space, armed) = guard.parts();
+        let mut ancillary = RecvAncillaryBuffer::new(space);
+        let received = recvmsg(
+            control,
+            &mut vectors,
+            &mut ancillary,
+            RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
+        );
+        *armed = received.is_ok();
+        let received = match received {
+            Ok(value) => value,
+            Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => continue,
+            Err(error) => return Err(ProtectedIssuerHandoffErrorV1::Io(error.into())),
+        };
+        let mut rights = Vec::with_capacity(5);
+        let mut invalid = false;
+        for message in ancillary.drain() {
+            match message {
+                RecvAncillaryMessage::ScmRights(received) => rights.extend(received),
+                _ => invalid = true,
             }
-        }?;
-        return Ok((payload, result.0, result.1));
+        }
+        drop(ancillary);
+        invalid |= guard.finish();
+        if received
+            .flags
+            .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+            || invalid
+        {
+            return Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer);
+        }
+        if Instant::now() >= deadline {
+            return Err(ProtectedIssuerHandoffErrorV1::Timeout);
+        }
+        return match (received.bytes, rights.len()) {
+            (COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1, 2) => Ok(ReceivedHandoffV1::Compiler(
+                payload[..COMPILER_EXECUTION_SUPERVISOR_HANDOFF_BYTES_V1]
+                    .try_into()
+                    .unwrap(),
+                rights.try_into().unwrap(),
+            )),
+            (APP_BYTES, 4) => Ok(ReceivedHandoffV1::Application(
+                Box::new(payload[..APP_BYTES].try_into().unwrap()),
+                rights.try_into().unwrap(),
+            )),
+            (CUSTODIAN_BYTES, 4) => Ok(ReceivedHandoffV1::CustodianApplication(
+                Box::new(payload),
+                rights.try_into().unwrap(),
+            )),
+            _ => Err(ProtectedIssuerHandoffErrorV1::MalformedTransfer),
+        };
     }
 }
 

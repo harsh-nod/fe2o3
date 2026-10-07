@@ -49,7 +49,8 @@ enum State {
     PublicationObserved,
     AwaitingTerminal,
     Retiring,
-    SendingCompletion,
+    CompletionReady,
+    DrainingCompletion,
     Completed,
     Failed,
     Cancelled,
@@ -74,6 +75,17 @@ pub(crate) struct RootCompilerRequest<'work> {
 }
 
 impl<'work> RootCompilerRequest<'work> {
+    pub(crate) const fn completion_was_published(&self) -> bool {
+        matches!(self.state, State::Completed)
+    }
+
+    pub(crate) fn original_completion_termination(&self) -> Result<execution::Termination> {
+        self.completion
+            .as_ref()
+            .map(|record| record.terminal().termination())
+            .ok_or_else(|| rejected("missing original terminal completion"))
+    }
+
     // Prepared and Receiver already have full reservations. The new optional
     // backing is inline here; its heap/file growth is charged by its constructor.
     pub(crate) const ENVELOPE: usize =
@@ -134,7 +146,7 @@ impl<'work> RootCompilerRequest<'work> {
             // owes the actual root wait and every acquired task's retirement.
             if !matches!(
                 self.state,
-                State::AwaitingTerminal | State::Retiring | State::SendingCompletion
+                State::AwaitingTerminal | State::Retiring | State::CompletionReady
             ) {
                 self.attempt()?.continuity(b).map_err(helper_error)?;
             }
@@ -145,8 +157,9 @@ impl<'work> RootCompilerRequest<'work> {
     /// Native supplies its original creator's pool. Helper exec is permitted by
     /// that dedicated deployment contract. Only the original native attempt can
     /// release its gate, validate first exec and control subsequent checkpoints.
-    /// True requires delivery of the original terminal publication completion;
-    /// all intermediate states return false and still require another turn.
+    /// True requires retaining the original terminal publication completion;
+    /// delivery is separately gated on the original aggregate cleanup. All
+    /// intermediate states return false and still require another turn.
     ///
     /// # Safety
     /// Preserve the entrypoint's actual outside whole-domain custodian, unique
@@ -408,7 +421,14 @@ impl<'work> RootCompilerRequest<'work> {
     }
 
     pub(crate) fn cancel(&mut self) {
-        self.state = State::Cancelled;
+        self.state = if matches!(
+            self.state,
+            State::CompletionReady | State::DrainingCompletion
+        ) {
+            State::DrainingCompletion
+        } else {
+            State::Cancelled
+        };
         if let Some(attempt) = &mut self.attempt {
             let _ = attempt.cancel();
             if !attempt.needs_foreground_cancellation() {
@@ -426,7 +446,7 @@ impl<'work> RootCompilerRequest<'work> {
     /// Retire only foreground wait ownership. A true result still requires the
     /// original independently funded pool to finish every deferred domain.
     pub(crate) fn cancel_step(&mut self, b: &mut Budget<'_>) -> Result<bool> {
-        if self.state != State::Cancelled {
+        if !matches!(self.state, State::Cancelled | State::DrainingCompletion) {
             return Err(rejected("foreground cleanup requires cancellation"));
         }
         if self.attempt.is_none() {

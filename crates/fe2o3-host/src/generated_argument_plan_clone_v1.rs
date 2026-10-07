@@ -7,9 +7,9 @@ use fe2o3_kernel_ir::{
 use std::mem::size_of_val;
 
 impl GeneratedArgumentPackingPlanV1 {
-    /// Includes the owner shell, both boxed arrays, each cloned field name and
-    /// conservative shared-seal retention. The seal allocation is shared, but
-    /// must stay covered even when the original plan drops. Reserves nothing.
+    /// Includes the owner shell, cloned component array and conservative shared
+    /// field/name/seal retention, including both Arc control blocks. Shared
+    /// allocations stay covered when the original plan drops. Reserves nothing.
     pub(crate) fn conditional_clone_storage_v1(
         &self,
         budget: &mut Budget<'_>,
@@ -20,11 +20,11 @@ impl GeneratedArgumentPackingPlanV1 {
             .and_then(|n| n.checked_add(size_of_val(&*self.components)))
             .and_then(|n| {
                 n.checked_add(
-                    2 * size_of::<usize>() + size_of::<GeneratedArgumentPackingPlanSealV1>(),
+                    4 * size_of::<usize>() + size_of::<GeneratedArgumentPackingPlanSealV1>(),
                 )
             })
             .ok_or(Resource::Arithmetic)?;
-        for field in &self.fields {
+        for field in self.fields.iter() {
             bytes = bytes
                 .checked_add(field.name().as_str().len())
                 .ok_or(Resource::Arithmetic)?;
@@ -71,7 +71,7 @@ mod tests {
     }
 
     #[test]
-    fn clone_quote_covers_deep_fields_components_names_and_shared_seal() {
+    fn clone_quote_covers_components_and_retained_shared_fields_names_and_seal() {
         let original = plan();
         let mut work = Work::new(1_000_000);
         let mut budget = Budget::new(&mut work, 1_000_000);
@@ -82,7 +82,7 @@ mod tests {
                 + size_of::<AbiField>()
                 + size_of::<GeneratedPackingComponentV1>()
                 + "count_with_retained_name_storage".len()
-                + 2 * size_of::<usize>()
+                + 4 * size_of::<usize>()
                 + size_of::<GeneratedArgumentPackingPlanSealV1>()
         );
         let (copy, retained) = original.clone_for_conditional_v1(&mut budget).unwrap();
@@ -90,9 +90,9 @@ mod tests {
         assert_eq!(budget.storage(), 0);
         budget.reserve_storage(retained).unwrap();
         assert!(Arc::ptr_eq(&copy.seal, &original.seal));
-        assert_ne!(copy.fields.as_ptr(), original.fields.as_ptr());
+        assert!(Arc::ptr_eq(&copy.fields, &original.fields));
         assert_ne!(copy.components.as_ptr(), original.components.as_ptr());
-        assert_ne!(
+        assert_eq!(
             copy.fields[0].name().as_str().as_ptr(),
             original.fields[0].name().as_str().as_ptr()
         );

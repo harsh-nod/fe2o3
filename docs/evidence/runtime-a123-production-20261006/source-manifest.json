@@ -1,0 +1,163 @@
+{
+  "authority": false,
+  "critical_inputs": [
+    {
+      "path": "Cargo.toml",
+      "sha256": "bb1dd9f2563b9f9267171f323ba5c1c6aec8bc780f12ebd4d72015ec39194e87"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "713486402105af06826d70d145d0c0440ec34db726e55c1a78bfc3b6996d34b2"
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "sha256": "49eeb550dd57841add3be3442177e78f6f0668ffc4f31739ce78d75f8129b154"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "b9a85db5a2da5ad0a51e79798888c226a5faaaf5542e7ea0a725e9ffda4d858b"
+    },
+    {
+      "path": ".github/workflows/runtime-model-verus.yml",
+      "sha256": "7700f0100797c5beba0227548a53a2e5ac02aa5e8c10704617075b963118c207"
+    },
+    {
+      "path": "scripts/ci-local.sh",
+      "sha256": "e9cb512cb9dd0248c6c24fbdb5969aadaa22fd4cbf6328a65e04ea7477b88a53"
+    },
+    {
+      "path": "scripts/tests/ci-local-test-gate.sh",
+      "sha256": "10a93e4396ed47d9bb0f299f9f89fd3ed81f57ace83e9d5a1150f3fb3aec5607"
+    },
+    {
+      "path": "scripts/qualify-native-static-cpu.sh",
+      "sha256": "eb5090d0b285ea8133e3aed9fcbc90c7784e3d296aad19963410a6fc46143bcc"
+    },
+    {
+      "path": "scripts/build-static-proof-custodian.sh",
+      "sha256": "6b360de5289e1d43c821736c4e6c28ceea3ca432596b394c97bbd3d40fb3c414"
+    },
+    {
+      "path": "scripts/workspace-dependency-policy.json",
+      "sha256": "48816fe1919c67c7a6f72b3a76034810a5d04526948048814a8f79162d70aad3"
+    },
+    {
+      "path": "crates/fe2o3-runtime-model/verus/pins/PRODUCER_LIVE_CAMPAIGN_INPUTS.json",
+      "sha256": "b391abd80f2da04f55bf754518b1d588f6fb8de0f6bc2fc49ded1e5dae531e32"
+    },
+    {
+      "path": "crates/fe2o3-runtime-model/verus/pins/PRODUCER_PLANNER_INPUT_CAMPAIGN_V1.json",
+      "sha256": "01bbcc2ec08dab892ce824032370ec2d9016461721961a8daed60e741fd97bee"
+    }
+  ],
+  "group_hash_algorithm": "SHA-256 of records sorted by repository-relative path: lowercase file SHA-256, two ASCII spaces, POSIX repository-relative path, newline. UTF-8; no domain prefix.",
+  "group_scope": "All regular files recursively beneath each package src plus its Cargo.toml and build.rs when present. No implicit claim about other package files.",
+  "groups": [
+    {
+      "files": 92,
+      "package": "cargo-fe2o3",
+      "records_sha256": "893408d8c1b467cc7f5b550f24d051b49cecbbf87325de5261bb65d54f2da7a9"
+    },
+    {
+      "files": 507,
+      "package": "fe2o3-runtime",
+      "records_sha256": "511f22e881dc1b9bfa2f3e05ce935b5cf054b5109bf8d8ac738cf92c8afca016"
+    },
+    {
+      "files": 314,
+      "package": "fe2o3-runtime-model",
+      "records_sha256": "1832db1d93e336c7e55a4645f421727df9c9fe1df1ff52156a31776ed1a57d31"
+    },
+    {
+      "files": 484,
+      "package": "fe2o3-kfd",
+      "records_sha256": "0750ef5d1fa3506948c3f992fb326038ea8bed9550111339dac40115ce033978"
+    },
+    {
+      "files": 123,
+      "package": "fe2o3-host",
+      "records_sha256": "0cdfd185ee1d068517f06da7799c9cf00f98196a99c952ec1866486479b62c7e"
+    },
+    {
+      "files": 395,
+      "package": "fe2o3-kernel-ir",
+      "records_sha256": "f3d65615a6ead3c8780cd4344e8649fc23cbcc832aeac1cc5abec8374fdd48c8"
+    },
+    {
+      "files": 60,
+      "package": "fe2o3-proof-custodian",
+      "records_sha256": "e36207bfce3ecdffd00cf05c6baf366b8e6ad2a054822a2e72f05201570db168"
+    },
+    {
+      "files": 60,
+      "package": "fe2o3-artifact-transaction",
+      "records_sha256": "fa39235b7f13341f1587ae93d990079ae65de82d1a69587b4335b1725f7cc4dd"
+    },
+    {
+      "files": 26,
+      "package": "fe2o3-runtime-protocol",
+      "records_sha256": "02d6c63b441d4da78201aeef861fe941569c026ff9fa807660b69e5b7c2fa3c1"
+    },
+    {
+      "files": 79,
+      "package": "fe2o3-compiler-closure-capability",
+      "records_sha256": "f388d572456d314121fbb3835b519b9b32dba048f77320c7f0af2fbdb4eba6a9"
+    },
+    {
+      "files": 35,
+      "package": "fe2o3-compiler-execution-client",
+      "records_sha256": "451b18dcd7112ce2d13265ce16d8a1c83f6ad4618dd88ed1b97fa75d27f09172"
+    },
+    {
+      "files": 108,
+      "package": "fe2o3-compiler-execution-coordinator",
+      "records_sha256": "9d75f8e619ef8124c4eeb20d70c744b2d65673865066fe77757401bae7c8760d"
+    },
+    {
+      "files": 118,
+      "package": "fe2o3-compiler-execution-supervisor",
+      "records_sha256": "31581fcf11af2c22466b8d58b6f4821a8b81aaa01f806b090b4fcc2a9fc9393e"
+    },
+    {
+      "files": 112,
+      "package": "fe2o3-broker-authority-service",
+      "records_sha256": "af87db3c7276ba8e6a135c1585f000a0d146623914b977e41f78646c604f5292"
+    },
+    {
+      "files": 94,
+      "package": "fe2o3-protected-service-spawn",
+      "records_sha256": "289ae7ef8973a464de94b37a87b79d4e742ba5c4fa1608dd7c31e08f5a1dd312"
+    },
+    {
+      "files": 557,
+      "package": "fe2o3-verifier",
+      "records_sha256": "caae8b927c4331c426b7b6e84c34a507c680bb889e93ae451278f474fea0722d"
+    },
+    {
+      "files": 11,
+      "package": "fe2o3-macros",
+      "records_sha256": "e364bca79400a60613a4f734c2026b44f04d2c370b3b98ea0f16ca244503f936"
+    }
+  ],
+  "integration_base_commit": "17078d5bff96de343c4d248c8e1883c4792d9bf0",
+  "reproduction": [
+    "cargo fmt --all -- --check",
+    "bash scripts/tests/ci-local-test-gate.sh",
+    "cargo test --locked -p fe2o3-runtime --features scale-qualification,cpu-runtime-fixtures --lib -- --test-threads=1",
+    "cargo test --locked -p fe2o3-runtime --features scale-qualification,cpu-runtime-fixtures --doc generated_scope",
+    "cargo test --locked -p fe2o3-kfd --features cpu-runtime-fixtures --lib -- --test-threads=1",
+    "cargo test --locked -p cargo-fe2o3 --bin cargo-fe2o3 -- --test-threads=1",
+    "cargo test --locked -p fe2o3-macros -- --test-threads=1",
+    "cargo run --locked -p cargo-fe2o3 -- check --manifest-path crates/cargo-fe2o3/tests/fixtures/conditional-custodian-application/Cargo.toml --bins --locked",
+    "bash scripts/qualify-native-static-cpu.sh",
+    "crates/fe2o3-runtime-model/verus/verify-verus.sh"
+  ],
+  "reproduction_requirements": [
+    "Use the complete landed source tree and locked dependencies; a package digest alone is not a source archive.",
+    "CPU commands used nightly-2026-04-03, FE2O3_HIP_SYS_DISABLE=1, two Cargo jobs, private build/cache paths and disabled core dumps.",
+    "Static deployment tests require noninteractive sudo for disposable private mount namespaces, not installation or service activation.",
+    "Verus gates require their exact maintained tool closure and unchanged resource admission; CPU tests do not replace these proofs."
+  ],
+  "schema": "fe2o3.runtime-a123.integration-source-index.v1",
+  "source_state": "working integration tree; source hashes, not the base commit alone, identify changes"
+}

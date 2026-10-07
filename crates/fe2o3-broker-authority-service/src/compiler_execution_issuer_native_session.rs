@@ -19,6 +19,12 @@ impl<'work> Session<'work> {
         b.charge_work(8)?;
         self.context.require_available()
     }
+    pub(super) fn require_kind(&self, kind: Kind) -> Result<()> {
+        self.context.require_kind(kind)
+    }
+    pub(super) fn require_carriage(&self, carriage: &Carriage) -> Result<()> {
+        self.context.require_carriage(carriage)
+    }
     pub fn publication_guard<'a>(
         &'a self,
         admission: &'a Admission<'a>,
@@ -62,6 +68,7 @@ impl<'work> Session<'work> {
     }
 
     pub fn validate(&self, a: &Admission<'_>, record: &Record, b: &mut Budget<'_>) -> Result<()> {
+        self.context.validate_service(a, b)?;
         self.check_record(record)?;
         if let Some(occurrence) = &self.occurrence {
             self.context.validate(a, occurrence, b)?;

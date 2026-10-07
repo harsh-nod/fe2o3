@@ -14,6 +14,12 @@ peer and client pidfd, admits the service-owned root and signing key, and
 independently admits the supervisor-provisioned external-anchor endpoint at FD
 10 against its pidfd at FD 11 and the manifest-pinned service UID/GID. It binds
 that transport to the policy's distinct external-anchor verification key,
+and requires the root-created observer endpoint at FD 12 and original root
+pidfd at FD 13. The authenticated greeting binds this actual issuer and its
+supervisor to the exact launch before recovery or readiness. The empty-capability
+issuer keeps remote occurrence guards and original publication-lock aliases
+through signing and durable commit; it cannot fall back to local inspection.
+After observer admission it
 recovers both durable ledgers, emits one exact readiness record through a
 nonblocking atomic pipe, and runs the bounded
 compiler-execution service. It has no compiler, LLVM, linker, HSACO, loader,
@@ -26,7 +32,7 @@ runtime dependency, executable stack, or undefined symbol. The repository
 toolchain pins the required Rust target. The protected supervisor binds the
 already authenticated launcher and issuer-program images to the exact
 credential profile, protected root, caller policy, canonical signing-key
-capability, authenticated external-anchor endpoint and pidfd, twelve-entry
+capability, authenticated external-anchor and observer endpoints/pidfds, fourteen-entry
 descriptor manifest, and child lifecycle before launch. Publication does not
 yet perform the external anchor exchange.
 

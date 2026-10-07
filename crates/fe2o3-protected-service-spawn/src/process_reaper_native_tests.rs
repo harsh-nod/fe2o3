@@ -1089,8 +1089,17 @@ fn domain_step_storage_and_work_are_prepaid_on_the_original_pool_account() {
         inline_pool
             + CAPACITY * (Domain::STORAGE - size_of::<Domain>())
             + CAPACITY * (Namespace::STORAGE - size_of::<Namespace>())
+            + CAPACITY * crate::process_cleanup::NATIVE_PROOF_RETIREMENT_STORAGE
             + Service::GUARD_FILE_STORAGE
             + Domain::STEP_SCRATCH
+    );
+    assert_eq!(
+        crate::process_cleanup::NATIVE_PROOF_RETIREMENT_STORAGE,
+        size_of::<(
+            std::sync::atomic::AtomicBool,
+            std::sync::atomic::AtomicUsize,
+            std::sync::atomic::AtomicUsize,
+        )>()
     );
     assert_eq!(
         Namespace::STORAGE - size_of::<Namespace>(),

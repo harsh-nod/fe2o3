@@ -9,10 +9,38 @@ mod authenticated_service_queue;
 #[cfg(target_os = "linux")]
 mod compiler_execution_current_record_audit;
 mod compiler_generated_contract;
+#[cfg(all(test, target_os = "linux"))]
+mod eof_test_process;
 mod generated_argument_borrow;
 mod generated_argument_plan;
+mod generated_conditional_coverage;
+mod generated_context_arguments;
 mod generated_kfd_arguments;
 mod generated_kfd_invocation;
+mod generated_runtime_arguments;
+mod generated_runtime_carrier;
+mod generated_runtime_results;
+mod native_conditional_fill_artifact_v1;
+#[cfg(target_arch = "x86_64")]
+pub use native_conditional_fill_artifact_v1::{
+    CheckedCustodiedNativeConditionalFillContentV1,
+    CheckedRegisteredNativeConditionalFillArtifactV1,
+    check_custodied_native_conditional_fill_content_v1,
+    check_registered_native_conditional_fill_artifact_v1,
+};
+pub use native_conditional_fill_artifact_v1::{
+    CheckedNativeConditionalFillAbiV1, CheckedNativeConditionalFillArtifactV1,
+    NativeConditionalFillAbiErrorV1, NativeConditionalFillArtifactErrorV1,
+    NativeConditionalFillArtifactStorageV1, check_native_conditional_fill_abi_v1,
+    check_native_conditional_fill_artifact_v1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use native_conditional_fill_artifact_v1::{
+    CurrentnessReadyNativeConditionalFillApplicationV1, NativeConditionalFillIntakeErrorV1,
+    NativeConditionalFillIntakeStorageV1, NativeConditionalFillInvocationScopeV1,
+    PreparedNativeConditionalFillApplicationV1, ProvedNativeConditionalFillApplicationV1,
+    RegisteredNativeConditionalFillApplicationV1,
+};
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 mod generated_worker_v3_dispatch;
 #[cfg(feature = "qualification-legacy-hip-hsa")]
@@ -43,6 +71,11 @@ mod worker_v3_verification_admission;
 #[cfg(feature = "hardware-test-hooks")]
 #[doc(hidden)]
 pub mod __hardware_test {
+    #[cfg(target_os = "linux")]
+    pub use crate::application_descriptor_handoff::{
+        consume_inherited_worker_v3_envelope_only_fixture_v1,
+        consume_inherited_worker_v3_envelope_only_roster_fixture_v1,
+    };
     use fe2o3_artifacts::{Access, AddressSpace, PointerWidth};
 
     use crate::{
@@ -131,13 +164,15 @@ pub mod __hardware_test {
 
 #[cfg(target_os = "linux")]
 pub use application_descriptor_handoff::{
-    ApplicationDescriptorHandoffErrorV1, WorkerV3ApplicationDescriptorHandoffErrorV1,
+    ApplicationDescriptorHandoffErrorV1, RegisteredWorkerV3CustodianApplicationV1,
+    WorkerV3ApplicationDescriptorHandoffErrorV1,
     consume_inherited_mixed_worker_v53_application_handoff,
     consume_inherited_mixed_worker_v89_application_handoff,
 };
 #[cfg(target_os = "linux")]
 #[doc(hidden)]
 pub use application_descriptor_handoff::{
+    consume_inherited_worker_v3_application_custodian_handoff_v1,
     consume_inherited_worker_v3_application_handoff_v1,
     consume_inherited_worker_v3_application_roster_handoff_v1,
 };
@@ -215,6 +250,13 @@ pub use generated_argument_plan::{
     GeneratedArgumentPackingPlanV1, GeneratedDeviceScalarV1, GeneratedPackingComponentKindV1,
     GeneratedPackingComponentV1,
 };
+pub use generated_conditional_coverage::{
+    CheckedConditionalPackedCoverageV1, ConditionalOutputArgumentBindingV1,
+    ConditionalPackedCoverageErrorV1,
+};
+pub use generated_context_arguments::{
+    GeneratedContextReadSlice, GeneratedContextReadWriteSlice, GeneratedContextWriteSlice,
+};
 #[doc(hidden)]
 pub use generated_kfd_arguments::{
     CompilerGeneratedKfdArguments, GeneratedKfdArgumentBinding, GeneratedKfdArgumentError,
@@ -225,11 +267,32 @@ pub use generated_kfd_arguments::{
 };
 pub use generated_kfd_invocation::{
     GENERATED_KFD_DIFFERENTIAL_OBSERVATION_SCHEMA_V1,
-    GENERATED_WORKER_V3_DIRECT_KFD_RUNTIME_CONTRACT_V1,
-    GeneratedWorkerV3KfdDifferentialAvailabilityV1, GeneratedWorkerV3KfdDifferentialBindingV1,
-    GeneratedWorkerV3KfdDifferentialObservationV1, GeneratedWorkerV3KfdExecutionError,
-    GeneratedWorkerV3KfdInvocation, GeneratedWorkerV3KfdInvocationError,
-    WorkerV3ApplicationExecutionBindingV1,
+    GENERATED_WORKER_V3_DIRECT_KFD_RUNTIME_CONTRACT_V1, GeneratedWorkerV3ContextInvocationErrorV1,
+    GeneratedWorkerV3ContextInvocationV1, GeneratedWorkerV3KfdDifferentialAvailabilityV1,
+    GeneratedWorkerV3KfdDifferentialBindingV1, GeneratedWorkerV3KfdDifferentialObservationV1,
+    GeneratedWorkerV3KfdExecutionError, GeneratedWorkerV3KfdInvocation,
+    GeneratedWorkerV3KfdInvocationError, GeneratedWorkerV3RuntimeInvocationErrorV1,
+    GeneratedWorkerV3RuntimeInvocationV1, WorkerV3ApplicationExecutionBindingV1,
+};
+pub use generated_runtime_arguments::{
+    CompilerGeneratedRuntimeArguments, GeneratedRuntimeArgumentBindingV1,
+    GeneratedRuntimeArgumentBudgetV1, GeneratedRuntimeArgumentErrorV1,
+    GeneratedRuntimeArgumentFootprintV1, GeneratedRuntimeArgumentLimitsV1,
+    GeneratedRuntimeChargedArgumentsV1, GeneratedRuntimeOutputDecoderV1,
+    GeneratedRuntimePackedArgumentsV1, GeneratedRuntimeReadSlice, GeneratedRuntimeReadWriteSlice,
+    GeneratedRuntimeResultV1, GeneratedRuntimeSliceBindingV1, GeneratedRuntimeWriteSlice,
+};
+pub use generated_runtime_results::{
+    ChargedTypedResultV1, GeneratedRuntimeChargedResultV1, GeneratedRuntimeCompletedBundleV1,
+    GeneratedRuntimeCompletedOutputV1, GeneratedRuntimeResultBudgetV1,
+    GeneratedRuntimeResultUsageV1, GeneratedRuntimeStagingErrorV1,
+    GeneratedRuntimeTypedBindErrorV1, GeneratedRuntimeTypedBindFailureV1,
+    GeneratedRuntimeTypedBundleBindFailureV1, GeneratedRuntimeTypedBundleCompletionV1,
+    GeneratedRuntimeTypedBundleFailureV1, GeneratedRuntimeTypedBundleJoinFailureV1,
+    GeneratedRuntimeTypedBundleOutcomeV1, GeneratedRuntimeTypedCompletionErrorV1,
+    GeneratedRuntimeTypedCompletionFailureV1, GeneratedRuntimeTypedCompletionV1,
+    GeneratedRuntimeTypedJoinFailureV1, GeneratedRuntimeTypedOutcomeV1,
+    GeneratedRuntimeTypedOutputBundleV1, GeneratedRuntimeTypedOutputErrorV1,
 };
 #[doc(hidden)]
 #[cfg(feature = "qualification-legacy-hip-hsa")]
@@ -262,8 +325,13 @@ pub use production_application::{
 };
 #[cfg(target_os = "linux")]
 pub use production_application::{
-    ProductionWorkerV3KfdApplicationErrorV1, ProductionWorkerV3KfdPreparationErrorV1,
-    prepare_inherited_worker_v3_kfd_application_v1,
+    ProductionWorkerV3ApplicationStageV1, ProductionWorkerV3AuthenticationErrorV1,
+    ProductionWorkerV3CurrentThreadConfigV1, ProductionWorkerV3CurrentThreadErrorV1,
+    ProductionWorkerV3CurrentThreadReportV1, ProductionWorkerV3KfdApplicationErrorV1,
+    ProductionWorkerV3KfdPreparationErrorV1, ProductionWorkerV3RuntimeInitializationErrorV1,
+    authenticate_inherited_worker_v3_application_v1,
+    prepare_inherited_worker_v3_kfd_application_v1, run_inherited_worker_v3_current_thread_v1,
+    run_inherited_worker_v3_current_thread_with_composed_backing_root_v1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use published_direct_link::{
@@ -279,16 +347,17 @@ pub use published_hsaco_inspection::{
     PublishedPhysicalLaunchLayoutV1, PublishedPhysicalLayoutInspectionError,
 };
 pub use recovered_worker_v3_admission::{
-    MixedWorkerV53PreparationError, MixedWorkerV53VerificationRequest,
-    MixedWorkerV89PreparationError, MixedWorkerV89VerificationRequest,
-    PreparedMixedWorkerV53Invocation, PreparedMixedWorkerV89Invocation,
-    RecoveredMixedWorkerV53PinnedRoster, RecoveredMixedWorkerV89PinnedRoster,
-    RecoveredNominalWorkerV3AdmissionError, RecoveredNominalWorkerV3PinnedRoster,
-    RecoveredWorkerV3AdmissionErrorV1, RecoveredWorkerV3EntrypointV1,
-    RecoveredWorkerV3PinnedDescriptorV1, RecoveredWorkerV3PinnedRosterV1,
-    WorkerV3HostLineageIdentityV1, admit_recovered_mixed_worker_v53_roster,
-    admit_recovered_mixed_worker_v89_roster, admit_recovered_nominal_worker_v3_roster,
-    admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
+    CheckedWorkerV3CompilerClosureV1, MixedWorkerV53PreparationError,
+    MixedWorkerV53VerificationRequest, MixedWorkerV89PreparationError,
+    MixedWorkerV89VerificationRequest, PreparedMixedWorkerV53Invocation,
+    PreparedMixedWorkerV89Invocation, RecoveredMixedWorkerV53PinnedRoster,
+    RecoveredMixedWorkerV89PinnedRoster, RecoveredNominalWorkerV3AdmissionError,
+    RecoveredNominalWorkerV3PinnedRoster, RecoveredWorkerV3AdmissionErrorV1,
+    RecoveredWorkerV3EntrypointV1, RecoveredWorkerV3PinnedDescriptorV1,
+    RecoveredWorkerV3PinnedRosterV1, WorkerV3HostLineageIdentityV1,
+    admit_recovered_mixed_worker_v53_roster, admit_recovered_mixed_worker_v89_roster,
+    admit_recovered_nominal_worker_v3_roster, admit_recovered_worker_v3_descriptor_v1,
+    admit_recovered_worker_v3_roster_v1, check_worker_v3_compiler_closure_v1,
 };
 #[cfg(feature = "qualification-legacy-hip-hsa")]
 pub use tile_interop::{
@@ -299,16 +368,17 @@ pub use tile_interop::{
 
 pub use worker_v3_verification_admission::{
     AuthenticatedWorkerV3ExecutableV1, AuthenticatedWorkerV3RosterEntryV1,
-    AuthenticatedWorkerV3RosterV1, MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1,
+    AuthenticatedWorkerV3RosterV1, CheckedWorkerV3ConditionalFillAssociationV1,
+    MAX_WORKER_V3_MACHINE_EFFECT_EVIDENCE_BYTES_V1,
     MAX_WORKER_V3_SEMANTIC_MACHINE_REFINEMENT_PROOF_BYTES_V1, WorkerV3AuditorV1,
     WorkerV3CompilerExecutionEvidenceErrorV1, WorkerV3CompilerExecutionVerificationV1,
-    WorkerV3ProtectedRosterEntryEvidenceV1, WorkerV3ProtectedRosterVerificationEvidenceV1,
-    WorkerV3ProtectedRosterVerifierAdapterV1, WorkerV3ProtectedRosterVerifierBackendV1,
-    WorkerV3ProtectedSemanticMachineRefinementEvidenceV1, WorkerV3ProtectedVerificationEvidenceV1,
-    WorkerV3ProtectedVerifierAdapterV1, WorkerV3ProtectedVerifierBackendV1,
-    WorkerV3RefiningProtectedVerifierAdapterV1, WorkerV3RefiningProtectedVerifierErrorV1,
-    WorkerV3RosterEntryErrorV1, WorkerV3RosterLoadEnvelopeEvidenceViewV1,
-    WorkerV3RosterVerificationAuthenticationErrorV1,
+    WorkerV3ConditionalFillAssociationErrorV1, WorkerV3ProtectedRosterEntryEvidenceV1,
+    WorkerV3ProtectedRosterVerificationEvidenceV1, WorkerV3ProtectedRosterVerifierAdapterV1,
+    WorkerV3ProtectedRosterVerifierBackendV1, WorkerV3ProtectedSemanticMachineRefinementEvidenceV1,
+    WorkerV3ProtectedVerificationEvidenceV1, WorkerV3ProtectedVerifierAdapterV1,
+    WorkerV3ProtectedVerifierBackendV1, WorkerV3RefiningProtectedVerifierAdapterV1,
+    WorkerV3RefiningProtectedVerifierErrorV1, WorkerV3RosterEntryErrorV1,
+    WorkerV3RosterLoadEnvelopeEvidenceViewV1, WorkerV3RosterVerificationAuthenticationErrorV1,
     WorkerV3RosterVerificationAuthenticationFailureV1,
     WorkerV3RosterVerificationChallengeIdentityV1, WorkerV3RosterVerificationDecisionErrorV1,
     WorkerV3RosterVerificationDecisionV1, WorkerV3RosterVerificationRequestV1,
@@ -319,7 +389,18 @@ pub use worker_v3_verification_admission::{
     WorkerV3VerificationChallengeIdentityV1, WorkerV3VerificationDecisionErrorV1,
     WorkerV3VerificationDecisionV1, WorkerV3VerificationRequestV1,
     WorkerV3VerificationRosterIdentityV1, WorkerV3VerifierV1,
-    audit_recovered_worker_v3_verification_v1,
+    audit_recovered_worker_v3_verification_v1, derive_worker_v3_conditional_fill_host_contract_v1,
+};
+#[cfg(target_os = "linux")]
+pub use worker_v3_verification_admission::{
+    InertWorkerV3ConditionalFillSubjectV1, PendingWorkerV3ConditionalFillArtifactV1,
+    RetainedWorkerV3ConditionalFillProofV1, WorkerV3ConditionalFillPendingErrorV1,
+    WorkerV3ConditionalFillRetainedErrorV1, execute_retained_worker_v3_conditional_fill_v1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use worker_v3_verification_admission::{
+    RemoteConditionalFillArtifactV1, WorkerV3ConditionalFillInvocationErrorV1,
+    WorkerV3RemoteConditionalFillErrorV1,
 };
 #[cfg(feature = "worker-v3-verifier-test-support")]
 #[doc(hidden)]
@@ -335,6 +416,20 @@ pub mod __generated {
     pub use crate::production_application::load_admitted_worker_v3_application_v1;
     #[cfg(target_os = "linux")]
     pub use crate::production_application::prepare_admitted_worker_v3_kfd_application_v1;
+    pub use crate::{
+        CompilerGeneratedRuntimeArguments, GeneratedContextReadSlice,
+        GeneratedContextReadWriteSlice, GeneratedContextWriteSlice,
+        GeneratedRuntimeArgumentBindingV1, GeneratedRuntimeArgumentBudgetV1,
+        GeneratedRuntimeArgumentErrorV1, GeneratedRuntimeArgumentFootprintV1,
+        GeneratedRuntimeArgumentLimitsV1, GeneratedRuntimeOutputDecoderV1,
+        GeneratedRuntimePackedArgumentsV1, GeneratedRuntimeReadSlice,
+        GeneratedRuntimeReadWriteSlice, GeneratedRuntimeResultV1, GeneratedRuntimeSliceBindingV1,
+        GeneratedRuntimeWriteSlice,
+    };
+    pub use fe2o3_runtime::{
+        RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeArgumentsV1, RuntimeBindingV1,
+        RuntimeMemoryRegionV1,
+    };
 
     pub use crate::{
         CompilerGeneratedArgumentLayoutV1, CompilerGeneratedKernelExpectationRosterEntryV1,

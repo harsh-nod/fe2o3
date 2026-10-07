@@ -564,6 +564,27 @@ pub(super) fn execute_functional_refinement_generated_rust_verify(
     )
 }
 
+pub(super) fn execute_functional_refinement_generated_rust_verify_cancellable(
+    attempt: &mut AttemptV1,
+    runtime: std::sync::Arc<RetainedRuntimeClosureV2>,
+    source: &CanonicalGeneratedVerusProofInputV3,
+    deadline: Instant,
+    output_limit: usize,
+    policy: super::GeneratedProofProcessPolicyV2,
+    keep_alive: &dyn Fn() -> std::io::Result<()>,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
+    functional_refinement_process_tree_v1::execute_with_policy_cancellable(
+        attempt,
+        runtime,
+        source,
+        deadline,
+        output_limit,
+        policy,
+        Some(keep_alive),
+    )
+}
+
 struct SealedGeneratedProofSourceV3 {
     file: File,
     snapshot: ObjectSnapshotV2,

@@ -138,6 +138,8 @@ mod compiler_execution_issuer_durable;
 mod compiler_execution_journal_recovery;
 #[cfg(target_os = "linux")]
 mod compiler_execution_occurrence;
+#[cfg(test)]
+mod test_isolation;
 #[cfg(target_os = "linux")]
 pub use compiler_execution_occurrence::{
     RootPublicationCustodyErrorV3, RootPublicationCustodyV3, RootPublicationQuotaV3,
@@ -146,10 +148,16 @@ pub use compiler_execution_occurrence::{
 mod compiler_execution_root_channel;
 #[cfg(target_os = "linux")]
 mod compiler_execution_root_connection;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod compiler_execution_root_currentness_connection;
 #[cfg(target_os = "linux")]
 pub use compiler_execution_root_connection::{
     RootConnectionErrorV3, RootConnectionQuotaV3, RootConnectionStorageV3, RootConnectionV3,
     RootControlSessionV3,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use compiler_execution_root_currentness_connection::{
+    ApplicationCurrentnessCustodyV3, RootApplicationCurrentnessConnectionV3,
 };
 #[cfg(target_os = "linux")]
 mod compiler_execution_root_exchange;
@@ -199,7 +207,9 @@ pub use compiler_execution_issuer_durable::{
     ProtectedCompilerExecutionReceiptV1,
 };
 #[cfg(target_os = "linux")]
-pub use compiler_execution_occurrence::ProtectedCompilerExecutionOccurrenceErrorV1;
+pub use compiler_execution_occurrence::{
+    ProtectedCompilerExecutionOccurrenceErrorV1, RetainedCompilerExecutionOccurrenceV1,
+};
 #[cfg(target_os = "linux")]
 pub(crate) use compiler_execution_occurrence::{
     ProtectedCompilerExecutionOccurrenceGuardV1, ProtectedCompilerExecutionOccurrenceV1,
@@ -229,15 +239,36 @@ pub use durable_session_consume::{
     prepare_durable_broker_session_v1_with_options, recover_durable_broker_session_v1,
     recover_durable_broker_session_v1_with_options, recover_prepared_durable_broker_session_v1,
 };
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use linux::application_observation::{
+    NativeApplicationObservationErrorV3, NativeApplicationObservationStorageV3,
+    RetainedNativeApplicationObservationV3, RetainedWorkerV3ApplicationObservationV1,
+    WorkerV3ApplicationDescriptorNumbersV1, WorkerV3ApplicationObservationErrorV1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use linux::observer_channel::{
+    CompilerExecutionObserverErrorV1, ObservedApplicationRegistrationV1,
+    ObservedCustodianApplicationRegistrationV1, PendingApplicationObservationGateV1,
+    PendingRootNativeApplicationV3, PreparedRootCompilerExecutionObserverV1,
+    PreparedRootCompilerObserverRegistryV1, ProofManagerCommandV1, ProofManagerDeploymentV1,
+    ProtectedCompilerExecutionObserverV1, PublishedApplicationCustodianHandoffV1,
+    ReceivedNativeApplicationV3, ReceivedPublishedApplicationV1, RegisteredApplicationObserverV1,
+    RegisteredCompilerObserverV1, RegisteredCustodianApplicationObserverV1,
+    RootCompilerExecutionObserverProgressV1, RootCompilerExecutionObserverV1,
+    RootCompilerObserverRegistryV1, RootNativeApplicationSupervisorErrorV3,
+    RootNativeApplicationSupervisorStorageV3, RootNativeApplicationSupervisorV3,
+    RootProofManagerClientV1, RootProofManagerServerV1, SupervisorCompilerObserverRegistryV1,
+};
 #[cfg(target_os = "linux")]
 pub use linux::{
     AdmissionErrorKindV1, CURRENT_PROCESS_START_TIME_IO_STORAGE_V2,
     CURRENT_PROCESS_START_TIME_WORK_V2, ExpectedClientProcessIdentityV1, LiveClientPidfdErrorV2,
     LiveClientPidfdIdentityV1, LiveClientPidfdIdentityV2, LiveClientPidfdStorageV2,
-    ProtectedExternalAnchorServiceAdmissionV1, ProtectedExternalAnchorServiceAdmissionV2,
-    ProtectedExternalAnchorServiceErrorV2, ProtectedExternalAnchorServiceStorageV2,
-    ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionErrorV2,
-    ProtectedServiceAdmissionV1, ProtectedServiceAdmissionV2, ProtectedServiceStorageV2,
+    NativeClientTerminalObservationV1, ProtectedExternalAnchorServiceAdmissionV1,
+    ProtectedExternalAnchorServiceAdmissionV2, ProtectedExternalAnchorServiceErrorV2,
+    ProtectedExternalAnchorServiceStorageV2, ProtectedServiceAdmissionErrorV1,
+    ProtectedServiceAdmissionErrorV2, ProtectedServiceAdmissionV1, ProtectedServiceAdmissionV2,
+    ProtectedServiceStorageV2, RetainedCompilerClientSessionV1,
     current_process_start_time_ticks_v1, current_process_start_time_ticks_v2,
 };
 #[cfg(target_os = "linux")]

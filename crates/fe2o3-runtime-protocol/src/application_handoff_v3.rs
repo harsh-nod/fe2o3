@@ -64,6 +64,8 @@ pub const WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1: &str =
 /// Inherited write-only acknowledgment descriptor installed by the Cargo supervisor.
 pub const WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1: &str =
     "FE2O3_APPLICATION_V3_HANDOFF_ACK_FD_V1";
+/// Dedicated Cargo-created application endpoint; not the compiler service at FD195.
+pub const WORKER_V3_APPLICATION_PROOF_FD_ENV_V1: &str = "FE2O3_APPLICATION_V3_PROOF_FD_V1";
 /// Canonical application-occurrence wire installed by the Cargo supervisor as lowercase hex.
 pub const WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1: &str = "FE2O3_APPLICATION_V3_OCCURRENCE_V1";
 /// Canonical V3 handoff commitment installed by the Cargo supervisor as lowercase hex.
@@ -292,7 +294,7 @@ impl WorkerV3ApplicationIdentityV1 {
     }
 
     #[cfg(test)]
-    const fn from_test_parts(sha256: [u8; IDENTITY_BYTES_V1], byte_len: u64) -> Self {
+    pub(super) const fn from_test_parts(sha256: [u8; IDENTITY_BYTES_V1], byte_len: u64) -> Self {
         Self { sha256, byte_len }
     }
 }

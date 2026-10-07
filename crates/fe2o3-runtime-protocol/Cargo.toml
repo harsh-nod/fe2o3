@@ -19,3 +19,6 @@ fe2o3-hsaco-finalize.workspace = true
 fe2o3-kernel-ir.workspace = true
 fe2o3-static-executable-format.workspace = true
 sha2.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }

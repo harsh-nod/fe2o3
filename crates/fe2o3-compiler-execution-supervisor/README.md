@@ -222,13 +222,17 @@ external-anchor service UID/GID selected by the root-owned client profile.
 Handoff admission requires those credentials to equal the identity of the
 supervisor-provisioned anchor endpoint before any launch material is created.
 
-One accepted handoff can now be consumed into a move-only prepared launch. The
+One accepted handoff is first registered with the original root coordinator,
+transferring only its compiler peer/pidfd, never Cargo's control endpoint.
+Production preparation requires that authenticated registry. The returned opaque
+registration retains a root-created observer endpoint and original root pidfd.
+One accepted handoff can then be consumed into a move-only prepared launch. The
 supervisor clones and revalidates the exact launcher, issuer, root, service
 peer, rustc pidfd, policy, signing key, sealed service-launch capability,
-external-anchor endpoint, and external-anchor pidfd;
+external-anchor endpoint/pidfd, and observer endpoint/root pidfd;
 creates distinct nonblocking close-on-exec pipes for stdin, stdout, stderr, and
-readiness; and constructs the fixed twelve-entry source table for issuer FDs
-`0..=11`. It binds that table and the issuer image to the current supervisor PID
+readiness; and constructs the fixed fourteen-entry source table for issuer FDs
+`0..=13`. It binds that table and the issuer image to the current supervisor PID
 and exact procfs start time in one canonical 704-byte manifest. The manifest is
 stored in an anonymous read-only mode-`0400` memfd with exact `WRITE`, `GROW`,
 `SHRINK`, and `SEAL` seals. Revalidation repeats all authority, client-liveness,
@@ -248,9 +252,17 @@ Both report writers are closed before the gate wait. It cannot execute until the
 parent requires report EOF, exact PID and calling-thread namespace matches, proc-visible profile
 checks, and the complete prepared authority set. No tracing privilege or
 dumpability relaxation is needed. It then isolates standard streams, installs the
-manifest at FD 198, issuer at FD 199, sources at FDs `200..211`, and executes
+manifest at FD 198, issuer at FD 199, V1 observer sources at FDs `200..213`, and executes
 the authenticated static launcher with one fixed argument and an empty
 environment.
+
+Before returning launched custody or waiting for readiness, the supervisor binds
+the original issuer child pidfd to its registration. Registry exchanges are
+serialized with deadline-bounded mutex acquisition, not across a whole session.
+Root sends the issuer greeting only after independently checking parentage and
+the protected process profile. Supervisor transfer aliases then close without
+shutting down the issuer endpoint. The explicit twelve-source fixture path exists
+only for unit tests; production has no fallback.
 
 The move-only result has three states. `LaunchedProtectedIssuerV1` owns the
 atomically returned close-on-exec pidfd but grants no issuer authority.
@@ -310,7 +322,7 @@ cloneable stop handle provides graceful shutdown with a one-second maximum
 idle accept observation; active sessions retain their trusted timeout bounds.
 
 The launcher deliberately inherits an already established profile instead of
-performing privileged credential transitions after `clone3`. Deployment must
+performing privileged credential transitions after cloning. Deployment must
 therefore start the supervisor under the dedicated UID/GID with empty groups
 and capabilities, exact locked securebits, `no_new_privs`, nondumpability,
 zero core limits, umask `077`, default owned `SIGCHLD`, and stable namespaces.
@@ -321,7 +333,8 @@ The descriptor-only deployed entrypoint is implemented and accepts no arguments
 or environment. It consumes the canonical deployment manifest at FD 220 plus
 fixed inherited bound socket, root, launcher, issuer, policy, root-owned signing-key
 template, external-anchor descriptors, and an independent shared lifecycle
-lease at FD 12; validates the complete locked service
+lease at FD 12, authenticated root registry at FD 13 and original root pidfd
+at FD 14; validates the complete locked service
 profile; invokes `listen(2)` only after entering the protected supervisor UID,
 reissues the exact policy-bound key template into a fresh anonymous
 service-owned sealed image only after the deployment UID/GID and policy agree;

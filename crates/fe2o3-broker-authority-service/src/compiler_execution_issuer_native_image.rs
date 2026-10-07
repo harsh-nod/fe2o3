@@ -6,7 +6,10 @@ use super::{
     RetainedStaticIssuerExecutableV1 as Executable, native_checks::IssuerInspectionError,
     require_close_on_exec, validate_executable_snapshot,
 };
-use fe2o3_compiler_execution_protocol::CompilerExecutionIssuerPolicyV3 as Policy;
+use fe2o3_compiler_execution_protocol::{
+    CompilerExecutionIssuerPolicyV3 as Policy,
+    CompilerExecutionSupervisorDeploymentV3 as SupervisorDeployment,
+};
 use fe2o3_kernel_ir::{
     CanonicalKernelIrVerificationResourceBudgetV1 as Budget,
     CanonicalKernelIrVerificationResourceErrorV1 as Resource,
@@ -298,6 +301,43 @@ pub fn validate_retained_issuer_image_v3<T: Send + 'static>(
             require_live(child, budget)
         },
     )
+}
+
+/// Image mechanics for the actual root-owned supervisor child. The caller must
+/// separately establish installed deployment provenance and protected process
+/// custody; a caller-created deployment record is not authority. This does not
+/// invent an issuer policy or claim an issuer runtime for the supervisor.
+pub(crate) fn validate_original_supervisor_image_v3(
+    child: &Child,
+    deployment: &SupervisorDeployment,
+    budget: &mut Budget<'_>,
+) -> Result<(), RootIssuerImageErrorV3> {
+    let _quota = retained_issuer_image_quota_v3(deployment.executable().byte_len())?;
+    let floor = child
+        .retained_storage()
+        .checked_add(deployment.retained_storage())
+        .ok_or(Resource::Arithmetic)?;
+    budget.with_prepaid_scope(floor, ENTRY_WORK, CHILD_IO_WORK, CHILD_FRAME, |budget| {
+        if !child.is_live(budget)? {
+            return Err(RootIssuerImageErrorV3(Failure::NotLive));
+        }
+        let process = open_child_proc(child.pid())?;
+        let image = open_process_image(&process)?;
+        let (before, measured) =
+            measure_expected_image(&image, deployment.executable().byte_len(), budget)?;
+        if measured.executable != deployment.executable() {
+            return Err(IssuerInspectionError::new(
+                Kind::ExecutablePolicyMismatch,
+                "running supervisor executable differs from native deployment",
+            )
+            .into());
+        }
+        require_current_image(&open_process_image(&process)?, before)?;
+        if !child.is_live(budget)? {
+            return Err(RootIssuerImageErrorV3(Failure::NotLive));
+        }
+        Ok(())
+    })
 }
 
 fn measure_expected_image(

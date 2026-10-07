@@ -177,7 +177,11 @@ mod tests {
 
     #[test]
     fn inherited_manifest_is_retained_privately() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "compiler_execution_service_launch::tests::inherited_manifest_is_retained_privately",
+        ) {
+            return;
+        }
         let expected = manifest(7);
         let capability =
             CompilerExecutionServiceLaunchCapabilityV1::create(expected.clone()).unwrap();
@@ -200,7 +204,11 @@ mod tests {
 
     #[test]
     fn canonical_child_installation_uses_fd_8_and_exact_bytes() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "compiler_execution_service_launch::tests::canonical_child_installation_uses_fd_8_and_exact_bytes",
+        ) {
+            return;
+        }
         let expected = manifest(7);
         let path = std::env::temp_dir().join(format!(
             "fe2o3-compiler-execution-launch-expected-{}",

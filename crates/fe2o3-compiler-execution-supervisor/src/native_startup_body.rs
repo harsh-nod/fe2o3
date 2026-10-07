@@ -44,6 +44,8 @@ pub enum Error {
     Service(ServiceError),
     /// Native readiness construction refused.
     Ready(ReadyError),
+    /// Separate authenticated native application bootstrap or transfer refused.
+    Application(std::io::Error),
     /// Configured credentials or another fixed startup invariant is invalid.
     Invalid(&'static str),
 }
@@ -83,6 +85,7 @@ impl std::fmt::Display for Error {
             Self::Supervisor(e) => e.fmt(f),
             Self::Service(e) => e.fmt(f),
             Self::Ready(e) => e.fmt(f),
+            Self::Application(e) => e.fmt(f),
             Self::Invalid(s) => f.write_str(s),
         }
     }
@@ -102,6 +105,7 @@ impl std::error::Error for Error {
             Self::Supervisor(e) => Some(e),
             Self::Service(e) => Some(e),
             Self::Ready(e) => Some(e),
+            Self::Application(e) => Some(e),
             Self::Invalid(_) => None,
         }
     }
@@ -125,6 +129,50 @@ pub(super) unsafe fn run(
     cleanup: &mut Cleanup,
     b: &mut Budget<'_>,
 ) -> Result<DispatchReport> {
+    // SAFETY: this wrapper passes the original fixed-source intake contract on.
+    unsafe {
+        run_with(
+            cleanup,
+            b,
+            |supervisor, listener, bootstrap, deployment, revalidate, cleanup, b| {
+                let (service, charge) = Service::bind(supervisor, listener, session, b)?;
+                b.reserve_storage(charge.additional_storage())?;
+                revalidate(b)?;
+                service.revalidate(b)?;
+                let pid = u32::try_from(rustix::process::getpid().as_raw_pid())
+                    .map_err(|_| Error::Invalid("invalid native supervisor PID"))?;
+                let (ready, charge) = Ready::new(pid, deployment.deployment(), b)?;
+                b.reserve_storage(charge.additional_storage())?;
+                io::send_ready(&bootstrap, ready.canonical_bytes(), b)?;
+                drop((ready, bootstrap));
+                b.release_storage(charge.additional_storage() + FILE_STORAGE)?;
+                revalidate(b)?;
+                service.revalidate(b)?;
+                let report = service.run_turns(dispatch, cleanup, b);
+                revalidate(b)?;
+                service.revalidate(b)?;
+                Ok(report)
+            },
+        )
+    }
+}
+
+// Closed callers supply compiler dispatch or the original-root application
+// protocol. The common prefix still creates all actual native owners; this is
+// not a public provider interface or a projection from an inert deployment.
+pub(super) unsafe fn run_with<'work, T>(
+    cleanup: &mut Cleanup,
+    b: &mut Budget<'work>,
+    finish: impl FnOnce(
+        Supervisor,
+        std::os::fd::OwnedFd,
+        std::os::fd::OwnedFd,
+        &Deployment,
+        &mut dyn FnMut(&mut Budget<'work>) -> Result<()>,
+        &mut Cleanup,
+        &mut Budget<'work>,
+    ) -> Result<T>,
+) -> Result<T> {
     // SAFETY: the dedicated entrypoint transfers every fixed raw slot, even on refusal.
     let mut sources = unsafe { Sources::new() };
     b.with_prepaid_scope(INPUT_STORAGE, 8, NATIVE_ISSUER_STARTUP_WORK_V2,
@@ -190,33 +238,16 @@ pub(super) unsafe fn run(
             b.reserve_storage(charge.additional_storage())?;
             let (supervisor, charge) = Supervisor::bind(program, credentials, root, key, anchor, b)?;
             b.reserve_storage(charge.additional_storage())?;
-            let (service, charge) = Service::bind(supervisor,
-                intake(&mut sources, io::LISTENER, FILE_STORAGE, b)?.into(), session, b)?;
-            b.reserve_storage(charge.additional_storage())?;
+            let listener = intake(&mut sources, io::LISTENER, FILE_STORAGE, b)?.into();
 
-            let revalidate = |b: &mut Budget<'_>| -> Result<()> {
+            let mut revalidate = |b: &mut Budget<'work>| -> Result<()> {
                 deployment.revalidate(b)?;
                 running.revalidate(b)?;
                 profile.revalidate(b)?;
                 lifecycle.revalidate_for_root(&lifecycle_root, b)?;
-                service.revalidate(b)?;
                 Ok(())
             };
-            revalidate(b)?;
-            let pid = u32::try_from(rustix::process::getpid().as_raw_pid())
-                .map_err(|_| Error::Invalid("invalid native supervisor PID"))?;
-            let (ready, charge) = Ready::new(pid, d, b)?;
-            b.reserve_storage(charge.additional_storage())?;
-            io::send_ready(&bootstrap, ready.canonical_bytes(), b)?;
-            drop((ready, bootstrap));
-            b.release_storage(charge.additional_storage() + FILE_STORAGE)?;
-            revalidate(b)?;
-            let report = service.run_turns(dispatch, cleanup, b);
-            revalidate(b)?;
-            // The persistent cleanup guard still holds the lock after these locals.
-            drop(service);
-            drop(lifecycle);
-            Ok(report)
+            finish(supervisor, listener, bootstrap, &deployment, &mut revalidate, cleanup, b)
         })
 }
 

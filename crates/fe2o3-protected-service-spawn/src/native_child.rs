@@ -118,6 +118,18 @@ impl RootOwnedProtectedServiceChildV2 {
         }
     }
 
+    pub(crate) fn attach_native_proof_retirement(
+        &mut self,
+        retirement: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        self.custody
+            .0
+            .as_mut()
+            .expect("original native child custody")
+            .0
+            .attach_native_proof_retirement(retirement);
+    }
+
     /// Transfers the prepared namespace with exact child/domain/lease/slot custody.
     pub(crate) fn new_with_domain_and_namespace(
         pid: Pid,

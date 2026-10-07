@@ -6,6 +6,7 @@ pub(crate) enum GeneratedProofProcessPolicyV2 {
     LegacySingleSolverV1,
     PinnedSingleThreadContextsV2,
     PinnedSingleThreadContextsV3,
+    ClosedConditionalFillV1,
 }
 
 impl GeneratedProofProcessPolicyV2 {
@@ -16,6 +17,7 @@ impl GeneratedProofProcessPolicyV2 {
     pub(crate) const fn max_total(self) -> usize {
         match self {
             Self::LegacySingleSolverV1 => 1,
+            Self::ClosedConditionalFillV1 => 12,
             Self::PinnedSingleThreadContextsV2 | Self::PinnedSingleThreadContextsV3 => 4_096,
         }
     }
@@ -23,13 +25,17 @@ impl GeneratedProofProcessPolicyV2 {
     pub(crate) const fn max_live(self) -> usize {
         match self {
             Self::LegacySingleSolverV1 => 1,
-            Self::PinnedSingleThreadContextsV2 | Self::PinnedSingleThreadContextsV3 => 2,
+            Self::PinnedSingleThreadContextsV2
+            | Self::PinnedSingleThreadContextsV3
+            | Self::ClosedConditionalFillV1 => 2,
         }
     }
 
     pub(crate) const fn verifier_thread_stack_bytes(self) -> u64 {
         match self {
-            Self::LegacySingleSolverV1 | Self::PinnedSingleThreadContextsV2 => 32 * 1024 * 1024,
+            Self::LegacySingleSolverV1
+            | Self::PinnedSingleThreadContextsV2
+            | Self::ClosedConditionalFillV1 => 32 * 1024 * 1024,
             // Pinned b677dd5 vir/src/interpreter.rs requests this stack explicitly.
             Self::PinnedSingleThreadContextsV3 => 1024 * 1024 * 1024,
         }
@@ -40,6 +46,14 @@ impl GeneratedProofProcessPolicyV2 {
             Self::LegacySingleSolverV1 => b"FE2O3/GENERATED-PROOF/PROCESS-POLICY/V1\0single-solver;max-total=1;max-live=1;num-threads=1;direct-verifier-children;exact-retained-exec-fd-maps;authenticated-terminal",
             Self::PinnedSingleThreadContextsV2 => b"FE2O3/GENERATED-PROOF/PROCESS-POLICY/V2\0pinned-verus-b677dd5;max-total=4096;max-live=2;num-threads=1;direct-verifier-children;exact-retained-exec-fd-maps;authenticated-terminal",
             Self::PinnedSingleThreadContextsV3 => b"FE2O3/GENERATED-PROOF/PROCESS-POLICY/V3\0pinned-verus-b677dd5;max-total=4096;max-live=2;num-threads=1;direct-verifier-children;exact-retained-exec-fd-maps;authenticated-terminal;verifier-thread-stack-max=1073741824;other-thread-stack-max=33554432;process-stack-max=33554432",
+            Self::ClosedConditionalFillV1 => b"FE2O3/GENERATED-PROOF/PROCESS-POLICY/CLOSED-CONDITIONAL-FILL/V1\0pinned-verus-b677dd5;max-total=12;max-live=2;num-threads=1;no-bv-simplify;direct-verifier-children;exact-retained-exec-fd-maps;authenticated-terminal;verifier-thread-stack-max=33554432;other-thread-stack-max=33554432;process-stack-max=33554432",
+        }
+    }
+
+    pub(crate) const fn extra_verifier_arguments(self) -> &'static [&'static str] {
+        match self {
+            Self::ClosedConditionalFillV1 => &["-V", "no-bv-simplify"],
+            _ => &[],
         }
     }
 }

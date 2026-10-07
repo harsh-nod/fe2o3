@@ -173,12 +173,24 @@ impl<R> RecoveredMixedWorkerPinnedRoster<R> {
         Ok(())
     }
     pub fn revalidate_currentness(&self) -> Result<()> {
+        self.acquire_retained_currentness_token().map(drop)
+    }
+    pub(crate) fn acquire_retained_currentness_token(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1> {
         let current = self
             .envelope
             .current_publication_lease()
             .acquire_current_token()
             .map_err(AdmissionError::CurrentPublication)?;
-        self.check_current(&current)
+        self.check_current(&current)?;
+        Ok(current)
+    }
+    pub(crate) fn revalidate_retained_currentness_token(
+        &self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<()> {
+        self.check_current(current)
     }
     /// Provides the complete request while holding the current publication lock.
     /// The post-check also runs when the receiver returns an error. Callback

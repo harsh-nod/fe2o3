@@ -1,0 +1,951 @@
+{
+  "capture_closure_sha256": "1516d92d908215f3568bd59c724a179d43a3e7cde82bc9b79535655fde31eb09",
+  "capture_owner_sha256": "c8db0a16f6662e9fa14caeffa3b64b25577b8c1ce083581ea91e95a147a74a31",
+  "capture_prepared_sha256": "028e22f153465055823cd2ce3adcfeddff048f16e924f62d4c244f5c44358aef",
+  "capture_result_sha256": "3671624de266bbdf01a72ea90216df058ddfb7d9ee6a20a7944169a98252d7e3",
+  "cases": {
+    "actual_domain-read-failure-cursor-reset": {
+      "body_sha256": "4e899ced2b07ded59d46e72ec59cf54c9c68fa0e31081cbd676de4aac5e8f2c2",
+      "capture_stderr_sha256": "da5082b519fdaed486dbec7825a9713083b6585c36d97a7ce692fa19d6f00b4e",
+      "capture_stdout_sha256": "8ed7300a41643a863be547407ebf1196f2c35e4d39ffbfe6bd4cddfcf85d8cf2",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "domain-check-omitted": {
+      "body_sha256": "dad713bf6e5f78c0b1954055b6933566e5eac00f72efe09d424695daead4b3db",
+      "capture_stderr_sha256": "392e63d1f449691585532e1320575eccb16bcf6b42652f3f8ba2d108e1df6d8f",
+      "capture_stdout_sha256": "097a43460c50ad4f913f7d91b6016053624e8516f27ea6e8519ecb23063d03dd",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "domain-equality-inverted": {
+      "body_sha256": "22aba71f55a997e38fd54a21aa7451d63c71c0eb31712c4144f98ad5a98952d7",
+      "capture_stderr_sha256": "d0dbffcf42a5e6744257658bcf6ece5cbe955f098e35a42660c458e8106722fc",
+      "capture_stdout_sha256": "49fcddf56466cd9532a875ad0feb3ee2eddf77155c3b9d02e0130f51bae42389",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "domain-error-substituted": {
+      "body_sha256": "472450b8c1ddaafd5e90c5ed2e8f65f3f744dfcd9a9cc12dd3646d76c5955183",
+      "capture_stderr_sha256": "54c848b65197401bd5fb5fc3cc2c01f42b1ebc28e8c7a381dd628cf1692775e3",
+      "capture_stdout_sha256": "a46c38dce4494e69d64847f539afb6e27ac6452578133e2d1a133ce6a5b63291",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "domain-not-consumed": {
+      "body_sha256": "033cfd24a12a62438da4b11125e16ad712f6a995749dd5974df8d3fb7657ec22",
+      "capture_stderr_sha256": "69cb77fcb0a38c0ebc17aff0821e2172a22e6c9ba19e9a860fa73278d6fcfbde",
+      "capture_stdout_sha256": "086875125c5383a83f4ee564107abb08e62a2cf1dc3f333920ba96f7036a1951",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "equality-empty-refused": {
+      "body_sha256": "de6a3d067175a472231429898b73a24e635eb6ad31d0c71410b21424736ea8db",
+      "capture_stderr_sha256": "c26f7d0da2d9009e52f6183f48a2f8f446f2e20f0aaba0eafb7e0529eba0eb5d",
+      "capture_stdout_sha256": "1a432f27a692d4f22518f576c62083488451fca3d047ef03dabba6e66eaa9ec8",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "bytes_equal",
+      "selector": "*bytes_equal",
+      "verified": 1
+    },
+    "equality-last-byte-ignored": {
+      "body_sha256": "7c2a852ac2ea5df27c754fce888ea385ee7f10bba2a136f2a4b8df07ddc124dd",
+      "capture_stderr_sha256": "7d25d9f9d0c57bb420c53fffc1ae513acaebe576f7759d46794533332484c516",
+      "capture_stdout_sha256": "674ad3b057dd472b4e81d93f4e136cc79ad2537ed05fc2b953ea26a318764533",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "assertion failed"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "bytes_equal",
+      "selector": "*bytes_equal",
+      "verified": 1
+    },
+    "equality-matching-refused": {
+      "body_sha256": "dbabfa10a017141218e386dd24f566122ecf2152e8a69aec9258fd41c16ffce8",
+      "capture_stderr_sha256": "ad819fc1ec9cede30bf4319140fc63626a2ea691a7d37a099f1c3f5c55f5e906",
+      "capture_stdout_sha256": "970cbafd066078fb5058eda360e63d159e148b6b71054b54f1cd71e57032894d",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "bytes_equal",
+      "selector": "*bytes_equal",
+      "verified": 1
+    },
+    "equality-mismatch-accepted": {
+      "body_sha256": "b32693b76e493469a85311050f0995d81ee81001040077207b2352882ee5ed58",
+      "capture_stderr_sha256": "ff2fc0f984c467eb4e67285dbb073c02a07db8905311bf65570b784e8d0c93af",
+      "capture_stdout_sha256": "85415967370d2a17e84e7ff81f33ddc208925543c5796b6f50976e2a0cab300f",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "bytes_equal",
+      "selector": "*bytes_equal",
+      "verified": 1
+    },
+    "equality-right-reversed": {
+      "body_sha256": "266cbc51aa2bc746463cbb4411d6a2568e2211dd72192790af4aef1e7f7912ee",
+      "capture_stderr_sha256": "0d29f3b93d8855b01842a9847c146e8a24a51408fdc94bf60bfc213ce147d996",
+      "capture_stdout_sha256": "e36744c5f5eff79d01ca69d0b4e073fab0f52a32937be568a26487475e9afddc",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "while loop: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "bytes_equal",
+      "selector": "*bytes_equal",
+      "verified": 1
+    },
+    "equality-unequal-length-accepted": {
+      "body_sha256": "1867d91decf06bd3857a2ed541e78400758305c92536ad7b0d8d59aa19fad097",
+      "capture_stderr_sha256": "cee8bc4093f7e72f39b7bba45cd9fb9afd7bbb67e09567643304b7bfc3052cf4",
+      "capture_stdout_sha256": "1e7dbb4022c0089cfd85933e85de2c3e70b792f01435acf0e3ca0f298e8f04fc",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "bytes_equal",
+      "selector": "*bytes_equal",
+      "verified": 1
+    },
+    "header-eager-four-byte-preflight": {
+      "body_sha256": "1fba8ab4dd3b0ae0689060f2801633ed81258f4d06d198cd21c8eaacff1b7557",
+      "capture_stderr_sha256": "1c2cce96d4419ee2222ec70181f0b752eb6fb27e582b6d4676598600d9951d7d",
+      "capture_stdout_sha256": "cd6a53cf6a644b63bf352802faa8e85895313b9667cd7577ac7332bc990bcb8b",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "header-success-cursor-reset": {
+      "body_sha256": "b5242ae4acbb68b212bc79cf5cd77ad5fa324b15796193739431fb36e8e78483",
+      "capture_stderr_sha256": "2734038d2238b7f90fc8299d1d7a5793909089d0beed917744fcab1c0db52abb",
+      "capture_stdout_sha256": "3091f3a95f758bd05f511c2414eb12a86af8e0860eb9beca4968874852639546",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "note",
+          "message": "recommendation not met"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "header-success-refused": {
+      "body_sha256": "983e755e10c57ad926adc9bb680f83f3a89ef3d010bf230cae76aa7a797b4a86",
+      "capture_stderr_sha256": "39eb427e95c5dd0c5246e68dc0aaf2002faa6f8407312981fee5b5040b2fdd40",
+      "capture_stdout_sha256": "a76bd277a736e52aabaef90f386f2bfc8263a9ee11f01284f09aae0277516a2d",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "reserved-check-omitted": {
+      "body_sha256": "0a431760dadd85e1faa72b53a2dbe5d450906eb40cfaf74404b4ebc025712569",
+      "capture_stderr_sha256": "c938c4c2f35f258ad5bd0c9704dc30df39b447b8a8da8f50744146b63fe35612",
+      "capture_stdout_sha256": "eb11e11e43a82fb0d830bd740e1bfc7a313dcf0e6440683eaa2c395d9953c537",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "reserved-error-substituted": {
+      "body_sha256": "fd2ab192722310e1243e7ec0d000a804cec7b16cfcea7affb0875bdf4e0758ce",
+      "capture_stderr_sha256": "5f6128919eb01f1061b4850ac2a676373881ca917b8d0c5ab751e3319e56b5ae",
+      "capture_stdout_sha256": "d11e4f6f6a79eae46468a236d294a571555e84bb5d86902e12f14d078a5b02cf",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "reserved-first-byte-ignored": {
+      "body_sha256": "bce4ded81e228678ee2aa3c097b938a7788cff4f02e7d381f265d458c11161d5",
+      "capture_stderr_sha256": "df1b349d1dac2ba573e1e6572aee00567c193bea60065138c83392a55d71aedb",
+      "capture_stdout_sha256": "348d89a55430ddd38053fef8b19a8b04a3b1f195c823a224087fcb41ef3d563d",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "reserved-read-failure-cursor-reset": {
+      "body_sha256": "d833f517973124e3bf02a9b3479088501049c4a49deb385e8259c599ebe532a3",
+      "capture_stderr_sha256": "e378b8cdfb1e8c1523a7de1f917adf502899978168b4fef6c5e80795b68d43d6",
+      "capture_stdout_sha256": "b6f76f5aa2f79b667277f28bed83459d568cf5f0f78e46ec5940e2125d9ff5fd",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "reserved-second-byte-ignored": {
+      "body_sha256": "5d641a014f7105458517ad656de1a10902bac2696b6fde3de6544b436bc0ec01",
+      "capture_stderr_sha256": "f9c459908139fc5155afcd5d2062b6823e95e38ec2789d74849e93c63d25c113",
+      "capture_stdout_sha256": "ccd227e6dceaa3c55ac7ffb663c82b92a52f430409ddbd515568924cad809717",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "schema-check-omitted": {
+      "body_sha256": "bc4a873af09b22ea47663f85e56ea21cded0dc8e311834a68024169066cb5a00",
+      "capture_stderr_sha256": "b7b88a06a2d25daa854ffbcc59239261b2febe2a2f662aae8a192e0114c65e43",
+      "capture_stdout_sha256": "c8e9bd0bf4e0930eaf1390ff97fb2ef80348e6a323b99694b8ce86b9a8ef5cd2",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "schema-error-substituted": {
+      "body_sha256": "3d70c7f42733ce10006fdbb5d30a350d90783cab2ca37bf4dcf1087433a1fe19",
+      "capture_stderr_sha256": "8ff87b61fa3d55bf9368555fe444b08799e9e5f40d20e170f5d16dcb4b4dd3b8",
+      "capture_stdout_sha256": "2570f647c1b7908aff0cf19791aa61ef939d81f5f3afe249ca454fefb8c1e75d",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "schema-read-failure-cursor-reset": {
+      "body_sha256": "67b9507b9e06d02384bd232524cc90b713f599811d6c58a0845185ff39f21b81",
+      "capture_stderr_sha256": "59dff40ba2c1ffb62d53e739ffb3c520fd4694cb874773ed77e935dd1a771f05",
+      "capture_stdout_sha256": "cbf357eeeae1e88b79fc3f4d3ca9d1de3cb0782dbe51f01a493a8eefd02337b7",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_header",
+      "selector": "*read_header",
+      "verified": 0
+    },
+    "u64-read-cursor-reset": {
+      "body_sha256": "1ebc9c2b78e3533b3b53b887d13fda682f50da8adb9c477537041a1be51259fb",
+      "capture_stderr_sha256": "72ecccfa7a97695a2ffa328d11f83db05717a3bfa1ca5a2ae97d38b888836711",
+      "capture_stdout_sha256": "8ac899bb37bb56b02751ef072bc78ff4f1134ae98056e346f34d6ceca870127b",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_u64",
+      "selector": "*read_u64",
+      "verified": 0
+    },
+    "u64-read-error-substituted": {
+      "body_sha256": "c87dadd38b3612cbc11862577dce16a292f8fb840dfa2981f47db42e0fdef95e",
+      "capture_stderr_sha256": "6b15cae2000991c55c9a56f2b54e088f1e77815d597615c15706a0dbcf70effc",
+      "capture_stdout_sha256": "ae21d5b4469329772f3777ba9a30193c2893dc671bcfdd892a629647085b50fe",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_u64",
+      "selector": "*read_u64",
+      "verified": 0
+    },
+    "u64-read-failure-cursor-reset": {
+      "body_sha256": "b39c60fa9d66c30e343dc4afe01a8b5b96a1feb5e4f3a286b26a07cf5a7734bd",
+      "capture_stderr_sha256": "499169ea0a80c90c3fc73ae661aa1fcdd495e6aa8c2b7a8836eef5464358e869",
+      "capture_stdout_sha256": "e5ca8d30ef559efeab0026aacb9e91d13f7b797b10880d7a43f9f5ea7791ff4f",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_u64",
+      "selector": "*read_u64",
+      "verified": 0
+    },
+    "u64-read-reversed": {
+      "body_sha256": "976eda5051f312fa6e0d487369b0bc508f5690e0b88149e4f74052a72378f641",
+      "capture_stderr_sha256": "c726b6611e6f6aa7b8f109b94e68c1fdb48ff8f9e85861364c4b0f778fa24549",
+      "capture_stdout_sha256": "a4234522751115e3c95d5326e7b33ff250d565bff1f622e8d213aab3d2a5d52b",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "read_u64",
+      "selector": "*read_u64",
+      "verified": 0
+    },
+    "u64-write-byte-rotation": {
+      "body_sha256": "5e0358d0bc96e9770c8376b023fdb48581b7dc3b4210b8a8eda7f31d5cb7a532",
+      "capture_stderr_sha256": "34e6c7798c8ac6f02b2fbb77582ec2ef02698db262e6c511658ef1347ab2bd4a",
+      "capture_stdout_sha256": "4ce802bbcff33c904ede81386f590e76f068be331ca5fe93981e038b7c4e83e3",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "write_u64",
+      "selector": "*write_u64",
+      "verified": 0
+    },
+    "u64-write-omitted": {
+      "body_sha256": "d5ab98f370c22e0c058c3799a6bdf86914c47a005addf90c6fa4e097e554cb08",
+      "capture_stderr_sha256": "f8b4df109e1e1773f40be404f52e955fc693ef760c44732d700bb3237707ffef",
+      "capture_stdout_sha256": "3428673b57affea99ea1d224a5907a8d668420cc1208de451be1e4278e8b9a18",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "write_u64",
+      "selector": "*write_u64",
+      "verified": 0
+    },
+    "u64-write-prefix-substituted": {
+      "body_sha256": "4305a1e8b69daa283fa5d28057eebfd4d021d019b6765ef26849a461b8824acc",
+      "capture_stderr_sha256": "e344b5aa5cf5dbd5c5cb7db83b7210338cd72c9806c625d420686ecd40512100",
+      "capture_stdout_sha256": "a3f2de81bcf44876724cc6dbbe72a4d0e73e615d4917465d18b708127b5b6668",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "postcondition not satisfied"
+        },
+        {
+          "level": "note",
+          "message": "recommendation not met"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "write_u64",
+      "selector": "*write_u64",
+      "verified": 0
+    },
+    "write-domain-omitted": {
+      "body_sha256": "41a87bdbdfb235c062f989f5e6f74d1c6d66c73b9ff4a669e6f6aaa05036bb9f",
+      "capture_stderr_sha256": "5408879fa3ce714946c42e112354cecbc496d810d409b089085630c788ef0df9",
+      "capture_stdout_sha256": "4bf7e3859766ee3297cf52b820b9128f0f6f8fabbf63f4dd0028c7eb02dca3dd",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "assertion failed"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "write_header",
+      "selector": "*write_header",
+      "verified": 1
+    },
+    "write-reserved-omitted": {
+      "body_sha256": "9cfee072989b60806b0153a3b7eea1cbd8209cf28abfd4bc27f965c4a8146280",
+      "capture_stderr_sha256": "8854db3ec977280edc38671fc7f043fa5cd96c94b5312f55100ca122e7c2ae83",
+      "capture_stdout_sha256": "e8397af31dca4b343fcba842d13aa932762c626ae535d2ad97cd94fe4d73b6d7",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "assertion failed"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "write_header",
+      "selector": "*write_header",
+      "verified": 1
+    },
+    "write-reserved-substituted": {
+      "body_sha256": "f8b4edfef5c90e799a8aae80753e7c993d40aa7eb317676b00b00d224270678c",
+      "capture_stderr_sha256": "0ce21d77d17d696ada2e612757f14ff5cb5db397aca391075ae326b499e0defd",
+      "capture_stdout_sha256": "08f1371d2b1e07e7241713a332f83bff5d376efb3f88bbad604e79f05217111e",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "assertion failed"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "write_header",
+      "selector": "*write_header",
+      "verified": 1
+    },
+    "write-schema-omitted": {
+      "body_sha256": "46c96fc111240c6326effba159586fb2a8ec71d5fa232173c23e2b095eb2251f",
+      "capture_stderr_sha256": "6f006f29e5b0323599cd0a5733cd3468a388abd6b74f4db0c5ca26cc34bafa1d",
+      "capture_stdout_sha256": "a821d5cae50e0f5a396d565a63c2474ef97132c7d572e20b2ee6ffd03b6fbd4b",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "assertion failed"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "write_header",
+      "selector": "*write_header",
+      "verified": 1
+    },
+    "write-schema-substituted": {
+      "body_sha256": "3f41f9c9ebc308771f0c1166e4400002b81d5be421cd39a2995b2c57a61f44f4",
+      "capture_stderr_sha256": "b9a946ff189819f6203b4de8bb1fc6f3b0c470ca1cc3b92c0209f3e44b6217c0",
+      "capture_stdout_sha256": "66a2fc4400f717a25dbe905cda771a91ebf44c95e42cb29c11dc9d6c26e55948",
+      "diagnostic_messages": [
+        {
+          "level": "note",
+          "message": "verifying root module (selected functions)"
+        },
+        {
+          "level": "note",
+          "message": "function body check: not all errors may have been reported; rerun with a higher value for --multiple-errors to find other potential errors in this function"
+        },
+        {
+          "level": "error",
+          "message": "assertion failed"
+        },
+        {
+          "level": "error",
+          "message": "aborting due to 1 previous error"
+        }
+      ],
+      "errors": 1,
+      "kind": "write_header",
+      "selector": "*write_header",
+      "verified": 1
+    }
+  },
+  "expected_full_positive_verified": 63,
+  "new_solver_or_cpu_execution": false,
+  "proof_inputs": {
+    "crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d",
+    "crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_fields_body.rs": "90c6e5ff451bdeafd39c6fe120119ce435cb9df2dc2038c60b0561dd859b3e83",
+    "crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": "222b9a154402bfad72a745ee6900fe29aead0b8f3e00db9a62d01e7498188f5c",
+    "crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a",
+    "crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363",
+    "crates/fe2o3-runtime-model/verus/distributed_codec_fields_v1.rs": "d40cefa6acd21c25e6f9d004f6c00118d01ba46304e7c4ebf36910ad7c5ddfe4",
+    "crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6",
+    "crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790",
+    "crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "scope": "calibration only; all old captures remain unqualified; fresh full campaign and independent acceptance still required",
+  "source_capture_accepted_negative_classifications": 0,
+  "source_capture_qualified_kills": 0,
+  "vstd_seq_sha256": "69e792cd1c8df0f3ce87e71ae9b07b833b606315e94eb4e23d78adba2f788663"
+}

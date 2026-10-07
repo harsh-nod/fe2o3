@@ -296,15 +296,7 @@ pub(super) fn observe_drm_identity(
     unsafe { rustix::ioctl::ioctl(fd, request) }
         .map_err(|source| binding_syscall("AMDGPU_INFO_DEV_INFO", source))?;
 
-    let mut vram_lost_counter = 0_u32;
-    let mut reset_query =
-        DrmAmdgpuInfo::vram_lost_counter((&mut vram_lost_counter as *mut u32) as usize as u64);
-    // SAFETY: the pinned query writes exactly one initialized `u32` through the
-    // nested pointer. `Updater` keeps rustix's userspace-mutation contract true.
-    let request = unsafe { Updater::<DRM_INFO_OPCODE, _>::new(&mut reset_query) };
-    // SAFETY: the output and outer request remain live for the call.
-    unsafe { rustix::ioctl::ioctl(fd, request) }
-        .map_err(|source| binding_syscall("AMDGPU_INFO_VRAM_LOST_COUNTER", source))?;
+    let vram_lost_counter = observe_vram_lost_counter(fd)?;
 
     Ok(DrmIdentityObservation {
         driver_version: version.reported_driver_version(),
@@ -312,6 +304,19 @@ pub(super) fn observe_drm_identity(
         device,
         vram_lost_counter,
     })
+}
+
+/// Queries only the wrapping VRAM-loss counter used by active-queue fences.
+pub(super) fn observe_vram_lost_counter(fd: &OwnedFd) -> Result<u32, DeviceBindingError> {
+    let mut output = 0_u32;
+    let mut query = DrmAmdgpuInfo::vram_lost_counter((&mut output as *mut u32) as usize as u64);
+    // SAFETY: the pinned query writes exactly one initialized `u32` through the
+    // nested pointer. `Updater` keeps rustix's userspace-mutation contract true.
+    let request = unsafe { Updater::<DRM_INFO_OPCODE, _>::new(&mut query) };
+    // SAFETY: the output and outer request remain live for the call.
+    unsafe { rustix::ioctl::ioctl(fd, request) }
+        .map_err(|source| binding_syscall("AMDGPU_INFO_VRAM_LOST_COUNTER", source))?;
+    Ok(output)
 }
 
 trait KernelContractIo {

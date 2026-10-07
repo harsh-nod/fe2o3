@@ -71,6 +71,8 @@ pub mod compiler_child_channel;
 mod compiler_spawn;
 #[path = "native_namespace_spawn.rs"]
 mod namespace_spawn;
+#[path = "native_proof_controller.rs"]
+pub mod proof_controller;
 
 pub(crate) const ENTRY: usize = 8;
 pub(crate) type Result<T> = std::result::Result<T, ProtectedServiceSpawnErrorV2>;

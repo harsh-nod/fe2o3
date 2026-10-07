@@ -28,7 +28,9 @@ mod resources;
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use resources::{
     RetainedFunctionalRefinementRuntimeResourceErrorV1,
-    RetainedFunctionalRefinementRuntimeStorageV1, open_retained_generated_verus_runtime_bounded_v1,
+    RetainedFunctionalRefinementRuntimeStorageV1,
+    open_retained_closed_conditional_fill_runtime_bounded_v1,
+    open_retained_generated_verus_runtime_bounded_v1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -179,6 +181,14 @@ pub(crate) fn open_retained_generated_verus_runtime_v1(
     open_with_manifest(root, &manifest)
 }
 
+pub(crate) fn open_retained_closed_conditional_fill_runtime_v1(
+    root: &Path,
+) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedFunctionalRefinementRuntimeErrorV1> {
+    let mut owner = open_retained_generated_verus_runtime_v1(root)?;
+    owner.policy = GeneratedProofProcessPolicyV2::ClosedConditionalFillV1;
+    Ok(owner)
+}
+
 pub(crate) fn open_retained_generated_verus_context_runtime_v2(
     root: &Path,
 ) -> Result<RetainedGeneratedVerusRuntimeBackendV1, RetainedFunctionalRefinementRuntimeErrorV1> {
@@ -320,6 +330,38 @@ impl RetainedGeneratedVerusRuntimeBackendV1 {
                 RetainedFunctionalRefinementRuntimeErrorKindV1::UnsupportedPlatform,
                 "sealed generated rust_verify execution requires Linux x86-64",
             ));
+            attempt.complete()?;
+            self.revalidate()?;
+            result
+        })
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+impl RetainedGeneratedVerusRuntimeBackendV1 {
+    pub(crate) fn execute_generated_rust_verify_cancellable(
+        &self,
+        attempt: &mut RuntimeAttemptV1,
+        source: &CanonicalGeneratedVerusProofInputV3,
+        deadline: Instant,
+        output_limit: usize,
+        keep_alive: &dyn Fn() -> std::io::Result<()>,
+    ) -> Result<
+        RetainedFunctionalRefinementRuntimeOutputV1,
+        RetainedFunctionalRefinementRuntimeErrorV1,
+    > {
+        self.with_legacy_access(|| {
+            attempt.check()?;
+            self.revalidate()?;
+            let result = linux::execute_functional_refinement_generated_rust_verify_cancellable(
+                attempt,
+                std::sync::Arc::clone(&self.retained),
+                source,
+                deadline,
+                output_limit,
+                self.policy,
+                keep_alive,
+            );
             attempt.complete()?;
             self.revalidate()?;
             result

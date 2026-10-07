@@ -616,8 +616,9 @@ impl<'a> ValidatedEnvelope<'a> {
                 minor: metadata_version.minor(),
             });
         }
-        if inspection.target().processor() != self.plan.profile().processor()
-            || inspection.target().amdhsa_elf_flags_v4_plus() != self.plan.profile().elf_flags()
+        let profile = self.plan.profile();
+        if inspection.target().processor() != profile.processor()
+            || inspection.target().amdhsa_elf_flags_v4_plus() != profile.elf_flags()
         {
             return Err(KernelClosureError::UnsupportedTarget);
         }
@@ -690,7 +691,7 @@ impl<'a> ValidatedEnvelope<'a> {
             SelectedKernelResourceBindingV1::new(selected_kernel, selected_binding.descriptor());
         let relocation = ClosedRelocationEvidenceV1 { private: () };
         let identity = identity_inputs(
-            self.plan.profile(),
+            profile,
             self.bytes,
             self.metadata_descriptor,
             descriptor_bytes,

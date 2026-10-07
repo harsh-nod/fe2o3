@@ -155,6 +155,25 @@ pub struct LiveClientPidfdIdentityV2 {
 }
 type Client = LiveClientPidfdIdentityV2;
 
+/// A finite exit observation on the original retained, freshly admitted pidfd.
+///
+/// This non-cloneable witness borrows that exact owner. It proves neither child
+/// reap, isolated-domain retirement nor GPU settlement. Errors and lack of poll
+/// readiness never construct it; it cannot be decoded from recorded identities.
+pub struct NativeClientTerminalObservationV1<'client> {
+    client: &'client Client,
+}
+impl NativeClientTerminalObservationV1<'_> {
+    /// Requires the identical retained owner, not matching recorded PID fields.
+    pub fn is_for(&self, client: &Client) -> bool {
+        std::ptr::eq(self.client, client)
+    }
+    /// Original admitted process occurrence, not a newly resolved PID.
+    pub const fn expected_client(&self) -> ExpectedClientProcessIdentityV1 {
+        self.client.expected_client()
+    }
+}
+
 impl Client {
     pub(super) const RETAINED: usize = size_of::<(Self, Storage)>();
     /// Full logical charge for the consumed pidfd owner and receipt padding.
@@ -164,10 +183,16 @@ impl Client {
     pub const ADMISSION_WORK: usize = native::operation_work(3);
     /// Two target/start-time pairs around the non-reaping liveness observation.
     pub const REVALIDATION_WORK: usize = native::operation_work(2);
+    /// One nonblocking native poll bracketed by original-descriptor checks.
+    pub const TERMINAL_OBSERVATION_WORK: usize = native::operation_work(1);
     /// Original, duplicate and original again: six target/start-time pairs.
     pub const CLONE_TRANSFER_WORK: usize = native::operation_work(6);
     /// The same schedule on a temporary duplicate of a borrowed transfer pidfd.
     pub const VALIDATE_TRANSFER_WORK: usize = native::operation_work(6);
+    /// Four liveness schedules plus one bounded child start-time/parent record.
+    pub const PARENT_VALIDATION_WORK: usize = native::operation_work(9);
+    /// Fixed native I/O and two-owner parentage-check envelope, not RSS.
+    pub const PARENT_IO_STORAGE: usize = native::operation_storage(2 * Self::RETAINED, 0);
     /// Fixed logical staging, record buffers and error/control envelopes.
     /// Nested I/O never creates another ledger. Not generated-stack or RSS bounds.
     pub const IO_STORAGE: usize = native::operation_storage(Self::RETAINED, Self::FD_STORAGE);
@@ -190,6 +215,90 @@ impl Client {
         Self::scope(budget, Self::RETAINED, Self::REVALIDATION_WORK, |_| {
             Ok(self.state.validate_liveness_with::<Native>()?)
         })
+    }
+
+    /// Polls the original retained process pidfd once without waiting or reaping.
+    ///
+    /// A terminal witness requires exact descriptor continuity and POLLIN; it
+    /// accepts POLLHUP only alongside POLLIN after reaping. Unexpected events,
+    /// interruption, descriptor drift and budget refusal are errors, not exit.
+    /// The process may already have been reaped, so no numeric PID is reopened.
+    /// Reserve returned witness storage until it is dropped.
+    pub fn observe_terminal(
+        &self,
+        budget: &mut Budget<'_>,
+    ) -> Result<Option<(NativeClientTerminalObservationV1<'_>, Storage)>> {
+        Self::scope(
+            budget,
+            Self::RETAINED,
+            Self::TERMINAL_OBSERVATION_WORK,
+            |_| {
+                self.check_terminal_descriptor()?;
+                let (ready, events) = Native::poll(&self.state.pidfd)?;
+                self.check_terminal_descriptor()?;
+                if ready == 0 && events == 0 {
+                    return Ok(None);
+                }
+                if ready != 1
+                    || events & libc::POLLIN == 0
+                    || events & !(libc::POLLIN | libc::POLLHUP) != 0
+                {
+                    return Err(CheckError::poll_events(events).into());
+                }
+                Ok(Some((
+                    NativeClientTerminalObservationV1 { client: self },
+                    Storage(size_of::<(NativeClientTerminalObservationV1<'_>, Storage)>()),
+                )))
+            },
+        )
+    }
+
+    fn check_terminal_descriptor(&self) -> std::result::Result<(), CheckError> {
+        checks::require_close_on_exec(
+            &self.state.pidfd,
+            AdmissionErrorKindV1::ClientPidfdCloseOnExec,
+            "terminal client pidfd",
+        )?;
+        checks::require_process_pidfd_mode(&self.state.pidfd)?;
+        if checks::inspect_object(
+            &self.state.pidfd,
+            AdmissionErrorKindV1::InspectClientPidfd,
+            "terminal client pidfd",
+        )? != self.state.descriptor_identity
+        {
+            return Err(CheckError::new(
+                AdmissionErrorKindV1::ClientPidfdIdentityChanged,
+                "terminal client pidfd descriptor identity changed",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Observes exact parentage bracketed by both original live pidfd owners.
+    ///
+    /// Prepay both owners on the original caller ledger. The single bounded stat
+    /// read also checks the admitted child's start time; no PID is re-admitted,
+    /// legacy owner is constructed, or descriptor is exposed. This observation
+    /// grants no application authority or guarantee of future parentage/liveness.
+    pub fn validate_parent(&self, parent: &Self, budget: &mut Budget<'_>) -> Result<()> {
+        budget.with_prepaid_scope(
+            2 * Self::RETAINED,
+            native::ENTRY_WORK,
+            Self::PARENT_VALIDATION_WORK,
+            Self::PARENT_IO_STORAGE,
+            |_| {
+                self.state.validate_liveness_with::<Native>()?;
+                parent.state.validate_liveness_with::<Native>()?;
+                super::native_io::inspect_process_parent(
+                    self.state.expected_client.pid,
+                    self.state.start_time_ticks,
+                    parent.state.expected_client.pid,
+                )?;
+                parent.state.validate_liveness_with::<Native>()?;
+                self.state.validate_liveness_with::<Native>()?;
+                Ok(())
+            },
+        )
     }
 
     /// Returns a separately charged CLOEXEC duplicate after checking the original,
@@ -263,6 +372,12 @@ impl Client {
     /// the pidfd alone does not independently prove them or bind a socket peer.
     pub const fn expected_client(&self) -> ExpectedClientProcessIdentityV1 {
         self.state.expected_client
+    }
+
+    /// Cached process occurrence for inert cross-process matching. This is not a
+    /// liveness observation; call `validate_liveness` at every use boundary.
+    pub const fn start_time_ticks(&self) -> u64 {
+        self.state.start_time_ticks
     }
 
     /// Cached `(device, inode, mode)` for inert admission-snapshot/role comparisons.

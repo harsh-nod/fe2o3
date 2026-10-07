@@ -1,0 +1,119 @@
+{
+  "artifacts": [
+    {
+      "bytes": 8719658,
+      "name": "a2-final-interrupted-before-modularization.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "81f0429bdecd2f17ae068fe1e33a95706b9b18d76c94919cf19676f616946ae4"
+    },
+    {
+      "bytes": 10542020,
+      "name": "a2-live-campaigns.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "fc0e3a0c808179e14dd30853dc35ea1848685f3eefb13135fdbfb006bb7d28c6"
+    },
+    {
+      "bytes": 1808897,
+      "name": "a2-planner-input-campaigns.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "fbc8755afacea3ba070765875e55dbef9cd362a5f513abb8fc1eeecc490d13ce"
+    },
+    {
+      "bytes": 2840408,
+      "name": "generic-verus-incomplete-before-modularization.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "45cd4c163ee46ee74814be1c27f0e8cfdf3f1dcc0336c8c0e21cca316d1b440e"
+    },
+    {
+      "bytes": 678905,
+      "name": "native-snapshot05-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "75b75a397da99ee23884df7fe7797b6219a3759541854823c8a80e66f68afe9b"
+    },
+    {
+      "bytes": 1009942,
+      "name": "native-snapshot11-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "ba629031cb0c349de46cd6b3ff5ceef69b3a0eecd0812038825d3a8cd57645d8"
+    },
+    {
+      "bytes": 1151990,
+      "name": "native-snapshot14-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "ec664338c756c568f49a69b24784f2a3e8bcedd09d61ebb53dcec50aaaa79134"
+    },
+    {
+      "bytes": 1402966,
+      "name": "native-snapshot20-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "619f7fa8ad4e46924fdaa1efcd900a5779466fb1a22bd29af46bb8762386860c"
+    },
+    {
+      "bytes": 1094643,
+      "name": "native-snapshot21-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "76bb2181cf95a42e0e349afb1a0d498383b34bc3d2097f5dbf5f6f1e741a3322"
+    },
+    {
+      "bytes": 1358206,
+      "name": "native-snapshot22-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "3125b256713239789db77f367311b1efed11583d8dfca45f5656cb1245c6ed4e"
+    },
+    {
+      "bytes": 2108263,
+      "name": "native-snapshot23-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "ac4f3b695573acb40cab6ae566a410974da05c27b3ebdb63e5d00dafcbb51a6a"
+    },
+    {
+      "bytes": 1679952,
+      "name": "native-snapshots08-10-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "1a468389392da58626591d96e04b1af3275a5e1814b15090fe71618f5a850b8c"
+    },
+    {
+      "bytes": 1792148,
+      "name": "native-snapshots12-13-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "f3b23c129eae73eb5fcb4559ee5bd3d9925405e53a8db57cb6aa9b625944a3c5"
+    },
+    {
+      "bytes": 2278467,
+      "name": "native-snapshots15-17-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "35512fe9600cce905d5886a7729aa94958ef0c43abe5efbe0e987f79e1fd169f"
+    },
+    {
+      "bytes": 1762043,
+      "name": "native-snapshots18-19-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "d554bad5025c0dc06c4b129a777effe13ff7f7e84618fe14ffdf5b4c0e323316"
+    },
+    {
+      "bytes": 271812,
+      "name": "standalone-lock-audit.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "dc67a2e10fb2b3bcb395f0e9b28785f04d5b913a74f2a05ebe936cf7da4da633"
+    }
+  ],
+  "authority": false,
+  "schema": "fe2o3.runtime-a123.private-evidence-index.v1",
+  "scope": "Hashes locate retained diagnostics; they do not authenticate execution or prove a property."
+}

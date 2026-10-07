@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt;
 use std::os::fd::OwnedFd;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{
     ExitedProtectedIssuerV1, LaunchedProtectedIssuerV1, PreparedProtectedIssuerLaunchV1,
@@ -112,6 +112,8 @@ impl ProtectedIssuerSessionTimeoutsV1 {
 pub enum ProtectedIssuerSessionErrorV1 {
     /// Cargo handoff authentication failed.
     Handoff(ProtectedIssuerHandoffErrorV1),
+    /// Dedicated application profile authentication failed.
+    ApplicationHandoff(crate::ProtectedApplicationHandoffErrorV1),
     /// Static-launch input materialization failed.
     Preparation(ProtectedIssuerLaunchPreparationErrorV1),
     /// Gated clone or authenticated static exec failed.
@@ -128,6 +130,9 @@ impl fmt::Display for ProtectedIssuerSessionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Handoff(error) => write!(formatter, "issuer handoff failed: {error}"),
+            Self::ApplicationHandoff(error) => {
+                write!(formatter, "application handoff failed: {error}")
+            }
             Self::Preparation(error) => write!(formatter, "issuer preparation failed: {error}"),
             Self::Launch(error) => write!(formatter, "issuer launch failed: {error}"),
             Self::Readiness(error) => write!(formatter, "issuer readiness failed: {error}"),
@@ -141,6 +146,7 @@ impl Error for ProtectedIssuerSessionErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Handoff(error) => Some(error),
+            Self::ApplicationHandoff(error) => Some(error),
             Self::Preparation(error) => Some(error),
             Self::Launch(error)
             | Self::Readiness(error)
@@ -175,12 +181,20 @@ impl ProtectedIssuerSupervisorV1 {
         AfterPreparation: FnOnce(&PreparedProtectedIssuerLaunchV1) -> State,
         AfterLaunch: FnOnce(State, &LaunchedProtectedIssuerV1),
     {
-        let accepted = self
-            .accept_handoff_inner::<PRODUCTION>(control, timeouts.handoff())
-            .map_err(ProtectedIssuerSessionErrorV1::Handoff)?;
-        let prepared = self
-            .prepare_launch(accepted)
-            .map_err(ProtectedIssuerSessionErrorV1::Preparation)?;
+        let start = Instant::now();
+        let accepted =
+            self.accept_profile_until::<PRODUCTION>(control, start + timeouts.handoff())?;
+        let prepared = match accepted {
+            crate::handoff::AcceptedHandoffV1::CustodianApplication(accepted) => self
+                .prepare_custodian_application_launch(*accepted, start + MAX_BOUNDARY_TIMEOUT_V1),
+            crate::handoff::AcceptedHandoffV1::Compiler(accepted) => {
+                self.prepare_launch_inner::<PRODUCTION>(*accepted)
+            }
+            crate::handoff::AcceptedHandoffV1::Application(accepted) => {
+                self.prepare_application_launch(*accepted, start + MAX_BOUNDARY_TIMEOUT_V1)
+            }
+        }
+        .map_err(ProtectedIssuerSessionErrorV1::Preparation)?;
         let state = after_preparation(&prepared);
         let launched = self
             .launch_inner::<PRODUCTION>(prepared, timeouts.launch())

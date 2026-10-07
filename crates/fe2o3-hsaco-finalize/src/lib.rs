@@ -263,6 +263,7 @@ pub use native_worker_publication::{
     NativeWorkerPublicationIntentV1, NativeWorkerPublicationPlanIdentityV1,
     PreparedConditionalWorkerHsacoPublicationV5, PreparedNativeWorkerHsacoPublicationV1,
     RecoveredConditionalWorkerHsacoPublicationV5, RecoveredNativeWorkerHsacoPublicationV1,
+    derive_recovered_conditional_worker_publication_intent_in_original_account_v5,
     persist_prepared_conditional_worker_hsaco_publication_in_original_account_v5,
     persist_prepared_conditional_worker_hsaco_publication_v5,
     persist_prepared_native_worker_hsaco_publication_v1,

@@ -1,0 +1,17 @@
+profile=fe2o3.gfx942-xgmi-retained-pair-ordinary-lifetime.v1
+status=experimental,external-kernel-contract,not-formally-qualified
+target=Linux-x86_64,MI300X,gfx942:xnack-,SPX/NPS1,KFD-1.18
+environment=explicit-caller-assumption,reviewed-Linux-6.8.0-124-generic,AMDGPU-DKMS-6.16.13,package-1:6.16.13.30300400-2341068.24.04,not-runtime-module-attestation
+entry=live-drained-exact-directional-queue,all-native-record-rosters-empty,no-uncertain-ticket,vacant-retirement,exact-source-VM-and-ring-control-completion-tokens,retained-peer-domain,full-pair-admission
+ownership=exclusive-source-session-peer-session-queue-borrows,move-only-data-mappings,exact-private-queue-occurrence-and-ticket-generations,no-raw-address-authority,no-early-unmap
+operation=retained-pair-binding,source-operational-fence,peer-operational-fence,native-operation,source-operational-fence,peer-operational-fence
+operational-fence=opener-PID,non-draining-reset-readiness,admitted-wrapping-DRM-VRAM-loss-counter,closing-reset-readiness
+completion=exact-native-completion-and-both-closing-operational-fences-before-retained-result,distinct-result-type,no-deferred-finish-witness,no-full-fresh-result-conversion
+pending=exact-ticket-and-mapping-custody-retained,successful-fenced-timeout-retryable
+terminal=paired-session-quarantine-before-error-or-unwind,queue-and-process-gate-poison,eager-no-Ok-from-terminal-custody,original-error-preserved,completed-indeterminate-mappings-not-success
+scope-close=drained-live-queue-and-pair-operational-fence,not-fresh-topology,consuming-failed-or-pending-close-quarantines
+scope-drop=unfinished-quarantines,forget-cannot-release-pending-queue-owned-records-or-undo-eager-terminalization,prior-successes-already-operationally-closed
+kernel-contract=retained-PDD-DRM-VM-and-GEM-BO-identities,mapped-BO-free-refusal,queue-control-buffer-references,reserved-selected-SDMA-engine,kernel-managed-eviction-and-PTE-restore,not-fixed-physical-residency
+excluded-interference=all-administrative-repartition,hive-reconfiguration,hotplug,privileged-CRIU,foreign-same-process-KFD-DRM-mutation
+excluded-claims=fresh-whole-host-authority,all-reset-generation,atomic-reset-subscription,hotplug-coverage,firmware-or-ISA-proof,module-attestation,performance-parity
+preserved-defaults=existing-Full-and-BatchScoped-APIs-and-receipts-unchanged,no-fallback

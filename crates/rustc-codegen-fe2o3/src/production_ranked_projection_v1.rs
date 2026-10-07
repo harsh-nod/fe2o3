@@ -1482,6 +1482,7 @@ fn authenticate_ranked_root_v5(
     ranked_ir: &str,
     semantic_u32_induction: fe2o3_mir_model::SemanticU32InductionNoOverflowReportV1,
     effect_receipts: Vec<fe2o3_verifier::InertFunctionalRefinementReceiptSignatureV2>,
+    runtime: Option<&fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>,
 ) -> Result<AuthenticatedRankedVerificationV5, ProductionRankedVerificationErrorV1> {
     if effect_receipts.len() != lowering.retained_policy_checked_refinement_staging().len() {
         return Err(ProductionRankedVerificationErrorV1::RosterMetadata(
@@ -1513,6 +1514,7 @@ fn authenticate_ranked_root_v5(
                 semantics.semantic_contract_report(),
                 &parallel_contract,
                 parallel_report,
+                runtime,
             )
             .map_err(ProductionRankedVerificationErrorV1::AggregateVerus)?;
         Some(AuthenticatedFunctionalVerificationV1 {
@@ -1792,7 +1794,17 @@ impl ProductionRankedSemanticProgramV1 {
     }
 
     pub(crate) fn into_verified_roster_receipt(
+        self,
+    ) -> Result<
+        ProductionRankedSemanticProjectionRosterReceiptV1,
+        ProductionRankedVerificationErrorV1,
+    > {
+        self.into_verified_roster_receipt_with_runtime(None)
+    }
+
+    pub(crate) fn into_verified_roster_receipt_with_runtime(
         mut self,
+        runtime: Option<&fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>,
     ) -> Result<
         ProductionRankedSemanticProjectionRosterReceiptV1,
         ProductionRankedVerificationErrorV1,
@@ -1866,6 +1878,7 @@ impl ProductionRankedSemanticProgramV1 {
                 &ranked_ir,
                 semantic_u32_induction,
                 effect_receipts,
+                runtime,
             )?;
             verified_roots.push(ProductionRankedVerifiedRootCandidateV1 {
                 logical_name,
@@ -3284,11 +3297,42 @@ pub(crate) fn project_and_verify_ranked_materialized_semantic_mir_v1(
     )
 }
 
+pub(crate) fn project_and_verify_ranked_materialized_with_runtime_v1(
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    runtime: Option<&std::sync::Arc<fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>>,
+) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
+    project_and_verify_ranked_materialized_with_compile_and_runtime_v1(
+        materialized,
+        root_inputs,
+        reference_bindings,
+        &mut paid_ranked_compile_v1::Selection::Legacy,
+        runtime,
+    )
+}
+
 fn project_and_verify_ranked_materialized_with_compile_v1(
     materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
     root_inputs: &[ProductionRankedRootInputV1],
     reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
     compiler: &mut paid_ranked_compile_v1::Selection<'_>,
+) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
+    project_and_verify_ranked_materialized_with_compile_and_runtime_v1(
+        materialized,
+        root_inputs,
+        reference_bindings,
+        compiler,
+        None,
+    )
+}
+
+fn project_and_verify_ranked_materialized_with_compile_and_runtime_v1(
+    materialized: fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1,
+    root_inputs: &[ProductionRankedRootInputV1],
+    reference_bindings: &crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+    compiler: &mut paid_ranked_compile_v1::Selection<'_>,
+    runtime: Option<&std::sync::Arc<fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>>,
 ) -> Result<ProductionRankedSemanticProgramV1, ProductionRankedProjectionErrorV1> {
     #[cfg(test)]
     crate::production_reference_effect_join_v2::prepared_observation_v1::observe_source(
@@ -3298,7 +3342,7 @@ fn project_and_verify_ranked_materialized_with_compile_v1(
         let source = RankedProjectionSourceV1::from_materialized_checked(&materialized)?;
         let mut ledger = ranked_projection_source_v1::projection_source_ledger_v1(&source)?;
         let roots = ledger.with_budget(|budget| {
-            if compiler.is_legacy() {
+            if compiler.is_legacy() && runtime.is_none() {
                 project_ranked_roots_v1(&source, root_inputs, reference_bindings, budget)
             } else {
                 project_ranked_roots_with_progress_and_compile_v1(
@@ -3309,7 +3353,7 @@ fn project_and_verify_ranked_materialized_with_compile_v1(
                     None,
                     compiler,
                 )?
-                .finish(&source, budget)
+                .finish_with_runtime(&source, budget, runtime)
             }
         })?;
         (

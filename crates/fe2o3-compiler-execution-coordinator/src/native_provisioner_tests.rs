@@ -94,6 +94,14 @@ impl Fixture {
 
 #[test]
 fn complete_filesystem_graph_is_native_and_idempotent_on_one_ledger() {
+    crate::eof_test_process::isolated(
+        module_path!(),
+        "complete_filesystem_graph_is_native_and_idempotent_on_one_ledger",
+        complete_filesystem_graph_is_native_and_idempotent_on_one_ledger_isolated,
+    );
+}
+
+fn complete_filesystem_graph_is_native_and_idempotent_on_one_ledger_isolated() {
     let f = Fixture::new();
     let first = f.run(|_| Ok(())).unwrap();
     assert_eq!(f.count(), 7);
@@ -123,6 +131,14 @@ fn complete_filesystem_graph_is_native_and_idempotent_on_one_ledger() {
 
 #[test]
 fn prepublication_image_change_refuses_without_installing_stale_public_records() {
+    crate::eof_test_process::isolated(
+        module_path!(),
+        "prepublication_image_change_refuses_without_installing_stale_public_records",
+        prepublication_image_change_refuses_without_installing_stale_public_records_isolated,
+    );
+}
+
+fn prepublication_image_change_refuses_without_installing_stale_public_records_isolated() {
     let f = Fixture::new();
     assert!(
         f.run(|step| {
@@ -140,6 +156,14 @@ fn prepublication_image_change_refuses_without_installing_stale_public_records()
 
 #[test]
 fn seed_path_replacement_is_rejected_before_publication_even_with_equal_bytes() {
+    crate::eof_test_process::isolated(
+        module_path!(),
+        "seed_path_replacement_is_rejected_before_publication_even_with_equal_bytes",
+        seed_path_replacement_is_rejected_before_publication_even_with_equal_bytes_isolated,
+    );
+}
+
+fn seed_path_replacement_is_rejected_before_publication_even_with_equal_bytes_isolated() {
     let f = Fixture::new();
     assert!(
         f.run(|step| {
@@ -160,6 +184,14 @@ fn seed_path_replacement_is_rejected_before_publication_even_with_equal_bytes() 
 
 #[test]
 fn each_lifecycle_refusal_restores_storage_and_allows_an_idempotent_rerun() {
+    crate::eof_test_process::isolated(
+        module_path!(),
+        "each_lifecycle_refusal_restores_storage_and_allows_an_idempotent_rerun",
+        each_lifecycle_refusal_restores_storage_and_allows_an_idempotent_rerun_isolated,
+    );
+}
+
+fn each_lifecycle_refusal_restores_storage_and_allows_an_idempotent_rerun_isolated() {
     for failed_step in 1..=3 {
         let f = Fixture::new();
         assert!(
@@ -178,6 +210,14 @@ fn each_lifecycle_refusal_restores_storage_and_allows_an_idempotent_rerun() {
 
 #[test]
 fn existing_listener_and_record_mismatch_are_not_repaired() {
+    crate::eof_test_process::isolated(
+        module_path!(),
+        "existing_listener_and_record_mismatch_are_not_repaired",
+        existing_listener_and_record_mismatch_are_not_repaired_isolated,
+    );
+}
+
+fn existing_listener_and_record_mismatch_are_not_repaired_isolated() {
     let f = Fixture::new();
     fs::write(&f.listener, b"occupied").unwrap();
     assert!(
@@ -198,6 +238,14 @@ fn existing_listener_and_record_mismatch_are_not_repaired() {
 
 #[test]
 fn unwind_closes_the_directory_lock_and_restores_the_original_account() {
+    crate::eof_test_process::isolated(
+        module_path!(),
+        "unwind_closes_the_directory_lock_and_restores_the_original_account",
+        unwind_closes_the_directory_lock_and_restores_the_original_account_isolated,
+    );
+}
+
+fn unwind_closes_the_directory_lock_and_restores_the_original_account_isolated() {
     let f = Fixture::new();
     let (work, storage) = quota().unwrap();
     let mut w = Work::new(work);

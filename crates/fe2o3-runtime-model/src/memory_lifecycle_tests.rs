@@ -283,6 +283,16 @@ fn live_monotonic_allocation(
     (state, reservation, allocation)
 }
 
+pub(crate) fn checkpoint_vm_fixture_for_test() -> MemoryLifecycleStateV1 {
+    let devices = admissions();
+    acquire(
+        MemoryLifecycleStateV1::new_monotonic_non_reusable(domain(1)),
+        devices.first_vm,
+        vec![devices.first, devices.second],
+        100,
+    )
+}
+
 fn map_succeeded(
     state: MemoryLifecycleStateV1,
     key: MemoryMappingKeyV1,

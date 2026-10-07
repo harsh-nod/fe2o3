@@ -72,6 +72,139 @@ fn revalidate(client: &Client) -> Result<()> {
     result
 }
 
+#[test]
+fn native_terminal_witness_requires_original_exited_process_owner() {
+    let mut fixture = Fixture::new();
+    let client = fixture.admitted();
+    let other = fixture.admitted();
+    let mut work = Work::new(3 * Client::TERMINAL_OBSERVATION_WORK);
+    let floor = client.retained_storage() + EXTRA;
+    let mut budget = Budget::new(&mut work, floor + Client::IO_STORAGE);
+    budget.reserve_storage(floor).unwrap();
+    assert!(client.observe_terminal(&mut budget).unwrap().is_none());
+    fixture.child.0.kill().unwrap();
+    fixture.child.0.wait().unwrap();
+    let (terminal, storage) = client.observe_terminal(&mut budget).unwrap().unwrap();
+    budget
+        .reserve_storage(storage.additional_storage())
+        .unwrap();
+    assert!(terminal.is_for(&client));
+    assert!(!terminal.is_for(&other));
+    assert_eq!(terminal.expected_client(), fixture.expected());
+    drop(terminal);
+    budget
+        .release_storage(storage.additional_storage())
+        .unwrap();
+    assert_eq!(budget.storage(), floor);
+    rustix::io::fcntl_setfd(&client.state.pidfd, rustix::io::FdFlags::empty()).unwrap();
+    assert!(client.observe_terminal(&mut budget).is_err());
+}
+
+#[test]
+fn native_terminal_budget_refusal_never_constructs_exit() {
+    let fixture = Fixture::new();
+    let client = fixture.admitted();
+    let floor = client.retained_storage();
+    let mut work = Work::new(Client::TERMINAL_OBSERVATION_WORK - 1);
+    let mut budget = Budget::new(&mut work, floor + Client::IO_STORAGE);
+    budget.reserve_storage(floor).unwrap();
+    let error = client.observe_terminal(&mut budget).err().unwrap();
+    assert!(error.resource().is_some());
+    assert_eq!(budget.storage(), floor);
+}
+
+fn current_parent() -> Client {
+    let mut work = Work::new(Client::ADMISSION_WORK);
+    let mut budget = Budget::new(&mut work, Client::FD_STORAGE + Client::IO_STORAGE);
+    budget.reserve_storage(Client::FD_STORAGE).unwrap();
+    let expected = ExpectedClientProcessIdentityV1::new(
+        std::process::id(),
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .unwrap();
+    let (parent, charge) =
+        Client::admit(pidfd_for(std::process::id()), expected, &mut budget).unwrap();
+    budget.reserve_storage(charge.additional_storage()).unwrap();
+    parent
+}
+
+#[test]
+fn native_parentage_requires_original_live_child_and_parent() {
+    let fixture = Fixture::new();
+    let sibling = Fixture::new();
+    let child = fixture.admitted();
+    let wrong_parent = sibling.admitted();
+    let parent = current_parent();
+    let mut work = Work::new(3 * Client::PARENT_VALIDATION_WORK);
+    let floor = 2 * Client::RETAINED + EXTRA;
+    let mut budget = Budget::new(&mut work, floor + Client::PARENT_IO_STORAGE);
+    budget.reserve_storage(floor).unwrap();
+    child.validate_parent(&parent, &mut budget).unwrap();
+    assert_eq!(budget.work(), Client::PARENT_VALIDATION_WORK);
+    assert_eq!(budget.storage(), floor);
+    assert!(child.validate_parent(&wrong_parent, &mut budget).is_err());
+    assert!(child.validate_parent(&child, &mut budget).is_err());
+    assert_eq!(budget.work(), 3 * Client::PARENT_VALIDATION_WORK);
+    assert_eq!(budget.storage(), floor);
+}
+
+#[test]
+fn native_parentage_budget_denials_preserve_storage_and_cumulative_work() {
+    let fixture = Fixture::new();
+    let child = fixture.admitted();
+    let parent = current_parent();
+    let floor = 2 * Client::RETAINED;
+    for (work_limit, storage_limit, prepaid) in [
+        (
+            Client::PARENT_VALIDATION_WORK - 1,
+            floor + Client::PARENT_IO_STORAGE,
+            floor,
+        ),
+        (
+            Client::PARENT_VALIDATION_WORK,
+            floor + Client::PARENT_IO_STORAGE - 1,
+            floor,
+        ),
+        (
+            Client::PARENT_VALIDATION_WORK,
+            floor + Client::PARENT_IO_STORAGE,
+            floor - 1,
+        ),
+    ] {
+        let mut work = Work::new(work_limit);
+        let mut budget = Budget::new(&mut work, storage_limit);
+        budget.reserve_storage(prepaid).unwrap();
+        assert!(
+            child
+                .validate_parent(&parent, &mut budget)
+                .unwrap_err()
+                .resource()
+                .is_some()
+        );
+        assert_eq!(budget.storage(), prepaid);
+        assert!(budget.work() >= native::ENTRY_WORK);
+    }
+}
+
+#[test]
+fn native_parentage_rejects_exited_child_and_start_time_drift() {
+    let mut fixture = Fixture::new();
+    let mut child = fixture.admitted();
+    let parent = current_parent();
+    let mut work = Work::new(2 * Client::PARENT_VALIDATION_WORK);
+    let floor = 2 * Client::RETAINED;
+    let mut budget = Budget::new(&mut work, floor + Client::PARENT_IO_STORAGE);
+    budget.reserve_storage(floor).unwrap();
+    child.state.start_time_ticks += 1;
+    assert!(child.validate_parent(&parent, &mut budget).is_err());
+    child.state.start_time_ticks -= 1;
+    fixture.child.0.kill().unwrap();
+    fixture.child.0.wait().unwrap();
+    assert!(child.validate_parent(&parent, &mut budget).is_err());
+    assert_eq!(budget.storage(), floor);
+}
+
 fn transfer(client: &Client, pidfd: Option<&OwnedFd>) -> Result<Option<(OwnedFd, Storage)>> {
     let work_limit = if pidfd.is_some() {
         Client::VALIDATE_TRANSFER_WORK

@@ -70,12 +70,14 @@ abort policy inside that child; the
 application receives terminal backend loss without being terminated itself.
 
 The repository provides both bounded canonical codecs and server loops, but does
-not yet ship a standalone KFD worker executable. Shut down the context first,
-then shut down the returned worker backend so the transport can send its
-empty-frame termination and reap the child. V4 flush and ordinary extension
-calls may synchronously block up to the configured request timeout; drain obeys
-the caller's earlier deadline. Timeout, malformed terminal response, or terminal
-backend failure seals and reaps the worker.
+not yet ship a production standalone KFD worker executable. Feature
+`hardware-qualification` adds a copy-only KFD Worker V5 child for the exact
+gfx942 progress qualification; it rejects every machine-code launch. Shut down
+the context first, then shut down the returned worker backend so the transport
+can send its empty-frame termination and reap the child. V4 flush and ordinary
+extension calls may synchronously block up to the configured request timeout;
+drain obeys the caller's earlier deadline. Timeout, malformed terminal response,
+or terminal backend failure seals and reaps the worker.
 
 Observe each submission to a conclusive `RuntimeCompletionStatusV1`: `Succeeded`,
 a typed backend-code or cancellation failure, or `QuiescentWithoutResult` when
@@ -108,14 +110,85 @@ futures as stopped and returns the context. This engine observes completion; it
 does not publish deferred backend work, replace explicit `flush_stream`, or
 provide native asynchronous execution by itself.
 
+`RuntimeAsyncOwnedEngineV1` additionally constructs even a non-`Send` direct-KFD
+context inside its owner thread. It uses the same bounded loop and requires
+explicit native teardown through `RuntimeOwnedShutdownBackendV1`; failed cleanup
+retains the context until process exit. Its handles add nonblocking
+`enqueue_with_context` commands and runtime-owned `launch`, `copy_async`, and
+`peer_copy` futures. Operation progress survives future Drop. A persistent stream
+roster rotates flushes independently of completion polling. Rejected polls retry
+observation without resubmitting work. Shutdown stops rather than drains; inspect
+its cleanup/native-failure/quarantine report. This is a local #182 integration,
+not distributed execution or complete executable verification. See
+`docs/runtime-async-execution-plane-v1.md` for bounds and remaining acceptance.
+
+The additive `launch_tracked`, `copy_async_tracked`, and `peer_copy_tracked`
+operations provide an opaque local control handle and atomic cancellation before
+context submission starts. `observe_with_timeout` accepts an executor timer and
+returns the original operation on timeout, preserving its eventual result and
+runtime custody. Neither control phases nor timeout establish GPU completion or
+retry authority. See `docs/runtime-async-control-v1.md` for the exact boundary.
+
+`submit_graph` binds the existing completion graph to frozen typed launches,
+same-device copies and host joins. Its bounded driver reserves the entire
+context, gates dependent issue on successful retirement, and preserves custody
+across cancellation and observer Drop. This is not compiler-authenticated DAG
+admission or distributed execution. See `docs/runtime-async-graph-v1.md`.
+
+`begin_drain` closes cloned-handle admission and observes the accepted workload
+without cancellation. Its separate lifecycle slot remains available when the
+command queue or reply budget is full. A quiescent report is not a cleanup
+receipt; join the owner and inspect shutdown separately. Tick exhaustion or
+interruption retains unresolved custody. Async reply cells now have a shared
+configurable count budget that includes completed, caller-retained futures.
+
+Graph reports derive exact byte-segment input/output lineage for each execution.
+Optional `expect_input_version` checks a graph-local producer before reservation;
+output versions commit only after successful native retirement. These historical
+versions do not grant compiler admission or cross-run freshness. See the
+[R65 contract](../../docs/runtime-async-drain-versions-v1.md) for bounds,
+verification scope and remaining A1/A2 acceptance.
+
+`open_with_version_journal_v1` opts into bounded allocation and writer metadata.
+It tracks synchronous host writes and ordinary async launch/copy destinations,
+settling only from the exact backend result and retaining uncertain outcomes
+independently of completion handles. This development profile rejects overlapping
+unsettled writers and does not expose lineage, read leases or reuse authority.
+Generated protected execution is separate. See the
+[async journal boundary](../../docs/runtime-context-version-journal-async-v1.md).
+Ordinary Unknown writers now retain each successful allocation-owner disposal
+receipt until the whole roster is gone, without implicitly releasing siblings.
+Journal slots and request credits return only at that final boundary. See the
+[disposal contract](../../docs/runtime-context-version-journal-disposal-v1.md);
+this does not establish zero native pool residency or recovered content.
+
+R66 adds reciprocal native storage checks and runtime scheduling for disjoint
+primary persistent compute with directional-persistent H2D/D2H copies. This
+changes admission, not completion or release semantics. See the
+[coexistence contract](../../docs/runtime-compute-sdma-coexistence-v1.md) for
+supported modes, proof boundaries and outstanding hardware qualification.
+
+Progress mode additionally offers `event_future_with_progress`, which admits one
+event and its exact source stream in a single transaction. Event polling runs
+before stream flushing in each engine tick, so completion of one persistent SDMA
+window can make its continuation ready for that tick's flush. A conclusive event
+observation retires the paired progress entry before making the future ready;
+logical event, stream, submission, and native custody still require explicit
+release. Rejection installs neither half, and drop performs no final flush.
+
 The current single-device KFD adapter admits one gfx942 device and at most
 65,536 logical streams, multiplexed over exactly two persistent native compute
 lanes. Logical stream creation does not lease a lane. Accepted compute launches
 own their kernarg, bindings, dependencies, and retained resources in bounded
 per-stream FIFOs until the lowest available lane can publish the FIFO head.
-At most one dispatch occupies each lane, and concurrent native work must use
-disjoint allocations. This is bounded two-lane concurrency, not arbitrary
-same-device compute concurrency.
+R60 permits up to 64 retained ordinary dispatch epochs per lane when every
+successor uses the exact same stream, kernel, arguments, storage, and geometry.
+Early chaining excludes persistent N1/N3, `ReadWrite`, mixed read/write bindings
+to one allocation, and a predecessor named as an explicit success dependency.
+Their `WaitForPrior` packets execute in order; host completion and receipt
+commit remain distinct. Native work on different lanes must use disjoint
+allocations. This is bounded ordinary pipelining and two-lane concurrency,
+not arbitrary same-device compute concurrency.
 
 Compute and same-device copy operations on one logical stream gain an implicit
 tail dependency. Cross-stream overlapping allocation use requires an explicit
@@ -137,8 +210,10 @@ failures remain registered and observable; terminal ambiguity seals the engine.
 This opt-in host scheduler is cooperative progress, not proof of native
 liveness, fairness, or hardware execution. Runtime Worker V1 has no flush
 request; negotiated Runtime Worker V4 and V5 expose the same bounded progress
-operation. Direct KFD owners remain thread-affine and cannot use the cross-thread
-engine; the Send-capable Worker V4/V5 adapters can.
+operation. Direct KFD owners remain thread-affine and cannot be moved into the
+original cross-thread engine; R61's factory-owned engine constructs them on the
+worker thread instead. The Send-capable Worker V4/V5 adapters support the
+original constructors.
 
 Live child-process regression tests exercise this progress path through exact
 V4 ordinary and V5 atomic wire requests: an event must first report pending,
@@ -146,6 +221,14 @@ then the background engine emits the canonical flush request, and only then may
 the child report completion. Separate cases verify response-deadline,
 decoded-terminal, and EOF sealing. These tests validate host transport and
 runtime state propagation only; they are not native KFD or liveness evidence.
+An opt-in hardware qualification compiles an exact copy-only KFD Worker V5
+child and drives a 256 MiB same-device D2D operation as a 63-packet window plus
+a two-packet continuation through the paired future, with no caller
+`flush_stream`. It validates an absolute-offset payload after completion. The
+source and destination are both read back outside the progress interval. The
+ignored test passed on one idle MI300X device at R24 commit `0631c5be`; this is
+one exact native liveness and correctness result, not fairness, parity,
+bandwidth, latency, or performance evidence.
 
 Same-device `copy_async` uses the native directional SDMA queues and splits
 logical ranges larger than one linear packet into sequential packets. Live
@@ -180,14 +263,13 @@ direction are selected by a deterministic FIFO readiness queue and published in 
 native reservation and doorbell store, capped at 63 so the 64-slot ring retains
 one empty slot. Polling or waiting for work beyond the current batch may observe
 a published predecessor, providing bounded caller-driven completion observation
-without claiming background progress. `flush_stream` snapshots the
-dependency-ready directional set at entry and publishes it in FIFO prefixes of
-at most 63. When more than one prefix is needed, flush synchronously drains each
-earlier prefix before publishing the next; the final prefix remains outstanding
-so host work after the flush can overlap DMA. A first-prefix allocation or
-admission failure rejects before native mutation. A recoverable later-prefix
-failure is quiescent because every earlier published prefix has completed, and
-the remaining ready custody can be retried. Poll and wait observe
+without claiming background progress. Scalar `flush_stream` snapshots the
+dependency-ready directional set at entry and publishes it in one batch of at
+most 63. A larger ready set rejects before native publication, as does a nonempty
+ready set with a busy publication window. An empty ready set succeeds without
+observing completion. Flush never drains an earlier scalar batch or waits for its
+completion. Bounded progress through a larger ready backlog requires a separate
+operation and is not provided by this flush contract. Poll and wait observe
 already-published completion and terminal dependencies but never publish
 deferred copies. Flush creates no background thread. It exposes no
 compute, same-device copy, memory
@@ -360,9 +442,10 @@ clock-domain calibration input only: it does not identify a dispatch
 publication, start, or completion boundary. Collection begins before context
 construction and finishes only after logical cleanup and native shutdown. See
 [`docs/kfd-native-profiler-v1.md`](../../docs/kfd-native-profiler-v1.md).
-Atomic and collective contracts affect the opaque dispatch-shape identity but
-are not yet exposed as typed profiler fields, so profiler/query consumers cannot
-independently report their operation, scope, order, or participants.
+An opt-in semantic-profile sidecar exposes exact typed atomic/collective fields,
+including ordering and participants. The separate V2 runtime custody and query
+path authenticates that observation; it does not prove kernel machine semantics
+or provide device timestamps.
 
 The profiler also records process-local monotonic points immediately after an
 AQL publication is accepted and when runtime completion processing finishes.
@@ -454,6 +537,55 @@ volatile-load/store bridge with explicit bounds and access checks. It is not
 broad Rust/device-language support; general `std`, allocation, unwind, dynamic
 dispatch, arbitrary inline assembly, and external calls remain outside the
 admitted device subset.
+
+The R60 ordinary 64-launch pipeline has separate
+[MI300X numerical and matched timing evidence](../../docs/evidence/mi300x-r60-ordinary-pipeline-2026-09-09/README.md).
+It covers ordered publication/completion of one fixed HostVisible vecadd recipe,
+not concurrent kernel execution or full HIP/HSA parity. The evidence separates
+the original baseline from measured cache and wait optimizations, retains exact
+source identities, and reports the remaining performance gap.
+
+R57 adds one exact persistent-device compute shape through the ordinary typed
+`RuntimeContextV1::launch` path: two initialized HBM read inputs and one
+distinct initialized HBM write output with equal full-allocation extents on the
+same device, VM, and primary gfx942 queue. It publishes one `WaitForPrior`
+packet through the existing fixed-dispatch binder. Authenticated H2D and fully
+initialized persistent replay are the only admitted input witnesses. In
+particular, `Write` access is not a full-write proof: an uninitialized output is
+rejected until an exact kernel/dispatch/allocation/extent certificate exists.
+
+Recoverable clean prepublication rejection or explicit prepared cancellation
+restores all three owners. A terminal `RejectedBeforeSideEffect`, native
+preparation failure after consuming ownership, or consuming unwind retains or
+quarantines all three and poisons authority even when publication was
+impossible. Once publication may have occurred, ambiguous currentness or
+lifecycle failure has the same terminal policy. Successful completion preserves A/B
+content generations, advances C's effect/content generation, records
+`PersistentDeviceReused` with zero user-data materializations, and releases the
+incompatible fixed control before another transaction. This is bounded N=3,
+not general typed asynchronous launch or three-binding control replay. The
+model and host tests alone establish neither native numerical results nor a
+Rust/native refinement theorem or HIP/HSA performance parity.
+Host coverage enters the production binder through ABI and fixed-control
+validation but does not retain native code/kernarg authorities or exercise
+native submit, poll, and detach. Per-entry failure injection after entry 1 or
+2 of shared N=3 publish, complete, and recycle remains explicit follow-up work
+for the hardware tranche.
+
+The `hardware-qualification` feature now includes a separate, independently
+pinned `gfx942-runtime-r57-n3-qualification` lane for that hardware follow-up.
+Its exact authority first requires an uninitialized-C rejection before the
+authority callback, then admits only `A+B -> C` followed by `C+B -> D` over four
+whole DeviceLocal buffers. The runner requires `PersistentDeviceReused`, zero
+user-data materializations, no control reuse, exact full A/B/C/D readback, two
+authority calls, and explicit cleanup before its single bounded PASS record.
+Two exact signed-archive executions on one idle MI300X GPU completed that
+sequence with identical full A/B/C/D readback digests and sole PASS records;
+see the [bounded qualification
+evidence](../../docs/evidence/mi300x-r57-n3-qualification-2026-09-08.md).
+This supplies native numerical evidence only for the fixed sequence and source
+product. It supplies no refinement, latency, throughput, HIP/HSA parity, or
+speedup evidence.
 
 The opt-in `gfx942-lds-diagnostic` executes one SHA-pinned, loader-inspected LDS
 reduction through this same transition using an explicitly unsafe diagnostic

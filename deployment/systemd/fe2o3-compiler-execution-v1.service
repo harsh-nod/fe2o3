@@ -28,8 +28,9 @@ OpenFile=/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v1:issuer-key-see
 OpenFile=/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v1:anchor-key-seed:read-only
 
 # Exact namespace observation of the distinct-UID, nondumpable child needs ptrace.
+# The root observer reads exact compiler-owned private publication directories.
 # The protected child launcher still clears every child capability set.
-CapabilityBoundingSet=CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE
 AmbientCapabilities=
 NoNewPrivileges=no
 PrivateDevices=yes

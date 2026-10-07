@@ -28,7 +28,7 @@ use crate::batch::ServiceFixedBatchV1;
 /// Frozen claim boundary for the reusable service queue composition layer.
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
     "profile=fe2o3-service-addressless-fixed-queue-r21-v1\n",
-    "source.compute_aql_session_sha256=09f9d032c2460c73531a960b1a8b39a877cb9daf0d75d1f8404b980510bddc10\n",
+    "source.compute_aql_session_sha256=c51feb1d7e373f4f2c20c2f193b990af4892c34ab4e6ab290192a7fbb954c790\n",
     "queue=one-live-kfd-compute-aql-owner,ring-event-doorbell-and-signal-resources-retained-across-live-rebind,quiescent-rollover-may-confirm-destroy-and-create-one-replacement-queue\n",
     "batch=1-through-8192-fixed-packets,conservative-wait-for-prior-ordering-default-with-explicit-independent-opt-in,exact-ring-capacity,inspected-programs,complete-kernarg-images,addressless-checked-device-local-or-host-visible-ranges,optional-initialized-enclosing-host-snapshot-associated-with-one-strict-interior\n",
     "implicit-kernarg=exact-trailing-256-byte-COV6-caller-zero-suffix,lower-owner-privately-populates-metadata-derived-block-count-group-size-remainder-zero-global-offset-grid-dimensions-and-dynamic-lds,queue-pointer-and-runtime-service-or-address-fields-rejected\n",
@@ -48,7 +48,7 @@ pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1: &str = concat!(
 
 /// SHA-256 of [`SERVICE_QUEUE_OWNERSHIP_MANIFEST_V1`].
 pub const SERVICE_QUEUE_OWNERSHIP_MANIFEST_SHA256_V1: &str =
-    "15bec641ae635775f4a5cab96402eef9ad1cff9045ee62117c279b9f8ca4178f";
+    "761064fdbb9984441c48ef8774bfe369370085ca73d6e2f0e236be7834799f07";
 
 /// Feature-bound contract for deliberate service queue-transition faults.
 #[cfg(feature = "qualification-fault-injection")]
@@ -552,7 +552,10 @@ impl<const N: usize> ServiceCompletedQueueSessionV1<N> {
                 }),
                 Err(error) => Err(quarantine(self.owner, error)),
             },
-            Err(error) => Err(quarantine(self.owner, error)),
+            Err(failure) => {
+                let (error, _completed) = failure.into_parts();
+                Err(quarantine(self.owner, error))
+            }
         }
     }
 }

@@ -331,6 +331,8 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
     // Shared OFD flags remain observations; this is not protected admission.
     require_open_parent_stdio().map_err(BindingWrapperError::Spawn)?;
     let stdio = CapturedStdioV1::capture_current().map_err(BindingWrapperError::Spawn)?;
+    let policy_export = crate::native_policy_export::from_environment()
+        .map_err(BindingWrapperError::BuildObservation)?;
     reject_dynamic_loader_environment()?;
     normalize_unprotected_validation_loader_environment();
     let expected_rustc_sha256 = expected_rustc_sha256()?;
@@ -357,7 +359,7 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
         build_observation,
         managed_attempt,
         managed_rustc_args,
-        compiler_capabilities,
+        mut compiler_capabilities,
         rustc_working_directory,
     ) = match invocation {
         RustcInvocationV2::Compile(compile) => {
@@ -507,6 +509,14 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 )?)
             };
             let mut release_guard = managed.as_ref().map(ManagedAttemptRevocationGuard::arm);
+            if let Some(managed) = managed.as_ref()
+                && !managed.is_managed_recovery()
+                && capability_binding.requires_compiler_closure_v2()
+                && !compiler_capabilities.has_native_profile()
+                && let Err(primary) = compiler_capabilities.prepare_compiler_proof(managed.attempt)
+            {
+                return Err(pre_spawn_failure(release_guard.as_mut(), primary));
+            }
             let source_isa_observer = match (managed.as_ref(), source_isa_binding) {
                 (Some(managed), Some((config, unit)))
                     if !compiler_capabilities.has_native_profile() =>
@@ -514,6 +524,9 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     compiler_capabilities
                         .release_invocation_with_source_isa_observer(config, unit, managed.attempt)
                         .map(Some)
+                }
+                _ if !compiler_capabilities.has_native_profile() => {
+                    compiler_capabilities.release_invocation().map(|()| None)
                 }
                 _ => Ok(None),
             };
@@ -819,9 +832,14 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                     let durable = prepared
                         .persist_original_root(&managed.output_dir, &managed.producer)
                         .map_err(native_continuation_error)?;
-                    let published = durable
+                    let mut published = durable
                         .publish_original_root(&managed.output_dir, &managed.producer)
                         .map_err(native_continuation_error)?;
+                    if let Some(request) = &policy_export {
+                        published
+                            .export_original_policy_inputs(request, &managed.producer)
+                            .map_err(native_continuation_error)?;
+                    }
                     published
                         .complete_original_root(&managed.output_dir, &managed.producer)
                         .map_err(native_continuation_error)?;
@@ -829,8 +847,24 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
                 },
             );
         }
-        let mut child = match command.spawn() {
-            Ok(child) => child,
+        let pending_proof = compiler_capabilities
+            .as_mut()
+            .and_then(|capabilities| capabilities.compiler_proof.take());
+        if compiler_execution_boundary.is_some() != pending_proof.is_some()
+            || (pending_proof.is_some() && parent_rustc_invocation_custody.is_none())
+        {
+            return Err(BindingWrapperError::CapabilityBroker(
+                "protected rustc proof, execution boundary, and original invocation custody disagree".to_owned(),
+            ));
+        }
+        let spawn = match pending_proof {
+            Some(proof) => command
+                .spawn_with_compiler_proof(proof)
+                .map(|(child, proof)| (child, Some(proof))),
+            None => command.spawn().map(|child| (child, None)),
+        };
+        let (mut child, spawned_proof) = match spawn {
+            Ok(spawned) => spawned,
             Err(error) => {
                 return Ok(RustcExecutionOutcome::Local {
                     status: Err(error),
@@ -840,19 +874,43 @@ pub(crate) fn run(mut argv: Vec<OsString>) -> Result<ExitStatus, BindingWrapperE
             }
         };
         let compiler_execution_readiness = match compiler_execution_boundary {
-            Some(boundary) => match boundary.finish(child.id()) {
-                Ok(custody) => Some(custody),
-                Err(error) => {
-                    let stage = error.stage();
-                    let primary = error.to_string();
-                    let cleanup = terminate_spawned_rustc(&mut child);
-                    return Err(BindingWrapperError::CompilerExecutionBoundary {
-                        stage,
-                        primary,
-                        cleanup,
-                    });
+            Some(boundary) => {
+                match (|| {
+                    let retained_child = fe2o3_compiler_execution_client::RetainedCompilerExecutionChildV1::capture(&child)
+                    .map_err(crate::compiler_execution_boundary::CompilerExecutionBoundaryErrorV1::ChildChannel)?;
+                    let proof = spawned_proof.ok_or_else(|| {
+                    crate::compiler_execution_boundary::CompilerExecutionBoundaryErrorV1::Evidence(
+                        "protected compiler lost its prepared proof delegation".to_owned(),
+                    )
+                })?;
+                    let parent = parent_rustc_invocation_custody.as_ref().ok_or_else(|| {
+                    crate::compiler_execution_boundary::CompilerExecutionBoundaryErrorV1::Evidence(
+                        "compiler proof has no original invocation custody".to_owned(),
+                    )
+                })?;
+                    let invocation = parent.try_clone_for_compiler_proof().map_err(|error| {
+                    crate::compiler_execution_boundary::CompilerExecutionBoundaryErrorV1::Evidence(error.to_string())
+                })?;
+                    proof.delegate(invocation, Instant::now() + Duration::from_secs(30)).map_err(|error| {
+                    crate::compiler_execution_boundary::CompilerExecutionBoundaryErrorV1::Evidence(
+                        format!("compiler proof delegation failed: {error}"),
+                    )
+                })?;
+                    boundary.finish_with_retained_child(retained_child)
+                })() {
+                    Ok(custody) => Some(custody),
+                    Err(error) => {
+                        let stage = error.stage();
+                        let primary = error.to_string();
+                        let cleanup = terminate_spawned_rustc(&mut child);
+                        return Err(BindingWrapperError::CompilerExecutionBoundary {
+                            stage,
+                            primary,
+                            cleanup,
+                        });
+                    }
                 }
-            },
+            }
             None => None,
         };
         let status = child.wait().map_err(|error| {
@@ -988,6 +1046,8 @@ fn configure_build_observation_environment(
     command: &mut Command,
     observation: Option<CompileBuildObservationV2>,
 ) {
+    // This is post-compilation inert export selection, never a compiler input.
+    command.env_remove(crate::native_policy_export::ENV);
     if let Some(observation) = observation {
         command.env(CRATE_BINDING_ID_ENV_V1, observation.crate_binding.to_hex());
         // This digest is an exact build observation, not a semantic admission identity.
@@ -998,6 +1058,77 @@ fn configure_build_observation_environment(
     } else {
         command.env_remove(CRATE_BINDING_ID_ENV_V1);
         command.env_remove(CARGO_METADATA_BUILD_OBSERVATION_ENV_V2);
+    }
+}
+
+#[cfg(test)]
+mod native_policy_export_environment_tests {
+    use super::*;
+
+    #[test]
+    fn inert_policy_export_selection_never_becomes_a_rustc_input() {
+        let mut command = Command::new("unused");
+        command.env(crate::native_policy_export::ENV, "selected");
+        configure_build_observation_environment(&mut command, None);
+        assert!(
+            command.get_envs().any(|(name, value)| {
+                name == crate::native_policy_export::ENV && value.is_none()
+            })
+        );
+    }
+
+    #[test]
+    fn production_environment_accepts_only_export_selector_removal() {
+        let inherited = || {
+            [
+                (
+                    OsString::from("CARGO_MANIFEST_DIR"),
+                    OsString::from("/exact/project"),
+                ),
+                (
+                    OsString::from("FE2O3_TARGET"),
+                    OsString::from("gfx942:xnack-"),
+                ),
+            ]
+        };
+        for selection in [None, Some("inert export metadata")] {
+            let mut environment = inherited().to_vec();
+            if let Some(value) = selection {
+                environment.push((crate::native_policy_export::ENV.into(), value.into()));
+            }
+            let mut command = Command::new("unused");
+            configure_build_observation_environment(&mut command, None);
+            let final_environment = materialize_production_child_environment(
+                Some(BuildCompileEnvironmentProfileV1::ProductionAmd),
+                &mut command,
+                environment,
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(final_environment.entries.len(), 2);
+            assert!(
+                final_environment
+                    .entries
+                    .iter()
+                    .all(|(name, _)| name != crate::native_policy_export::ENV)
+            );
+            assert!(
+                command
+                    .get_envs()
+                    .all(|(name, _)| name != crate::native_policy_export::ENV)
+            );
+        }
+        let mut command = Command::new("unused");
+        configure_build_observation_environment(&mut command, None);
+        command.env(crate::native_policy_export::ENV, "must never reach rustc");
+        assert!(
+            materialize_production_child_environment(
+                Some(BuildCompileEnvironmentProfileV1::ProductionAmd),
+                &mut command,
+                inherited(),
+            )
+            .is_err()
+        );
     }
 }
 
@@ -1318,6 +1449,12 @@ fn materialize_closed_child_environment(
         .map(|(name, value)| (name.to_owned(), value.map(OsString::from)))
         .collect::<Vec<_>>();
     for (name, value) in explicit {
+        if name == crate::native_policy_export::ENV && value.is_none() {
+            // This selector belongs solely to post-compilation inert export.
+            // Removal is allowed, but no value joins the rustc environment.
+            final_environment.remove(&name);
+            continue;
+        }
         if apply_managed_loader_environment(&mut final_environment, &name, value.as_deref())? {
             continue;
         }
@@ -1454,7 +1591,9 @@ fn append_prepared_rustc_arguments(
     Ok(())
 }
 
-fn decode_managed_rustc_args(value: &OsStr) -> Result<Vec<OsString>, BindingWrapperError> {
+pub(crate) fn decode_managed_rustc_args(
+    value: &OsStr,
+) -> Result<Vec<OsString>, BindingWrapperError> {
     let fields = os_bytes(value)
         .split(|byte| *byte == 0x1f)
         .map(|field| os_string(field.to_vec()))
@@ -1637,6 +1776,7 @@ struct CompilerCapabilities {
     compiler_execution_profile_v3: Option<crate::authority_release::profile::FundedClientProfileV3>,
     native_capture_prepaid: std::cell::Cell<bool>,
     invocation_authority: Option<capability_broker::BrokeredInvocationAuthorityV1>,
+    compiler_proof: Option<fe2o3_verifier::PendingCompilerProofDelegationV1>,
     output_dir: PathBuf,
 }
 
@@ -1720,7 +1860,7 @@ impl CompilerCapabilities {
         };
         let invocation_authority = release_or_retain_invocation_authority(
             transferred.invocation_authority.take(),
-            retain_for_selected_source_isa_observer || compiler_execution_profile_v3.is_some(),
+            retain_for_selected_source_isa_observer || binding.requires_compiler_closure_v2(),
             capability_broker::BrokeredInvocationAuthorityV1::release,
         )?;
         let output_dir = transferred.artifact.child_path();
@@ -1733,6 +1873,7 @@ impl CompilerCapabilities {
             compiler_execution_profile_v3,
             native_capture_prepaid: std::cell::Cell::new(false),
             invocation_authority,
+            compiler_proof: None,
             output_dir,
         })
     }
@@ -1839,6 +1980,39 @@ impl CompilerCapabilities {
             attempt,
             capability_broker::BrokeredInvocationAuthorityV1::release_with_source_isa_observer,
         )
+    }
+
+    fn prepare_compiler_proof(&mut self, attempt: BuildAttempt) -> Result<(), BindingWrapperError> {
+        if self.compiler_proof.is_some() || self.has_native_profile() {
+            return Err(BindingWrapperError::CapabilityBroker(
+                "compiler proof is already prepared or the profile is not V1".to_owned(),
+            ));
+        }
+        let authority = self.invocation_authority.as_mut().ok_or_else(|| {
+            BindingWrapperError::CapabilityBroker(
+                "compiler proof has no retained invocation authority".to_owned(),
+            )
+        })?;
+        self.compiler_proof = Some(
+            authority
+                .prepare_compiler_proof(attempt)
+                .map_err(BindingWrapperError::CapabilityBroker)?,
+        );
+        Ok(())
+    }
+
+    fn release_invocation(&mut self) -> Result<(), BindingWrapperError> {
+        if self.has_native_profile() {
+            return Err(BindingWrapperError::CapabilityBroker(
+                "legacy proof release rejects the native profile".to_owned(),
+            ));
+        }
+        if let Some(authority) = self.invocation_authority.take() {
+            authority
+                .release()
+                .map_err(BindingWrapperError::CapabilityBroker)?;
+        }
+        Ok(())
     }
 
     fn output_dir(&self) -> &Path {

@@ -381,6 +381,41 @@ impl ParentPublishedConditionalArtifact<'_, '_, '_> {
     pub(crate) fn compiler_execution(&self) -> &Carriage {
         &self.custody.compiler_execution
     }
+
+    /// Explicit inert export from this actual original-root owner only. The
+    /// resulting files cannot reconstruct its approval, account or currentness.
+    pub(crate) fn export_original_policy_inputs(
+        &mut self,
+        request: &crate::native_policy_export::Request,
+        producer: &ProducerIdentity,
+    ) -> Result<()> {
+        if !request.matches(producer)? {
+            return Ok(());
+        }
+        self.revalidate(producer)?;
+        self.custody.readiness.origin.require_original_root()?;
+        let parameters = self.custody.policy_origin.original_parameters()?;
+        if parameters.target != fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942
+            || parameters.history_limits
+                != fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1::production_v1()
+        {
+            return Err(Failure::Mismatch("native policy export target/history profile").into());
+        }
+        let finalized = self.publication.recovered_evidence().finalized();
+        let handoff = finalized.source().recovered_handoff().handoff();
+        request.publish(
+            producer,
+            handoff.capsule().source_packet_bytes(),
+            handoff.capsule().policy_roster_bytes(),
+            crate::native_policy_export::OriginalObservations {
+                handoff: (*handoff.identity().sha256(), handoff.identity().byte_len()),
+                carriage: *self.custody.compiler_execution.identity().as_bytes(),
+                artifact: *finalized.identity(),
+            },
+            self.custody.readiness.budget,
+        )?;
+        self.revalidate(producer)
+    }
     pub(crate) fn revalidate(&mut self, producer: &ProducerIdentity) -> Result<()> {
         let retained = self.publication.recovered_evidence();
         self.custody.revalidate(
@@ -1026,6 +1061,7 @@ fn with_retirement<T>(barrier: Option<Barrier>, run: impl FnOnce() -> Result<T>)
 }
 #[derive(Debug)]
 enum Cause {
+    PolicyExport(std::io::Error),
     Approval(ApprovalError),
     Resource(Resource),
     Readiness(Failure),
@@ -1057,6 +1093,7 @@ macro_rules! causes {
     };
 }
 causes!(Resource => Resource, Failure => Readiness, CapabilityError => Invocation,
+    std::io::Error => PolicyExport,
     ApprovalError => Approval,
     PolicyRosterError => PolicyRoster,
     CompilerModuleHandoffAdmissionErrorV5<RecoveryError> => Recovery,

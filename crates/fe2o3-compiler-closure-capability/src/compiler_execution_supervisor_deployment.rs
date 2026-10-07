@@ -168,7 +168,11 @@ mod tests {
 
     #[test]
     fn canonical_inherited_deployment_is_retained_privately() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "compiler_execution_supervisor_deployment::tests::canonical_inherited_deployment_is_retained_privately",
+        ) {
+            return;
+        }
         let expected = deployment();
         let capability =
             CompilerExecutionSupervisorDeploymentCapabilityV1::create(expected.clone()).unwrap();

@@ -74,6 +74,13 @@ impl DedicatedCreatorScopeV1 {
         Ok(())
     }
 
+    /// Charges the original controller for a finite all-empty phase checkpoint.
+    /// The scope remains armed and retains the same account and deployment guard;
+    /// only final `shutdown` disarms it. This is not permanent retirement.
+    pub fn checkpoint_quiescent_phase(&mut self) -> Result<(), Failure> {
+        self.cleanup.checkpoint_quiescent_phase()
+    }
+
     /// Releases the scope only after the original pool's successful empty shutdown.
     /// Busy, quarantine, accounting failure, and exhaustion leave it armed.
     pub fn shutdown(&mut self) -> Result<Account, Failure> {

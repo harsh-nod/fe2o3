@@ -34,6 +34,12 @@ fn inputs(b: &mut Budget<'_>) -> (Policy, Manifest) {
 
 #[test]
 fn native_readiness_writes_exact_frame_only_after_validation_and_closes_writer() {
+    if !crate::test_isolation::enter(concat!(
+        module_path!(),
+        "::native_readiness_writes_exact_frame_only_after_validation_and_closes_writer"
+    )) {
+        return;
+    }
     let mut work = Work::new(10_000_000);
     let mut b = Budget::new(&mut work, 1_000_000);
     b.reserve_storage(17).unwrap();
@@ -66,6 +72,12 @@ fn native_readiness_writes_exact_frame_only_after_validation_and_closes_writer()
 
 #[test]
 fn native_readiness_failed_revalidation_publishes_nothing() {
+    if !crate::test_isolation::enter(concat!(
+        module_path!(),
+        "::native_readiness_failed_revalidation_publishes_nothing"
+    )) {
+        return;
+    }
     let mut work = Work::new(10_000_000);
     let mut b = Budget::new(&mut work, 1_000_000);
     let (p, m) = inputs(&mut b);
@@ -82,6 +94,12 @@ fn native_readiness_failed_revalidation_publishes_nothing() {
 
 #[test]
 fn native_readiness_denied_original_work_never_calls_validation_or_writes() {
+    if !crate::test_isolation::enter(concat!(
+        module_path!(),
+        "::native_readiness_denied_original_work_never_calls_validation_or_writes"
+    )) {
+        return;
+    }
     let mut work = Work::new(10_000_000);
     let mut b = Budget::new(&mut work, 1_000_000);
     let (p, m) = inputs(&mut b);

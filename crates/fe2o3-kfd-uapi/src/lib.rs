@@ -15,9 +15,12 @@
 
 mod debug_trap;
 mod event;
+mod gfx950_queue_outputs;
+mod queue_output_numeric;
 
 pub use debug_trap::*;
 pub use event::*;
+pub use gfx950_queue_outputs::*;
 
 use core::mem::{align_of, offset_of, size_of};
 
@@ -742,42 +745,38 @@ pub const fn admit_kfd_gfx942_create_queue_outputs(
     raw_doorbell_offset: u64,
     gpu_id: u32,
 ) -> Result<KfdGfx942CreateQueueOutputs, KfdGfx942CreateQueueOutputError> {
-    if queue_id >= KFD_MAX_QUEUE_SLOTS_PER_PROCESS {
-        return Err(KfdGfx942CreateQueueOutputError::QueueIdOutOfRange { queue_id });
-    }
-
-    let observed_type = raw_doorbell_offset >> KFD_MMAP_TYPE_SHIFT;
-    if observed_type != KFD_MMAP_TYPE_DOORBELL {
-        return Err(KfdGfx942CreateQueueOutputError::DoorbellMmapType {
-            observed: observed_type,
-        });
-    }
-
-    let observed_hash =
-        ((raw_doorbell_offset >> KFD_MMAP_GPU_ID_HASH_SHIFT) & KFD_MMAP_GPU_ID_HASH_MASK) as u16;
-    let expected_hash = (gpu_id & KFD_MMAP_GPU_ID_HASH_MASK as u32) as u16;
-    if observed_hash != expected_hash {
-        return Err(KfdGfx942CreateQueueOutputError::DoorbellGpuIdHash {
-            expected: expected_hash,
-            observed: observed_hash,
-        });
-    }
-
-    let offset = raw_doorbell_offset & KFD_MMAP_OFFSET_MASK;
-    if offset >= KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES {
-        return Err(KfdGfx942CreateQueueOutputError::DoorbellOffsetOutOfRange { offset });
-    }
-    if !offset.is_multiple_of(KFD_GFX942_DOORBELL_BYTES) {
-        return Err(KfdGfx942CreateQueueOutputError::DoorbellOffsetMisaligned { offset });
-    }
-
+    use queue_output_numeric::NumericQueueOutputError as Error;
+    let decoded = match queue_output_numeric::decode_non_mes_soc15_outputs(
+        queue_id,
+        raw_doorbell_offset,
+        gpu_id,
+        KFD_MAX_QUEUE_SLOTS_PER_PROCESS,
+        KFD_GFX942_DOORBELL_BYTES,
+        KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES,
+    ) {
+        Ok(decoded) => decoded,
+        Err(Error::QueueIdOutOfRange { queue_id }) => {
+            return Err(KfdGfx942CreateQueueOutputError::QueueIdOutOfRange { queue_id });
+        }
+        Err(Error::DoorbellMmapType { observed }) => {
+            return Err(KfdGfx942CreateQueueOutputError::DoorbellMmapType { observed });
+        }
+        Err(Error::DoorbellGpuIdHash { expected, observed }) => {
+            return Err(KfdGfx942CreateQueueOutputError::DoorbellGpuIdHash { expected, observed });
+        }
+        Err(Error::DoorbellOffsetOutOfRange { offset }) => {
+            return Err(KfdGfx942CreateQueueOutputError::DoorbellOffsetOutOfRange { offset });
+        }
+        Err(Error::DoorbellOffsetMisaligned { offset }) => {
+            return Err(KfdGfx942CreateQueueOutputError::DoorbellOffsetMisaligned { offset });
+        }
+    };
     Ok(KfdGfx942CreateQueueOutputs {
         queue_id: KfdQueueIdObservation(queue_id),
         doorbell_offset: KfdGfx942DoorbellOffsetObservation {
             raw: raw_doorbell_offset,
-            encoded_process_slice_offset: raw_doorbell_offset
-                & !(KFD_GFX942_PROCESS_DOORBELL_SLICE_BYTES - 1),
-            in_process_byte_offset: offset,
+            encoded_process_slice_offset: decoded.encoded_process_slice_offset,
+            in_process_byte_offset: decoded.in_process_byte_offset,
         },
     })
 }

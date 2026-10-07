@@ -14,6 +14,7 @@ readonly RUNTIME_LABEL="functional-refinement Verus runtime V1"
 readonly SUCCESS_PREFIX=FE2O3_FUNCTIONAL_REFINEMENT_RUNTIME_V1
 readonly TARGET_PREFIX=toolchain/lib/rustlib/x86_64-unknown-linux-gnu/lib
 readonly TARGET_SOURCE_PREFIX=lib/rustlib/x86_64-unknown-linux-gnu/lib
+readonly QUALIFICATION_PACKAGES="$SCRIPT_DIRECTORY/compiler-execution-qualification-base-packages-v1.lock"
 
 die() {
     printf '%s: %s\n' "$RUNTIME_LABEL" "$*" >&2
@@ -24,6 +25,7 @@ usage() {
     cat >&2 <<'EOF'
 usage:
   functional-refinement-verus-runtime-v1.sh audit-source VERUS_DIST RUST_TOOLCHAIN RUSTUP
+  functional-refinement-verus-runtime-v1.sh audit-qualification-source VERUS_DIST RUST_TOOLCHAIN INPUTS
   functional-refinement-verus-runtime-v1.sh provision VERUS_DIST RUST_TOOLCHAIN RUSTUP DESTINATION
   functional-refinement-verus-runtime-v1.sh audit-installed RUNTIME_ROOT
 
@@ -33,6 +35,9 @@ excluded provenance; neither is copied into the executable closure.
 These commands grant no proof authority. The typed Rust entry point separately
 admits and retains the installed closure, revalidates it around every bounded
 proof process, and returns only non-authoritative refinement evidence.
+`audit-qualification-source` reads INPUTS/{libc.deb,zlib.deb,rustup-init}
+without extracting, installing, or executing them. It does not approve the
+installed interpreter or replace the post-overlay source/installed audits.
 EOF
     exit 2
 }
@@ -54,7 +59,20 @@ header_value() {
 }
 
 sha256_file() {
-    sha256sum -- "$1" | awk '{print $1}'
+    local digest
+    digest="$(sha256sum -- "$1" | awk '{print $1}')" || die "cannot hash file: $1"
+    [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || die "malformed file digest: $1"
+    printf '%s\n' "$digest"
+}
+
+report_success() {
+    local digest
+    digest="$(sha256_file "$MANIFEST")" || die "cannot hash manifest"
+    if [[ $# == 2 ]]; then
+        printf '%s_%s_OK manifest_sha256=%s root=%s\n' "$SUCCESS_PREFIX" "$1" "$digest" "$2"
+    else
+        printf '%s_%s_OK manifest_sha256=%s\n' "$SUCCESS_PREFIX" "$1" "$digest"
+    fi
 }
 
 require_regular_source() {
@@ -96,14 +114,15 @@ validate_pin_contract() {
     [[ "$(tail -c 1 "$TARGET_PINS" | od -An -tuC | tr -d ' ')" == 10 ]] \
         || die "target pins must end in exactly one newline"
 
-    local pin_record pin_count pin_bytes pin_digest
+    local pin_record pin_count pin_bytes pin_digest actual
     pin_record="$(header_value rust-target-pins)"
     IFS='|' read -r pin_count pin_bytes pin_digest <<<"$pin_record"
     [[ "$pin_count" =~ ^[0-9]+$ && "$pin_bytes" =~ ^[0-9]+$ && "$pin_digest" =~ ^[0-9a-f]{64}$ ]] \
         || die "rust-target-pins record is malformed"
     [[ "$(wc -l < "$TARGET_PINS" | tr -d ' ')" == "$pin_count" ]] || die "target pin count differs"
     [[ "$(wc -c < "$TARGET_PINS" | tr -d ' ')" == "$pin_bytes" ]] || die "target pin byte count differs"
-    [[ "$(sha256_file "$TARGET_PINS")" == "$pin_digest" ]] || die "target pin digest differs"
+    actual="$(sha256_file "$TARGET_PINS")" || die "cannot hash target pins"
+    [[ "$actual" == "$pin_digest" ]] || die "target pin digest differs"
     awk 'length($1) != 64 || $1 !~ /^[0-9a-f]+$/ || $2 == "" || NF != 2 { exit 1 } { print $2 }' "$TARGET_PINS" \
         | LC_ALL=C sort -c -u || die "target pins are malformed or not strictly sorted"
     awk -F '|' '$1 == "directory" { print $3 }' "$MANIFEST" | LC_ALL=C sort -c -u \
@@ -118,9 +137,11 @@ verify_file() {
     local expected_size=$3
     local expected_digest=$4
     local require_root=${5:-false}
+    local actual
     require_regular_source "$path"
     [[ "$(stat -Lc %s -- "$path")" == "$expected_size" ]] || die "size differs: $path"
-    [[ "$(sha256_file "$path")" == "$expected_digest" ]] || die "SHA-256 differs: $path"
+    actual="$(sha256_file "$path")" || die "cannot hash source: $path"
+    [[ "$actual" == "$expected_digest" ]] || die "SHA-256 differs: $path"
     if [[ "$require_root" == true ]]; then
         [[ "$(stat -Lc %a -- "$path")" == "${expected_mode#0}" ]] || die "mode differs: $path"
         [[ "$(stat -Lc '%u:%g' -- "$path")" == 0:0 ]] || die "owner differs: $path"
@@ -128,7 +149,7 @@ verify_file() {
 }
 
 verify_interpreter() {
-    local record requested canonical size digest mode
+    local record requested canonical size digest mode kind link target
     record="$(header_value interpreter)"
     IFS='|' read -r requested canonical size digest <<<"$record"
     [[ "$requested" == /lib64/ld-linux-x86-64.so.2 ]] || die "PT_INTERP path differs"
@@ -140,15 +161,16 @@ verify_interpreter() {
         *) die "interpreter mode is neither 0555 nor 0755: $canonical" ;;
     esac
     verify_file "$canonical" "$mode" "$size" "$digest" true
-    while IFS='|' read -r _ link target; do
+    while IFS='|' read -r kind link target; do
+        [[ "$kind" == interpreter-link ]] || continue
         [[ -L "$link" ]] || die "interpreter link is not a symbolic link: $link"
         [[ "$(readlink -- "$link")" == "$target" ]] || die "interpreter link target differs: $link"
         [[ "$(stat -c '%u:%g' -- "$link")" == 0:0 ]] || die "interpreter link owner differs: $link"
-    done < <(awk -F '|' '$1 == "interpreter-link"' "$MANIFEST")
+    done < "$MANIFEST"
     [[ "$(readlink -f -- "$requested")" == "$canonical" ]] || die "PT_INTERP chain resolves elsewhere"
 }
 
-audit_source() {
+audit_toolchain_source() {
     local distribution=$1
     local toolchain=$2
     local rustup=$3
@@ -167,23 +189,115 @@ audit_source() {
     IFS='|' read -r rustup_size rustup_digest <<<"$rustup_record"
     verify_file "$rustup" 0555 "$rustup_size" "$rustup_digest" false
 
-    while IFS='|' read -r _ mode size digest relative; do
+    local kind mode size digest relative actual
+    # Direct record iteration cannot lose an enumeration subprocess's exit status.
+    while IFS='|' read -r kind mode size digest relative; do
+        [[ "$kind" == file ]] || continue
+        [[ "$relative" != system-lib/* ]] || continue
         local source
         source="$(source_for_file "$relative" "$distribution" "$toolchain")"
         verify_file "$source" "$mode" "$size" "$digest" false
-    done < <(awk -F '|' '$1 == "file"' "$MANIFEST")
+    done < "$MANIFEST"
     while IFS=' ' read -r digest name; do
         local source="$toolchain/$TARGET_SOURCE_PREFIX/$name"
         require_regular_source "$source"
-        [[ "$(sha256_file "$source")" == "$digest" ]] || die "target SHA-256 differs: $source"
+        actual="$(sha256_file "$source")" || die "cannot hash target: $source"
+        [[ "$actual" == "$digest" ]] || die "target SHA-256 differs: $source"
     done < "$TARGET_PINS"
+}
+
+audit_source() {
+    audit_toolchain_source "$1" "$2" "$3"
+    local kind mode size digest relative
+    while IFS='|' read -r kind mode size digest relative; do
+        [[ "$kind" == file ]] || continue
+        [[ "$relative" == system-lib/* ]] || continue
+        verify_file "$(system_source "$relative")" "$mode" "$size" "$digest" false
+    done < "$MANIFEST"
     verify_interpreter
-    printf '%s_SOURCE_OK manifest_sha256=%s\n' "$SUCCESS_PREFIX" "$(sha256_file "$MANIFEST")"
+    report_success SOURCE
+}
+
+qualification_package_digest() {
+    local record
+    record="$(awk -F '\t' -v name="$1" '
+        $1 == "package" && $2 == name {
+            if (NF != 5 || $4 != "amd64" || seen++) exit 3;
+            print $5
+        }
+        END { if (!seen) exit 4 }
+    ' "$QUALIFICATION_PACKAGES")" || die "qualification package pin differs: $1"
+    [[ "$record" =~ ^[0-9a-f]{64}$ ]] || die "malformed qualification package digest: $1"
+    printf '%s\n' "$record"
+}
+
+verify_package_member() {
+    local package=$1 member=$2 expected_size=$3 expected_digest=$4 size digest
+    # Complete pipelines avoid extraction and propagate decoder/tar failures.
+    # Package SHA-256 is checked before any archive is parsed.
+    size="$(dpkg-deb --fsys-tarfile "$package" | tar -xOf - -- "$member" | wc -c)" \
+        || die "cannot measure package member: $member"
+    [[ "$size" == "$expected_size" ]] || die "package member size differs: $member"
+    digest="$(dpkg-deb --fsys-tarfile "$package" | tar -xOf - -- "$member" | sha256sum | awk '{print $1}')" \
+        || die "cannot hash package member: $member"
+    [[ "$digest" == "$expected_digest" ]] || die "package member SHA-256 differs: $member"
+}
+
+audit_qualification_source() {
+    local distribution=$1 toolchain=$2 inputs=$3 name package expected actual
+    require_absolute_directory "$inputs" INPUTS
+    for name in libc6 zlib1g; do
+        case "$name" in
+            libc6) package="$inputs/libc.deb" ;;
+            zlib1g) package="$inputs/zlib.deb" ;;
+        esac
+        require_regular_source "$package"
+        expected="$(qualification_package_digest "$name")" || die "cannot read qualification package pin: $name"
+        actual="$(sha256_file "$package")" || die "cannot hash qualification package: $name"
+        [[ "$actual" == "$expected" ]] || die "qualification package SHA-256 differs: $name"
+    done
+    audit_toolchain_source "$distribution" "$toolchain" "$inputs/rustup-init"
+
+    local kind mode size digest relative member
+    while IFS='|' read -r kind mode size digest relative; do
+        [[ "$kind" == file ]] || continue
+        case "$relative" in
+            system-lib/libc.so.6|system-lib/libdl.so.2|system-lib/libm.so.6|system-lib/libpthread.so.0|system-lib/librt.so.1)
+                package="$inputs/libc.deb"
+                member="./usr/lib/x86_64-linux-gnu/${relative#system-lib/}"
+                ;;
+            system-lib/libz.so.1)
+                package="$inputs/zlib.deb"
+                member=./usr/lib/x86_64-linux-gnu/libz.so.1.3
+                ;;
+            system-lib/libgcc_s.so.1|system-lib/libstdc++.so.6)
+                verify_file "$(system_source "$relative")" "$mode" "$size" "$digest" false
+                continue
+                ;;
+            system-lib/*) die "unsupported qualification system DSO: $relative" ;;
+            *) continue ;;
+        esac
+        verify_package_member "$package" "$member" "$size" "$digest"
+    done < "$MANIFEST"
+
+    local interpreter requested canonical
+    interpreter="$(header_value interpreter)"
+    IFS='|' read -r requested canonical size digest <<<"$interpreter"
+    [[ "$requested" == /lib64/ld-linux-x86-64.so.2 \
+        && "$canonical" == /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]] \
+        || die "qualification interpreter layout differs"
+    verify_package_member "$inputs/libc.deb" \
+        ./usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 "$size" "$digest"
+    # /usr/lib64 is rebuilt by the harness; /lib64 is inherited unchanged.
+    [[ -L /lib64 && "$(readlink -- /lib64)" == usr/lib64 \
+        && "$(stat -c '%u:%g' -- /lib64)" == 0:0 ]] || die "host /lib64 link differs"
+    report_success QUALIFICATION_INPUTS
 }
 
 expected_inventory() {
     printf '%s|f\n' "$INSTALLED_MANIFEST_NAME"
-    awk -F '|' '$1 == "directory" { print $3 "|d" } $1 == "file" { print $5 "|f" }' "$MANIFEST"
+    awk -F '|' '$1 == "directory" { print $3 "|d" } $1 == "file" { print $5 "|f" }' "$MANIFEST" \
+        || die "cannot enumerate manifest inventory"
     while IFS=' ' read -r _ name; do
         printf '%s/%s|f\n' "$TARGET_PREFIX" "$name"
     done < "$TARGET_PINS"
@@ -210,26 +324,30 @@ audit_installed() {
     }
     rm -rf -- "$temporary"
 
-    while IFS='|' read -r _ mode relative; do
+    local kind mode relative size digest actual
+    while IFS='|' read -r kind mode relative; do
+        [[ "$kind" == directory ]] || continue
         local path="$root/$relative"
         [[ -d "$path" && ! -L "$path" ]] || die "installed directory differs: $relative"
         [[ "$(stat -Lc %a -- "$path")" == "${mode#0}" ]] || die "installed directory mode differs: $relative"
         [[ "$(stat -Lc '%u:%g' -- "$path")" == 0:0 ]] || die "installed directory owner differs: $relative"
-    done < <(awk -F '|' '$1 == "directory"' "$MANIFEST")
-    while IFS='|' read -r _ mode size digest relative; do
+    done < "$MANIFEST"
+    while IFS='|' read -r kind mode size digest relative; do
+        [[ "$kind" == file ]] || continue
         verify_file "$root/$relative" "$mode" "$size" "$digest" true
-    done < <(awk -F '|' '$1 == "file"' "$MANIFEST")
+    done < "$MANIFEST"
     while IFS=' ' read -r digest name; do
         local path="$root/$TARGET_PREFIX/$name"
         require_regular_source "$path"
         [[ "$(stat -Lc %a -- "$path")" == 444 ]] || die "target mode differs: $name"
         [[ "$(stat -Lc '%u:%g' -- "$path")" == 0:0 ]] || die "target owner differs: $name"
-        [[ "$(sha256_file "$path")" == "$digest" ]] || die "target SHA-256 differs: $name"
+        actual="$(sha256_file "$path")" || die "cannot hash installed target: $name"
+        [[ "$actual" == "$digest" ]] || die "target SHA-256 differs: $name"
     done < "$TARGET_PINS"
-    verify_file "$root/$INSTALLED_MANIFEST_NAME" 0444 "$(wc -c < "$MANIFEST" | tr -d ' ')" "$(sha256_file "$MANIFEST")" true
+    actual="$(sha256_file "$MANIFEST")" || die "cannot hash manifest"
+    verify_file "$root/$INSTALLED_MANIFEST_NAME" 0444 "$(wc -c < "$MANIFEST" | tr -d ' ')" "$actual" true
     verify_interpreter
-    printf '%s_INSTALLED_OK manifest_sha256=%s root=%s\n' \
-        "$SUCCESS_PREFIX" "$(sha256_file "$MANIFEST")" "$root"
+    report_success INSTALLED "$root"
 }
 
 provision() {
@@ -245,37 +363,51 @@ provision() {
 
     umask 077
     install -d -o root -g root -m 0755 -- "$destination"
-    while IFS='|' read -r _ _ relative; do
+    local kind mode relative
+    while IFS='|' read -r kind mode relative; do
+        [[ "$kind" == directory ]] || continue
         install -d -o root -g root -m 0755 -- "$destination/$relative"
-    done < <(awk -F '|' '$1 == "directory"' "$MANIFEST")
-    while IFS='|' read -r _ mode _ _ relative; do
+    done < "$MANIFEST"
+    while IFS='|' read -r kind mode _ _ relative; do
+        [[ "$kind" == file ]] || continue
         local source
         source="$(source_for_file "$relative" "$distribution" "$toolchain")"
         install -o root -g root -m "${mode#0}" -- "$source" "$destination/$relative"
-    done < <(awk -F '|' '$1 == "file"' "$MANIFEST")
+    done < "$MANIFEST"
     while IFS=' ' read -r _ name; do
         install -o root -g root -m 0444 -- "$toolchain/$TARGET_SOURCE_PREFIX/$name" "$destination/$TARGET_PREFIX/$name"
     done < "$TARGET_PINS"
     install -o root -g root -m 0444 -- "$MANIFEST" "$destination/$INSTALLED_MANIFEST_NAME"
-    while IFS='|' read -r _ mode relative; do
+    while IFS='|' read -r kind mode relative; do
+        [[ "$kind" == directory ]] || continue
         chmod "${mode#0}" -- "$destination/$relative"
-    done < <(awk -F '|' '$1 == "directory"' "$MANIFEST")
+    done < "$MANIFEST"
     chmod 0555 -- "$destination"
     audit_installed "$destination"
 }
 
-case "${1:-}" in
-    audit-source)
-        [[ $# == 4 ]] || usage
-        audit_source "$2" "$3" "$4"
-        ;;
-    provision)
-        [[ $# == 5 ]] || usage
-        provision "$2" "$3" "$4" "$5"
-        ;;
-    audit-installed)
-        [[ $# == 2 ]] || usage
-        audit_installed "$2"
-        ;;
-    *) usage ;;
-esac
+main() {
+    case "${1:-}" in
+        audit-qualification-source)
+            [[ $# == 4 ]] || usage
+            audit_qualification_source "$2" "$3" "$4"
+            ;;
+        audit-source)
+            [[ $# == 4 ]] || usage
+            audit_source "$2" "$3" "$4"
+            ;;
+        provision)
+            [[ $# == 5 ]] || usage
+            provision "$2" "$3" "$4" "$5"
+            ;;
+        audit-installed)
+            [[ $# == 2 ]] || usage
+            audit_installed "$2"
+            ;;
+        *) usage ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

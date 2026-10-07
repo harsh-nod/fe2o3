@@ -29,6 +29,13 @@ fn session_limits_reject_invalid_handoff_and_preserve_each_native_wait() {
 
 #[test]
 fn session_control_adoption_closes_descriptor_and_preserves_account_prefix() {
+    crate::eof_test_process::isolated_eof_case(
+        "process::native::session_tests::session_control_adoption_closes_descriptor_and_preserves_account_prefix",
+        session_control_adoption_closes_descriptor_and_preserves_account_prefix_isolated,
+    );
+}
+
+fn session_control_adoption_closes_descriptor_and_preserves_account_prefix_isolated() {
     const SUPERVISOR: usize = 23;
     const UNRELATED: usize = 19;
     let floor = SUPERVISOR + Accepted::CONTROL_STORAGE;
@@ -77,6 +84,13 @@ fn session_control_adoption_closes_descriptor_and_preserves_account_prefix() {
 
 #[test]
 fn session_control_floor_overflow_drops_input_without_adopting_its_charge() {
+    crate::eof_test_process::isolated_eof_case(
+        "process::native::session_tests::session_control_floor_overflow_drops_input_without_adopting_its_charge",
+        session_control_floor_overflow_drops_input_without_adopting_its_charge_isolated,
+    );
+}
+
+fn session_control_floor_overflow_drops_input_without_adopting_its_charge_isolated() {
     let (reader, control) = pipe(PipeFlags::NONBLOCK).unwrap();
     let mut work = Work::new(100);
     let mut b = Budget::new(&mut work, 1024);

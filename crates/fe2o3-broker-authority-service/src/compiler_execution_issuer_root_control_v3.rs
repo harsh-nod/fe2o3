@@ -22,6 +22,23 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "compiler_execution_issuer_currentness_root_v1.rs"]
+mod currentness;
+pub(super) use currentness::CurrentnessRoot;
+use fe2o3_runtime_protocol::{
+    NativeApplicationCurrentnessRootKindV1 as CurrentKind,
+    NativeApplicationCurrentnessRootRecordV1 as CurrentRecord,
+};
+
+pub(super) struct AuthenticatedCurrentnessGate {
+    request: CurrentRecord,
+    deadline: Instant,
+}
+enum GateSelection {
+    Compiler(Established),
+    Currentness(AuthenticatedCurrentnessGate),
+}
+
 pub(super) const ENDPOINT_STORAGE: usize = size_of::<(OwnedFd, usize)>();
 pub(super) const TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_ATTEMPTS: usize = transport::MAX_PHASE_ATTEMPTS;
@@ -124,7 +141,7 @@ impl<'work> RootEndpoint<'work> {
         manifest: &Manifest,
         deadline: Instant,
         b: &mut Budget<'_>,
-    ) -> Result<()> {
+    ) -> Result<Option<AuthenticatedCurrentnessGate>> {
         self.begin_handshake(b)?;
         let floor = Self::STORAGE
             .checked_add(a.retained_storage())
@@ -141,6 +158,39 @@ impl<'work> RootEndpoint<'work> {
                 self.pause(deadline, false, b)?;
             };
             b.reserve_storage(BYTES)?;
+            // Only this exact original-root authenticated receive may choose the
+            // reduced application role. Unauthenticated bytes never reach here.
+            if CurrentRecord::has_gate_magic(&bytes) {
+                let (request, charge) =
+                    CurrentRecord::decode_gate(&bytes, b).map_err(currentness::codec)?;
+                b.reserve_storage(charge.additional_storage())?;
+                if request.kind() != CurrentKind::Request
+                    || !request
+                        .matches_launch(&a.policy, manifest, b)
+                        .map_err(currentness::codec)?
+                {
+                    return Err(Error::rejected("currentness root launch binding"));
+                }
+                a.validate_continuity(b)?;
+                readiness::check_binding(a, manifest, b)?;
+                let (reply, charge) = request.reply(b).map_err(currentness::codec)?;
+                b.reserve_storage(charge.additional_storage())?;
+                let reply = reply.gate_bytes(b).map_err(currentness::codec)?;
+                b.reserve_storage(BYTES)?;
+                loop {
+                    if self.send(&reply, deadline, &mut attempts, b)?.is_some() {
+                        break;
+                    }
+                    self.pause(deadline, true, b)?;
+                }
+                a.validate_continuity(b)?;
+                readiness::check_binding(a, manifest, b)?;
+                self.revalidate(deadline, b)?;
+                return Ok(GateSelection::Currentness(AuthenticatedCurrentnessGate {
+                    request,
+                    deadline,
+                }));
+            }
             let (request, charge) = Record::decode(&bytes, b).map_err(codec_error)?;
             b.reserve_storage(charge.additional_storage())?;
             let () =
@@ -161,21 +211,27 @@ impl<'work> RootEndpoint<'work> {
             a.validate_continuity(b)?;
             readiness::check_binding(a, manifest, b)?;
             self.revalidate(deadline, b)?;
-            Ok::<_, Error>(Established {
+            Ok::<_, Error>(GateSelection::Compiler(Established {
                 gate: request,
                 deadline,
                 attempts,
                 // The issuer-to-root request stream has its own sequence. The
                 // root's sequence-one admission challenge is the reverse flow.
                 next_sequence: 1,
-            })
+            }))
         })?;
-        *self
-            .state
-            .try_borrow_mut()
-            .map_err(|_| Error::rejected("root control reentry"))? =
-            ConnectionState::Established(established);
-        Ok(())
+        match established {
+            GateSelection::Compiler(established) => {
+                *self
+                    .state
+                    .try_borrow_mut()
+                    .map_err(|_| Error::rejected("root control reentry"))? =
+                    ConnectionState::Established(established);
+                Ok(None)
+            }
+            // The ordinary compiler RPC state intentionally stays Failed.
+            GateSelection::Currentness(gate) => Ok(Some(gate)),
+        }
     }
 
     fn begin_handshake(&self, b: &mut Budget<'_>) -> Result<()> {

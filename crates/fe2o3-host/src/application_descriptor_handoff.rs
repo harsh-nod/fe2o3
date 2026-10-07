@@ -11,7 +11,13 @@ use crate::{
     admit_recovered_worker_v3_descriptor_v1, admit_recovered_worker_v3_roster_v1,
 };
 use crate::{RecoveredMixedWorkerV53PinnedRoster, admit_recovered_mixed_worker_v53_roster};
-use fe2o3_artifact_transaction::WorkerV3LoadReadinessReceiptV1;
+use fe2o3_artifact_transaction::{
+    DurableCurrentLinkPublicationTokenV1, WorkerV3LoadReadinessReceiptV1,
+};
+use fe2o3_compiler_execution_client::{
+    ApplicationProofChannelErrorV1, COMPILER_EXECUTION_SERVICE_CHILD_FD_V1,
+    RegisteredApplicationProofEndpointV1, RetainedApplicationProofEndpointV1,
+};
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as MixedReceiptBudgetV53;
 use fe2o3_runtime_protocol::{
     MAX_WORKER_V3_APPLICATION_OCCURRENCE_BYTES_V1, MAX_WORKER_V3_LOAD_ENVELOPE_BYTES_V2,
@@ -21,11 +27,13 @@ use fe2o3_runtime_protocol::{
     WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_BYTES_V1,
     WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1, WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
-    WorkerV3ApplicationHandoffChallengeV1, WorkerV3ApplicationHandoffCommitmentV1,
-    WorkerV3ApplicationHandoffExpectationV1, WorkerV3ApplicationHandoffProtocolErrorV1,
-    WorkerV3ApplicationIdentityV1, WorkerV3ApplicationInputOccurrenceV1,
-    WorkerV3ApplicationOccurrenceV1, WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeIdentityV1,
-    WorkerV3LoadEnvelopeWireV2, recover_worker_v3_load_envelope_v2,
+    WORKER_V3_APPLICATION_PROOF_FD_ENV_V1, WorkerV3ApplicationHandoffChallengeV1,
+    WorkerV3ApplicationHandoffCommitmentV1, WorkerV3ApplicationHandoffExpectationV1,
+    WorkerV3ApplicationHandoffProtocolErrorV1, WorkerV3ApplicationIdentityV1,
+    WorkerV3ApplicationInputOccurrenceV1, WorkerV3ApplicationOccurrenceV1,
+    WorkerV3ApplicationRegistrationDescriptorsV1, WorkerV3ApplicationRegistrationErrorV1,
+    WorkerV3ApplicationRegistrationInputsV1, WorkerV3LoadEnvelopeErrorV2,
+    WorkerV3LoadEnvelopeIdentityV1, WorkerV3LoadEnvelopeWireV2, recover_worker_v3_load_envelope_v2,
 };
 use rustix::fs::{FileType, OFlags, fcntl_getfl, fcntl_setfl, fstat};
 use std::error::Error;
@@ -39,6 +47,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+mod custodian;
+use custodian::ApplicationCustodianStateV1;
+pub use custodian::RegisteredWorkerV3CustodianApplicationV1;
+
 const MAX_APPLICATION_EXECUTABLE_BYTES_V1: u64 = 1 << 30;
 const MAX_APPLICATION_ARTIFACT_DIRECTORY_ENTRIES_V1: usize = 4_096;
 const RETIRED_WORKER_V2_ENVELOPE_PREFIX_V1: &str = ".fe2o3-worker-v2-load-envelope-v1-";
@@ -49,7 +61,7 @@ const WORKER_V2_APPLICATION_HANDOFF_COMMITMENT_ENV_V1: &str =
 const WORKER_V2_APPLICATION_HANDOFF_ACK_FD_ENV_V1: &str = "FE2O3_APPLICATION_HANDOFF_ACK_FD_V1";
 const WORKER_V2_APPLICATION_HANDOFF_CHALLENGE_ENV_V1: &str =
     "FE2O3_APPLICATION_HANDOFF_CHALLENGE_V1";
-const ACK_DEADLINE_V1: Duration = Duration::from_secs(5);
+const STARTUP_DEADLINE_V1: Duration = Duration::from_secs(30);
 const WORKER_V3_ENVELOPE_PREFIX_V1: &str = ".fe2o3-worker-v3-load-readiness-v1-";
 const WORKER_V3_ENVELOPE_SUFFIX_V1: &str = ".envelope";
 const WORKER_V3_ENVELOPE_NAME_BYTES_V1: usize =
@@ -133,12 +145,27 @@ struct InspectedWorkerV3EnvelopeV1 {
 pub(crate) struct RetainedWorkerV3ApplicationDescriptorsV1 {
     directory: File,
     envelope: File,
+    proof: ApplicationRegistrationCustodyV1,
     directory_snapshot: DirectorySnapshotV1,
     envelope_snapshot: EnvelopeSnapshotV1,
     envelope_name: String,
     exact_envelope_bytes: Box<[u8]>,
     expectation: WorkerV3ApplicationHandoffExpectationV1,
     challenge: WorkerV3ApplicationHandoffChallengeV1,
+}
+
+enum ApplicationRegistrationCustodyV1 {
+    Unregistered(RetainedApplicationProofEndpointV1),
+    Registered(RegisteredApplicationProofEndpointV1),
+    Custodian(std::sync::Mutex<ApplicationCustodianStateV1>),
+}
+
+#[derive(Clone, Copy)]
+enum ApplicationRegistrationModeV1 {
+    Required,
+    Custodian,
+    #[cfg(feature = "hardware-test-hooks")]
+    EnvelopeOnlyFixture,
 }
 
 impl fmt::Debug for RetainedWorkerV3ApplicationDescriptorsV1 {
@@ -166,12 +193,63 @@ impl RetainedWorkerV3ApplicationDescriptorsV1 {
             &self.envelope_name,
         )
         .map_err(worker_v3_descriptor_error)?;
-        reject_worker_v2_envelope_coexistence(&self.directory).map_err(worker_v3_descriptor_error)
+        reject_worker_v2_envelope_coexistence(&self.directory)
+            .map_err(worker_v3_descriptor_error)?;
+        match &self.proof {
+            ApplicationRegistrationCustodyV1::Unregistered(proof) => proof.revalidate(),
+            ApplicationRegistrationCustodyV1::Registered(proof) => proof.revalidate(),
+            ApplicationRegistrationCustodyV1::Custodian(proof) => proof
+                .try_lock()
+                .map_err(|_| custodian::terminal())?
+                .revalidate(),
+        }
+        .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::ProofChannel)?;
+        Ok(())
+    }
+
+    fn register(
+        mut self,
+        inputs: WorkerV3ApplicationRegistrationInputsV1,
+        mode: ApplicationRegistrationModeV1,
+        deadline: Instant,
+    ) -> Result<Self, WorkerV3ApplicationDescriptorHandoffErrorV1> {
+        match mode {
+            ApplicationRegistrationModeV1::Required | ApplicationRegistrationModeV1::Custodian => {
+                self.proof = match self.proof {
+                    ApplicationRegistrationCustodyV1::Unregistered(proof) => {
+                        if matches!(mode, ApplicationRegistrationModeV1::Custodian) {
+                            ApplicationRegistrationCustodyV1::Custodian(std::sync::Mutex::new(
+                                ApplicationCustodianStateV1::register(proof, inputs, deadline)?,
+                            ))
+                        } else {
+                            ApplicationRegistrationCustodyV1::Registered(
+                                proof.register_pre_ack(inputs, deadline).map_err(
+                                    WorkerV3ApplicationDescriptorHandoffErrorV1::ProofChannel,
+                                )?,
+                            )
+                        }
+                    }
+                    ApplicationRegistrationCustodyV1::Registered(_)
+                    | ApplicationRegistrationCustodyV1::Custodian(_) => {
+                        unreachable!("single-use startup registration")
+                    }
+                };
+            }
+            #[cfg(feature = "hardware-test-hooks")]
+            ApplicationRegistrationModeV1::EnvelopeOnlyFixture => {}
+        }
+        Ok(self)
     }
 }
 
 trait WorkerV3ApplicationHandoffAdmissionV1: Sized {
-    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1>;
+    fn acquire_currentness(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, RecoveredWorkerV3AdmissionErrorV1>;
+    fn revalidate_currentness(
+        &self,
+        token: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1>;
 
     fn retain_application_descriptors(
         self,
@@ -180,8 +258,17 @@ trait WorkerV3ApplicationHandoffAdmissionV1: Sized {
 }
 
 impl WorkerV3ApplicationHandoffAdmissionV1 for RecoveredWorkerV3PinnedDescriptorV1 {
-    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-        RecoveredWorkerV3PinnedDescriptorV1::revalidate_currentness(self)
+    fn acquire_currentness(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, RecoveredWorkerV3AdmissionErrorV1> {
+        self.acquire_retained_currentness_token()
+    }
+
+    fn revalidate_currentness(
+        &self,
+        token: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        self.revalidate_retained_currentness_token(token)
     }
 
     fn retain_application_descriptors(
@@ -193,8 +280,17 @@ impl WorkerV3ApplicationHandoffAdmissionV1 for RecoveredWorkerV3PinnedDescriptor
 }
 
 impl<R> WorkerV3ApplicationHandoffAdmissionV1 for RecoveredWorkerV3PinnedRosterV1<R> {
-    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-        RecoveredWorkerV3PinnedRosterV1::revalidate_currentness(self)
+    fn acquire_currentness(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, RecoveredWorkerV3AdmissionErrorV1> {
+        self.acquire_retained_currentness_token()
+    }
+
+    fn revalidate_currentness(
+        &self,
+        token: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        self.revalidate_retained_currentness_token(token)
     }
 
     fn retain_application_descriptors(
@@ -206,8 +302,16 @@ impl<R> WorkerV3ApplicationHandoffAdmissionV1 for RecoveredWorkerV3PinnedRosterV
 }
 
 impl<R> WorkerV3ApplicationHandoffAdmissionV1 for RecoveredMixedWorkerV53PinnedRoster<R> {
-    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-        RecoveredMixedWorkerV53PinnedRoster::revalidate_currentness(self)
+    fn acquire_currentness(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, RecoveredWorkerV3AdmissionErrorV1> {
+        self.acquire_retained_currentness_token()
+    }
+    fn revalidate_currentness(
+        &self,
+        token: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        self.revalidate_retained_currentness_token(token)
     }
     fn retain_application_descriptors(
         self,
@@ -237,16 +341,27 @@ where
         claimed.envelope,
         claimed.directory,
         claimed.acknowledgment,
+        claimed.proof,
         claimed.occurrence,
         claimed.commitment,
         claimed.challenge,
+        ApplicationRegistrationModeV1::Required,
         |envelope| admit_recovered_mixed_worker_v53_roster::<R>(envelope, budget),
     )
+    .map(|(admission, _current)| admission)
 }
 
 impl<R> WorkerV3ApplicationHandoffAdmissionV1 for crate::RecoveredMixedWorkerV89PinnedRoster<R> {
-    fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-        crate::RecoveredMixedWorkerV89PinnedRoster::revalidate_currentness(self)
+    fn acquire_currentness(
+        &self,
+    ) -> Result<DurableCurrentLinkPublicationTokenV1, RecoveredWorkerV3AdmissionErrorV1> {
+        self.acquire_retained_currentness_token()
+    }
+    fn revalidate_currentness(
+        &self,
+        token: &DurableCurrentLinkPublicationTokenV1,
+    ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
+        self.revalidate_retained_currentness_token(token)
     }
 
     fn retain_application_descriptors(
@@ -282,17 +397,21 @@ where
         claimed.envelope,
         claimed.directory,
         claimed.acknowledgment,
+        claimed.proof,
         claimed.occurrence,
         claimed.commitment,
         claimed.challenge,
+        ApplicationRegistrationModeV1::Required,
         |envelope| crate::admit_recovered_mixed_worker_v89_roster::<R>(envelope, budget),
     )
+    .map(|(admission, _current)| admission)
 }
 
 struct ClaimedInheritedWorkerV3ApplicationHandoffV1 {
     envelope: OwnedFd,
     directory: OwnedFd,
     acknowledgment: OwnedFd,
+    proof: Option<OwnedFd>,
     occurrence: WorkerV3ApplicationOccurrenceV1,
     commitment: WorkerV3ApplicationHandoffCommitmentV1,
     challenge: WorkerV3ApplicationHandoffChallengeV1,
@@ -303,8 +422,9 @@ struct ClaimedInheritedWorkerV3ApplicationHandoffV1 {
 /// All V2 and V3 handoff environment values are removed atomically with respect to this
 /// operation's startup contract. The supplied occurrence is independently reconstructed from the
 /// current executable and inherited descriptor objects. The returned descriptor retains the
-/// envelope and artifact-directory descriptors through HSA unload and grants neither verification
-/// nor launch authority.
+/// envelope, artifact-directory and registered root-channel custody through native unload.
+/// Four input slots and root registration are mandatory, including when test features are enabled.
+/// This grants neither verification nor launch authority.
 ///
 /// # Safety
 ///
@@ -320,6 +440,7 @@ pub unsafe fn consume_inherited_worker_v3_application_handoff_v1(
         claimed.envelope,
         claimed.directory,
         claimed.acknowledgment,
+        claimed.proof,
         claimed.occurrence,
         claimed.commitment,
         claimed.challenge,
@@ -327,11 +448,41 @@ pub unsafe fn consume_inherited_worker_v3_application_handoff_v1(
     )
 }
 
+/// Consumes the strict handoff through the independently installed proof custodian.
+///
+/// Requires root CustodianReady, emits ACK, and retains the original controller endpoint
+/// inside the recovered publication. Legacy Ready is rejected without fallback. This is
+/// still inert admission: no proof request, compiler audit or native launch occurs here.
+///
+/// # Safety
+///
+/// The same exclusive startup/environment/descriptor contract as
+/// [`consume_inherited_worker_v3_application_handoff_v1`] applies.
+pub unsafe fn consume_inherited_worker_v3_application_custodian_handoff_v1(
+    kernel_id: KernelId,
+) -> Result<RegisteredWorkerV3CustodianApplicationV1, WorkerV3ApplicationDescriptorHandoffErrorV1> {
+    // SAFETY: caller promises the same exclusive startup contract as the private claim.
+    let claimed = unsafe { claim_inherited_worker_v3_application_handoff_v1()? };
+    consume_worker_v3_application_handoff_with_admission_v1(
+        claimed.envelope,
+        claimed.directory,
+        claimed.acknowledgment,
+        claimed.proof,
+        claimed.occurrence,
+        claimed.commitment,
+        claimed.challenge,
+        ApplicationRegistrationModeV1::Custodian,
+        |recovered| admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id),
+    )
+    .map(|(admission, current)| RegisteredWorkerV3CustodianApplicationV1 { admission, current })
+}
+
 /// Consumes Cargo's strict Worker V3 descriptor handoff into one exact generated roster.
 ///
 /// The complete marker roster is matched in canonical descriptor-table order. The returned roster
-/// retains the envelope and artifact-directory descriptors through HSA unload and grants neither
-/// verification nor launch authority. It exposes no raw inherited descriptor or envelope bytes.
+/// retains the envelope, artifact-directory and registered root-channel custody through native
+/// unload and grants neither verification nor launch authority. Four input slots and root
+/// registration are mandatory. It exposes no raw inherited descriptor or envelope bytes.
 ///
 /// ```compile_fail
 /// use fe2o3_host::RecoveredWorkerV3PinnedRosterV1;
@@ -357,6 +508,7 @@ where
         claimed.envelope,
         claimed.directory,
         claimed.acknowledgment,
+        claimed.proof,
         claimed.occurrence,
         claimed.commitment,
         claimed.challenge,
@@ -392,29 +544,40 @@ unsafe fn claim_inherited_worker_v3_application_handoff_v1()
         WORKER_V3_APPLICATION_HANDOFF_ACK_FD_ENV_V1,
         environment[2].as_deref(),
     );
-    let (envelope_raw, directory_raw, acknowledgment_raw) =
-        match (envelope_raw, directory_raw, acknowledgment_raw) {
-            (Ok(envelope), Ok(directory), Ok(acknowledgment)) => {
-                (envelope, directory, acknowledgment)
+    let proof_raw = environment[6]
+        .as_deref()
+        .map(|value| worker_v3_environment_fd(WORKER_V3_APPLICATION_PROOF_FD_ENV_V1, Some(value)))
+        .transpose();
+    let (envelope_raw, directory_raw, acknowledgment_raw, proof_raw) =
+        match (envelope_raw, directory_raw, acknowledgment_raw, proof_raw) {
+            (Ok(envelope), Ok(directory), Ok(acknowledgment), Ok(proof)) => {
+                (envelope, directory, acknowledgment, proof)
             }
-            (envelope, directory, acknowledgment) => {
+            (envelope, directory, acknowledgment, proof) => {
                 close_available_handoff_descriptors([
                     envelope.as_ref().ok().copied(),
                     directory.as_ref().ok().copied(),
                     acknowledgment.as_ref().ok().copied(),
+                    proof.as_ref().ok().copied().flatten(),
                 ]);
                 return Err(envelope
                     .err()
                     .or_else(|| directory.err())
                     .or_else(|| acknowledgment.err())
+                    .or_else(|| proof.err())
                     .expect("the non-success branch contains an error"));
             }
         };
-    if envelope_raw == directory_raw
-        || envelope_raw == acknowledgment_raw
-        || directory_raw == acknowledgment_raw
-    {
-        close_aliased_handoff_descriptors(envelope_raw, directory_raw, acknowledgment_raw);
+    let descriptors = [
+        Some(envelope_raw),
+        Some(directory_raw),
+        Some(acknowledgment_raw),
+        proof_raw,
+    ];
+    if descriptors.iter().enumerate().any(|(index, descriptor)| {
+        descriptor.is_some() && descriptors[..index].contains(descriptor)
+    }) {
+        close_available_handoff_descriptors(descriptors);
         return Err(WorkerV3ApplicationDescriptorHandoffErrorV1::AliasedDescriptors);
     }
 
@@ -424,9 +587,16 @@ unsafe fn claim_inherited_worker_v3_application_handoff_v1()
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor);
     let acknowledgment = claim_inherited_descriptor(acknowledgment_raw, "Worker V3 acknowledgment")
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor);
+    let proof = proof_raw
+        .map(|descriptor| {
+            claim_inherited_descriptor(descriptor, "Worker V3 proof endpoint")
+                .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)
+        })
+        .transpose();
     let envelope = envelope?;
     let directory = directory?;
     let acknowledgment = acknowledgment?;
+    let proof = proof?;
 
     let occurrence = worker_v3_environment_wire(
         WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
@@ -460,10 +630,61 @@ unsafe fn claim_inherited_worker_v3_application_handoff_v1()
         envelope,
         directory,
         acknowledgment,
+        proof,
         occurrence,
         commitment,
         challenge,
     })
+}
+
+/// Envelope-only fixture entrypoint. Does not establish a registered application session.
+///
+/// # Safety
+/// Same cooperative startup contract as the production inherited handoff consumer.
+#[cfg(feature = "hardware-test-hooks")]
+pub unsafe fn consume_inherited_worker_v3_envelope_only_fixture_v1(
+    kernel_id: KernelId,
+) -> Result<RecoveredWorkerV3PinnedDescriptorV1, WorkerV3ApplicationDescriptorHandoffErrorV1> {
+    // SAFETY: the caller upholds the inherited handoff startup contract.
+    let claimed = unsafe { claim_inherited_worker_v3_application_handoff_v1()? };
+    consume_worker_v3_application_handoff_with_admission_v1(
+        claimed.envelope,
+        claimed.directory,
+        claimed.acknowledgment,
+        claimed.proof,
+        claimed.occurrence,
+        claimed.commitment,
+        claimed.challenge,
+        ApplicationRegistrationModeV1::EnvelopeOnlyFixture,
+        |recovered| admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id),
+    )
+    .map(|(admission, _current)| admission)
+}
+
+/// Envelope-only roster fixture. Does not establish a registered application session.
+///
+/// # Safety
+/// Same cooperative startup contract as the production inherited roster consumer.
+#[cfg(feature = "hardware-test-hooks")]
+pub unsafe fn consume_inherited_worker_v3_envelope_only_roster_fixture_v1<R>()
+-> Result<RecoveredWorkerV3PinnedRosterV1<R>, WorkerV3ApplicationDescriptorHandoffErrorV1>
+where
+    R: CompilerGeneratedKernelExpectationRosterV1,
+{
+    // SAFETY: the caller upholds the inherited handoff startup contract.
+    let claimed = unsafe { claim_inherited_worker_v3_application_handoff_v1()? };
+    consume_worker_v3_application_handoff_with_admission_v1(
+        claimed.envelope,
+        claimed.directory,
+        claimed.acknowledgment,
+        claimed.proof,
+        claimed.occurrence,
+        claimed.commitment,
+        claimed.challenge,
+        ApplicationRegistrationModeV1::EnvelopeOnlyFixture,
+        admit_recovered_worker_v3_roster_v1::<R>,
+    )
+    .map(|(admission, _current)| admission)
 }
 
 /// Descriptor-level strict V3 application recovery used by the public startup boundary.
@@ -472,6 +693,7 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
     envelope: OwnedFd,
     artifact_directory: OwnedFd,
     acknowledgment: OwnedFd,
+    proof: Option<OwnedFd>,
     occurrence: WorkerV3ApplicationOccurrenceV1,
     commitment: WorkerV3ApplicationHandoffCommitmentV1,
     challenge: WorkerV3ApplicationHandoffChallengeV1,
@@ -481,11 +703,14 @@ pub(crate) fn consume_worker_v3_application_handoff_descriptors_v1(
         envelope,
         artifact_directory,
         acknowledgment,
+        proof,
         occurrence,
         commitment,
         challenge,
+        ApplicationRegistrationModeV1::Required,
         |recovered| admit_recovered_worker_v3_descriptor_v1(recovered, kernel_id),
     )
+    .map(|(admission, _current)| admission)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -493,6 +718,7 @@ fn consume_worker_v3_application_roster_handoff_descriptors_v1<R>(
     envelope: OwnedFd,
     artifact_directory: OwnedFd,
     acknowledgment: OwnedFd,
+    proof: Option<OwnedFd>,
     occurrence: WorkerV3ApplicationOccurrenceV1,
     commitment: WorkerV3ApplicationHandoffCommitmentV1,
     challenge: WorkerV3ApplicationHandoffChallengeV1,
@@ -504,11 +730,14 @@ where
         envelope,
         artifact_directory,
         acknowledgment,
+        proof,
         occurrence,
         commitment,
         challenge,
+        ApplicationRegistrationModeV1::Required,
         admit_recovered_worker_v3_roster_v1::<R>,
     )
+    .map(|(admission, _current)| admission)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -516,28 +745,56 @@ fn consume_worker_v3_application_handoff_with_admission_v1<Admission>(
     envelope: OwnedFd,
     artifact_directory: OwnedFd,
     acknowledgment: OwnedFd,
+    proof: Option<OwnedFd>,
     occurrence: WorkerV3ApplicationOccurrenceV1,
     commitment: WorkerV3ApplicationHandoffCommitmentV1,
     challenge: WorkerV3ApplicationHandoffChallengeV1,
+    registration: ApplicationRegistrationModeV1,
     admit: impl FnOnce(
         RecoveredWorkerV3LoadEnvelopeV2,
     ) -> Result<Admission, RecoveredWorkerV3AdmissionErrorV1>,
-) -> Result<Admission, WorkerV3ApplicationDescriptorHandoffErrorV1>
+) -> Result<
+    (Admission, DurableCurrentLinkPublicationTokenV1),
+    WorkerV3ApplicationDescriptorHandoffErrorV1,
+>
 where
     Admission: WorkerV3ApplicationHandoffAdmissionV1,
 {
+    let deadline = Instant::now().checked_add(STARTUP_DEADLINE_V1).ok_or(
+        WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor(
+            ApplicationDescriptorHandoffErrorV1::AcknowledgmentTimeout,
+        ),
+    )?;
+    let proof = proof.ok_or(
+        WorkerV3ApplicationDescriptorHandoffErrorV1::MissingEnvironment(
+            WORKER_V3_APPLICATION_PROOF_FD_ENV_V1,
+        ),
+    )?;
+    let coordinates = WorkerV3ApplicationRegistrationDescriptorsV1::new(
+        envelope.as_raw_fd(),
+        artifact_directory.as_raw_fd(),
+        acknowledgment.as_raw_fd(),
+        proof.as_raw_fd(),
+    )
+    .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Registration)?;
     set_close_on_exec(&envelope, "Worker V3 envelope")
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
     set_close_on_exec(&artifact_directory, "Worker V3 artifact directory")
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
     set_close_on_exec(&acknowledgment, "Worker V3 acknowledgment")
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
+    set_close_on_exec(&proof, "Worker V3 proof endpoint")
+        .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
     let directory = File::from(artifact_directory);
     let envelope = File::from(envelope);
     let acknowledgment = File::from(acknowledgment);
-    let descriptor_identities =
-        snapshot_handoff_descriptor_identities(&directory, &envelope, &acknowledgment)
-            .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
+    let descriptor_identities = snapshot_handoff_descriptor_identities(
+        &directory,
+        &envelope,
+        &acknowledgment,
+        Some(&proof),
+    )
+    .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
     seal_descriptor_occurrences(&descriptor_identities)
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
     let directory_snapshot = inspect_directory(&directory)
@@ -550,18 +807,29 @@ where
     } = inspect_worker_v3_envelope(&directory, &envelope)?;
     inspect_acknowledgment(&acknowledgment)
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
+    let proof = RetainedApplicationProofEndpointV1::admit_inherited(proof)
+        .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::ProofChannel)?;
 
     let application = current_application_identity_v3()?;
-    let observed_inputs = worker_v3_descriptor_occurrences(&envelope, &directory, &acknowledgment)?;
+    let observed_inputs =
+        worker_v3_descriptor_occurrences(&envelope, &directory, &acknowledgment, Some(&proof))?;
     validate_worker_v3_application_occurrence(&occurrence, application, &observed_inputs)?;
     let envelope_identity = WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(&exact_envelope_bytes)
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Protocol)?;
     let expectation = WorkerV3ApplicationHandoffExpectationV1::new(envelope_identity, &occurrence);
     validate_worker_v3_application_commitment(expectation.commitment(), commitment)?;
+    let inputs = WorkerV3ApplicationRegistrationInputsV1::new(
+        occurrence,
+        coordinates,
+        expectation,
+        challenge,
+    )
+    .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Registration)?;
 
     let retained = RetainedWorkerV3ApplicationDescriptorsV1 {
         directory,
         envelope,
+        proof: ApplicationRegistrationCustodyV1::Unregistered(proof),
         directory_snapshot,
         envelope_snapshot,
         envelope_name,
@@ -590,19 +858,24 @@ where
     }
     let recovered =
         admit(recovered).map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Admission)?;
-    seal_descriptor_occurrences(&descriptor_identities)
-        .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
-    retained.revalidate()?;
-    recovered
-        .revalidate_currentness()
+    // Keep one lock owner across registration and ACK; reacquisition would fail Busy.
+    let current = recovered
+        .acquire_currentness()
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Admission)?;
+    let retained = retained.register(inputs, registration, deadline)?;
     let acknowledgment_bytes = expectation
         .acknowledgment(challenge)
         .encode_canonical()
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Protocol)?;
-    emit_acknowledgment_bytes(&acknowledgment, &acknowledgment_bytes)
-        .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
-    Ok(recovered.retain_application_descriptors(retained))
+    emit_acknowledgment_bytes(&acknowledgment, &acknowledgment_bytes, deadline, || {
+        seal_descriptor_occurrences(&descriptor_identities)
+            .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor)?;
+        recovered
+            .revalidate_currentness(&current)
+            .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Admission)?;
+        retained.revalidate()
+    })?;
+    Ok((recovered.retain_application_descriptors(retained), current))
 }
 
 fn worker_v2_handoff_environment_names() -> [&'static str; 5] {
@@ -615,7 +888,7 @@ fn worker_v2_handoff_environment_names() -> [&'static str; 5] {
     ]
 }
 
-fn worker_v3_handoff_environment_names() -> [&'static str; 6] {
+fn worker_v3_handoff_environment_names() -> [&'static str; 7] {
     [
         WORKER_V3_APPLICATION_ENVELOPE_FD_ENV_V1,
         WORKER_V3_APPLICATION_ARTIFACT_DIR_FD_ENV_V1,
@@ -623,12 +896,13 @@ fn worker_v3_handoff_environment_names() -> [&'static str; 6] {
         WORKER_V3_APPLICATION_OCCURRENCE_ENV_V1,
         WORKER_V3_APPLICATION_HANDOFF_COMMITMENT_ENV_V1,
         WORKER_V3_APPLICATION_HANDOFF_CHALLENGE_ENV_V1,
+        WORKER_V3_APPLICATION_PROOF_FD_ENV_V1,
     ]
 }
 
 struct InheritedHandoffEnvironmentV1 {
     v2: [Option<OsString>; 5],
-    v3: [Option<OsString>; 6],
+    v3: [Option<OsString>; 7],
 }
 
 fn take_inherited_environment() -> InheritedHandoffEnvironmentV1 {
@@ -662,7 +936,7 @@ fn close_environment_handoff_descriptors(environment: &InheritedHandoffEnvironme
                         && value.as_bytes().iter().all(u8::is_ascii_digit)
             })
             .and_then(|value| value.parse::<RawFd>().ok())
-            .filter(|descriptor| *descriptor > libc::STDERR_FILENO)
+            .filter(|descriptor| valid_application_descriptor(*descriptor))
     };
     close_available_handoff_descriptors([
         descriptor(environment.v2[0].as_ref()),
@@ -671,6 +945,7 @@ fn close_environment_handoff_descriptors(environment: &InheritedHandoffEnvironme
         descriptor(environment.v3[0].as_ref()),
         descriptor(environment.v3[1].as_ref()),
         descriptor(environment.v3[2].as_ref()),
+        descriptor(environment.v3[6].as_ref()),
     ]);
 }
 
@@ -699,7 +974,7 @@ fn worker_v3_environment_fd(
     canonical
         .then(|| value.parse::<RawFd>().ok())
         .flatten()
-        .filter(|descriptor| *descriptor > libc::STDERR_FILENO)
+        .filter(|descriptor| valid_application_descriptor(*descriptor))
         .ok_or(WorkerV3ApplicationDescriptorHandoffErrorV1::InvalidEnvironment(name))
 }
 
@@ -735,7 +1010,7 @@ fn worker_v3_environment_wire(
     Ok(decoded)
 }
 
-fn claim_inherited_descriptor(
+pub(crate) fn claim_inherited_descriptor(
     descriptor: RawFd,
     kind: &'static str,
 ) -> Result<OwnedFd, ApplicationDescriptorHandoffErrorV1> {
@@ -754,16 +1029,18 @@ fn claim_inherited_descriptor(
     Ok(descriptor)
 }
 
-fn close_aliased_handoff_descriptors(envelope: RawFd, directory: RawFd, acknowledgment: RawFd) {
-    close_available_handoff_descriptors([Some(envelope), Some(directory), Some(acknowledgment)]);
+pub(crate) fn valid_application_descriptor(descriptor: RawFd) -> bool {
+    descriptor > libc::STDERR_FILENO && descriptor != COMPILER_EXECUTION_SERVICE_CHILD_FD_V1
 }
 
-fn close_available_handoff_descriptors<const N: usize>(descriptors: [Option<RawFd>; N]) {
+pub(crate) fn close_available_handoff_descriptors<const N: usize>(descriptors: [Option<RawFd>; N]) {
     for (index, descriptor) in descriptors.into_iter().enumerate() {
         let Some(descriptor) = descriptor else {
             continue;
         };
-        if descriptors[..index].contains(&Some(descriptor)) {
+        if !valid_application_descriptor(descriptor)
+            || descriptors[..index].contains(&Some(descriptor))
+        {
             continue;
         }
         let _ = claim_inherited_descriptor(descriptor, "rejected handoff");
@@ -795,7 +1072,8 @@ fn snapshot_handoff_descriptor_identities<D: AsFd, E: AsFd, A: AsFd>(
     directory: &D,
     envelope: &E,
     acknowledgment: &A,
-) -> Result<[DescriptorIdentityV1; 3], ApplicationDescriptorHandoffErrorV1> {
+    proof: Option<&OwnedFd>,
+) -> Result<Vec<DescriptorIdentityV1>, ApplicationDescriptorHandoffErrorV1> {
     let directory = fstat(directory)
         .map(|stat| DescriptorIdentityV1::from_stat(&stat))
         .map_err(|error| descriptor_io("artifact directory identity", error));
@@ -805,20 +1083,31 @@ fn snapshot_handoff_descriptor_identities<D: AsFd, E: AsFd, A: AsFd>(
     let acknowledgment = fstat(acknowledgment)
         .map(|stat| DescriptorIdentityV1::from_stat(&stat))
         .map_err(|error| descriptor_io("acknowledgment identity", error));
+    let proof = proof
+        .map(|fd| {
+            fstat(fd)
+                .map(|stat| DescriptorIdentityV1::from_stat(&stat))
+                .map_err(|error| descriptor_io("proof endpoint identity", error))
+        })
+        .transpose();
     let available = [
         directory.as_ref().ok().copied(),
         envelope.as_ref().ok().copied(),
         acknowledgment.as_ref().ok().copied(),
+        proof.as_ref().ok().copied().flatten(),
     ];
     seal_descriptor_occurrences(&available.into_iter().flatten().collect::<Vec<_>>())?;
-    Ok([directory?, envelope?, acknowledgment?])
+    let mut identities = vec![directory?, envelope?, acknowledgment?];
+    identities.extend(proof?);
+    Ok(identities)
 }
 
 fn worker_v3_descriptor_occurrences<E: AsFd, D: AsFd, A: AsFd>(
     envelope: &E,
     directory: &D,
     acknowledgment: &A,
-) -> Result<[WorkerV3ApplicationInputOccurrenceV1; 3], WorkerV3ApplicationDescriptorHandoffErrorV1>
+    proof: Option<&RetainedApplicationProofEndpointV1>,
+) -> Result<Vec<WorkerV3ApplicationInputOccurrenceV1>, WorkerV3ApplicationDescriptorHandoffErrorV1>
 {
     let occurrence = |slot, descriptor: &dyn AsFd, kind| {
         let stat = fstat(descriptor.as_fd()).map_err(|error| {
@@ -832,17 +1121,25 @@ fn worker_v3_descriptor_occurrences<E: AsFd, D: AsFd, A: AsFd>(
         )
         .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Protocol)
     };
-    Ok([
+    let mut inputs = vec![
         occurrence(1, envelope, "Worker V3 envelope occurrence")?,
         occurrence(2, directory, "Worker V3 artifact-directory occurrence")?,
         occurrence(3, acknowledgment, "Worker V3 acknowledgment occurrence")?,
-    ])
+    ];
+    if let Some(proof) = proof {
+        let (device, inode, mode) = proof.descriptor_identity();
+        inputs.push(
+            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(4, device, inode, mode)
+                .map_err(WorkerV3ApplicationDescriptorHandoffErrorV1::Protocol)?,
+        );
+    }
+    Ok(inputs)
 }
 
 fn validate_worker_v3_application_occurrence(
     supplied: &WorkerV3ApplicationOccurrenceV1,
     application: WorkerV3ApplicationIdentityV1,
-    inputs: &[WorkerV3ApplicationInputOccurrenceV1; 3],
+    inputs: &[WorkerV3ApplicationInputOccurrenceV1],
 ) -> Result<(), WorkerV3ApplicationDescriptorHandoffErrorV1> {
     if supplied.application() != application {
         return Err(WorkerV3ApplicationDescriptorHandoffErrorV1::ApplicationIdentityMismatch);
@@ -1261,7 +1558,7 @@ fn current_application_exact_bytes() -> Result<Vec<u8>, ApplicationDescriptorHan
 }
 
 #[cfg(test)]
-fn sealed_static_test_elf_v1() -> Vec<u8> {
+pub(crate) fn sealed_static_test_elf_v1() -> Vec<u8> {
     const HEADER: usize = 64;
     const PROGRAM: usize = 56;
     const PROGRAMS: usize = 4;
@@ -1365,13 +1662,22 @@ fn inspect_acknowledgment(
 fn emit_acknowledgment_bytes(
     acknowledgment: &File,
     bytes: &[u8],
-) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
-    inspect_acknowledgment(acknowledgment)?;
-    let flags =
-        fcntl_getfl(acknowledgment).map_err(|error| descriptor_io("acknowledgment", error))?;
+    deadline: Instant,
+    revalidate: impl FnOnce() -> Result<(), WorkerV3ApplicationDescriptorHandoffErrorV1>,
+) -> Result<(), WorkerV3ApplicationDescriptorHandoffErrorV1> {
+    let descriptor = WorkerV3ApplicationDescriptorHandoffErrorV1::Descriptor;
+    inspect_acknowledgment(acknowledgment).map_err(descriptor)?;
+    let flags = fcntl_getfl(acknowledgment)
+        .map_err(|error| descriptor(descriptor_io("acknowledgment", error)))?;
     fcntl_setfl(acknowledgment, flags | OFlags::NONBLOCK)
-        .map_err(|error| descriptor_io("acknowledgment", error))?;
-    wait_writable(acknowledgment.as_raw_fd(), ACK_DEADLINE_V1)?;
+        .map_err(|error| descriptor(descriptor_io("acknowledgment", error)))?;
+    wait_writable(acknowledgment.as_raw_fd(), deadline).map_err(descriptor)?;
+    revalidate()?;
+    if Instant::now() >= deadline {
+        return Err(descriptor(
+            ApplicationDescriptorHandoffErrorV1::AcknowledgmentTimeout,
+        ));
+    }
     let written = unsafe {
         libc::write(
             acknowledgment.as_raw_fd(),
@@ -1380,21 +1686,23 @@ fn emit_acknowledgment_bytes(
         )
     };
     if written < 0 {
-        return Err(descriptor_io("acknowledgment", io::Error::last_os_error()));
+        return Err(descriptor(descriptor_io(
+            "acknowledgment",
+            io::Error::last_os_error(),
+        )));
     }
     if usize::try_from(written).ok() != Some(bytes.len()) {
-        return Err(ApplicationDescriptorHandoffErrorV1::PartialAcknowledgment);
+        return Err(descriptor(
+            ApplicationDescriptorHandoffErrorV1::PartialAcknowledgment,
+        ));
     }
     Ok(())
 }
 
 fn wait_writable(
     descriptor: RawFd,
-    timeout: Duration,
+    deadline: Instant,
 ) -> Result<(), ApplicationDescriptorHandoffErrorV1> {
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .ok_or(ApplicationDescriptorHandoffErrorV1::AcknowledgmentTimeout)?;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -1416,6 +1724,12 @@ fn wait_writable(
                 continue;
             }
             return Err(descriptor_io("acknowledgment", error));
+        }
+        if Instant::now() >= deadline {
+            return Err(ApplicationDescriptorHandoffErrorV1::AcknowledgmentTimeout);
+        }
+        if poll.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+            return Err(ApplicationDescriptorHandoffErrorV1::AcknowledgmentClosed);
         }
         if poll.revents & libc::POLLOUT != 0 {
             return Ok(());
@@ -1568,6 +1882,8 @@ pub enum WorkerV3ApplicationDescriptorHandoffErrorV1 {
     InvalidEnvironment(&'static str),
     AliasedDescriptors,
     Descriptor(ApplicationDescriptorHandoffErrorV1),
+    ProofChannel(ApplicationProofChannelErrorV1),
+    Registration(WorkerV3ApplicationRegistrationErrorV1),
     Protocol(WorkerV3ApplicationHandoffProtocolErrorV1),
     Envelope(WorkerV3LoadEnvelopeErrorV2),
     EnvelopeSize { actual: i64 },
@@ -1612,6 +1928,12 @@ impl fmt::Display for WorkerV3ApplicationDescriptorHandoffErrorV1 {
                     formatter,
                     "invalid Worker V3 application descriptor: {error}"
                 )
+            }
+            Self::ProofChannel(error) => {
+                write!(formatter, "invalid Worker V3 proof endpoint: {error}")
+            }
+            Self::Registration(error) => {
+                write!(formatter, "invalid Worker V3 registration: {error}")
             }
             Self::Protocol(error) => {
                 write!(
@@ -1667,6 +1989,8 @@ impl Error for WorkerV3ApplicationDescriptorHandoffErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Descriptor(error) => Some(error),
+            Self::ProofChannel(error) => Some(error),
+            Self::Registration(error) => Some(error),
             Self::Protocol(error) => Some(error),
             Self::Envelope(error) => Some(error),
             Self::Admission(error) => Some(error),
@@ -1676,95 +2000,4 @@ impl Error for WorkerV3ApplicationDescriptorHandoffErrorV1 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn worker_v3_environment_wire_requires_bounded_lowercase_canonical_hex() {
-        assert_eq!(
-            worker_v3_environment_wire("TEST", Some(OsStr::new("00af")), 2).unwrap(),
-            [0, 0xaf]
-        );
-        for invalid in ["", "0", "00AF", "00ag", "000000"] {
-            assert!(matches!(
-                worker_v3_environment_wire("TEST", Some(OsStr::new(invalid)), 2),
-                Err(WorkerV3ApplicationDescriptorHandoffErrorV1::InvalidEnvironment("TEST"))
-            ));
-        }
-    }
-
-    #[test]
-    fn worker_v3_occurrence_rejects_application_and_descriptor_substitution() {
-        let application =
-            WorkerV3ApplicationIdentityV1::from_sealed_static_elf_v1(&sealed_static_test_elf_v1())
-                .unwrap();
-        let inputs = [
-            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(1, 1, 2, 3).unwrap(),
-            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(2, 4, 5, 6).unwrap(),
-            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(3, 7, 8, 9).unwrap(),
-        ];
-        let supplied = WorkerV3ApplicationOccurrenceV1::new(application, [7; 32], &inputs).unwrap();
-        assert!(validate_worker_v3_application_occurrence(&supplied, application, &inputs).is_ok());
-
-        let mut substituted_image = sealed_static_test_elf_v1();
-        *substituted_image.last_mut().unwrap() ^= 1;
-        let substituted_application =
-            WorkerV3ApplicationIdentityV1::from_sealed_static_elf_v1(&substituted_image).unwrap();
-        assert!(matches!(
-            validate_worker_v3_application_occurrence(&supplied, substituted_application, &inputs),
-            Err(WorkerV3ApplicationDescriptorHandoffErrorV1::ApplicationIdentityMismatch)
-        ));
-
-        let substituted_inputs = [
-            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(1, 10, 2, 3).unwrap(),
-            inputs[1],
-            inputs[2],
-        ];
-        assert!(matches!(
-            validate_worker_v3_application_occurrence(&supplied, application, &substituted_inputs),
-            Err(WorkerV3ApplicationDescriptorHandoffErrorV1::DescriptorOccurrenceMismatch)
-        ));
-    }
-
-    #[test]
-    fn worker_v3_commitment_rejects_envelope_substitution() {
-        let application =
-            WorkerV3ApplicationIdentityV1::from_sealed_static_elf_v1(&sealed_static_test_elf_v1())
-                .unwrap();
-        let input =
-            WorkerV3ApplicationInputOccurrenceV1::from_linux_descriptor_v1(1, 1, 2, 3).unwrap();
-        let occurrence =
-            WorkerV3ApplicationOccurrenceV1::new(application, [9; 32], &[input]).unwrap();
-        let first = WorkerV3ApplicationHandoffExpectationV1::new(
-            WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(b"first").unwrap(),
-            &occurrence,
-        );
-        let second = WorkerV3ApplicationHandoffExpectationV1::new(
-            WorkerV3LoadEnvelopeIdentityV1::from_exact_bytes(b"second").unwrap(),
-            &occurrence,
-        );
-        assert!(matches!(
-            validate_worker_v3_application_commitment(first.commitment(), second.commitment()),
-            Err(WorkerV3ApplicationDescriptorHandoffErrorV1::CommitmentMismatch)
-        ));
-        assert!(
-            validate_worker_v3_application_commitment(first.commitment(), first.commitment())
-                .is_ok()
-        );
-    }
-
-    #[test]
-    fn worker_v3_envelope_name_requires_exact_lowercase_digest() {
-        let valid = format!(
-            "{WORKER_V3_ENVELOPE_PREFIX_V1}{}{WORKER_V3_ENVELOPE_SUFFIX_V1}",
-            "ab".repeat(32)
-        );
-        assert!(is_canonical_worker_v3_envelope_name(valid.as_bytes()));
-        assert!(!is_canonical_worker_v3_envelope_name(
-            valid.to_ascii_uppercase().as_bytes()
-        ));
-        assert!(!is_canonical_worker_v3_envelope_name(
-            format!("{valid}0").as_bytes()
-        ));
-    }
-}
+mod tests;

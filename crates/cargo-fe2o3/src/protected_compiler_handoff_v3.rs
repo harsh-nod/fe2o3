@@ -115,6 +115,18 @@ impl ParentRustcInvocationCustody {
         self.descriptor().amd_target()
     }
 
+    pub(crate) fn try_clone_for_compiler_proof(
+        &self,
+    ) -> Result<std::fs::File, ParentRustcInvocationCustodyError> {
+        self.revalidate()?;
+        let original = self
+            .capability
+            .try_clone_for_transfer()
+            .map_err(ParentRustcInvocationCustodyError::Capability)?;
+        self.revalidate()?;
+        Ok(original)
+    }
+
     /// Runs one operation while the exact selected parent custody remains live.
     pub(crate) fn retain_through<T>(self, operation: impl FnOnce(&Self) -> T) -> T {
         operation(&self)

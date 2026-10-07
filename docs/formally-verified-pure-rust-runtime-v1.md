@@ -131,6 +131,38 @@ The checked-in policy is `scripts/runtime-pure-rust-policy.json`. The auditor is
 `scripts/runtime_pure_rust_audit.py`. It uses only the Python standard library
 and has no ROCm dependency.
 
+The runtime's existing signature and digest dependency closure also requires
+the exact crates.io configuration-script exceptions `curve25519-dalek@4.1.3`
+and `generic-array@0.14.7`. Their reviewed `build.rs` files select Rust cfgs;
+neither compiles C/assembly, emits native linking directives, discovers ROCm,
+or declares Cargo `links`. The former selects Rust limb width/backend and
+nightly compatibility using target environment and `rustc_version@0.4.1`;
+the latter selects `relaxed_coherence` using `version_check@0.9.5`. These helpers
+query the configured Rust compiler version, including `RUSTC_WRAPPER` for
+`rustc_version`; this is build-time configuration, not runtime process-launch
+permission. Both helpers were reviewed against their locked crate archives.
+
+The 2026-10-06 source review checked the following archive and script hashes
+against `Cargo.lock` and the exact extracted bytes:
+
+| Package | Crate Archive SHA256 | `build.rs` SHA256 |
+| --- | --- | --- |
+| `curve25519-dalek@4.1.3` | `97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be` | `c479ea95fa9cac8b3374564261c15cfcb110738ddcaa5e0852644b6083bd9189` |
+| `generic-array@0.14.7` | `85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a` | `08fa30c4a2c1ad24fe5f987e721dfb20131f45ea5b5dc3e836dcf88a8e33248c` |
+
+The reviewed helper archive and `src/lib.rs` SHA256 values, respectively, are:
+
+- `rustc_version@0.4.1`:
+  `cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92`,
+  `6d0dbf7bd12ba7121e6767841a0cee23b8282cc4d7c4b778a1e33129abdd7d72`.
+- `version_check@0.9.5`:
+  `0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a`,
+  `01bb86088ba281d511ae002aa939bb30b747f47ace5ea13a46de554a3117806e`.
+
+The metadata checker still rejects another version or source and rejects a
+`links` declaration even on an otherwise approved identity. These exceptions
+are not cryptographic verification proofs or GPU qualification evidence.
+
 Audit the current locked, target-filtered production closure, including normal
 and build edges. The auditor invokes Cargo directly so CI cannot accidentally
 reuse detached or stale metadata:

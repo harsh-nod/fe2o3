@@ -547,6 +547,20 @@ impl ProductionCompilerCustody {
         matches!(self, Self::ExtractionOnly)
     }
 
+    fn proof_runtime(
+        &self,
+    ) -> Result<
+        Option<&std::sync::Arc<fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>>,
+        ProductionPipelineError,
+    > {
+        match self {
+            Self::ProtectedV3 { invocation, .. } => invocation
+                .proof_runtime()
+                .map_err(ProductionPipelineError::ProtectedRustcInvocation),
+            Self::ExtractionOnly => Ok(None),
+        }
+    }
+
     fn into_publication_custody(
         self,
     ) -> Result<ProtectedProductionPublicationCustody, ProductionPipelineError> {
@@ -3530,6 +3544,27 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .verify_general_kernel_checks()
     }
 
+    pub(crate) fn select_compiler_proof_family_v1(
+        mut self,
+        family: fe2o3_compiler_execution_protocol::CompilerExecutionPolicyFamilyV1,
+    ) -> Result<Self, ProductionPipelineError> {
+        let ProductionCompilerCustody::ProtectedV3 { invocation, .. } =
+            &mut self.stage.transaction.compiler_custody
+        else {
+            return Err(ProductionPipelineError::ExtractionCannotPublish);
+        };
+        match family {
+            fe2o3_compiler_execution_protocol::CompilerExecutionPolicyFamilyV1::LegacyV1 => {
+                invocation.select_legacy_proof_runtime()
+            }
+            fe2o3_compiler_execution_protocol::CompilerExecutionPolicyFamilyV1::NativeV3 => {
+                invocation.select_native_proof_runtime()
+            }
+        }
+        .map_err(ProductionPipelineError::ProtectedRustcInvocation)?;
+        Ok(self)
+    }
+
     /// Consumes the sole production transaction through exact semantic MIR,
     /// formal memory admission, and exact authenticated-target LLVM lowering.
     pub(crate) fn lower_production_target(
@@ -4103,10 +4138,11 @@ impl MaterializedNeutralProductionCompilation {
             bindings,
         } = self;
         let ranked =
-            crate::production_ranked_projection_v1::project_and_verify_ranked_materialized_semantic_mir_v1(
+            crate::production_ranked_projection_v1::project_and_verify_ranked_materialized_with_runtime_v1(
                 materialized,
                 &ranked_roots,
                 &bindings.reference_effect_bindings,
+                bindings.transaction.compiler_custody.proof_runtime()?,
             )
             .map_err(ProductionPipelineError::RankedProjection)?;
         Ok(RankedVerifiedProductionCompilation { ranked, bindings })
@@ -4139,7 +4175,13 @@ impl RankedVerifiedProductionCompilation {
     ) -> Result<TargetNeutralProductionCompilation, ProductionPipelineError> {
         let Self { ranked, bindings } = self.replay_conditional_for_target_v1()?;
         let roster_receipt = ranked
-            .into_verified_roster_receipt()
+            .into_verified_roster_receipt_with_runtime(
+                bindings
+                    .transaction
+                    .compiler_custody
+                    .proof_runtime()?
+                    .map(|runtime| runtime.as_ref()),
+            )
             .map_err(ProductionPipelineError::RankedVerification)?;
         debug_assert!(!roster_receipt.grants_artifact_or_launch_authority());
         debug_assert!(roster_receipt.verify_equivalence().is_ok());
@@ -4492,7 +4534,7 @@ mod tests {
 
         let pipeline = include_str!("production_pipeline.rs");
         let roster = pipeline
-            .find(".into_verified_roster_receipt()")
+            .find(".into_verified_roster_receipt_with_runtime(")
             .expect("ranked roster verification transition");
         let module = pipeline[roster..]
             .find(".into_module_verified_receipt()")
@@ -4512,7 +4554,7 @@ mod tests {
     fn ranked_roster_receipt_reaches_complete_module_kir_authority() {
         let pipeline = include_str!("production_pipeline.rs");
         let roster = pipeline
-            .find(".into_verified_roster_receipt()")
+            .find(".into_verified_roster_receipt_with_runtime(")
             .expect("ranked roster receipt transition");
         let module = pipeline[roster..]
             .find(".into_module_verified_receipt()")

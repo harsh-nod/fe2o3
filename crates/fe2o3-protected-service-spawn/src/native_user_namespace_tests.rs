@@ -106,6 +106,17 @@ fn identity_map_readback_rejects_nonexact_or_ambiguous_rows() {
 
 #[test]
 fn identity_map_installation_does_not_require_a_seekable_control() {
+    if !crate::test_isolation::enter(
+        concat!(
+            module_path!(),
+            "::identity_map_installation_does_not_require_a_seekable_control"
+        )
+        .split_once("::")
+        .unwrap()
+        .1,
+    ) {
+        return;
+    }
     let (reader, writer) = rustix::pipe::pipe_with(
         rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
     )
@@ -193,6 +204,16 @@ fn configuration_schedule_is_single_use_even_after_partial_failure() {
 
 #[test]
 fn poisoned_cleanup_fixture_refuses_without_namespace_io_and_retains_pipe() {
+    if !crate::test_isolation::enter(
+        concat!(
+            module_path!(),
+            "::poisoned_cleanup_fixture_refuses_without_namespace_io_and_retains_pipe"
+        )
+        .strip_prefix("fe2o3_protected_service_spawn::")
+        .unwrap(),
+    ) {
+        return;
+    }
     let (reader, writer) = rustix::pipe::pipe_with(
         rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
     )

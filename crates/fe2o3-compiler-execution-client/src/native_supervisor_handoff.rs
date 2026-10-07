@@ -37,8 +37,11 @@ use std::{
     time::Instant,
 };
 
+#[path = "native_application_supervisor_handoff.rs"]
+mod application;
 #[path = "native_supervisor_handoff_io.rs"]
 mod io;
+pub use application::NativeApplicationSupervisorReadinessV1;
 type Result<T> = std::result::Result<T, CompilerExecutionHandoffErrorV3>;
 use CompilerExecutionHandoffErrorV3 as Failure;
 use CompilerExecutionHandoffStorageV3 as Storage;
@@ -279,6 +282,9 @@ pub enum CompilerExecutionHandoffErrorV3 {
     Manifest(ManifestError),
     Handoff(HandoffError),
     Readiness(ReadyError),
+    ProofChannel(crate::ApplicationProofChannelErrorV1),
+    RootTransfer(fe2o3_runtime_protocol::NativeApplicationRootTransferErrorV1),
+    Startup(fe2o3_runtime_protocol::NativeApplicationStartupErrorV1),
     Io(rustix::io::Errno),
     Mismatch(&'static str),
 }
@@ -294,7 +300,10 @@ macro_rules! causes {
     };
 }
 causes!(Resource=>Resource, Transport=>Transport, ChildError=>Child, ManifestError=>Manifest,
-    HandoffError=>Handoff, ReadyError=>Readiness, rustix::io::Errno=>Io);
+    HandoffError=>Handoff, ReadyError=>Readiness, rustix::io::Errno=>Io,
+    crate::ApplicationProofChannelErrorV1=>ProofChannel,
+    fe2o3_runtime_protocol::NativeApplicationRootTransferErrorV1=>RootTransfer,
+    fe2o3_runtime_protocol::NativeApplicationStartupErrorV1=>Startup);
 
 #[cfg(test)]
 #[path = "native_supervisor_handoff_tests.rs"]

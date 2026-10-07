@@ -96,6 +96,39 @@ fn facts(base: u64, logical: usize, id: u64) -> SharedGttMappedResourceFactsV1 {
 }
 
 #[test]
+fn request_parts_preserve_attached_mixed_premises_without_copying() {
+    let slices = slices();
+    let payload = payload(&slices, &accesses()).unwrap();
+    let identity = *payload.identity();
+    let slice_storage = payload.slices().as_ptr();
+    let access_storage = payload.accesses().as_ptr();
+    let request = request(&slices)
+        .with_mixed_conditional_premises_v26(payload)
+        .unwrap();
+    assert_eq!(
+        request
+            .inspection_v1()
+            .mixed_conditional_premises
+            .unwrap()
+            .identity(),
+        &identity
+    );
+    let parts = request.into_parts_v1();
+    assert!(parts.conditional_premises.is_none());
+    let retained = parts.mixed_conditional_premises.unwrap();
+    assert_eq!(retained.identity(), &identity);
+    assert_eq!(retained.slices().as_ptr(), slice_storage);
+    assert_eq!(retained.accesses().as_ptr(), access_storage);
+    retained
+        .check_live(&[
+            facts(0x1000, 12, 1),
+            facts(0x2000, 12, 2),
+            facts(0x3000, 12, 3),
+        ])
+        .unwrap();
+}
+
+#[test]
 fn mixed_multiple_writes_and_same_argument_reads_reach_actual_request() {
     let slices = slices();
     let payload = payload(&slices, &accesses()).unwrap();

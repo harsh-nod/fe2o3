@@ -88,6 +88,12 @@ pub enum FunctionalRefinementBoundaryV2 {
     SafeReferenceMirToKernelMir = 1,
     SafeReferenceSourceToKernelMir = 2,
     SafeReferenceMirToLivePliron = 3,
+    /// Guarded coverage remains conditional on the actual launch extent.
+    SafeReferenceMirToLivePlironConditionalCoverage = 4,
+    /// Closed semantic MIR/KIR to projected gfx942 fill dispatch, with explicit native premises.
+    SemanticMirToGfx942FillDispatchConditional = 5,
+    /// Recovered native final KIR to projected gfx942 fill dispatch; source replay is separate.
+    FinalKernelIrToGfx942FillDispatchConditional = 6,
 }
 
 impl FunctionalRefinementBoundaryV2 {
@@ -97,6 +103,9 @@ impl FunctionalRefinementBoundaryV2 {
             1 => Ok(Self::SafeReferenceMirToKernelMir),
             2 => Ok(Self::SafeReferenceSourceToKernelMir),
             3 => Ok(Self::SafeReferenceMirToLivePliron),
+            4 => Ok(Self::SafeReferenceMirToLivePlironConditionalCoverage),
+            5 => Ok(Self::SemanticMirToGfx942FillDispatchConditional),
+            6 => Ok(Self::FinalKernelIrToGfx942FillDispatchConditional),
             value => Err(FunctionalRefinementImportErrorV2::UnknownBoundary(value)),
         }
     }
@@ -775,6 +784,32 @@ impl fmt::Display for FunctionalRefinementImportErrorV2 {
 }
 
 impl Error for FunctionalRefinementImportErrorV2 {}
+
+/// Inspects canonical receipt fields without verifying its signature, result,
+/// boundary, execution or provenance. These values are untrusted import inputs,
+/// never a proof; callers must still use the strict receipt importer.
+#[cfg(feature = "internal-proof-staging")]
+pub fn inspect_untrusted_functional_refinement_receipt_v2(
+    wire: &[u8],
+) -> Result<
+    (FunctionalRefinementBindingV2, VerusToolchainIdentityV2),
+    FunctionalRefinementImportErrorV2,
+> {
+    if wire.len() != FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2 {
+        return Err(FunctionalRefinementImportErrorV2::WrongWireLength {
+            expected: FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2,
+            actual: wire.len(),
+        });
+    }
+    let message = wire[..SIGNED_MESSAGE_BYTES_V2].try_into().map_err(|_| {
+        FunctionalRefinementImportErrorV2::WrongWireLength {
+            expected: FUNCTIONAL_REFINEMENT_RECEIPT_WIRE_BYTES_V2,
+            actual: wire.len(),
+        }
+    })?;
+    let decoded = decode_message(message)?;
+    Ok((decoded.binding, decoded.toolchain))
+}
 
 #[cfg(any(test, feature = "internal-proof-staging"))]
 fn decode_message(

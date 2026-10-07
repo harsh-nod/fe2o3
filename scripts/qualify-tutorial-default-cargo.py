@@ -146,7 +146,7 @@ def stop_group(process):
     process.wait()
 
 
-def run_command(arguments, cwd, environment, log_path, timeout, max_log_bytes):
+def run_command(arguments, cwd, environment, log_path, timeout, max_log_bytes, *, executable_fd=None):
     """Bounded combined log, process-group deadline, and reaped direct child."""
     digest = hashlib.sha256()
     size = 0
@@ -160,9 +160,11 @@ def run_command(arguments, cwd, environment, log_path, timeout, max_log_bytes):
                 # Defer CLI interruption until the returned child has an owner;
                 # do not mask signals, which would change the child's mask too.
                 with interruption.defer() if interruption is not None else nullcontext():
+                    executable = {} if executable_fd is None else {
+                        "executable": f"/proc/self/fd/{executable_fd}", "pass_fds": (executable_fd,)}
                     process = subprocess.Popen(arguments, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
                                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                               start_new_session=True)
+                                               start_new_session=True, **executable)
             except OSError as error:
                 return {"status": "launch-error", "error": str(error), "exitCode": None,
                         "logSha256": digest.hexdigest(), "logBytes": 0, "logComplete": True,

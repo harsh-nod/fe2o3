@@ -1,0 +1,799 @@
+//! Exact-roster XGMI progress inside one full currentness envelope.
+
+#![forbid(unsafe_code)]
+
+use super::xgmi_batch_diagnostic::{CallTimer, Phase};
+use super::*;
+use crate::{
+    MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1, RuntimePeerCopyBatchBackendV1,
+    RuntimePeerCopyBatchPollV1,
+};
+use fe2o3_kfd::{
+    Gfx942NativeXgmiSdmaBatchV1, Gfx942SdmaErrorV1, Gfx942XgmiBatchWaitFailureV1,
+    Gfx942XgmiCompletedCopyV1,
+};
+
+const _: () = assert!(MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1 == GFX942_SDMA_MAX_IN_FLIGHT_V1);
+
+#[cfg(test)]
+mod tests;
+
+pub(super) fn finish_native_attempt<T>(result: std::thread::Result<T>, terminal: &mut bool) -> T {
+    match result {
+        Ok(result) => result,
+        Err(_) => {
+            // Moved native authority cannot be reconstructed after unwinding.
+            // Do not format diagnostics, allocate, drop the payload or resume.
+            *terminal = true;
+            std::process::abort();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AdmissionError {
+    Invalid,
+    Busy,
+    Corrupt,
+    Capacity,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct Admission {
+    pub(super) direction: usize,
+    pub(super) published: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Selection {
+    admission: Admission,
+    shared_source: bool,
+}
+
+fn qualify_selection(selection: Selection, custody: bool) -> Result<Admission, AdmissionError> {
+    if !custody {
+        Err(AdmissionError::Corrupt)
+    } else if selection.shared_source {
+        Err(AdmissionError::Busy)
+    } else {
+        Ok(selection.admission)
+    }
+}
+
+#[cfg(test)]
+fn admit(
+    requested: &[u64],
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    ready: &[VecDeque<u64>; 2],
+    in_flight: &[Vec<u64>; 2],
+    completed: &HashMap<u64, SubmissionRecordV1>,
+) -> Result<Admission, AdmissionError> {
+    admit_with_reservation(
+        requested,
+        active,
+        ready,
+        in_flight,
+        completed,
+        Vec::try_reserve_exact,
+    )
+}
+
+#[cfg(test)]
+fn admit_with_reservation(
+    requested: &[u64],
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    ready: &[VecDeque<u64>; 2],
+    in_flight: &[Vec<u64>; 2],
+    completed: &HashMap<u64, SubmissionRecordV1>,
+    mut reserve: impl FnMut(&mut Vec<u64>, usize) -> Result<(), std::collections::TryReserveError>,
+) -> Result<Admission, AdmissionError> {
+    admit_with_sharing(
+        requested,
+        active,
+        ready,
+        in_flight,
+        completed,
+        &mut reserve,
+        |_, _, _| Ok(false),
+    )
+    .map(|selection| selection.admission)
+}
+
+fn admit_with_sharing(
+    requested: &[u64],
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    ready: &[VecDeque<u64>; 2],
+    in_flight: &[Vec<u64>; 2],
+    completed: &HashMap<u64, SubmissionRecordV1>,
+    mut reserve: impl FnMut(&mut Vec<u64>, usize) -> Result<(), std::collections::TryReserveError>,
+    shared_read: impl Fn(u64, u64, u64) -> Result<bool, xgmi_directed::OwnerError>,
+) -> Result<Selection, AdmissionError> {
+    if requested.is_empty() || requested.len() > MAX_RUNTIME_PEER_COPY_BATCH_SUBMISSIONS_V1 {
+        return Err(AdmissionError::Invalid);
+    }
+    if requested.iter().any(|id| {
+        active
+            .get(id)
+            .is_some_and(|record| record.sequence.is_some())
+    }) {
+        return Err(AdmissionError::Invalid);
+    }
+    let mut shared_source = false;
+    for (index, id) in requested.iter().enumerate() {
+        if requested[..index].contains(id) {
+            return Err(AdmissionError::Invalid);
+        }
+    }
+    // Sorted scratch indexes avoid quadratic backlog scans without changing
+    // FIFO execution order. Allocation rejection remains before native effects.
+    let mut ready_index = [Vec::new(), Vec::new()];
+    for d in 0..2 {
+        reserve(&mut ready_index[d], ready[d].len()).map_err(|_| AdmissionError::Capacity)?;
+        ready_index[d].extend(ready[d].iter().copied());
+        ready_index[d].sort_unstable();
+    }
+    // Check index integrity before classifying an unknown ID or caller subset.
+    for d in 0..2 {
+        for (index, id) in ready_index[d].iter().enumerate() {
+            let record = active.get(id).ok_or(AdmissionError::Corrupt)?;
+            if record.id != *id
+                || index > 0 && ready_index[d][index - 1] == *id
+                || !xgmi_submission_is_ready_v1(record, completed, d)
+                || completed.contains_key(id)
+            {
+                return Err(AdmissionError::Corrupt);
+            }
+        }
+        for (index, id) in in_flight[d].iter().enumerate() {
+            let record = active.get(id).ok_or(AdmissionError::Corrupt)?;
+            if record.id != *id
+                || record.direction != d
+                || record.ticket.is_none()
+                || index > 0 && in_flight[d][index - 1] >= *id
+                || completed.contains_key(id)
+                || record.dependencies.iter().any(|dependency| {
+                    completed
+                        .get(dependency)
+                        .is_none_or(|r| r.status != BackendPollV1::Succeeded)
+                })
+            {
+                return Err(AdmissionError::Corrupt);
+            }
+        }
+    }
+    for (id, record) in active {
+        let d = record.direction;
+        if d > 1
+            || record.id != *id
+            || record.source == record.destination
+            || completed.contains_key(id)
+            || ready_index[1 - d].binary_search(id).is_ok()
+            || in_flight[1 - d].binary_search(id).is_ok()
+            || in_flight[d].binary_search(id).is_ok() != record.ticket.is_some()
+            || ready_index[d].binary_search(id).is_ok()
+                != xgmi_submission_is_ready_v1(record, completed, d)
+            || ready_index[d].binary_search(id).is_ok() != record.ready_indexed
+        {
+            return Err(AdmissionError::Corrupt);
+        }
+    }
+    if requested.iter().any(|id| !active.contains_key(id)) {
+        return Err(AdmissionError::Invalid);
+    }
+    let first = &active[&requested[0]];
+    let admission = Admission {
+        direction: first.direction,
+        published: first.ticket.is_some(),
+    };
+    let direction = admission.direction;
+    if admission.published {
+        if in_flight[direction].len() != requested.len()
+            || requested
+                .iter()
+                .any(|id| in_flight[direction].binary_search(id).is_err())
+        {
+            return Err(AdmissionError::Busy);
+        }
+    } else if !in_flight[direction].is_empty()
+        || ready[direction].len() != requested.len()
+        || requested
+            .iter()
+            .any(|id| ready_index[direction].binary_search(id).is_err())
+    {
+        return Err(AdmissionError::Busy);
+    }
+    for (index, id) in requested.iter().enumerate() {
+        let record = &active[id];
+        if record.direction != direction || record.ticket.is_some() != admission.published {
+            return Err(AdmissionError::Corrupt);
+        }
+        if admission.published {
+            if ready_index[direction].binary_search(id).is_ok() {
+                return Err(AdmissionError::Corrupt);
+            }
+        } else if !xgmi_submission_is_ready_v1(record, completed, direction) {
+            return Err(AdmissionError::Corrupt);
+        }
+        for earlier in &requested[..index] {
+            let previous = active.get(earlier).ok_or(AdmissionError::Corrupt)?;
+            if previous.stream == record.stream {
+                return Err(AdmissionError::Corrupt);
+            }
+            if [previous.source, previous.destination]
+                .iter()
+                .any(|id| *id == record.source || *id == record.destination)
+            {
+                if admission.published
+                    || previous.source != record.source
+                    || previous.destination == record.destination
+                    || !shared_read(*earlier, *id, record.source)
+                        .map_err(|_| AdmissionError::Corrupt)?
+                {
+                    return Err(AdmissionError::Corrupt);
+                }
+                shared_source = true;
+            }
+        }
+    }
+    Ok(Selection {
+        admission,
+        shared_source,
+    })
+}
+
+fn compatible_owner(
+    id: u64,
+    other: &XgmiRuntimeSubmissionV1,
+    allocation: u64,
+    shared_read: impl Fn(u64, u64, u64) -> Result<bool, xgmi_directed::OwnerError>,
+) -> bool {
+    other.id == id
+        || other.ticket.is_none()
+            && (other.id > id && other.dependencies.contains(&id)
+                || shared_read(id, other.id, allocation).unwrap_or(false))
+}
+
+fn valid_owner_roster(
+    id: u64,
+    allocation: u64,
+    owners: &[u64],
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    shared_read: impl Fn(u64, u64, u64) -> Result<bool, xgmi_directed::OwnerError>,
+) -> bool {
+    if owners.len() > MAX_RUNTIME_ALLOCATION_CUSTODY_OWNERS_V1 || !owners.contains(&id) {
+        return false;
+    }
+    owners.iter().enumerate().all(|(index, owner)| {
+        active.get(owner).is_some_and(|other| {
+            other.id == *owner
+                && !owners[..index].contains(owner)
+                && [other.source, other.destination].contains(&allocation)
+                && compatible_owner(id, other, allocation, &shared_read)
+        })
+    })
+}
+
+enum Input<R, T> {
+    Ready(Vec<R>),
+    Published(Vec<T>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct DependencyScratchCapacity;
+
+struct DependencyUseCount {
+    id: u64,
+    records: usize,
+    last_record: usize,
+}
+
+fn count_dependency_uses<'a>(
+    relevant: &mut [DependencyUseCount],
+    records: impl Iterator<Item = &'a XgmiRuntimeSubmissionV1>,
+) -> bool {
+    for (ordinal, record) in records.enumerate() {
+        for dependency in &record.dependencies {
+            let Ok(slot) = relevant.binary_search_by_key(dependency, |entry| entry.id) else {
+                continue;
+            };
+            let entry = &mut relevant[slot];
+            // Match contains-per-record semantics, including malformed duplicate
+            // edges in an unrelated record. Rows start with the MAX sentinel.
+            if entry.last_record != ordinal {
+                let Some(count) = entry.records.checked_add(1) else {
+                    return false;
+                };
+                entry.records = count;
+                entry.last_record = ordinal;
+            }
+        }
+    }
+    true
+}
+
+fn valid_dependency_indexes(
+    ids: &[u64],
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    completed: &HashMap<u64, SubmissionRecordV1>,
+    dependency_waiters: &HashMap<u64, Vec<u64>>,
+    retain_counts: &HashMap<u64, usize>,
+) -> Result<bool, DependencyScratchCapacity> {
+    valid_dependency_indexes_with_reservation(
+        ids,
+        active,
+        completed,
+        dependency_waiters,
+        retain_counts,
+        Vec::try_reserve_exact,
+    )
+}
+
+fn valid_dependency_indexes_with_reservation(
+    ids: &[u64],
+    active: &HashMap<u64, XgmiRuntimeSubmissionV1>,
+    completed: &HashMap<u64, SubmissionRecordV1>,
+    dependency_waiters: &HashMap<u64, Vec<u64>>,
+    retain_counts: &HashMap<u64, usize>,
+    mut reserve: impl FnMut(
+        &mut Vec<DependencyUseCount>,
+        usize,
+    ) -> Result<(), std::collections::TryReserveError>,
+) -> Result<bool, DependencyScratchCapacity> {
+    if ids.is_empty() {
+        return Ok(true);
+    }
+    let raw_len = ids
+        .iter()
+        .try_fold(ids.len(), |length, id| {
+            length.checked_add(active[id].dependencies.len())
+        })
+        .ok_or(DependencyScratchCapacity)?;
+    let mut relevant = Vec::new();
+    reserve(&mut relevant, raw_len).map_err(|_| DependencyScratchCapacity)?;
+    relevant.extend(
+        ids.iter()
+            .chain(ids.iter().flat_map(|id| &active[id].dependencies))
+            .map(|id| DependencyUseCount {
+                id: *id,
+                records: 0,
+                last_record: usize::MAX,
+            }),
+    );
+    relevant.sort_unstable_by_key(|entry| entry.id);
+    relevant.dedup_by_key(|entry| entry.id);
+    if !count_dependency_uses(&mut relevant, active.values()) {
+        return Ok(false);
+    }
+    let uses = |id: &u64| {
+        relevant
+            .binary_search_by_key(id, |entry| entry.id)
+            .ok()
+            .map(|slot| relevant[slot].records)
+    };
+    for id in ids {
+        let record = &active[id];
+        let waiters = dependency_waiters.get(id).map_or(&[][..], Vec::as_slice);
+        let Some(expected_waiters) = uses(id) else {
+            return Ok(false);
+        };
+        if waiters.len() != expected_waiters
+            || retain_counts.get(id).copied().unwrap_or(0) != expected_waiters
+            || waiters.iter().enumerate().any(|(index, waiter)| {
+                index > 0 && waiters[index - 1] >= *waiter
+                    || active
+                        .get(waiter)
+                        .is_none_or(|record| !record.dependencies.contains(id))
+            })
+        {
+            return Ok(false);
+        }
+        for (index, dependency) in record.dependencies.iter().enumerate() {
+            if *dependency >= *id
+                || record.dependencies[..index].contains(dependency)
+                || completed
+                    .get(dependency)
+                    .is_none_or(|record| record.status != BackendPollV1::Succeeded)
+                || dependency_waiters.contains_key(dependency)
+                || retain_counts
+                    .get(dependency)
+                    .is_none_or(|count| uses(dependency) != Some(*count))
+            {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
+enum Operation<R, T, C, E> {
+    Unpublished { error: E, requests: Vec<R> },
+    PublicationIndeterminate { error: E, tickets: Vec<T> },
+    Retained { error: E, tickets: Vec<T> },
+    Completed(Vec<C>),
+    Indeterminate { error: E, completed: Vec<C> },
+}
+
+trait Scope: Sized {
+    type Request;
+    type Ticket;
+    type Completed;
+    type Error;
+    fn submit(
+        &mut self,
+        requests: Vec<Self::Request>,
+    ) -> Result<Vec<Self::Ticket>, ScopedOperation<Self>>;
+    fn wait(
+        &mut self,
+        tickets: Vec<Self::Ticket>,
+        deadline: Instant,
+    ) -> Operation<Self::Request, Self::Ticket, Self::Completed, Self::Error>;
+    fn is_timeout(error: &Self::Error) -> bool;
+    fn finish(self, terminal: bool) -> Result<(), Self::Error>;
+}
+
+type ScopedOperation<S> = Operation<
+    <S as Scope>::Request,
+    <S as Scope>::Ticket,
+    <S as Scope>::Completed,
+    <S as Scope>::Error,
+>;
+
+#[cfg(test)]
+fn execute<S: Scope>(
+    scope: S,
+    input: Input<S::Request, S::Ticket>,
+    deadline: Instant,
+) -> (ScopedOperation<S>, Result<(), S::Error>) {
+    execute_profiled::<S, false>(scope, input, deadline, &mut CallTimer::new())
+}
+
+fn execute_profiled<S: Scope, const PROFILE: bool>(
+    mut scope: S,
+    input: Input<S::Request, S::Ticket>,
+    deadline: Instant,
+    timer: &mut CallTimer<PROFILE>,
+) -> (ScopedOperation<S>, Result<(), S::Error>) {
+    let tickets = match input {
+        Input::Ready(requests) => timer.measure(Phase::Submission, || scope.submit(requests)),
+        Input::Published(tickets) => Ok(tickets),
+    };
+    let operation = match tickets {
+        Ok(tickets) => timer.measure(Phase::Wait, || scope.wait(tickets, deadline)),
+        Err(operation) => operation,
+    };
+    let terminal = match &operation {
+        Operation::Retained { error, .. } => !S::is_timeout(error),
+        Operation::PublicationIndeterminate { .. } | Operation::Indeterminate { .. } => true,
+        Operation::Unpublished { .. } | Operation::Completed(_) => false,
+    };
+    // Custody in `operation` remains local and unobservable until full close.
+    let closing = timer.measure(Phase::Closing, || scope.finish(terminal));
+    (operation, closing)
+}
+
+impl Scope for Gfx942NativeXgmiSdmaBatchV1<'_> {
+    type Request = Gfx942XgmiSdmaCopyRequestV1;
+    type Ticket = Gfx942SdmaCopyTicketV1;
+    type Completed = Gfx942XgmiCompletedCopyV1;
+    type Error = Gfx942SdmaErrorV1;
+
+    fn submit(
+        &mut self,
+        requests: Vec<Self::Request>,
+    ) -> Result<Vec<Self::Ticket>, ScopedOperation<Self>> {
+        self.submit_batch(requests)
+            .map_err(|failure| match failure {
+                Gfx942XgmiBatchSubmissionFailureV1::Recoverable { error, requests } => {
+                    Operation::Unpublished { error, requests }
+                }
+                Gfx942XgmiBatchSubmissionFailureV1::Retained { error, tickets } => {
+                    Operation::PublicationIndeterminate { error, tickets }
+                }
+            })
+    }
+
+    fn wait(&mut self, tickets: Vec<Self::Ticket>, deadline: Instant) -> ScopedOperation<Self> {
+        match self.wait_batch_until(tickets, deadline) {
+            Ok(completed) => Operation::Completed(completed),
+            Err(Gfx942XgmiBatchWaitFailureV1::Retained { error, tickets }) => {
+                Operation::Retained { error, tickets }
+            }
+            Err(Gfx942XgmiBatchWaitFailureV1::CompletedCurrentnessIndeterminate {
+                error,
+                completed,
+            }) => Operation::Indeterminate { error, completed },
+        }
+    }
+
+    fn is_timeout(error: &Self::Error) -> bool {
+        matches!(error, Gfx942SdmaErrorV1::Timeout)
+    }
+
+    fn finish(self, terminal: bool) -> Result<(), Self::Error> {
+        if terminal {
+            self.finish_terminal()
+        } else {
+            self.finish()
+        }
+    }
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+trait CurrentnessFinish: Scope {
+    type Detail;
+    fn finish_currentness(self, terminal: bool) -> Result<Self::Detail, Self::Error>;
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+impl CurrentnessFinish for Gfx942NativeXgmiSdmaBatchV1<'_> {
+    type Detail = fe2o3_kfd::Gfx942XgmiPairCurrentnessDiagnosticsV1;
+
+    fn finish_currentness(self, terminal: bool) -> Result<Self::Detail, Self::Error> {
+        if terminal {
+            self.finish_terminal_currentness_diagnostic_v1()
+        } else {
+            self.finish_currentness_diagnostic_v1()
+        }
+    }
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+struct CurrentnessScope<'a, S: CurrentnessFinish> {
+    inner: S,
+    closing: &'a mut Option<S::Detail>,
+}
+
+#[cfg(feature = "hardware-diagnostic")]
+impl<S: CurrentnessFinish> Scope for CurrentnessScope<'_, S> {
+    type Request = S::Request;
+    type Ticket = S::Ticket;
+    type Completed = S::Completed;
+    type Error = S::Error;
+
+    fn submit(
+        &mut self,
+        requests: Vec<Self::Request>,
+    ) -> Result<Vec<Self::Ticket>, ScopedOperation<Self>> {
+        self.inner.submit(requests)
+    }
+
+    fn wait(&mut self, tickets: Vec<Self::Ticket>, deadline: Instant) -> ScopedOperation<Self> {
+        self.inner.wait(tickets, deadline)
+    }
+
+    fn is_timeout(error: &Self::Error) -> bool {
+        S::is_timeout(error)
+    }
+
+    fn finish(self, terminal: bool) -> Result<(), Self::Error> {
+        let Self { inner, closing } = self;
+        let detail = inner.finish_currentness(terminal)?;
+        *closing = Some(detail);
+        Ok(())
+    }
+}
+
+type NativeOperation = Operation<
+    Gfx942XgmiSdmaCopyRequestV1,
+    Gfx942SdmaCopyTicketV1,
+    Gfx942XgmiCompletedCopyV1,
+    Gfx942SdmaErrorV1,
+>;
+type NativeAttempt = Result<
+    (NativeOperation, Result<(), Gfx942SdmaErrorV1>),
+    (Gfx942SdmaErrorV1, Vec<Gfx942XgmiSdmaCopyRequestV1>),
+>;
+
+fn open_and_execute<const PROFILE: bool, const CURRENTNESS: bool>(
+    queue: &mut Gfx942NativeXgmiSdmaQueueV1,
+    sessions: (&mut SharedGttMemorySessionV1, &mut SharedGttMemorySessionV1),
+    published: bool,
+    requests: Vec<Gfx942XgmiSdmaCopyRequestV1>,
+    tickets: Vec<Gfx942SdmaCopyTicketV1>,
+    deadline: Instant,
+    timer: &mut CallTimer<PROFILE>,
+) -> NativeAttempt {
+    let (source, destination) = sessions;
+    #[cfg(feature = "hardware-diagnostic")]
+    if CURRENTNESS {
+        return match timer.measure(Phase::Opening, || {
+            queue.begin_batch_currentness_diagnostic_v1(source, destination)
+        }) {
+            Ok((inner, opening)) => {
+                let mut closing = None;
+                let result = execute_profiled::<_, PROFILE>(
+                    CurrentnessScope {
+                        inner,
+                        closing: &mut closing,
+                    },
+                    if published {
+                        Input::Published(tickets)
+                    } else {
+                        Input::Ready(requests)
+                    },
+                    deadline,
+                    timer,
+                );
+                timer.currentness = [Some(opening), closing];
+                Ok(result)
+            }
+            Err(error) => Err((error, requests)),
+        };
+    }
+    match timer.measure(Phase::Opening, || queue.begin_batch(source, destination)) {
+        Ok(scope) => Ok(execute_profiled::<_, PROFILE>(
+            scope,
+            if published {
+                Input::Published(tickets)
+            } else {
+                Input::Ready(requests)
+            },
+            deadline,
+            timer,
+        )),
+        Err(error) => Err((error, requests)),
+    }
+}
+
+impl KfdNativeXgmiRuntimeBackendV1 {
+    fn progress_peer_copy_batch_profiled<const PROFILE: bool, const CURRENTNESS: bool>(
+        &mut self,
+        requested: &[u64],
+        deadline: Instant,
+        timer: &mut CallTimer<PROFILE>,
+    ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let admission_start = timer.start();
+        self.require_live()?;
+        let selection = admit_with_sharing(
+            requested,
+            &self.active,
+            &self.ready_by_direction,
+            &self.in_flight_by_direction,
+            &self.submissions,
+            Vec::try_reserve_exact,
+            |left, right, allocation| xgmi_directed::shared_read(self, left, right, allocation),
+        )
+        .map_err(|error| match error {
+            AdmissionError::Invalid => Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "invalid XGMI aggregate roster",
+            ),
+            AdmissionError::Busy => Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "XGMI aggregate requires the complete ready or in-flight roster",
+            ),
+            AdmissionError::Corrupt => self.terminal_error("XGMI aggregate index corruption"),
+            AdmissionError::Capacity => Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Capacity,
+                "XGMI aggregate ready-index storage",
+            ),
+        })?;
+        let custody_is_valid = self
+            .batch_custody_is_valid(requested, selection.admission)
+            .map_err(|_| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "XGMI aggregate dependency-index storage",
+                )
+            })?;
+        let admission =
+            qualify_selection(selection, custody_is_valid).map_err(|error| match error {
+                AdmissionError::Busy => Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Busy,
+                    "XGMI aggregate requires disjoint allocation mappings",
+                ),
+                _ => self.terminal_error("XGMI aggregate custody corruption"),
+            })?;
+        let mut ids = Vec::new();
+        let mut requests = Vec::new();
+        let mut tickets = Vec::new();
+        for reserve in [
+            ids.try_reserve_exact(requested.len()),
+            requests.try_reserve_exact(requested.len()),
+            tickets.try_reserve_exact(requested.len()),
+        ] {
+            reserve.map_err(|_| {
+                Self::rejected(
+                    KfdRuntimeBackendErrorKindV1::Capacity,
+                    "XGMI aggregate storage",
+                )
+            })?;
+        }
+        if admission.published {
+            ids.extend_from_slice(&self.in_flight_by_direction[admission.direction]);
+            tickets.extend(ids.iter().map(|id| {
+                self.active[id]
+                    .ticket
+                    .unwrap_or_else(|| std::process::abort())
+            }));
+        } else {
+            ids.extend(self.ready_by_direction[admission.direction].iter().copied());
+        }
+        if self.in_flight_by_direction[admission.direction].capacity() < ids.len() {
+            return Err(self.terminal_error("XGMI aggregate lacks reserved in-flight slots"));
+        }
+        timer.end(Phase::Admission, admission_start);
+        #[cfg(feature = "hardware-diagnostic")]
+        if let Some(recorder) = self.xgmi_diagnostic.as_mut() {
+            recorder.invalidate();
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_admitted_peer_batch::<PROFILE, CURRENTNESS>(
+                admission, ids, requests, tickets, deadline, timer,
+            )
+        }));
+        finish_native_attempt(result, &mut self.terminal)
+    }
+}
+
+impl RuntimePeerCopyBatchBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
+    fn progress_peer_copy_batch_v1(
+        &mut self,
+        requested: &[u64],
+        deadline: Instant,
+    ) -> Result<RuntimePeerCopyBatchPollV1, RuntimeBackendFailureV1<Self::Error>> {
+        #[cfg(feature = "hardware-diagnostic")]
+        if let Some(recorder) = self.xgmi_segments_diagnostic.as_mut() {
+            recorder.invalidate();
+        }
+        #[cfg(feature = "hardware-diagnostic")]
+        if self.xgmi_aggregate_diagnostic.is_some() {
+            // This lookup identifies a diagnostic candidate only. Operational
+            // admission below still validates the complete roster and custody.
+            let identity = match requested {
+                [id] => self
+                    .active
+                    .get(id)
+                    .map(|active| xgmi_batch_diagnostic::CallIdentity {
+                        direction: active.direction,
+                        submission: *id,
+                        published: active.ticket.is_some(),
+                    }),
+                _ => None,
+            };
+            let recorder = self
+                .xgmi_aggregate_diagnostic
+                .as_mut()
+                .expect("armed recorder");
+            let currentness = recorder.is_currentness();
+            let armed = match identity {
+                Some(identity) => recorder.begin(identity, requested.len()),
+                None => {
+                    recorder.invalidate();
+                    false
+                }
+            };
+            if armed {
+                let start = Instant::now();
+                let mut timer = CallTimer::<true>::new();
+                let result = if currentness {
+                    self.progress_peer_copy_batch_profiled::<true, true>(
+                        requested, deadline, &mut timer,
+                    )
+                } else {
+                    self.progress_peer_copy_batch_profiled::<true, false>(
+                        requested, deadline, &mut timer,
+                    )
+                };
+                let [opening, closing] = timer.currentness;
+                let detail = opening
+                    .zip(closing)
+                    .map(|(opening, closing)| [opening, closing]);
+                let observed = matches!(result, Ok(RuntimePeerCopyBatchPollV1::Succeeded))
+                    .then(|| timer.finish(start));
+                self.xgmi_aggregate_diagnostic
+                    .as_mut()
+                    .expect("armed recorder")
+                    .finish(identity.expect("armed identity"), observed, detail);
+                return result;
+            }
+        }
+        self.progress_peer_copy_batch_profiled::<false, false>(
+            requested,
+            deadline,
+            &mut CallTimer::<false>::new(),
+        )
+    }
+}
+
+mod custody;

@@ -191,6 +191,10 @@ impl LinuxMemoryBackend {
         self.device.model_admission()
     }
 
+    pub(super) fn retained_device_v1(&self) -> &CheckedGfx942XnackMinusDevice {
+        &self.device
+    }
+
     pub(super) fn model_aperture(&self) -> InclusiveAperture {
         self.device.observation().aperture().gpuvm()
     }
@@ -244,6 +248,16 @@ impl LinuxMemoryBackend {
         self.device
             .check_gfx942_sdma_topology_capability_currentness()?;
         Ok(())
+    }
+
+    pub(super) fn check_xgmi_pair_currentness<M: crate::currentness_diagnostic::Mode>(
+        &mut self,
+        peer: &mut Self,
+        route: crate::topology::Gfx942XgmiRouteV1,
+    ) -> Result<M::Pair, MemorySessionError> {
+        self.device
+            .check_gfx942_xgmi_pair_currentness::<M>(&mut peer.device, route)
+            .map_err(MemorySessionError::Device)
     }
 
     pub(super) fn plan_aql_queue_resources(

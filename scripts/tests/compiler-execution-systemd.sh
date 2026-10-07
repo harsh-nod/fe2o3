@@ -184,7 +184,7 @@ paired_sandbox_contract() {
       expected["TimeoutStartSec"] = "300"
       expected["TimeoutStopSec"] = "30"
       if (version == "v1") {
-        expected["CapabilityBoundingSet"] = "CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE"
+        expected["CapabilityBoundingSet"] = "CAP_CHOWN CAP_DAC_READ_SEARCH CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE"
         expected["ReadWritePaths"] = "/var/lib/fe2o3/compiler-execution /var/lib/fe2o3/external-anchor"
         expected["RestrictNamespaces"] = "yes"
         delete expected["Slice"]
@@ -216,6 +216,7 @@ paired_sandbox_contract() {
 paired_sandbox_contract < "${SERVICE}" || fail 'paired creator/subtree sandbox changed'
 paired_sandbox_contract v1 < "${V1_SERVICE}" || fail 'V1 root-only namespace custody sandbox changed'
 for replacement in \
+  'CapabilityBoundingSet=CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE' \
   'CapabilityBoundingSet=CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID' \
   'CapabilityBoundingSet=CAP_CHOWN CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE CAP_SYS_ADMIN' \
   'AmbientCapabilities=CAP_SYS_PTRACE' \

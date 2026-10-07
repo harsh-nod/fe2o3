@@ -30,7 +30,7 @@ pub(crate) struct ReferenceSourceV1<'a> {
 /// The aggregate receipt is retained, not reconstructed from an inert report.
 pub(crate) struct ConditionalReferenceRootV1 {
     input: ProductionConditionalRootInputV1,
-    _runtime: FunctionalRefinementVerusRuntimeLeaseV1,
+    _runtime: std::sync::Arc<FunctionalRefinementVerusRuntimeLeaseV1>,
     _receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
     effect_policy: ProductionRefinementStagingPolicyV2,
     proof: fe2o3_verifier::RetainedProductionConditionalFormulaV2,
@@ -308,14 +308,19 @@ fn failure(error: impl fmt::Display) -> Error {
 
 /// No source spelling selects this route. Canonical coverage plus its checked
 /// root association decides whether a conditional continuation is applicable.
-pub(crate) fn continue_reference_v1<'a>(
+pub(crate) fn continue_reference_with_runtime_v1<'a>(
     owner: &ProductionPreRankedKirOwnerV1,
     request: CompilerOwnedReferenceEffectRequestV2,
     source: ReferenceSourceV1<'a>,
     budget: &mut Budget<'_>,
+    runtime: Option<&std::sync::Arc<FunctionalRefinementVerusRuntimeLeaseV1>>,
 ) -> Result<(ReferenceRootV1, ReferenceSourceV1<'a>), Error> {
     if !has_conditional_output(owner, source.root, budget)? {
-        let (lowering, receipts) = request.prove_and_compile()?;
+        require_unconditional_cpu_bounds_v2(request.pending_cpu_bounds)?;
+        let (lowering, receipts) = request
+            .prove_and_bind_with_runtime(runtime)?
+            .into_staged()?
+            .compile()?;
         return Ok((ReferenceRootV1::Ordinary { lowering, receipts }, source));
     }
     let [binding] = source.references.as_slice() else {
@@ -323,7 +328,7 @@ pub(crate) fn continue_reference_v1<'a>(
     };
     let subjects = conditional_source_v1::subjects(binding)?;
     let timeout = request.proof_timeout_seconds;
-    let bound = request.prove_and_bind()?;
+    let bound = request.prove_and_bind_with_runtime(runtime)?;
     let site = selected_site(&bound.kernel, budget)?;
     let (staged, effect_policy) = bound.into_staged_with_policy_v2()?;
     budget.reserve_storage(POLICY_STORAGE_V2).map_err(failure)?;

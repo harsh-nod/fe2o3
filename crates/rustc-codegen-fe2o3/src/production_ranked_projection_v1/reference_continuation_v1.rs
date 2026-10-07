@@ -1,7 +1,7 @@
 //! Resolve proof requests only after projection scratch and guard scopes close.
 use super::*;
 use crate::production_reference_effect_join_v2::conditional::{
-    ReferenceRootV1 as Verification, ReferenceSourceV1, continue_reference_v1,
+    ReferenceRootV1 as Verification, ReferenceSourceV1, continue_reference_with_runtime_v1,
 };
 use crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1 as References;
 use fe2o3_kernel_ir::{
@@ -23,6 +23,15 @@ impl ProjectedReferenceRootsV1 {
         source: &RankedProjectionSourceV1<'_>,
         budget: &mut Budget<'_>,
     ) -> Result<Box<[ProductionRankedRootProgramV1]>, ProductionRankedProjectionErrorV1> {
+        self.finish_with_runtime(source, budget, None)
+    }
+
+    pub(super) fn finish_with_runtime(
+        self,
+        source: &RankedProjectionSourceV1<'_>,
+        budget: &mut Budget<'_>,
+        runtime: Option<&std::sync::Arc<fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>>,
+    ) -> Result<Box<[ProductionRankedRootProgramV1]>, ProductionRankedProjectionErrorV1> {
         source.require_floor(budget)?;
         resources::owned(
             budget,
@@ -42,7 +51,7 @@ impl ProjectedReferenceRootsV1 {
                     .into_iter()
                     .zip(self.references.iter())
                     .map(|(root, references)| {
-                        let root = finish_root(root, references, source, budget)?;
+                        let root = finish_root(root, references, source, budget, runtime)?;
                         let storage = match &root.verification {
                             Verification::Conditional(root) => {
                                 root.retained_storage_v1().map_err(resource)?
@@ -71,6 +80,7 @@ fn finish_root(
     references: &References,
     source: &RankedProjectionSourceV1<'_>,
     budget: &mut Budget<'_>,
+    runtime: Option<&std::sync::Arc<fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>>,
 ) -> Result<ProductionRankedRootProgramV1, ProductionRankedProjectionErrorV1> {
     let semantic = source.semantic_ssa().source_semantic();
     let body = semantic
@@ -81,7 +91,7 @@ fn finish_root(
         .body();
     root.verification = match root.verification {
         Verification::Pending(request) => {
-            let (verification, returned) = continue_reference_v1(
+            let (verification, returned) = continue_reference_with_runtime_v1(
                 source.owner(),
                 request,
                 ReferenceSourceV1 {
@@ -93,6 +103,7 @@ fn finish_root(
                     ranked_ir: root.ranked_ir,
                 },
                 budget,
+                runtime,
             )
             .map_err(|error| {
                 ProductionRankedProjectionErrorV1::ReferenceEffectJoin(error)

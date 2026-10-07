@@ -18,9 +18,16 @@ use crate::{
     GeneratedKfdPackingObservationV1, GeneratedKfdPrepareError, RecoveredWorkerV3AdmissionErrorV1,
 };
 
-const DIFFERENTIAL_BINDING_DOMAIN_V1: &[u8] = b"FE2O3/HOST/GENERATED-KFD-DIFFERENTIAL-BINDING/V1\0";
-const APPLICATION_EXECUTION_BINDING_DOMAIN_V1: &[u8] =
-    b"FE2O3/HOST/WORKER-V3-APPLICATION-EXECUTION-BINDING/V1\0";
+#[path = "generated_runtime_invocation.rs"]
+mod generated_runtime_invocation;
+pub use generated_runtime_invocation::{
+    GeneratedWorkerV3ContextInvocationErrorV1, GeneratedWorkerV3ContextInvocationV1,
+    GeneratedWorkerV3RuntimeInvocationErrorV1, GeneratedWorkerV3RuntimeInvocationV1,
+};
+
+const DIFFERENTIAL_BINDING_DOMAIN_V2: &[u8] = b"FE2O3/HOST/GENERATED-KFD-DIFFERENTIAL-BINDING/V2\0";
+const APPLICATION_EXECUTION_BINDING_DOMAIN_V2: &[u8] =
+    b"FE2O3/HOST/WORKER-V3-APPLICATION-EXECUTION-BINDING/V2\0";
 const DEVICE_TOPOLOGY_BINDING_DOMAIN_V1: &[u8] = b"FE2O3/HOST/DIRECT-KFD-DEVICE-TOPOLOGY/V1\0";
 
 /// Stable schema for the generated-host/direct-KFD observation boundary.
@@ -176,6 +183,7 @@ impl<K: CompilerGeneratedKernelExpectationV1> GeneratedWorkerV3KfdInvocation<'_,
 /// Exact pre-dispatch identity axes retained from generated packing and protected Worker V3.
 ///
 /// This value is descriptive and grants no load, launch, compiler, proof, or parity authority.
+/// Its identity uses the V2 hash domain, including the canonical KIR version even for V8 inputs.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct GeneratedWorkerV3KfdDifferentialBindingV1 {
     identity: [u8; 32],
@@ -190,8 +198,9 @@ pub struct GeneratedWorkerV3KfdDifferentialBindingV1 {
     compiler_execution_subject_identity: [u8; 32],
     compiler_execution_receipt_identity: [u8; 32],
     finalizer_derivation_identity: [u8; 32],
-    production_kir_v8_sha256: [u8; 32],
-    production_kir_v8_bytes: u64,
+    production_kir_version: u16,
+    production_kir_sha256: [u8; 32],
+    production_kir_bytes: u64,
     finalized_hsaco_sha256: [u8; 32],
     finalized_hsaco_bytes: u64,
     target: String,
@@ -241,11 +250,15 @@ impl GeneratedWorkerV3KfdDifferentialBindingV1 {
     pub const fn finalizer_derivation_identity(&self) -> &[u8; 32] {
         &self.finalizer_derivation_identity
     }
-    pub const fn production_kir_v8_sha256(&self) -> &[u8; 32] {
-        &self.production_kir_v8_sha256
+    pub const fn production_kir_version(&self) -> u16 {
+        self.production_kir_version
     }
-    pub const fn production_kir_v8_bytes(&self) -> u64 {
-        self.production_kir_v8_bytes
+    /// Returns the version-domain-separated canonical KIR digest, not raw SHA-256 of its bytes.
+    pub const fn production_kir_sha256(&self) -> &[u8; 32] {
+        &self.production_kir_sha256
+    }
+    pub const fn production_kir_bytes(&self) -> u64 {
+        self.production_kir_bytes
     }
     pub const fn finalized_hsaco_sha256(&self) -> &[u8; 32] {
         &self.finalized_hsaco_sha256
@@ -501,8 +514,9 @@ struct WorkerV3ApplicationExecutionCoordinatesV1 {
     finalizer_derivation_identity: [u8; 32],
     proof_binding_sha256: [u8; 32],
     proof_binding_bytes: u64,
-    production_kir_v8_sha256: [u8; 32],
-    production_kir_v8_bytes: u64,
+    production_kir_version: u16,
+    production_kir_sha256: [u8; 32],
+    production_kir_bytes: u64,
     target_binding_sha256: [u8; 32],
     target_binding_bytes: u64,
     data_layout_sha256: [u8; 32],
@@ -584,11 +598,46 @@ struct GeneratedWorkerV3KfdExecutionAuthority<K> {
     device_unique_id: u64,
 }
 
+impl<K: CompilerGeneratedKernelExpectationV1>
+    crate::generated_runtime_carrier::GeneratedRuntimeAuthorityV1
+    for GeneratedWorkerV3KfdExecutionAuthority<K>
+{
+    fn artifact_bytes(&self) -> &[u8] {
+        self.binding
+            .authenticated
+            .current_publication_token()
+            .exact_artifact_bytes()
+    }
+}
+
+impl<K> GeneratedWorkerV3KfdExecutionAuthority<K> {
+    fn from_application(
+        authenticated: AuthenticatedWorkerV3ExecutableV1<K>,
+        packing: GeneratedKfdPackingObservationV1,
+        application: WorkerV3ApplicationExecutionAdmissionV1,
+    ) -> Self {
+        Self {
+            dispatch_contract_sha256: application.coordinates.dispatch_contract_sha256,
+            device_unique_id: application.coordinates.device_unique_id,
+            binding: Box::new(WorkerV3ApplicationExecutionBindingV1 {
+                authenticated,
+                semantic_machine_refinement: application.refinement,
+                coordinates: application.coordinates,
+                packing,
+            }),
+        }
+    }
+}
+
 // SAFETY: this private implementation is constructed only by
-// `prepare_generated_kfd_invocation`. That transition retains the exact authenticated Worker V3
-// decision and its current-publication token, admits only compiler-generated argument capabilities,
-// prepares the runtime request from the token's exact HSACO bytes, validates the selected kernel
-// and artifact identities, and retains the same checked KFD device whose identity is named here.
+// `prepare_generated_kfd_invocation` or the shared `prepare_context_payload` used by
+// `prepare_generated_runtime_invocation` and `prepare_generated_context_invocation`,
+// through `from_application` after consuming application admission. All retain the exact
+// Worker V3 decision/current-publication token, use compiler-generated arguments and the
+// token's exact HSACO, and validate selected-kernel/artifact identity. Standalone invocations
+// own the named checked device. Context preparation retains only an inert, generation-bound
+// payload after closing currentness; later persistent publication requires its own exact
+// Context/device revalidation and request projection, not this constructor alone.
 unsafe impl<K: CompilerGeneratedKernelExpectationV1> WorkerV3Gfx942ExecutionAuthorityV1
     for GeneratedWorkerV3KfdExecutionAuthority<K>
 {
@@ -703,16 +752,11 @@ impl<K: CompilerGeneratedKernelExpectationV1> AuthenticatedWorkerV3ExecutableV1<
         let authority = match application_admission {
             Some(application) => GeneratedWorkerV3KfdInvocationAuthorityV1 {
                 custody: ProductionExecutionCustodyV1::Production(
-                    GeneratedWorkerV3KfdExecutionAuthority {
-                        binding: Box::new(WorkerV3ApplicationExecutionBindingV1 {
-                            authenticated: self,
-                            semantic_machine_refinement: application.refinement,
-                            coordinates: application.coordinates,
-                            packing,
-                        }),
-                        dispatch_contract_sha256: prepared.dispatch_contract_sha256(),
-                        device_unique_id: device.observation().unique_id(),
-                    },
+                    GeneratedWorkerV3KfdExecutionAuthority::from_application(
+                        self,
+                        packing,
+                        application,
+                    ),
                 ),
             },
             None => {
@@ -756,7 +800,7 @@ fn application_execution_admission<K: CompilerGeneratedKernelExpectationV1>(
     let proof = verification.validated_compiler_proof_inputs()?;
     let target_lineage = verification.validated_compiler_target_lineage()?;
     let proof_binding = proof.receipt_identity();
-    let production_kir = proof.kernel_ir().identity();
+    let production_kir = proof.kernel_ir();
     let target_binding = target_lineage.target_binding_receipt_identity();
     let data_layout = target_lineage.data_layout_receipt_identity();
     let semantic_to_llvm = target_lineage.semantic_to_llvm_receipt_identity();
@@ -803,8 +847,9 @@ fn application_execution_admission<K: CompilerGeneratedKernelExpectationV1>(
         finalizer_derivation_identity: *verification.finalizer_derivation().identity().as_bytes(),
         proof_binding_sha256: *proof_binding.sha256(),
         proof_binding_bytes: proof_binding.byte_len(),
-        production_kir_v8_sha256: *production_kir.digest(),
-        production_kir_v8_bytes: production_kir.canonical_length(),
+        production_kir_version: production_kir.wire_version(),
+        production_kir_sha256: *production_kir.identity_digest(),
+        production_kir_bytes: production_kir.canonical_length(),
         target_binding_sha256: target_binding.sha256(),
         target_binding_bytes: target_binding.byte_len(),
         data_layout_sha256: data_layout.sha256(),
@@ -867,7 +912,7 @@ fn application_execution_binding_identity(
     coordinates: &WorkerV3ApplicationExecutionCoordinatesV1,
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(APPLICATION_EXECUTION_BINDING_DOMAIN_V1);
+    hasher.update(APPLICATION_EXECUTION_BINDING_DOMAIN_V2);
     hasher.update(coordinates.kernel_id);
     hash_bytes(&mut hasher, coordinates.logical_name.as_bytes());
     hash_bytes(&mut hasher, coordinates.export_name.as_bytes());
@@ -902,10 +947,11 @@ fn application_execution_binding_identity(
         coordinates.proof_binding_sha256,
         coordinates.proof_binding_bytes,
     );
+    hasher.update(coordinates.production_kir_version.to_le_bytes());
     hash_identity(
         &mut hasher,
-        coordinates.production_kir_v8_sha256,
-        coordinates.production_kir_v8_bytes,
+        coordinates.production_kir_sha256,
+        coordinates.production_kir_bytes,
     );
     hash_identity(
         &mut hasher,
@@ -994,7 +1040,7 @@ fn differential_binding<K: CompilerGeneratedKernelExpectationV1>(
 ) -> Option<GeneratedWorkerV3KfdDifferentialBindingV1> {
     let verification = authenticated.verification();
     let proof = verification.validated_compiler_proof_inputs()?;
-    let production_kir = proof.kernel_ir().identity();
+    let production_kir = proof.kernel_ir();
     let compiler_subject = authenticated
         .admission()
         .compiler_execution_subject()
@@ -1016,8 +1062,9 @@ fn differential_binding<K: CompilerGeneratedKernelExpectationV1>(
         compiler_execution_subject_identity: *compiler_subject.sha256(),
         compiler_execution_receipt_identity: compiler_execution.receipt_sha256(),
         finalizer_derivation_identity: *finalizer.as_bytes(),
-        production_kir_v8_sha256: *production_kir.digest(),
-        production_kir_v8_bytes: production_kir.canonical_length(),
+        production_kir_version: production_kir.wire_version(),
+        production_kir_sha256: *production_kir.identity_digest(),
+        production_kir_bytes: production_kir.canonical_length(),
         finalized_hsaco_sha256: verification.finalized_hsaco_sha256(),
         finalized_hsaco_bytes: verification.finalized_hsaco_length(),
         target: authenticated.target().to_string(),
@@ -1035,7 +1082,7 @@ fn differential_binding<K: CompilerGeneratedKernelExpectationV1>(
 
 fn differential_binding_identity(binding: &GeneratedWorkerV3KfdDifferentialBindingV1) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(DIFFERENTIAL_BINDING_DOMAIN_V1);
+    hasher.update(DIFFERENTIAL_BINDING_DOMAIN_V2);
     hasher.update(binding.kernel_id);
     hash_bytes(&mut hasher, binding.logical_name.as_bytes());
     hash_bytes(&mut hasher, binding.export_name.as_bytes());
@@ -1047,8 +1094,9 @@ fn differential_binding_identity(binding: &GeneratedWorkerV3KfdDifferentialBindi
     hasher.update(binding.compiler_execution_subject_identity);
     hasher.update(binding.compiler_execution_receipt_identity);
     hasher.update(binding.finalizer_derivation_identity);
-    hasher.update(binding.production_kir_v8_sha256);
-    hasher.update(binding.production_kir_v8_bytes.to_le_bytes());
+    hasher.update(binding.production_kir_version.to_le_bytes());
+    hasher.update(binding.production_kir_sha256);
+    hasher.update(binding.production_kir_bytes.to_le_bytes());
     hasher.update(binding.finalized_hsaco_sha256);
     hasher.update(binding.finalized_hsaco_bytes.to_le_bytes());
     hash_bytes(&mut hasher, binding.target.as_bytes());
@@ -1108,7 +1156,8 @@ fn require_ordinary_runtime_family(
     match binding {
         fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::OrdinaryV1 => Ok(()),
         fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalNominalV4 { .. }
-        | fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalMixedV26 { .. } => {
+        | fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalMixedV26 { .. }
+        | fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::NativeConditionalFill64V1 { .. } => {
             Err(GeneratedWorkerV3KfdInvocationError::ConditionalAdmissionUnavailable)
         }
     }
@@ -1261,6 +1310,13 @@ mod tests {
             }),
             Err(super::GeneratedWorkerV3KfdInvocationError::ConditionalAdmissionUnavailable)
         ));
+        assert!(matches!(
+            super::require_ordinary_runtime_family(Binding::NativeConditionalFill64V1 {
+                contract_identity: [1; 32],
+                premise_identity: [2; 32],
+            }),
+            Err(super::GeneratedWorkerV3KfdInvocationError::ConditionalAdmissionUnavailable)
+        ));
     }
 
     fn application_coordinates_fixture() -> WorkerV3ApplicationExecutionCoordinatesV1 {
@@ -1294,8 +1350,9 @@ mod tests {
             finalizer_derivation_identity: [23; 32],
             proof_binding_sha256: [24; 32],
             proof_binding_bytes: 25,
-            production_kir_v8_sha256: [26; 32],
-            production_kir_v8_bytes: 27,
+            production_kir_version: 8,
+            production_kir_sha256: [26; 32],
+            production_kir_bytes: 27,
             target_binding_sha256: [28; 32],
             target_binding_bytes: 29,
             data_layout_sha256: [30; 32],
@@ -1326,6 +1383,51 @@ mod tests {
             device_topology_identity: [47; 32],
             packing_identity: [48; 32],
         }
+    }
+
+    #[test]
+    fn differential_identity_binds_the_exact_kir_version_digest_and_length() {
+        let baseline = GeneratedWorkerV3KfdDifferentialBindingV1 {
+            identity: [0; 32],
+            kernel_id: [1; 32],
+            logical_name: "test",
+            export_name: "test",
+            kernel_binding_identity: [2; 32],
+            generated_host_contract_identity: [3; 32],
+            direct_kfd_runtime_contract: GENERATED_WORKER_V3_DIRECT_KFD_RUNTIME_CONTRACT_V1,
+            worker_challenge_identity: [4; 32],
+            worker_lineage_identity: [5; 32],
+            compiler_execution_subject_identity: [6; 32],
+            compiler_execution_receipt_identity: [7; 32],
+            finalizer_derivation_identity: [8; 32],
+            production_kir_version: 8,
+            production_kir_sha256: [9; 32],
+            production_kir_bytes: 100,
+            finalized_hsaco_sha256: [10; 32],
+            finalized_hsaco_bytes: 4096,
+            target: "gfx942:xnack-".to_owned(),
+            dispatch_contract_sha256: [11; 32],
+            grid: [64, 1, 1],
+            workgroup: [64, 1, 1],
+            dynamic_group_segment_bytes: 0,
+            device_unique_id: 12,
+            device_topology_identity: [13; 32],
+            packing: GeneratedKfdPackingObservationV1::empty_for_test(),
+        };
+        let expected = differential_binding_identity(&baseline);
+        for axis in 0..3 {
+            let mut changed = baseline.clone();
+            match axis {
+                0 => changed.production_kir_version = 9,
+                1 => changed.production_kir_sha256[0] ^= 1,
+                2 => changed.production_kir_bytes += 1,
+                _ => unreachable!(),
+            }
+            assert_ne!(expected, differential_binding_identity(&changed));
+        }
+        assert_eq!(baseline.production_kir_version(), 8);
+        assert_eq!(baseline.production_kir_sha256(), &[9; 32]);
+        assert_eq!(baseline.production_kir_bytes(), 100);
     }
 
     #[test]
@@ -1419,8 +1521,9 @@ mod tests {
         assert_substitution_changes_identity!(finalizer_derivation_identity, [41; 32]);
         assert_substitution_changes_identity!(proof_binding_sha256, [42; 32]);
         assert_substitution_changes_identity!(proof_binding_bytes, 43);
-        assert_substitution_changes_identity!(production_kir_v8_sha256, [44; 32]);
-        assert_substitution_changes_identity!(production_kir_v8_bytes, 45);
+        assert_substitution_changes_identity!(production_kir_version, 9);
+        assert_substitution_changes_identity!(production_kir_sha256, [44; 32]);
+        assert_substitution_changes_identity!(production_kir_bytes, 45);
         assert_substitution_changes_identity!(target_binding_sha256, [46; 32]);
         assert_substitution_changes_identity!(target_binding_bytes, 47);
         assert_substitution_changes_identity!(data_layout_sha256, [48; 32]);

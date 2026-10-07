@@ -18,12 +18,19 @@ mod native;
 mod native_io;
 mod service_native;
 
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod application_observation;
+mod client_session;
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod observer_channel;
+pub use client_session::RetainedCompilerClientSessionV1;
+
 pub(crate) use client_v2::process_start_time_ticks_v2;
 
 pub use client_v2::{
     CURRENT_PROCESS_START_TIME_IO_STORAGE_V2, CURRENT_PROCESS_START_TIME_WORK_V2,
     LiveClientPidfdErrorV2, LiveClientPidfdIdentityV2, LiveClientPidfdStorageV2,
-    current_process_start_time_ticks_v2,
+    NativeClientTerminalObservationV1, current_process_start_time_ticks_v2,
 };
 pub use native::{
     ProtectedExternalAnchorServiceAdmissionV2, ProtectedExternalAnchorServiceErrorV2,
@@ -237,6 +244,35 @@ impl fmt::Debug for LiveClientPidfdIdentityV1 {
 }
 
 impl LiveClientPidfdIdentityV1 {
+    /// Checks parentage while retaining both original live pidfds and start times.
+    /// This observation grants no process, compiler or application authority.
+    #[cfg(target_arch = "x86_64")]
+    pub fn validate_parent(&self, parent: &Self) -> Result<(), ProtectedServiceAdmissionErrorV1> {
+        self.validate_liveness()?;
+        parent.validate_liveness()?;
+        let contents = read_process_stat(self.expected_client.pid)?;
+        checks::require_client_start_time(
+            parse_process_start_time_ticks(&contents, self.expected_client.pid)?,
+            self.start_time_ticks,
+        )?;
+        let close = contents
+            .iter()
+            .rposition(|byte| *byte == b')')
+            .expect("stat validated");
+        let recorded_parent = contents[close + 1..]
+            .split(u8::is_ascii_whitespace)
+            .filter(|field| !field.is_empty())
+            .nth(1);
+        if recorded_parent != Some(parent.expected_client.pid.to_string().as_bytes()) {
+            return Err(ProtectedServiceAdmissionErrorV1::new(
+                AdmissionErrorKindV1::InspectClientStartTime,
+                "retained process does not have the expected live parent",
+            ));
+        }
+        parent.validate_liveness()?;
+        self.validate_liveness()
+    }
+
     fn try_clone(&self) -> Result<Self, ProtectedServiceAdmissionErrorV1> {
         self.validate_liveness()?;
         let pidfd = rustix::io::fcntl_dupfd_cloexec(&self.pidfd, 0).map_err(|error| {
@@ -901,6 +937,10 @@ pub(crate) fn require_procfs(
 }
 
 fn inspect_process_start_time_ticks(pid: u32) -> Result<u64, ProtectedServiceAdmissionErrorV1> {
+    parse_process_start_time_ticks(&read_process_stat(pid)?, pid)
+}
+
+fn read_process_stat(pid: u32) -> Result<Vec<u8>, ProtectedServiceAdmissionErrorV1> {
     // Validate that the selected procfs mount maps the service's numeric getpid consistently
     // before trusting a numeric client entry. This remains a trusted compatible-procfs
     // precondition; the check does not prove mount-namespace provenance.
@@ -931,7 +971,7 @@ fn inspect_process_start_time_ticks(pid: u32) -> Result<u64, ProtectedServiceAdm
             "client procfs stat identity is empty or exceeds 4096 bytes",
         ));
     }
-    parse_process_start_time_ticks(&contents, pid)
+    Ok(contents)
 }
 
 /// Returns the current process's exact Linux procfs `starttime` tick field.

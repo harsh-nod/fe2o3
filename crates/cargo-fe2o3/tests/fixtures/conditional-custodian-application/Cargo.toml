@@ -1,0 +1,45 @@
+[package]
+name = "fe2o3-conditional-custodian-application"
+version = "0.1.0"
+edition = "2024"
+publish = false
+default-run = "fe2o3-conditional-custodian-application"
+
+[[bin]]
+name = "native-conditional-fill"
+path = "src/native_application.rs"
+
+[[bin]]
+name = "native-conditional-fill-roster"
+path = "src/native_roster.rs"
+
+[[bin]]
+name = "native-conditional-proof-only"
+path = "src/native_proof_only.rs"
+
+[workspace]
+
+[features]
+receipt-coexistence = ["fe2o3-runtime/hardware-qualification"]
+
+[dependencies]
+fe2o3-device = { path = "../../../../fe2o3-device" }
+
+[target.'cfg(not(target_arch = "amdgpu"))'.dependencies]
+fe2o3-host = { path = "../../../../fe2o3-host" }
+fe2o3-runtime = { path = "../../../../fe2o3-runtime" }
+fe2o3-aql = { path = "../../../../fe2o3-aql" }
+fe2o3-artifact-transaction = { path = "../../../../fe2o3-artifact-transaction" }
+fe2o3-compiler-closure-capability = { path = "../../../../fe2o3-compiler-closure-capability" }
+fe2o3-compiler-execution-client = { path = "../../../../fe2o3-compiler-execution-client" }
+fe2o3-kernel-ir = { path = "../../../../fe2o3-kernel-ir" }
+tokio = { version = "=1.47.1", default-features = false, features = ["rt", "time"] }
+
+[profile.dev]
+debug = 0
+opt-level = 1
+panic = "abort"
+
+[profile.release]
+debug = 0
+panic = "abort"

@@ -1,0 +1,371 @@
+{
+  "base": "e02b7229ab6b85c2c1697d239d6f82e96ff04d45",
+  "body_sha256": "90c6e5ff451bdeafd39c6fe120119ce435cb9df2dc2038c60b0561dd859b3e83",
+  "compiler_or_solver_executed": false,
+  "logical_candidates": {
+    "actual_domain-read-failure-cursor-reset": {
+      "after": "let actual_domain = match take($bytes, $offset, $domain.len()) {\n                Ok(value) => value,\n                Err(error) => { *$offset = 0; return Err(error); },\n            };",
+      "before": "let actual_domain = match take($bytes, $offset, $domain.len()) {\n                Ok(value) => value,\n                Err(error) => return Err(error),\n            };",
+      "body_sha256": "4e899ced2b07ded59d46e72ec59cf54c9c68fa0e31081cbd676de4aac5e8f2c2",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "domain-check-omitted": {
+      "after": "if !bytes_equal(actual_domain, $domain) && false {",
+      "before": "if !bytes_equal(actual_domain, $domain) {",
+      "body_sha256": "dad713bf6e5f78c0b1954055b6933566e5eac00f72efe09d424695daead4b3db",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "domain-equality-inverted": {
+      "after": "if bytes_equal(actual_domain, $domain) {",
+      "before": "if !bytes_equal(actual_domain, $domain) {",
+      "body_sha256": "22aba71f55a997e38fd54a21aa7451d63c71c0eb31712c4144f98ad5a98952d7",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "domain-error-substituted": {
+      "after": "return Err(DistributedPublicationContractErrorV1::WrongSchema);",
+      "before": "return Err(DistributedPublicationContractErrorV1::WrongDomain);",
+      "body_sha256": "472450b8c1ddaafd5e90c5ed2e8f65f3f744dfcd9a9cc12dd3646d76c5955183",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "domain-not-consumed": {
+      "after": "take($bytes, $offset, 0)",
+      "before": "take($bytes, $offset, $domain.len())",
+      "body_sha256": "033cfd24a12a62438da4b11125e16ad712f6a995749dd5974df8d3fb7657ec22",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "equality-empty-refused": {
+      "after": "if $left.len() != $right.len() || $left.is_empty() {",
+      "before": "if $left.len() != $right.len() {",
+      "body_sha256": "de6a3d067175a472231429898b73a24e635eb6ad31d0c71410b21424736ea8db",
+      "candidate_logical_negative": true,
+      "kind": "bytes_equal",
+      "qualified": false,
+      "selector": "*bytes_equal"
+    },
+    "equality-last-byte-ignored": {
+      "after": "while $index < $left.len() && $index != $left.len() - 1",
+      "before": "while $index < $left.len()",
+      "body_sha256": "7c2a852ac2ea5df27c754fce888ea385ee7f10bba2a136f2a4b8df07ddc124dd",
+      "candidate_logical_negative": true,
+      "kind": "bytes_equal",
+      "qualified": false,
+      "selector": "*bytes_equal"
+    },
+    "equality-matching-refused": {
+      "after": "            false",
+      "before": "            true",
+      "body_sha256": "dbabfa10a017141218e386dd24f566122ecf2152e8a69aec9258fd41c16ffce8",
+      "candidate_logical_negative": true,
+      "kind": "bytes_equal",
+      "qualified": false,
+      "selector": "*bytes_equal"
+    },
+    "equality-mismatch-accepted": {
+      "after": "if $left[$index] != $right[$index] {\n                    return true;",
+      "before": "if $left[$index] != $right[$index] {\n                    return false;",
+      "body_sha256": "b32693b76e493469a85311050f0995d81ee81001040077207b2352882ee5ed58",
+      "candidate_logical_negative": true,
+      "kind": "bytes_equal",
+      "qualified": false,
+      "selector": "*bytes_equal"
+    },
+    "equality-right-reversed": {
+      "after": "$right[$right.len() - 1 - $index]",
+      "before": "$right[$index]",
+      "body_sha256": "266cbc51aa2bc746463cbb4411d6a2568e2211dd72192790af4aef1e7f7912ee",
+      "candidate_logical_negative": true,
+      "kind": "bytes_equal",
+      "qualified": false,
+      "selector": "*bytes_equal"
+    },
+    "equality-unequal-length-accepted": {
+      "after": "if $left.len() != $right.len() {\n                return true;",
+      "before": "if $left.len() != $right.len() {\n                return false;",
+      "body_sha256": "1867d91decf06bd3857a2ed541e78400758305c92536ad7b0d8d59aa19fad097",
+      "candidate_logical_negative": true,
+      "kind": "bytes_equal",
+      "qualified": false,
+      "selector": "*bytes_equal"
+    },
+    "header-eager-four-byte-preflight": {
+      "after": "$syntax!({\n            let saved = *$offset;\n            match fixed::<4>($bytes, $offset) {\n                Ok(_) => (),\n                Err(error) => return Err(error),\n            }\n            *$offset = saved;",
+      "before": "$syntax!({",
+      "body_sha256": "1fba8ab4dd3b0ae0689060f2801633ed81258f4d06d198cd21c8eaacff1b7557",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "header-success-cursor-reset": {
+      "after": "            *$offset = 0;\n            Ok(())",
+      "before": "            Ok(())",
+      "body_sha256": "b5242ae4acbb68b212bc79cf5cd77ad5fa324b15796193739431fb36e8e78483",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "header-success-refused": {
+      "after": "            Err(DistributedPublicationContractErrorV1::WrongLength)",
+      "before": "            Ok(())",
+      "body_sha256": "983e755e10c57ad926adc9bb680f83f3a89ef3d010bf230cae76aa7a797b4a86",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "reserved-check-omitted": {
+      "after": "if (reserved[0] != 0 || reserved[1] != 0) && false {",
+      "before": "if reserved[0] != 0 || reserved[1] != 0 {",
+      "body_sha256": "0a431760dadd85e1faa72b53a2dbe5d450906eb40cfaf74404b4ebc025712569",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "reserved-error-substituted": {
+      "after": "return Err(DistributedPublicationContractErrorV1::WrongSchema);",
+      "before": "return Err(DistributedPublicationContractErrorV1::NonzeroReserved);",
+      "body_sha256": "fd2ab192722310e1243e7ec0d000a804cec7b16cfcea7affb0875bdf4e0758ce",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "reserved-first-byte-ignored": {
+      "after": "if reserved[1] != 0 {",
+      "before": "if reserved[0] != 0 || reserved[1] != 0 {",
+      "body_sha256": "bce4ded81e228678ee2aa3c097b938a7788cff4f02e7d381f265d458c11161d5",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "reserved-read-failure-cursor-reset": {
+      "after": "let reserved = match fixed::<2>($bytes, $offset) {\n                Ok(value) => value,\n                Err(error) => { *$offset = 0; return Err(error); },\n            };",
+      "before": "let reserved = match fixed::<2>($bytes, $offset) {\n                Ok(value) => value,\n                Err(error) => return Err(error),\n            };",
+      "body_sha256": "d833f517973124e3bf02a9b3479088501049c4a49deb385e8259c599ebe532a3",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "reserved-second-byte-ignored": {
+      "after": "if reserved[0] != 0 {",
+      "before": "if reserved[0] != 0 || reserved[1] != 0 {",
+      "body_sha256": "5d641a014f7105458517ad656de1a10902bac2696b6fde3de6544b436bc0ec01",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "schema-check-omitted": {
+      "after": "if u16_from_le(schema) != DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1 && false {",
+      "before": "if u16_from_le(schema) != DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1 {",
+      "body_sha256": "bc4a873af09b22ea47663f85e56ea21cded0dc8e311834a68024169066cb5a00",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "schema-error-substituted": {
+      "after": "return Err(DistributedPublicationContractErrorV1::WrongDomain);",
+      "before": "return Err(DistributedPublicationContractErrorV1::WrongSchema);",
+      "body_sha256": "3d70c7f42733ce10006fdbb5d30a350d90783cab2ca37bf4dcf1087433a1fe19",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "schema-read-failure-cursor-reset": {
+      "after": "let schema = match fixed::<2>($bytes, $offset) {\n                Ok(value) => value,\n                Err(error) => { *$offset = 0; return Err(error); },\n            };",
+      "before": "let schema = match fixed::<2>($bytes, $offset) {\n                Ok(value) => value,\n                Err(error) => return Err(error),\n            };",
+      "body_sha256": "67b9507b9e06d02384bd232524cc90b713f599811d6c58a0845185ff39f21b81",
+      "candidate_logical_negative": true,
+      "kind": "read_header",
+      "qualified": false,
+      "selector": "*read_header"
+    },
+    "u64-read-cursor-reset": {
+      "after": "{ *$offset = 0; Ok(u64_from_le(value)) }",
+      "before": "Ok(u64_from_le(value))",
+      "body_sha256": "1ebc9c2b78e3533b3b53b887d13fda682f50da8adb9c477537041a1be51259fb",
+      "candidate_logical_negative": true,
+      "kind": "read_u64",
+      "qualified": false,
+      "selector": "*read_u64"
+    },
+    "u64-read-error-substituted": {
+      "after": "Err(_) => return Err(DistributedPublicationContractErrorV1::WrongSchema),",
+      "before": "Err(error) => return Err(error),",
+      "body_sha256": "c87dadd38b3612cbc11862577dce16a292f8fb840dfa2981f47db42e0fdef95e",
+      "candidate_logical_negative": true,
+      "kind": "read_u64",
+      "qualified": false,
+      "selector": "*read_u64"
+    },
+    "u64-read-failure-cursor-reset": {
+      "after": "Err(error) => { *$offset = 0; return Err(error); },",
+      "before": "Err(error) => return Err(error),",
+      "body_sha256": "b39c60fa9d66c30e343dc4afe01a8b5b96a1feb5e4f3a286b26a07cf5a7734bd",
+      "candidate_logical_negative": true,
+      "kind": "read_u64",
+      "qualified": false,
+      "selector": "*read_u64"
+    },
+    "u64-read-reversed": {
+      "after": "Ok(u64_from_le([value[7], value[6], value[5], value[4], value[3], value[2], value[1], value[0]]))",
+      "before": "Ok(u64_from_le(value))",
+      "body_sha256": "976eda5051f312fa6e0d487369b0bc508f5690e0b88149e4f74052a72378f641",
+      "candidate_logical_negative": true,
+      "kind": "read_u64",
+      "qualified": false,
+      "selector": "*read_u64"
+    },
+    "u64-write-byte-rotation": {
+      "after": "&u64_le(($value >> 8) | ($value << 56))",
+      "before": "&u64_le($value)",
+      "body_sha256": "5e0358d0bc96e9770c8376b023fdb48581b7dc3b4210b8a8eda7f31d5cb7a532",
+      "candidate_logical_negative": true,
+      "kind": "write_u64",
+      "qualified": false,
+      "selector": "*write_u64"
+    },
+    "u64-write-omitted": {
+      "after": "let _ = (&$bytes, &$offset, $value);",
+      "before": "put($bytes, $offset, &u64_le($value));",
+      "body_sha256": "d5ab98f370c22e0c058c3799a6bdf86914c47a005addf90c6fa4e097e554cb08",
+      "candidate_logical_negative": true,
+      "kind": "write_u64",
+      "qualified": false,
+      "selector": "*write_u64"
+    },
+    "u64-write-prefix-substituted": {
+      "after": "*$offset = 0; put($bytes, $offset, &u64_le($value));",
+      "before": "put($bytes, $offset, &u64_le($value));",
+      "body_sha256": "4305a1e8b69daa283fa5d28057eebfd4d021d019b6765ef26849a461b8824acc",
+      "candidate_logical_negative": true,
+      "kind": "write_u64",
+      "qualified": false,
+      "selector": "*write_u64"
+    },
+    "write-domain-omitted": {
+      "after": "let _ = $domain;",
+      "before": "put($bytes, $offset, $domain);",
+      "body_sha256": "41a87bdbdfb235c062f989f5e6f74d1c6d66c73b9ff4a669e6f6aaa05036bb9f",
+      "candidate_logical_negative": true,
+      "kind": "write_header",
+      "qualified": false,
+      "selector": "*write_header"
+    },
+    "write-reserved-omitted": {
+      "after": "();",
+      "before": "put($bytes, $offset, &[0; 2]);",
+      "body_sha256": "9cfee072989b60806b0153a3b7eea1cbd8209cf28abfd4bc27f965c4a8146280",
+      "candidate_logical_negative": true,
+      "kind": "write_header",
+      "qualified": false,
+      "selector": "*write_header"
+    },
+    "write-reserved-substituted": {
+      "after": "put($bytes, $offset, &[0, 1]);",
+      "before": "put($bytes, $offset, &[0; 2]);",
+      "body_sha256": "f8b4edfef5c90e799a8aae80753e7c993d40aa7eb317676b00b00d224270678c",
+      "candidate_logical_negative": true,
+      "kind": "write_header",
+      "qualified": false,
+      "selector": "*write_header"
+    },
+    "write-schema-omitted": {
+      "after": "let _ = DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1;",
+      "before": "put(\n                $bytes,\n                $offset,\n                &u16_le(DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1),\n            );",
+      "body_sha256": "46c96fc111240c6326effba159586fb2a8ec71d5fa232173c23e2b095eb2251f",
+      "candidate_logical_negative": true,
+      "kind": "write_header",
+      "qualified": false,
+      "selector": "*write_header"
+    },
+    "write-schema-substituted": {
+      "after": "&u16_le(2)",
+      "before": "&u16_le(DISTRIBUTED_PUBLICATION_CONTRACT_SCHEMA_V1)",
+      "body_sha256": "3f41f9c9ebc308771f0c1166e4400002b81d5be421cd39a2995b2c57a61f44f4",
+      "candidate_logical_negative": true,
+      "kind": "write_header",
+      "qualified": false,
+      "selector": "*write_header"
+    }
+  },
+  "negative_count_qualified": 0,
+  "panic_only_candidate": {
+    "after": "let _ = &$bytes[*$offset..][..$domain.len() + 4];\n            put($bytes, $offset, $domain);",
+    "before": "put($bytes, $offset, $domain);",
+    "body_sha256": "1a31fa4cc8cf1b9267636f8ea2d3941358b545f45ffe77677df53dbdccfa9efd",
+    "kind": "write_header",
+    "logical_kill_claimed": false,
+    "name": "write-header-eager-capacity-preflight",
+    "qualified": false,
+    "tests": [
+      "distributed_publication_contract::codec_fields_tests::header_writes_match_original_partial_panics_and_canaries",
+      "distributed_publication_contract::codec_fields_tests::header_panics_preserve_each_successful_put_without_eager_preflight"
+    ]
+  },
+  "schema": 1,
+  "scope": "source-only equality/header/u64 behavior roster; frontend and real diagnostics must be discovered after a passing full field proof",
+  "unchanged_proof_inputs": {
+    "crates/fe2o3-runtime-model/src/distributed_publication_contract/classifier_body.rs": "a9523b717e47851e50163e41a9cc4ff2ec31b10e814a90521644aaaa0158f18d",
+    "crates/fe2o3-runtime-model/src/distributed_publication_contract/codec_primitives_body.rs": "222b9a154402bfad72a745ee6900fe29aead0b8f3e00db9a62d01e7498188f5c",
+    "crates/fe2o3-runtime-model/src/distributed_publication_contract/construction_body.rs": "0057a0902bd3f8731affed1f51f8ea6296135a38588828515d5fe57149ea437a",
+    "crates/fe2o3-runtime-model/src/distributed_publication_contract/declarations.rs": "39a5e23849a75df9af224b2a4193cd037b5bb39cbddc85c3de07ada299015363",
+    "crates/fe2o3-runtime-model/verus/distributed_codec_fields_v1.rs": "fbe9841c7f3e3346f3a5ce094791c2e90372b54029218d02fd9a0736bf7ca732",
+    "crates/fe2o3-runtime-model/verus/distributed_codec_primitives_v1.rs": "2fac9dd32338e9e613bcd918571f893f1a1cc18228dc39aca14bad8bf92ef9f6",
+    "crates/fe2o3-runtime-model/verus/distributed_publication_construction_v1.rs": "b0955242b7c9e8868ba917be3145451d8e26af0ddf3a49ddf7379b5155d24790",
+    "crates/fe2o3-runtime-model/verus/distributed_publication_contract_v1.rs": "57edf7747e4c86c6e73b0311e59e06b7fb2dbf276fba5988e526dfd4fcacd853"
+  },
+  "wrapper_structural_controls": {
+    "bytes_equal": {
+      "logical_kill_claimed": false,
+      "native_after": "left, left, index, []",
+      "native_before": "left, right, index, []",
+      "structural_rejection_observed": true
+    },
+    "read_header": {
+      "logical_kill_claimed": false,
+      "owner_after": "unshared::read_header",
+      "owner_before": "codec_fields::read_header",
+      "structural_rejection_observed": true
+    },
+    "read_u64": {
+      "logical_kill_claimed": false,
+      "owner_after": "unshared::read_u64",
+      "owner_before": "codec_fields::read_u64",
+      "structural_rejection_observed": true
+    },
+    "write_header": {
+      "logical_kill_claimed": false,
+      "owner_after": "unshared::write_header",
+      "owner_before": "codec_fields::write_header",
+      "structural_rejection_observed": true
+    },
+    "write_u64": {
+      "logical_kill_claimed": false,
+      "owner_after": "unshared::write_u64",
+      "owner_before": "codec_fields::write_u64",
+      "structural_rejection_observed": true
+    }
+  }
+}

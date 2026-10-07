@@ -17,6 +17,37 @@ use fe2o3_rustc_invocation::{
 use super::*;
 
 const TEST_CHILD_FD: RawFd = 711;
+
+#[test]
+fn proof_family_admission_is_one_shot_and_has_no_downgrade() {
+    let mut custody = CompilerProofRuntimeCustody::Unselected;
+    assert!(custody.runtime().is_err());
+    custody.select_native().unwrap();
+    assert!(custody.runtime().unwrap().is_none());
+    assert!(custody.select_native().is_err());
+    assert!(
+        custody
+            .select_legacy(|| panic!("native custody must not consume legacy proof slots"))
+            .is_err()
+    );
+
+    let mut custody = CompilerProofRuntimeCustody::Unselected;
+    assert!(
+        custody
+            .select_legacy(|| Err(ProtectedRustcInvocationErrorV1::ProofRuntime(
+                "missing original slots".to_owned()
+            )))
+            .is_err()
+    );
+    assert!(custody.runtime().is_err());
+    assert!(custody.revalidate().is_err());
+    assert!(custody.select_native().is_err());
+    assert!(
+        custody
+            .select_legacy(|| panic!("refused proof admission cannot retry"))
+            .is_err()
+    );
+}
 const RUSTC_PIN: [u8; 32] = [0x44; 32];
 const BACKEND_PIN: [u8; 32] = [0x66; 32];
 static FD_TEST_LOCK: Mutex<()> = Mutex::new(());

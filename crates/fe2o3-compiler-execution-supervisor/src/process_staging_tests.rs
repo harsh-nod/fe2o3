@@ -95,6 +95,53 @@ fn assert_shared_offset(source: &File, staged: &OwnedFd, offset: u64) {
 }
 
 #[test]
+fn observer_staging_keeps_both_additional_sources_and_exact_targets() {
+    let fixture = Fixture::new();
+    let sources: [File; OBSERVER_SOURCE_COUNT] = std::array::from_fn(|_| anonymous_file());
+    let staged = StagedLaunchV1::new(
+        StagedLaunchInputV1 {
+            sources: &sources,
+            ..fixture.input()
+        },
+        &fixture.profile_ready.1,
+        &fixture.gate.0,
+        &fixture.exec_status.1,
+    )
+    .unwrap();
+    assert_eq!(staged.descriptors().len(), MAX_DESCRIPTOR_COUNT);
+    for (index, (source, descriptor)) in
+        sources.iter().zip(staged.descriptors().skip(2)).enumerate()
+    {
+        assert_eq!(descriptor.target, PREEXEC_SOURCE_FD_BASE + index as i32);
+        assert_duplicate(source, &descriptor.source);
+    }
+}
+
+#[test]
+fn invalid_source_counts_reject_before_duplication() {
+    let fixture = Fixture::new();
+    let sources: [File; OBSERVER_SOURCE_COUNT + 1] = std::array::from_fn(|_| anonymous_file());
+    for count in [0, 3, 11, 13, 15] {
+        let result = StagedLaunchV1::new_with_duplicate(
+            StagedLaunchInputV1 {
+                sources: &sources[..count],
+                ..fixture.input()
+            },
+            &fixture.profile_ready.1,
+            &fixture.gate.0,
+            &fixture.exec_status.1,
+            |_, _| panic!("invalid source count must not duplicate"),
+        );
+        assert!(matches!(
+            result,
+            Err(StagedLaunchErrorV1::InvalidProcessState(
+                "invalid staged source count"
+            ))
+        ));
+    }
+}
+
+#[test]
 fn fixed_targets_stdio_and_duplicates_preserve_the_child_contract() {
     let mut fixture = Fixture::new();
     let occupied = fcntl_dupfd_cloexec(&fixture.launcher, STAGED_DESCRIPTOR_FLOOR).unwrap();
@@ -103,17 +150,13 @@ fn fixed_targets_stdio_and_duplicates_preserve_the_child_contract() {
         .into();
     let staged = fixture.stage();
 
-    assert_eq!(staged.descriptors.len(), DESCRIPTOR_COUNT);
-    assert_eq!(staged.descriptors[0].target, 198);
-    assert_eq!(staged.descriptors[1].target, 199);
-    assert_duplicate(&fixture.manifest, &staged.descriptors[0].source);
-    assert_duplicate(&fixture.issuer, &staged.descriptors[1].source);
-    for (index, (source, descriptor)) in fixture
-        .sources
-        .iter()
-        .zip(&staged.descriptors[2..])
-        .enumerate()
-    {
+    let descriptors: Vec<_> = staged.descriptors().collect();
+    assert_eq!(descriptors.len(), DESCRIPTOR_COUNT);
+    assert_eq!(descriptors[0].target, 198);
+    assert_eq!(descriptors[1].target, 199);
+    assert_duplicate(&fixture.manifest, &descriptors[0].source);
+    assert_duplicate(&fixture.issuer, &descriptors[1].source);
+    for (index, (source, descriptor)) in fixture.sources.iter().zip(&descriptors[2..]).enumerate() {
         assert_eq!(descriptor.target, 200 + index as i32);
         assert_duplicate(source, &descriptor.source);
         assert_shared_offset(source, &descriptor.source, index as u64 + 10);
@@ -121,9 +164,9 @@ fn fixed_targets_stdio_and_duplicates_preserve_the_child_contract() {
     assert_eq!(
         staged.stdio_sources,
         [
-            staged.descriptors[2].source.as_raw_fd(),
-            staged.descriptors[3].source.as_raw_fd(),
-            staged.descriptors[4].source.as_raw_fd(),
+            descriptors[2].source.as_raw_fd(),
+            descriptors[3].source.as_raw_fd(),
+            descriptors[4].source.as_raw_fd(),
         ],
     );
     assert_duplicate(&fixture.launcher, &staged.launcher);
@@ -131,12 +174,12 @@ fn fixed_targets_stdio_and_duplicates_preserve_the_child_contract() {
     assert_duplicate(&fixture.gate.0, &staged.gate_reader);
     assert_duplicate(&fixture.exec_status.1, &staged.exec_status_writer);
     assert_shared_offset(&fixture.launcher, &staged.launcher, 1);
-    assert_shared_offset(&fixture.manifest, &staged.descriptors[0].source, 2);
-    assert_shared_offset(&fixture.issuer, &staged.descriptors[1].source, 3);
+    assert_shared_offset(&fixture.manifest, &descriptors[0].source, 2);
+    assert_shared_offset(&fixture.issuer, &descriptors[1].source, 3);
 
     let mut previous = 215;
     for descriptor in std::iter::once(&staged.launcher)
-        .chain(staged.descriptors.iter().map(|entry| &entry.source))
+        .chain(staged.descriptors().map(|entry| &entry.source))
         .chain([
             &staged.profile_ready_writer,
             &staged.gate_reader,
@@ -148,7 +191,7 @@ fn fixed_targets_stdio_and_duplicates_preserve_the_child_contract() {
         assert!(raw > previous, "staging must be strictly increasing");
         assert_ne!(raw, occupied.as_raw_fd());
         assert_ne!(raw, fixture.sources[7].as_raw_fd());
-        assert!(staged.descriptors.iter().all(|entry| raw != entry.target));
+        assert!(staged.descriptors().all(|entry| raw != entry.target));
         previous = raw;
     }
     assert_duplicate(&fixture.launcher, &occupied);

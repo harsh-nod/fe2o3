@@ -176,6 +176,17 @@ pub(crate) fn open_retained_generated_verus_runtime_bounded_v1(
     })
 }
 
+/// Identical bounded closure admission, selecting only the existing closed-fill
+/// process profile. No manifest, flags, solver census or limits are expanded.
+pub(crate) fn open_retained_closed_conditional_fill_runtime_bounded_v1(
+    root: &Path,
+    budget: &mut Budget<'_>,
+) -> Result<(Runtime, RetainedFunctionalRefinementRuntimeStorageV1)> {
+    let (mut runtime, storage) = open_retained_generated_verus_runtime_bounded_v1(root, budget)?;
+    runtime.policy = super::GeneratedProofProcessPolicyV2::ClosedConditionalFillV1;
+    Ok((runtime, storage))
+}
+
 impl RuntimeAccountV1 {
     fn bind(
         retained: &linux::RetainedRuntimeClosureV2,

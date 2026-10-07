@@ -1,0 +1,32 @@
+[Unit]
+Description=fe2o3 independent keyless application proof manager
+Before=fe2o3-compiler-execution.service
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/fe2o3/fe2o3-proof-manager
+User=root
+Group=root
+RuntimeDirectory=fe2o3-proof-custodian
+RuntimeDirectoryMode=0700
+UMask=0077
+LimitCORE=0
+TasksMax=256
+Delegate=yes
+KillMode=control-group
+TimeoutStopSec=30
+Restart=no
+
+# This parent must have no inherited seccomp filter or securebits. The fixed
+# child establishes its own closed non-root proof profile before opening inputs.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_KILL CAP_SETGID CAP_SETPCAP CAP_SETUID CAP_SYS_PTRACE
+AmbientCapabilities=
+NoNewPrivileges=no
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/run/fe2o3-proof-custodian
+InaccessiblePaths=-/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v1 -/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v1 -/etc/fe2o3/compiler-execution/issuer-signing-key-seed-v3 -/etc/fe2o3/compiler-execution/anchor-signing-key-seed-v3
+
+[Install]
+WantedBy=multi-user.target

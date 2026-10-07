@@ -51,9 +51,11 @@ const CORRESPONDENCE_POLICY_V1: u16 = 1;
 const RANKED_ROSTER_IDENTITY_DOMAIN_V1: &[u8] =
     b"FE2O3/PRODUCTION-RANKED-KERNEL-ROSTER-IDENTITY/V1\0";
 
-/// Move-only ownership of exact canonical neutral Kernel IR accepted for a multi-root proof.
+/// Move-only ownership of exact canonical neutral Kernel IR.
+///
+/// Each proof-input validator separately restricts which versions its contract accepts.
 #[derive(Debug)]
-pub enum ValidatedCompilerMultiRootKernelIrV1 {
+pub enum ValidatedCompilerKernelIrV1 {
     /// Exact canonical Kernel IR V8.
     V8(VerifiedCanonicalKernelIrV8),
     /// Exact canonical Kernel IR V9.
@@ -62,7 +64,35 @@ pub enum ValidatedCompilerMultiRootKernelIrV1 {
     V11(VerifiedCanonicalKernelIrV11),
 }
 
-impl ValidatedCompilerMultiRootKernelIrV1 {
+/// Compatibility name for the versioned owner retained by multi-root proofs.
+pub use ValidatedCompilerKernelIrV1 as ValidatedCompilerMultiRootKernelIrV1;
+
+impl ValidatedCompilerKernelIrV1 {
+    /// Returns the exact V8 owner, without projecting a different version into V8.
+    pub const fn as_v8(&self) -> Option<&VerifiedCanonicalKernelIrV8> {
+        match self {
+            Self::V8(owner) => Some(owner),
+            _ => None,
+        }
+    }
+
+    /// Returns the exact V9 owner, without reserializing another version.
+    pub const fn as_v9(&self) -> Option<&VerifiedCanonicalKernelIrV9> {
+        match self {
+            Self::V9(owner) => Some(owner),
+            _ => None,
+        }
+    }
+
+    /// Returns the canonical wire version as its numeric tag.
+    pub const fn wire_version(&self) -> u16 {
+        match self {
+            Self::V8(_) => 8,
+            Self::V9(_) => 9,
+            Self::V11(_) => 11,
+        }
+    }
+
     /// Returns the exact retained canonical bytes.
     pub fn canonical_bytes(&self) -> &[u8] {
         match self {

@@ -24,6 +24,15 @@ use fe2o3_kfd_uapi::{
 use rustix::ioctl::{Opcode, Setter, Updater};
 use rustix::mm::{Advice, MapFlags, MprotectFlags, ProtFlags};
 
+#[cfg(test)]
+pub(crate) mod doorbell_release_tests;
+mod teardown;
+pub(crate) use teardown::LinuxPrimaryTeardownCustodyV1;
+
+#[cfg(test)]
+#[path = "queue_linux/primary_fixture.rs"]
+pub(crate) mod primary_fixture;
+
 const CREATE_QUEUE_OPCODE: Opcode = AMDKFD_IOC_CREATE_QUEUE as Opcode;
 const DESTROY_QUEUE_OPCODE: Opcode = AMDKFD_IOC_DESTROY_QUEUE as Opcode;
 const CREATE_EVENT_OPCODE: Opcode = AMDKFD_IOC_CREATE_EVENT as Opcode;
@@ -113,6 +122,89 @@ pub(crate) fn permanently_poison_process_global_kfd_runtime_gate_v1() {
     }
 }
 
+struct RuntimeGateTerminalCreationArmV1<'a> {
+    gate: &'a Mutex<ProcessGlobalKfdRuntimeGateV1>,
+    finished: bool,
+}
+
+impl RuntimeGateTerminalCreationArmV1<'_> {
+    fn finish_checked(&mut self, opener_pid: u32) -> Result<(), LinuxDoorbellErrorV1> {
+        finish_runtime_gate_creation_checked_v1(self.gate, &mut self.finished, opener_pid)
+    }
+
+    fn disarm(mut self) {
+        finish_runtime_gate_creation_arm(self.gate, true);
+        self.finished = true;
+    }
+}
+
+fn finish_runtime_gate_creation_checked_v1(
+    gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>,
+    finished: &mut bool,
+    opener_pid: u32,
+) -> Result<(), LinuxDoorbellErrorV1> {
+    let mut gate = lock_runtime_gate_v1(gate);
+    let enabled_here = matches!(gate.runtime,
+        ProcessKfdRuntimeStateV1::Enabled { opener_pid: owner, leases }
+            if owner == opener_pid && leases != 0);
+    if *finished
+        || !gate.creation_in_flight
+        || gate.permanently_poisoned
+        || gate.teardown_arms != 0
+        || !enabled_here
+    {
+        gate.poison();
+        return Err(LinuxDoorbellErrorV1::Runtime(
+            "creation finalization unavailable",
+        ));
+    }
+    gate.finish_creation_arm(true);
+    *finished = true;
+    Ok(())
+}
+
+impl Drop for RuntimeGateTerminalCreationArmV1<'_> {
+    fn drop(&mut self) {
+        if !self.finished {
+            finish_runtime_gate_creation_arm(self.gate, false);
+        }
+    }
+}
+
+fn arm_runtime_gate_for_terminal_creation(
+    gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>,
+) -> Result<RuntimeGateTerminalCreationArmV1<'_>, LinuxDoorbellErrorV1> {
+    lock_runtime_gate_v1(gate).arm_creation()?;
+    Ok(RuntimeGateTerminalCreationArmV1 {
+        gate,
+        finished: false,
+    })
+}
+
+fn finish_runtime_gate_creation_arm(gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>, confirmed: bool) {
+    lock_runtime_gate_v1(gate).finish_creation_arm(confirmed);
+}
+
+/// Poisons the process-global gate unless one queue-creation attempt reaches
+/// a fully validated live owner and explicitly disarms the guard.
+pub(crate) struct ProcessGlobalKfdRuntimeCreationArmV1(RuntimeGateTerminalCreationArmV1<'static>);
+
+impl ProcessGlobalKfdRuntimeCreationArmV1 {
+    pub(crate) fn finish_checked(&mut self, opener_pid: u32) -> Result<(), LinuxDoorbellErrorV1> {
+        self.0.finish_checked(opener_pid)
+    }
+
+    pub(crate) fn disarm(self) {
+        self.0.disarm();
+    }
+}
+
+pub(crate) fn arm_process_global_kfd_runtime_gate_for_creation_v1()
+-> Result<ProcessGlobalKfdRuntimeCreationArmV1, LinuxDoorbellErrorV1> {
+    arm_runtime_gate_for_terminal_creation(&KFD_RUNTIME_GATE)
+        .map(ProcessGlobalKfdRuntimeCreationArmV1)
+}
+
 fn lock_runtime_gate_v1(
     gate: &Mutex<ProcessGlobalKfdRuntimeGateV1>,
 ) -> MutexGuard<'_, ProcessGlobalKfdRuntimeGateV1> {
@@ -146,6 +238,7 @@ enum ProcessKfdRuntimeStateV1 {
 struct ProcessGlobalKfdRuntimeGateV1 {
     runtime: ProcessKfdRuntimeStateV1,
     teardown_arms: usize,
+    creation_in_flight: bool,
     permanently_poisoned: bool,
     #[cfg(any(test, feature = "engineering-gfx950"))]
     next_debug_reservation: u64,
@@ -156,6 +249,7 @@ impl ProcessGlobalKfdRuntimeGateV1 {
         Self {
             runtime: ProcessKfdRuntimeStateV1::Disabled,
             teardown_arms: 0,
+            creation_in_flight: false,
             permanently_poisoned: false,
             #[cfg(any(test, feature = "engineering-gfx950"))]
             next_debug_reservation: 1,
@@ -163,16 +257,40 @@ impl ProcessGlobalKfdRuntimeGateV1 {
     }
 
     fn admit_runtime(&mut self, opener_pid: u32) -> Result<bool, LinuxDoorbellErrorV1> {
-        if self.is_blocked() {
+        if self.permanently_poisoned {
             return Err(LinuxDoorbellErrorV1::Runtime(
                 "process-global gate poisoned",
             ));
+        }
+        if self.teardown_arms != 0 || self.creation_in_flight {
+            return Err(LinuxDoorbellErrorV1::Runtime("process-global gate blocked"));
         }
         self.runtime.join_enabled(opener_pid)
     }
 
     const fn is_blocked(&self) -> bool {
-        self.teardown_arms != 0 || self.permanently_poisoned
+        self.teardown_arms != 0 || self.creation_in_flight || self.permanently_poisoned
+    }
+
+    fn arm_creation(&mut self) -> Result<(), LinuxDoorbellErrorV1> {
+        if self.is_blocked() {
+            return Err(LinuxDoorbellErrorV1::Runtime(
+                "process-global creation gate unavailable",
+            ));
+        }
+        self.creation_in_flight = true;
+        Ok(())
+    }
+
+    fn finish_creation_arm(&mut self, confirmed: bool) {
+        if !self.creation_in_flight {
+            self.poison();
+            return;
+        }
+        self.creation_in_flight = false;
+        if !confirmed {
+            self.poison();
+        }
     }
 
     fn arm_teardown(&mut self) -> bool {
@@ -987,6 +1105,7 @@ pub(crate) struct LinuxCwsrShadowPagesV1 {
 
 pub(crate) struct LinuxUnpublishedCwsrShadowPagesV1 {
     shadows: Option<LinuxCwsrShadowPagesV1>,
+    terminal_payload_released: bool,
 }
 
 pub(crate) struct LinuxCwsrShadowsAfterEventDestroyedV1 {
@@ -1125,6 +1244,7 @@ impl LinuxCwsrShadowPagesV1 {
         };
         admit_installed_cwsr_shadows(owner).map(|shadows| LinuxUnpublishedCwsrShadowPagesV1 {
             shadows: Some(shadows),
+            terminal_payload_released: false,
         })
     }
 
@@ -1358,20 +1478,43 @@ impl LinuxCwsrShadowsAfterEventDestroyedV1 {
 
 impl LinuxUnpublishedCwsrShadowPagesV1 {
     pub(crate) fn shadows(&self) -> &LinuxCwsrShadowPagesV1 {
+        assert!(
+            !self.terminal_payload_released,
+            "terminal unpublished CWSR custody"
+        );
         self.shadows
             .as_ref()
             .expect("unpublished CWSR shadow custody is armed")
     }
 
     pub(crate) fn publish_for_native_queue_creation(mut self) -> LinuxCwsrShadowPagesV1 {
+        assert!(
+            !self.terminal_payload_released,
+            "terminal unpublished CWSR custody"
+        );
         self.shadows
             .take()
             .expect("unpublished CWSR shadow custody is armed")
+    }
+
+    pub(crate) fn cleanup_payload_for_terminal_retention(&mut self) {
+        if self.terminal_payload_released {
+            return;
+        }
+        let shadows = self.shadows.as_mut().expect("unpublished CWSR custody");
+        if shadows.release_payload_page().is_err() {
+            std::process::abort();
+        }
+        shadows.active = false;
+        self.terminal_payload_released = true;
     }
 }
 
 impl Drop for LinuxUnpublishedCwsrShadowPagesV1 {
     fn drop(&mut self) {
+        if self.terminal_payload_released {
+            return;
+        }
         let Some(mut shadows) = self.shadows.take() else {
             return;
         };
@@ -1546,6 +1689,13 @@ pub(super) struct LinuxDoorbellSliceV1 {
     plan: DoorbellMmapPlanV1,
     opener_pid: u32,
     active: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct LinuxDoorbellReleaseProgressV1 {
+    pub(crate) started: bool,
+    pub(crate) attempted: bool,
+    pub(crate) result: Option<Result<(), rustix::io::Errno>>,
 }
 
 impl LinuxDoorbellSliceV1 {
@@ -1727,6 +1877,10 @@ impl LinuxDoorbellSliceV1 {
     }
 
     pub(super) fn release(mut self) -> Result<(), LinuxDoorbellErrorV1> {
+        self.release_retaining_v1(&mut LinuxDoorbellReleaseProgressV1::default())
+    }
+
+    pub(crate) fn validate_release_v1(&self) -> Result<(), LinuxDoorbellErrorV1> {
         if self.opener_pid != std::process::id() {
             return Err(LinuxDoorbellErrorV1::ProcessChanged);
         }
@@ -1735,16 +1889,43 @@ impl LinuxDoorbellSliceV1 {
                 "doorbell release state",
             ));
         }
-        // SAFETY: the exact mapping remains linearly owned and no MMIO pointer
-        // or reference can escape the capability.
-        unsafe { rustix::mm::munmap(self.address.as_ptr(), self.plan.slice_bytes) }.map_err(
-            |source| LinuxDoorbellErrorV1::Syscall {
-                operation: "munmap complete KFD doorbell slice",
-                source,
-            },
-        )?;
+        Ok(())
+    }
+
+    pub(crate) fn release_retaining_v1(
+        &mut self,
+        progress: &mut LinuxDoorbellReleaseProgressV1,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        self.release_retaining_with_v1(progress, Self::unmap_owned_v1)
+    }
+
+    fn release_retaining_with_v1(
+        &mut self,
+        progress: &mut LinuxDoorbellReleaseProgressV1,
+        unmap: impl FnOnce(&Self) -> Result<(), rustix::io::Errno>,
+    ) -> Result<(), LinuxDoorbellErrorV1> {
+        if progress.started {
+            return Err(LinuxDoorbellErrorV1::InvalidObservation(
+                "doorbell release is one-shot",
+            ));
+        }
+        progress.started = true;
+        self.validate_release_v1()?;
+        progress.attempted = true;
+        let result = unmap(self);
+        progress.result = Some(result);
+        result.map_err(|source| LinuxDoorbellErrorV1::Syscall {
+            operation: "munmap complete KFD doorbell slice",
+            source,
+        })?;
         self.active = false;
         Ok(())
+    }
+
+    fn unmap_owned_v1(&self) -> Result<(), rustix::io::Errno> {
+        // SAFETY: the exact mapping remains linearly owned and no MMIO pointer
+        // or reference can escape the capability.
+        unsafe { rustix::mm::munmap(self.address.as_ptr(), self.plan.slice_bytes) }
     }
 
     #[cfg(feature = "live-validation")]
@@ -1860,484 +2041,5 @@ pub fn destroy_queue(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::queue::submit::{
-        GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1, GFX942_CWSR_TOTAL_BYTES_V1, GFX942_CWSR_XCC_COUNT_V1,
-    };
-    use std::os::fd::AsFd;
-
-    type DiagnosticShadowFixture = (
-        LinuxCwsrShadowPagesV1,
-        Vec<Box<[u8; 4096]>>,
-        Box<[u8; 4096]>,
-        LinuxQueueExceptionEventV1,
-        std::fs::File,
-    );
-
-    fn diagnostic_shadow_fixture() -> DiagnosticShadowFixture {
-        let file = std::fs::File::open("/dev/null").unwrap();
-        let binding = QueueExceptionBindingV1 {
-            event_id: KfdSignalEventIdV1::new(7).unwrap(),
-            opener_pid: std::process::id(),
-            raw_fd: file.as_fd().as_raw_fd(),
-        };
-        let mut storage: Vec<Box<[u8; 4096]>> = (0..GFX942_CWSR_SHADOW_PAGES_V1)
-            .map(|_| Box::new([0_u8; 4096]))
-            .collect();
-        let mut payload_storage = Box::new([0_u8; 4096]);
-        let payload_page = NonNull::new(payload_storage.as_mut_ptr().cast::<c_void>()).unwrap();
-        let payload = NonNull::new(payload_storage.as_mut_ptr().cast::<u64>()).unwrap();
-        let payload_address =
-            KfdQueueExceptionPayloadAddressV1::new(payload.as_ptr() as usize as u64).unwrap();
-        for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
-            let page = &mut storage[xcc * CWSR_CONTROL_STACK_PAGES_PER_XCC_V1];
-            let header = crate::queue::submit::gfx942_cwsr_header_bytes(
-                xcc,
-                payload_address,
-                binding.event_id,
-            )
-            .unwrap();
-            page[..header.len()].copy_from_slice(&header);
-        }
-        let pages: [NonNull<c_void>; GFX942_CWSR_SHADOW_PAGES_V1] = storage
-            .iter_mut()
-            .map(|page| NonNull::new(page.as_mut_ptr().cast::<c_void>()).unwrap())
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let shadows = LinuxCwsrShadowPagesV1 {
-            pages,
-            payload_page,
-            payload,
-            binding,
-            page_bytes: 4096,
-            payload_page_active: true,
-            active: true,
-        };
-        let event = LinuxQueueExceptionEventV1 {
-            binding,
-            active: true,
-            poisoned: false,
-            observation_used: false,
-        };
-        (shadows, storage, payload_storage, event, file)
-    }
-
-    type MappedDiagnosticShadowFixture = (
-        LinuxCwsrShadowPagesV1,
-        Vec<Box<[u8; 4096]>>,
-        LinuxQueueExceptionEventV1,
-        std::fs::File,
-    );
-
-    fn mapped_diagnostic_shadow_fixture() -> MappedDiagnosticShadowFixture {
-        let file = std::fs::File::open("/dev/null").unwrap();
-        let binding = QueueExceptionBindingV1 {
-            event_id: KfdSignalEventIdV1::new(7).unwrap(),
-            opener_pid: std::process::id(),
-            raw_fd: file.as_fd().as_raw_fd(),
-        };
-        let mut storage: Vec<Box<[u8; 4096]>> = (0..GFX942_CWSR_SHADOW_PAGES_V1)
-            .map(|_| Box::new([0_u8; 4096]))
-            .collect();
-        let payload_page = map_cwsr_payload_page(4096).unwrap();
-        let payload = NonNull::new(payload_page.as_ptr().cast::<u64>()).unwrap();
-        let payload_address =
-            KfdQueueExceptionPayloadAddressV1::new(payload.as_ptr() as usize as u64).unwrap();
-        for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
-            let page = &mut storage[xcc * CWSR_CONTROL_STACK_PAGES_PER_XCC_V1];
-            let header = crate::queue::submit::gfx942_cwsr_header_bytes(
-                xcc,
-                payload_address,
-                binding.event_id,
-            )
-            .unwrap();
-            page[..header.len()].copy_from_slice(&header);
-        }
-        let pages: [NonNull<c_void>; GFX942_CWSR_SHADOW_PAGES_V1] = storage
-            .iter_mut()
-            .map(|page| NonNull::new(page.as_mut_ptr().cast::<c_void>()).unwrap())
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let shadows = LinuxCwsrShadowPagesV1 {
-            pages,
-            payload_page,
-            payload,
-            binding,
-            page_bytes: 4096,
-            payload_page_active: true,
-            active: true,
-        };
-        let event = LinuxQueueExceptionEventV1 {
-            binding,
-            active: true,
-            poisoned: false,
-            observation_used: false,
-        };
-        (shadows, storage, event, file)
-    }
-
-    #[test]
-    fn shadow_plan_is_exact_and_hostile_geometry_fails_closed() {
-        let plan = CwsrShadowPlanV1::from_owned_reservation(
-            0x1_0000_0000,
-            GFX942_CWSR_TOTAL_BYTES_V1,
-            4096,
-        )
-        .unwrap();
-        assert_eq!(plan.bytes, 0xb16_7000);
-        assert_eq!(plan.page_bytes, 4096);
-        let mut addresses = [0_u64; GFX942_CWSR_SHADOW_PAGES_V1];
-        for xcc in 0..GFX942_CWSR_XCC_COUNT_V1 {
-            for page in 0..CWSR_CONTROL_STACK_PAGES_PER_XCC_V1 {
-                let ordinal = xcc * CWSR_CONTROL_STACK_PAGES_PER_XCC_V1 + page;
-                addresses[ordinal] =
-                    plan.base + (xcc * GFX942_CWSR_CONTEXT_BYTES_PER_XCC_V1 + page * 4096) as u64;
-                assert!(addresses[ordinal].is_multiple_of(4096));
-            }
-        }
-        assert!(addresses.windows(2).all(|pair| pair[0] < pair[1]));
-
-        for result in [
-            CwsrShadowPlanV1::from_owned_reservation(
-                plan.base + 1,
-                GFX942_CWSR_TOTAL_BYTES_V1,
-                4096,
-            ),
-            CwsrShadowPlanV1::from_owned_reservation(
-                plan.base,
-                GFX942_CWSR_TOTAL_BYTES_V1 - 4096,
-                4096,
-            ),
-            CwsrShadowPlanV1::from_owned_reservation(plan.base, GFX942_CWSR_TOTAL_BYTES_V1, 8192),
-            CwsrShadowPlanV1::from_owned_reservation(
-                u64::MAX - 4095,
-                GFX942_CWSR_TOTAL_BYTES_V1,
-                4096,
-            ),
-        ] {
-            assert!(result.is_err());
-        }
-    }
-
-    #[test]
-    fn unpublished_payload_is_unmapped_when_final_admission_fails() {
-        let (shadows, mut storage, _event, _file) = mapped_diagnostic_shadow_fixture();
-        storage[0][0] ^= 1;
-        // Admission returns only after release succeeds; a release failure is
-        // process-terminal because this call consumes the final page owner.
-        assert!(admit_installed_cwsr_shadows(shadows).is_err());
-    }
-
-    #[test]
-    fn payload_is_unmapped_at_event_destroy_boundary_before_later_cleanup() {
-        let (shadows, _storage, _event, file) = mapped_diagnostic_shadow_fixture();
-        let binding = shadows.binding;
-        let after_event = shadows
-            .after_event_destroy(LinuxDestroyedQueueExceptionEventV1 { binding })
-            .unwrap();
-        // A successful transition means zero/protect/munmap completed. Check
-        // the retained state instead of racing another thread's address reuse.
-        assert!(!after_event.shadows.payload_page_active);
-
-        let ready = after_event
-            .after_runtime_destroy(LinuxKfdRuntimeDisabledV1 {
-                binding: KfdRuntimeBindingV1 {
-                    opener_pid: std::process::id(),
-                    raw_fd: file.as_fd().as_raw_fd(),
-                },
-                completion_pending: true,
-            })
-            .unwrap();
-        ready.complete().unwrap();
-    }
-
-    #[test]
-    fn unpublished_custody_unmaps_payload_on_early_return() {
-        let (shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
-        // The unpublished owner aborts if release fails. Returning from this
-        // drop therefore proves the page completed its release path.
-        drop(LinuxUnpublishedCwsrShadowPagesV1 {
-            shadows: Some(shadows),
-        });
-    }
-
-    #[test]
-    fn unpublished_custody_cleanup_failure_is_process_terminal() {
-        const CHILD_ENV: &str = "FE2O3_TEST_UNPUBLISHED_CWSR_PAYLOAD_RELEASE_ABORT";
-        if std::env::var_os(CHILD_ENV).is_some() {
-            let (mut shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
-            shadows.page_bytes = 0;
-            drop(LinuxUnpublishedCwsrShadowPagesV1 {
-                shadows: Some(shadows),
-            });
-            panic!("unpublished payload cleanup failure returned instead of terminating");
-        }
-
-        use std::os::unix::process::ExitStatusExt;
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .arg("--exact")
-            .arg("queue_linux::tests::unpublished_custody_cleanup_failure_is_process_terminal")
-            .arg("--nocapture")
-            .env(CHILD_ENV, "1")
-            .status()
-            .unwrap();
-        assert_eq!(status.signal(), Some(libc::SIGABRT));
-    }
-
-    #[test]
-    fn payload_release_failure_after_event_destroy_is_process_terminal() {
-        const CHILD_ENV: &str = "FE2O3_TEST_CWSR_PAYLOAD_RELEASE_ABORT";
-        if std::env::var_os(CHILD_ENV).is_some() {
-            let (mut shadows, _storage, _event, _file) = mapped_diagnostic_shadow_fixture();
-            let binding = shadows.binding;
-            // A zero-length mprotect/munmap request cannot complete release of
-            // the retained mapping. The production transition must abort
-            // rather than return after consuming its only owner.
-            shadows.page_bytes = 0;
-            let _ = shadows.after_event_destroy(LinuxDestroyedQueueExceptionEventV1 { binding });
-            panic!("payload cleanup failure returned instead of terminating");
-        }
-
-        use std::os::unix::process::ExitStatusExt;
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
-            .arg("--exact")
-            .arg("queue_linux::tests::payload_release_failure_after_event_destroy_is_process_terminal")
-            .arg("--nocapture")
-            .env(CHILD_ENV, "1")
-            .status()
-            .unwrap();
-        assert_eq!(status.signal(), Some(libc::SIGABRT));
-    }
-
-    #[test]
-    fn wait_and_payload_must_agree_and_unknown_reasons_are_rejected() {
-        let empty = KfdQueueExceptionReasonV1::from_untrusted_wire(0).unwrap();
-        let fault = KfdQueueExceptionReasonV1::from_untrusted_wire(1).unwrap();
-        assert_eq!(
-            admit_queue_exception_wait(KfdWaitResultV1::Timeout, empty).unwrap(),
-            QueueExceptionWaitObservationV1::NoExceptionAtObservation
-        );
-        assert_eq!(
-            admit_queue_exception_wait(KfdWaitResultV1::Complete, fault).unwrap(),
-            QueueExceptionWaitObservationV1::Exception(fault)
-        );
-        assert!(admit_queue_exception_wait(KfdWaitResultV1::Complete, empty).is_err());
-        assert!(admit_queue_exception_wait(KfdWaitResultV1::Timeout, fault).is_err());
-        assert!(KfdQueueExceptionReasonV1::from_untrusted_wire(1 << 63).is_none());
-    }
-
-    #[test]
-    fn timeout_diagnostic_admits_reason_but_rejects_malformed_shadow_state() {
-        let (shadows, mut storage, _payload_storage, event, file) = diagnostic_shadow_fixture();
-        // SAFETY: the fixture retains the aligned writable payload word.
-        unsafe { core::ptr::write_volatile(shadows.payload.as_ptr(), 1_u64.to_le()) };
-        assert!(
-            event
-                .validate_live_with_shadows_for_diagnostic(
-                    file.as_fd(),
-                    std::process::id(),
-                    &shadows,
-                )
-                .is_ok()
-        );
-        assert!(
-            event
-                .validate_live_with_shadows(file.as_fd(), std::process::id(), &shadows)
-                .is_err()
-        );
-        assert_eq!(shadows.observe_reason().unwrap().get(), 1);
-
-        // SAFETY: the fixture retains the aligned writable payload word.
-        unsafe { core::ptr::write_volatile(shadows.payload.as_ptr(), (1_u64 << 63).to_le()) };
-        assert!(shadows.observe_reason().is_err());
-
-        storage[CWSR_CONTROL_STACK_PAGES_PER_XCC_V1][0] ^= 1;
-        assert!(
-            event
-                .validate_live_with_shadows_for_diagnostic(
-                    file.as_fd(),
-                    std::process::id(),
-                    &shadows,
-                )
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn runtime_queue_event_order_is_linear_and_hostile_reordering_fails() {
-        use KfdRuntimeLifecyclePhaseV1 as P;
-        let mut phase = P::EnabledBeforeQueue;
-        phase = admit_runtime_transition(phase, P::EnabledBeforeQueue, P::QueueLive).unwrap();
-        phase = admit_runtime_transition(phase, P::QueueLive, P::QueueDestroyed).unwrap();
-        phase = admit_runtime_transition(phase, P::QueueDestroyed, P::EventDestroyed).unwrap();
-        phase = admit_runtime_transition(phase, P::EventDestroyed, P::Disabled).unwrap();
-        assert_eq!(phase, P::Disabled);
-
-        assert!(
-            admit_runtime_transition(P::EnabledBeforeQueue, P::QueueLive, P::QueueDestroyed)
-                .is_err()
-        );
-        assert!(admit_runtime_transition(P::QueueLive, P::EventDestroyed, P::Disabled).is_err());
-        assert!(
-            admit_runtime_transition(P::QueueDestroyed, P::EventDestroyed, P::Disabled).is_err()
-        );
-        assert!(
-            admit_runtime_transition(P::Disabled, P::EnabledBeforeQueue, P::QueueLive).is_err()
-        );
-    }
-
-    #[test]
-    fn queue_exception_observation_cannot_be_reused() {
-        let mut used = false;
-        assert!(begin_one_shot_observation(&mut used).is_ok());
-        assert!(used);
-        assert!(begin_one_shot_observation(&mut used).is_err());
-    }
-
-    #[test]
-    fn terminal_teardown_arm_clears_only_after_confirmed_success() {
-        let gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
-        let first = arm_runtime_gate_for_terminal_teardown(&gate);
-        let second = arm_runtime_gate_for_terminal_teardown(&gate);
-        assert_eq!(lock_runtime_gate_v1(&gate).teardown_arms, 2);
-        first.confirm_destroyed();
-        assert_eq!(lock_runtime_gate_v1(&gate).teardown_arms, 1);
-        assert!(!lock_runtime_gate_v1(&gate).permanently_poisoned);
-        second.confirm_destroyed();
-        assert_eq!(lock_runtime_gate_v1(&gate).teardown_arms, 0);
-        assert!(!lock_runtime_gate_v1(&gate).permanently_poisoned);
-
-        let arm = arm_runtime_gate_for_terminal_teardown(&gate);
-        assert_eq!(lock_runtime_gate_v1(&gate).teardown_arms, 1);
-        drop(arm);
-        assert_eq!(lock_runtime_gate_v1(&gate).teardown_arms, 0);
-        assert!(lock_runtime_gate_v1(&gate).permanently_poisoned);
-
-        let panic_gate = Mutex::new(ProcessGlobalKfdRuntimeGateV1::new());
-        let result = std::panic::catch_unwind(|| {
-            let _arm = arm_runtime_gate_for_terminal_teardown(&panic_gate);
-            panic!("simulated teardown panic");
-        });
-        assert!(result.is_err());
-        assert_eq!(lock_runtime_gate_v1(&panic_gate).teardown_arms, 0);
-        assert!(lock_runtime_gate_v1(&panic_gate).permanently_poisoned);
-    }
-
-    #[test]
-    fn teardown_arm_attempt_after_admission_check_linearizes_after_lease() {
-        use std::sync::{Arc, Barrier, mpsc};
-
-        let pid = 41;
-        let gate = Arc::new(Mutex::new(ProcessGlobalKfdRuntimeGateV1::new()));
-        let start_arm = Arc::new(Barrier::new(2));
-        let (attempted_tx, attempted_rx) = mpsc::sync_channel(0);
-        let (armed_tx, armed_rx) = mpsc::sync_channel(0);
-        let (release_tx, release_rx) = mpsc::sync_channel(0);
-
-        let mut admission = lock_runtime_gate_v1(&gate);
-        assert!(!admission.is_blocked());
-        let worker_gate = Arc::clone(&gate);
-        let worker_barrier = Arc::clone(&start_arm);
-        let worker = std::thread::spawn(move || {
-            worker_barrier.wait();
-            attempted_tx.send(()).unwrap();
-            let arm = arm_runtime_gate_for_terminal_teardown(&worker_gate);
-            armed_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
-            arm.confirm_destroyed();
-        });
-
-        start_arm.wait();
-        attempted_rx.recv().unwrap();
-        // This models the former gap between the final arm check and the lease
-        // join. The arm thread has started, but the shared gate lock keeps its
-        // transition ordered after this admission.
-        assert_eq!(admission.teardown_arms, 0);
-        assert!(admission.runtime.join_enabled(pid).unwrap());
-        admission.runtime.commit_first_enabled(pid);
-        drop(admission);
-
-        armed_rx.recv().unwrap();
-        let mut blocked_admission = lock_runtime_gate_v1(&gate);
-        assert!(blocked_admission.is_blocked());
-        assert!(matches!(
-            blocked_admission.admit_runtime(pid),
-            Err(LinuxDoorbellErrorV1::Runtime(
-                "process-global gate poisoned"
-            ))
-        ));
-        drop(blocked_admission);
-        release_tx.send(()).unwrap();
-        worker.join().unwrap();
-
-        let gate = lock_runtime_gate_v1(&gate);
-        assert_eq!(gate.teardown_arms, 0);
-        assert!(!gate.permanently_poisoned);
-        assert_eq!(
-            gate.runtime,
-            ProcessKfdRuntimeStateV1::Enabled {
-                opener_pid: pid,
-                leases: 1,
-            }
-        );
-    }
-
-    #[test]
-    fn process_runtime_context_multiplexes_independent_queue_leases() {
-        let pid = 41;
-        let mut state = ProcessKfdRuntimeStateV1::Disabled;
-        assert!(state.join_enabled(pid).unwrap());
-        state.commit_first_enabled(pid);
-        assert!(!state.join_enabled(pid).unwrap());
-        assert!(!state.join_enabled(pid).unwrap());
-        assert_eq!(
-            state,
-            ProcessKfdRuntimeStateV1::Enabled {
-                opener_pid: pid,
-                leases: 3,
-            }
-        );
-
-        assert!(!state.release_plan(pid).unwrap());
-        assert!(!state.release_plan(pid).unwrap());
-        assert!(state.release_plan(pid).unwrap());
-        state.commit_last_disabled();
-        assert_eq!(state, ProcessKfdRuntimeStateV1::Disabled);
-    }
-
-    #[test]
-    fn process_runtime_context_rejects_cross_process_and_poisoned_joins() {
-        let mut state = ProcessKfdRuntimeStateV1::Enabled {
-            opener_pid: 17,
-            leases: 1,
-        };
-        assert!(matches!(
-            state.join_enabled(18),
-            Err(LinuxDoorbellErrorV1::ProcessChanged)
-        ));
-        assert!(matches!(
-            state.release_plan(18),
-            Err(LinuxDoorbellErrorV1::ProcessChanged)
-        ));
-        state.poison();
-        assert!(matches!(
-            state.join_enabled(17),
-            Err(LinuxDoorbellErrorV1::Runtime(
-                "process runtime context poisoned"
-            ))
-        ));
-    }
-
-    #[test]
-    fn destroy_event_setter_owns_the_wire_record_not_reference_bytes() {
-        let source = include_str!("queue_linux.rs");
-        let production = source.split("\n#[cfg(test)]\nmod tests").next().unwrap();
-        assert!(production.contains("Setter::<DESTROY_EVENT_OPCODE, _>::new(args)"));
-        assert!(!production.contains("Setter::<DESTROY_EVENT_OPCODE, _>::new(&args)"));
-        assert!(production.contains("Setter::<UPDATE_QUEUE_OPCODE, _>::new(*args)"));
-        assert!(!production.contains("Setter::<UPDATE_QUEUE_OPCODE, _>::new(args)"));
-    }
-}
+#[path = "queue_linux/tests.rs"]
+mod tests;

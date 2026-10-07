@@ -109,6 +109,8 @@ pub struct AcceptedCompilerExecutionHandoffV3 {
     retained: usize,
 }
 type Accepted = AcceptedCompilerExecutionHandoffV3;
+#[path = "application_native_v3.rs"]
+pub(crate) mod application;
 use ProtectedIssuerHandoffErrorV3 as LaunchError;
 #[path = "handoff_native_launch.rs"]
 mod launch;

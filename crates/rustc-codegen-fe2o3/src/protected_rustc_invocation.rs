@@ -6,6 +6,8 @@ use std::fs;
 use std::os::fd::RawFd;
 use std::os::unix::ffi::OsStrExt as _;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 #[cfg(test)]
 use fe2o3_build_authority::CompilerClosureV2;
@@ -33,9 +35,112 @@ const RUNNING_RUSTC_PATH: &str = "/proc/self/exe";
 /// One retained V3 descriptor that exactly matched this rustc process.
 pub(crate) struct AdmittedProtectedRustcInvocationV1 {
     capability: RustcInvocationCapabilityV1,
+    proof_runtime: CompilerProofRuntimeCustody,
+}
+
+enum CompilerProofRuntimeCustody {
+    Unselected,
+    Refused,
+    NativeV3,
+    LegacyV1(Arc<fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>),
+}
+
+impl CompilerProofRuntimeCustody {
+    fn select_legacy(
+        &mut self,
+        admit: impl FnOnce() -> Result<
+            Arc<fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>,
+            ProtectedRustcInvocationErrorV1,
+        >,
+    ) -> Result<(), ProtectedRustcInvocationErrorV1> {
+        if !matches!(self, Self::Unselected) {
+            return Err(ProtectedRustcInvocationErrorV1::ProofRuntime(
+                "compiler proof family was already selected or refused".to_owned(),
+            ));
+        }
+        *self = Self::Refused;
+        *self = Self::LegacyV1(admit()?);
+        Ok(())
+    }
+
+    fn select_native(&mut self) -> Result<(), ProtectedRustcInvocationErrorV1> {
+        if !matches!(self, Self::Unselected) {
+            return Err(ProtectedRustcInvocationErrorV1::ProofRuntime(
+                "compiler proof family was already selected or refused".to_owned(),
+            ));
+        }
+        *self = Self::NativeV3;
+        Ok(())
+    }
+
+    fn runtime(
+        &self,
+    ) -> Result<
+        Option<&Arc<fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>>,
+        ProtectedRustcInvocationErrorV1,
+    > {
+        match self {
+            Self::LegacyV1(runtime) => Ok(Some(runtime)),
+            Self::NativeV3 => Ok(None),
+            Self::Unselected | Self::Refused => Err(ProtectedRustcInvocationErrorV1::ProofRuntime(
+                "compiler proof family is unselected or refused".to_owned(),
+            )),
+        }
+    }
+
+    fn revalidate(&self) -> Result<(), ProtectedRustcInvocationErrorV1> {
+        match self {
+            Self::LegacyV1(runtime) => runtime
+                .revalidate()
+                .map_err(|error| ProtectedRustcInvocationErrorV1::ProofRuntime(error.to_string())),
+            Self::Refused => Err(ProtectedRustcInvocationErrorV1::ProofRuntime(
+                "compiler proof admission was refused".to_owned(),
+            )),
+            Self::Unselected | Self::NativeV3 => Ok(()),
+        }
+    }
 }
 
 impl AdmittedProtectedRustcInvocationV1 {
+    pub(crate) fn select_legacy_proof_runtime(
+        &mut self,
+    ) -> Result<(), ProtectedRustcInvocationErrorV1> {
+        self.revalidate_for_publication()?;
+        let descriptor = self.capability.descriptor();
+        self.proof_runtime.select_legacy(|| {
+            let runtime = fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1::open(
+                fe2o3_verifier::PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+            )
+            .map_err(|error| ProtectedRustcInvocationErrorV1::ProofRuntime(error.to_string()))?;
+            // SAFETY: only the authenticated legacy dispatch calls this private one-shot
+            // boundary. It owns the validated original invocation and consumes its proof slots.
+            let runtime = unsafe {
+                fe2o3_verifier::admit_inherited_compiler_proof_runtime_v1(
+                    descriptor,
+                    runtime,
+                    Instant::now() + Duration::from_secs(30),
+                )
+            }
+            .map_err(|error| ProtectedRustcInvocationErrorV1::ProofRuntime(error.to_string()))?;
+            Ok(Arc::new(runtime))
+        })
+    }
+
+    pub(crate) fn select_native_proof_runtime(
+        &mut self,
+    ) -> Result<(), ProtectedRustcInvocationErrorV1> {
+        self.proof_runtime.select_native()
+    }
+
+    pub(crate) fn proof_runtime(
+        &self,
+    ) -> Result<
+        Option<&Arc<fe2o3_verifier::FunctionalRefinementVerusRuntimeLeaseV1>>,
+        ProtectedRustcInvocationErrorV1,
+    > {
+        self.proof_runtime.runtime()
+    }
+
     /// Borrows the exact canonical descriptor retained by the sealed invocation image.
     pub(crate) fn descriptor(&self) -> &RustcInvocationDescriptorV3 {
         self.capability.descriptor()
@@ -56,6 +161,7 @@ impl AdmittedProtectedRustcInvocationV1 {
         self.revalidate_for_publication()?;
         Ok(FinishedProtectedRustcInvocationV3 {
             capability: self.capability,
+            proof_runtime: self.proof_runtime,
         })
     }
 
@@ -91,7 +197,8 @@ impl AdmittedProtectedRustcInvocationV1 {
             .revalidate()
             .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
         let observation = capture(self.capability.descriptor())?;
-        validate_retained_capability(&self.capability, observation)
+        validate_retained_capability(&self.capability, observation)?;
+        self.proof_runtime.revalidate()
     }
 
     #[cfg(test)]
@@ -111,8 +218,10 @@ impl AdmittedProtectedRustcInvocationV1 {
         observation: RustcProcessObservationV1,
     ) -> Result<FinishedProtectedRustcInvocationV3, ProtectedRustcInvocationErrorV1> {
         validate_retained_capability(&self.capability, observation)?;
+        self.proof_runtime.revalidate()?;
         Ok(FinishedProtectedRustcInvocationV3 {
             capability: self.capability,
+            proof_runtime: self.proof_runtime,
         })
     }
 }
@@ -121,6 +230,7 @@ impl AdmittedProtectedRustcInvocationV1 {
 /// remeasurement. It is private compiler authority, not a serializable receipt.
 pub(crate) struct FinishedProtectedRustcInvocationV3 {
     capability: RustcInvocationCapabilityV1,
+    proof_runtime: CompilerProofRuntimeCustody,
 }
 
 impl FinishedProtectedRustcInvocationV3 {
@@ -136,7 +246,8 @@ impl FinishedProtectedRustcInvocationV3 {
             .revalidate()
             .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
         let observation = RustcProcessObservationV1::capture(self.capability.descriptor())?;
-        validate_retained_capability(&self.capability, observation)
+        validate_retained_capability(&self.capability, observation)?;
+        self.proof_runtime.revalidate()
     }
 
     #[cfg(test)]
@@ -147,13 +258,15 @@ impl FinishedProtectedRustcInvocationV3 {
         self.capability
             .revalidate()
             .map_err(ProtectedRustcInvocationErrorV1::RetainedCapabilityChanged)?;
-        validate_retained_capability(&self.capability, observation)
+        validate_retained_capability(&self.capability, observation)?;
+        self.proof_runtime.revalidate()
     }
 }
 
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum ProtectedRustcInvocationErrorV1 {
     Capability(String),
+    ProofRuntime(String),
     UnexpectedProtectedSignals {
         descriptor_present: bool,
         compiler_closure_marker_present: bool,
@@ -188,6 +301,10 @@ pub(crate) enum ProtectedRustcInvocationErrorV1 {
 impl fmt::Display for ProtectedRustcInvocationErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ProofRuntime(detail) => write!(
+                formatter,
+                "protected compiler proof runtime unavailable: {detail}"
+            ),
             Self::Capability(detail) => write!(
                 formatter,
                 "cannot admit canonical fd {RUSTC_INVOCATION_CHILD_FD_V1} as a sealed V3 capability: {detail}"
@@ -388,7 +505,10 @@ fn validate_capability(
     observation: RustcProcessObservationV1,
 ) -> Result<AdmittedProtectedRustcInvocationV1, ProtectedRustcInvocationErrorV1> {
     validate_retained_capability(&capability, observation)?;
-    Ok(AdmittedProtectedRustcInvocationV1 { capability })
+    Ok(AdmittedProtectedRustcInvocationV1 {
+        capability,
+        proof_runtime: CompilerProofRuntimeCustody::Unselected,
+    })
 }
 
 fn validate_retained_capability(

@@ -7,12 +7,24 @@
 use std::{error::Error, fmt, path::Path, time::Instant};
 
 use crate::CanonicalGeneratedVerusProofInputV3;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "functional_refinement_runtime_v1_bounded.rs"]
+mod bounded;
 use crate::retained_functional_refinement_runtime_v1::{
     GeneratedProofProcessPolicyV2, RetainedFunctionalRefinementRuntimeErrorV1,
     RetainedFunctionalRefinementRuntimeOutputV1, RetainedGeneratedVerusRuntimeBackendV1,
-    RuntimeAttemptV1, open_retained_generated_verus_context_runtime_v2,
+    RuntimeAttemptV1, open_retained_closed_conditional_fill_runtime_v1,
+    open_retained_generated_verus_context_runtime_v2,
     open_retained_generated_verus_context_runtime_v3, open_retained_generated_verus_runtime_v1,
 };
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use bounded::{
+    FunctionalRefinementRuntimeResourceErrorV1, FunctionalRefinementRuntimeStorageV1,
+};
+
+/// Fixed runtime selected by the protected compiler and its Cargo proof executor.
+pub const PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1: &str =
+    "/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5";
 
 /// Domain-separated identity of the exact workload-neutral verifier runtime.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -32,6 +44,8 @@ impl FunctionalRefinementVerusRuntimeIdentityV1 {
 pub struct FunctionalRefinementVerusRuntimeLeaseV1 {
     identity: FunctionalRefinementVerusRuntimeIdentityV1,
     backend: RetainedGeneratedVerusRuntimeBackendV1,
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    broker: Option<Box<crate::compiler_proof_broker_v1::AuthenticatedCompilerProofSessionV1>>,
 }
 
 pub(crate) struct FunctionalRefinementAttemptV1(RuntimeAttemptV1);
@@ -74,6 +88,27 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
         Ok(Self {
             identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
             backend,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            broker: None,
+        })
+    }
+
+    /// Opens the pinned tools under the closed conditional-fill process policy.
+    ///
+    /// At most twelve authenticated solver lifetimes and two live solver groups
+    /// are admitted. The fixed single-threaded invocation disables bit-vector
+    /// simplification and retains the 32 MiB stack limit. This distinct policy
+    /// cannot be substituted for a compiler-proof broker or native proof policy.
+    pub fn open_closed_conditional_fill_v1(
+        root: impl AsRef<Path>,
+    ) -> Result<Self, FunctionalRefinementRuntimeErrorV1> {
+        let backend = open_retained_closed_conditional_fill_runtime_v1(root.as_ref())
+            .map_err(runtime_error_from_backend)?;
+        Ok(Self {
+            identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
+            backend,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            broker: None,
         })
     }
 
@@ -91,6 +126,8 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
         Ok(Self {
             identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
             backend,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            broker: None,
         })
     }
 
@@ -108,6 +145,8 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
         Ok(Self {
             identity: FunctionalRefinementVerusRuntimeIdentityV1(backend.identity()),
             backend,
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            broker: None,
         })
     }
 
@@ -127,9 +166,47 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
 
     /// Revalidates the retained runtime objects and path edges.
     pub fn revalidate(&self) -> Result<(), FunctionalRefinementRuntimeErrorV1> {
-        self.backend
-            .revalidate()
-            .map_err(runtime_error_from_backend)
+        self.revalidate_until(Instant::now() + std::time::Duration::from_secs(30))
+    }
+
+    pub(crate) fn revalidate_until(
+        &self,
+        deadline: Instant,
+    ) -> Result<(), FunctionalRefinementRuntimeErrorV1> {
+        if let Err(error) = self.backend.revalidate() {
+            #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+            if let Some(session) = &self.broker {
+                session.poison();
+            }
+            return Err(runtime_error_from_backend(error));
+        }
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        if let Some(session) = &self.broker {
+            session
+                .revalidate_until(deadline)
+                .map_err(runtime_error_from_broker)?;
+        }
+        #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+        let _ = deadline;
+        Ok(())
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    pub(crate) fn with_compiler_broker(
+        mut self,
+        session: crate::compiler_proof_broker_v1::AuthenticatedCompilerProofSessionV1,
+        deadline: Instant,
+    ) -> Result<Self, FunctionalRefinementRuntimeErrorV1> {
+        if self.broker.is_some()
+            || self.process_policy() != GeneratedProofProcessPolicyV2::LegacySingleSolverV1
+        {
+            return Err(runtime_error_from_broker(std::io::Error::other(
+                "compiler-proof bridge requires an unbrokered legacy single-solver runtime",
+            )));
+        }
+        self.broker = Some(Box::new(session));
+        self.revalidate_until(deadline)?;
+        Ok(self)
     }
 
     pub(crate) fn execute_generated_rust_verify(
@@ -140,12 +217,30 @@ impl FunctionalRefinementVerusRuntimeLeaseV1 {
         output_limit: usize,
     ) -> Result<FunctionalRefinementRuntimeProcessOutputV1, FunctionalRefinementRuntimeErrorV1>
     {
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        if let Some(session) = &self.broker {
+            attempt.0.check().map_err(runtime_error_from_backend)?;
+            self.revalidate_until(deadline)?;
+            let output = session.execute(source, deadline, output_limit, self.process_policy());
+            attempt.complete()?;
+            self.revalidate_until(deadline)?;
+            let output = output.map_err(runtime_error_from_broker)?;
+            check_output_policy(self.process_policy(), output.policy)?;
+            return Ok(output);
+        }
         let output = self
             .backend
             .execute_generated_rust_verify(&mut attempt.0, source, deadline, output_limit)
             .map_err(runtime_error_from_backend)?;
         check_output_policy(self.process_policy(), output.policy)?;
         Ok(FunctionalRefinementRuntimeProcessOutputV1::from(output))
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn runtime_error_from_broker(error: std::io::Error) -> FunctionalRefinementRuntimeErrorV1 {
+    FunctionalRefinementRuntimeErrorV1 {
+        detail: format!("authenticated compiler-proof broker failed: {error}"),
     }
 }
 
@@ -242,14 +337,17 @@ mod tests {
     #[test]
     fn immutable_runtime_output_policy_rejects_cross_policy_substitution() {
         use GeneratedProofProcessPolicyV2::{
-            LegacySingleSolverV1, PinnedSingleThreadContextsV2, PinnedSingleThreadContextsV3,
+            ClosedConditionalFillV1, LegacySingleSolverV1, PinnedSingleThreadContextsV2,
+            PinnedSingleThreadContextsV3,
         };
         for expected in [
+            ClosedConditionalFillV1,
             LegacySingleSolverV1,
             PinnedSingleThreadContextsV2,
             PinnedSingleThreadContextsV3,
         ] {
             for actual in [
+                ClosedConditionalFillV1,
                 LegacySingleSolverV1,
                 PinnedSingleThreadContextsV2,
                 PinnedSingleThreadContextsV3,

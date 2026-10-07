@@ -11,6 +11,8 @@ use rustix::io::Errno;
 use crate::launch_checks::SOURCE_COUNT_V1;
 
 const DESCRIPTOR_COUNT: usize = SOURCE_COUNT_V1 + 2;
+const OBSERVER_SOURCE_COUNT: usize = 14;
+const MAX_DESCRIPTOR_COUNT: usize = OBSERVER_SOURCE_COUNT + 2;
 const STAGED_DESCRIPTOR_FLOOR: i32 = PREEXEC_SOURCE_FD_BASE + PREEXEC_MAX_DESCRIPTORS as i32;
 
 const _: () = assert!(DESCRIPTOR_COUNT == 14);
@@ -24,7 +26,7 @@ pub(super) struct StagedLaunchInputV1<'a> {
     pub(super) launcher: &'a File,
     pub(super) issuer: &'a File,
     pub(super) manifest: &'a File,
-    pub(super) sources: &'a [File; SOURCE_COUNT_V1],
+    pub(super) sources: &'a [File],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,7 +45,8 @@ pub(super) struct StagedDescriptorV1 {
 
 pub(super) struct StagedLaunchV1 {
     pub(super) launcher: OwnedFd,
-    pub(super) descriptors: [StagedDescriptorV1; DESCRIPTOR_COUNT],
+    descriptors: [Option<StagedDescriptorV1>; MAX_DESCRIPTOR_COUNT],
+    descriptor_count: usize,
     pub(super) stdio_sources: [i32; 3],
     pub(super) profile_ready_writer: OwnedFd,
     pub(super) gate_reader: OwnedFd,
@@ -51,6 +54,16 @@ pub(super) struct StagedLaunchV1 {
 }
 
 impl StagedLaunchV1 {
+    pub(super) fn descriptors(&self) -> impl ExactSizeIterator<Item = &StagedDescriptorV1> {
+        self.descriptors[..self.descriptor_count]
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_ref()
+                    .expect("staging fills the exact descriptor prefix")
+            })
+    }
+
     pub(super) fn new(
         input: StagedLaunchInputV1<'_>,
         profile_ready_writer: &OwnedFd,
@@ -73,6 +86,12 @@ impl StagedLaunchV1 {
         exec_status_writer: &OwnedFd,
         mut duplicate: impl FnMut(BorrowedFd<'_>, i32) -> Result<OwnedFd, Errno>,
     ) -> Result<Self, StagedLaunchErrorV1> {
+        if input.sources.len() != SOURCE_COUNT_V1 && input.sources.len() != OBSERVER_SOURCE_COUNT {
+            return Err(StagedLaunchErrorV1::InvalidProcessState(
+                "invalid staged source count",
+            ));
+        }
+        let descriptor_count = input.sources.len() + 2;
         let mut next = STAGED_DESCRIPTOR_FLOOR;
         let launcher = duplicate_above(
             input.launcher,
@@ -102,43 +121,35 @@ impl StagedLaunchV1 {
         );
 
         // Each filled slot owns its duplicate even if a later syscall fails.
-        let mut descriptors: [Option<StagedDescriptorV1>; DESCRIPTOR_COUNT] =
-            [const { None }; DESCRIPTOR_COUNT];
+        let mut descriptors: [Option<StagedDescriptorV1>; MAX_DESCRIPTOR_COUNT] =
+            [const { None }; MAX_DESCRIPTOR_COUNT];
         for (slot, (source, target, operation)) in descriptors.iter_mut().zip(inputs) {
             *slot = Some(StagedDescriptorV1 {
                 source: duplicate_above(source, &mut next, operation, &mut duplicate)?,
                 target,
             });
         }
-        let [
-            Some(manifest),
-            Some(issuer),
-            Some(source0),
-            Some(source1),
-            Some(source2),
-            Some(source3),
-            Some(source4),
-            Some(source5),
-            Some(source6),
-            Some(source7),
-            Some(source8),
-            Some(source9),
-            Some(source10),
-            Some(source11),
-        ] = descriptors
-        else {
+        if descriptors[..descriptor_count].iter().any(Option::is_none) {
             return Err(StagedLaunchErrorV1::InvalidProcessState(
                 "staged descriptor table is incomplete",
             ));
-        };
+        }
         let stdio_sources = [
-            source0.source.as_raw_fd(),
-            source1.source.as_raw_fd(),
-            source2.source.as_raw_fd(),
-        ];
-        let descriptors = [
-            manifest, issuer, source0, source1, source2, source3, source4, source5, source6,
-            source7, source8, source9, source10, source11,
+            descriptors[2]
+                .as_ref()
+                .expect("source count checked")
+                .source
+                .as_raw_fd(),
+            descriptors[3]
+                .as_ref()
+                .expect("source count checked")
+                .source
+                .as_raw_fd(),
+            descriptors[4]
+                .as_ref()
+                .expect("source count checked")
+                .source
+                .as_raw_fd(),
         ];
         let profile_ready_writer = duplicate_above(
             profile_ready_writer,
@@ -161,6 +172,7 @@ impl StagedLaunchV1 {
         Ok(Self {
             launcher,
             descriptors,
+            descriptor_count,
             stdio_sources,
             profile_ready_writer,
             gate_reader,
