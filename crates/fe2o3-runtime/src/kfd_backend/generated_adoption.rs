@@ -6,6 +6,7 @@ use generated_shells::GeneratedShellPlanV1;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 mod cohort3;
+mod detached;
 mod issue;
 mod readback;
 mod receipt;
@@ -22,6 +23,7 @@ pub(super) mod qualification;
 enum PhaseV1 {
     Entering,
     Adopted,
+    Detached,
     Retiring,
     Retired,
 }
@@ -31,6 +33,7 @@ pub(super) struct GeneratedNativeAdoptionV1 {
     lane: usize,
     native_lane: Option<ComputeAqlQueueLaneV1>,
     data: Vec<Gfx942FixedDispatchDataV1>,
+    detached: detached::RetainedDetachedV1<fe2o3_kfd::Gfx942DetachedFixedDispatchV1>,
     returned: ReturnedDataV1<Gfx942FixedDispatchDataV1>,
     submission: Option<issue::GeneratedSubmissionV1>,
 }
@@ -80,6 +83,7 @@ impl GeneratedNativeAdoptionV1 {
     pub(super) fn is_retired(&self) -> bool {
         self.phase == PhaseV1::Retired
             && self.data.is_empty()
+            && self.detached.is_disposed_or_unentered()
             && self.returned.handed_to_lower.is_none()
             && self
                 .returned
@@ -236,6 +240,7 @@ impl KfdRuntimeBackendV1 {
             lane,
             native_lane: self.native_compute_lanes[lane],
             data,
+            detached: detached::RetainedDetachedV1::empty(),
             returned: ReturnedDataV1::empty(),
             submission: None,
         });
@@ -512,7 +517,11 @@ impl KfdRuntimeBackendV1 {
             None if rejected.is_none() => Some(RetirementV1::Pristine),
             None => None,
         };
-        if native.phase != PhaseV1::Adopted
+        let retained_completed = native.phase == PhaseV1::Detached
+            && retirement == Some(RetirementV1::Recycled)
+            && rejected.is_none()
+            && native.detached.is_held();
+        if !(native.phase == PhaseV1::Adopted || retained_completed)
             || retirement.is_none()
             || !self.generated_lease_matches_v1(plan)
         {
@@ -523,6 +532,14 @@ impl KfdRuntimeBackendV1 {
         }
         let lane_index = native.lane;
         let handle = native.native_lane.expect("exact generated lane");
+        if retirement == Some(RetirementV1::Recycled) && rejected.is_none() && !retained_completed {
+            let submission = native
+                .submission
+                .as_ref()
+                .expect("recycled original submission")
+                .id;
+            self.retain_generated_completed_data_v1(plan, submission)?;
+        }
         self.generated_shells
             .get_mut(&plan.key)
             .expect("rooted shell")
@@ -547,7 +564,12 @@ impl KfdRuntimeBackendV1 {
                         RetirementV1::Pristine => lane.abort_unpublished_fixed_dispatch_v1()?,
                         RetirementV1::CancelledOnly => lane.abort_cancelled_fixed_dispatch_v1()?,
                         RetirementV1::Recycled => {
-                            lane.detach_recycled_fixed_dispatch()?.into_data()
+                            if !native.detached.is_held() {
+                                native.retain_recycled_data_v1(plan.count, || {
+                                    lane.detach_recycled_fixed_dispatch()
+                                })?;
+                            }
+                            native.take_retained_data_for_disposal_v1(plan.count)?
                         }
                     };
                     native.returned.install(data);

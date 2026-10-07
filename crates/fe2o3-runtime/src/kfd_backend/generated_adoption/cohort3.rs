@@ -95,6 +95,7 @@ impl KfdRuntimeBackendV1 {
             lane: 0,
             native_lane: None,
             data,
+            detached: detached::RetainedDetachedV1::empty(),
             returned: ReturnedDataV1::empty(),
             submission: None,
         });

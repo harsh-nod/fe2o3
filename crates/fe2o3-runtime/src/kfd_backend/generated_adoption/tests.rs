@@ -8,6 +8,15 @@ use std::rc::Rc;
 mod native;
 
 pub(super) fn shells() -> (KfdRuntimeBackendV1, GeneratedShellPlanV1) {
+    let (backend, plan, _) = shells_with_roster();
+    (backend, plan)
+}
+
+pub(super) fn shells_with_roster() -> (
+    KfdRuntimeBackendV1,
+    GeneratedShellPlanV1,
+    GeneratedHostRosterV1,
+) {
     let mut backend = KfdRuntimeBackendV1::mock();
     let (binding, logical) = crate::RuntimeContextV1::generated_shell_test_binding_v1(&mut backend);
     let (hsaco, projection) = source_projection();
@@ -22,7 +31,7 @@ pub(super) fn shells() -> (KfdRuntimeBackendV1, GeneratedShellPlanV1) {
         .bind_generated_shell_requests_v1(plan, core::array::from_fn(|_| None))
         .unwrap();
     backend.commit_generated_shells_v1(bound, &mut source, &roster);
-    (backend, plan)
+    (backend, plan, roster)
 }
 
 fn native_state(phase: PhaseV1, lane: usize) -> GeneratedNativeAdoptionV1 {
@@ -32,6 +41,7 @@ fn native_state(phase: PhaseV1, lane: usize) -> GeneratedNativeAdoptionV1 {
         lane,
         native_lane: None,
         data: Vec::new(),
+        detached: detached::RetainedDetachedV1::empty(),
         returned: ReturnedDataV1::empty(),
         submission: None,
     }
@@ -475,6 +485,7 @@ fn generated_native_phases_disable_shell_disposal_even_before_packet_transfer() 
     for phase in [
         PhaseV1::Entering,
         PhaseV1::Adopted,
+        PhaseV1::Detached,
         PhaseV1::Retiring,
         PhaseV1::Retired,
     ] {
