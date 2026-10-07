@@ -149,6 +149,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + 4 * size_of::<usize>()
         + size_of::<Definition>()
         + size_of::<fe2o3_kernel_ir::Constant>()
+        + 2 * size_of::<Type>()
         + size_of::<bool>()
         + size_of::<Option<usize>>()
         + 2 * size_of::<Result<Recipe>>()
