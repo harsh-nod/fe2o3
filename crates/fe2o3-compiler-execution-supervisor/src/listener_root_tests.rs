@@ -39,6 +39,13 @@ fn original_listener_rejects_changed_passcred_and_path() {
 
 #[test]
 fn post_accept_revalidation_closes_the_actual_new_endpoint() {
+    crate::eof_test_process::isolated_eof_case(
+        "listener::root_tests::post_accept_revalidation_closes_the_actual_new_endpoint",
+        post_accept_revalidation_closes_the_actual_new_endpoint_isolated,
+    );
+}
+
+fn post_accept_revalidation_closes_the_actual_new_endpoint_isolated() {
     let f = Fixture::new("lr-post-accept");
     let mut owner = admitted(&f);
     owner.activate_original_root().unwrap();
