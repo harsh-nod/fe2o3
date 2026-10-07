@@ -1,10 +1,15 @@
 //! Original caller demands, independent of any original or expanded target.
 //! These rows describe obligations; they do not prove preservation across calls.
+use super::super::{Terminator, boundary::Boundaries, invocations::InvocationPlan};
 use super::{
-    Boundaries, ComponentDemandsV42, Error, Event, InvocationPlan, Resource, Result, SourceBlock,
-    SourceSlots, Terminator, Value, Variable, Writer, block, vector,
+    Error, Resource, Result, Writer, component_demands::ComponentDemandsV42, slots::SourceSlots,
+    vector,
 };
 use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+use fe2o3_mir_model::{
+    SsaBlockIdV1 as Block, SsaResolvedEventV1 as Event, SsaValueV1 as Value,
+    SsaVariableIdV1 as Variable, semantic_mir_v1::SemanticBlockIdV1 as SourceBlock,
+};
 use std::{
     mem::{align_of_val, size_of, size_of_val},
     ops::Range,
@@ -36,6 +41,12 @@ fn mismatch() -> Error {
     Error::Statement("original frame demand differs from its retained caller SSA")
 }
 
+fn block(index: usize) -> Result<Block> {
+    Ok(Block::new(
+        u32::try_from(index).map_err(|_| Resource::Arithmetic)?,
+    ))
+}
+
 pub(super) fn headers() -> usize {
     // Caller inputs, borrowed source/SSA rows, and event/leaf traversal state.
     18 * size_of::<&()>()
@@ -58,7 +69,7 @@ pub(super) fn headers() -> usize {
         + size_of::<std::slice::Iter<'_, (u32, Event)>>()
         + size_of::<&[Variable]>()
         + size_of::<&[(u32, Event)]>()
-        + size_of::<&[super::super::super::invocations::CallSite]>()
+        + size_of::<&[super::super::invocations::CallSite]>()
         + size_of::<std::result::Result<usize, usize>>()
         + size_of::<&mut [Option<Value>]>()
         + size_of::<&mut [Option<ComponentDemandsV42<'_, '_, '_>>]>()

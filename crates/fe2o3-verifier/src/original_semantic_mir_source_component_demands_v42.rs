@@ -1,7 +1,7 @@
 //! Backward demands for independently modeled original value components.
 //! This retains the source CFG and SSA reachability; it is not another SSA plan.
 
-use super::{Error, Resource, Result, SourceSlots, Writer, add, vector};
+use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_mir_model::{
     SsaBlockIdV1,
     semantic_mir_v1::{
@@ -40,6 +40,11 @@ struct Facts<'a, 'view, 'source, 'data> {
 
 fn mismatch() -> Error {
     Error::Statement("original aggregate component demand differs from its source CFG")
+}
+
+fn add(left: usize, right: usize) -> Result<usize> {
+    left.checked_add(right)
+        .ok_or_else(|| Resource::Arithmetic.into())
 }
 
 fn words_for(bits: usize) -> Result<usize> {

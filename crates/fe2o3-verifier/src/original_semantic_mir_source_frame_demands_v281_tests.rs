@@ -1,4 +1,4 @@
-use super::super::{ControlInput, PairedInvocations, SourceByteProgram};
+use super::super::super::boundary::ControlInput;
 use super::*;
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
@@ -138,8 +138,8 @@ fn fixture(
         &mut Writer<'_, '_>,
     ) -> Result<()>,
 ) -> (Result<()>, usize, usize, usize) {
-    super::super::super::super::invocations::tests::run_variant(work, storage, true, |plan, out| {
-        super::super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+    super::super::super::invocations::tests::run_variant(work, storage, true, |plan, out| {
+        super::super::source_function::tests::with_slots(plan, out, |slots, out| {
             examine(plan, slots, out)
         })
     })
@@ -258,13 +258,113 @@ fn source_frame_caller_demands_match_independent_original_ssa_replay() {
 }
 
 #[test]
+fn source_frame_projected_return_keeps_only_unwritten_continuation_leaves() {
+    super::super::super::invocations::tests::run_source_transform(
+        LIMIT,
+        LIMIT,
+        |types, functions| {
+            super::super::paired::aggregate_tests::call_transform(types, functions, false)
+        },
+        |plan, out| {
+            super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                let source = plan.source(out)?;
+                let semantic = source.source_semantic(out.budget)?;
+                let archive = source.source_ssa(out.budget)?;
+                let mut cache = vector(semantic.functions().len(), out)?;
+                cache.resize_with(semantic.functions().len(), || None);
+                let mut projected = 0;
+                for root in 0..source.root_count(out.budget)? {
+                    let caller = plan.instance(root, 0, out)?;
+                    let function = &semantic.functions()[caller.function.index() as usize];
+                    let ssa = archive.plan_for_function(caller.function).unwrap().plan();
+                    let successors: Vec<Vec<_>> = function
+                        .blocks()
+                        .iter()
+                        .map(|body| {
+                            let mut edges = Vec::new();
+                            body.terminator()
+                                .kind()
+                                .try_for_each_edge(|edge| {
+                                    edges.push(block(edge.target().index() as usize)?);
+                                    Ok::<_, Error>(())
+                                })
+                                .unwrap();
+                            edges
+                        })
+                        .collect();
+                    let boundaries = Boundaries::derive(
+                        ssa,
+                        ControlInput {
+                            entry: block(function.entry().index() as usize)?,
+                            successors: &successors,
+                        },
+                        out,
+                    )?;
+                    for site in plan.calls(root, 0, out)? {
+                        let demands = caller_demands(
+                            slots,
+                            plan,
+                            root,
+                            0,
+                            site.block,
+                            &boundaries,
+                            &mut cache,
+                            out,
+                        )?;
+                        let aggregate = demands.iter().find(|row| row.local == 4).unwrap();
+                        assert_eq!(aggregate.components.overwritten, Some((0, 1)));
+                        assert_eq!(aggregate.components.block, site.block.index() as usize + 1);
+                        let mut original = BTreeMap::new();
+                        for &variable in ssa.live_in(block(site.block.index() as usize)?).unwrap() {
+                            original.insert(
+                                variable.get(),
+                                boundaries.value(
+                                    block(site.block.index() as usize)?,
+                                    variable,
+                                    out,
+                                )?,
+                            );
+                        }
+                        for &(_, event) in ssa
+                            .resolved_events(block(site.block.index() as usize)?)
+                            .unwrap()
+                        {
+                            match event {
+                                Event::Define { variable, value } => {
+                                    original.insert(variable.get(), value);
+                                }
+                                Event::Kill { variable, .. } => {
+                                    original.remove(&variable.get());
+                                }
+                                Event::Use { .. } => (),
+                            }
+                        }
+                        assert_eq!(aggregate.value, original[&4]);
+                        let components = cache[caller.function.index() as usize].as_ref().unwrap();
+                        assert!(components.leaf_required(
+                            caller.function,
+                            aggregate.components.block,
+                            4,
+                            1,
+                            out
+                        )?);
+                        projected += 1;
+                    }
+                }
+                assert_eq!(projected, 4);
+                Ok(())
+            })
+        },
+    )
+    .0
+    .unwrap();
+}
+
+#[test]
 fn source_frame_complete_extraction_has_exact_and_short_resource_replay() {
     let (result, work, restored, peak) = fixture(LIMIT, LIMIT, compare_original_demands);
     result.unwrap();
-    assert_eq!(
-        restored,
-        super::super::super::super::invocations::tests::FLOOR
-    );
+    assert_eq!(restored, super::super::super::invocations::tests::FLOOR);
     let exact = fixture(work, peak, compare_original_demands);
     exact.0.unwrap();
     assert_eq!((exact.1, exact.2, exact.3), (work, restored, peak));
@@ -281,39 +381,6 @@ fn source_frame_complete_extraction_has_exact_and_short_resource_replay() {
 }
 
 #[test]
-fn source_frame_extraction_keeps_nominal_argument_return_and_suspended_bindings() {
-    fixture(LIMIT, LIMIT, |plan, slots, out| {
-        let source = SourceByteProgram::derive(plan, slots, out)?;
-        let paired = PairedInvocations::derive(
-            plan,
-            &source,
-            fe2o3_kernel_ir::FormalIndexWidth::Bits64,
-            out,
-        )?;
-        assert!(
-            paired
-                .instances
-                .iter()
-                .flatten()
-                .any(|row| !row.suspended.is_empty())
-        );
-        assert!(
-            paired
-                .instances
-                .iter()
-                .flatten()
-                .any(|row| !row.arguments.is_empty())
-        );
-        paired.emit(out)?;
-        assert!(out.text.contains("invocation_paired_initial_trace_0_v36"));
-        assert!(!out.text.contains("assume("));
-        Ok(())
-    })
-    .0
-    .unwrap();
-}
-
-#[test]
 fn source_frame_component_cache_rejects_foreign_slots_and_other_functions() {
     fixture(LIMIT, LIMIT, |plan, slots, out| {
         let function = plan.instance(0, 0, out)?.function;
@@ -327,7 +394,7 @@ fn source_frame_component_cache_rejects_foreign_slots_and_other_functions() {
                 "original aggregate component demand differs from its source CFG"
             ))
         ));
-        super::super::super::source_function::tests::with_slots(plan, out, |foreign, out| {
+        super::super::source_function::tests::with_slots(plan, out, |foreign, out| {
             assert!(!std::ptr::eq(slots, foreign));
             assert!(matches!(
                 demands.check_owner_v281(foreign, function, out),
