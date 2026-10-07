@@ -384,18 +384,26 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     assert_eq!(source.matches("proof fn ").count(), 20);
     let logical_projection = source
         .split_once("proof fn invocation_source_logical_write_aggregates_v268(")
-        .unwrap().1
+        .unwrap()
+        .1
         .split_once("\n{\n")
-        .unwrap().0;
-    assert_eq!(logical_projection,
-        "\n    logical: InvocationSourceLogicalV38, local: int,\n)\n    ensures invocation_source_logical_write_v38(logical, local).aggregates\n        == logical.aggregates.remove(local),");
+        .unwrap()
+        .0;
+    assert_eq!(
+        logical_projection,
+        "\n    logical: InvocationSourceLogicalV38, local: int,\n)\n    ensures invocation_source_logical_write_v38(logical, local).aggregates\n        == logical.aggregates.remove(local),"
+    );
     let checked_values = source
         .split_once("proof fn invocation_checked_add_values_typed_v268(")
-        .unwrap().1
+        .unwrap()
+        .1
         .split_once("\n{\n")
-        .unwrap().0;
-    assert_eq!(checked_values,
-        "left: int, right: int)\n    requires 0 <= left < 4294967296, 0 <= right < 4294967296,\n    ensures invocation_source_byte_value_typed_v36(\n        MemoryValueV30::Scalar((left + right) % 4294967296), 32)\n        && invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(\n            if left + right >= 4294967296 { 1int } else { 0int }), 1),");
+        .unwrap()
+        .0;
+    assert_eq!(
+        checked_values,
+        "left: int, right: int)\n    requires 0 <= left < 4294967296, 0 <= right < 4294967296,\n    ensures invocation_source_byte_value_typed_v36(\n        MemoryValueV30::Scalar((left + right) % 4294967296), 32)\n        && invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(\n            if left + right >= 4294967296 { 1int } else { 0int }), 1),"
+    );
     let replay = source
         .split_once("proof fn invocation_source_checked_event_replays_v264(")
         .unwrap()
@@ -405,7 +413,11 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         .0;
     assert!(!replay.contains("requires"));
     assert!(replay.contains("destination, source_type, operation, bits, signed, left, right"));
-    assert!(replay.contains("== invocation_source_checked_v42(source, destination, source_type, operation,"));
+    assert!(
+        replay.contains(
+            "== invocation_source_checked_v42(source, destination, source_type, operation,"
+        )
+    );
     for name in [
         "invocation_context_marker_aggregate_well_formed_v260",
         "invocation_checked_add_aggregate_complete_v260",
@@ -429,14 +441,22 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         .unwrap()
         .0;
     assert_eq!(
-        install.split_once("    requires ").unwrap().1.split_once("    ensures ").unwrap().0,
+        install
+            .split_once("    requires ")
+            .unwrap()
+            .1
+            .split_once("    ensures ")
+            .unwrap()
+            .0,
         "source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),\n        invocation_source_aggregate_well_formed_v42(aggregate), aggregate.execution_lease.is_none(),\n"
     );
     let install_body = source
         .split_once("proof fn invocation_source_plain_aggregate_install_frame_v260(")
-        .unwrap().1
+        .unwrap()
+        .1
         .split_once("proof fn invocation_context_marker_aggregate_well_formed_v260(")
-        .unwrap().0;
+        .unwrap()
+        .0;
     for hidden in [
         "invocation_source_logical_write_v38",
         "invocation_source_execution_lease_current_v170",
@@ -444,36 +464,50 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     ] {
         assert!(install_body.contains(&format!("hide({hidden});")));
     }
-    assert_eq!(install_body.matches(
-        "invocation_source_logical_write_aggregates_v268(source.logical, destination);"
-    ).count(), 1);
+    assert_eq!(
+        install_body
+            .matches(
+                "invocation_source_logical_write_aggregates_v268(source.logical, destination);"
+            )
+            .count(),
+        1
+    );
     assert!(!install_body.contains("reveal(invocation_source_logical_write_v38);"));
     let marker_body = source
         .split_once("proof fn invocation_context_marker_aggregate_well_formed_v260(")
-        .unwrap().1
+        .unwrap()
+        .1
         .split_once("proof fn invocation_checked_add_aggregate_complete_v260(")
-        .unwrap().0;
+        .unwrap()
+        .0;
     let checked_shape_body = source
         .split_once("proof fn invocation_checked_add_aggregate_complete_v260(")
-        .unwrap().1
+        .unwrap()
+        .1
         .split_once("proof fn invocation_source_context_issue_frame_v262(")
-        .unwrap().0;
+        .unwrap()
+        .0;
     for body in [marker_body, checked_shape_body] {
         assert!(body.contains("hide(invocation_source_aggregate_well_formed_v42);"));
         assert!(body.contains("hide(invocation_source_byte_value_typed_v36);"));
         assert!(body.contains("reveal(invocation_source_aggregate_well_formed_v42);"));
     }
     assert!(marker_body.contains("reveal(invocation_source_byte_value_typed_v36);"));
-    assert!(marker_body.contains(
-        "assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Unit, 0)) by {"
-    ));
+    assert!(
+        marker_body.contains(
+            "assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Unit, 0)) by {"
+        )
+    );
     assert!(marker_body.contains("assert(0 <= ordinal < 5 && path == seq![ordinal]);"));
     assert!(marker_body.contains("assert(leaves[path] == MemoryValueV30::Unit);"));
     assert!(checked_shape_body.contains("hide(memory_value_modulus_v30);"));
     assert!(checked_shape_body.contains("assert(seq![0int] != seq![1int]);"));
-    assert_eq!(checked_shape_body.matches(
-        "invocation_checked_add_values_typed_v268(left, right);"
-    ).count(), 1);
+    assert_eq!(
+        checked_shape_body
+            .matches("invocation_checked_add_values_typed_v268(left, right);")
+            .count(),
+        1
+    );
     assert!(!checked_shape_body.contains("reveal(invocation_source_byte_value_typed_v36);"));
     assert!(!checked_shape_body.contains("reveal(memory_value_modulus_v30);"));
     let frame = source
@@ -496,13 +530,30 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     );
     let frame_body = source
         .split_once("proof fn invocation_context_issue_fresh_preserves_frame_v259(")
-        .unwrap().1
+        .unwrap()
+        .1
         .split_once("proof fn invocation_context_issue_preserves_snapshot_v259(")
-        .unwrap().0;
+        .unwrap()
+        .0;
     assert!(!frame_body.contains("invocation_context_issue_fresh_has_exact_updates_v211("));
-    assert_eq!(frame_body.matches("invocation_context_issue_fresh_preserves_current_map_v238(").count(), 1);
-    assert_eq!(frame_body.matches("invocation_context_issue_coupling_replays_both_actual_steps_v211(").count(), 1);
-    assert_eq!(frame_body.matches("invocation_source_context_issue_frame_projection_v267(source, issue);").count(), 1);
+    assert_eq!(
+        frame_body
+            .matches("invocation_context_issue_fresh_preserves_current_map_v238(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        frame_body
+            .matches("invocation_context_issue_coupling_replays_both_actual_steps_v211(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        frame_body
+            .matches("invocation_source_context_issue_frame_projection_v267(source, issue);")
+            .count(),
+        1
+    );
     for source_only in [
         "let aggregate =",
         "InvocationSourceAggregateV42 {",
@@ -511,7 +562,10 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "assert(after.logical.aggregates[issue.destination] == aggregate);",
         "assert(after.logical.aggregates =~=",
     ] {
-        assert!(!frame_body.contains(source_only), "source-only normalization leaked into coupled frame: {source_only}");
+        assert!(
+            !frame_body.contains(source_only),
+            "source-only normalization leaked into coupled frame: {source_only}"
+        );
     }
     let inputs = |name: &str| {
         source
@@ -537,13 +591,33 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         inputs("invocation_source_checked_add_local_step_v266"),
         "source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),\n        0 <= left_local < source.machine.values.len(), 0 <= right_local < source.machine.values.len(),\n        source.machine.values[left_local] == MemoryValueV30::Scalar(left),\n        source.machine.values[right_local] == MemoryValueV30::Scalar(right),\n        0 <= left < 4294967296, 0 <= right < 4294967296,\n        invocation_source_aggregate_leaf_count_v42(source_type) == 2,\n        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],\n        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],\n        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,\n        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,\n"
     );
-    let local_step = source.split_once("proof fn invocation_source_checked_add_local_step_v266(").unwrap().1;
+    let local_step = source
+        .split_once("proof fn invocation_source_checked_add_local_step_v266(")
+        .unwrap()
+        .1;
     assert!(local_step.contains("let after = invocation_source_byte_step_v36(source,\n        InvocationSourceByteEventV36::Checked {"));
-    assert_eq!(local_step.matches("invocation_source_local_evaluates_v265(source,").count(), 2);
-    assert_eq!(local_step.matches("invocation_source_checked_add_reconstruction_step_v259(source,").count(), 1);
-    assert_eq!(local_step.matches("invocation_source_checked_event_replays_v264(source,").count(), 1);
+    assert_eq!(
+        local_step
+            .matches("invocation_source_local_evaluates_v265(source,")
+            .count(),
+        2
+    );
+    assert_eq!(
+        local_step
+            .matches("invocation_source_checked_add_reconstruction_step_v259(source,")
+            .count(),
+        1
+    );
+    assert_eq!(
+        local_step
+            .matches("invocation_source_checked_event_replays_v264(source,")
+            .count(),
+        1
+    );
     assert!(local_step.contains("assert(value_path != overflow_path);"));
-    assert!(source.contains("== (InvocationSourceByteEvaluationV36 { source, value: source.machine.values[local] })"));
+    assert!(source.contains(
+        "== (InvocationSourceByteEvaluationV36 { source, value: source.machine.values[local] })"
+    ));
     assert!(source.contains("== (InvocationSourceTileResultV161 { source: after, observations })"));
     assert_eq!(
         inputs("invocation_source_context_issue_replays_install_v263"),
@@ -555,13 +629,22 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     );
     let projection = source
         .split_once("proof fn invocation_source_context_issue_frame_projection_v267(")
-        .unwrap().1
+        .unwrap()
+        .1
         .split_once("proof fn invocation_context_issue_fresh_preserves_frame_v259(")
-        .unwrap().0;
-    assert_eq!(projection.matches("invocation_source_context_issue_frame_v262(source, issue);").count(), 1);
+        .unwrap()
+        .0;
+    assert_eq!(
+        projection
+            .matches("invocation_source_context_issue_frame_v262(source, issue);")
+            .count(),
+        1
+    );
     assert!(projection.contains("let after = source_step.source;"));
     assert!(projection.contains("issue.destination, after.logical.aggregates[issue.destination]"));
-    assert!(projection.contains("assert(after.logical.aggregates[issue.destination] == aggregate);"));
+    assert!(
+        projection.contains("assert(after.logical.aggregates[issue.destination] == aggregate);")
+    );
     assert!(!projection.contains("target"));
     assert!(!projection.contains("execution_map"));
     assert_eq!(
@@ -573,23 +656,38 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         )
     );
     let pair_inputs = inputs("invocation_source_checked_pair_replays_install_v269");
-    assert_eq!(pair_inputs,
-        "source.machine.valid,\n        bits == 8 || bits == 16 || bits == 32 || bits == 64, 0 <= operation < 3,\n        invocation_source_aggregate_leaf_count_v42(source_type) == 2,\n        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],\n        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],\n        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == bits,\n        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,\n        !matches!(left_operand, InvocationSourceByteValueV36::Read { .. }),\n        !matches!(right_operand, InvocationSourceByteValueV36::Read { .. }),\n        invocation_source_byte_evaluate_v36(source, left_operand, bits, root, instance, little_endian)\n            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(left) }),\n        invocation_source_byte_evaluate_v36(source, right_operand, bits, root, instance, little_endian)\n            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(right) }),\n        invocation_source_checked_pair_v44(MemoryValueV30::Scalar(left),\n            MemoryValueV30::Scalar(right), operation, bits, signed) == Some((value, overflow)),\n");
+    assert_eq!(
+        pair_inputs,
+        "source.machine.valid,\n        bits == 8 || bits == 16 || bits == 32 || bits == 64, 0 <= operation < 3,\n        invocation_source_aggregate_leaf_count_v42(source_type) == 2,\n        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],\n        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],\n        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == bits,\n        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,\n        !matches!(left_operand, InvocationSourceByteValueV36::Read { .. }),\n        !matches!(right_operand, InvocationSourceByteValueV36::Read { .. }),\n        invocation_source_byte_evaluate_v36(source, left_operand, bits, root, instance, little_endian)\n            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(left) }),\n        invocation_source_byte_evaluate_v36(source, right_operand, bits, root, instance, little_endian)\n            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(right) }),\n        invocation_source_checked_pair_v44(MemoryValueV30::Scalar(left),\n            MemoryValueV30::Scalar(right), operation, bits, signed) == Some((value, overflow)),\n"
+    );
     let pair_body = source
         .split_once("proof fn invocation_source_checked_pair_replays_install_v269(")
-        .unwrap().1
+        .unwrap()
+        .1
         .split_once("proof fn invocation_source_checked_add_replays_install_v260(")
-        .unwrap().0;
+        .unwrap()
+        .0;
     assert!(!pair_body.contains("4294967296"));
     assert!(!pair_body.split_once("\n{\n").unwrap().1.contains("hide("));
     assert!(pair_body.contains("reveal(invocation_source_checked_v42);"));
-    assert!(pair_body.contains("leaves: Map::empty().insert(seq![0int], value).insert(seq![1int], overflow)"));
+    assert!(
+        pair_body.contains(
+            "leaves: Map::empty().insert(seq![0int], value).insert(seq![1int], overflow)"
+        )
+    );
     let add_replay = source
         .split_once("proof fn invocation_source_checked_add_replays_install_v260(")
-        .unwrap().1
+        .unwrap()
+        .1
         .split_once("proof fn invocation_source_checked_add_reconstruction_step_v259(")
-        .unwrap().0;
-    assert_eq!(add_replay.matches("invocation_reconstructed_checked_add_u32_v259(left, right);").count(), 1);
+        .unwrap()
+        .0;
+    assert_eq!(
+        add_replay
+            .matches("invocation_reconstructed_checked_add_u32_v259(left, right);")
+            .count(),
+        1
+    );
     assert_eq!(add_replay.matches("invocation_source_checked_pair_replays_install_v269(source, destination, source_type,").count(), 1);
     assert!(!add_replay.contains("reveal(invocation_source_checked_v42);"));
     let add_replay_body = add_replay.split_once("\n{\n").unwrap().1;
@@ -598,8 +696,14 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     assert!(add_replay_body.contains("pair.0, pair.1, root, instance, little_endian);"));
     assert!(add_replay_body.contains("None => {},"));
     assert!(!add_replay_body.contains("4294967296"));
-    assert!(add_replay_body.find("invocation_source_checked_pair_replays_install_v269(").unwrap()
-        < add_replay_body.find("invocation_reconstructed_checked_add_u32_v259(").unwrap());
+    assert!(
+        add_replay_body
+            .find("invocation_source_checked_pair_replays_install_v269(")
+            .unwrap()
+            < add_replay_body
+                .find("invocation_reconstructed_checked_add_u32_v259(")
+                .unwrap()
+    );
     for exact in [
         "values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined)",
         "values: target.values.update(destination, next.target.values[destination])",
@@ -687,7 +791,9 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         assert!(!body.contains("let leaves ="));
         if name == "invocation_source_context_issue_frame_v262" {
             assert!(body.contains("hide(invocation_source_observe_effects_v39);"));
-            assert!(body.contains("invocation_source_tile_installed_valid_v265(source, installed, Seq::empty());"));
+            assert!(body.contains(
+                "invocation_source_tile_installed_valid_v265(source, installed, Seq::empty());"
+            ));
             assert!(!body.contains("reveal(invocation_source_tile_installed_v161);"));
         }
         for hidden in [
