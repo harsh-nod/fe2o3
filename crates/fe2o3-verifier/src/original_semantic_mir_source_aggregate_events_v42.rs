@@ -105,6 +105,20 @@ impl Transfer {
         let (Operand::Copy(place) | Operand::Move(place)) = operand else {
             return Err(unsupported());
         };
+        out.budget.charge_work(2)?;
+        if matches!(operand, Operand::Copy(_))
+            && matches!(
+                context
+                    .types
+                    .get(ty.index() as usize)
+                    .ok_or_else(mismatch)?
+                    .rust_type_kind(),
+                SemanticRustTypeKindV1::Execution(_)
+            )
+            && !context.slots.product_type_copyable_v282(ty, out)?
+        {
+            return Err(unsupported());
+        }
         let source = AggregatePlace::derive(context, place, out)?.ok_or_else(unsupported)?;
         let destination = AggregatePlace::derive(context, assignment.destination(), out)?
             .ok_or_else(unsupported)?;

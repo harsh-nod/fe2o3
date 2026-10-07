@@ -10,8 +10,8 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticBackendPrimitiveV1 as BackendPrimitive, SemanticBackendReprV1 as BackendRepr,
     SemanticBackendScalarV1 as BackendScalar, SemanticFieldsShapeV1 as Fields,
     SemanticPointerKindV1 as PointerKind, SemanticPointerMetadataV1 as PointerMetadata,
-    SemanticProjectionKindV1 as Projection, SemanticTerminatorKindV1 as Terminator,
-    SemanticVolatilityV1 as Volatility,
+    SemanticProjectionKindV1 as Projection, SemanticRustTypeKindV1,
+    SemanticTerminatorKindV1 as Terminator, SemanticVolatilityV1 as Volatility,
 };
 use std::{fmt::Write as _, mem::size_of, ops::Range};
 
@@ -50,6 +50,10 @@ mod witness_transfers;
 #[cfg(test)]
 #[path = "original_semantic_mir_descriptor_dispatch_v48_tests.rs"]
 mod descriptor_dispatch_tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_nominal_aggregate_copy_v290_tests.rs"]
+mod nominal_aggregate_copy_tests;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Address {
@@ -1557,6 +1561,16 @@ impl Context<'_, '_, '_> {
             let (Operand::Copy(place) | Operand::Move(place)) = operand else {
                 return Err(unsupported());
             };
+            out.budget.charge_work(2)?;
+            if matches!(operand, Operand::Copy(_))
+                && matches!(
+                    declaration.rust_type_kind(),
+                    SemanticRustTypeKindV1::Execution(_)
+                )
+                && !self.slots.product_type_copyable_v282(ty, out)?
+            {
+                return Err(unsupported());
+            }
             OperandKind::Aggregate {
                 place: aggregates::AggregatePlace::derive(self, place, out)?
                     .ok_or_else(unsupported)?,
@@ -1989,6 +2003,17 @@ fn emit_event(
     Ok(())
 }
 
+fn aggregate_copy_headers() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    h::<SemanticRustTypeKindV1>()
+        + h::<&Type>()
+        + h::<Option<&Type>>()
+        + h::<&Operand>()
+        + h::<bool>()
+}
+
 fn headers() -> usize {
     fn h<T>() -> usize {
         size_of::<T>() + 2 * size_of::<Result<T>>()
@@ -2025,6 +2050,7 @@ fn headers() -> usize {
         + h::<&[Type]>()
         + h::<Option<(u32, &'static str)>>()
         + call_operand_headers()
+        + aggregate_copy_headers()
         + pointer_events::headers()
         + witness_transfers::headers()
         + descriptor_loans::headers()

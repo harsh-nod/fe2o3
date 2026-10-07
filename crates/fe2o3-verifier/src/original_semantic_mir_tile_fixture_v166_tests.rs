@@ -569,6 +569,26 @@ pub(in super::super) fn run_fixture_with_unreachable_root_v281(
     )
 }
 
+pub(in super::super) fn run_fixture_with_owner_v290(
+    work: usize,
+    storage: usize,
+    owner: impl Fn() -> ProductionSemanticSsaOwnerV1,
+    examine: impl FnOnce(
+        &InvocationPlan<'_, '_>,
+        &SourceSlots<'_, '_>,
+        &TileExpansion<'_, '_>,
+        &mut Writer<'_, '_>,
+    ) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_fixture_with_preparation(
+        Layout::Blocked,
+        work,
+        storage,
+        |budget| prepared_with_owner(budget, owner),
+        examine,
+    )
+}
+
 fn run_fixture_with_preparation(
     layout: Layout,
     work: usize,
