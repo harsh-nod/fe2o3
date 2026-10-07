@@ -26,6 +26,7 @@ pub mod context;
 pub mod diagnostics;
 pub mod execution;
 pub mod ffi;
+pub mod fp4;
 pub mod fp8;
 pub mod gfx950;
 pub mod group;
@@ -71,6 +72,7 @@ pub use ffi::{
     DeviceConstantPtr, DeviceFfiAbiTypeV1, DeviceGlobalConstPtr, DeviceGlobalMutPtr,
     DevicePrivateConstPtr, DevicePrivateMutPtr, DeviceWorkgroupConstPtr, DeviceWorkgroupMutPtr,
 };
+pub use fp4::{Fp4E2M1Error, Fp4E2M1Ocp, Fp4E2M1Ocpx8};
 pub use fp8::{Fp8E4M3Fnuz, Fp8E4M3Fnuzx4, Fp8E5M2Fnuz, Fp8E5M2Fnuzx4};
 pub use gfx950::{
     GFX950_LOW_PRECISION_CONTRACT_VERSION_V1, GFX950_MFMA_K, GFX950_MFMA_M, GFX950_MFMA_N,
