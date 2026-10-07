@@ -3,7 +3,7 @@
 use super::super::invocations::{CallKind, InvocationPlan};
 use super::{
     Error, Resource, Result, Writer, expanded_generation::ExpandedGenerationV221,
-    slots::SourceSlots, tile_target::TileMicroCutsV180, vector,
+    slots::SourceSlots, source_frame_plan::FramePlan, tile_target::TileMicroCutsV180, vector,
 };
 use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
 use fe2o3_kernel_ir::{
@@ -108,6 +108,10 @@ pub struct ExpandedSupportInstanceV280 {
     pub cuts: Range<usize>,
     /// Range in the complete call roster.
     pub calls: Range<usize>,
+    /// Exact incoming global call row; not a dynamic suspended-frame witness.
+    pub parent_call_v281: Option<usize>,
+    /// Original call-frame depth, distinct from target execution frames.
+    pub depth_v281: usize,
 }
 
 /// Original call class, independent of whether an expanded continuation exists.
@@ -138,6 +142,10 @@ pub struct ExpandedSupportCallV280 {
     pub reachable: bool,
     /// Root-relative authenticated child, when retained.
     pub child: Option<usize>,
+    /// Original continuation block for ordinary calls.
+    pub continuation_v281: Option<usize>,
+    /// Shared caller demands while this exact child is executing.
+    pub carries_v281: Range<usize>,
 }
 
 /// One original block entry, including entries with no target candidates.
@@ -155,6 +163,27 @@ pub struct ExpandedSupportCutV280 {
     pub zero_edges: Range<usize>,
     /// Existing bounded zero-step rank, not a whole-execution termination proof.
     pub zero_rank: usize,
+    /// Current-frame original demands; inactive/unreachable cuts remain empty.
+    pub current_v281: Range<usize>,
+}
+
+/// An original SSA obligation, not an expanded target definition or proof.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExpandedSupportFrameDemandV281 {
+    /// Original root ordinal.
+    pub root: usize,
+    /// Root-local original instance.
+    pub instance: usize,
+    /// Local within the original semantic function.
+    pub local: usize,
+    /// Global source-interpreter logical coordinate.
+    pub logical_local: usize,
+    /// Exact retained original SSA endpoint.
+    pub value: fe2o3_mir_model::SsaValueV1,
+    /// Original entry/continuation at which component liveness was queried.
+    pub component_block: usize,
+    /// Exact leaf range overwritten by a projected return, if any.
+    pub overwritten: Option<(usize, usize)>,
 }
 
 /// Exact expanded block boundary, not a bounding interval.
@@ -182,6 +211,8 @@ pub struct ExpandedSupportCensusV280<'a> {
     pub candidates: &'a [ExpandedSupportCursorV280],
     /// Existing coincident-cursor edges, as global cut ordinals.
     pub zero_edges: &'a [(usize, usize)],
+    /// Current and shared suspended-caller requirements, not temporal evidence.
+    pub frame_demands_v281: &'a [ExpandedSupportFrameDemandV281],
 }
 
 struct Census {
@@ -191,6 +222,7 @@ struct Census {
     cuts: Vec<ExpandedSupportCutV280>,
     candidates: Vec<ExpandedSupportCursorV280>,
     zero_edges: Vec<(usize, usize)>,
+    frame_demands: Vec<ExpandedSupportFrameDemandV281>,
 }
 
 impl Census {
@@ -198,13 +230,19 @@ impl Census {
         plan: &InvocationPlan<'_, '_>,
         model: &ExpandedGenerationV221<'_, '_, '_, '_>,
         cuts: &TileMicroCutsV180<'_, '_, '_, '_>,
+        frames: &FramePlan<'_, '_, '_, '_>,
         out: &mut Writer<'_, '_>,
     ) -> Result<Self> {
+        frames.check(plan, model.target(out)?.source_slots(out)?, out)?;
         let source = plan.source(out)?;
         let count = source.root_count(out.budget)?;
         let rows = cuts.static_rows_v280(out)?;
         out.budget.charge_work(2)?;
-        if rows.roots.len() != count || rows.rank.len() != rows.cuts.len() {
+        if rows.roots.len() != count
+            || rows.rank.len() != rows.cuts.len()
+            || frames.roots.len() != count
+            || frames.cuts.len() != rows.cuts.len()
+        {
             return Err(mismatch());
         }
         let (mut instances, mut calls) = (0usize, 0usize);
@@ -223,6 +261,7 @@ impl Census {
             cuts: vector(rows.cuts.len(), out)?,
             candidates: vector(rows.candidates.len(), out)?,
             zero_edges: vector(rows.zero_edges.len(), out)?,
+            frame_demands: vector(frames.demands.len(), out)?,
         };
         for (root, range) in rows.roots.iter().enumerate() {
             let scope = plan.root(root, out)?;
@@ -239,9 +278,37 @@ impl Census {
             for instance in 0..scope.instances.len() {
                 out.budget.charge_work(1)?;
                 let row = plan.instance(root, instance, out)?;
+                let frame = frames
+                    .frames
+                    .get(census.instances.len())
+                    .ok_or_else(mismatch)?;
+                if (frame.root, frame.instance, frame.function, frame.active)
+                    != (root, instance, row.function, row.active)
+                    || frame.locals != row.locals
+                {
+                    return Err(mismatch());
+                }
                 let first = census.calls.len();
                 for call in plan.calls(root, instance, out)? {
                     out.budget.charge_work(1)?;
+                    let carry = frames.calls.get(census.calls.len()).ok_or_else(mismatch)?;
+                    if (
+                        carry.root,
+                        carry.caller,
+                        carry.block,
+                        carry.child,
+                        carry.kind,
+                        carry.reachable,
+                    ) != (
+                        root,
+                        call.caller,
+                        call.block.index() as usize,
+                        call.child,
+                        call.kind,
+                        call.ssa_reachable,
+                    ) {
+                        return Err(mismatch());
+                    }
                     census.calls.push(ExpandedSupportCallV280 {
                         root,
                         caller: call.caller,
@@ -254,6 +321,8 @@ impl Census {
                         },
                         reachable: call.ssa_reachable,
                         child: call.child,
+                        continuation_v281: carry.continuation,
+                        carries_v281: carry.demands.clone(),
                     });
                 }
                 census.instances.push(ExpandedSupportInstanceV280 {
@@ -265,6 +334,8 @@ impl Census {
                     locals: row.locals.clone(),
                     cuts: row.blocks.clone(),
                     calls: first..census.calls.len(),
+                    parent_call_v281: frame.parent_call,
+                    depth_v281: frame.depth,
                 });
             }
             if range.start != census.cuts.len() {
@@ -273,6 +344,12 @@ impl Census {
             for pc in range.clone() {
                 out.budget.charge_work(1)?;
                 let cut = rows.cuts.get(pc).ok_or_else(mismatch)?;
+                let current = frames.cuts.get(pc).ok_or_else(mismatch)?;
+                if (current.root, current.instance, current.block, current.pc)
+                    != (root, cut.instance, cut.block.index() as usize, pc)
+                {
+                    return Err(mismatch());
+                }
                 census.cuts.push(ExpandedSupportCutV280 {
                     root,
                     instance: cut.instance,
@@ -280,6 +357,7 @@ impl Census {
                     candidates: cut.candidates.clone(),
                     zero_edges: cut.edges.clone(),
                     zero_rank: *rows.rank.get(pc).ok_or_else(mismatch)?,
+                    current_v281: current.demands.clone(),
                 });
             }
         }
@@ -294,6 +372,22 @@ impl Census {
         for &edge in rows.zero_edges {
             out.budget.charge_work(1)?;
             census.zero_edges.push(edge);
+        }
+        for demand in &frames.demands {
+            out.budget.charge_work(2)?;
+            let frame = frames.frames.get(demand.frame).ok_or_else(mismatch)?;
+            if demand.source.local >= frame.locals.len() {
+                return Err(mismatch());
+            }
+            census.frame_demands.push(ExpandedSupportFrameDemandV281 {
+                root: frame.root,
+                instance: frame.instance,
+                local: demand.source.local,
+                logical_local: add(frame.locals.start, demand.source.local)?,
+                value: demand.source.value,
+                component_block: demand.source.components.block,
+                overwritten: demand.source.components.overwritten,
+            });
         }
         if census.instances.len() != instances
             || census.calls.len() != calls
@@ -312,6 +406,7 @@ impl Census {
             cuts: &self.cuts,
             candidates: &self.candidates,
             zero_edges: &self.zero_edges,
+            frame_demands_v281: &self.frame_demands,
         }
     }
 }
@@ -517,8 +612,10 @@ where
         let slots = SourceSlots::derive_tile_v162(&plan, tile, &mut out)?;
         let model = ExpandedGenerationV221::derive(&plan, &slots, width, endian, &mut out)?;
         let cuts = TileMicroCutsV180::derive(model.target(&mut out)?, &plan, &mut out)?;
-        let census = Census::derive(&plan, &model, &cuts, &mut out)?;
+        let frames = FramePlan::derive(&plan, &slots, &mut out)?;
+        let census = Census::derive(&plan, &model, &cuts, &frames, &mut out)?;
         model.emit_support_with_cuts_v280(&cuts, Some(runtime), &mut out)?;
+        model.emit_frame_contracts_v281(&frames, &cuts, &mut out)?;
         model.finish(&mut out)?;
         check_owners(source, original, tile, out.budget)?;
         let view = ExpandedSupportModelV280 {
@@ -571,6 +668,8 @@ where
         2 * size_of::<ExpandedSupportCallV280>(),
         2 * size_of::<ExpandedSupportCutV280>(),
         2 * size_of::<ExpandedSupportCursorV280>(),
+        2 * size_of::<ExpandedSupportFrameDemandV281>(),
+        size_of::<FramePlan<'_, '_, '_, '_>>(),
         size_of::<ExpandedSupportRuntimeV280>(),
         2 * size_of::<Range<usize>>(),
         size_of::<Result<Census>>(),
