@@ -765,7 +765,7 @@ pub(in super::super) fn deinitialized_transform(
 
 // Both tuple fields remain live, while every helper path returns normally.
 // Assertion failure admission is a separate control-flow obligation.
-fn checked_leaf_transform(
+pub(in super::super) fn checked_leaf_transform(
     types: &mut Vec<SemanticTypeDeclV1>,
     functions: &mut Vec<SemanticFunctionDeclV1>,
     operation: SemanticCheckedBinaryOpV1,

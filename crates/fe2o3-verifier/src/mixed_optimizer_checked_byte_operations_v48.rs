@@ -4,12 +4,12 @@ use super::*;
 use fe2o3_kernel_ir::{BinaryOp, CheckedBinaryOperator};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct CheckedByteOperationV48 {
-    pub(super) operands: [usize; 2],
-    pub(super) results: [usize; 2],
-    pub(super) bits: u32,
-    pub(super) signed: bool,
-    pub(super) operator: CheckedBinaryOperator,
+pub(in super::super) struct CheckedByteOperationV48 {
+    pub(in super::super) operands: [usize; 2],
+    pub(in super::super) results: [usize; 2],
+    pub(in super::super) bits: u32,
+    pub(in super::super) signed: bool,
+    pub(in super::super) operator: CheckedBinaryOperator,
 }
 
 fn unsupported() -> Error {
@@ -34,7 +34,7 @@ pub(super) fn width(scalar: ScalarType, index: FormalIndexWidth) -> Result<u32> 
 }
 
 impl CheckedByteOperationV48 {
-    pub(super) fn derive(
+    pub(in super::super) fn derive(
         inventory: &Inventory<'_>,
         operation: usize,
         index: FormalIndexWidth,

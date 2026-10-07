@@ -47,7 +47,7 @@ use integral::IntegralByteCastV40;
 
 #[path = "mixed_optimizer_checked_byte_operations_v48.rs"]
 mod checked;
-use checked::CheckedByteOperationV48;
+pub(super) use checked::CheckedByteOperationV48;
 
 #[path = "mixed_optimizer_float_byte_operations_v52.rs"]
 mod floating;

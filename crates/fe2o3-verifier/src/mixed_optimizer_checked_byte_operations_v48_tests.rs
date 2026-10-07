@@ -129,6 +129,60 @@ fn actual_checked_byte_dispatch_binds_both_result_ordinals_even_when_one_is_unus
 }
 
 #[test]
+fn actual_checked_byte_sparse_permuted_ids_use_dense_operand_and_result_ordinals() {
+    use fe2o3_kernel_ir::CheckedBinaryOperator;
+    for [left, right, value, overflow] in [[91, 7, 53, 11], [13, 89, 3, 67]] {
+        let mut entry = BasicBlock::new(BlockId(41));
+        entry.operations.push(KirOperation::new(
+            vec![
+                ValueDef::new(ValueId(value), Type::Scalar(ScalarType::U32)),
+                ValueDef::new(ValueId(overflow), Type::BOOL),
+            ],
+            OperationKind::Binary {
+                op: BinaryOp::Checked(CheckedBinaryOperator::Add),
+                lhs: ValueId(left),
+                rhs: ValueId(right),
+            },
+        ));
+        entry.terminator = Some(Terminator::Return {
+            values: vec![ValueId(value), ValueId(overflow)],
+        });
+        let mut module = Module::new("checked-sparse-ids");
+        module.functions.push(KirFunction::internal_helper(
+            "checked",
+            Signature::new(
+                vec![Type::Scalar(ScalarType::U32); 2],
+                vec![Type::Scalar(ScalarType::U32), Type::BOOL],
+            ),
+            vec![ValueId(left), ValueId(right)],
+            vec![entry],
+        ));
+        with_inventory(&module, |inventory, physical, floor| {
+            run(floor, LIMIT, LIMIT, |out| {
+                let allocations = NoAllocations(inventory.owner());
+                let body = ByteFunctionV30::derive(
+                    inventory,
+                    physical,
+                    Function(0),
+                    ByteContext::native(FormalIndexWidth::Bits64),
+                    &allocations,
+                    out,
+                )?;
+                let ByteOperationV30::Checked(plan) = body.operations[0] else {
+                    panic!("genuine Checked operation must retain both dense results");
+                };
+                assert_eq!(plan.operands, [0, 1]);
+                assert_eq!(plan.results, [2, 3]);
+                assert_eq!((plan.bits, plan.signed), (32, false));
+                body.emit(298, out)
+            })
+            .0
+            .unwrap();
+        });
+    }
+}
+
+#[test]
 fn actual_checked_byte_index_width_is_explicit_and_noninteger_shapes_refuse() {
     use fe2o3_kernel_ir::CheckedBinaryOperator as Op;
     for index in [
