@@ -13,6 +13,7 @@ pub const DRM_DEVICE_MAJOR_V1: u32 = 226;
 pub const DRM_RENDER_MIN_MINOR_V1: u32 = 128;
 pub const AMD_PCI_VENDOR_ID_V1: u16 = 0x1002;
 pub const MI300X_PCI_DEVICE_ID_V1: u16 = 0x74a1;
+pub const GFX950_PCI_DEVICE_ID_V1: u16 = 0x75a0;
 pub const KFD_UAPI_MAJOR_V1: u32 = 1;
 pub const KFD_UAPI_MINOR_V1: u32 = 18;
 pub const DRM_DRIVER_MAJOR_V1: u32 = 3;
@@ -67,7 +68,31 @@ impl PciAddressV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GpuTargetObservationV1 {
     Gfx942,
+    Gfx950,
     Other(u32),
+}
+
+/// Closed model profiles, independent of caller-supplied identity digests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceAdmissionTargetProfileV1 {
+    Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0,
+    Gfx950XnackMinusSpxNps1Kfd1_18Drm3_64_0,
+}
+
+impl DeviceAdmissionTargetProfileV1 {
+    pub const fn target(self) -> GpuTargetObservationV1 {
+        match self {
+            Self::Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0 => GpuTargetObservationV1::Gfx942,
+            Self::Gfx950XnackMinusSpxNps1Kfd1_18Drm3_64_0 => GpuTargetObservationV1::Gfx950,
+        }
+    }
+
+    pub(crate) const fn pci_device_id(self) -> u16 {
+        match self {
+            Self::Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0 => MI300X_PCI_DEVICE_ID_V1,
+            Self::Gfx950XnackMinusSpxNps1Kfd1_18Drm3_64_0 => GFX950_PCI_DEVICE_ID_V1,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -224,6 +249,7 @@ impl UntrustedDeviceInventoryV1 {
 /// inputs until a future evidence layer authenticates them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeviceAdmissionProfileV1 {
+    target_profile: DeviceAdmissionTargetProfileV1,
     identity: DeviceAdmissionProfileIdV1,
     kfd_schema_identity: IdentityDigestV1,
     drm_schema_identity: IdentityDigestV1,
@@ -236,10 +262,33 @@ impl DeviceAdmissionProfileV1 {
         drm_schema_identity: IdentityDigestV1,
     ) -> Self {
         Self {
+            target_profile: DeviceAdmissionTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0,
             identity,
             kfd_schema_identity,
             drm_schema_identity,
         }
+    }
+
+    pub const fn target_profile(self) -> DeviceAdmissionTargetProfileV1 {
+        self.target_profile
+    }
+
+    /// Closed gfx950 model profile; all identity digests remain untrusted inputs.
+    pub const fn gfx950_xnack_minus_spx_nps1_kfd_1_18_drm_3_64_0(
+        identity: DeviceAdmissionProfileIdV1,
+        kfd_schema_identity: IdentityDigestV1,
+        drm_schema_identity: IdentityDigestV1,
+    ) -> Self {
+        Self {
+            target_profile: DeviceAdmissionTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18Drm3_64_0,
+            identity,
+            kfd_schema_identity,
+            drm_schema_identity,
+        }
+    }
+
+    pub const fn target(self) -> GpuTargetObservationV1 {
+        self.target_profile.target()
     }
 
     pub const fn identity(self) -> DeviceAdmissionProfileIdV1 {
@@ -307,6 +356,7 @@ pub struct ModelPhysicalDeviceIdentityV1 {
 pub struct ModelCorrelatedDeviceV1 {
     domain_id: DeviceObservationDomainIdV1,
     profile_id: DeviceAdmissionProfileIdV1,
+    target_profile: DeviceAdmissionTargetProfileV1,
     epoch: ObservationEpochV1,
     identity: ModelPhysicalDeviceIdentityV1,
     topology_node_id: u32,
@@ -326,6 +376,14 @@ impl ModelCorrelatedDeviceV1 {
 
     pub const fn profile_id(self) -> DeviceAdmissionProfileIdV1 {
         self.profile_id
+    }
+
+    pub const fn target_profile(self) -> DeviceAdmissionTargetProfileV1 {
+        self.target_profile
+    }
+
+    pub const fn target(self) -> GpuTargetObservationV1 {
+        self.target_profile.target()
     }
 
     pub const fn epoch(self) -> ObservationEpochV1 {
@@ -437,10 +495,10 @@ pub fn correlate_model_only_v1(
     if topology.device_id != render.device_id {
         return Err(DeviceCorrelationErrorV1::DeviceIdMismatch);
     }
-    if topology.device_id != MI300X_PCI_DEVICE_ID_V1 {
+    if topology.device_id != profile.target_profile.pci_device_id() {
         return Err(DeviceCorrelationErrorV1::UnsupportedDeviceId);
     }
-    if topology.target != GpuTargetObservationV1::Gfx942 {
+    if topology.target != profile.target() {
         return Err(DeviceCorrelationErrorV1::UnsupportedTarget);
     }
     if kfd.xnack != XnackObservationV1::Disabled {
@@ -474,6 +532,7 @@ pub fn correlate_model_only_v1(
     Ok(ModelCorrelatedDeviceV1 {
         domain_id: kfd.domain_id,
         profile_id: profile.identity,
+        target_profile: profile.target_profile,
         epoch: kfd.epoch,
         identity: ModelPhysicalDeviceIdentityV1 {
             physical_id: PhysicalDeviceIdV1(topology.gpu_unique_id),

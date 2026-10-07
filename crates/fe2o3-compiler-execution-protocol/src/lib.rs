@@ -1,6 +1,9 @@
 #![deny(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+/// Fixed child descriptor reserved for the compiler-execution service peer.
+pub const COMPILER_EXECUTION_SERVICE_CHILD_FD_V1: i32 = 195;
+
 mod attestation;
 mod attestation_challenge_adapter;
 mod attestation_challenge_v2;
@@ -57,6 +60,13 @@ mod launch_manifest_adapter;
 mod launch_manifest_codec;
 mod launch_manifest_v2;
 mod launch_manifest_v3;
+mod native_proof_custodian_configuration_v1;
+pub use native_proof_custodian_configuration_v1::{
+    NATIVE_PROOF_CUSTODIAN_CONFIGURATION_BYTES_V1, NATIVE_PROOF_CUSTODIAN_MAX_ANALYZER_BYTES_V1,
+    NATIVE_PROOF_CUSTODIAN_MAX_CONTROLLER_BYTES_V1, NativeApplicationProofCustodianConfigurationV1,
+    NativeProofCustodianConfigurationErrorV1, NativeProofCustodianConfigurationPartsV1,
+    NativeProofCustodianConfigurationStorageV1,
+};
 mod proof_executor_bootstrap_v1;
 pub use proof_executor_bootstrap_v1::{
     PROOF_EXECUTOR_BOOTSTRAP_BYTES_V1, PROOF_EXECUTOR_BOOTSTRAP_STORAGE_V1,
@@ -165,6 +175,10 @@ pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1: u32 = 0o660;
 /// Sole production Unix socket pathname for the protected compiler-execution supervisor.
 pub const COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1: &str =
     "/run/fe2o3/compiler-execution-supervisor.sock";
+
+/// Distinct native application-registration ingress; never a compiler request socket.
+pub const NATIVE_APPLICATION_SUPERVISOR_SOCKET_PATH_V3: &str =
+    "/run/fe2o3/native-application-supervisor.sock";
 
 /// Sole production durable-root pathname for the protected compiler-execution supervisor.
 pub const COMPILER_EXECUTION_SUPERVISOR_STATE_ROOT_PATH_V1: &str =

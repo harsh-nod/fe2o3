@@ -43,6 +43,9 @@ mod consuming {
     pub(crate) mod root_issuer {
         include!("native_root_issuer.rs");
     }
+    pub(crate) mod application_supervisor {
+        include!("native_application_supervisor.rs");
+    }
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -50,4 +53,10 @@ mod consuming {
     }
 }
 pub use consuming::RootManagedCompilerExecutionServiceV3;
+pub use consuming::application_supervisor::{
+    NativeApplicationSupervisorChildV3, NativeApplicationSupervisorControlV3,
+};
+pub use consuming::root_issuer::application_currentness::{
+    ApplicationCurrentnessCleanupQuotaV3, ApplicationCurrentnessIssuerV3,
+};
 pub(crate) use consuming::root_issuer::{IssuerCleanupQuota, NativeAttempt};

@@ -153,8 +153,9 @@ impl Service {
     /// Includes capacity for one deployment guard retained until empty shutdown.
     /// Embedded records, mutexes, phase state, lease and account metadata are
     /// included by `size_of`. Each cell also funds domain/namespace non-inline
-    /// storage; one serialized pump scratch allowance stays prepaid even with
-    /// no controller. This is logical retention, not RSS.
+    /// storage and its optional exact-domain retirement cell; one serialized
+    /// pump scratch allowance stays prepaid even with no controller. This is
+    /// logical retention, not RSS.
     pub const STORAGE: usize = size_of::<DeferredReaperV1>()
         + size_of::<Self>()
         + CAPACITY
@@ -163,7 +164,8 @@ impl Service {
                 + Domain::STORAGE
                 - size_of::<Domain>()
                 + Namespace::STORAGE
-                - size_of::<Namespace>())
+                - size_of::<Namespace>()
+                + crate::process_cleanup::NATIVE_PROOF_RETIREMENT_STORAGE)
         + Self::GUARD_FILE_STORAGE
         + Domain::STEP_SCRATCH;
     /// Full logical input charge for a deployment guard descriptor, excluding file data.
@@ -461,6 +463,46 @@ impl Service {
         Ok(self.native(&mut mode)?.report())
     }
 
+    /// Full finite cell-scan work charged by a nonterminal phase checkpoint.
+    pub const fn quiescent_phase_work() -> usize {
+        SHUTDOWN_WORK
+    }
+
+    /// Observes an empty original pool without closing, replacing or refunding
+    /// its controller, account, deployment guard or prepaid final shutdown.
+    /// Every nonempty cell (including reserved or quarantined custody) refuses.
+    /// This is an instantaneous checkpoint, not a reusable terminal witness;
+    /// subsequent reservations invalidate any claim that the pool is still empty.
+    pub fn checkpoint_quiescent_phase(&mut self) -> Result<(), Failure> {
+        let mut mode = self
+            .reaper
+            .mode
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let native = self.native(&mut mode)?;
+        if !self.shutdown_paid {
+            return Err(Failure::State);
+        }
+        native.charge(Self::quiescent_phase_work())?;
+        if self
+            .reaper
+            .cells
+            .iter()
+            .any(|cell| cell.state.load(Ordering::Acquire) != EMPTY)
+        {
+            return Err(Failure::Busy);
+        }
+        if let Err(error) = native.check_storage() {
+            native.admission_open = false;
+            return Err(error);
+        }
+        if native.retained_storage != 0 {
+            native.admission_open = false;
+            return Err(Resource::Accounting.into());
+        }
+        Ok(())
+    }
+
     /// Retires an empty pool, returning its original account and closing it permanently.
     ///
     /// The first attempt per controller was prepaid at admission/recovery; later
@@ -615,6 +657,10 @@ pub(crate) fn isolated_cleanup(account: Account) -> Service {
 #[cfg(test)]
 #[path = "process_reaper_native_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "process_reaper_phase_tests.rs"]
+mod phase_tests;
 
 #[cfg(test)]
 #[path = "process_reaper_guard_tests.rs"]

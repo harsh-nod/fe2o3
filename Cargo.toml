@@ -137,6 +137,8 @@ fe2o3-semantic-import = { path = "crates/fe2o3-semantic-import" }
 fe2o3-semantic-query = { path = "crates/fe2o3-semantic-query" }
 fe2o3-semantic-trace = { path = "crates/fe2o3-semantic-trace" }
 fe2o3-proof-contracts = { path = "crates/fe2o3-proof-contracts" }
+fe2o3-resource-accounting = { path = "crates/fe2o3-resource-accounting" }
+fe2o3-proof-custodian = { path = "crates/fe2o3-proof-custodian" }
 fe2o3-rustc-invocation = { path = "crates/fe2o3-rustc-invocation" }
 fe2o3-rustc-front = { path = "crates/fe2o3-rustc-front" }
 fe2o3-runtime-model = { path = "crates/fe2o3-runtime-model" }

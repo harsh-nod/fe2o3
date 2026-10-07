@@ -225,7 +225,6 @@ struct UserRegistersX86_64 {
 }
 
 unsafe extern "C" {
-    fn close_range(first: u32, last: u32, flags: u32) -> i32;
     fn dup2(old_descriptor: i32, new_descriptor: i32) -> i32;
     fn fcntl(descriptor: i32, command: i32, ...) -> i32;
     fn getrlimit(resource: i32, limit: *mut ResourceLimit) -> i32;
@@ -465,6 +464,28 @@ pub(super) fn execute_with_policy(
     policy: GeneratedProofProcessPolicyV2,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
+    execute_with_policy_cancellable(
+        attempt,
+        runtime,
+        source,
+        deadline,
+        output_limit,
+        policy,
+        None,
+    )
+}
+
+pub(super) fn execute_with_policy_cancellable(
+    attempt: &mut AttemptV1,
+    runtime: std::sync::Arc<RetainedRuntimeClosureV2>,
+    source: &CanonicalGeneratedVerusProofInputV3,
+    deadline: Instant,
+    output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
+    keep_alive: Option<&dyn Fn() -> io::Result<()>>,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
+    check_keep_alive(keep_alive)?;
     #[cfg(test)]
     reset_solver_context_observation();
     crate::authenticated_verus_execution_v2::validate_controller_security_v2().map_err(
@@ -560,6 +581,7 @@ pub(super) fn execute_with_policy(
             "--sysroot",
         ])
         .arg(format!("/proc/self/fd/{TOOLCHAIN_DIRECTORY_FD}"))
+        .args(policy.extra_verifier_arguments())
         .env_clear()
         .env("VERUS_ROOT", format!("/proc/self/fd/{DIST_DIRECTORY_FD}"))
         .env("VERUS_Z3_PATH", format!("/proc/self/fd/{Z3_FD}"))
@@ -580,8 +602,9 @@ pub(super) fn execute_with_policy(
         run.sealed = Some(sealed);
         run.descriptors = duplicates;
     }
+    check_keep_alive(keep_alive)?;
     seized_spawn::spawn_in(attempt, command, bindings.clone(), cpu_seconds, deadline)?;
-    let result = supervise_with_policy(
+    let result = supervise_with_policy_cancellable(
         attempt,
         &bindings,
         bindings[0].identity,
@@ -592,6 +615,7 @@ pub(super) fn execute_with_policy(
         deadline,
         output_limit,
         policy,
+        keep_alive,
     );
     attempt
         .run()?
@@ -603,9 +627,20 @@ pub(super) fn execute_with_policy(
     result
 }
 
+fn check_keep_alive(
+    keep_alive: Option<&dyn Fn() -> io::Result<()>>,
+) -> Result<(), RetainedFunctionalRefinementRuntimeErrorV1> {
+    if let Some(validate) = keep_alive {
+        validate()
+            .map_err(|error| process_failure(format!("compiler-proof custody lost: {error}")))?;
+    }
+    Ok(())
+}
+
 fn prepare_child(bindings: &[DescriptorBinding], cpu_seconds: u64) -> io::Result<()> {
-    // SAFETY: close_range only marks descriptors close-on-exec in this process.
-    if unsafe { close_range(3, u32::MAX, CLOSE_RANGE_CLOEXEC) } != 0 {
+    // Use the kernel ABI directly; older static musl has no close_range symbol.
+    // SAFETY: the syscall only marks descriptors close-on-exec in this process.
+    if unsafe { libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, CLOSE_RANGE_CLOEXEC) } != 0 {
         return Err(io::Error::last_os_error());
     }
     for binding in bindings {
@@ -727,6 +762,7 @@ const fn jump(code: u16, value: u32, jump_true: u8, jump_false: u8) -> SockFilte
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn supervise(
     attempt: &mut AttemptV1,
     bindings: &[DescriptorBinding],
@@ -754,6 +790,7 @@ fn supervise(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn supervise_with_policy(
     attempt: &mut AttemptV1,
     bindings: &[DescriptorBinding],
@@ -765,6 +802,36 @@ fn supervise_with_policy(
     deadline: Instant,
     output_limit: usize,
     policy: GeneratedProofProcessPolicyV2,
+) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
+{
+    supervise_with_policy_cancellable(
+        attempt,
+        bindings,
+        verifier_identity,
+        solver_identity,
+        allowed_mappings,
+        validate_mappings,
+        require_auxiliary_verifier,
+        deadline,
+        output_limit,
+        policy,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn supervise_with_policy_cancellable(
+    attempt: &mut AttemptV1,
+    bindings: &[DescriptorBinding],
+    verifier_identity: ObjectIdentityV2,
+    solver_identity: ObjectIdentityV2,
+    allowed_mappings: &[AllowedRuntimeExecutableV1],
+    validate_mappings: bool,
+    require_auxiliary_verifier: bool,
+    deadline: Instant,
+    output_limit: usize,
+    policy: GeneratedProofProcessPolicyV2,
+    keep_alive: Option<&dyn Fn() -> io::Result<()>>,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
     #[cfg(test)]
@@ -782,6 +849,7 @@ fn supervise_with_policy(
         deadline,
         output_limit,
         policy,
+        keep_alive,
     );
     run.release_spawn_after_terminal();
     result
@@ -799,6 +867,7 @@ fn supervise_run(
     deadline: Instant,
     output_limit: usize,
     policy: GeneratedProofProcessPolicyV2,
+    keep_alive: Option<&dyn Fn() -> io::Result<()>>,
 ) -> Result<RetainedFunctionalRefinementRuntimeOutputV1, RetainedFunctionalRefinementRuntimeErrorV1>
 {
     let Run {
@@ -829,6 +898,7 @@ fn supervise_run(
         return Err(reject_and_reap(tracees, error));
     }
     let execution = (|| {
+        check_keep_alive(keep_alive)?;
         seized_spawn::wait_initial_exec(tracees, verifier, spawn_lease, deadline)?;
         set_trace_options(verifier)?;
         validate_executable(verifier, verifier_identity, "rust_verify")?;
@@ -849,6 +919,7 @@ fn supervise_run(
         let expected_process_descendants = if require_auxiliary_verifier { 2 } else { 1 };
         let mut idle_interval = ACTIVE_TREE_POLL_INTERVAL;
         while !tracees.is_empty() {
+            check_keep_alive(keep_alive)?;
             drain(stdout, stdout_capture, output_limit, OutputStream::Stdout)?;
             drain(stderr, stderr_capture, output_limit, OutputStream::Stderr)?;
             if Instant::now() >= deadline {
@@ -2143,6 +2214,68 @@ mod tests {
                 BPF_RETURN => return instruction.value,
                 code => panic!("unexpected BPF instruction {code:#x}"),
             }
+        }
+    }
+
+    #[test]
+    fn broker_custody_loss_reaps_the_original_attempt_before_returning() {
+        let _guard = super::super::RUNTIME_CLOSURE_PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for reject_at in [1, 2] {
+            let mut command = Command::new("/bin/sh");
+            command
+                .args(["-c", "while :; do :; done"])
+                .env_clear()
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut attempt = seized_spawn::spawn(command, vec![], 2, deadline).unwrap();
+            let original_root = attempt.id() as i32;
+            let calls = std::cell::Cell::new(0);
+            let keep_alive = || {
+                calls.set(calls.get() + 1);
+                if calls.get() >= reject_at {
+                    Err(io::Error::other("original broker disconnected"))
+                } else {
+                    Ok(())
+                }
+            };
+            let result = supervise_with_policy_cancellable(
+                &mut attempt,
+                &[],
+                identity("/bin/sh"),
+                identity("/bin/true"),
+                &[],
+                false,
+                false,
+                deadline,
+                4096,
+                GeneratedProofProcessPolicyV2::LegacySingleSolverV1,
+                Some(&keep_alive),
+            );
+            let error = result.err().expect("lost broker must refuse proof output");
+            assert!(
+                error.to_string().contains("original broker disconnected"),
+                "{error}"
+            );
+            let run = attempt.run().unwrap();
+            assert_eq!(run.root, Some(original_root));
+            assert_eq!(run.tracees.len(), 1);
+            // Cleanup retains the exact terminal record; absence is not a reap witness.
+            let root = run.tracees.get(&original_root).unwrap();
+            assert!(root.terminal_consumed);
+            assert_eq!(root.role, TraceeRole::Verifier);
+            assert_eq!(root.thread_group, original_root);
+            assert!(root.leader);
+            assert!(!root.pending_creation);
+            assert!(root.current_stop.is_none());
+            assert!(!run.tracees.unresolved());
+            assert!(!run.tracees.has_uncertain());
+            assert!(run.spawn_lease.is_none());
+            attempt.complete().unwrap();
+            assert!(calls.get() >= reject_at);
         }
     }
 

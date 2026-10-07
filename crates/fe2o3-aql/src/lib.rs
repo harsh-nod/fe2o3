@@ -9,6 +9,10 @@
 
 extern crate alloc;
 
+mod dependency_dispatch;
+
+pub use dependency_dispatch::*;
+
 use alloc::boxed::Box;
 mod closed_program_v1;
 pub use closed_program_v1::{
@@ -19,6 +23,14 @@ use core::{
     mem::{align_of, offset_of, size_of},
     sync::atomic::{AtomicI64, Ordering},
 };
+
+include!("preparation_body.rs");
+
+macro_rules! aql_rust_expr {
+    ($body:expr) => {
+        $body
+    };
+}
 
 /// Stable name of the reviewed packet/signal contract.
 pub const AQL_DISPATCH_ABI_SCHEMA_ID_V1: &str =
@@ -196,27 +208,18 @@ pub struct ObservedGpuAddressV1(u64);
 
 impl ObservedGpuAddressV1 {
     pub const fn new(raw: u64) -> Result<Self, AqlAddressObservationError> {
-        if raw == 0 {
-            return Err(AqlAddressObservationError::Zero);
-        }
-        Ok(Self(raw))
+        aql_address_body!(aql_rust_expr, raw)
     }
 
     pub const fn raw(self) -> u64 {
-        self.0
+        aql_field_body!(aql_rust_expr, self, 0)
     }
 
     pub const fn require_alignment(
         self,
         alignment: u64,
     ) -> Result<Self, AqlAddressObservationError> {
-        if alignment == 0 || alignment > 4096 || !alignment.is_power_of_two() {
-            return Err(AqlAddressObservationError::InvalidRequiredAlignment);
-        }
-        if self.0 & (alignment - 1) != 0 {
-            return Err(AqlAddressObservationError::Misaligned);
-        }
-        Ok(self)
+        aql_alignment_body!(aql_rust_expr, self, alignment)
     }
 }
 
@@ -637,15 +640,15 @@ impl AqlDispatchGeometryV1 {
     }
 
     pub const fn grid(self) -> [u32; 3] {
-        self.grid
+        aql_field_body!(aql_rust_expr, self, grid)
     }
 
     pub const fn workgroup(self) -> [u16; 3] {
-        self.workgroup
+        aql_field_body!(aql_rust_expr, self, workgroup)
     }
 
     pub const fn dimensions(self) -> u16 {
-        self.dimensions
+        aql_field_body!(aql_rust_expr, self, dimensions)
     }
 
     /// Derives the COV6 block-count, group-size, remainder, and rank values.
@@ -821,36 +824,17 @@ impl AqlKernelDispatchPacketV1 {
         completion_signal: ObservedGpuAddressV1,
         ordering: AqlDispatchOrderingV1,
     ) -> Result<AqlPreparedKernelDispatchV1, AqlDispatchPacketError> {
-        let kernel_object = kernel_object
-            .require_alignment(64)
-            .map_err(AqlDispatchPacketError::KernelObject)?;
-        let kernarg_address = kernarg_address
-            .require_alignment(kernarg_alignment)
-            .map_err(AqlDispatchPacketError::Kernarg)?;
-        let completion_signal = completion_signal
-            .require_alignment(AMD_SIGNAL_ALIGNMENT_V1 as u64)
-            .map_err(AqlDispatchPacketError::CompletionSignal)?;
-        let workgroup = geometry.workgroup();
-        let grid = geometry.grid();
-
-        let packet = Self {
-            full_header: (u32::from(geometry.dimensions()) << 16)
-                | u32::from(AQL_INVALID_PACKET_HEADER_V1),
-            workgroup_size_x: workgroup[0],
-            workgroup_size_y: workgroup[1],
-            workgroup_size_z: workgroup[2],
-            reserved0: 0,
-            grid_size_x: grid[0],
-            grid_size_y: grid[1],
-            grid_size_z: grid[2],
+        aql_dispatch_preparation_body!(
+            aql_rust_expr,
+            geometry,
             private_segment_size,
             group_segment_size,
-            kernel_object: kernel_object.raw(),
-            kernarg_address: kernarg_address.raw(),
-            reserved2: 0,
-            completion_signal: completion_signal.raw(),
-        };
-        Ok(AqlPreparedKernelDispatchV1 { packet, ordering })
+            kernel_object,
+            kernarg_address,
+            kernarg_alignment,
+            completion_signal,
+            ordering
+        )
     }
 
     pub const fn is_unpublished(&self) -> bool {
@@ -911,6 +895,11 @@ impl AqlPreparedKernelDispatchV1 {
     /// Returns the explicit execution-order policy retained for publication.
     pub const fn ordering(&self) -> AqlDispatchOrderingV1 {
         self.ordering
+    }
+
+    /// Checks the exact completion signal retained for publication.
+    pub fn completion_signal_matches(&self, expected: ObservedGpuAddressV1) -> bool {
+        self.packet.completion_signal() == expected.raw()
     }
 
     pub fn publish_with<T: AqlPacketPublicationTargetV1>(
@@ -1002,18 +991,7 @@ impl<const N: usize> AqlPreparedKernelDispatchBatchV2<N> {
     pub fn try_from_boxed_packets(
         packets: Box<[AqlPreparedKernelDispatchV1; N]>,
     ) -> Result<Self, AqlPreparedKernelDispatchBatchErrorV1> {
-        if N == 0 {
-            return Err(AqlPreparedKernelDispatchBatchErrorV1::ZeroPacketCount);
-        }
-        if N > AQL_MAX_FIXED_BATCH_PACKETS_V2 as usize {
-            return Err(
-                AqlPreparedKernelDispatchBatchErrorV1::PacketCountExceedsReviewedMaximum {
-                    requested: N,
-                    maximum: AQL_MAX_FIXED_BATCH_PACKETS_V2,
-                },
-            );
-        }
-        Ok(Self { packets })
+        aql_boxed_batch_body!(aql_rust_expr, packets, N)
     }
 
     pub const fn packet_count(&self) -> u32 {
@@ -1032,6 +1010,19 @@ impl<const N: usize> AqlPreparedKernelDispatchBatchV2<N> {
             target.publish_release_header(batch_index as u32, packet.ordering.header())?;
         }
         Ok(())
+    }
+}
+
+impl AqlPreparedKernelDispatchBatchV2<1> {
+    /// Checks the completion signal retained by the sole prepared dispatch.
+    pub fn matches_one_completion_signal(&self, expected: ObservedGpuAddressV1) -> bool {
+        self.packets[0].completion_signal_matches(expected)
+    }
+
+    /// Moves the sole prepared dispatch out of an exact one-packet batch.
+    pub fn into_one(self) -> AqlPreparedKernelDispatchV1 {
+        let [packet] = *self.packets;
+        packet
     }
 }
 
@@ -1243,6 +1234,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shared_alignment_check_preserves_power_of_two_policy() {
+        for alignment in (0..=8193).chain([u64::MAX, 1_u64 << 63]) {
+            for raw in [1, 63, 64, 4095, 4096, 4097, u64::MAX] {
+                let address = ObservedGpuAddressV1::new(raw).unwrap();
+                let expected = if alignment == 0 || alignment > 4096 || !alignment.is_power_of_two()
+                {
+                    Err(AqlAddressObservationError::InvalidRequiredAlignment)
+                } else if raw % alignment != 0 {
+                    Err(AqlAddressObservationError::Misaligned)
+                } else {
+                    Ok(address)
+                };
+                assert_eq!(address.require_alignment(alignment), expected);
+            }
+        }
+    }
+
+    #[test]
     fn cov6_shape_separates_complete_blocks_from_partial_remainders() {
         let geometry = AqlDispatchGeometryV1::new([257, 3, 1], [64, 2, 1]).unwrap();
         let shape = geometry.cov6_implicit_dispatch_shape();
@@ -1270,5 +1279,50 @@ mod tests {
             signal.observe_acquire(),
             AqlCompletionObservationV1::Unexpected(-7)
         );
+    }
+
+    #[test]
+    fn one_packet_v2_batch_returns_its_exact_dispatch_owner() {
+        let packet = AqlKernelDispatchPacketV1::new_unpublished(
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            0,
+            ObservedGpuAddressV1::new(0x10_000).unwrap(),
+            ObservedGpuAddressV1::new(0x20_000).unwrap(),
+            16,
+            ObservedGpuAddressV1::new(0x30_000).unwrap(),
+        )
+        .unwrap();
+        let expected = AqlKernelDispatchPacketV1::new_unpublished(
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            0,
+            ObservedGpuAddressV1::new(0x10_000).unwrap(),
+            ObservedGpuAddressV1::new(0x20_000).unwrap(),
+            16,
+            ObservedGpuAddressV1::new(0x30_000).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            AqlPreparedKernelDispatchBatchV2::one(packet).into_one(),
+            expected
+        );
+    }
+
+    #[test]
+    fn one_packet_v2_batch_authenticates_its_completion_signal() {
+        let packet = AqlKernelDispatchPacketV1::new_unpublished(
+            AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+            0,
+            0,
+            ObservedGpuAddressV1::new(0x10_000).unwrap(),
+            ObservedGpuAddressV1::new(0x20_000).unwrap(),
+            16,
+            ObservedGpuAddressV1::new(0x30_000).unwrap(),
+        )
+        .unwrap();
+        let batch = AqlPreparedKernelDispatchBatchV2::one(packet);
+        assert!(batch.matches_one_completion_signal(ObservedGpuAddressV1::new(0x30_000).unwrap()));
+        assert!(!batch.matches_one_completion_signal(ObservedGpuAddressV1::new(0x30_040).unwrap()));
     }
 }

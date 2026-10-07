@@ -29,6 +29,7 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
+mod application;
 #[path = "program_v2_tests.rs"]
 mod native_program;
 
@@ -479,22 +480,22 @@ fn wrong_launcher_and_issuer_measurements_reject() {
 #[test]
 fn dynamic_and_invalid_source_descriptors_reject() {
     let fixture = Fixture::new("hostile-source");
-    let current = fixture.root.join("dynamic-entry");
-    let mut current_bytes = fixture.bytes.clone();
+    let dynamic = fixture.root.join("dynamic-entry");
+    let mut dynamic_bytes = fixture.bytes.clone();
     const PT_INTERP: u32 = 3;
     let stack_header = 64 + 3 * 56;
-    current_bytes[stack_header..stack_header + 4].copy_from_slice(&PT_INTERP.to_le_bytes());
-    fs::write(&current, &current_bytes).unwrap();
-    fs::set_permissions(&current, fs::Permissions::from_mode(0o555)).unwrap();
-    let current_measurement = ProvisionedStaticExecutableMeasurementV1::new(
-        Sha256::digest(&current_bytes).into(),
-        u64::try_from(current_bytes.len()).unwrap(),
+    dynamic_bytes[stack_header..stack_header + 4].copy_from_slice(&PT_INTERP.to_le_bytes());
+    fs::write(&dynamic, &dynamic_bytes).unwrap();
+    fs::set_permissions(&dynamic, fs::Permissions::from_mode(0o555)).unwrap();
+    let dynamic_measurement = ProvisionedStaticExecutableMeasurementV1::new(
+        Sha256::digest(&dynamic_bytes).into(),
+        u64::try_from(dynamic_bytes.len()).unwrap(),
     )
     .unwrap();
     assert!(matches!(
         AdmittedIssuerProgramV1::provision(
-            File::open(current).unwrap(),
-            current_measurement,
+            File::open(dynamic).unwrap(),
+            dynamic_measurement,
             fixture.open(),
             policy(fixture.issuer_measurement()),
         ),
@@ -829,6 +830,13 @@ fn supervisor_debug_exposes_no_descriptor_path_or_secret_seed() {
 
 #[test]
 fn exact_cross_process_handoff_is_admitted_and_revalidated() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::exact_cross_process_handoff_is_admitted_and_revalidated",
+        exact_cross_process_handoff_is_admitted_and_revalidated_isolated,
+    );
+}
+
+fn exact_cross_process_handoff_is_admitted_and_revalidated_isolated() {
     let fixture = Fixture::new("exact-handoff");
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
@@ -1108,13 +1116,45 @@ fn provisioned_service_inputs_reject_listener_mode_and_parent_mutation() {
 }
 
 #[test]
-fn admitted_handoff_materializes_exact_sealed_twelve_source_launch() {
+fn production_launch_rejects_missing_root_observer_registry() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::production_launch_rejects_missing_root_observer_registry",
+        production_launch_rejects_missing_root_observer_registry_isolated,
+    );
+}
+
+fn production_launch_rejects_missing_root_observer_registry_isolated() {
+    let fixture = Fixture::new("missing-observer-registry");
+    let Some(supervisor) = bound_supervisor(&fixture) else {
+        return;
+    };
+    let (_reserved_fd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
+    assert!(matches!(
+        supervisor.prepare_launch(accepted),
+        Err(ProtectedIssuerLaunchPreparationErrorV1::Supervisor(
+            ProtectedIssuerSupervisorErrorV1::Observer(_)
+        ))
+    ));
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn fixture_handoff_materializes_exact_sealed_twelve_source_launch() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::fixture_handoff_materializes_exact_sealed_twelve_source_launch",
+        fixture_handoff_materializes_exact_sealed_twelve_source_launch_isolated,
+    );
+}
+
+fn fixture_handoff_materializes_exact_sealed_twelve_source_launch_isolated() {
     let fixture = Fixture::new("exact-prepared-launch");
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
     let (_reserved_fd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let expected_manifest = accepted.manifest().clone();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
 
     assert_eq!(prepared.static_manifest().descriptors().len(), 12);
     assert_eq!(
@@ -1122,7 +1162,7 @@ fn admitted_handoff_materializes_exact_sealed_twelve_source_launch() {
         std::process::id() as i32
     );
     assert_ne!(prepared.static_manifest().parent_start_time(), 0);
-    assert_eq!(prepared.service_manifest(), prepared.accepted.manifest());
+    assert_eq!(prepared.service_manifest(), &expected_manifest);
     assert_eq!(
         prepared
             .static_manifest()
@@ -1215,6 +1255,13 @@ fn admitted_handoff_materializes_exact_sealed_twelve_source_launch() {
 
 #[test]
 fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::prepared_launch_rejects_source_manifest_and_parent_substitution",
+        prepared_launch_rejects_source_manifest_and_parent_substitution_isolated,
+    );
+}
+
+fn prepared_launch_rejects_source_manifest_and_parent_substitution_isolated() {
     let fixture = Fixture::new("hostile-prepared-launch");
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
@@ -1222,7 +1269,7 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
 
     let (first_reserved_fd_guard, mut child, _control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let mut prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     prepared.sources.swap(1, 2);
     assert!(prepared.revalidate(&supervisor).is_err());
     child.kill().unwrap();
@@ -1230,7 +1277,7 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
     drop(first_reserved_fd_guard);
 
     let (anchor_peer_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
-    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let mut prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let (substituted_anchor_peer, _substituted_anchor_service) = socketpair(
         AddressFamily::UNIX,
         SocketType::SEQPACKET,
@@ -1250,7 +1297,7 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
     drop(anchor_peer_guard);
 
     let (anchor_pidfd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
-    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let mut prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     prepared.sources[11] = prepared.sources[5].try_clone().unwrap();
     assert!(matches!(
         prepared.revalidate(&supervisor),
@@ -1264,7 +1311,7 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
 
     let (second_reserved_fd_guard, mut child, _control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let mut prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     prepared.static_manifest_file = File::open("/dev/null").unwrap();
     assert!(prepared.revalidate(&supervisor).is_err());
     child.kill().unwrap();
@@ -1273,7 +1320,7 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
 
     let (_third_reserved_fd_guard, mut child, _control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let mut prepared = supervisor.prepare_launch(accepted).unwrap();
+    let mut prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let wrong_parent = prepared
         .static_manifest()
         .parent_pid()
@@ -1296,12 +1343,19 @@ fn prepared_launch_rejects_source_manifest_and_parent_substitution() {
 
 #[test]
 fn prepared_launch_revalidation_detects_rustc_exit() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::prepared_launch_revalidation_detects_rustc_exit",
+        prepared_launch_revalidation_detects_rustc_exit_isolated,
+    );
+}
+
+fn prepared_launch_revalidation_detects_rustc_exit_isolated() {
     let fixture = Fixture::new("prepared-launch-rustc-exit");
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
     let (_reserved_fd_guard, mut child, _control_sender, accepted) = accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     child.kill().unwrap();
     child.wait().unwrap();
     assert!(matches!(
@@ -1328,6 +1382,13 @@ fn production_handoff_rejects_a_same_uid_submitter_before_receive() {
 
 #[test]
 fn malformed_wrong_policy_and_extra_descriptors_fail_closed() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::malformed_wrong_policy_and_extra_descriptors_fail_closed",
+        malformed_wrong_policy_and_extra_descriptors_fail_closed_isolated,
+    );
+}
+
+fn malformed_wrong_policy_and_extra_descriptors_fail_closed_isolated() {
     let fixture = Fixture::new("hostile-handoff");
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
@@ -1525,13 +1586,20 @@ fn assert_reaped(pid: rustix::process::Pid) {
 
 #[test]
 fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::clone3_pidfd_launch_admits_exact_readiness_and_reaps_once",
+        clone3_pidfd_launch_admits_exact_readiness_and_reaps_once_isolated,
+    );
+}
+
+fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once_isolated() {
     let fixture = Fixture::with_code("pidfd-ready", &launched_probe_code(true));
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
 
@@ -1574,13 +1642,20 @@ fn clone3_pidfd_launch_admits_exact_readiness_and_reaps_once() {
 
 #[test]
 fn serving_issuer_natural_exit_is_observed_and_reaped_once() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::serving_issuer_natural_exit_is_observed_and_reaped_once",
+        serving_issuer_natural_exit_is_observed_and_reaped_once_isolated,
+    );
+}
+
+fn serving_issuer_natural_exit_is_observed_and_reaped_once_isolated() {
     let fixture = Fixture::with_code("natural-serving-exit", &naturally_exiting_probe_code(37));
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
     let launched = supervisor
@@ -1618,13 +1693,20 @@ fn serving_issuer_natural_exit_is_observed_and_reaped_once() {
 
 #[test]
 fn serving_exit_timeout_kills_and_eventually_reaps_exact_child() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::serving_exit_timeout_kills_and_eventually_reaps_exact_child",
+        serving_exit_timeout_kills_and_eventually_reaps_exact_child_isolated,
+    );
+}
+
+fn serving_exit_timeout_kills_and_eventually_reaps_exact_child_isolated() {
     let fixture = Fixture::with_code("serving-exit-timeout", &launched_probe_code(true));
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
     let launched = supervisor
@@ -1657,6 +1739,13 @@ fn serving_exit_timeout_kills_and_eventually_reaps_exact_child() {
 
 #[test]
 fn one_session_operation_runs_every_lifecycle_stage_in_order() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::one_session_operation_runs_every_lifecycle_stage_in_order",
+        one_session_operation_runs_every_lifecycle_stage_in_order_isolated,
+    );
+}
+
+fn one_session_operation_runs_every_lifecycle_stage_in_order_isolated() {
     let fixture = Fixture::with_code("complete-session", &naturally_exiting_probe_code(0));
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
@@ -1753,6 +1842,13 @@ fn session_policy_and_stage_errors_fail_before_later_authority() {
 
 #[test]
 fn fixed_named_listener_dispatches_one_complete_session() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::fixed_named_listener_dispatches_one_complete_session",
+        fixed_named_listener_dispatches_one_complete_session_isolated,
+    );
+}
+
+fn fixed_named_listener_dispatches_one_complete_session_isolated() {
     let fixture = Fixture::with_code("named-listener", &naturally_exiting_probe_code(0));
     let listener_path = fixture.root.join("supervisor.sock");
     let listener = bound_named_seqpacket_socket(&listener_path);
@@ -2007,13 +2103,20 @@ fn pre_requested_shutdown_starts_and_joins_every_fixed_worker() {
 
 #[test]
 fn closed_cargo_control_fails_publication_and_reaps_the_issuer() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::closed_cargo_control_fails_publication_and_reaps_the_issuer",
+        closed_cargo_control_fails_publication_and_reaps_the_issuer_isolated,
+    );
+}
+
+fn closed_cargo_control_fails_publication_and_reaps_the_issuer_isolated() {
     let fixture = Fixture::with_code("closed-readiness-control", &launched_probe_code(true));
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
     let launched = supervisor
@@ -2045,6 +2148,13 @@ fn closed_cargo_control_fails_publication_and_reaps_the_issuer() {
 
 #[test]
 fn readiness_pid_substitution_and_trailing_bytes_fail_closed() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::readiness_pid_substitution_and_trailing_bytes_fail_closed",
+        readiness_pid_substitution_and_trailing_bytes_fail_closed_isolated,
+    );
+}
+
+fn readiness_pid_substitution_and_trailing_bytes_fail_closed_isolated() {
     for trailing in [false, true] {
         let name = if trailing {
             "readiness-trailing"
@@ -2057,7 +2167,7 @@ fn readiness_pid_substitution_and_trailing_bytes_fail_closed() {
         };
         let (_reserved_fd_guard, mut rustc_child, _control_sender, accepted) =
             accepted_handoff(&supervisor);
-        let prepared = supervisor.prepare_launch(accepted).unwrap();
+        let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
         let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
         let launch_manifest = prepared.service_manifest().clone();
         let launched = supervisor
@@ -2106,13 +2216,20 @@ fn readiness_pid_substitution_and_trailing_bytes_fail_closed() {
 
 #[test]
 fn readiness_timeout_kills_reaps_and_allows_a_fresh_launch() {
+    crate::eof_test_process::isolated_eof_case(
+        "tests::readiness_timeout_kills_reaps_and_allows_a_fresh_launch",
+        readiness_timeout_kills_reaps_and_allows_a_fresh_launch_isolated,
+    );
+}
+
+fn readiness_timeout_kills_reaps_and_allows_a_fresh_launch_isolated() {
     let fixture = Fixture::with_code("readiness-timeout", &launched_probe_code(false));
     let Some(supervisor) = bound_supervisor(&fixture) else {
         return;
     };
     let (first_reserved_fd_guard, mut first_rustc, _first_control, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
         .unwrap();
@@ -2131,7 +2248,7 @@ fn readiness_timeout_kills_reaps_and_allows_a_fresh_launch() {
 
     let (_second_reserved_fd_guard, mut second_rustc, _second_control, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
         .unwrap();
@@ -2175,7 +2292,7 @@ fn real_static_launcher_crosses_both_exec_boundaries() {
     .unwrap();
     let (_reserved_fd_guard, mut rustc_child, control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let injected_readiness = rustix::io::fcntl_dupfd_cloexec(&prepared.sources[9], 0).unwrap();
     let launch_manifest = prepared.service_manifest().clone();
     let launched = supervisor
@@ -2209,7 +2326,7 @@ fn clone3_parent_death_helper() {
     };
     let (_reserved_fd_guard, mut rustc_child, _control_sender, accepted) =
         accepted_handoff(&supervisor);
-    let prepared = supervisor.prepare_launch(accepted).unwrap();
+    let prepared = supervisor.prepare_launch_inner::<false>(accepted).unwrap();
     let launched = supervisor
         .launch_inner::<false>(prepared, Duration::from_secs(2))
         .unwrap();

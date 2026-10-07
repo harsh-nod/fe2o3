@@ -147,14 +147,14 @@ pub(crate) struct CompilerOwnedBoundReferenceEffectV2 {
     policy: ProductionRefinementStagingPolicyV2,
     signed_receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
     // Retain the protected closure, not just its identity, through the continuation.
-    runtime: FunctionalRefinementVerusRuntimeLeaseV1,
+    runtime: std::sync::Arc<FunctionalRefinementVerusRuntimeLeaseV1>,
     pending_cpu_bounds: Option<u32>,
 }
 
 pub(crate) struct CompilerOwnedStagedReferenceEffectV2 {
     construction: ProductionConstructionV1,
     signed_receipts: Vec<InertFunctionalRefinementReceiptSignatureV2>,
-    runtime: FunctionalRefinementVerusRuntimeLeaseV1,
+    runtime: std::sync::Arc<FunctionalRefinementVerusRuntimeLeaseV1>,
     pending_cpu_bounds: Option<u32>,
 }
 
@@ -184,6 +184,7 @@ impl CompilerOwnedReferenceEffectRequestV2 {
         &self.kernel
     }
 
+    #[cfg(test)]
     pub(crate) fn prove_and_compile(
         self,
     ) -> Result<
@@ -197,20 +198,33 @@ impl CompilerOwnedReferenceEffectRequestV2 {
         self.prove_and_bind()?.into_staged()?.compile()
     }
 
+    #[cfg(test)]
     pub(crate) fn prove_and_bind(
         self,
     ) -> Result<CompilerOwnedBoundReferenceEffectV2, ProductionReferenceEffectJoinErrorV2> {
+        self.prove_and_bind_with_runtime(None)
+    }
+
+    pub(crate) fn prove_and_bind_with_runtime(
+        self,
+        runtime: Option<&std::sync::Arc<FunctionalRefinementVerusRuntimeLeaseV1>>,
+    ) -> Result<CompilerOwnedBoundReferenceEffectV2, ProductionReferenceEffectJoinErrorV2> {
         #[cfg(test)]
         prepared_observation_v1::observe_request(&self);
-        let runtime = FunctionalRefinementVerusRuntimeLeaseV1::open(
-            RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
-        )
-        .map_err(|error| {
-            ProductionReferenceEffectJoinErrorV2::ProofRuntimeUnavailable {
-                root: RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
-                detail: error.to_string(),
-            }
-        })?;
+        let runtime = match runtime {
+            Some(runtime) => std::sync::Arc::clone(runtime),
+            None => std::sync::Arc::new(
+                FunctionalRefinementVerusRuntimeLeaseV1::open(
+                    RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+                )
+                .map_err(|error| {
+                    ProductionReferenceEffectJoinErrorV2::ProofRuntimeUnavailable {
+                        root: RETAINED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+                        detail: error.to_string(),
+                    }
+                })?,
+            ),
+        };
         #[cfg(test)]
         source_proof_freshness_v1::observe_request(&self, &runtime);
         // Staging retains requests in block/operation order, which can differ

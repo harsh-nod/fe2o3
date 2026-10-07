@@ -11,6 +11,12 @@ use std::io;
 
 pub mod observations;
 
+mod proof_controller;
+pub use proof_controller::{
+    ProofControllerCredentialProfileV1, ProofControllerProcessProfileV1,
+    require_proof_controller_parent_v1, validate_proof_controller_process_v1,
+};
+
 mod native;
 pub use native::{
     ProtectedServiceNamespaceSetV2, ProtectedServiceProcessProfileV2,
@@ -31,7 +37,7 @@ const SECBIT_KEEP_CAPS_LOCKED: u32 = 1 << 5;
 const SECBIT_NO_CAP_AMBIENT_RAISE: u32 = 1 << 6;
 const SECBIT_NO_CAP_AMBIENT_RAISE_LOCKED: u32 = 1 << 7;
 
-/// Exact securebits value required by every protected service process.
+/// Exact securebits value required by the locked protected-service profile.
 ///
 /// Root privilege, set-ID capability fixups, retained capabilities, and future
 /// ambient-capability raises are all disabled and locked. `KEEP_CAPS` itself is clear while its
@@ -249,10 +255,20 @@ impl ProtectedServiceNamespaceSetV1 {
             .map_err(map_observation_error)
     }
 
+    /// Captures the calling thread, including pending child namespace identities.
+    pub fn capture_current_thread() -> Result<Self, ProtectedServiceProfileErrorV1> {
+        Self::capture_self()
+    }
+
     pub fn revalidate_self(&self) -> Result<(), ProtectedServiceProfileErrorV1> {
         self.observation
             .revalidate_self()
             .map_err(map_observation_error)
+    }
+
+    /// Rechecks the calling thread, including pending child namespace identities.
+    pub fn revalidate_current_thread(&self) -> Result<(), ProtectedServiceProfileErrorV1> {
+        self.revalidate_self()
     }
 
     pub fn revalidate_process(

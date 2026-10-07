@@ -99,6 +99,37 @@ impl Inputs {
         )
     }
 
+    /// Admits policy-neutral inputs at the separate native application pathname.
+    /// This observes descriptors and their original filesystem objects only;
+    /// it does not authorize an application or select a supervisor execution role.
+    pub fn admit_native_application(
+        listener: OwnedFd,
+        root: File,
+        credentials: Credentials,
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, Storage)> {
+        Self::admit_at(
+            listener,
+            root,
+            credentials,
+            Path::new(
+                fe2o3_compiler_execution_protocol::NATIVE_APPLICATION_SUPERVISOR_SOCKET_PATH_V3,
+            ),
+            ListenerFilesystemPolicyV1::production(credentials),
+            budget,
+        )
+    }
+
+    /// Revalidates original inputs and requires the separate application path.
+    /// A compiler listener, including an otherwise valid one, is not accepted.
+    pub fn validate_native_application(&self, budget: &mut Budget<'_>) -> Result<()> {
+        self.revalidate(budget)?;
+        if !self.listener.has_native_application_path() {
+            return Err(Failure::Listener("not the native application listener"));
+        }
+        Ok(())
+    }
+
     fn admit_at(
         listener: OwnedFd,
         root: File,

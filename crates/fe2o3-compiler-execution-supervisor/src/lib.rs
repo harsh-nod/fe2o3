@@ -19,6 +19,7 @@ use fe2o3_protected_static_executable::{
 use fe2o3_runtime_protocol::SealedStaticApplicationErrorV1;
 use fe2o3_static_preexec_manifest::StaticPreexecObjectIdentityV1;
 
+mod application_route;
 mod authority;
 mod authority_v2;
 #[cfg(test)]
@@ -86,14 +87,25 @@ pub use deployment::{
     COMPILER_EXECUTION_SUPERVISOR_EXTERNAL_ANCHOR_PIDFD_V1,
     COMPILER_EXECUTION_SUPERVISOR_ISSUER_FD_V1, COMPILER_EXECUTION_SUPERVISOR_LAUNCHER_FD_V1,
     COMPILER_EXECUTION_SUPERVISOR_LIFECYCLE_FD_V1, COMPILER_EXECUTION_SUPERVISOR_LISTENER_FD_V1,
+    COMPILER_EXECUTION_SUPERVISOR_OBSERVER_REGISTRY_FD_V1,
+    COMPILER_EXECUTION_SUPERVISOR_OBSERVER_ROOT_PIDFD_V1,
     COMPILER_EXECUTION_SUPERVISOR_POLICY_FD_V1, COMPILER_EXECUTION_SUPERVISOR_ROOT_FD_V1,
     COMPILER_EXECUTION_SUPERVISOR_SIGNING_KEY_FD_V1, ProtectedIssuerDeploymentErrorV1,
     run_inherited_protected_issuer_service_v1,
 };
-pub use handoff::{AcceptedCompilerExecutionHandoffV1, ProtectedIssuerHandoffErrorV1};
+pub use handoff::{
+    AcceptedApplicationHandoffV1, AcceptedCompilerExecutionHandoffV1,
+    AcceptedCustodianApplicationHandoffV1, ProtectedApplicationHandoffErrorV1,
+    ProtectedIssuerHandoffErrorV1,
+};
 pub use handoff_v2::{
     AcceptedCompilerExecutionHandoffV2, ProtectedIssuerHandoffErrorV2,
     ProtectedIssuerHandoffStorageV2,
+};
+pub use handoff_v3::application::{
+    AcceptedNativeApplicationHandoffV3, PendingNativeApplicationRootTransferV3,
+    ProtectedNativeApplicationHandoffErrorV3, ProtectedNativeApplicationHandoffStorageV3,
+    PublishedNativeApplicationRootTransferV3,
 };
 pub use handoff_v3::{
     AcceptedCompilerExecutionHandoffV3, ProtectedIssuerHandoffErrorV3,
@@ -124,7 +136,8 @@ pub use native_entrypoint::{
     NATIVE_ISSUER_STARTUP_FRAME_STORAGE_V2, NATIVE_ISSUER_STARTUP_INPUT_STORAGE_V2,
     NATIVE_ISSUER_STARTUP_INPUT_STORAGE_V3, NATIVE_ISSUER_STARTUP_WORK_V2,
     ProtectedIssuerDeploymentErrorV2, ProtectedIssuerDeploymentErrorV3,
-    run_inherited_protected_issuer_service_v2, run_inherited_protected_issuer_service_v3,
+    run_inherited_native_supervisor_v3, run_inherited_protected_issuer_service_v2,
+    run_inherited_protected_issuer_service_v3,
 };
 pub use process::{
     ExitedProtectedIssuerV1, LaunchedProtectedIssuerV1, MAX_PROTECTED_ISSUER_PROCESSES_V1,

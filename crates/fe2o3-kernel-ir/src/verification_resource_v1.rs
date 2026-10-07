@@ -125,6 +125,13 @@ pub use window::CanonicalKernelIrStorageAccountIdentityV1;
 #[path = "verification_resource_scope_v1.rs"]
 mod scope;
 
+#[path = "verification_resource_async_scope_v1.rs"]
+mod async_scope;
+
+#[path = "verification_resource_retention_v1.rs"]
+mod retention;
+pub use retention::CanonicalKernelIrOriginalAccountRetentionLoanV1;
+
 struct StorageState {
     storage: usize,
     peak_storage: usize,
@@ -214,6 +221,10 @@ impl CanonicalKernelIrOwnedVerificationResourceBudgetV1 {
     /// that cannot be cleaned up after replacement. Operations on a replacement
     /// budget affect that budget's account. No state is copied back on return or
     /// unwind; dropping either view performs no automatic storage release.
+    /// Explicit original-account retention loans must be dropped before this
+    /// callback exits. A hidden guard fails stop on any forgotten loan, including
+    /// after view replacement or unwind; it neither infers native settlement nor
+    /// refunds storage. With no retention loans, exit behavior is unchanged.
     ///
     /// ```compile_fail
     /// use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
@@ -238,6 +249,7 @@ impl CanonicalKernelIrOwnedVerificationResourceBudgetV1 {
         &mut self,
         operation: impl for<'a> FnOnce(&mut CanonicalKernelIrVerificationResourceBudgetV1<'a>) -> T,
     ) -> T {
+        let _retained = retention::Exit::new(&self.window);
         let mut budget = CanonicalKernelIrVerificationResourceBudgetV1 {
             work: &mut self.work,
             storage: Storage::Borrowed(&mut self.storage),

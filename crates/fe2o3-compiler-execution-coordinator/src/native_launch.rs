@@ -44,6 +44,10 @@ pub enum CompilerExecutionLaunchErrorV2 {
     Preparation(Preparation),
     /// Actual sealed native context refused.
     Capability(Capability),
+    /// The original independently installed root deployment changed.
+    Installation(
+        fe2o3_compiler_closure_capability::RootProductionCompilerExecutionDeploymentErrorV3,
+    ),
     /// Lifecycle transfer refused.
     Lifecycle(Lifecycle),
     /// Final listener/root transfer refused.
@@ -60,6 +64,8 @@ pub enum CompilerExecutionLaunchErrorV2 {
     RootConnection(RootConnection),
     /// Actual original-compiler publication observation or currentness refused.
     Publication(Publication),
+    /// The original native application registration/currentness owner refused.
+    ApplicationCurrentness(std::io::Error),
     /// Atomic spawn or child operation refused.
     Spawn(Spawn),
     /// Persistent cleanup funding refused.
@@ -118,11 +124,13 @@ macro_rules! errors {
     };
 }
 errors!(Resource => Resource, Preparation => Preparation, Capability => Capability,
+    fe2o3_compiler_closure_capability::RootProductionCompilerExecutionDeploymentErrorV3 => Installation,
     Lifecycle => Lifecycle, Inputs => ServiceInputs, Anchor => Anchor, Image => Executable,
     Spawn => Spawn, Cleanup => Cleanup, Retained => Retained, Profile => Profile,
     observations::Error => Observation, ReadyV2 => ReadyV2, ReadyV3 => ReadyV3,
     ManifestV3 => ManifestV3, ServiceReadyV3 => ServiceReadyV3, IssuerImage => IssuerImage,
-    RootChannel => RootChannel, RootConnection => RootConnection, Publication => Publication);
+    RootChannel => RootChannel, RootConnection => RootConnection, Publication => Publication,
+    std::io::Error => ApplicationCurrentness);
 
 impl From<launch_io::Failure> for Failure {
     fn from(error: launch_io::Failure) -> Self {

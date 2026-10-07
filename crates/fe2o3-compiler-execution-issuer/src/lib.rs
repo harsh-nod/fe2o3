@@ -36,13 +36,14 @@ use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 
 use fe2o3_broker_authority_service::{
-    CompilerExecutionServiceErrorV1, CompilerExecutionServiceExitV1,
-    ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
+    CompilerExecutionObserverErrorV1, CompilerExecutionServiceErrorV1,
+    CompilerExecutionServiceExitV1, ExpectedClientProcessIdentityV1, LiveClientPidfdIdentityV1,
     ProtectedCompilerExecutionExternalAnchorErrorV1, ProtectedCompilerExecutionExternalAnchorV1,
     ProtectedCompilerExecutionIssuerAdmissionErrorV1, ProtectedCompilerExecutionIssuerAdmissionV1,
     ProtectedCompilerExecutionIssuerErrorV1, ProtectedCompilerExecutionIssuerV1,
-    ProtectedExternalAnchorServiceAdmissionV1, ProtectedIssuerProcessV1,
-    ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1, serve_compiler_execution_v1,
+    ProtectedCompilerExecutionObserverV1, ProtectedExternalAnchorServiceAdmissionV1,
+    ProtectedIssuerProcessV1, ProtectedServiceAdmissionErrorV1, ProtectedServiceAdmissionV1,
+    serve_compiler_execution_v1,
 };
 use fe2o3_compiler_closure_capability::{
     COMPILER_EXECUTION_SIGNING_KEY_ISSUER_FD_V1, CompilerExecutionPolicyCapabilityV1,
@@ -74,8 +75,13 @@ pub const COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1: RawFd = 10;
 pub const COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1: RawFd = 11;
 /// V3-only issuer endpoint of the original root's private control channel.
 pub const COMPILER_EXECUTION_ISSUER_ROOT_CONTROL_FD_V3: RawFd = 12;
+/// V1-only authenticated root-observer endpoint for this exact issuer occurrence.
+pub const COMPILER_EXECUTION_ISSUER_OBSERVER_PEER_FD_V1: RawFd = 12;
+/// V1-only original root coordinator pidfd, never reopened by numeric PID.
+pub const COMPILER_EXECUTION_ISSUER_OBSERVER_ROOT_PIDFD_V1: RawFd = 13;
 
 const PRIVATE_DESCRIPTOR_FLOOR: RawFd = 12;
+const PRIVATE_DESCRIPTOR_FLOOR_V1: RawFd = 14;
 const PRIVATE_DESCRIPTOR_FLOOR_V3: RawFd = 13;
 
 const NATIVE_INHERITED_DESCRIPTORS: [RawFd; 9] = [
@@ -126,8 +132,17 @@ const _: () = assert!(
     COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1
         < COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1
 );
+const _: () = assert!(
+    COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1
+        < COMPILER_EXECUTION_ISSUER_OBSERVER_PEER_FD_V1
+);
+const _: () = assert!(
+    COMPILER_EXECUTION_ISSUER_OBSERVER_PEER_FD_V1
+        < COMPILER_EXECUTION_ISSUER_OBSERVER_ROOT_PIDFD_V1
+);
 const _: () =
-    assert!(COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1 < PRIVATE_DESCRIPTOR_FLOOR);
+    assert!(COMPILER_EXECUTION_ISSUER_OBSERVER_ROOT_PIDFD_V1 < PRIVATE_DESCRIPTOR_FLOOR_V1);
+const _: () = assert!(PRIVATE_DESCRIPTOR_FLOOR_V1 < 128);
 const _: () = assert!(PRIVATE_DESCRIPTOR_FLOOR < 128);
 const _: () = assert!(
     COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1
@@ -138,7 +153,7 @@ const _: () = assert!(PRIVATE_DESCRIPTOR_FLOOR_V3 < 128);
 
 /// Runs one exact protected compiler-execution service occurrence from inherited descriptors.
 ///
-/// This function reads no arguments or environment. The caller must install the nine fixed
+/// This function reads no arguments or environment. The caller must install the eleven fixed
 /// descriptors through the freestanding static pre-exec launcher. Admission requires a service
 /// UID distinct from the rustc client UID, a service-owned mode-0700 root, a service-owned sealed
 /// mode-0400 key, the exact sealed-static running image named by the policy, and exact agreement
@@ -162,13 +177,16 @@ pub fn run_inherited_compiler_execution_issuer_v1()
         return Err(CompilerExecutionIssuerEntrypointErrorV1::PolicyMismatch);
     }
 
-    let root = take_inherited(COMPILER_EXECUTION_ISSUER_ROOT_FD_V1)?;
-    let peer = take_inherited(COMPILER_EXECUTION_ISSUER_PEER_FD_V1)?;
-    let client_pidfd = take_inherited(COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1)?;
-    let signing_key = take_inherited(COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1)?;
+    let root = take_inherited_v1(COMPILER_EXECUTION_ISSUER_ROOT_FD_V1)?;
+    let peer = take_inherited_v1(COMPILER_EXECUTION_ISSUER_PEER_FD_V1)?;
+    let client_pidfd = take_inherited_v1(COMPILER_EXECUTION_ISSUER_CLIENT_PIDFD_V1)?;
+    let signing_key = take_inherited_v1(COMPILER_EXECUTION_ISSUER_SIGNING_KEY_FD_V1)?;
     let external_anchor_peer =
-        take_inherited(COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1)?;
-    let external_anchor_pidfd = take_inherited(COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1)?;
+        take_inherited_v1(COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1)?;
+    let external_anchor_pidfd =
+        take_inherited_v1(COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1)?;
+    let observer_peer = take_inherited_v1(COMPILER_EXECUTION_ISSUER_OBSERVER_PEER_FD_V1)?;
+    let observer_root_pidfd = take_inherited_v1(COMPILER_EXECUTION_ISSUER_OBSERVER_ROOT_PIDFD_V1)?;
     let signing_key = CompilerExecutionSigningKeyCapabilityV1::from_file(
         File::from(signing_key),
         policy.policy(),
@@ -183,6 +201,14 @@ pub fn run_inherited_compiler_execution_issuer_v1()
         .map_err(CompilerExecutionIssuerEntrypointErrorV1::ServiceAdmission)?;
     let service = ProtectedServiceAdmissionV1::admit(root, peer, live_client)
         .map_err(CompilerExecutionIssuerEntrypointErrorV1::ServiceAdmission)?;
+    let observer = ProtectedCompilerExecutionObserverV1::admit(
+        observer_peer,
+        observer_root_pidfd,
+        launch.manifest(),
+        policy.policy(),
+        &service,
+    )
+    .map_err(CompilerExecutionIssuerEntrypointErrorV1::Observer)?;
     let external_anchor_admission = ProtectedExternalAnchorServiceAdmissionV1::admit(
         external_anchor_peer,
         external_anchor_pidfd,
@@ -208,6 +234,9 @@ pub fn run_inherited_compiler_execution_issuer_v1()
         external_anchor,
     )
     .map_err(CompilerExecutionIssuerEntrypointErrorV1::IssuerAdmission)?;
+    let admission = admission
+        .with_observer(observer)
+        .map_err(CompilerExecutionIssuerEntrypointErrorV1::IssuerAdmission)?;
     let (issuer, _) = ProtectedCompilerExecutionIssuerV1::admit(admission)
         .map_err(CompilerExecutionIssuerEntrypointErrorV1::Issuer)?;
     let issuer_pid = u32::try_from(rustix::process::getpid().as_raw_pid())
@@ -233,7 +262,7 @@ pub fn run_inherited_compiler_execution_issuer_v1()
 }
 
 fn take_readiness_writer() -> Result<OwnedFd, CompilerExecutionIssuerEntrypointErrorV1> {
-    admit_readiness_writer(take_inherited(COMPILER_EXECUTION_ISSUER_READY_FD_V1)?)
+    admit_readiness_writer(take_inherited_v1(COMPILER_EXECUTION_ISSUER_READY_FD_V1)?)
 }
 
 fn admit_readiness_writer(
@@ -300,6 +329,12 @@ fn take_inherited(descriptor: RawFd) -> Result<OwnedFd, CompilerExecutionIssuerE
     take_inherited_at_floor(descriptor, PRIVATE_DESCRIPTOR_FLOOR)
 }
 
+fn take_inherited_v1(
+    descriptor: RawFd,
+) -> Result<OwnedFd, CompilerExecutionIssuerEntrypointErrorV1> {
+    take_inherited_at_floor(descriptor, PRIVATE_DESCRIPTOR_FLOOR_V1)
+}
+
 fn take_inherited_at_floor(
     descriptor: RawFd,
     floor: RawFd,
@@ -361,6 +396,7 @@ fn close_inherited(descriptor: RawFd) -> Result<(), CompilerExecutionIssuerEntry
 /// Stable protected-issuer entrypoint failure.
 #[derive(Debug)]
 pub enum CompilerExecutionIssuerEntrypointErrorV1 {
+    Observer(CompilerExecutionObserverErrorV1),
     Descriptor(io::Error),
     UnexpectedCloseOnExec(RawFd),
     PolicyCapability(String),
@@ -382,6 +418,7 @@ pub enum CompilerExecutionIssuerEntrypointErrorV1 {
 impl fmt::Display for CompilerExecutionIssuerEntrypointErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Observer(error) => write!(formatter, "issuer observer admission failed: {error}"),
             Self::Descriptor(error) => {
                 write!(formatter, "issuer descriptor admission failed: {error}")
             }
@@ -435,6 +472,7 @@ impl fmt::Display for CompilerExecutionIssuerEntrypointErrorV1 {
 impl Error for CompilerExecutionIssuerEntrypointErrorV1 {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Observer(error) => Some(error),
             Self::Descriptor(error) => Some(error),
             Self::ReadinessDescriptor(error) => Some(error),
             Self::ReadinessProtocol(error) => Some(error),
@@ -511,6 +549,8 @@ mod tests {
             COMPILER_EXECUTION_ISSUER_READY_FD_V1,
             COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PEER_FD_V1,
             COMPILER_EXECUTION_ISSUER_EXTERNAL_ANCHOR_PIDFD_V1,
+            COMPILER_EXECUTION_ISSUER_OBSERVER_PEER_FD_V1,
+            COMPILER_EXECUTION_ISSUER_OBSERVER_ROOT_PIDFD_V1,
         ];
         assert!(
             descriptors
@@ -519,7 +559,26 @@ mod tests {
         );
         for (index, descriptor) in descriptors.iter().enumerate() {
             assert!(!descriptors[..index].contains(descriptor));
+            assert!(*descriptor < PRIVATE_DESCRIPTOR_FLOOR_V1);
         }
+    }
+
+    #[test]
+    fn observer_and_native_descriptor_staging_families_remain_separate() {
+        assert_eq!(PRIVATE_DESCRIPTOR_FLOOR_V1, 14);
+        assert_eq!(PRIVATE_DESCRIPTOR_FLOOR, 12);
+        assert_eq!(PRIVATE_DESCRIPTOR_FLOOR_V3, 13);
+        assert!(
+            !NATIVE_INHERITED_DESCRIPTORS.contains(&COMPILER_EXECUTION_ISSUER_OBSERVER_PEER_FD_V1)
+        );
+        assert!(
+            !NATIVE_INHERITED_DESCRIPTORS_V3
+                .contains(&COMPILER_EXECUTION_ISSUER_OBSERVER_ROOT_PIDFD_V1)
+        );
+        assert_eq!(
+            NATIVE_INHERITED_DESCRIPTORS_V3.last(),
+            Some(&COMPILER_EXECUTION_ISSUER_ROOT_CONTROL_FD_V3)
+        );
     }
 
     #[test]

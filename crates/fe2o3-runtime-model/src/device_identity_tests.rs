@@ -101,6 +101,88 @@ fn observations(seed: u8) -> ObservationFixture {
     }
 }
 
+fn gfx950_profile() -> DeviceAdmissionProfileV1 {
+    DeviceAdmissionProfileV1::gfx950_xnack_minus_spx_nps1_kfd_1_18_drm_3_64_0(
+        profile().identity(),
+        profile().kfd_schema_identity(),
+        profile().drm_schema_identity(),
+    )
+}
+
+fn gfx950_observations(seed: u8) -> ObservationFixture {
+    let mut fixture = observations(seed);
+    fixture.topology.target = GpuTargetObservationV1::Gfx950;
+    fixture.topology.device_id = GFX950_PCI_DEVICE_ID_V1;
+    fixture.render.device_id = GFX950_PCI_DEVICE_ID_V1;
+    fixture.render.pci_revision_id = GFX950_PCI_REVISION_V1;
+    fixture
+}
+
+#[test]
+fn gfx950_correlation_retains_closed_target_despite_equal_untrusted_digests() {
+    let profile950 = gfx950_profile();
+    assert_eq!(profile950.identity(), profile().identity());
+    assert_ne!(profile950, profile());
+    let correlation = gfx950_observations(4)
+        .inventory()
+        .correlate_model_only(&profile950)
+        .unwrap();
+    assert_eq!(correlation.authority_domain(), AuthorityDomainV1::ModelOnly);
+    assert_eq!(correlation.target_profile(), profile950.target_profile());
+    assert_eq!(correlation.target(), GpuTargetObservationV1::Gfx950);
+    assert_eq!(correlation.identity().device_id, GFX950_PCI_DEVICE_ID_V1);
+    let (_, admission) = DeviceIdentityStateV1::new(domain(1))
+        .register_device_model_only(correlation, DeviceGenerationV1(1))
+        .unwrap();
+    assert_eq!(
+        admission.correlation().target_profile(),
+        profile950.target_profile()
+    );
+    assert_eq!(admission.authority_domain(), AuthorityDomainV1::ModelOnly);
+    assert!(
+        gfx950_observations(4)
+            .inventory()
+            .correlate_model_only(&profile())
+            .is_err()
+    );
+    assert!(
+        observations(4)
+            .inventory()
+            .correlate_model_only(&profile950)
+            .is_err()
+    );
+}
+
+#[test]
+fn gfx950_correlation_rejects_nonprofile_observations() {
+    let changes: [fn(&mut ObservationFixture); 10] = [
+        |f| f.topology.target = GpuTargetObservationV1::Gfx942,
+        |f| f.topology.target = GpuTargetObservationV1::Other(90500),
+        |f| {
+            f.topology.device_id = MI300X_PCI_DEVICE_ID_V1;
+            f.render.device_id = MI300X_PCI_DEVICE_ID_V1;
+        },
+        |f| f.kfd.xnack = XnackObservationV1::Enabled,
+        |f| f.kfd.xnack = XnackObservationV1::Unknown,
+        |f| f.kfd.uapi_minor = 19,
+        |f| f.render.drm_minor = 65,
+        |f| f.render.family = DrmFamilyObservationV1::Other(141),
+        |f| f.topology.compute_partition = ComputePartitionObservationV1::Cpx,
+        |f| f.topology.memory_partition = MemoryPartitionObservationV1::Nps4,
+    ];
+    for (index, change) in changes.into_iter().enumerate() {
+        let mut fixture = gfx950_observations(4);
+        change(&mut fixture);
+        assert!(
+            fixture
+                .inventory()
+                .correlate_model_only(&gfx950_profile())
+                .is_err(),
+            "mutation {index}"
+        );
+    }
+}
+
 fn vm_observation(token: ModelDeviceAdmissionV1, vm_id: u64) -> UntrustedVmObservationV1 {
     let correlation = token.correlation();
     UntrustedVmObservationV1 {
@@ -122,6 +204,8 @@ fn correlation_is_deterministic_model_only_and_binds_every_observation() {
     assert_eq!(first.authority_domain(), AuthorityDomainV1::ModelOnly);
     assert_eq!(first.domain_id(), domain(1));
     assert_eq!(first.profile_id(), profile().identity());
+    assert_eq!(first.target_profile(), profile().target_profile());
+    assert_eq!(first.target(), GpuTargetObservationV1::Gfx942);
     assert_eq!(first.identity().physical_id, PhysicalDeviceIdV1(104));
     assert_eq!(first.identity().pci, fixture.topology.pci);
     assert_eq!(first.identity().revision_id, fixture.render.pci_revision_id);
@@ -431,9 +515,25 @@ fn stale_device_tokens_and_generations_cannot_cross_retirement() {
     let (state, first) = state
         .register_device_model_only(correlation, DeviceGenerationV1(1))
         .unwrap();
+    let before = state.clone();
+    assert_eq!(
+        state.register_device_model_only(correlation, DeviceGenerationV1(2)),
+        Err(DeviceAdmissionErrorV1::ActiveDeviceExists(
+            first.model_key()
+        ))
+    );
+    assert_eq!(state, before);
     let (state, vm) = state
         .register_vm_model_only(first, vm_observation(first, 1))
         .unwrap();
+    let before = state.clone();
+    assert_eq!(
+        state.register_device_model_only(correlation, DeviceGenerationV1(2)),
+        Err(DeviceAdmissionErrorV1::ActiveDeviceExists(
+            first.model_key()
+        ))
+    );
+    assert_eq!(state, before);
     assert_eq!(
         state.retire_device_model_only(first),
         Err(DeviceAdmissionErrorV1::LiveVmPreventsDeviceRetirement(
@@ -441,6 +541,12 @@ fn stale_device_tokens_and_generations_cannot_cross_retirement() {
         ))
     );
     let state = state.retire_vm_model_only(vm).unwrap();
+    assert_eq!(
+        state.register_device_model_only(correlation, DeviceGenerationV1(2)),
+        Err(DeviceAdmissionErrorV1::ActiveDeviceExists(
+            first.model_key()
+        ))
+    );
     let state = state.retire_device_model_only(first).unwrap();
     assert_eq!(
         state.register_vm_model_only(first, vm_observation(first, 2)),

@@ -435,8 +435,7 @@ impl RootCompilerRequest<'_> {
         }
         let (_, compiler) = payloads()?;
         let issuer =
-            Prepared::maximum_issuer_cleanup_quota::<ManagedProofHelper>(compiler, cleanup_turns)
-                .map_err(NativeError::from)?;
+            Prepared::maximum_issuer_cleanup_quota::<ManagedProofHelper>(compiler, cleanup_turns)?;
         let publication =
             fe2o3_broker_authority_service::RootPublicationCustodyV3::observation_cleanup_quota(
                 MAX_HANDOFF,

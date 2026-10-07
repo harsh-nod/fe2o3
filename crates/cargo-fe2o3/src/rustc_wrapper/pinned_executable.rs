@@ -958,6 +958,13 @@ mod platform {
             crate::process_execution::spawn(&mut self.command)
         }
 
+        pub(crate) fn spawn_with_compiler_proof(
+            self,
+            proof: fe2o3_verifier::PendingCompilerProofDelegationV1,
+        ) -> io::Result<(Child, fe2o3_verifier::SpawnedCompilerProofDelegationV1)> {
+            proof.spawn(self.command)
+        }
+
         pub(crate) fn output(&mut self) -> io::Result<Output> {
             crate::process_execution::capture_output(&mut self.command)
         }

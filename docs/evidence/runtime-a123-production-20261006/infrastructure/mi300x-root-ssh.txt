@@ -1,0 +1,15 @@
+Recorded after attempts: 2026-10-07 00:15:01 UTC
+Scope: one normal configured-identity public-key attempt per authorized alias.
+No password guessing, configuration change, service, container or GPU command.
+Command payload: true (identity-only success/denial check).
+
+$ ssh -o BatchMode=yes -o ConnectTimeout=15 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PreferredAuthentications=publickey root@mi300x true
+root@sharkmi300x-1: Permission denied (publickey,password).
+exit_code=255
+
+$ ssh -o BatchMode=yes -o ConnectTimeout=15 -o ConnectionAttempts=1 -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -o PasswordAuthentication=no -o KbdInteractiveAuthentication=no -o PreferredAuthentications=publickey root@mi300x-2 true
+root@sharkmi300x-3: Permission denied (publickey,password).
+exit_code=255
+
+Result: Neither attempt authenticated. No protected qualification or real-root
+execution was performed. No remote scratch or persistent state was created.

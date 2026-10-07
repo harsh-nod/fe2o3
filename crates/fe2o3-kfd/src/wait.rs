@@ -2,13 +2,12 @@
 
 use std::time::{Duration, Instant};
 
-const SPIN_ATTEMPTS_V1: u32 = 64;
-const YIELD_ATTEMPTS_V1: u32 = 16;
+include!("wait_arithmetic.rs");
 const INITIAL_SLEEP_V1: Duration = Duration::from_micros(25);
 const MAX_SLEEP_V1: Duration = Duration::from_millis(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum WaitActionV1 {
+pub(crate) enum WaitActionV1 {
     Spin,
     Yield,
     Sleep(Duration),
@@ -21,24 +20,83 @@ enum WaitActionV1 {
 /// missing GPU completion from monopolizing a host core.
 pub(crate) struct MonotonicWaitV1 {
     deadline: Option<Instant>,
+    active_spin_until: Option<Instant>,
     attempts: u32,
     next_sleep: Duration,
+    max_sleep: Duration,
 }
 
 impl MonotonicWaitV1 {
     pub(crate) fn without_deadline() -> Self {
         Self {
             deadline: None,
+            active_spin_until: None,
             attempts: 0,
             next_sleep: INITIAL_SLEEP_V1,
+            max_sleep: MAX_SLEEP_V1,
         }
     }
 
     pub(crate) fn until(deadline: Instant) -> Self {
         Self {
             deadline: Some(deadline),
+            active_spin_until: None,
             attempts: 0,
             next_sleep: INITIAL_SLEEP_V1,
+            max_sleep: MAX_SLEEP_V1,
+        }
+    }
+
+    pub(crate) fn until_with_sleep_ceiling(deadline: Instant, max_sleep: Duration) -> Self {
+        Self {
+            deadline: Some(deadline),
+            active_spin_until: None,
+            attempts: 0,
+            next_sleep: INITIAL_SLEEP_V1.min(max_sleep),
+            max_sleep,
+        }
+    }
+
+    pub(crate) fn until_with_active_spin_floor(
+        deadline: Instant,
+        active_spin_floor: Duration,
+    ) -> Self {
+        Self::until_with_active_spin_floor_and_sleep_ceiling_from(
+            Instant::now(),
+            deadline,
+            active_spin_floor,
+            MAX_SLEEP_V1,
+        )
+    }
+
+    pub(crate) fn until_with_active_spin_floor_and_sleep_ceiling(
+        deadline: Instant,
+        active_spin_floor: Duration,
+        max_sleep: Duration,
+    ) -> Self {
+        Self::until_with_active_spin_floor_and_sleep_ceiling_from(
+            Instant::now(),
+            deadline,
+            active_spin_floor,
+            max_sleep,
+        )
+    }
+
+    fn until_with_active_spin_floor_and_sleep_ceiling_from(
+        started: Instant,
+        deadline: Instant,
+        active_spin_floor: Duration,
+        max_sleep: Duration,
+    ) -> Self {
+        let active_spin_until = started
+            .checked_add(active_spin_floor)
+            .map_or(deadline, |spin_until| spin_until.min(deadline));
+        Self {
+            deadline: Some(deadline),
+            active_spin_until: Some(active_spin_until),
+            attempts: 0,
+            next_sleep: INITIAL_SLEEP_V1.min(max_sleep),
+            max_sleep,
         }
     }
 
@@ -47,50 +105,142 @@ impl MonotonicWaitV1 {
             .is_some_and(|deadline| Instant::now() >= deadline)
     }
 
-    fn next_action(&mut self) -> WaitActionV1 {
-        self.attempts = self.attempts.saturating_add(1);
-        if self.attempts <= SPIN_ATTEMPTS_V1 {
+    fn next_action_at(&mut self, now: Instant) -> WaitActionV1 {
+        self.attempts = increment_wait_attempts_v1(self.attempts);
+        if self
+            .active_spin_until
+            .is_some_and(|active_spin_until| now < active_spin_until)
+        {
             return WaitActionV1::Spin;
         }
-        if self.attempts <= SPIN_ATTEMPTS_V1 + YIELD_ATTEMPTS_V1 {
-            return WaitActionV1::Yield;
+        match wait_prefix_v1(self.attempts) {
+            WaitPrefixV1::Spin => return WaitActionV1::Spin,
+            WaitPrefixV1::Yield => return WaitActionV1::Yield,
+            WaitPrefixV1::Sleep => {}
         }
-        let sleep = self
+        let remaining = self
             .deadline
-            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
-            .map_or(self.next_sleep, |remaining| remaining.min(self.next_sleep));
-        self.next_sleep = self.next_sleep.saturating_mul(2).min(MAX_SLEEP_V1);
+            .map(|deadline| deadline.saturating_duration_since(now));
+        let sleep = wait_sleep_duration_v1(self.next_sleep, remaining);
+        self.next_sleep = wait_backoff_duration_v1(self.next_sleep, self.max_sleep);
         WaitActionV1::Sleep(sleep)
     }
 
-    pub(crate) fn pause(&mut self) {
-        match self.next_action() {
+    fn next_action(&mut self) -> WaitActionV1 {
+        self.next_action_at(Instant::now())
+    }
+
+    pub(crate) fn pause_observed(&mut self) -> WaitActionV1 {
+        let action = self.next_action();
+        match action {
             WaitActionV1::Spin => core::hint::spin_loop(),
             WaitActionV1::Yield => std::thread::yield_now(),
             WaitActionV1::Sleep(duration) if !duration.is_zero() => std::thread::sleep(duration),
             WaitActionV1::Sleep(_) => {}
         }
+        action
+    }
+
+    pub(crate) fn pause(&mut self) {
+        let _ = self.pause_observed();
+    }
+
+    /// Repeats one observation before consulting the deadline. `Ok(true)`
+    /// means the observed operation is ready; `Ok(false)` means the deadline
+    /// expired after a Pending observation.
+    pub(crate) fn observe_until_ready<E>(
+        &mut self,
+        mut observe_ready: impl FnMut() -> Result<bool, E>,
+    ) -> Result<bool, E> {
+        loop {
+            if observe_ready()? {
+                return Ok(true);
+            }
+            if self.expired() {
+                return Ok(false);
+            }
+            self.pause();
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "wait_cursor_differential_tests.rs"]
+mod cursor_differential_tests;
+
+#[cfg(test)]
+#[path = "wait_arithmetic_tests.rs"]
+mod arithmetic_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn cadence_cursors_keep_prefix_clip_deadlines_and_saturate_attempts() {
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(1);
+        for ceiling in [MAX_SLEEP_V1, Duration::from_micros(25)] {
+            let mut wait = if ceiling == MAX_SLEEP_V1 {
+                MonotonicWaitV1::until(deadline)
+            } else {
+                MonotonicWaitV1::until_with_sleep_ceiling(deadline, ceiling)
+            };
+            assert_eq!(wait.deadline, Some(deadline));
+            assert_eq!(wait.active_spin_until, None);
+            for _ in 0..64 {
+                assert_eq!(wait.next_action_at(started), WaitActionV1::Spin);
+            }
+            for _ in 0..16 {
+                assert_eq!(wait.next_action_at(started), WaitActionV1::Yield);
+            }
+            for exponent in 0..8 {
+                assert_eq!(
+                    wait.next_action_at(started),
+                    WaitActionV1::Sleep((INITIAL_SLEEP_V1 * (1 << exponent)).min(ceiling))
+                );
+            }
+            let remaining = Duration::from_micros(7);
+            assert_eq!(
+                wait.next_action_at(deadline - remaining),
+                WaitActionV1::Sleep(remaining)
+            );
+            assert_eq!(
+                wait.next_action_at(deadline),
+                WaitActionV1::Sleep(Duration::ZERO)
+            );
+            assert_eq!(
+                wait.next_action_at(deadline + Duration::from_nanos(1)),
+                WaitActionV1::Sleep(Duration::ZERO)
+            );
+            wait.attempts = u32::MAX - 1;
+            for _ in 0..3 {
+                assert_eq!(wait.next_action_at(started), WaitActionV1::Sleep(ceiling));
+                assert_eq!(wait.attempts, u32::MAX);
+            }
+            assert_eq!(wait.deadline, Some(deadline));
+            assert_eq!(wait.max_sleep, ceiling);
+        }
+    }
+
+    #[test]
     fn sustained_waits_progress_from_spin_to_yield_to_bounded_sleep() {
         let mut wait = MonotonicWaitV1::without_deadline();
-        for _ in 0..SPIN_ATTEMPTS_V1 {
+        for expected_attempts in 1..=SPIN_ATTEMPTS_V1 {
             assert_eq!(wait.next_action(), WaitActionV1::Spin);
+            assert_eq!(wait.attempts, expected_attempts);
         }
-        for _ in 0..YIELD_ATTEMPTS_V1 {
+        for expected_attempts in (SPIN_ATTEMPTS_V1 + 1)..=(SPIN_ATTEMPTS_V1 + YIELD_ATTEMPTS_V1) {
             assert_eq!(wait.next_action(), WaitActionV1::Yield);
+            assert_eq!(wait.attempts, expected_attempts);
         }
         assert_eq!(wait.next_action(), WaitActionV1::Sleep(INITIAL_SLEEP_V1));
+        assert_eq!(wait.attempts, SPIN_ATTEMPTS_V1 + YIELD_ATTEMPTS_V1 + 1);
         assert_eq!(
             wait.next_action(),
             WaitActionV1::Sleep(INITIAL_SLEEP_V1 * 2)
         );
+        assert_eq!(wait.attempts, SPIN_ATTEMPTS_V1 + YIELD_ATTEMPTS_V1 + 2);
         for _ in 0..32 {
             let WaitActionV1::Sleep(duration) = wait.next_action() else {
                 panic!("backoff returned to an active wait")
@@ -100,8 +250,160 @@ mod tests {
     }
 
     #[test]
+    fn deadline_without_floor_preserves_the_default_action_sequence() {
+        let started = Instant::now();
+        let mut wait = MonotonicWaitV1::until(started + Duration::from_secs(1));
+        for _ in 0..SPIN_ATTEMPTS_V1 {
+            assert_eq!(wait.next_action_at(started), WaitActionV1::Spin);
+        }
+        for _ in 0..YIELD_ATTEMPTS_V1 {
+            assert_eq!(wait.next_action_at(started), WaitActionV1::Yield);
+        }
+        assert_eq!(
+            wait.next_action_at(started),
+            WaitActionV1::Sleep(INITIAL_SLEEP_V1)
+        );
+    }
+
+    #[test]
+    fn explicit_sleep_ceiling_is_applied_before_and_after_backoff() {
+        let started = Instant::now();
+        let ceiling = Duration::from_micros(25);
+        let mut wait =
+            MonotonicWaitV1::until_with_sleep_ceiling(started + Duration::from_secs(1), ceiling);
+        for _ in 0..SPIN_ATTEMPTS_V1 {
+            assert_eq!(wait.next_action_at(started), WaitActionV1::Spin);
+        }
+        for _ in 0..YIELD_ATTEMPTS_V1 {
+            assert_eq!(wait.next_action_at(started), WaitActionV1::Yield);
+        }
+        for _ in 0..32 {
+            assert_eq!(wait.next_action_at(started), WaitActionV1::Sleep(ceiling));
+        }
+        assert_eq!(wait.max_sleep, ceiling);
+    }
+
+    #[test]
     fn zero_deadline_is_immediately_expired() {
         let wait = MonotonicWaitV1::until(Instant::now());
         assert!(wait.expired());
+    }
+
+    #[test]
+    fn active_spin_floor_is_elapsed_and_clamped_to_deadline() {
+        let started = Instant::now();
+        let deadline = started + Duration::from_micros(100);
+        let mut wait = MonotonicWaitV1::until_with_active_spin_floor_and_sleep_ceiling_from(
+            started,
+            deadline,
+            Duration::from_micros(50),
+            MAX_SLEEP_V1,
+        );
+
+        for _ in 0..SPIN_ATTEMPTS_V1 {
+            assert_eq!(
+                wait.next_action_at(started + Duration::from_micros(49)),
+                WaitActionV1::Spin
+            );
+        }
+        assert_eq!(wait.attempts, SPIN_ATTEMPTS_V1);
+        assert_eq!(
+            wait.next_action_at(started + Duration::from_micros(50)),
+            WaitActionV1::Yield
+        );
+        assert_eq!(wait.attempts, SPIN_ATTEMPTS_V1 + 1);
+
+        let clamped = MonotonicWaitV1::until_with_active_spin_floor_and_sleep_ceiling_from(
+            started,
+            deadline,
+            Duration::from_micros(200),
+            MAX_SLEEP_V1,
+        );
+        assert_eq!(clamped.active_spin_until, Some(deadline));
+    }
+
+    #[test]
+    fn active_spin_floor_preserves_the_explicit_sleep_ceiling() {
+        let started = Instant::now();
+        let deadline = started + Duration::from_secs(1);
+        let ceiling = Duration::from_micros(25);
+        let mut wait = MonotonicWaitV1::until_with_active_spin_floor_and_sleep_ceiling_from(
+            started,
+            deadline,
+            Duration::from_micros(250),
+            ceiling,
+        );
+
+        for _ in 0..(SPIN_ATTEMPTS_V1 + YIELD_ATTEMPTS_V1) {
+            assert_eq!(
+                wait.next_action_at(started + Duration::from_micros(249)),
+                WaitActionV1::Spin
+            );
+        }
+        for _ in 0..8 {
+            assert_eq!(
+                wait.next_action_at(started + Duration::from_micros(250)),
+                WaitActionV1::Sleep(ceiling)
+            );
+        }
+    }
+
+    #[test]
+    fn profiled_observation_loop_checks_zero_deadline_only_after_observing() {
+        let deadline = Instant::now();
+        let mut pending =
+            MonotonicWaitV1::until_with_active_spin_floor(deadline, Duration::from_nanos(50_000));
+        let mut pending_observations = 0;
+        assert_eq!(
+            pending.observe_until_ready(|| {
+                pending_observations += 1;
+                Ok::<_, ()>(false)
+            }),
+            Ok(false)
+        );
+        assert_eq!(pending_observations, 1);
+
+        let deadline = Instant::now();
+        let mut ready =
+            MonotonicWaitV1::until_with_active_spin_floor(deadline, Duration::from_nanos(50_000));
+        let mut ready_observations = 0;
+        assert_eq!(
+            ready.observe_until_ready(|| {
+                ready_observations += 1;
+                Ok::<_, ()>(true)
+            }),
+            Ok(true)
+        );
+        assert_eq!(ready_observations, 1);
+    }
+
+    #[test]
+    fn observation_loop_retries_pending_then_returns_ready() {
+        let mut wait = MonotonicWaitV1::without_deadline();
+        let mut observations = 0;
+        assert_eq!(
+            wait.observe_until_ready(|| {
+                observations += 1;
+                Ok::<_, ()>(observations == 2)
+            }),
+            Ok(true)
+        );
+        assert_eq!(observations, 2);
+        assert_eq!(wait.attempts, 1);
+    }
+
+    #[test]
+    fn observation_loop_propagates_closure_error_without_pausing() {
+        let mut wait = MonotonicWaitV1::without_deadline();
+        let mut observations = 0;
+        assert_eq!(
+            wait.observe_until_ready(|| {
+                observations += 1;
+                Err::<bool, _>("observation failed")
+            }),
+            Err("observation failed")
+        );
+        assert_eq!(observations, 1);
+        assert_eq!(wait.attempts, 0);
     }
 }

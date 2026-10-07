@@ -1,0 +1,416 @@
+{
+  "body_sha256": "8f5f2345edc0667ac7654229d3f859a742342b770b7c77444573a9506991c4d8",
+  "compiler_or_solver_executed": false,
+  "equivalent_omissions": {
+    "finish_omission": "Not a logical negative under exact input length and full consumption; retained by structural source binding.",
+    "initial_zero_fill_change": "Not a logical negative under complete output overwrite; no kill claimed."
+  },
+  "expected_full_positive_verified": 99,
+  "logical_candidates": {
+    "decode_artifact": {
+      "after": "artifact: RuntimeArtifactIdV1::from_untrusted_digest({ let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "artifact: RuntimeArtifactIdV1::from_untrusted_digest(read_digest($bytes, &mut offset)?),",
+      "behavior": "consume artifact at the right offset but construct a different digest",
+      "body_sha256": "b7eb7ae724681a71ea954de1951bbb045984d01c74b829fb9b7ca9bfbfd77a4c",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_attempt": {
+      "after": "attempt: (read_u64($bytes, &mut offset)? ^ 1u64),",
+      "before": "attempt: read_u64($bytes, &mut offset)?,",
+      "behavior": "consume attempt at the right offset but corrupt its low bit",
+      "body_sha256": "392cde2d7d5e981726eb63445ec50848ee67c70d9b04c21d228f75335fe0eaaa",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_constructor_bypass": {
+      "after": "Ok(ModelDistributedOperationBindingV1 { coordinates })",
+      "before": "ModelDistributedOperationBindingV1::from_untrusted_coordinates(coordinates)",
+      "behavior": "bypass identity/integer validity and their established error precedence",
+      "body_sha256": "0da7d7270261041df0cec2e0e32e3d6ffb43788918b8a7a0b26053a678109ad8",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_coordinator": {
+      "after": "coordinator: DistributedParticipantIdV1::from_untrusted_digest(\n                    { let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "coordinator: DistributedParticipantIdV1::from_untrusted_digest(\n                    read_digest($bytes, &mut offset)?),",
+      "behavior": "consume coordinator at the right offset but construct a different digest",
+      "body_sha256": "240fcf4931d5fbfb6272d3f52e04eae609f9bb8635beae33b4cdf51bae3bd75b",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_coordinator_epoch": {
+      "after": "coordinator_epoch: (read_u64($bytes, &mut offset)? ^ 1u64),",
+      "before": "coordinator_epoch: read_u64($bytes, &mut offset)?,",
+      "behavior": "consume coordinator_epoch at the right offset but corrupt its low bit",
+      "body_sha256": "1b8cd4e71925492db3106e6b7a886a93444e867ec477546b9faba0b1701cc2dc",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_execution_plan": {
+      "after": "execution_plan: DistributedExecutionPlanIdV1::from_untrusted_digest(\n                    { let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "execution_plan: DistributedExecutionPlanIdV1::from_untrusted_digest(\n                    read_digest($bytes, &mut offset)?),",
+      "behavior": "consume execution_plan at the right offset but construct a different digest",
+      "body_sha256": "25135e27e32521b933282bf9a419814c7d0a2277cd2e010f1c301e3b7f1577e0",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_extra_length": {
+      "after": "if $bytes.len() < DISTRIBUTED_OPERATION_DESCRIPTION_BYTES_V1 {",
+      "before": "if $bytes.len() != DISTRIBUTED_OPERATION_DESCRIPTION_BYTES_V1 {",
+      "behavior": "allow extended input to reach header errors before the eventual finish rejection",
+      "body_sha256": "eb0dc707ad1550cdb23333b7cbdb34c69dcf07c474eb8f1e06cd423d29d41fb3",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_header_bypass": {
+      "after": "offset = 47;",
+      "before": "read_header($bytes, &mut offset, DISTRIBUTED_OPERATION_DESCRIPTION_DOMAIN_V1)?;",
+      "behavior": "skip actual domain/schema/reserved checks while preserving payload offsets",
+      "body_sha256": "4ea63102922c88b44bc2e138c873afad6eb0cd27dd9161dac804a84d9c0c9400",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_length_precedence": {
+      "after": "return Err(DistributedPublicationContractErrorV1::WrongDomain);",
+      "before": "return Err(DistributedPublicationContractErrorV1::WrongLength);",
+      "behavior": "change the exact-length rejection before any header read",
+      "body_sha256": "8a3c72a9e1160e52c1e283b2983c0e0b4361bc15b6af07ad31b0ad1f4a97eafb",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_membership": {
+      "after": "membership: DistributedMembershipIdV1::from_untrusted_digest(\n                    { let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "membership: DistributedMembershipIdV1::from_untrusted_digest(\n                    read_digest($bytes, &mut offset)?),",
+      "behavior": "consume membership at the right offset but construct a different digest",
+      "body_sha256": "7b52aa23243bd4ec9ba2d2c36a33f89d25074bc5af7312dd22d704a1a9c33a29",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_membership_epoch": {
+      "after": "membership_epoch: (read_u64($bytes, &mut offset)? ^ 1u64),",
+      "before": "membership_epoch: read_u64($bytes, &mut offset)?,",
+      "behavior": "consume membership_epoch at the right offset but corrupt its low bit",
+      "body_sha256": "ab138a6ca3ba9b0dab915c74df2528f8686d2c926606684a88521d7663b0d336",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_operation": {
+      "after": "operation: DistributedOperationIdV1::from_untrusted_digest(\n                    { let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "operation: DistributedOperationIdV1::from_untrusted_digest(\n                    read_digest($bytes, &mut offset)?),",
+      "behavior": "consume operation at the right offset but construct a different digest",
+      "body_sha256": "f3dcc0b24a8ef05886e494fb5027c5eadfae4113504c11ff36b015cebeb1531a",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_participant": {
+      "after": "participant: DistributedParticipantIdV1::from_untrusted_digest(\n                    { let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "participant: DistributedParticipantIdV1::from_untrusted_digest(\n                    read_digest($bytes, &mut offset)?),",
+      "behavior": "consume participant at the right offset but construct a different digest",
+      "body_sha256": "7c372570392eba7ce553c34713303100c5770e31b8bd900ef01500adda347c76",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_participant_incarnation": {
+      "after": "participant_incarnation: (read_u64($bytes, &mut offset)? ^ 1u64),",
+      "before": "participant_incarnation: read_u64($bytes, &mut offset)?,",
+      "behavior": "consume participant_incarnation at the right offset but corrupt its low bit",
+      "body_sha256": "d260ba2d4d9c0aed959daa562f1d7f68a6a76f8a1675d603059eebd17f2bc4a1",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_placement_plan": {
+      "after": "placement_plan: DistributedPlacementPlanIdV1::from_untrusted_digest(\n                    { let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "placement_plan: DistributedPlacementPlanIdV1::from_untrusted_digest(\n                    read_digest($bytes, &mut offset)?),",
+      "behavior": "consume placement_plan at the right offset but construct a different digest",
+      "body_sha256": "6d0754aa2ac2dc22a2fc4fa9f20383b60a6fc46e0b95b03079cbf33f007ef35b",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_run": {
+      "after": "run: DistributedRunIdV1::from_untrusted_digest({ let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "run: DistributedRunIdV1::from_untrusted_digest(read_digest($bytes, &mut offset)?),",
+      "behavior": "consume run at the right offset but construct a different digest",
+      "body_sha256": "f8b4121bd2b26c8457aa62641d7d8abfab02d6e015666e0adc155beaa71a9ff2",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_runtime_instance": {
+      "after": "runtime_instance: DistributedRuntimeInstanceIdV1::from_untrusted_digest(\n                    { let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "runtime_instance: DistributedRuntimeInstanceIdV1::from_untrusted_digest(\n                    read_digest($bytes, &mut offset)?),",
+      "behavior": "consume runtime_instance at the right offset but construct a different digest",
+      "body_sha256": "5d6bd37e42347d3361cbb1f8e50c3ac308643489aacf3ffde583abc41749b813",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_runtime_model": {
+      "after": "runtime_model: RuntimeModelIdV1::from_untrusted_digest({ let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "runtime_model: RuntimeModelIdV1::from_untrusted_digest(read_digest($bytes, &mut offset)?),",
+      "behavior": "consume runtime_model at the right offset but construct a different digest",
+      "body_sha256": "7a2d9b31dff0ae8a29aa3e79174f133274278e796812d150cd2880b98a420b58",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "decode_target": {
+      "after": "target: DistributedTargetDescriptionIdV1::from_untrusted_digest(\n                    { let _ = read_digest($bytes, &mut offset)?; IdentityDigestV1::from_untrusted_bytes([1u8; 32]) }),",
+      "before": "target: DistributedTargetDescriptionIdV1::from_untrusted_digest(\n                    read_digest($bytes, &mut offset)?),",
+      "behavior": "consume target at the right offset but construct a different digest",
+      "body_sha256": "569c20f2e8c35129f673201b4e433a176287ab5a047ad468c07e5bcf8cf07afa",
+      "family": "decode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "decode"
+    },
+    "digest_read_cursor": {
+      "after": "{ let mut next = *$offset; Ok(IdentityDigestV1::from_untrusted_bytes(fixed($bytes, &mut next)?)) }",
+      "before": "Ok(IdentityDigestV1::from_untrusted_bytes(fixed($bytes, $offset)?))",
+      "behavior": "read correct bytes through a shadow cursor without advancing the real cursor",
+      "body_sha256": "ae53226b22997d1ef42280b86a536791df8e4dc74bf46810f79ded4fe582ad6c",
+      "family": "read_digest",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "read_digest"
+    },
+    "digest_read_value": {
+      "after": "{ let _ = fixed::<32>($bytes, $offset)?; Ok(IdentityDigestV1::from_untrusted_bytes([1u8; 32])) }",
+      "before": "Ok(IdentityDigestV1::from_untrusted_bytes(fixed($bytes, $offset)?))",
+      "behavior": "consume the exact digest extent but return unrelated bytes",
+      "body_sha256": "88509ceb8775d205e93625262864795905e5adab39b85c1bffcded66aef7d04e",
+      "family": "read_digest",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "read_digest"
+    },
+    "digest_write_cursor": {
+      "after": "let mut next = *$offset; put($bytes, &mut next, $value.as_bytes());",
+      "before": "put($bytes, $offset, $value.as_bytes());",
+      "behavior": "write correct bytes through a shadow cursor without advancing the real cursor",
+      "body_sha256": "f9396c630a31f93e712a48d49a8ff49427da0d8a527e6eb9c4428efe8f96b91c",
+      "family": "write_digest",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "write_digest"
+    },
+    "digest_write_value": {
+      "after": "put($bytes, $offset, &[0u8; 32]);",
+      "before": "put($bytes, $offset, $value.as_bytes());",
+      "behavior": "replace the arbitrary digest payload, keeping write extent",
+      "body_sha256": "33f0c28c91081089398d09cb39a831731a9b320ba391687658fb576b992f46cf",
+      "family": "write_digest",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "write_digest"
+    },
+    "encode_artifact": {
+      "after": "write_digest(&mut bytes, &mut offset, c.execution_plan.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.artifact.digest());",
+      "behavior": "encode execution_plan in the distinct artifact slot; all offsets unchanged",
+      "body_sha256": "53970bcf3513ff3f3b43b7085866602499d2a110da342128cdfefc3cd70737e6",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_attempt": {
+      "after": "write_u64(&mut bytes, &mut offset, c.participant_incarnation);",
+      "before": "write_u64(&mut bytes, &mut offset, c.attempt);",
+      "behavior": "encode participant_incarnation in the distinct attempt slot; all offsets unchanged",
+      "body_sha256": "b82ed7adaddb28e8a1786a4a64b8ed271b29ef4408732fd1411f0956683184bd",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_coordinator": {
+      "after": "write_digest(&mut bytes, &mut offset, c.membership.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.coordinator.digest());",
+      "behavior": "encode membership in the distinct coordinator slot; all offsets unchanged",
+      "body_sha256": "cd2015bc380d7ab21b2e160542389bce6f875d090c66bf3f661a35221cb59c75",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_coordinator_epoch": {
+      "after": "write_u64(&mut bytes, &mut offset, c.membership_epoch);",
+      "before": "write_u64(&mut bytes, &mut offset, c.coordinator_epoch);",
+      "behavior": "encode membership_epoch in the distinct coordinator_epoch slot; all offsets unchanged",
+      "body_sha256": "cbf5c51ce9b798f8c2f0b713e1ffa9299b100c345d11a8c495d34b9c11c874ca",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_execution_plan": {
+      "after": "write_digest(&mut bytes, &mut offset, c.placement_plan.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.execution_plan.digest());",
+      "behavior": "encode placement_plan in the distinct execution_plan slot; all offsets unchanged",
+      "body_sha256": "d1fec9a9d2070b551f766fe6aaec96ff25a69ece115c8c1efc4d0818c0ce3127",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_header": {
+      "after": "write_header(&mut bytes, &mut offset, DISTRIBUTED_OPERATION_DESCRIPTION_DOMAIN_V1);\n            bytes[0] = bytes[0] ^ 1u8;",
+      "before": "write_header(&mut bytes, &mut offset, DISTRIBUTED_OPERATION_DESCRIPTION_DOMAIN_V1);",
+      "behavior": "corrupt the encoded domain without moving any coordinate slot",
+      "body_sha256": "c9a2ef88bf0f190c628b0d5dd0618573e6c53b6e386f4f6fa63794048854f0e9",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_initial_cursor": {
+      "after": "let mut offset = 1;",
+      "before": "let mut offset = 0;",
+      "behavior": "shift the whole encode cursor, testing actual capacity and final offset obligations",
+      "body_sha256": "ec25c98cc726cf24d28fe86a9cabe3691905a3b2376a1dcc824276a848c75cca",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_membership": {
+      "after": "write_digest(&mut bytes, &mut offset, c.run.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.membership.digest());",
+      "behavior": "encode run in the distinct membership slot; all offsets unchanged",
+      "body_sha256": "e53640e4e28d0e107e72f1d8756e334bbe018c47e6406bbfcec475b6352efeb3",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_membership_epoch": {
+      "after": "write_u64(&mut bytes, &mut offset, c.attempt);",
+      "before": "write_u64(&mut bytes, &mut offset, c.membership_epoch);",
+      "behavior": "encode attempt in the distinct membership_epoch slot; all offsets unchanged",
+      "body_sha256": "0ed764313e06c04d112ee3509c7e12a6b7adf18f87877d9919fd82f96069c16d",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_operation": {
+      "after": "write_digest(&mut bytes, &mut offset, c.artifact.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.operation.digest());",
+      "behavior": "encode artifact in the distinct operation slot; all offsets unchanged",
+      "body_sha256": "4f8f71ba7cafd6def561f5efaf411f44a164fcf04f51e1ef2ee0c0be1c00809d",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_participant": {
+      "after": "write_digest(&mut bytes, &mut offset, c.coordinator.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.participant.digest());",
+      "behavior": "encode coordinator in the distinct participant slot; all offsets unchanged",
+      "body_sha256": "2aa31058cd01a1d4f96810a0dca0d88827033b4737103d26e21ad6d0f8b1b4ec",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_participant_incarnation": {
+      "after": "write_u64(&mut bytes, &mut offset, c.coordinator_epoch);",
+      "before": "write_u64(&mut bytes, &mut offset, c.participant_incarnation);",
+      "behavior": "encode coordinator_epoch in the distinct participant_incarnation slot; all offsets unchanged",
+      "body_sha256": "62eec976174077798b44332dc3bcc0a51a53949e3e290eb6b3b099a84593e9fa",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_placement_plan": {
+      "after": "write_digest(&mut bytes, &mut offset, c.target.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.placement_plan.digest());",
+      "behavior": "encode target in the distinct placement_plan slot; all offsets unchanged",
+      "body_sha256": "9a29be758ef5e407185eeec4f1a0aaa761d539f34900f92c110195b38e52f019",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_run": {
+      "after": "write_digest(&mut bytes, &mut offset, c.operation.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.run.digest());",
+      "behavior": "encode operation in the distinct run slot; all offsets unchanged",
+      "body_sha256": "e03e85c9565435180137951d06a46b08ebaa505088b2b40d4677067326ff22ed",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_runtime_instance": {
+      "after": "write_digest(&mut bytes, &mut offset, c.participant.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.runtime_instance.digest());",
+      "behavior": "encode participant in the distinct runtime_instance slot; all offsets unchanged",
+      "body_sha256": "d2825bdcb483fa61786d8123e46bba8e1585ece2c1817573d5ee9daeff4628bc",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_runtime_model": {
+      "after": "write_digest(&mut bytes, &mut offset, c.runtime_instance.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.runtime_model.digest());",
+      "behavior": "encode runtime_instance in the distinct runtime_model slot; all offsets unchanged",
+      "body_sha256": "c51a57176cd851737bc1745dfbf70b23b2cab9b8627f8b9f5591b070e2e63ed3",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    },
+    "encode_target": {
+      "after": "write_digest(&mut bytes, &mut offset, c.runtime_model.digest());",
+      "before": "write_digest(&mut bytes, &mut offset, c.target.digest());",
+      "behavior": "encode runtime_model in the distinct target slot; all offsets unchanged",
+      "body_sha256": "d836e6df72ecdffaf5076558fc8645de2e8ec0876820e4d1070c5b912f665959",
+      "family": "encode_operation",
+      "negative_classification_accepted": false,
+      "qualified_kill": false,
+      "selector": "encode"
+    }
+  },
+  "negative_count_qualified": 0,
+  "schema": "fe2o3-operation-mutation-roster-v1",
+  "scope": "Forty immutable actual-body substitutions from the complete capture; all proof invocations remain full-root and no historical capture is a qualified kill.",
+  "source_builder_sha256": "b9907c658862233e2b8793c095a6da463f08a6da78afb73b87c8424e474ca7a8",
+  "source_capture_prepared_sha256": "c0f6c3f7fa16b17273d90975dc1f935e4953483f818aa5910a579ba4213d5efc"
+}

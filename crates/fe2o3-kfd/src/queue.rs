@@ -7,6 +7,7 @@
 //! public queue API.
 
 use core::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use fe2o3_kfd_uapi::{
     KfdAqlComputeQueueBuffers, KfdAqlQueueRingSize, KfdGfx942CreateQueueOutputs,
@@ -15,14 +16,42 @@ use fe2o3_kfd_uapi::{
 };
 use fe2o3_runtime_model::{
     CREATE_QUEUE_ID_SENTINEL_V1, ComputeAqlQueuePhaseV1, ComputeAqlQueuePlanV1,
-    CreateQueueIdFieldObservationV1, DeviceIdentityStateV1, MAX_QUEUE_HISTORY_ENTRIES_V1,
-    MemoryLifecycleStateV1, QueueConfigurationIdV1, QueueCreateObservationV1, QueueKeyV1,
-    QueueLifecycleStateV1, QueueSyscallStatusV1, QueueTransitionErrorV1, QueueTransitionV1,
-    UntrustedQueueIdObservationV1,
+    CreateQueueIdFieldObservationV1, DeviceIdentityStateV1, DeviceObservationDomainIdV1,
+    MAX_QUEUE_HISTORY_ENTRIES_V1, MemoryIdentityDisciplineV1, MemoryLifecycleStateV1,
+    ModelAdmissionStatusV1, ModelDeviceAdmissionV1, QueueConfigurationIdV1,
+    QueueCreateObservationV1, QueueKeyV1, QueueLifecycleStateV1, QueueSyscallStatusV1,
+    QueueTransitionErrorV1, QueueTransitionV1, UntrustedQueueIdObservationV1, VmKeyV1,
 };
 
 #[path = "queue_live.rs"]
 mod live;
+
+#[cfg(feature = "cpu-runtime-fixtures")]
+#[doc(hidden)]
+pub use live::cpu_fixture::{
+    CpuDispatchIdentityV1, CpuFixedDispatchFixtureV1, CpuFixedDispatchLaneV1, CpuLaneSnapshotV1,
+};
+pub(crate) use live::sdma_synchronous::SdmaSynchronousCustodyV1;
+pub use live::{
+    Gfx942ComputeXgmiProgressV1, Gfx942ComputeXgmiQueueCreationDispositionV1,
+    Gfx942ComputeXgmiQueueCreationOutcomeV1, Gfx942ComputeXgmiQueueCreationRootV1,
+    Gfx942ComputeXgmiQueueV1,
+};
+pub use live::{
+    Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1, Gfx942SdmaHostReadIntoErrorV1,
+};
+
+#[cfg(test)]
+pub(crate) use live::{
+    admit_directional_persistent_sdma_copy_input_v1,
+    admit_directional_persistent_sdma_window_input_v1,
+    admit_same_device_persistent_sdma_window_input_v1,
+    preserve_directional_window_sdma_publication_custody_v1,
+    preserve_persistent_compute_bind_input_for_sdma_quiescence_v1,
+    preserve_persistent_compute_ready_affiliation_v1,
+    preserve_persistent_compute_ready_preflight_custody_v1,
+    terminal_persistent_compute_ready_hash_failure_v1,
+};
 
 #[allow(unsafe_code)]
 #[path = "queue_submit.rs"]
@@ -32,6 +61,9 @@ pub(crate) mod submit;
 #[path = "queue_completion.rs"]
 pub(crate) mod completion;
 
+#[path = "queue_dependency.rs"]
+pub(crate) mod dependency;
+
 #[path = "queue_dispatch_binding.rs"]
 pub(crate) mod dispatch_binding;
 
@@ -40,22 +72,35 @@ pub(crate) mod device_content;
 
 pub use completion::{
     GFX942_AQL_COMPLETION_MANIFEST_SHA256_V1, GFX942_AQL_COMPLETION_MANIFEST_V1,
+    GFX942_COMPUTE_EVENT_CUSTODY_MANIFEST_SHA256_V1, GFX942_COMPUTE_EVENT_CUSTODY_MANIFEST_V1,
+    GFX942_MAX_COMPUTE_DEPENDENCY_READERS_V1, GFX942_MAX_COMPUTE_EVENT_OCCURRENCES_V1,
     Gfx942CompletedBatchV1, Gfx942CompletionBatchV1, Gfx942CompletionErrorV1,
     Gfx942CompletionPollV1, Gfx942CompletionPollWithProgressV1, Gfx942CompletionProgressV1,
-    Gfx942CompletionRecycleObservationV1, Gfx942TimeoutExecutionObservationV1,
-    Gfx942TimeoutSignalObservationV1,
+    Gfx942CompletionRecycleObservationV1, Gfx942ComputeDependencyReaderLeaseV1,
+    Gfx942ComputeDependencyReaderReleaseObservationV1, Gfx942ComputeEventBindingStateV1,
+    Gfx942ComputeEventOccurrenceV1, Gfx942ComputeEventReleaseObservationV1,
+    Gfx942TimeoutExecutionObservationV1, Gfx942TimeoutSignalObservationV1,
+};
+
+pub use dependency::{
+    GFX942_COMPUTE_DEPENDENCY_PUBLISHER_FOUNDATION_MANIFEST_SHA256_V1,
+    GFX942_COMPUTE_DEPENDENCY_PUBLISHER_FOUNDATION_MANIFEST_V1,
+    MAX_ACTIVE_DEPENDENCY_TARGETS_PER_SESSION_V1,
 };
 
 pub use dispatch_binding::{
     GFX942_AQL_DISPATCH_BINDING_MANIFEST_SHA256_V1, GFX942_AQL_DISPATCH_BINDING_MANIFEST_V1,
-    GFX942_MAX_FIXED_DISPATCH_DATA_V1, GFX942_MAX_FIXED_DISPATCH_PACKETS_V1,
-    GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1, Gfx942CompletedDispatchBatchV1,
-    Gfx942CompletedDispatchReadRequestV1, Gfx942CompletedDispatchReadbackV1,
-    Gfx942CompletedDispatchSnapshotRequestV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
-    Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1,
-    Gfx942DispatchProgressV1, Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1,
-    Gfx942FixedDispatchDataV1, Gfx942FixedDispatchPacketV1, Gfx942RecycledDispatchWriteRequestV1,
-    preflight_gfx942_fixed_dispatch_replacement,
+    GFX942_MAX_FIXED_DISPATCH_DATA_V1, GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1,
+    GFX942_MAX_FIXED_DISPATCH_PACKETS_V1, GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1,
+    Gfx942CompletedDispatchBatchV1, Gfx942CompletedDispatchReadRequestV1,
+    Gfx942CompletedDispatchReadbackV1, Gfx942CompletedDispatchSnapshotRequestV1,
+    Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1, Gfx942DispatchBufferBindingV1,
+    Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1, Gfx942DispatchProgressV1,
+    Gfx942FixedDispatchCapacityProfileV1, Gfx942FixedDispatchCapacityV1,
+    Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1,
+    Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchPreallocationV1,
+    Gfx942RecycledDispatchWriteRequestV1, preflight_gfx942_fixed_dispatch_replacement,
+    project_gfx942_fixed_host_packet_v1,
 };
 
 pub use device_content::{
@@ -69,21 +114,33 @@ pub use live::{
     ComputeAqlQueueDestroyedV1, ComputeAqlQueueLaneDispatchV1, ComputeAqlQueueLaneV1,
     ComputeAqlQueueObservationV1, ComputeAqlQueueSessionErrorV1, ComputeAqlQueueSessionV1,
     GFX942_COMPUTE_AQL_SESSION_MANIFEST_SHA256_V1, GFX942_COMPUTE_AQL_SESSION_MANIFEST_V1,
+    GFX942_COMPUTE_AQL_SHARED_ALLOCATION_RECORDS_V1,
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, Gfx942BarrierProbeExecutionObservationV1,
     Gfx942BarrierProbeFailureV1, Gfx942BarrierProbePollBoundErrorV1, Gfx942BarrierProbePollBoundV1,
-    Gfx942BarrierProbeRingBackingV1, Gfx942BarrierProbeSuccessV1, Gfx942DetachedFixedDispatchV1,
-    Gfx942KfdDebugTargetDispatchErrorV2, Gfx942KfdDebugTargetDispatchResultV2,
-    Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchInspectionV1,
-    Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestV1,
+    Gfx942BarrierProbeRingBackingV1, Gfx942BarrierProbeSuccessV1,
+    Gfx942CompletedComputeDependencyDispatchV1, Gfx942ComputeDependencyDispatchV1,
+    Gfx942ComputeDependencyEventReleaseFailureV1, Gfx942ComputeDependencyEventV1,
+    Gfx942ComputeDependencyPollFailureV1, Gfx942ComputeDependencyPollV1,
+    Gfx942ComputeDependencySourceBatchV1, Gfx942ComputeDependencySubmissionFailureV1,
+    Gfx942DetachedFixedDispatchV1, Gfx942FixedDispatchRecycleFailureV1,
+    Gfx942FixedDispatchSubmissionFailureV1, Gfx942KfdDebugTargetDispatchErrorV2,
+    Gfx942KfdDebugTargetDispatchResultV2, Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1,
+    Gfx942KfdDispatchInspectionV1, Gfx942KfdDispatchPointerFixupV1,
+    Gfx942KfdDispatchRequestErrorV1, Gfx942KfdDispatchRequestPartsV1, Gfx942KfdDispatchRequestV1,
     Gfx942KfdDispatchResultV1, Gfx942KfdQueueExceptionObservationV1,
-    Gfx942RecycledDispatchResourcesV1, Gfx942SdmaBatchExecutionFailureV1,
-    Gfx942SdmaBatchExecutionRecoveryV1, Gfx942SdmaBatchSubmissionFailureV1,
-    Gfx942SdmaBufferTransitionFailureV1, Gfx942SdmaMultiQueueFailureCustodyV1,
+    Gfx942R66NativeObservationFailureV1, Gfx942RecycledDispatchResourcesV1,
+    Gfx942SdmaBatchExecutionFailureV1, Gfx942SdmaBatchExecutionRecoveryV1,
+    Gfx942SdmaBatchSubmissionFailureV1, Gfx942SdmaBufferTransitionFailureV1,
+    Gfx942SdmaLogicalMuxExecutionCustodyV2, Gfx942SdmaLogicalMuxExecutionFailureV2,
+    Gfx942SdmaLogicalMuxFailureCustodyV2, Gfx942SdmaLogicalMuxFailureDispositionV2,
+    Gfx942SdmaLogicalMuxSubmissionFailureV2, Gfx942SdmaLogicalMuxTerminalCustodyV2,
+    Gfx942SdmaLogicalMuxTerminalNativeShardObservationV2, Gfx942SdmaMultiQueueExecutionCustodyV1,
+    Gfx942SdmaMultiQueueExecutionFailureV1, Gfx942SdmaMultiQueueFailureCustodyV1,
     Gfx942SdmaMultiQueueFailureDispositionV1, Gfx942SdmaMultiQueueSubmissionFailureV1,
     Gfx942SdmaMultiQueueTerminalCustodyV1, Gfx942SdmaSubmissionFailureV1,
     Gfx942SdmaTerminalShardObservationV1, KfdTargetRuntimeDebugQueueTeardownV1,
-    KfdTargetRuntimeDebugQueueV1, QuarantinedGfx942BarrierProbeV1,
+    KfdTargetRuntimeDebugQueueV1, PrimaryQueueReleaseCustodyV1, QuarantinedGfx942BarrierProbeV1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1,
@@ -99,30 +156,30 @@ pub use live::{
 
 /// Canonical claim boundary for the executable native-queue foundation.
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1: &str = concat!(
-    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r24-v1\n",
-    "compute_session_sha256=09f9d032c2460c73531a960b1a8b39a877cb9daf0d75d1f8404b980510bddc10\n",
+    "profile=fe2o3-mi300x-gfx942-native-queue-adapter-foundation-r52-v1\n",
+    "compute_session_sha256=c51feb1d7e373f4f2c20c2f193b990af4892c34ab4e6ab290192a7fbb954c790\n",
     "operations=create,update,disable,destroy\n",
     "projection=existing-bounded-queue-lifecycle-model,pending-before-ioctl,append-only-history\n",
     "resources=backend-specific-private-capability,linearly-retained,exact-ring-control-eop-cwsr-mappings-required\n",
     "currentness=opener-pid-and-contracted-device-check-before-and-after-every-lifecycle-ioctl\n",
-    "failure=linux-errno-must-map-indeterminate,malformed-output-global-poison,post-call-projection-failure-global-poison\n",
+    "failure=linux-errno-must-map-indeterminate,malformed-output-global-poison,post-call-projection-failure-global-poison,certificate-revision-exhaustion-before-plan-admission-retains-authority-in-terminal-engine-while-initial-wrapper-recovers-no-rust-authority,and-before-destroy-prevents-native-call\n",
     "release=explicit-only-after-confirmed-destroy,no-drop-ioctl\n",
     "linux-boundary=private-create-update-destroy-ioctl-shims,production-create-destroy-composition\n",
-    "composition=shared-memory-linear-role-authorities,exact-one-page-same-va-userptr-writable-coherent-control,exact-set-device-memory-dispatch-transfer,transferred-model-foundation,live-allocation-lifecycle-mutation-foundation-loan-and-reclaim,whole-slice-doorbell-mmap\n",
+    "composition=shared-memory-linear-role-authorities,exact-one-page-same-va-userptr-writable-coherent-control,exact-set-device-memory-dispatch-transfer,identity-memory-and-private-nonclone-invariant-certificate-foundation-bundle,native-engine-authenticates-exact-session-domain-device-vm-issuer-generation-and-revision-bindings,live-allocation-lifecycle-mutation-central-certificate-loan-and-reclaim,whole-slice-doorbell-mmap\n",
     "creation=every-error-from-userptr-control-allocation-attempt-through-live-session-return-recovers-no-authority-permanently-poisons-process-global-runtime-gate-and-requires-process-termination\n",
     "submission=crate-private-single-producer-aql-fixed-batch-v2-through-8192,ring-capacity-checked,one-actual-write-counter-fetch-add-by-count,all-invalid-bodies-before-release-headers,one-final-doorbell-store\n",
-    "completion=separate-linear-8192-signal-host-coherent-arena,heap-owned-fixed-cardinality-retention,unique-signal-per-packet,crate-private-generation-binding,bounded-acquire-poll,addressless-timeout-execution-observation-before-terminal-poison,release-reset-after-exact-batch-completion\n",
+    "completion=separate-linear-8192-signal-host-coherent-arena,heap-owned-fixed-cardinality-retention,unique-signal-per-packet,crate-private-exact-batch-queue-mapping-slot-generation-dispatch-roster-and-packet-occurrence-binding,bounded-acquire-poll,addressless-timeout-execution-observation-before-terminal-poison,release-reset-after-exact-batch-completion-and-zero-event-reader-pins,session-owned-addressless-cross-queue-dependency-occurrence-lifecycle\n",
     "barrier-probe=three-consuming-fresh-queue-entries,gfx942-production-executable-one-span-or-plain-executable-one-span-or-selected-gpu-userptr-final-rocr-derived-flags-one-span-ring-with-no-full-rocr-order-parity,typed-poll-bound-before-device-consumption,zero-dependency-system-scope-packet,isolated-one-signal-lease,no-code-kernarg-or-dispatch-generation,success-after-completion-reset-and-confirmed-destroy-release-only,every-error-at-or-after-userptr-control-registration-entry-permanently-poisons-process-global-runtime-gate-and-is-terminal,execution-failure-opaque-quarantine-until-process-teardown,process-global-runtime-gate-poison-armed-before-destroy-and-cleared-only-after-confirmed-success,terminal-teardown-or-panic-retains-permanent-gate-poison-recovers-no-authority-native-resource-disposition-indeterminate-process-termination-required-no-retry-reopen-or-confirmed-cleanup\n",
-    "dispatch-binding=public-addressless-inspected-code-zero-pointer-and-caller-zero-implicit-kernarg-private-substitution,mapped-device-lease-fixed-batch-completion-generation-composition,metadata-derived-COV6-geometry-and-dynamic-lds-only,queue-pointer-and-runtime-address-fields-rejected,real-resource-retention-through-recycle,recycled-only-detach-and-rebind-on-one-live-queue,actual-mapped-authority-return-after-never-published-prepared-or-exact-recycle\n",
-    "dispatch-generation=rebind-is-seeded-from-exact-detached-predecessor-and-strictly-advances-before-publication\n",
-    "missing=kernel-dispatch-hardware-completion-and-exception-refinement,live-kernel-batch-evidence,kernel-memory-effect-refinement,kernel-numerical-correctness,machine-proof\n",
-    "proof=model-projection-and-hostile-tests-only,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
+    "dispatch-binding=public-addressless-inspected-code-zero-pointer-and-caller-zero-implicit-kernarg-private-substitution,mapped-device-lease-fixed-batch-completion-generation-composition,metadata-derived-COV6-geometry-and-dynamic-lds-only,queue-pointer-and-runtime-address-fields-rejected,one-immutable-wait-for-prior-recipe-with-up-to-64-host-retained-exact-epochs,real-resource-retention-until-every-slot-vacant,recycled-only-detach-and-rebind-on-one-live-queue,actual-mapped-authority-return-after-never-published-prepared-or-all-exact-recycles\n",
+    "dispatch-generation=globally-nonzero-recipe-occurrence-plus-fixed-slot-index-nonzero-slot-generation-and-nonzero-dispatch-generation,rebind-is-seeded-from-exact-maximum-detached-predecessor-and-strictly-advances-before-publication\n",
+    "missing=kernel-dispatch-hardware-completion-and-exception-refinement,live-kernel-batch-evidence,kernel-memory-effect-refinement,kernel-numerical-correctness,machine-proof,general-multi-recipe-or-shared-buffer-dag,concurrent-kernel-execution,performance-or-hip-hsa-parity\n",
+    "proof=model-projection-and-hostile-tests-only,no-rust-verus-syscall-hardware-or-performance-claim,cpu-gpu-atomic-coherence-and-mmio-refinement-contracted\n",
     "authority=redacted-live-session,queue-id-observation-only,no-fd-gpu-address-mmio-pointer-or-dispatch-export\n",
 );
 
 /// SHA-256 of [`NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_V1`].
 pub const NATIVE_QUEUE_ADAPTER_FOUNDATION_MANIFEST_SHA256_V1: &str =
-    "a8673e9cb2943f320401032bb7bb4b48c611051c267a62ea20e0219631ac75b5";
+    "6e4790a546a66940d773cdd0e048575ae4e9bbf9ccb16d1b1643b6ee6a55a83f";
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,12 +222,361 @@ impl fmt::Display for NativeQueueAdapterErrorV1 {
 
 impl std::error::Error for NativeQueueAdapterErrorV1 {}
 
+static NEXT_QUEUE_FOUNDATION_CERTIFICATE_ISSUER_V1: AtomicU64 = AtomicU64::new(1);
+
+/// A move-only witness for the structural invariants checked when model custody
+/// first crosses from a shared session into a queue. It is deliberately not a
+/// currentness, native-effect, or Rust-to-model refinement certificate.
+#[derive(Debug, Eq, PartialEq)]
+struct QueueModelFoundationInvariantCertificateV1 {
+    issuer: u64,
+    session_id: u64,
+    domain: DeviceObservationDomainIdV1,
+    device: ModelDeviceAdmissionV1,
+    vm: VmKeyV1,
+    live_loan_generation: u64,
+    revision: u64,
+    revision_seal: u64,
+}
+
+const fn queue_foundation_revision_seal_v1(issuer: u64, generation: u64, revision: u64) -> u64 {
+    issuer.rotate_left(17)
+        ^ generation.wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        ^ revision.wrapping_mul(0xd6e8_feb8_6659_fd93)
+}
+
 /// Model foundation supplied by the backend that owns the checked device/VM.
-/// These model values are not concrete authority; the private backend resource
-/// type is what prevents callers from presenting numeric addresses directly.
-struct QueueModelFoundationV1 {
+/// Identity, memory state, and the move-only invariant witness always move as
+/// one private value. Concrete authority remains in the backend resources.
+pub(crate) struct QueueModelFoundationV1 {
     identity: DeviceIdentityStateV1,
     memory: MemoryLifecycleStateV1,
+    certificate: Option<QueueModelFoundationInvariantCertificateV1>,
+}
+
+#[cfg(test)]
+pub(crate) type QueueCertificateSnapshotV1 = (
+    u64,
+    u64,
+    DeviceObservationDomainIdV1,
+    ModelDeviceAdmissionV1,
+    VmKeyV1,
+    u64,
+    u64,
+    u64,
+);
+
+impl QueueModelFoundationV1 {
+    pub(crate) const fn uncertified(
+        identity: DeviceIdentityStateV1,
+        memory: MemoryLifecycleStateV1,
+    ) -> Self {
+        Self {
+            identity,
+            memory,
+            certificate: None,
+        }
+    }
+
+    pub(crate) fn empty(domain: DeviceObservationDomainIdV1) -> Self {
+        Self::uncertified(
+            DeviceIdentityStateV1::new(domain),
+            MemoryLifecycleStateV1::new_monotonic_non_reusable(domain),
+        )
+    }
+
+    pub(crate) fn identity(&self) -> &DeviceIdentityStateV1 {
+        &self.identity
+    }
+
+    pub(crate) fn memory(&self) -> &MemoryLifecycleStateV1 {
+        &self.memory
+    }
+
+    pub(crate) fn replace_memory_after_sealed_transition(
+        &mut self,
+        memory: MemoryLifecycleStateV1,
+    ) -> Result<(), &'static str> {
+        if memory.domain_id() != self.memory.domain_id()
+            || memory.identity_discipline() != self.memory.identity_discipline()
+        {
+            return Err("queue foundation memory binding");
+        }
+        if let Some(certificate) = self.certificate.as_mut() {
+            certificate.revision = certificate
+                .revision
+                .checked_add(1)
+                .ok_or("queue foundation certificate revision exhausted")?;
+            certificate.revision_seal = queue_foundation_revision_seal_v1(
+                certificate.issuer,
+                certificate.live_loan_generation,
+                certificate.revision,
+            );
+        }
+        self.memory = memory;
+        Ok(())
+    }
+
+    pub(crate) fn preflight_memory_transition_revisions(
+        &self,
+        needed: u64,
+    ) -> Result<(), &'static str> {
+        if needed == 0 {
+            return Err("queue foundation certificate revision budget");
+        }
+        if let Some(certificate) = self.certificate.as_ref() {
+            certificate
+                .revision
+                .checked_add(needed)
+                .ok_or("queue foundation certificate revision exhausted")?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn mint_invariant_certificate(
+        &mut self,
+        session_id: u64,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+    ) -> Result<u64, &'static str> {
+        if self.certificate.is_some() || session_id == 0 {
+            return Err("queue foundation certificate phase");
+        }
+        Self::validate_full_state(&self.identity, &self.memory, device, vm)?;
+        let issuer = NEXT_QUEUE_FOUNDATION_CERTIFICATE_ISSUER_V1
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                current.checked_add(1)
+            })
+            .map_err(|_| "queue foundation certificate issuer exhausted")?;
+        if issuer == 0 {
+            return Err("queue foundation certificate issuer");
+        }
+        self.certificate = Some(QueueModelFoundationInvariantCertificateV1 {
+            issuer,
+            session_id,
+            domain: device.domain_id(),
+            device,
+            vm,
+            live_loan_generation: 0,
+            revision: 0,
+            revision_seal: queue_foundation_revision_seal_v1(issuer, 0, 0),
+        });
+        Ok(issuer)
+    }
+
+    fn validate_full_state(
+        identity: &DeviceIdentityStateV1,
+        memory: &MemoryLifecycleStateV1,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+    ) -> Result<(), &'static str> {
+        #[cfg(test)]
+        QUEUE_FOUNDATION_FULL_VALIDATION_COUNT_V1.with(|count| count.set(count.get() + 1));
+        if identity.domain_id() != device.domain_id()
+            || memory.domain_id() != device.domain_id()
+            || memory.identity_discipline() != MemoryIdentityDisciplineV1::MonotonicNonReusable
+            || identity.validate_global_invariants().is_err()
+            || memory.validate_global_invariants().is_err()
+            || vm.device != device.model_key()
+            || !identity.devices().iter().any(|record| {
+                record.key == device.model_key()
+                    && record.domain_id == device.domain_id()
+                    && record.profile_id == device.correlation().profile_id()
+                    && record.correlation == device.correlation()
+                    && record.status == ModelAdmissionStatusV1::Active
+            })
+            || !identity
+                .vms()
+                .iter()
+                .any(|record| record.key == vm && record.status == ModelAdmissionStatusV1::Active)
+            || !memory.vms().iter().any(|record| {
+                record.admission.model_key() == vm
+                    && record.state == fe2o3_runtime_model::MemoryVmStateV1::Active
+            })
+        {
+            return Err("queue foundation global invariant");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_full(
+        &self,
+        session_id: u64,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+        issuer: u64,
+    ) -> Result<(), &'static str> {
+        self.authenticate(session_id, device, vm, issuer)?;
+        Self::validate_full_state(&self.identity, &self.memory, device, vm)
+    }
+
+    pub(crate) fn authenticate(
+        &self,
+        session_id: u64,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+        issuer: u64,
+    ) -> Result<(), &'static str> {
+        let certificate = self
+            .certificate
+            .as_ref()
+            .ok_or("queue foundation certificate missing")?;
+        if issuer == 0
+            || certificate.issuer != issuer
+            || certificate.session_id != session_id
+            || certificate.domain != device.domain_id()
+            || certificate.device != device
+            || certificate.vm != vm
+            || certificate.revision_seal
+                != queue_foundation_revision_seal_v1(
+                    certificate.issuer,
+                    certificate.live_loan_generation,
+                    certificate.revision,
+                )
+            || self.identity.domain_id() != certificate.domain
+            || self.memory.domain_id() != certificate.domain
+            || self.memory.identity_discipline() != MemoryIdentityDisciplineV1::MonotonicNonReusable
+        {
+            return Err("queue foundation certificate binding");
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn issuer(&self) -> Result<u64, &'static str> {
+        self.certificate
+            .as_ref()
+            .map(|certificate| certificate.issuer)
+            .ok_or("queue foundation certificate missing")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn certificate_snapshot_for_test(&self) -> Option<QueueCertificateSnapshotV1> {
+        self.certificate.as_ref().map(|c| {
+            (
+                c.issuer,
+                c.session_id,
+                c.domain,
+                c.device,
+                c.vm,
+                c.live_loan_generation,
+                c.revision,
+                c.revision_seal,
+            )
+        })
+    }
+
+    pub(crate) fn revoke_invariant_certificate(
+        &mut self,
+        session_id: u64,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+        issuer: u64,
+    ) -> Result<(), &'static str> {
+        self.authenticate(session_id, device, vm, issuer)?;
+        self.certificate = None;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn authenticate_origin(&self) -> Result<(), &'static str> {
+        let certificate = self
+            .certificate
+            .as_ref()
+            .ok_or("queue foundation certificate missing")?;
+        self.authenticate(
+            certificate.session_id,
+            certificate.device,
+            certificate.vm,
+            certificate.issuer,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_certified_for_test(&self) -> bool {
+        self.certificate.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_certificate_revision_for_test(
+        &mut self,
+        revision: u64,
+    ) -> Result<(), &'static str> {
+        let certificate = self
+            .certificate
+            .as_mut()
+            .ok_or("queue foundation certificate missing")?;
+        certificate.revision = revision;
+        certificate.revision_seal = queue_foundation_revision_seal_v1(
+            certificate.issuer,
+            certificate.live_loan_generation,
+            revision,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn begin_live_loan(
+        &mut self,
+        session_id: u64,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+        issuer: u64,
+        generation: u64,
+    ) -> Result<u64, &'static str> {
+        self.authenticate(session_id, device, vm, issuer)?;
+        let certificate = self
+            .certificate
+            .as_mut()
+            .ok_or("queue foundation certificate missing")?;
+        let expected = certificate
+            .live_loan_generation
+            .checked_add(1)
+            .ok_or("queue foundation loan generation exhausted")?;
+        if generation != expected {
+            return Err("queue foundation loan generation");
+        }
+        certificate.live_loan_generation = generation;
+        certificate.revision_seal = queue_foundation_revision_seal_v1(
+            certificate.issuer,
+            certificate.live_loan_generation,
+            certificate.revision,
+        );
+        Ok(certificate.revision)
+    }
+
+    pub(crate) fn authenticate_live_loan(
+        &self,
+        session_id: u64,
+        device: ModelDeviceAdmissionV1,
+        vm: VmKeyV1,
+        issuer: u64,
+        generation: u64,
+        starting_revision: u64,
+    ) -> Result<(), &'static str> {
+        self.authenticate(session_id, device, vm, issuer)?;
+        let certificate = self
+            .certificate
+            .as_ref()
+            .ok_or("queue foundation certificate missing")?;
+        if certificate.live_loan_generation != generation
+            || certificate.revision < starting_revision
+        {
+            return Err("queue foundation live-loan certificate");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static QUEUE_FOUNDATION_FULL_VALIDATION_COUNT_V1: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(test)]
+fn queue_foundation_full_validation_count_v1() -> usize {
+    QUEUE_FOUNDATION_FULL_VALIDATION_COUNT_V1.with(std::cell::Cell::get)
 }
 
 #[derive(Clone, Copy)]
@@ -188,6 +594,14 @@ struct QueueKernelOutcomeV1<T> {
     status: QueueSyscallStatusV1,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct NativeQueueDestroyProgressV1 {
+    started: bool,
+    request: Option<KfdIoctlDestroyQueueArgs>,
+    attempted: bool,
+    returned: Option<(KfdIoctlDestroyQueueArgs, QueueSyscallStatusV1)>,
+}
+
 /// Private substitution point. Its associated authority type is retained by
 /// the engine and cannot be manufactured through the public crate API.
 #[allow(dead_code)]
@@ -198,6 +612,10 @@ trait NativeQueueBackendV1 {
     fn take_model_foundation(
         &mut self,
     ) -> Result<QueueModelFoundationV1, NativeQueueAdapterErrorV1>;
+    fn authenticate_model_foundation(
+        &self,
+        foundation: &QueueModelFoundationV1,
+    ) -> Result<(), NativeQueueAdapterErrorV1>;
     fn resource_view(
         &self,
         authority: &Self::ResourceAuthority,
@@ -224,44 +642,86 @@ struct RetainedQueueResourcesV1<A> {
     create_outputs: Option<KfdGfx942CreateQueueOutputs>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PrimaryReleaseFaultV1 {
+    DestroyObservation(QueueKeyV1),
+    PublicationReturn,
+}
+
 struct NativeQueueEngineV1<B: NativeQueueBackendV1> {
     backend: B,
     opener_pid: u32,
-    identity: DeviceIdentityStateV1,
-    memory: MemoryLifecycleStateV1,
+    foundation: QueueModelFoundationV1,
     model: QueueLifecycleStateV1,
     resources: Vec<RetainedQueueResourcesV1<B::ResourceAuthority>>,
     authority_poisoned: bool,
+    #[cfg(test)]
+    release_fault: Option<PrimaryReleaseFaultV1>,
 }
 
-#[allow(dead_code)]
-impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
-    fn new(mut backend: B) -> Result<Self, NativeQueueAdapterErrorV1> {
+struct NativeQueueEngineInitializationV1<B: NativeQueueBackendV1> {
+    backend: Option<B>,
+    foundation: Option<QueueModelFoundationV1>,
+    started: bool,
+}
+
+impl<B: NativeQueueBackendV1> NativeQueueEngineInitializationV1<B> {
+    fn new(backend: B) -> Self {
+        Self {
+            backend: Some(backend),
+            foundation: None,
+            started: false,
+        }
+    }
+
+    fn initialize(&mut self) -> Result<NativeQueueEngineV1<B>, NativeQueueAdapterErrorV1> {
+        if self.started {
+            return Err(NativeQueueAdapterErrorV1::AuthorityPoisoned);
+        }
+        self.started = true;
+        let backend = self.backend.as_mut().expect("initial backend custody");
         let opener_pid = backend.opener_pid();
         if opener_pid != std::process::id() {
             return Err(NativeQueueAdapterErrorV1::ProcessChanged);
         }
-        let foundation = backend.take_model_foundation()?;
-        let domain = foundation.identity.domain_id();
-        if foundation.memory.domain_id() != domain {
-            return Err(NativeQueueAdapterErrorV1::InvalidResource(
-                "model observation domain",
-            ));
-        }
-        Ok(Self {
-            backend,
+        self.foundation = Some(backend.take_model_foundation()?);
+        let foundation = self
+            .foundation
+            .as_ref()
+            .expect("returned foundation custody");
+        backend.authenticate_model_foundation(foundation)?;
+        let model = QueueLifecycleStateV1::new(foundation.identity().domain_id());
+        // Only nonallocating moves follow the final borrowed authentication.
+        Ok(NativeQueueEngineV1 {
+            backend: self.backend.take().expect("authenticated backend"),
             opener_pid,
-            identity: foundation.identity,
-            memory: foundation.memory,
-            model: QueueLifecycleStateV1::new(domain),
+            foundation: self.foundation.take().expect("authenticated foundation"),
+            model,
             resources: Vec::new(),
             authority_poisoned: false,
+            #[cfg(test)]
+            release_fault: None,
         })
+    }
+}
+
+#[allow(dead_code)]
+impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
+    fn new(backend: B) -> Result<Self, NativeQueueAdapterErrorV1> {
+        NativeQueueEngineInitializationV1::new(backend).initialize()
     }
 
     fn admit(
         &mut self,
         authority: B::ResourceAuthority,
+    ) -> Result<QueueKeyV1, NativeQueueAdapterErrorV1> {
+        self.admit_in_place(&mut Some(authority))
+    }
+
+    fn admit_in_place(
+        &mut self,
+        authority: &mut Option<B::ResourceAuthority>,
     ) -> Result<QueueKeyV1, NativeQueueAdapterErrorV1> {
         if self.authority_poisoned {
             return Err(NativeQueueAdapterErrorV1::AuthorityPoisoned);
@@ -269,7 +729,9 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
         self.resources
             .try_reserve(1)
             .map_err(|_| NativeQueueAdapterErrorV1::JournalCapacity)?;
-        let view = self.backend.resource_view(&authority)?;
+        let view = self.backend.resource_view(authority.as_ref().ok_or(
+            NativeQueueAdapterErrorV1::InvalidResource("missing queue authority"),
+        )?)?;
         if view.buffers.ring_base_address == 0
             || view.buffers.write_pointer_address == 0
             || view.buffers.read_pointer_address == 0
@@ -284,15 +746,37 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
                 "nonzero queue buffer contract",
             ));
         }
+        if self
+            .foundation
+            .preflight_memory_transition_revisions(1)
+            .is_err()
+        {
+            self.authority_poisoned = true;
+            self.resources.push(RetainedQueueResourcesV1 {
+                key: view.plan.queue,
+                authority: authority.take(),
+                view,
+                create_outputs: None,
+            });
+            return Err(NativeQueueAdapterErrorV1::AuthorityPoisoned);
+        }
         let admission = self
             .model
-            .admit_compute_aql_plan(&self.identity, &self.memory, view.plan)
+            .admit_compute_aql_plan(
+                self.foundation.identity(),
+                self.foundation.memory(),
+                view.plan,
+            )
             .map_err(|_| NativeQueueAdapterErrorV1::ModelProjection)?;
         let key = view.plan.queue;
-        (self.model, self.memory) = admission.into_states();
+        let (model, memory) = admission.into_states();
+        self.foundation
+            .replace_memory_after_sealed_transition(memory)
+            .map_err(|_| NativeQueueAdapterErrorV1::ModelProjection)?;
+        self.model = model;
         self.resources.push(RetainedQueueResourcesV1 {
             key,
-            authority: Some(authority),
+            authority: authority.take(),
             view,
             create_outputs: None,
         });
@@ -304,7 +788,8 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
             queues: self.model.queues().len(),
             history: self.model.history().len(),
             live_publications: self
-                .memory
+                .foundation
+                .memory()
                 .publications()
                 .iter()
                 .filter(|publication| {
@@ -473,19 +958,50 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
     }
 
     fn destroy(&mut self, key: QueueKeyV1) -> Result<(), NativeQueueAdapterErrorV1> {
+        self.destroy_retaining(key, &mut NativeQueueDestroyProgressV1::default())
+    }
+
+    fn destroy_retaining(
+        &mut self,
+        key: QueueKeyV1,
+        progress: &mut NativeQueueDestroyProgressV1,
+    ) -> Result<(), NativeQueueAdapterErrorV1> {
+        if progress.started {
+            return Err(NativeQueueAdapterErrorV1::InvalidPhase);
+        }
+        progress.started = true;
+        // One memory-foundation revision is committed when the destroyed
+        // queue's retained publications and authority are returned.
+        self.foundation
+            .preflight_memory_transition_revisions(1)
+            .map_err(|_| NativeQueueAdapterErrorV1::ModelProjection)?;
         self.prepare_operation()?;
         let queue_id = self
             .native_queue_id(key)
             .ok_or(NativeQueueAdapterErrorV1::InvalidPhase)?;
         let args = KfdIoctlDestroyQueueArgs::new(queue_id);
+        progress.request = Some(args);
         self.begin(QueueTransitionV1::BeginDestroy { queue: key })?;
+        progress.attempted = true;
         let outcome = self.backend.destroy(args);
+        progress.returned = Some((outcome.value, outcome.status));
         let mut status = outcome.status;
         let malformed = outcome.value != args;
         if malformed {
             status = QueueSyscallStatusV1::Indeterminate;
         }
-        self.observe(QueueTransitionV1::ObserveDestroy { queue: key, status })?;
+        let observation = QueueTransitionV1::ObserveDestroy { queue: key, status };
+        #[cfg(test)]
+        let observation = match self
+            .release_fault
+            .take_if(|fault| matches!(fault, PrimaryReleaseFaultV1::DestroyObservation(_)))
+        {
+            Some(PrimaryReleaseFaultV1::DestroyObservation(queue)) => {
+                QueueTransitionV1::ObserveDestroy { queue, status }
+            }
+            _ => observation,
+        };
+        self.observe(observation)?;
         let phase = self.phase(key);
         self.finish_operation()?;
         if malformed {
@@ -508,135 +1024,25 @@ impl<B: NativeQueueBackendV1> NativeQueueEngineV1<B> {
         if self.phase(key) != Some(ComputeAqlQueuePhaseV1::Destroyed) {
             return Err(NativeQueueAdapterErrorV1::InvalidPhase);
         }
-        self.memory = self
+        self.resource(key)?;
+        let memory = self
             .model
-            .release_resource_publications(&self.memory, key)
+            .release_resource_publications(self.foundation.memory(), key)
+            .map_err(|_| NativeQueueAdapterErrorV1::ModelProjection)?;
+        #[cfg(test)]
+        if self.release_fault == Some(PrimaryReleaseFaultV1::PublicationReturn) {
+            self.release_fault = None;
+            self.foundation
+                .set_certificate_revision_for_test(u64::MAX)
+                .expect("original certified queue foundation");
+        }
+        self.foundation
+            .replace_memory_after_sealed_transition(memory)
             .map_err(|_| NativeQueueAdapterErrorV1::ModelProjection)?;
         self.resource_mut(key)?
             .authority
             .take()
             .ok_or(NativeQueueAdapterErrorV1::InvalidPhase)
-    }
-
-    fn complete_plain_operation<T: Copy + Eq>(
-        &mut self,
-        operation: NativeQueueOperationV1,
-        key: QueueKeyV1,
-        args: T,
-        call: impl FnOnce(&mut B, T) -> QueueKernelOutcomeV1<T>,
-    ) -> Result<(), NativeQueueAdapterErrorV1> {
-        let outcome = call(&mut self.backend, args);
-        let mut status = outcome.status;
-        let malformed = outcome.value != args;
-        if malformed {
-            status = QueueSyscallStatusV1::Indeterminate;
-        }
-        let transition = match operation {
-            NativeQueueOperationV1::Update => {
-                QueueTransitionV1::ObserveUpdate { queue: key, status }
-            }
-            NativeQueueOperationV1::Disable => {
-                QueueTransitionV1::ObserveDisable { queue: key, status }
-            }
-            _ => return Err(NativeQueueAdapterErrorV1::ModelProjection),
-        };
-        self.observe(transition)?;
-        let phase = self.phase(key);
-        self.finish_operation()?;
-        if malformed {
-            self.authority_poisoned = true;
-            return Err(NativeQueueAdapterErrorV1::MalformedKernelResult(
-                operation,
-                "UPDATE_QUEUE immutable inputs",
-            ));
-        }
-        self.classify_completion(operation, status, phase)
-    }
-
-    fn classify_completion(
-        &self,
-        operation: NativeQueueOperationV1,
-        status: QueueSyscallStatusV1,
-        phase: Option<ComputeAqlQueuePhaseV1>,
-    ) -> Result<(), NativeQueueAdapterErrorV1> {
-        match status {
-            QueueSyscallStatusV1::Succeeded
-                if !matches!(phase, Some(ComputeAqlQueuePhaseV1::Ambiguous)) =>
-            {
-                Ok(())
-            }
-            QueueSyscallStatusV1::FailedNoEffect => {
-                Err(NativeQueueAdapterErrorV1::BackendFailedNoEffect(operation))
-            }
-            _ => Err(NativeQueueAdapterErrorV1::BackendIndeterminate(operation)),
-        }
-    }
-
-    fn prepare_operation(&mut self) -> Result<(), NativeQueueAdapterErrorV1> {
-        if self.authority_poisoned {
-            return Err(NativeQueueAdapterErrorV1::AuthorityPoisoned);
-        }
-        let retained = self
-            .model
-            .queues()
-            .iter()
-            .filter(|queue| queue.phase.retains_resources())
-            .count();
-        if self
-            .model
-            .history()
-            .len()
-            .checked_add(2 + retained)
-            .is_none_or(|needed| needed > MAX_QUEUE_HISTORY_ENTRIES_V1)
-        {
-            return Err(NativeQueueAdapterErrorV1::JournalCapacity);
-        }
-        if self.opener_pid != std::process::id() || self.backend.opener_pid() != self.opener_pid {
-            self.quarantine_all()?;
-            return Err(NativeQueueAdapterErrorV1::ProcessChanged);
-        }
-        if let Err(detail) = self.backend.check_currentness() {
-            self.quarantine_all()?;
-            return Err(NativeQueueAdapterErrorV1::Currentness(detail));
-        }
-        Ok(())
-    }
-
-    fn finish_operation(&mut self) -> Result<(), NativeQueueAdapterErrorV1> {
-        if self.opener_pid != std::process::id() || self.backend.opener_pid() != self.opener_pid {
-            self.quarantine_all()?;
-            return Err(NativeQueueAdapterErrorV1::ProcessChanged);
-        }
-        if let Err(detail) = self.backend.check_currentness() {
-            self.quarantine_all()?;
-            return Err(NativeQueueAdapterErrorV1::Currentness(detail));
-        }
-        Ok(())
-    }
-
-    fn begin(&mut self, transition: QueueTransitionV1) -> Result<(), NativeQueueAdapterErrorV1> {
-        self.model = self
-            .model
-            .next(&self.identity, &self.memory, transition)
-            .map_err(map_model_error)?;
-        Ok(())
-    }
-
-    fn observe(&mut self, transition: QueueTransitionV1) -> Result<(), NativeQueueAdapterErrorV1> {
-        match self.model.next(&self.identity, &self.memory, transition) {
-            Ok(model) => {
-                self.model = model;
-                Ok(())
-            }
-            Err(_) => {
-                // The syscall may have changed native state, while the exact
-                // model observation could not be committed. Pending phases
-                // already retain resources; poison the concrete adapter
-                // without inventing a CurrentnessLost history edge.
-                self.authority_poisoned = true;
-                Err(NativeQueueAdapterErrorV1::ModelProjection)
-            }
-        }
     }
 
     fn quarantine_all(&mut self) -> Result<(), NativeQueueAdapterErrorV1> {
@@ -736,3 +1142,14 @@ fn create_inputs_unchanged(
 #[cfg(test)]
 #[path = "queue_tests.rs"]
 mod tests;
+
+#[path = "queue/operation_journal.rs"]
+mod operation_journal;
+
+#[cfg(test)]
+#[path = "queue/source_inputs_tests.rs"]
+mod source_inputs_tests;
+#[cfg(test)]
+pub(crate) use source_inputs_tests::{
+    fixed_dispatch_production_source_for_tests_v1, live_production_source_for_tests_v1,
+};

@@ -367,6 +367,15 @@ impl PreparedProductionBuildConfig {
             .is_ok()
     }
 
+    pub(crate) fn selects_only_unit(
+        &self,
+        crate_name: &str,
+        source: &Path,
+        working_directory: &Path,
+    ) -> bool {
+        self.link.units.len() == 1 && self.selects(crate_name, source, working_directory)
+    }
+
     pub(crate) fn source_isa_unit_identity(
         &self,
         crate_name: &str,

@@ -10,7 +10,8 @@ use fe2o3_kernel_ir::VerifiedCanonicalKernelIrV5;
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalFormalMemoryAdmissionEvidenceV4,
     InertCanonicalMirToKirCorrespondenceEvidenceV3, InertCanonicalMirToKirCorrespondenceEvidenceV4,
-    ProductionFormalMemoryOwnerV1, ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
+    InertCanonicalMirToKirCorrespondenceEvidenceV5, ProductionFormalMemoryOwnerV1,
+    ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
 };
 use fe2o3_mir_model::analyze_semantic_u32_induction_no_overflow_v1;
 use fe2o3_mir_model::semantic_mir_v1::*;
@@ -280,7 +281,7 @@ const PRODUCTION_AMDHSA_DATA_LAYOUT: &str = "e-m:e-p:64:64-p1:64:64-p2:32:32-p3:
 const PRODUCTION_TARGET_CPU: &str = "gfx942";
 const PRODUCTION_TARGET_FEATURES: &str = "-wavefrontsize32,+wavefrontsize64,-xnack";
 
-fn production_target_layout_identity() -> SemanticLayoutIdentityV1 {
+pub(crate) fn production_target_layout_identity() -> SemanticLayoutIdentityV1 {
     SemanticLayoutIdentityV1::from_sha256(
         derive_semantic_target_layout_identity_v1(
             PRODUCTION_RUSTC_LLVM_TARGET,
@@ -347,6 +348,30 @@ pub(crate) fn canonical_compiler_proof_inputs_v4(seed: u8) -> CanonicalCompilerP
     canonical_compiler_proof_inputs(seed, semantic_owner(seed), true)
 }
 
+#[allow(dead_code, reason = "shared support also serves older receipt tests")]
+pub(crate) fn canonical_compiler_proof_inputs_with_v5_correspondence(
+    seed: u8,
+) -> CanonicalCompilerProofInputsV3 {
+    let owner = ProductionSemanticKirOwnerV1::try_lower(
+        semantic_owner(seed),
+        ProductionSemanticKirLimitsV1::default(),
+    )
+    .unwrap();
+    let report = analyze_semantic_u32_induction_no_overflow_v1(
+        owner.semantic().semantic(),
+        SemanticFunctionIdV1::from_index(0),
+    )
+    .unwrap();
+    let correspondence =
+        InertCanonicalMirToKirCorrespondenceEvidenceV5::from_live_owner(&owner, &report)
+            .unwrap()
+            .canonical_bytes()
+            .to_vec();
+    let (mut inputs, _) = canonical_compiler_proof_inputs_from_owner(seed, owner, true);
+    inputs.correspondence = correspondence;
+    inputs
+}
+
 #[allow(dead_code, reason = "shared guarded-domain public verifier fixture")]
 pub(crate) fn canonical_compiler_proof_inputs_v4_with_guarded_read(
     seed: u8,
@@ -399,6 +424,17 @@ fn canonical_compiler_proof_inputs(
         ProductionSemanticKirLimitsV1::default(),
     )
     .unwrap();
+    canonical_compiler_proof_inputs_from_owner(seed, semantic_kir, lossless_correspondence).0
+}
+
+pub(crate) fn canonical_compiler_proof_inputs_from_owner(
+    seed: u8,
+    semantic_kir: ProductionSemanticKirOwnerV1,
+    lossless_correspondence: bool,
+) -> (
+    CanonicalCompilerProofInputsV3,
+    ProductionFormalMemoryOwnerV1,
+) {
     let semantic = semantic_kir.semantic().semantic();
     let semantic_mir = semantic.canonical_encoding().to_vec();
     let semantic_identity = *semantic.semantic_sha256().as_bytes();
@@ -414,11 +450,7 @@ fn canonical_compiler_proof_inputs(
                 .canonical_bytes()
                 .to_vec();
         (
-            semantic_kir
-                .canonical_kernel_ir_v8()
-                .expect("lossless induction fixture must retain canonical KIR V8")
-                .canonical_bytes()
-                .to_vec(),
+            semantic_kir.canonical_kernel_ir_bytes().to_vec(),
             correspondence,
         )
     } else {
@@ -442,13 +474,16 @@ fn canonical_compiler_proof_inputs(
             .into_canonical_bytes()
     };
 
-    CanonicalCompilerProofInputsV3 {
-        semantic_mir,
-        middle_end: middle_end_v5_bytes(semantic_identity, seed),
-        kernel_ir,
-        correspondence,
-        formal_memory,
-    }
+    (
+        CanonicalCompilerProofInputsV3 {
+            semantic_mir,
+            middle_end: middle_end_v5_bytes(semantic_identity, seed),
+            kernel_ir,
+            correspondence,
+            formal_memory,
+        },
+        formal_owner,
+    )
 }
 
 /// Builds internally valid signed aggregate evidence for cross-crate transport tests.

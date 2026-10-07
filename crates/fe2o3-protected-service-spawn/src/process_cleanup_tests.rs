@@ -959,6 +959,16 @@ fn namespace_fixture() -> (ChildCleanupV1, OwnedFd) {
 
 #[test]
 fn namespace_setup_error_and_root_reap_keep_exact_namespace_custody() {
+    if !crate::test_isolation::enter(
+        concat!(
+            module_path!(),
+            "::namespace_setup_error_and_root_reap_keep_exact_namespace_custody"
+        )
+        .strip_prefix("fe2o3_protected_service_spawn::")
+        .unwrap(),
+    ) {
+        return;
+    }
     // Neither owner can admit a real namespace/domain. The fake pidfd is a pipe,
     // and the poisoned namespace refuses before any child/map syscall.
     let (mut child, namespace_reader) = namespace_fixture();

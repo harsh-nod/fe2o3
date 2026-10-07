@@ -22,6 +22,12 @@ const TRANSFER_MAGIC: [u8; 8] = *b"FE2CEC2\0";
 const TRANSFER_VERSION: u32 = 2;
 const TRANSFER_BYTES: usize = 24;
 
+mod retained_child;
+pub use retained_child::RetainedCompilerExecutionChildV1;
+
+#[cfg(test)]
+pub(crate) static RESERVED_CHILD_FD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Move-only service launch inputs bound to one still-live rustc child.
 ///
 /// The value grants no issuer, signing, compilation, publication, loading, or execution
@@ -97,6 +103,56 @@ impl CompilerExecutionServiceLaunchV1 {
         }
         require_service_peer_live(&self.service_peer)?;
         require_pidfd_live(&self.client_pidfd)
+    }
+}
+
+/// Application-only launch custody using duplicates of the original child and Cargo pidfds.
+///
+/// There is no conversion to compiler-only launch custody. This owner does not establish
+/// application observation, proof custody, readiness, or launch authority.
+///
+/// ```compile_fail
+/// fn cloneable<T: Clone>() {}
+/// cloneable::<fe2o3_compiler_execution_client::RetainedApplicationServiceLaunchV1>();
+/// ```
+/// ```compile_fail
+/// fn descriptor<T: std::os::fd::AsFd>() {}
+/// descriptor::<fe2o3_compiler_execution_client::RetainedApplicationServiceLaunchV1>();
+/// ```
+/// ```compile_fail
+/// fn downgrade(value: fe2o3_compiler_execution_client::RetainedApplicationServiceLaunchV1)
+///     -> fe2o3_compiler_execution_client::CompilerExecutionServiceLaunchV1 {
+///     value.into()
+/// }
+/// ```
+pub struct RetainedApplicationServiceLaunchV1 {
+    pub(crate) compiler: CompilerExecutionServiceLaunchV1,
+    pub(crate) parent_pidfd: OwnedFd,
+}
+
+impl fmt::Debug for RetainedApplicationServiceLaunchV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RetainedApplicationServiceLaunchV1")
+            .field("client", &self.client())
+            .field("submitter", &self.submitter())
+            .field("authority", &"none")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RetainedApplicationServiceLaunchV1 {
+    pub const fn client(&self) -> CompilerExecutionClientProcessIdentityV1 {
+        self.compiler.client()
+    }
+
+    pub const fn submitter(&self) -> CompilerExecutionClientProcessIdentityV1 {
+        self.compiler.submitter()
+    }
+
+    pub(crate) fn revalidate(&self) -> Result<(), CompilerExecutionChildChannelErrorV1> {
+        self.compiler.revalidate_for_supervisor_handoff()?;
+        require_close_on_exec(&self.parent_pidfd)?;
+        require_pidfd_live(&self.parent_pidfd)
     }
 }
 
@@ -205,13 +261,97 @@ impl PendingCompilerExecutionChildChannelV1 {
         }
         require_child_channel_deadline(deadline)?;
         let client_pidfd = open_pidfd(child_pid)?;
-        wait_for_transfer(&self.receiver, &client_pidfd, deadline)?;
+        self.finish_with_pidfd(child_pid, client_pidfd, current_submitter()?, deadline)
+    }
+
+    /// Transfers a duplicate of the originally captured child pidfd, retaining cleanup custody.
+    pub fn finish_until_with_retained_child(
+        self,
+        child: &RetainedCompilerExecutionChildV1,
+        deadline: Instant,
+    ) -> Result<CompilerExecutionServiceLaunchV1, CompilerExecutionChildChannelErrorV1> {
+        require_child_channel_deadline(deadline)?;
+        let client_pidfd = child.clone_for_live_transfer()?;
+        let launch =
+            self.finish_with_pidfd(child.child_pid(), client_pidfd, child.submitter(), deadline)?;
+        child.validate_live_transfer()?;
+        require_child_channel_deadline(deadline)?;
+        Ok(launch)
+    }
+
+    /// Constructs application-only custody without reopening either process by numeric PID.
+    pub fn finish_application_until(
+        self,
+        child: &RetainedCompilerExecutionChildV1,
+        deadline: Instant,
+    ) -> Result<RetainedApplicationServiceLaunchV1, CompilerExecutionChildChannelErrorV1> {
+        require_child_channel_deadline(deadline)?;
+        let parent_pidfd = child.clone_parent_for_live_transfer()?;
+        let compiler = self.finish_until_with_retained_child(child, deadline)?;
+        let launch = RetainedApplicationServiceLaunchV1 {
+            compiler,
+            parent_pidfd,
+        };
+        launch.revalidate()?;
+        child.validate_live_transfer()?;
+        require_child_channel_deadline(deadline)?;
+        Ok(launch)
+    }
+
+    /// Native application-only transfer with exactly one poll and one recvmsg.
+    /// EINTR, short/absent transfer and spurious readiness fail without retry.
+    /// Original captured child/parent pidfds are duplicated, never reopened by PID.
+    pub fn finish_native_application_until(
+        self,
+        child: &RetainedCompilerExecutionChildV1,
+        deadline: Instant,
+    ) -> Result<RetainedApplicationServiceLaunchV1, CompilerExecutionChildChannelErrorV1> {
+        require_child_channel_deadline(deadline)?;
+        let parent_pidfd = child.clone_parent_for_live_transfer()?;
+        let client_pidfd = child.clone_for_live_transfer()?;
+        let compiler = self.finish_with_pidfd_policy::<true>(
+            child.child_pid(),
+            client_pidfd,
+            child.submitter(),
+            deadline,
+        )?;
+        let launch = RetainedApplicationServiceLaunchV1 {
+            compiler,
+            parent_pidfd,
+        };
+        launch.revalidate()?;
+        child.validate_live_transfer()?;
+        require_child_channel_deadline(deadline)?;
+        Ok(launch)
+    }
+
+    fn finish_with_pidfd(
+        self,
+        child_pid: u32,
+        client_pidfd: OwnedFd,
+        submitter: CompilerExecutionClientProcessIdentityV1,
+        deadline: Instant,
+    ) -> Result<CompilerExecutionServiceLaunchV1, CompilerExecutionChildChannelErrorV1> {
+        self.finish_with_pidfd_policy::<false>(child_pid, client_pidfd, submitter, deadline)
+    }
+
+    fn finish_with_pidfd_policy<const SINGLE_ATTEMPT: bool>(
+        self,
+        child_pid: u32,
+        client_pidfd: OwnedFd,
+        submitter: CompilerExecutionClientProcessIdentityV1,
+        deadline: Instant,
+    ) -> Result<CompilerExecutionServiceLaunchV1, CompilerExecutionChildChannelErrorV1> {
+        if submitter != current_submitter()? {
+            return Err(CompilerExecutionChildChannelErrorV1::ParentCredentialsMismatch);
+        }
+        wait_for_transfer_policy::<SINGLE_ATTEMPT>(&self.receiver, &client_pidfd, deadline)?;
         let (service_peer, transferred_pid, transferred_parent_pid) =
             receive_service_peer(&self.receiver)?;
         if transferred_pid != child_pid {
             return Err(CompilerExecutionChildChannelErrorV1::ChildPidMismatch);
         }
-        if transferred_parent_pid != std::process::id() {
+        if transferred_parent_pid != submitter.pid() {
             return Err(CompilerExecutionChildChannelErrorV1::ParentPidMismatch);
         }
         validate_seqpacket_peer(&service_peer).map_err(service_peer_error)?;
@@ -222,12 +362,6 @@ impl PendingCompilerExecutionChildChannelV1 {
         }
         require_service_peer_live(&service_peer)?;
         require_pidfd_live(&client_pidfd)?;
-        let submitter = CompilerExecutionClientProcessIdentityV1::new(
-            transferred_parent_pid,
-            rustix::process::geteuid().as_raw(),
-            rustix::process::getegid().as_raw(),
-        )
-        .map_err(|_| CompilerExecutionChildChannelErrorV1::ParentPidMismatch)?;
         if submitter.uid() != client.uid() || submitter.gid() != client.gid() {
             return Err(CompilerExecutionChildChannelErrorV1::ParentCredentialsMismatch);
         }
@@ -250,6 +384,16 @@ fn service_peer_error(
         }
         _ => CompilerExecutionChildChannelErrorV1::InvalidServicePeer,
     }
+}
+
+fn current_submitter()
+-> Result<CompilerExecutionClientProcessIdentityV1, CompilerExecutionChildChannelErrorV1> {
+    CompilerExecutionClientProcessIdentityV1::new(
+        std::process::id(),
+        rustix::process::geteuid().as_raw(),
+        rustix::process::getegid().as_raw(),
+    )
+    .map_err(|_| CompilerExecutionChildChannelErrorV1::ParentPidMismatch)
 }
 
 fn require_child_channel_deadline(
@@ -425,6 +569,8 @@ fn send_service_peer(control: RawFd, service: RawFd) -> io::Result<()> {
 }
 
 fn open_pidfd(child_pid: u32) -> Result<OwnedFd, CompilerExecutionChildChannelErrorV1> {
+    #[cfg(test)]
+    PIDFD_OPEN_CALLS.set(PIDFD_OPEN_CALLS.get() + 1);
     // SAFETY: pidfd_open consumes one positive scalar PID and zero flags.
     let descriptor = unsafe { libc::syscall(libc::SYS_pidfd_open, child_pid, 0) };
     if descriptor < 0 {
@@ -443,10 +589,38 @@ fn open_pidfd(child_pid: u32) -> Result<OwnedFd, CompilerExecutionChildChannelEr
     Ok(pidfd)
 }
 
-fn wait_for_transfer(
+#[cfg(test)]
+thread_local! {
+    pub(crate) static PIDFD_OPEN_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn wait_for_transfer_policy<const SINGLE_ATTEMPT: bool>(
     receiver: &OwnedFd,
     pidfd: &OwnedFd,
     deadline: Instant,
+) -> Result<(), CompilerExecutionChildChannelErrorV1> {
+    wait_for_transfer_using::<SINGLE_ATTEMPT>(receiver, pidfd, deadline, |descriptors, timeout| {
+        // SAFETY: the live writable pollfd slice remains valid for this call.
+        let result = unsafe {
+            libc::poll(
+                descriptors.as_mut_ptr(),
+                descriptors.len() as libc::nfds_t,
+                timeout,
+            )
+        };
+        if result < 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(result)
+        }
+    })
+}
+
+fn wait_for_transfer_using<const SINGLE_ATTEMPT: bool>(
+    receiver: &OwnedFd,
+    pidfd: &OwnedFd,
+    deadline: Instant,
+    mut poll: impl FnMut(&mut [libc::pollfd; 2], i32) -> io::Result<i32>,
 ) -> Result<(), CompilerExecutionChildChannelErrorV1> {
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -465,21 +639,11 @@ fn wait_for_transfer(
                 revents: 0,
             },
         ];
-        // SAFETY: descriptors names a live two-element pollfd array.
-        let result = unsafe {
-            libc::poll(
-                descriptors.as_mut_ptr(),
-                descriptors.len() as libc::nfds_t,
-                duration_to_poll_millis(remaining),
-            )
+        let result = match poll(&mut descriptors, duration_to_poll_millis(remaining)) {
+            Ok(result) => result,
+            Err(error) if !SINGLE_ATTEMPT && error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(CompilerExecutionChildChannelErrorV1::Poll(error)),
         };
-        if result < 0 {
-            let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            return Err(CompilerExecutionChildChannelErrorV1::Poll(error));
-        }
         if result == 0 || deadline.saturating_duration_since(Instant::now()).is_zero() {
             return Err(CompilerExecutionChildChannelErrorV1::Timeout);
         }
@@ -500,6 +664,9 @@ fn wait_for_transfer(
         }
         if descriptors[0].revents & libc::POLLHUP != 0 {
             return Err(CompilerExecutionChildChannelErrorV1::ControlClosed);
+        }
+        if SINGLE_ATTEMPT {
+            return Err(CompilerExecutionChildChannelErrorV1::ControlFailed);
         }
     }
 }
@@ -677,6 +844,7 @@ pub enum CompilerExecutionChildChannelErrorV1 {
     ReservedDescriptorInUse,
     Descriptor(io::Error),
     Pidfd(io::Error),
+    ChildWait(io::Error),
     Poll(io::Error),
     Receive(io::Error),
     Timeout,
@@ -715,6 +883,7 @@ impl fmt::Display for CompilerExecutionChildChannelErrorV1 {
                 write!(formatter, "rustc channel descriptor failed: {error}")
             }
             Self::Pidfd(error) => write!(formatter, "rustc child pidfd failed: {error}"),
+            Self::ChildWait(error) => write!(formatter, "original child is not waitable: {error}"),
             Self::Poll(error) => write!(formatter, "rustc channel poll failed: {error}"),
             Self::Receive(error) => write!(formatter, "rustc channel receive failed: {error}"),
             Self::Timeout => formatter.write_str("rustc channel absolute deadline expired"),
@@ -764,6 +933,7 @@ impl Error for CompilerExecutionChildChannelErrorV1 {
         match self {
             Self::Descriptor(error)
             | Self::Pidfd(error)
+            | Self::ChildWait(error)
             | Self::Poll(error)
             | Self::Receive(error)
             | Self::PeerCredentials(error) => Some(error),
@@ -774,6 +944,45 @@ impl Error for CompilerExecutionChildChannelErrorV1 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_child_poll_has_one_attempt_and_legacy_retry_is_preserved() {
+        use super::*;
+        fn exercise<const SINGLE: bool>(mode: u8) -> (bool, usize) {
+            // Real inert descriptors only; this tests poll scheduling, never
+            // fabricates accepted child or protected service custody.
+            let (reader, writer) = rustix::pipe::pipe().unwrap();
+            let mut calls = 0;
+            let result = wait_for_transfer_using::<SINGLE>(
+                &reader,
+                &writer,
+                Instant::now() + Duration::from_secs(2),
+                |descriptors, _| {
+                    calls += 1;
+                    if calls == 1 {
+                        match mode {
+                            0 => return Err(io::Error::from_raw_os_error(libc::EINTR)),
+                            1 => return Ok(1),
+                            2 => return Ok(0),
+                            _ => {
+                                descriptors[1].revents = libc::POLLIN;
+                                return Ok(1);
+                            }
+                        }
+                    }
+                    descriptors[0].revents = libc::POLLIN;
+                    Ok(1)
+                },
+            );
+            (result.is_ok(), calls)
+        }
+        for mode in 0..4 {
+            assert_eq!(exercise::<true>(mode), (false, 1));
+            assert_eq!(
+                exercise::<false>(mode),
+                if mode < 2 { (true, 2) } else { (false, 1) }
+            );
+        }
+    }
     use super::*;
 
     #[test]

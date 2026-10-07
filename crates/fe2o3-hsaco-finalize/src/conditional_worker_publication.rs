@@ -388,6 +388,67 @@ pub fn recover_conditional_worker_hsaco_publication_v5(
     })
 }
 
+/// Re-derives only inert durable coordinates from actual recovered-transcript
+/// source/finalizer custody. Unlike preparation this never promotes recovery to
+/// fresh consumption and cannot publish, load, or grant execution authority.
+/// The host must compare the returned plan against its separately held live
+/// publication claim. Full artifact, transcript and producer backing stay paid
+/// on the original account; returned fixed result storage is unreserved.
+pub fn derive_recovered_conditional_worker_publication_intent_in_original_account_v5(
+    producer: &ProducerIdentity,
+    finalized: &Artifact,
+    transcript: &Transcript,
+    budget: &mut Budget<'_>,
+) -> PublicResult<ConditionalWorkerPublicationIntentV5> {
+    (|| {
+        let mut producer_storage = size_of::<ProducerIdentity>();
+        producer.visit_retained_heap_storage_v1(|count, width| -> Result<()> {
+            budget.charge_work(1)?;
+            producer_storage = add(
+                producer_storage,
+                count.checked_mul(width).ok_or(Resource::Arithmetic)?,
+            )?;
+            Ok(())
+        })?;
+        let inputs = add(
+            add(
+                finalized.required_retained_storage(),
+                transcript.storage().retained_storage(),
+            )?,
+            producer_storage,
+        )?;
+        recovered_intent_using(finalized.source().custody(), inputs, budget, |budget| {
+            precheck(finalized, transcript)?;
+            budget.charge_work(producer_storage)?;
+            derive_intent(
+                producer_package_identity_v1(producer),
+                finalized,
+                transcript,
+                budget,
+            )
+        })
+    })()
+    .map_err(ConditionalWorkerHsacoPublicationErrorV5)
+}
+
+fn recovered_intent_using<T>(
+    custody: Custody,
+    inputs: usize,
+    budget: &mut Budget<'_>,
+    derive: impl FnOnce(&mut Budget<'_>) -> Result<T>,
+) -> Result<(T, NativeWorkerHsacoPublicationStorageV1)> {
+    original_terminal(budget, inputs, |budget| {
+        budget.with_prepaid_scope(inputs, 8, ENTRY_WORK, FRAME, |budget| {
+            require_custody(custody, Custody::RecoveredTranscript)?;
+            let intent = derive(budget)?;
+            Ok((
+                intent,
+                NativeWorkerHsacoPublicationStorageV1(size_of::<T>()),
+            ))
+        })
+    })
+}
+
 fn check_storage_cap(b: &Budget<'_>) -> Result<()> {
     if b.storage_limit() > MAX_INERT_REFINED_FORWARDING_STORAGE_V1 {
         return Err(Error::StorageCap);

@@ -1,4 +1,4 @@
-//! Run closure witnesses without concurrent test forks inheriting their writers.
+//! Isolate descriptor-closure and fixed-number witnesses from unrelated tests.
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -25,7 +25,7 @@ pub(crate) fn isolated_eof_case(name: &str, run: impl FnOnce()) {
     }
 
     // CLOEXEC writers may survive a concurrent test's fork until its exec. Create
-    // all probes only after re-exec in a single-test process that never forks.
+    // probes only after re-exec, away from unrelated forks and fixed-FD users.
     let report = tempfile::NamedTempFile::new().unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
     let mut child = EofChild(Some(

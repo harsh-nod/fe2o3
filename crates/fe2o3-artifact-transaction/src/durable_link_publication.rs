@@ -417,6 +417,16 @@ impl fmt::Debug for DurableCurrentLinkPublicationLeaseV1 {
 }
 
 impl DurableCurrentLinkPublicationLeaseV1 {
+    pub(crate) fn retain_native_lock(
+        self,
+        lock: super::OutputLock,
+    ) -> DurableCurrentLinkPublicationTokenV1 {
+        debug_assert!(self.binding.output.native_read_limits.is_some());
+        DurableCurrentLinkPublicationTokenV1 {
+            binding: self.binding,
+            _lock: lock,
+        }
+    }
     /// Conservative logical Rust backing, including complete shared snapshots.
     /// Counts each Arc in full, even when another owner retains the same bytes.
     /// This quote is not currentness, FD/kernel memory, allocator RSS or authority.
@@ -559,6 +569,11 @@ impl fmt::Debug for DurableCurrentLinkPublicationTokenV1 {
 }
 
 impl DurableCurrentLinkPublicationTokenV1 {
+    pub(crate) fn native_output(&self) -> &PinnedOutput {
+        debug_assert!(self.binding.output.native_read_limits.is_some());
+        &self.binding.output
+    }
+
     /// Borrows the immutable descriptor-derived artifact bytes while currentness is locked.
     pub fn exact_artifact_bytes(&self) -> &[u8] {
         self.binding.snapshot.artifact().bytes()
@@ -1434,6 +1449,22 @@ fn recover_envelope(
     names: &DurableNames,
     scope: LinkPublicationScopeV1,
 ) -> Result<DurableEnvelopeV1, DurableLinkPublicationError> {
+    if output.native_read_limits.is_some() {
+        match statat(&output.fd, &names.redo, AtFlags::SYMLINK_NOFOLLOW) {
+            Err(error) if error == rustix::io::Errno::NOENT => {}
+            Err(error) => return Err(std::io::Error::from(error).into()),
+            Ok(_) => {
+                return Err(current_publication_error(
+                    "native observation rejects journal redo",
+                ));
+            }
+        }
+        return read_envelope(output, &names.record, scope)
+            .map_err(DurableReadError::into_public)?
+            .ok_or_else(|| {
+                current_publication_error("native observation requires canonical publication")
+            });
+    }
     match read_envelope(output, &names.redo, scope) {
         Ok(Some(redo)) => {
             let canonical = read_envelope(output, &names.record, scope)
@@ -1517,6 +1548,13 @@ fn recover_incomplete(
     names: &DurableNames,
     envelope: &mut DurableEnvelopeV1,
 ) -> Result<(), DurableLinkPublicationError> {
+    if output.native_read_limits.is_some()
+        && (envelope.active.is_some() || envelope.active_plan.is_some())
+    {
+        return Err(current_publication_error(
+            "native observation rejects incomplete publication",
+        ));
+    }
     let Some(mut active) = envelope.active.clone() else {
         return Ok(());
     };
@@ -1549,6 +1587,9 @@ fn verify_or_invalidate_published(
     match snapshot_for_record_checked(output, record, faults) {
         Ok(_) => return Ok(()),
         Err(SnapshotReadError::Transient(error)) => return Err(error),
+        Err(error) if output.native_read_limits.is_some() => {
+            return Err(error.into_public("native published artifact"));
+        }
         Err(SnapshotReadError::Missing | SnapshotReadError::Corrupt(_)) => {}
     }
     envelope.generation_floor = envelope.generation_floor.max(record.attempt().generation());
@@ -1809,7 +1850,14 @@ fn open_artifact(
     let fd = match openat(
         &output.fd,
         entry,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        OFlags::RDONLY
+            | OFlags::NOFOLLOW
+            | OFlags::CLOEXEC
+            | if output.native_read_limits.is_some() {
+                OFlags::NONBLOCK
+            } else {
+                OFlags::empty()
+            },
         Mode::empty(),
     ) {
         Ok(fd) => fd,
@@ -1835,6 +1883,14 @@ fn open_artifact(
         .map_err(SnapshotReadError::Transient)?;
     let length = usize::try_from(before.st_size).unwrap_or(usize::MAX);
     validate_artifact_size(length).map_err(SnapshotReadError::Corrupt)?;
+    if output
+        .native_read_limits
+        .is_some_and(|limits| length > limits.artifact_bytes())
+    {
+        return Err(SnapshotReadError::Corrupt(current_publication_error(
+            "native artifact byte bound",
+        )));
+    }
     if !is_private_regular(&before) {
         return Err(SnapshotReadError::Corrupt(unsafe_entry(
             entry,
@@ -1842,10 +1898,15 @@ fn open_artifact(
         )));
     }
     let mut bytes = Vec::with_capacity(length);
-    Read::by_ref(&mut file)
-        .take((MAX_DURABLE_FINALIZED_ARTIFACT_BYTES + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(DurableLinkPublicationError::from)
+    let read = if output.native_read_limits.is_some() {
+        crate::native_current_publication::read_exact_file(&file, length).map(|value| bytes = value)
+    } else {
+        Read::by_ref(&mut file)
+            .take((MAX_DURABLE_FINALIZED_ARTIFACT_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map(|_| ())
+    };
+    read.map_err(DurableLinkPublicationError::from)
         .map_err(SnapshotReadError::Transient)?;
     let after = fstat(&file)
         .map_err(std::io::Error::from)
@@ -2070,7 +2131,14 @@ fn open_private_file(
     let fd = openat(
         &output.fd,
         entry,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        OFlags::RDONLY
+            | OFlags::NOFOLLOW
+            | OFlags::CLOEXEC
+            | if output.native_read_limits.is_some() {
+                OFlags::NONBLOCK
+            } else {
+                OFlags::empty()
+            },
         Mode::empty(),
     )
     .map_err(|error| match error {
@@ -2093,10 +2161,21 @@ fn open_private_file(
             "{description} length is outside 1..={maximum_bytes}"
         )));
     }
+    if maximum_bytes == MAX_DURABLE_FINALIZED_ARTIFACT_BYTES
+        && output
+            .native_read_limits
+            .is_some_and(|limits| length > limits.artifact_bytes())
+    {
+        return Err(current_publication_error("native artifact byte bound"));
+    }
     let mut bytes = Vec::with_capacity(length);
-    Read::by_ref(&mut file)
-        .take((maximum_bytes + 1) as u64)
-        .read_to_end(&mut bytes)?;
+    if output.native_read_limits.is_some() {
+        bytes = crate::native_current_publication::read_exact_file(&file, length)?;
+    } else {
+        Read::by_ref(&mut file)
+            .take((maximum_bytes + 1) as u64)
+            .read_to_end(&mut bytes)?;
+    }
     let after = fstat(&file).map_err(std::io::Error::from)?;
     let named =
         statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(std::io::Error::from)?;
@@ -2134,7 +2213,11 @@ fn validate_open_file(
             "{description} no longer names the retained private file"
         )));
     }
-    let bytes = read_exact_at(file, expected_bytes.len(), description)?;
+    let bytes = if output.native_read_limits.is_some() {
+        crate::native_current_publication::read_exact_file(file, expected_bytes.len())?
+    } else {
+        read_exact_at(file, expected_bytes.len(), description)?
+    };
     let after = fstat(file).map_err(std::io::Error::from)?;
     if bytes != expected_bytes || !same_private_file(&before, &after, expected_bytes.len()) {
         return Err(current_publication_error(format!(

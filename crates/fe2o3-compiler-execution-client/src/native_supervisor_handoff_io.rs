@@ -26,8 +26,17 @@ impl super::ReadinessIo for System {
 }
 
 pub(super) fn connect(expected: Credentials, deadline: Instant) -> Result<OwnedFd> {
+    connect_using(expected, deadline, address()?)
+}
+pub(super) fn connect_application(expected: Credentials, deadline: Instant) -> Result<OwnedFd> {
+    connect_using(expected, deadline, application_address()?)
+}
+fn connect_using(
+    expected: Credentials,
+    deadline: Instant,
+    address: SocketAddrUnix,
+) -> Result<OwnedFd> {
     super::super::require_deadline(deadline)?;
-    let address = address()?;
     let control = net::socket_with(
         AddressFamily::UNIX,
         SocketType::SEQPACKET,
@@ -41,7 +50,7 @@ pub(super) fn connect(expected: Credentials, deadline: Instant) -> Result<OwnedF
         }
         Err(error) => return Err(error.into()),
     }
-    validate(&control, expected)?;
+    validate_using(&control, expected, address)?;
     super::super::require_deadline(deadline)?;
     Ok(control)
 }
@@ -50,11 +59,22 @@ fn address() -> Result<SocketAddrUnix> {
         fe2o3_compiler_execution_protocol::COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
     )?)
 }
+fn application_address() -> Result<SocketAddrUnix> {
+    Ok(SocketAddrUnix::new(
+        fe2o3_compiler_execution_protocol::NATIVE_APPLICATION_SUPERVISOR_SOCKET_PATH_V3,
+    )?)
+}
 pub(super) fn validate(control: &OwnedFd, expected: Credentials) -> Result<()> {
+    validate_using(control, expected, address()?)
+}
+pub(super) fn validate_application(control: &OwnedFd, expected: Credentials) -> Result<()> {
+    validate_using(control, expected, application_address()?)
+}
+fn validate_using(control: &OwnedFd, expected: Credentials, address: SocketAddrUnix) -> Result<()> {
     Ok(super::super::validate_production_control(
         control,
         expected,
-        &SocketAddrAny::from(address()?),
+        &SocketAddrAny::from(address),
     )?)
 }
 pub(super) fn send(
@@ -115,6 +135,33 @@ fn wait(control: &OwnedFd, events: i16, deadline: Instant) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn send_application(
+    control: &OwnedFd,
+    bytes: &[u8],
+    descriptors: &[BorrowedFd<'_>],
+    deadline: Instant,
+) -> Result<()> {
+    if !matches!(descriptors.len(), 0 | 1 | 4) {
+        return Err(Failure::Mismatch("native application descriptor count"));
+    }
+    wait(control, libc::POLLOUT, deadline)?;
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(4))];
+    let mut ancillary = SendAncillaryBuffer::new(&mut space);
+    if !descriptors.is_empty() && !ancillary.push(SendAncillaryMessage::ScmRights(descriptors)) {
+        return Err(Failure::Mismatch("native application descriptor buffer"));
+    }
+    let sent = net::sendmsg(
+        control,
+        &[IoSlice::new(bytes)],
+        &mut ancillary,
+        SendFlags::DONTWAIT | SendFlags::NOSIGNAL,
+    )?;
+    if sent != bytes.len() {
+        return Err(Transport::PartialSend.into());
+    }
+    Ok(super::super::require_deadline(deadline)?)
+}
+
 fn receive<const N: usize>(
     control: &OwnedFd,
     deadline: Instant,
@@ -154,8 +201,15 @@ fn receive<const N: usize>(
     Ok((bytes, received.bytes, credentials))
 }
 pub(super) fn readiness(control: &OwnedFd, deadline: Instant) -> Result<[u8; READY_BYTES]> {
+    exact_record(control, deadline)
+}
+
+pub(super) fn exact_record<const N: usize>(
+    control: &OwnedFd,
+    deadline: Instant,
+) -> Result<[u8; N]> {
     let expected = net::sockopt::socket_peercred(control)?;
-    let (bytes, count, credentials) = receive::<READY_BYTES>(control, deadline)?;
+    let (bytes, count, credentials) = receive::<N>(control, deadline)?;
     if count != bytes.len() || credentials != Some(expected) {
         return Err(Transport::MalformedReadiness.into());
     }

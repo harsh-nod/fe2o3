@@ -4,6 +4,93 @@ use fe2o3_artifact_transaction::{BuildInvocation, BuildSession, begin_build_atte
 use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
 
 #[test]
+fn recovered_intent_gate_preserves_mode_and_original_account() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    const OUTSIDE: usize = MAX_INERT_REFINED_FORWARDING_STORAGE_V1 + 1;
+    let mut owner = Owned::new(Work::new(usize::MAX), OUTSIDE + FRAME + 1_000_000);
+    owner.with_budget(|budget| {
+        budget.reserve_storage(OUTSIDE).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let account = budget.storage_account_identity_v1();
+        let (intent, storage) =
+            recovered_intent_using(Custody::RecoveredTranscript, 7, budget, |b| {
+                b.charge_work(5)?;
+                Ok(derive_plan(inputs()))
+            })
+            .unwrap();
+        assert_eq!(intent, derive_plan(inputs()));
+        assert!(!intent.grants_publication_authority());
+        assert_eq!(
+            storage.retained_storage(),
+            size_of::<ConditionalWorkerPublicationIntentV5>()
+        );
+        assert_eq!(budget.storage(), OUTSIDE);
+        assert!(budget.work_ledger_identity_v1() == ledger);
+        assert_eq!(budget.storage_account_identity_v1(), account);
+        assert!(
+            recovered_intent_using::<()>(Custody::ConsumedPublication, 7, budget, |_| panic!(
+                "fresh custody entered recovered adapter"
+            ))
+            .is_err()
+        );
+        assert!(
+            budget.storage() > OUTSIDE,
+            "terminal outer operation overlap stays charged"
+        );
+    });
+}
+
+#[test]
+fn recovered_intent_gate_exact_and_one_short_resource_limits() {
+    use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
+    let mut owner = Owned::new(Work::new(usize::MAX), 1_000_000 + FRAME);
+    let (needed_work, needed_storage) = owner.with_budget(|budget| {
+        budget.reserve_storage(7).unwrap();
+        recovered_intent_using(Custody::RecoveredTranscript, 7, budget, |b| {
+            b.charge_work(5)?;
+            Ok(())
+        })
+        .unwrap();
+        (budget.work(), budget.peak_storage())
+    });
+    for (work_limit, storage_limit, success) in [
+        (needed_work, needed_storage, true),
+        (needed_work - 1, needed_storage, false),
+        (needed_work, needed_storage - 1, false),
+    ] {
+        let mut owner = Owned::new(Work::new(work_limit), storage_limit);
+        owner.with_budget(|budget| {
+            budget.reserve_storage(7).unwrap();
+            let result = recovered_intent_using(Custody::RecoveredTranscript, 7, budget, |b| {
+                b.charge_work(5)?;
+                Ok(())
+            });
+            assert_eq!(result.is_ok(), success);
+            if success {
+                assert_eq!(budget.storage(), 7);
+            }
+        });
+    }
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, 1_000_000 + FRAME);
+    budget.reserve_storage(7).unwrap();
+    assert!(
+        recovered_intent_using::<()>(Custody::RecoveredTranscript, 8, &mut budget, |_| panic!(
+            "unpaid inputs entered derivation"
+        ))
+        .is_err()
+    );
+    assert_eq!(budget.storage(), 7);
+    // The original-account adapter must still reject a standalone mutable view.
+    assert!(
+        recovered_intent_using::<()>(Custody::RecoveredTranscript, 7, &mut budget, |_| panic!(
+            "unowned storage account entered derivation"
+        ))
+        .is_err()
+    );
+}
+
+#[test]
 fn original_publication_terminal_exact_one_short_and_partial_failure_accounting() {
     use fe2o3_kernel_ir::CanonicalKernelIrOwnedVerificationResourceBudgetV1 as Owned;
     const OUTSIDE: usize = MAX_INERT_REFINED_FORWARDING_STORAGE_V1 + 1;

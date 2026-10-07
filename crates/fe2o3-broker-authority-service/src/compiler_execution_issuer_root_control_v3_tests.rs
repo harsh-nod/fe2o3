@@ -149,6 +149,12 @@ fn assert_closed(peer: &OwnedFd) {
 
 #[test]
 fn preflight_resource_refusals_close_consumed_endpoint_and_preserve_history() {
+    if !crate::test_isolation::enter(concat!(
+        module_path!(),
+        "::preflight_resource_refusals_close_consumed_endpoint_and_preserve_history"
+    )) {
+        return;
+    }
     for (work, scratch, spent) in [
         (ENTRY - 1, CHECK_FRAME, 0),
         (CHECK_WORK - 1, CHECK_FRAME, ENTRY),
@@ -176,6 +182,12 @@ fn preflight_resource_refusals_close_consumed_endpoint_and_preserve_history() {
 
 #[test]
 fn input_floor_refusal_precedes_endpoint_inspection_and_closes_it() {
+    if !crate::test_isolation::enter(concat!(
+        module_path!(),
+        "::input_floor_refusal_precedes_endpoint_inspection_and_closes_it"
+    )) {
+        return;
+    }
     let (endpoint, peer) = pair(net::SocketType::STREAM, net::SocketFlags::CLOEXEC);
     let mut work = Work::new(CHECK_WORK);
     let mut b = Budget::new(&mut work, ENDPOINT_STORAGE + CHECK_FRAME);
@@ -188,6 +200,12 @@ fn input_floor_refusal_precedes_endpoint_inspection_and_closes_it() {
 
 #[test]
 fn exact_preflight_quote_reaches_real_endpoint_shape_and_creator_checks() {
+    if !crate::test_isolation::enter(concat!(
+        module_path!(),
+        "::exact_preflight_quote_reaches_real_endpoint_shape_and_creator_checks"
+    )) {
+        return;
+    }
     for (kind, flags, passcred, expected) in [
         (
             net::SocketType::STREAM,

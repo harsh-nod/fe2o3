@@ -474,8 +474,16 @@ fn issuer_peer_preparation_rejects_unexpected_status_without_clearing_it() {
 }
 
 #[test]
-#[allow(unsafe_code)]
 fn issuer_abi_stages_exact_roles_and_all_ready_writer_aliases_must_close() {
+    crate::eof_test_process::isolated(
+        module_path!(),
+        "issuer_abi_stages_exact_roles_and_all_ready_writer_aliases_must_close",
+        issuer_abi_stages_exact_roles_and_all_ready_writer_aliases_must_close_isolated,
+    );
+}
+
+#[allow(unsafe_code)]
+fn issuer_abi_stages_exact_roles_and_all_ready_writer_aliases_must_close_isolated() {
     let channels = Channels::new().unwrap();
     let files: [File; 10] = std::array::from_fn(|_| tempfile::tempfile().unwrap());
     let sources = [

@@ -1,0 +1,992 @@
+//! Runtime-owned typed operations, independently of observer lifetime.
+
+use super::*;
+use crate::{
+    RuntimeArgumentsV1, RuntimeAsyncCopyBackendV1, RuntimeCopyV1,
+    RuntimeDirectedScalarPeerCopyBackendV1, RuntimeDirectedScalarPeerCopyV1,
+    RuntimeLaunchGeometryV1, RuntimeMemoryRegionV1, RuntimePeerCopySegmentV1,
+    RuntimePeerCopySegmentsBackendV1, RuntimePeerCopySegmentsV1, RuntimePeerCopyV1,
+    RuntimeSubmissionV1, TypedRuntimeKernelV1,
+};
+use std::collections::{BTreeMap, VecDeque};
+
+use generated_operation::completion_contract::{CompletionClassV1, classify_completion_v1};
+
+mod factory;
+pub(super) use factory::{EngineOperationFactoryV1, stop_reply};
+mod event;
+pub use event::*;
+mod progress;
+use progress::{DirectedPeerProgressV1, ObservedProgressV1, OperationProgressV1};
+
+/// An exact submission and its final host observation. An error is not GPU
+/// completion; the context continues to retain possibly reachable resources.
+pub struct RuntimeAsyncOperationResultV1<A, E> {
+    /// Absent only when launch returned no usable submission handle.
+    pub submission: Option<RuntimeSubmissionV1<A>>,
+    pub observation: Result<RuntimeCompletionStatusV1, RuntimeErrorV1<E>>,
+    pub rejected_observations: u64,
+    pub last_rejected_observation: Option<E>,
+}
+
+/// Standard future for runtime-owned submission, progress, and observation.
+///
+/// Dropping it does not cancel the operation or withdraw its progress. A stopped
+/// engine is not evidence of non-publication or quiescence. Completion does not
+/// release the submission, allocations, or module; use ordinary context release
+/// APIs after inspecting the outcome, or inspect owner shutdown's cleanup report.
+pub type RuntimeAsyncOperationFutureV1<A, E> =
+    RuntimeAsyncCommandFutureV1<RuntimeAsyncOperationResultV1<A, E>>;
+
+/// Owner-local driver installed before its first Context/native effect.
+pub(super) trait EngineOperationV1<B: RuntimeBackendV1> {
+    /// True grants driver disposal, not merely completion of its reply. Issued
+    /// custody must remain here or in the Context until conclusively retired.
+    fn advance(&mut self, context: &mut RuntimeContextV1<B>) -> bool;
+    /// Inert flush identity, cached before first advance. Preparation has none.
+    fn stream(&self) -> Option<RuntimeStreamIdV1>;
+    /// Only a fully host-owned, never-adopted preparation may park.
+    fn prepared_key(&self) -> Option<&Arc<generated_operation::PreparedKeyV1>> {
+        None
+    }
+    fn reserved_key(&self) -> Option<&Arc<generated_operation::PreparedKeyV1>> {
+        None
+    }
+    fn reserve_generated(
+        &mut self,
+        _context: &mut RuntimeContextV1<B>,
+        _completion: &mut Option<owned::Reply<generated_operation::GeneratedCompletionOutcomeV1>>,
+    ) -> Result<
+        Option<RuntimeGeneratedResultDomainV1>,
+        crate::RuntimeGfx942GeneratedReservationErrorV1,
+    > {
+        Err(crate::RuntimeGfx942GeneratedReservationErrorV1::UnsupportedPreparation)
+    }
+    fn preflight_adoption(
+        &mut self,
+        _context: &mut RuntimeContextV1<B>,
+        _stream: RuntimeStreamIdV1,
+        _access: Option<crate::context::ContextGraphReservationV1>,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        Err(crate::RuntimeValidationErrorV1::Unsupported.into())
+    }
+    fn activate_adoption(
+        &mut self,
+        _hold: crate::context::ContextUnpublishedHoldV1,
+        _ticket: RuntimeAsyncReservedTicketV1,
+    ) -> RuntimeAsyncGeneratedCompletionV1 {
+        unreachable!("only an admitted generated driver activates")
+    }
+    /// True permits disposal only after exact unpublished native retirement.
+    fn retire_unpublished(
+        &mut self,
+        _context: &mut RuntimeContextV1<B>,
+    ) -> Result<bool, RuntimeErrorV1<B::Error>> {
+        Ok(false)
+    }
+    /// Called after the driver is rooted in the preallocated parked roster.
+    fn complete_preparation(&mut self) {}
+    /// Infallibly detach/resolve the reply before any fallible handling, without
+    /// disposing possibly reachable native custody. Panic containment preserves
+    /// custody, but cannot recover a reply hidden by a broken implementation.
+    fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1);
+}
+
+struct OperationEntryV1<B: RuntimeBackendV1> {
+    stream: Option<RuntimeStreamIdV1>,
+    driver: Box<dyn EngineOperationV1<B>>,
+}
+
+pub(super) struct OperationRegistryV1<B: RuntimeBackendV1> {
+    entries: VecDeque<OperationEntryV1<B>>,
+    parked: VecDeque<OperationEntryV1<B>>,
+    streams: BTreeMap<RuntimeStreamIdV1, usize>,
+    flush_cursor: Option<RuntimeStreamIdV1>,
+    owner_cleanup: bool,
+}
+
+impl<B: RuntimeBackendV1> OperationRegistryV1<B> {
+    pub(super) fn new(capacity: usize, owner_cleanup: bool) -> Self {
+        Self {
+            entries: VecDeque::with_capacity(capacity),
+            parked: VecDeque::with_capacity(capacity),
+            streams: BTreeMap::new(),
+            flush_cursor: None,
+            owner_cleanup,
+        }
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.entries.len() + self.parked.len()
+    }
+
+    pub(super) fn active_len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub(super) fn insert(&mut self, operation: Box<dyn EngineOperationV1<B>>) {
+        let stream = operation.stream();
+        if let Some(stream) = stream {
+            *self.streams.entry(stream).or_default() += 1;
+        }
+        self.entries.push_back(OperationEntryV1 {
+            stream,
+            driver: operation,
+        });
+    }
+
+    pub(super) fn accepts_factory(&self, factory: &dyn EngineOperationFactoryV1<B>) -> bool {
+        self.owner_cleanup || !factory.requires_owned_shutdown()
+    }
+
+    /// Resolving a reply never removes its driver from the custody roster.
+    pub(super) fn stop_observations(&mut self) -> bool {
+        let mut panicked = false;
+        for entry in self.entries.iter_mut().chain(&mut self.parked) {
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                entry
+                    .driver
+                    .reject(RuntimeAsyncEngineCallErrorV1::EngineStopped);
+            })) {
+                core::mem::forget(payload);
+                panicked = true;
+            }
+        }
+        panicked
+    }
+
+    fn retire_stream(&mut self, stream: Option<RuntimeStreamIdV1>) {
+        let Some(stream) = stream else { return };
+        let count = self
+            .streams
+            .get_mut(&stream)
+            .expect("operation stream is retained");
+        *count -= 1;
+        if *count == 0 {
+            self.streams.remove(&stream);
+        }
+    }
+
+    pub(super) fn discard_prepared(
+        &mut self,
+        key: &Arc<generated_operation::PreparedKeyV1>,
+    ) -> bool {
+        self.discard_parked(key, false)
+    }
+
+    pub(super) fn discard_reserved(
+        &mut self,
+        key: &Arc<generated_operation::PreparedKeyV1>,
+    ) -> bool {
+        self.discard_parked(key, true)
+    }
+
+    fn discard_parked(
+        &mut self,
+        key: &Arc<generated_operation::PreparedKeyV1>,
+        reserved: bool,
+    ) -> bool {
+        let Some(index) = self.parked.iter().position(|entry| {
+            (if reserved {
+                entry.driver.reserved_key()
+            } else {
+                entry.driver.prepared_key()
+            })
+            .is_some_and(|stored| Arc::ptr_eq(stored, key))
+        }) else {
+            return false;
+        };
+        // The caller contains destructor panic and owns the discard reply.
+        drop(self.parked.remove(index).expect("matched parked owner"));
+        true
+    }
+
+    pub(super) fn reserve_generated(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        key: &Arc<generated_operation::PreparedKeyV1>,
+        completion: &mut Option<owned::Reply<generated_operation::GeneratedCompletionOutcomeV1>>,
+    ) -> Result<
+        Option<RuntimeGeneratedResultDomainV1>,
+        crate::RuntimeGfx942GeneratedReservationErrorV1,
+    > {
+        let entry = self
+            .parked
+            .iter_mut()
+            .find(|entry| {
+                entry
+                    .driver
+                    .prepared_key()
+                    .is_some_and(|stored| Arc::ptr_eq(stored, key))
+            })
+            .ok_or(crate::RuntimeGfx942GeneratedReservationErrorV1::Engine(
+                RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
+            ))?;
+        entry.driver.reserve_generated(context, completion)
+    }
+
+    pub(super) fn validate_reserved(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        ticket: &RuntimeAsyncReservedTicketV1,
+        stream: RuntimeStreamIdV1,
+        access: Option<crate::context::ContextGraphReservationV1>,
+    ) -> Result<usize, generated_operation::adoption::ActivationErrorV1<B::Error>> {
+        use generated_operation::adoption::ActivationErrorV1 as Error;
+        if context.is_terminal() || !self.owner_cleanup {
+            return Err(Error::Engine(RuntimeAsyncEngineCallErrorV1::EngineStopped));
+        }
+        context
+            .require_unpublished_open_access_v1(access)
+            .map_err(|e| Error::Context(e.into()))?;
+        let key = &ticket.key;
+        if key.context_generation != context.capture_context_generation_v1() {
+            return Err(Error::Engine(
+                RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
+            ));
+        }
+        let index = self
+            .parked
+            .iter()
+            .position(|entry| {
+                entry
+                    .driver
+                    .reserved_key()
+                    .is_some_and(|stored| Arc::ptr_eq(stored, key))
+            })
+            .ok_or(Error::Engine(
+                RuntimeAsyncEngineCallErrorV1::InvalidPreparedTicket,
+            ))?;
+        if self.entries.len() == self.entries.capacity() {
+            return Err(Error::Engine(
+                RuntimeAsyncEngineCallErrorV1::OperationCapacity,
+            ));
+        }
+        self.parked[index]
+            .driver
+            .preflight_adoption(context, stream, access)
+            .map_err(Error::Context)?;
+        context
+            .require_unpublished_open_access_v1(access)
+            .map_err(|e| Error::Context(e.into()))?;
+        Ok(index)
+    }
+
+    pub(super) fn activate_reserved(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        ticket: &mut Option<RuntimeAsyncReservedTicketV1>,
+        stream: RuntimeStreamIdV1,
+        access: Option<crate::context::ContextGraphReservationV1>,
+    ) -> Result<
+        RuntimeAsyncGeneratedCompletionV1,
+        generated_operation::adoption::ActivationErrorV1<B::Error>,
+    > {
+        use generated_operation::adoption::ActivationErrorV1 as Error;
+        let index = self.validate_reserved(
+            context,
+            ticket.as_ref().expect("queued reserved ticket"),
+            stream,
+            access,
+        )?;
+        let hold = context
+            .hold_unpublished_stream_with_access_v1(stream, access)
+            .map_err(|error| Error::Context(error.into()))?;
+        let entry = self.parked.remove(index).expect("exact parked entry");
+        debug_assert!(
+            entry.stream.is_none(),
+            "adoption never enters the flush roster"
+        );
+        self.entries.push_back(entry);
+        // Root the same driver before its phase changes or any adapter effect.
+        Ok(self
+            .entries
+            .back_mut()
+            .expect("rooted adoption")
+            .driver
+            .activate_adoption(hold, ticket.take().expect("consumed exact reserved ticket")))
+    }
+
+    pub(super) fn retire_unpublished_v1(
+        &mut self,
+        context: &mut RuntimeContextV1<B>,
+        budget: usize,
+    ) {
+        if context.is_terminal() {
+            return;
+        }
+        let mut index = 0;
+        for _ in 0..budget.min(self.entries.len()) {
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                let retired = self
+                    .entries
+                    .get_mut(index)
+                    .expect("bounded retirement roster")
+                    .driver
+                    .retire_unpublished(context)?;
+                if context.is_terminal() {
+                    return Err(crate::RuntimeValidationErrorV1::ContextTerminal.into());
+                }
+                if retired {
+                    let entry = self
+                        .entries
+                        .remove(index)
+                        .expect("retired unpublished owner");
+                    self.retire_stream(entry.stream);
+                    drop(entry);
+                } else {
+                    // Progress owns round-robin rotation. Rotating again here
+                    // can starve both scans when their equal budgets alias.
+                    index += 1;
+                }
+                Ok::<_, RuntimeErrorV1<B::Error>>(())
+            }));
+            match result {
+                Ok(Ok(())) if !context.is_terminal() => {}
+                failed => {
+                    if let Err(payload) = failed {
+                        core::mem::forget(payload);
+                    }
+                    context.quarantine_after_async_command_panic_v1();
+                    return;
+                }
+            }
+        }
+    }
+
+    pub(super) fn dispose_quiescent(&mut self) {
+        // Pop one at a time so outer panic containment retains every later owner.
+        while let Some(entry) = self.entries.pop_front() {
+            drop(entry);
+        }
+        while let Some(entry) = self.parked.pop_front() {
+            drop(entry);
+        }
+        self.streams.clear();
+    }
+}
+
+type Submit<B, A> = Box<
+    dyn FnOnce(
+            &mut RuntimeContextV1<B>,
+        )
+            -> Result<RuntimeSubmissionV1<A>, RuntimeErrorV1<<B as RuntimeBackendV1>::Error>>
+        + Send,
+>;
+
+struct Operation<B: RuntimeBackendV1, A, P> {
+    stream: RuntimeStreamIdV1,
+    submit: Option<Submit<B, A>>,
+    submission: Option<RuntimeSubmissionV1<A>>,
+    reply: Option<owned::Reply<RuntimeAsyncOperationResultV1<A, B::Error>>>,
+    event_reply: Option<event::EventReplyV1<B::Error>>,
+    rejected_observations: u64,
+    last_rejected_observation: Option<B::Error>,
+    deferred_quiescent_observation: Option<B::Error>,
+    control: Option<RuntimeAsyncOperationControlV1>,
+    progress: core::marker::PhantomData<fn() -> P>,
+}
+
+impl<B: RuntimeBackendV1, A, P> Operation<B, A, P> {
+    fn finish(&mut self, observation: Result<RuntimeCompletionStatusV1, RuntimeErrorV1<B::Error>>) {
+        if let Some(control) = &self.control {
+            control.finish_observation();
+        }
+        if let Some(mut reply) = self.reply.take() {
+            reply.complete(Ok(RuntimeAsyncOperationResultV1 {
+                submission: self.submission.take(),
+                observation,
+                rejected_observations: self.rejected_observations,
+                last_rejected_observation: self.last_rejected_observation.take(),
+            }));
+        }
+    }
+}
+
+impl<B: RuntimeBackendV1, A, P> Drop for Operation<B, A, P> {
+    fn drop(&mut self) {
+        factory::stop_reply(
+            &mut self.event_reply,
+            self.control.as_ref(),
+            RuntimeAsyncEngineCallErrorV1::EngineStopped,
+        );
+        factory::stop_reply(
+            &mut self.reply,
+            self.control.as_ref(),
+            RuntimeAsyncEngineCallErrorV1::EngineStopped,
+        );
+    }
+}
+
+impl<B: RuntimeBackendV1, A, P: OperationProgressV1<B, A>> EngineOperationV1<B>
+    for Operation<B, A, P>
+{
+    fn advance(&mut self, context: &mut RuntimeContextV1<B>) -> bool {
+        if let Some(submit) = self.submit.take() {
+            if let Some(control) = &self.control
+                && !control.start_submission()
+            {
+                let error =
+                    if control.phase() == RuntimeAsyncOperationPhaseV1::CancelledBeforeSubmission {
+                        RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission
+                    } else {
+                        RuntimeAsyncEngineCallErrorV1::EngineStopped
+                    };
+                self.reject(error);
+                return true;
+            }
+            match submit(context) {
+                Ok(submission) => {
+                    self.submission = Some(submission);
+                    if let Some(control) = &self.control {
+                        control.observing();
+                    }
+                }
+                Err(error) => {
+                    if let Some(mut reply) = self.event_reply.take() {
+                        reply.complete(Ok(Err(
+                            RuntimeAsyncOperationEventErrorV1::SubmissionUnavailable,
+                        )));
+                    }
+                    self.finish(Err(error));
+                    return true;
+                }
+            }
+            return false;
+        }
+        let submission = self
+            .submission
+            .as_mut()
+            .expect("accepted operation retains submission");
+        if self.event_reply.is_some() {
+            // Keep both replies and the submission rooted across a backend panic.
+            // Recording has its own advance; it never also polls or flushes.
+            let result = context
+                .record_event(submission)
+                .map_err(RuntimeAsyncOperationEventErrorV1::RecordingFailed);
+            self.event_reply.take().unwrap().complete(Ok(result));
+            return false;
+        }
+        let mut observation = match P::observe(context, submission) {
+            Ok(_) => context
+                .query_submission(submission)
+                .map_err(RuntimeErrorV1::from),
+            Err(error) => Err(error),
+        };
+        if matches!(observation, Err(RuntimeErrorV1::BackendQuiescent(_)))
+            && !context.is_terminal()
+            && context.query_submission(submission) == Ok(RuntimeCompletionStatusV1::Pending)
+        {
+            // The diagnostic may belong to a producer. Bounded reconciliation
+            // must finish the requested submission before this driver retires.
+            let Err(RuntimeErrorV1::BackendQuiescent(error)) = observation else {
+                unreachable!("matched quiescent observation");
+            };
+            self.deferred_quiescent_observation.get_or_insert(error);
+            return false;
+        }
+        if matches!(
+            observation,
+            Ok(RuntimeCompletionStatusV1::QuiescentWithoutResult)
+        ) && let Some(error) = self.deferred_quiescent_observation.take()
+        {
+            observation = Err(RuntimeErrorV1::BackendQuiescent(error));
+        }
+        match classify_completion_v1(&observation) {
+            CompletionClassV1::Pending => false,
+            CompletionClassV1::Rejected if context.is_terminal() => {
+                // A producer contradiction can seal custody while preserving
+                // its original rejection. Do not replace it with EngineStopped.
+                self.finish(observation);
+                true
+            }
+            CompletionClassV1::Rejected => {
+                let Err(RuntimeErrorV1::BackendRejected(error)) = observation else {
+                    unreachable!("classifier preserves rejected observation");
+                };
+                self.rejected_observations = self.rejected_observations.saturating_add(1);
+                self.last_rejected_observation = Some(error);
+                false
+            }
+            CompletionClassV1::SuccessCandidate
+            | CompletionClassV1::Failed(_)
+            | CompletionClassV1::QuiescentWithoutResult
+            | CompletionClassV1::QuiescentError
+            | CompletionClassV1::Terminal
+            | CompletionClassV1::ObservationError => {
+                self.finish(observation);
+                true
+            }
+        }
+    }
+
+    fn stream(&self) -> Option<RuntimeStreamIdV1> {
+        P::flush_stream(self.stream)
+    }
+
+    fn reject(&mut self, error: RuntimeAsyncEngineCallErrorV1) {
+        let discard_unissued = matches!(
+            error,
+            RuntimeAsyncEngineCallErrorV1::EngineStopped
+                | RuntimeAsyncEngineCallErrorV1::CommandPanicked
+        );
+        factory::stop_reply(&mut self.event_reply, self.control.as_ref(), error);
+        factory::stop_reply(&mut self.reply, self.control.as_ref(), error);
+        if discard_unissued {
+            // This ordinary driver retains only an unissued host callback here;
+            // possibly live native resources remain owned by the Context.
+            drop(self.submit.take());
+        }
+    }
+}
+
+impl<B: RuntimeBackendV1 + 'static> RuntimeAsyncProgressHandleV1<B> {
+    fn operation_dependencies(
+        &self,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<snapshot::Charged<Box<[RuntimeEventIdV1]>>, RuntimeAsyncEngineCallErrorV1> {
+        if self.observer.rejects_async_enqueue() {
+            return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
+        }
+        snapshot::charge_dependencies(&self.observer.snapshot_budget, dependencies)
+    }
+
+    fn operation_peer_copy_segments(
+        &self,
+        segments: Vec<RuntimePeerCopySegmentV1>,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        snapshot::Charged<snapshot::PeerCopySegmentsSnapshotV1>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
+        if self.observer.rejects_async_enqueue() {
+            return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
+        }
+        snapshot::charge_peer_copy_segments(&self.observer.snapshot_budget, segments, dependencies)
+    }
+
+    pub(super) fn enqueue_operation<A: 'static>(
+        &self,
+        stream: RuntimeStreamIdV1,
+        submit: Submit<B, A>,
+    ) -> Result<RuntimeAsyncOperationFutureV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        self.enqueue_controlled_operation::<A, ObservedProgressV1>(stream, submit, None)
+    }
+
+    pub(super) fn enqueue_tracked_operation<A: 'static>(
+        &self,
+        stream: RuntimeStreamIdV1,
+        submit: Submit<B, A>,
+    ) -> Result<RuntimeAsyncTrackedOperationV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        let control = RuntimeAsyncOperationControlV1::new();
+        let future = self.enqueue_controlled_operation::<A, ObservedProgressV1>(
+            stream,
+            submit,
+            Some(control.clone()),
+        )?;
+        Ok(RuntimeAsyncTrackedOperationV1 { future, control })
+    }
+
+    fn enqueue_controlled_operation<A: 'static, P: OperationProgressV1<B, A>>(
+        &self,
+        stream: RuntimeStreamIdV1,
+        submit: Submit<B, A>,
+        control: Option<RuntimeAsyncOperationControlV1>,
+    ) -> Result<RuntimeAsyncOperationFutureV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        if self.observer.rejects_async_enqueue() {
+            return Err(RuntimeAsyncEngineCallErrorV1::ReentrantCall);
+        }
+        let (reply, future) = owned::Reply::budgeted_pair(&self.observer.reply_budget)?;
+        let factory = factory::OperationFactoryV1::<B, A, P>::new(stream, submit, reply, control);
+        self.send_operation_factory(Box::new(factory))?;
+        Ok(future)
+    }
+
+    fn send_operation_factory(
+        &self,
+        factory: Box<dyn EngineOperationFactoryV1<B>>,
+    ) -> Result<(), RuntimeAsyncEngineCallErrorV1> {
+        match self
+            .observer
+            .try_send_command(RuntimeAsyncEngineCommandV1::Operation(factory))
+        {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => Err(RuntimeAsyncEngineCallErrorV1::CommandQueueFull),
+            Err(TrySendError::Disconnected(_)) => Err(RuntimeAsyncEngineCallErrorV1::EngineStopped),
+        }
+    }
+
+    /// Enqueues a typed launch through the existing context admission path.
+    ///
+    /// Registry capacity is reserved before submission. The engine retains and
+    /// advances accepted work even if this future is dropped. At most
+    /// `waiter_capacity` operations occupy this independent registry; each tick
+    /// advances at most `polls_per_tick` and makes a `progress_stream_v1` attempt
+    /// for at most `flushes_per_tick` distinct operation streams, in addition to
+    /// the observer registries. Success may leave ready work unpublished; the
+    /// default backend operation retains legacy full-flush behavior.
+    /// Arguments and kernel ownership remain subject to their existing contracts;
+    /// these record bounds do not bound arbitrary user-owned argument bytes.
+    /// Dependency lists are checked, compacted and charged before enqueue.
+    /// Use `enqueue_launch` for a fully frozen, payload-budgeted launch request.
+    pub fn launch<A: RuntimeArgumentsV1>(
+        &self,
+        stream: RuntimeStreamIdV1,
+        kernel: Arc<TypedRuntimeKernelV1<A>>,
+        arguments: A,
+        geometry: RuntimeLaunchGeometryV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<RuntimeAsyncOperationFutureV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        let dependencies = self.operation_dependencies(dependencies)?;
+        self.enqueue_operation(
+            stream,
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.launch(stream, &kernel, &arguments, geometry, dependencies)
+                })
+            }),
+        )
+    }
+
+    /// Like `launch`, with local identity, pre-submission cancellation, and
+    /// recoverable timeout observation. It uses the same admission and registry.
+    pub fn launch_tracked<A: RuntimeArgumentsV1>(
+        &self,
+        stream: RuntimeStreamIdV1,
+        kernel: Arc<TypedRuntimeKernelV1<A>>,
+        arguments: A,
+        geometry: RuntimeLaunchGeometryV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<RuntimeAsyncTrackedOperationV1<A, B::Error>, RuntimeAsyncEngineCallErrorV1> {
+        let dependencies = self.operation_dependencies(dependencies)?;
+        self.enqueue_tracked_operation(
+            stream,
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.launch(stream, &kernel, &arguments, geometry, dependencies)
+                })
+            }),
+        )
+    }
+
+    /// Enqueues a same-device transfer with runtime-owned progress and custody.
+    pub fn copy_async(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<RuntimeAsyncOperationFutureV1<RuntimeCopyV1, B::Error>, RuntimeAsyncEngineCallErrorV1>
+    where
+        B: RuntimeAsyncCopyBackendV1,
+    {
+        let dependencies = self.operation_dependencies(dependencies)?;
+        self.enqueue_operation(
+            stream,
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.copy_async(stream, source, destination, dependencies)
+                })
+            }),
+        )
+    }
+
+    /// Same-device transfer with the same control and custody as `launch_tracked`.
+    pub fn copy_async_tracked(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncTrackedOperationV1<RuntimeCopyV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    >
+    where
+        B: RuntimeAsyncCopyBackendV1,
+    {
+        let dependencies = self.operation_dependencies(dependencies)?;
+        self.enqueue_tracked_operation(
+            stream,
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.copy_async(stream, source, destination, dependencies)
+                })
+            }),
+        )
+    }
+
+    /// Enqueues an admitted peer transfer; it does not imply native XGMI routing.
+    pub fn peer_copy(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncOperationFutureV1<RuntimePeerCopyV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
+        let dependencies = self.operation_dependencies(dependencies)?;
+        self.enqueue_operation(
+            stream,
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.peer_copy(stream, source, destination, dependencies)
+                })
+            }),
+        )
+    }
+
+    /// Admitted peer transfer with local control; it does not imply XGMI routing.
+    pub fn peer_copy_tracked(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncTrackedOperationV1<RuntimePeerCopyV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    > {
+        let dependencies = self.operation_dependencies(dependencies)?;
+        self.enqueue_tracked_operation(
+            stream,
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.peer_copy(stream, source, destination, dependencies)
+                })
+            }),
+        )
+    }
+
+    /// Enqueues an explicitly directed peer copy with bounded producer progress.
+    ///
+    /// Submission and progress occur in separate owner advances. Each progress
+    /// advance performs at most one backend action through the Context directed
+    /// API, including retained-producer reconciliation. This operation adds no
+    /// automatic stream progress. Other operations, event observers and explicit
+    /// stream registrations retain their independent scheduler budgets, even on
+    /// the same stream; the bound is not global to an engine tick.
+    /// Dependencies are charged until owner submission or disposal. Dropping the
+    /// future does not cancel the copy or release its Context-owned custody.
+    pub fn directed_peer_copy(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncOperationFutureV1<RuntimeDirectedScalarPeerCopyV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    >
+    where
+        B: RuntimeDirectedScalarPeerCopyBackendV1,
+    {
+        let dependencies = self.operation_dependencies(dependencies)?;
+        self.enqueue_controlled_operation::<_, DirectedPeerProgressV1>(
+            stream,
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.directed_peer_copy_v1(stream, source, destination, dependencies)
+                })
+            }),
+            None,
+        )
+    }
+
+    /// Directed peer copy with local pre-submission cancellation and timeout
+    /// observation. After submission, control cancellation cannot retire native
+    /// work. Progress and snapshot credit follow `directed_peer_copy`.
+    pub fn directed_peer_copy_tracked(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncTrackedOperationV1<RuntimeDirectedScalarPeerCopyV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    >
+    where
+        B: RuntimeDirectedScalarPeerCopyBackendV1,
+    {
+        let dependencies = self.operation_dependencies(dependencies)?;
+        let control = RuntimeAsyncOperationControlV1::new();
+        let future = self.enqueue_controlled_operation::<_, DirectedPeerProgressV1>(
+            stream,
+            Box::new(move |context| {
+                dependencies.with(|dependencies| {
+                    context.directed_peer_copy_v1(stream, source, destination, dependencies)
+                })
+            }),
+            Some(control.clone()),
+        )?;
+        Ok(RuntimeAsyncTrackedOperationV1 { future, control })
+    }
+
+    /// Enqueues one ordered peer-copy list with runtime-owned whole-list progress.
+    ///
+    /// Descriptors and dependencies are compacted and charged together until
+    /// owner-thread submission or disposal. Spare Vec capacity is not retained;
+    /// the charge excludes allocator/record overhead and backend/GPU custody.
+    /// Descriptor order and duplicates are preserved. The context validates live
+    /// identities and all ranges on the owner thread. Dropping the future does
+    /// not cancel the list. This local SPI extension does not imply XGMI routing.
+    pub fn peer_copy_segments(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        segments: Vec<RuntimePeerCopySegmentV1>,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncOperationFutureV1<RuntimePeerCopySegmentsV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    >
+    where
+        B: RuntimePeerCopySegmentsBackendV1,
+    {
+        let snapshot = self.operation_peer_copy_segments(segments, dependencies)?;
+        self.enqueue_operation(
+            stream,
+            Box::new(move |context| {
+                snapshot.with(|request| {
+                    context.peer_copy_segments(
+                        stream,
+                        source,
+                        destination,
+                        &request.segments,
+                        &request.dependencies,
+                    )
+                })
+            }),
+        )
+    }
+
+    /// Ordered peer copy with local pre-submission cancellation and timeout
+    /// observation. Credit and native custody follow `peer_copy_segments`.
+    pub fn peer_copy_segments_tracked(
+        &self,
+        stream: RuntimeStreamIdV1,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+        segments: Vec<RuntimePeerCopySegmentV1>,
+        dependencies: Vec<RuntimeEventIdV1>,
+    ) -> Result<
+        RuntimeAsyncTrackedOperationV1<RuntimePeerCopySegmentsV1, B::Error>,
+        RuntimeAsyncEngineCallErrorV1,
+    >
+    where
+        B: RuntimePeerCopySegmentsBackendV1,
+    {
+        let snapshot = self.operation_peer_copy_segments(segments, dependencies)?;
+        self.enqueue_tracked_operation(
+            stream,
+            Box::new(move |context| {
+                snapshot.with(|request| {
+                    context.peer_copy_segments(
+                        stream,
+                        source,
+                        destination,
+                        &request.segments,
+                        &request.dependencies,
+                    )
+                })
+            }),
+        )
+    }
+}
+
+pub(super) fn advance_operations_v1<B: RuntimeBackendV1>(
+    context: &mut RuntimeContextV1<B>,
+    operations: &mut OperationRegistryV1<B>,
+    poll_budget: usize,
+    flush_budget: usize,
+    flush: RuntimeAsyncFlushDriverV1<B>,
+) {
+    if context.is_terminal() {
+        return;
+    }
+    for _ in 0..poll_budget.min(operations.active_len()) {
+        let entry = operations
+            .entries
+            .front_mut()
+            .expect("bounded operation roster");
+        // An adapter may have performed a side effect before unwinding. Do not
+        // let command panic containment turn that into permission to retry.
+        match catch_unwind(AssertUnwindSafe(|| {
+            let retired = entry.driver.advance(context);
+            (retired, !retired && entry.driver.prepared_key().is_some())
+        })) {
+            Ok(_) if context.is_terminal() => return,
+            Ok((true, _)) => {
+                let retired = operations.entries.pop_front().expect("retired driver");
+                operations.retire_stream(retired.stream);
+            }
+            Ok((false, false)) => operations.entries.rotate_left(1),
+            Ok((false, true)) => {
+                let parked = operations.entries.pop_front().expect("prepared driver");
+                operations.retire_stream(parked.stream);
+                operations.parked.push_back(parked);
+                let entry = operations.parked.back_mut().expect("parked driver");
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    entry.driver.complete_preparation();
+                })) {
+                    core::mem::forget(payload);
+                    context.quarantine_after_async_command_panic_v1();
+                    if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                        entry
+                            .driver
+                            .reject(RuntimeAsyncEngineCallErrorV1::CommandPanicked);
+                    })) {
+                        core::mem::forget(payload);
+                    }
+                    return;
+                }
+            }
+            Err(payload) => {
+                core::mem::forget(payload);
+                context.quarantine_after_async_command_panic_v1();
+                if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                    entry
+                        .driver
+                        .reject(RuntimeAsyncEngineCallErrorV1::CommandPanicked);
+                })) {
+                    core::mem::forget(payload);
+                }
+                return;
+            }
+        }
+        if context.is_terminal() {
+            return;
+        }
+    }
+    let selected: Vec<_> = match operations.flush_cursor {
+        Some(cursor) => operations
+            .streams
+            .range((Excluded(cursor), Unbounded))
+            .chain(operations.streams.range(..=cursor))
+            .map(|(stream, _)| *stream)
+            .take(flush_budget)
+            .collect(),
+        None => operations
+            .streams
+            .keys()
+            .copied()
+            .take(flush_budget)
+            .collect(),
+    };
+    for stream in selected {
+        operations.flush_cursor = Some(stream);
+        match catch_unwind(AssertUnwindSafe(|| flush(context, stream))) {
+            Ok(Err(error)) if runtime_error_is_terminal_v1(&error) => return,
+            Err(payload) => {
+                core::mem::forget(payload);
+                context.quarantine_after_async_command_panic_v1();
+                return;
+            }
+            _ => {}
+        }
+    }
+}

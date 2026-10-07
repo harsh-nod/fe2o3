@@ -21,6 +21,7 @@ const _: () = {
 #[derive(Default)]
 pub(super) struct OccurrenceContext<'work> {
     root: Option<RootContext<'work>>,
+    currentness: Option<root_control::CurrentnessRoot<'work>>,
 }
 
 #[cfg(test)]
@@ -91,7 +92,43 @@ impl NativeOccurrence {
 
 impl<'work> OccurrenceContext<'work> {
     pub(super) fn require_available(&self) -> Result<()> {
-        self.root().map(|_| ())
+        if self.currentness.is_some() {
+            Ok(())
+        } else {
+            self.root().map(|_| ())
+        }
+    }
+
+    pub(super) fn require_kind(&self, kind: Kind) -> Result<()> {
+        if self.currentness.is_some() {
+            require_currentness_kind(kind)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(super) fn from_currentness(root: root_control::CurrentnessRoot<'work>) -> Self {
+        Self {
+            root: None,
+            currentness: Some(root),
+        }
+    }
+    pub(super) fn require_carriage(&self, carriage: &Carriage) -> Result<()> {
+        if let Some(root) = &self.currentness {
+            root.require_carriage(carriage.identity().as_bytes())?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_service(
+        &self,
+        admission: &Admission<'_>,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        if let Some(root) = &self.currentness {
+            root.validate(admission, b)?;
+        }
+        Ok(())
     }
 
     /// The consumed endpoint stays prepaid. Return only growth above that charge;
@@ -117,6 +154,7 @@ impl<'work> OccurrenceContext<'work> {
                         manifest,
                         retained,
                     }),
+                    currentness: None,
                 },
                 growth,
             ))
@@ -125,6 +163,10 @@ impl<'work> OccurrenceContext<'work> {
 
     pub(super) fn retained_storage(&self) -> usize {
         self.root.as_ref().map_or(0, |root| root.retained)
+            + self
+                .currentness
+                .as_ref()
+                .map_or(0, |root| root.retained_storage())
     }
 
     fn root(&self) -> Result<&RootContext<'work>> {
@@ -241,5 +283,40 @@ impl<'work> OccurrenceContext<'work> {
             }
             Ok(())
         })
+    }
+}
+
+fn require_currentness_kind(kind: Kind) -> Result<()> {
+    match kind {
+        Kind::VerifyCurrent | Kind::Cancel => Ok(()),
+        Kind::Prepare | Kind::Issue | Kind::Publish | Kind::Recover | Kind::Inspect => Err(
+            Error::rejected("application issuer only permits currentness or cancellation"),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod currentness_role_tests {
+    use super::*;
+    #[test]
+    fn currentness_role_excludes_every_compiler_issuance_and_recovery_operation() {
+        for kind in [
+            Kind::Prepare,
+            Kind::Issue,
+            Kind::Publish,
+            Kind::Recover,
+            Kind::Inspect,
+        ] {
+            assert!(require_currentness_kind(kind).is_err());
+        }
+        assert!(require_currentness_kind(Kind::VerifyCurrent).is_ok());
+        assert!(require_currentness_kind(Kind::Cancel).is_ok());
+    }
+    #[test]
+    fn existing_default_context_does_not_implicitly_select_currentness() {
+        let context = OccurrenceContext::default();
+        assert!(context.currentness.is_none());
+        assert!(context.require_available().is_err());
+        assert!(context.root().is_err());
     }
 }

@@ -295,6 +295,7 @@ fn complete_root_request_case() {
         request: None,
         activation: None,
         signals: None,
+        admission: Admission::Inherited,
         creator,
     };
     native

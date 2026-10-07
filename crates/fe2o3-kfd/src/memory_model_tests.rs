@@ -243,6 +243,8 @@ fn private_session_completion_journal_has_exact_order_counts_and_states() {
     let fixture = journal_fixture();
     let mut state = fixture.state;
     assert_eq!(state.vms().len(), 1);
+    let vms_before = state.vms().to_vec();
+    assert_eq!(vms_before[0].state, model::MemoryVmStateV1::Active);
     assert!(state.reservations().is_empty());
     assert!(state.allocations().is_empty());
     assert!(state.mappings().is_empty());
@@ -309,6 +311,7 @@ fn private_session_completion_journal_has_exact_order_counts_and_states() {
         state.reservations()[0].state,
         model::VaReservationStateV1::Released
     );
+    assert_eq!(state.vms(), vms_before.as_slice());
 }
 
 #[test]

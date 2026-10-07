@@ -22,7 +22,8 @@ use fe2o3_kernel_ir::{
     AddressSpace, AmdGpuDiagnosticOperation, BasicBlock, BinaryOp, CheckedBinaryOperator,
     FunctionBody, MemoryAccess, Module, OperationKind, Terminator,
     VerifiedCanonicalKernelIrErrorV5, VerifiedCanonicalKernelIrErrorV8,
-    VerifiedCanonicalKernelIrV5, VerifiedCanonicalKernelIrV8,
+    VerifiedCanonicalKernelIrErrorV9, VerifiedCanonicalKernelIrV5, VerifiedCanonicalKernelIrV8,
+    VerifiedCanonicalKernelIrV9,
 };
 use fe2o3_lower_mir_kernel::{
     InertCanonicalFormalMemoryAdmissionEvidenceV3, InertCanonicalFormalMemoryAdmissionEvidenceV4,
@@ -44,8 +45,9 @@ use fe2o3_mir_model::{
 use fe2o3_pliron::{InertProductionMiddleEndEvidenceV5, ProductionMiddleEndEvidenceCodecErrorV5};
 
 use crate::{
-    CanonicalProductionMirPlironVerusExecutionEvidenceV1,
-    ProductionMirPlironVerusExecutionEvidenceErrorV1,
+    CanonicalConditionalOutputEvidenceV1, CanonicalProductionMirPlironVerusExecutionEvidenceV1,
+    ConditionalOutputEvidenceErrorV1, ProductionMirPlironVerusExecutionEvidenceErrorV1,
+    ValidatedCompilerKernelIrV1,
 };
 
 /// Independently decoded and cross-checked V3 compiler proof inputs.
@@ -90,8 +92,8 @@ pub struct ValidatedCompilerProofInputsV4 {
     receipt_identity: InertProofBindingReceiptIdentityV3,
     semantic_mir: AdmittedInertSemanticMirV1,
     middle_end: InertProductionMiddleEndEvidenceV5,
-    kernel_ir: VerifiedCanonicalKernelIrV8,
-    correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV4,
+    kernel_ir: ValidatedCompilerKernelIrV1,
+    correspondence: RetainedCorrespondenceV4,
     formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV4,
     verus_execution: CanonicalProductionMirPlironVerusExecutionEvidenceV1,
     induction_anchors: Box<[VerifiedSemanticU32InductionKirAnchorV1]>,
@@ -229,14 +231,19 @@ impl ValidatedCompilerProofInputsV4 {
         &self.middle_end
     }
 
-    /// Returns the independently decoded and semantically verified exact Kernel IR V8.
-    pub const fn kernel_ir(&self) -> &VerifiedCanonicalKernelIrV8 {
+    /// Returns the independently decoded and semantically verified exact Kernel IR V8 or V9.
+    pub const fn kernel_ir(&self) -> &ValidatedCompilerKernelIrV1 {
         &self.kernel_ir
     }
 
-    /// Returns the independently decoded exact MIR-to-KIR correspondence.
+    /// Returns the V4 correspondence, nested inside V5 when that is the input schema.
     pub const fn correspondence(&self) -> &InertCanonicalMirToKirCorrespondenceEvidenceV4 {
-        &self.correspondence
+        self.correspondence.nested()
+    }
+
+    /// Returns the complete original V4/V5 receipt preimage, without wrapper erasure.
+    pub fn exact_correspondence_bytes(&self) -> &[u8] {
+        self.correspondence.canonical_bytes()
     }
 
     /// Returns the independently decoded exact formal-memory admission.
@@ -381,6 +388,50 @@ pub fn validate_compiler_proof_inputs_v4(
     mir_to_kir_correspondence: &InertMirToKirCorrespondenceReceiptV3,
     formal_memory: &InertFormalMemoryReceiptV3,
 ) -> Result<ValidatedCompilerProofInputsV4, CompilerProofInputValidationErrorV4> {
+    let (association, decoded) = decode_associated_stages_v4(
+        proof_binding,
+        semantic_mir,
+        middle_end,
+        kernel_ir,
+        mir_to_kir_correspondence,
+        formal_memory,
+    )?;
+    let verus_execution = CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(
+        association.verus_execution_evidence(),
+    )
+    .map_err(CompilerProofInputValidationErrorV4::VerusEvidence)?;
+    if verus_execution
+        .claims()
+        .pliron_evidence_identity()
+        .as_bytes()
+        != decoded.middle_end.identity().sha256()
+    {
+        return Err(CompilerProofInputValidationErrorV4::VerusMiddleEndMismatch);
+    }
+    Ok(ValidatedCompilerProofInputsV4 {
+        association,
+        receipt_identity: proof_binding.identity(),
+        semantic_mir: decoded.semantic_mir,
+        middle_end: decoded.middle_end,
+        kernel_ir: decoded.kernel_ir,
+        correspondence: decoded.correspondence,
+        formal_memory: decoded.formal_memory,
+        verus_execution,
+        induction_anchors: decoded.induction_anchors,
+    })
+}
+
+fn decode_associated_stages_v4(
+    proof_binding: &InertProofBindingReceiptV3,
+    semantic_mir: &InertCanonicalSemanticMirReceiptV3,
+    middle_end: &InertMiddleEndReceiptV3,
+    kernel_ir: &InertKernelIrReceiptV3,
+    mir_to_kir_correspondence: &InertMirToKirCorrespondenceReceiptV3,
+    formal_memory: &InertFormalMemoryReceiptV3,
+) -> Result<
+    (InertProofBindingAssociationV4, DecodedCompilerProofStagesV4),
+    CompilerProofInputValidationErrorV4,
+> {
     let association = InertProofBindingAssociationV4::decode(proof_binding.canonical_preimage())
         .map_err(CompilerProofInputValidationErrorV4::ProofBindingDecode)?;
     let inputs = association.inputs();
@@ -445,29 +496,179 @@ pub fn validate_compiler_proof_inputs_v4(
         formal_memory,
     )
     .map_err(|error| CompilerProofInputValidationErrorV4::Stage(Box::new(error)))?;
-    let verus_execution = CanonicalProductionMirPlironVerusExecutionEvidenceV1::decode(
-        association.verus_execution_evidence(),
-    )
-    .map_err(CompilerProofInputValidationErrorV4::VerusEvidence)?;
-    if verus_execution
-        .claims()
-        .pliron_evidence_identity()
-        .as_bytes()
-        != decoded.middle_end.identity().sha256()
-    {
-        return Err(CompilerProofInputValidationErrorV4::VerusMiddleEndMismatch);
-    }
+    Ok((association, decoded))
+}
 
-    Ok(ValidatedCompilerProofInputsV4 {
+/// Exact singleton compiler inputs retaining a pending guarded-output condition.
+/// This is not an unconditional V4 owner, protected-origin proof or launch token.
+///
+/// ```compile_fail
+/// use fe2o3_verifier::ValidatedConditionalCompilerProofInputsV1;
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<ValidatedConditionalCompilerProofInputsV1>();
+/// ```
+///
+/// ```compile_fail
+/// use fe2o3_verifier::{ValidatedConditionalCompilerProofInputsV1, ValidatedCompilerProofInputsV4};
+/// fn cannot_promote(value: ValidatedConditionalCompilerProofInputsV1)
+///     -> ValidatedCompilerProofInputsV4 { value }
+/// ```
+#[derive(Debug)]
+#[must_use = "retain the condition until exact packed-argument and launch admission"]
+pub struct ValidatedConditionalCompilerProofInputsV1 {
+    association: InertProofBindingAssociationV4,
+    receipt_identity: InertProofBindingReceiptIdentityV3,
+    stages: DecodedCompilerProofStagesV4,
+    verus_execution: CanonicalConditionalOutputEvidenceV1,
+}
+
+impl ValidatedConditionalCompilerProofInputsV1 {
+    pub const fn association(&self) -> &InertProofBindingAssociationV4 {
+        &self.association
+    }
+    pub const fn receipt_identity(&self) -> InertProofBindingReceiptIdentityV3 {
+        self.receipt_identity
+    }
+    pub const fn semantic_mir(&self) -> &AdmittedInertSemanticMirV1 {
+        &self.stages.semantic_mir
+    }
+    pub const fn middle_end(&self) -> &InertProductionMiddleEndEvidenceV5 {
+        &self.stages.middle_end
+    }
+    pub const fn kernel_ir(&self) -> &ValidatedCompilerKernelIrV1 {
+        &self.stages.kernel_ir
+    }
+    pub const fn correspondence(&self) -> &InertCanonicalMirToKirCorrespondenceEvidenceV4 {
+        self.stages.correspondence.nested()
+    }
+    /// Returns the complete original V4/V5 receipt preimage, without wrapper erasure.
+    pub fn exact_correspondence_bytes(&self) -> &[u8] {
+        self.stages.correspondence.canonical_bytes()
+    }
+    pub const fn formal_memory(&self) -> &InertCanonicalFormalMemoryAdmissionEvidenceV4 {
+        &self.stages.formal_memory
+    }
+    pub const fn verus_execution(&self) -> &CanonicalConditionalOutputEvidenceV1 {
+        &self.verus_execution
+    }
+    pub fn semantic_u32_induction_kir_anchors(&self) -> &[VerifiedSemanticU32InductionKirAnchorV1] {
+        &self.stages.induction_anchors
+    }
+    pub const fn has_lossless_mir_to_kir_correspondence(&self) -> bool {
+        true
+    }
+    pub const fn requires_packed_extent_and_launch_discharge(&self) -> bool {
+        true
+    }
+    pub const fn authenticates_compiler_origin(&self) -> bool {
+        false
+    }
+    pub const fn establishes_llvm_or_machine_refinement(&self) -> bool {
+        false
+    }
+    pub const fn grants_runtime_authority(&self) -> bool {
+        false
+    }
+}
+
+#[derive(Debug)]
+pub enum ConditionalCompilerProofInputValidationErrorV1 {
+    Stage(CompilerProofInputValidationErrorV4),
+    Evidence(ConditionalOutputEvidenceErrorV1),
+    IdentityMismatch(&'static str),
+    UnsupportedProfile,
+}
+
+impl fmt::Display for ConditionalCompilerProofInputValidationErrorV1 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Stage(error) => error.fmt(f),
+            Self::Evidence(error) => error.fmt(f),
+            Self::IdentityMismatch(field) => {
+                write!(f, "conditional compiler evidence has a different {field}")
+            }
+            Self::UnsupportedProfile => f.write_str(
+                "conditional compiler evidence requires a singleton guarded-output profile",
+            ),
+        }
+    }
+}
+impl Error for ConditionalCompilerProofInputValidationErrorV1 {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Stage(error) => Some(error),
+            Self::Evidence(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+/// Imports conditional evidence without accepting it as an unconditional aggregate.
+/// Every stage uses the same exact V8/V9 and lossless correspondence checks as V4.
+pub fn validate_conditional_compiler_proof_inputs_v1(
+    proof_binding: &InertProofBindingReceiptV3,
+    semantic_mir: &InertCanonicalSemanticMirReceiptV3,
+    middle_end: &InertMiddleEndReceiptV3,
+    kernel_ir: &InertKernelIrReceiptV3,
+    mir_to_kir_correspondence: &InertMirToKirCorrespondenceReceiptV3,
+    formal_memory: &InertFormalMemoryReceiptV3,
+) -> Result<ValidatedConditionalCompilerProofInputsV1, ConditionalCompilerProofInputValidationErrorV1>
+{
+    use ConditionalCompilerProofInputValidationErrorV1 as E;
+    let (association, stages) = decode_associated_stages_v4(
+        proof_binding,
+        semantic_mir,
+        middle_end,
+        kernel_ir,
+        mir_to_kir_correspondence,
+        formal_memory,
+    )
+    .map_err(E::Stage)?;
+    let verus_execution =
+        CanonicalConditionalOutputEvidenceV1::decode(association.verus_execution_evidence())
+            .map_err(E::Evidence)?;
+    let claims = verus_execution.obligation();
+    for (matches, field) in [
+        (
+            claims.middle_end_identity().as_bytes() == stages.middle_end.identity().sha256(),
+            "middle-end identity",
+        ),
+        (
+            claims.source_semantic_identity().as_bytes()
+                == stages.semantic_mir.semantic_sha256().as_bytes(),
+            "source semantic identity",
+        ),
+        (
+            claims.ranked_kernel_identity().as_bytes()
+                == stages.middle_end.ranked_kernel_identity(),
+            "ranked kernel identity",
+        ),
+    ] {
+        if !matches {
+            return Err(E::IdentityMismatch(field));
+        }
+    }
+    let coverage = stages.middle_end.coverage_summary();
+    let semantics = stages.middle_end.semantic_summary();
+    if stages.semantic_mir.roots().len() != 1
+        || coverage.total_view_declared() != 0
+        || coverage.total_view_proved() != 0
+        || coverage.collective_contributions_declared() != 0
+        || coverage.collective_contributions_proved() != 0
+        || semantics.reference_obligations_declared() != 0
+        || semantics.reference_obligations_policy_checked() != 0
+        || semantics.effect_contracts_declared() != 1
+        || semantics.effect_contracts_proved() != 1
+        || semantics.collective_contracts_declared() != 0
+        || semantics.collective_contracts_policy_checked() != 0
+    {
+        return Err(E::UnsupportedProfile);
+    }
+    Ok(ValidatedConditionalCompilerProofInputsV1 {
         association,
         receipt_identity: proof_binding.identity(),
-        semantic_mir: decoded.semantic_mir,
-        middle_end: decoded.middle_end,
-        kernel_ir: decoded.kernel_ir,
-        correspondence: decoded.correspondence,
-        formal_memory: decoded.formal_memory,
+        stages,
         verus_execution,
-        induction_anchors: decoded.induction_anchors,
     })
 }
 
@@ -550,11 +751,34 @@ fn decode_and_cross_check_stages_v3(
     })
 }
 
+#[derive(Debug)]
+enum RetainedCorrespondenceV4 {
+    V4(InertCanonicalMirToKirCorrespondenceEvidenceV4),
+    V5(InertCanonicalMirToKirCorrespondenceEvidenceV5),
+}
+
+impl RetainedCorrespondenceV4 {
+    const fn nested(&self) -> &InertCanonicalMirToKirCorrespondenceEvidenceV4 {
+        match self {
+            Self::V4(value) => value,
+            Self::V5(value) => value.nested_v4(),
+        }
+    }
+
+    fn canonical_bytes(&self) -> &[u8] {
+        match self {
+            Self::V4(value) => value.canonical_bytes(),
+            Self::V5(value) => value.canonical_bytes(),
+        }
+    }
+}
+
+#[derive(Debug)]
 struct DecodedCompilerProofStagesV4 {
     semantic_mir: AdmittedInertSemanticMirV1,
     middle_end: InertProductionMiddleEndEvidenceV5,
-    kernel_ir: VerifiedCanonicalKernelIrV8,
-    correspondence: InertCanonicalMirToKirCorrespondenceEvidenceV4,
+    kernel_ir: ValidatedCompilerKernelIrV1,
+    correspondence: RetainedCorrespondenceV4,
     formal_memory: InertCanonicalFormalMemoryAdmissionEvidenceV4,
     induction_anchors: Box<[VerifiedSemanticU32InductionKirAnchorV1]>,
 }
@@ -574,24 +798,50 @@ fn decode_and_cross_check_stages_v4(
     let decoded_middle_end =
         InertProductionMiddleEndEvidenceV5::decode(middle_end.canonical_preimage())
             .map_err(CompilerProofInputValidationErrorV3::MiddleEndDecode)?;
-    let (decoded_kernel_ir, kernel_module) =
-        VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
-            kernel_ir.canonical_preimage().to_vec(),
-        )
-        .map_err(CompilerProofInputValidationErrorV3::KernelIrV8)?;
     let correspondence_bytes = mir_to_kir_correspondence.canonical_preimage();
-    let decoded_correspondence = if correspondence_bytes.get(..8) == Some(b"F2M2K5\0\0") {
-        InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(correspondence_bytes)
-            .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV5Decode)?
-            .into_nested_v4()
+    let correspondence = if correspondence_bytes.get(..8) == Some(b"F2M2K5\0\0") {
+        RetainedCorrespondenceV4::V5(
+            InertCanonicalMirToKirCorrespondenceEvidenceV5::decode(correspondence_bytes)
+                .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV5Decode)?,
+        )
     } else {
-        InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(correspondence_bytes)
-            .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV4Decode)?
+        RetainedCorrespondenceV4::V4(
+            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(correspondence_bytes)
+                .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV4Decode)?,
+        )
     };
+    let decoded_correspondence = correspondence.nested();
     let decoded_formal_memory =
         InertCanonicalFormalMemoryAdmissionEvidenceV4::decode(formal_memory.canonical_preimage())
             .map_err(CompilerProofInputValidationErrorV3::FormalMemoryV4Decode)?;
+    let correspondence_kir = decoded_correspondence.canonical_kernel_ir_identity();
+    let (decoded_kernel_ir, kernel_module) = match correspondence_kir.version() {
+        ProductionCanonicalKernelIrVersionV1::V8 => {
+            let (owner, module) = VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
+                kernel_ir.canonical_preimage().to_vec(),
+            )
+            .map_err(CompilerProofInputValidationErrorV3::KernelIrV8)?;
+            (ValidatedCompilerKernelIrV1::V8(owner), module)
+        }
+        ProductionCanonicalKernelIrVersionV1::V9 => {
+            let (owner, module) = VerifiedCanonicalKernelIrV9::from_canonical_bytes_with_module(
+                kernel_ir.canonical_preimage().to_vec(),
+            )
+            .map_err(CompilerProofInputValidationErrorV3::KernelIrV9)?;
+            (ValidatedCompilerKernelIrV1::V9(owner), module)
+        }
+        version => {
+            return Err(
+                CompilerProofInputValidationErrorV3::UnsupportedKernelIrVersion { version },
+            );
+        }
+    };
 
+    if let RetainedCorrespondenceV4::V5(value) = &correspondence {
+        value
+            .validate_against_module(&kernel_module)
+            .map_err(CompilerProofInputValidationErrorV3::CorrespondenceV5Decode)?;
+    }
     let semantic_identity = decoded_semantic_mir.semantic_sha256();
     for (actual, field) in [
         (
@@ -613,12 +863,10 @@ fn decode_and_cross_check_stages_v4(
             return Err(CompilerProofInputValidationErrorV3::NestedIdentityMismatch { field });
         }
     }
-    let correspondence_kir = decoded_correspondence.canonical_kernel_ir_identity();
     let formal_kir = decoded_formal_memory.canonical_kernel_ir_identity();
     if correspondence_kir != formal_kir
-        || correspondence_kir.version() != ProductionCanonicalKernelIrVersionV1::V8
-        || correspondence_kir.digest() != decoded_kernel_ir.identity().digest()
-        || correspondence_kir.canonical_length() != decoded_kernel_ir.identity().canonical_length()
+        || correspondence_kir.digest() != decoded_kernel_ir.identity_digest()
+        || correspondence_kir.canonical_length() != decoded_kernel_ir.canonical_length()
     {
         return Err(
             CompilerProofInputValidationErrorV3::NestedIdentityMismatch {
@@ -629,13 +877,13 @@ fn decode_and_cross_check_stages_v4(
     let induction_anchors = validate_lossless_correspondence_v4(
         &decoded_semantic_mir,
         &kernel_module,
-        &decoded_correspondence,
+        decoded_correspondence,
     )?;
     Ok(DecodedCompilerProofStagesV4 {
         semantic_mir: decoded_semantic_mir,
         middle_end: decoded_middle_end,
         kernel_ir: decoded_kernel_ir,
-        correspondence: decoded_correspondence,
+        correspondence,
         formal_memory: decoded_formal_memory,
         induction_anchors: induction_anchors.into_boxed_slice(),
     })
@@ -1414,6 +1662,13 @@ pub enum CompilerProofInputValidationErrorV3 {
     KernelIr(VerifiedCanonicalKernelIrErrorV5),
     /// Exact current canonical Kernel IR V8 could not be decoded or semantically verified.
     KernelIrV8(VerifiedCanonicalKernelIrErrorV8),
+    /// Exact canonical Kernel IR V9 could not be decoded or semantically verified.
+    KernelIrV9(VerifiedCanonicalKernelIrErrorV9),
+    /// This singleton proof contract does not accept the claimed canonical version.
+    UnsupportedKernelIrVersion {
+        /// The rejected version; no cross-version projection is attempted.
+        version: ProductionCanonicalKernelIrVersionV1,
+    },
     /// Exact MIR-to-KIR correspondence evidence could not be decoded.
     CorrespondenceDecode(ProductionLineageEvidenceErrorV3),
     /// Exact lossless MIR-to-KIR aggregate evidence could not be decoded.
@@ -1468,6 +1723,15 @@ impl fmt::Display for CompilerProofInputValidationErrorV3 {
                 write!(
                     formatter,
                     "cannot validate current compiler Kernel IR: {error}"
+                )
+            }
+            Self::KernelIrV9(error) => {
+                write!(formatter, "cannot validate compiler Kernel IR V9: {error}")
+            }
+            Self::UnsupportedKernelIrVersion { version } => {
+                write!(
+                    formatter,
+                    "singleton compiler proof does not support Kernel IR {version:?}"
                 )
             }
             Self::CorrespondenceDecode(error) => {
@@ -1526,13 +1790,15 @@ impl Error for CompilerProofInputValidationErrorV3 {
             Self::MiddleEndDecode(error) => Some(error),
             Self::KernelIr(error) => Some(error),
             Self::KernelIrV8(error) => Some(error),
+            Self::KernelIrV9(error) => Some(error),
             Self::CorrespondenceDecode(error) | Self::FormalMemoryDecode(error) => Some(error),
             Self::CorrespondenceV4Decode(error) => Some(error),
             Self::CorrespondenceV5Decode(error) => Some(error),
             Self::FormalMemoryV4Decode(error) => Some(error),
             Self::SemanticInductionAnalysis(error) => Some(error),
             Self::SemanticInductionEvidence(error) => Some(error),
-            Self::ProofBindingIdentityMismatch { .. }
+            Self::UnsupportedKernelIrVersion { .. }
+            | Self::ProofBindingIdentityMismatch { .. }
             | Self::NestedIdentityMismatch { .. }
             | Self::StructuralCorrespondence { .. } => None,
         }
@@ -1595,213 +1861,4 @@ impl Error for CompilerProofInputValidationErrorV4 {
 }
 
 #[cfg(test)]
-mod rust_call_parameter_tests {
-    use super::*;
-
-    #[allow(dead_code)]
-    mod compiler_proof_inputs_v3 {
-        use crate as fe2o3_verifier;
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tests/support/compiler_proof_inputs_v3.rs"
-        ));
-    }
-
-    #[test]
-    fn v4_function_binding_rejects_ordinary_singleton_and_pair_results() {
-        let proof = compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4(0x20);
-        let original = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
-            proof.semantic_mir(), fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default()).unwrap();
-        let (_, module) =
-            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
-                proof.kernel_ir().to_vec(),
-            )
-            .unwrap();
-        let correspondence =
-            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(proof.correspondence()).unwrap();
-        validate_lossless_correspondence_v4(&original, &module, &correspondence).unwrap();
-        for width in [1, 2] {
-            let source = compiler_proof_inputs_v3::ordinary_aggregate_result_owner_v1(0x20, width);
-            assert_eq!(
-                source.semantic().functions()[0].abi().extern_abi(),
-                fe2o3_mir_model::semantic_mir_v1::SemanticExternAbiV1::Rust
-            );
-            for role in [
-                fe2o3_kernel_ir::FunctionRole::KernelEntry,
-                fe2o3_kernel_ir::FunctionRole::InternalHelper,
-            ] {
-                let mut module = module.clone();
-                module.functions[0].role = role;
-                if role == fe2o3_kernel_ir::FunctionRole::InternalHelper {
-                    module.kernels.clear();
-                }
-                fe2o3_kernel_ir::verify_module(&module).unwrap();
-                assert!(matches!(
-                    validate_lossless_correspondence_v4(
-                        source.semantic(),
-                        &module,
-                        &correspondence
-                    ),
-                    Err(
-                        CompilerProofInputValidationErrorV3::StructuralCorrespondence {
-                            detail: "V4/V5 correspondence does not encode aggregate result components",
-                        }
-                    )
-                ));
-            }
-        }
-    }
-
-    #[test]
-    fn v4_parameter_envelope_rejects_singleton_projection_independently_of_rows() {
-        let proof = compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4(0x20);
-        let (_, module) =
-            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
-                proof.kernel_ir().to_vec(),
-            )
-            .unwrap();
-        let correspondence =
-            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(proof.correspondence()).unwrap();
-        let source = compiler_proof_inputs_v3::ordinary_aggregate_parameter_owner_v1(0x20);
-        assert!(
-            fe2o3_lower_mir_kernel::legacy_correspondence_source_results_supported_v4(
-                source.semantic()
-            )
-        );
-        assert!(
-            !fe2o3_lower_mir_kernel::legacy_correspondence_source_parameters_supported_v4(
-                source.semantic()
-            )
-        );
-        assert!(matches!(
-            validate_lossless_correspondence_v4(source.semantic(), &module, &correspondence),
-            Err(
-                CompilerProofInputValidationErrorV3::StructuralCorrespondence {
-                    detail: "V4/V5 correspondence does not encode projected or ignored parameter components",
-                }
-            )
-        ));
-    }
-
-    #[test]
-    fn v4_function_binding_requires_an_actual_kernel_entry() {
-        let proof = compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4(0x20);
-        let semantic = AdmittedInertSemanticMirV1::decode_current_production_canonical(
-            proof.semantic_mir(),
-            SemanticMirLimitsV1::default(),
-        )
-        .unwrap();
-        let (_, mut module) = VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
-            proof.kernel_ir().to_vec(),
-        )
-        .unwrap();
-        let correspondence =
-            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(proof.correspondence()).unwrap();
-        validate_lossless_correspondence_v4(&semantic, &module, &correspondence).unwrap();
-        module.kernels.clear();
-        module.functions[0].role = fe2o3_kernel_ir::FunctionRole::InternalHelper;
-        fe2o3_kernel_ir::verify_module(&module).unwrap();
-        assert!(matches!(
-            validate_lossless_correspondence_v4(&semantic, &module, &correspondence),
-            Err(
-                CompilerProofInputValidationErrorV3::StructuralCorrespondence {
-                    detail: "correspondence entry is not the selected source kernel body",
-                }
-            )
-        ));
-    }
-
-    #[test]
-    fn frozen_result_envelope_preserves_exact_wrappers_and_rejects_cross_body_calls() {
-        use compiler_proof_inputs_v3::{
-            ResultWrapperMutationV1 as Mutation, wrapped_result_owner_v1,
-        };
-        use fe2o3_lower_mir_kernel::{
-            ProductionSemanticKirLimitsV1, ProductionSemanticKirOwnerV1,
-            legacy_correspondence_source_results_supported_v4,
-        };
-        let source = wrapped_result_owner_v1(0x20, Mutation::None);
-        let selected = source.semantic().select_kernel_body_v1().unwrap();
-        assert!(selected.has_transparent_result_wrapper());
-        assert!(legacy_correspondence_source_results_supported_v4(
-            source.semantic()
-        ));
-        let owner = ProductionSemanticKirOwnerV1::try_lower(
-            source,
-            ProductionSemanticKirLimitsV1::default(),
-        )
-        .unwrap();
-        let semantic = owner.semantic().semantic();
-        let report =
-            analyze_semantic_u32_induction_no_overflow_v1(semantic, selected.root()).unwrap();
-        let v4 = InertCanonicalMirToKirCorrespondenceEvidenceV4::from_live_owner(&owner, &report)
-            .unwrap();
-        InertCanonicalMirToKirCorrespondenceEvidenceV5::from_live_owner(&owner, &report).unwrap();
-        validate_lossless_correspondence_v4(semantic, owner.module(), &v4).unwrap();
-        for mutation in [
-            Mutation::Computes,
-            Mutation::CrossCall,
-            Mutation::CrossTailCall,
-        ] {
-            let source = wrapped_result_owner_v1(0x20, mutation);
-            if !matches!(mutation, Mutation::Computes) {
-                let bodies = source
-                    .semantic()
-                    .roots()
-                    .iter()
-                    .map(|root| {
-                        source
-                            .semantic()
-                            .select_kernel_body_for_root_v1(*root)
-                            .unwrap()
-                            .body()
-                            .index()
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(bodies, [0, 2]);
-            }
-            assert!(!legacy_correspondence_source_results_supported_v4(
-                source.semantic()
-            ));
-        }
-    }
-
-    #[test]
-    fn v4_rejects_rust_call_even_when_expansion_has_no_parameters() {
-        let proof = compiler_proof_inputs_v3::canonical_compiler_proof_inputs_v4(0x20);
-        let semantic = fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1::decode_current_production_canonical(
-            proof.semantic_mir(), fe2o3_mir_model::semantic_mir_v1::SemanticMirLimitsV1::default(),
-        ).unwrap();
-        let (_, module) =
-            fe2o3_kernel_ir::VerifiedCanonicalKernelIrV8::from_canonical_bytes_with_module(
-                proof.kernel_ir().to_vec(),
-            )
-            .unwrap();
-        let body = module.functions[0].body.as_ref().unwrap();
-        let ordinary = &semantic.functions()[0];
-        let rust_call = compiler_proof_inputs_v3::rust_call_empty_helper_v28(0x20);
-        let correspondence =
-            InertCanonicalMirToKirCorrespondenceEvidenceV4::decode(proof.correspondence()).unwrap();
-        let bodies = BTreeMap::from([(0, body)]);
-        assert!(
-            validate_parameter_bindings_v4(
-                &correspondence,
-                &BTreeMap::from([(0, ordinary)]),
-                &bodies
-            )
-            .is_ok()
-        );
-        assert!(matches!(
-            validate_parameter_bindings_v4(
-                &correspondence,
-                &BTreeMap::from([(0, &rust_call)]),
-                &bodies
-            ),
-            Err(
-                CompilerProofInputValidationErrorV3::StructuralCorrespondence {
-                    detail: "V4 parameter correspondence does not encode RustCall components",
-                }
-            )
-        ));
-    }
-}
+mod rust_call_parameter_tests;

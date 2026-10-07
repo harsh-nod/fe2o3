@@ -3812,6 +3812,28 @@ pub(crate) mod semantic_v3 {
     }
 
     impl CompilerModuleHandoffConsumptionTokenV3 {
+        /// Retains original lock descriptions for an authenticated private transfer.
+        ///
+        /// Only nonrepairing descriptor-root observations are supported. This
+        /// duplicates lock custody, not the semantic token or compiler authority.
+        pub fn retain_observed_lock_descriptors(
+            &self,
+        ) -> Result<crate::CompilerModuleHandoffLockRetentionV3, CompilerModuleHandoffErrorV3>
+        {
+            if !self.binding.output.observation_only {
+                return Err(CompilerModuleHandoffErrorV3::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "lock retention requires a nonrepairing observer token",
+                )));
+            }
+            self.revalidate_locked_currentness()?;
+            let retained =
+                crate::CompilerModuleHandoffLockRetentionV3::retain_observer_lock(&self._lock)
+                    .map_err(CompilerModuleHandoffErrorV3::Io)?;
+            self.revalidate_locked_currentness()?;
+            Ok(retained)
+        }
+
         /// Borrows the strictly decoded inert handoff while this token keeps
         /// the cooperative lock held.
         ///
@@ -4117,6 +4139,41 @@ pub(crate) mod semantic_v3 {
         slot: CompilerModuleHandoffSlotV3,
     ) -> Result<CompilerModuleHandoffReceiptV3, CompilerModuleHandoffErrorV3> {
         recover_receipt_in_slot_v3(output_dir, producer, attempt, slot)
+    }
+
+    /// Observes a committed publication without repairing or creating client files.
+    ///
+    /// Returns `Busy` instead of waiting for cooperative locks. One original lock
+    /// spans receipt reconstruction, lease admission and returned token custody.
+    /// Missing locks and crash residue reject; reacquisition remains nonrepairing.
+    /// Filesystem operations have no hard wall-clock bound. This grants no authority.
+    pub fn try_observe_compiler_module_handoff_currentness_in_slot_v3(
+        output_dir: &Path,
+        producer: &ProducerIdentity,
+        attempt: BuildAttempt,
+        slot: CompilerModuleHandoffSlotV3,
+    ) -> Result<
+        (
+            CompilerModuleHandoffCurrentnessLeaseV3,
+            CompilerModuleHandoffConsumptionTokenV3,
+        ),
+        CompilerModuleHandoffErrorV3,
+    > {
+        let (binding, lock) = currentness::observe::<HandoffV3Schema>(
+            output_dir,
+            producer,
+            attempt,
+            slot,
+            &mut Resources::Legacy,
+        )
+        .map_err(engine_error_v3)?;
+        let handoff = load_current_handoff_locked(&binding)?;
+        let token = CompilerModuleHandoffConsumptionTokenV3 {
+            binding: Arc::clone(&binding),
+            handoff,
+            _lock: lock,
+        };
+        Ok((CompilerModuleHandoffCurrentnessLeaseV3 { binding }, token))
     }
 
     /// Atomically publishes opaque receipt bytes beside the exact current V3 handoff subject.
@@ -4854,6 +4911,9 @@ pub(crate) mod semantic_v3 {
 
     #[cfg(test)]
     pub(in crate::compiler_module_handoff) mod tests {
+        mod lock_retention;
+        mod observation;
+
         use super::*;
         use crate::{BuildInvocation, BuildSession, begin_build_attempt};
         use fe2o3_build_authority::CompilerClosureV2;
@@ -7249,6 +7309,7 @@ pub use semantic_v3::{
     recover_compiler_execution_receipt_transport_v1,
     recover_compiler_execution_receipt_transport_with_currentness_v1,
     recover_compiler_module_handoff_receipt_in_slot_v3, recover_compiler_module_handoff_receipt_v3,
+    try_observe_compiler_module_handoff_currentness_in_slot_v3,
 };
 
 #[cfg(test)]

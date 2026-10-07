@@ -28,7 +28,7 @@ device descriptors. This is not MI350 device, XNACK, memory, queue, or dispatch
 admission. Gfx950 observations cannot obtain the gfx942 queue-resource plan or
 gfx942 XGMI-route token, and gfx950 loader closures reject at both gfx942
 executable-preparation paths. An MI350 execution profile still requires its
-own queue-resource geometry and memory/queue integration; see issue #274.
+own native memory/queue integration; see issue #274.
 
 The additive `bind_gfx950_xnack_minus` entry returns a distinct
 `CheckedGfx950XnackMinusDevice` for the exact MI350 profile declared in
@@ -46,6 +46,17 @@ state, but the token grants no VM authority. Independent C layout oracles for
 the MI350 headers agree with the reused KFD/DRM wire layouts; the separate
 profile records the MI350 source provenance without changing the gfx942
 admission manifest.
+
+`gfx950_queue_resources::plan_gfx950_aql_queue_resources_v1` derives
+read-only ring, control, EOP and CWSR geometry for the separately pinned MI350
+SPX/NPS1 profile. Its checked context, debug, header and shadow-page offsets
+come from independent KFD/ROCr source observations, not gfx942 constants.
+The separately branded plan cannot enter gfx942 native APIs. It performs no
+device admission, allocation, mmap, ioctl, header write or queue submission.
+Source hashes do not authenticate the loaded module, and a topology snapshot
+does not establish XNACK state or native currentness. Protected native gfx950
+device, memory, queue and directional SDMA authority remain unimplemented;
+the separately feature-gated engineering path does not grant that authority.
 
 The public safe API does not expose file descriptors or raw ioctl arguments.
 The R1 composition path consumes an explicitly selected unique ID and returns a
@@ -87,6 +98,18 @@ an all-reset generation. Under the pinned driver contract this detects
 subscribed whole-GPU resets, VRAM-loss resets, and all changes visible through
 the admitted identity, process, descriptor, XNACK, aperture, and topology
 queries.
+
+Active retained queues keep every existing pre/post operation boundary but use
+a narrower operational observation at each boundary: opener PID first, a
+zero-timeout non-draining reset-fd readiness check, one dedicated wrapping
+`AMDGPU_INFO_VRAM_LOST_COUNTER` query compared with admission, and a closing
+readiness check. Process-incarnation and mount-namespace reads, descriptor
+identity, KFD version/XNACK, full DRM identity, topology, and apertures remain
+full lifecycle observations, including persistent-control open and explicit
+release. The readiness-to-nonempty-FIFO mapping is a contract of the pinned KFD
+source, not authentication of the loaded kernel. Poll errors, hangup, invalid
+descriptors, and unexpected readiness bits fail closed and permanently poison
+the checked device.
 
 This crate checks userspace schema admission and encapsulates descriptor
 ownership. Verus proves the pure canonical-record projection and abstract
@@ -313,7 +336,22 @@ initialization declaration into copy evidence or expose a numeric address.
 While a native queue remains live, every detach, rebind, allocation,
 initialization, or release mutation temporarily restores that same model
 foundation to the shared session and reclaims the updated foundation before
-returning to queue operation.
+returning to queue operation. Identity and memory now move with a private,
+non-cloneable structural-invariant certificate. The certificate is minted only
+after one full identity/memory/device/VM validation, binds the exact session,
+domain, selected device, VM, issuer, loan generation, and monotonic mutation
+revision, and makes ordinary loan/retake authentication independent of journal
+depth. Every sealed shared-memory projection advances the revision, including
+mutations performed by the public dispatch-data preparation callback. Final
+queue restoration performs one full validation, then revokes the certificate
+so the returned session may later transfer to a fresh queue occurrence. Before
+native allocation, map, unmap, release, plan admission, or queue destruction,
+the implementation preflights the exact remaining revision capacity. Plan
+admission exhaustion retains authority inside the terminal native engine; the
+initial-queue wrapper then returns no recoverable Rust authority. Consuming
+memory-token exhaustion quarantines the shared session. Both paths permanently
+close the process gate. This is fail-closed boundary safety, not evidence about
+practical counter frequency or performance.
 The dedicated bounded lease journal is not projected into the runtime memory
 model and has no Verus-to-Rust or syscall refinement. Ordinary C3 leases still
 grant no CPU mapping, initialization, sync or async copy, alias, quiescence,
@@ -581,6 +619,15 @@ or model-restoration failure yields no recoverable returned state. The consumed
 session and its no-effect drops retain any possibly live native resources for
 process teardown; there is no partial in-process cleanup or retry.
 
+Rust unwind across a live model loan is caught inside the private custody
+envelope. The implementation attempts exact retake, terminally poisons the
+queue and permanently closes the process runtime gate if retake fails on either
+normal return or unwind, and then resumes the original panic on unwind. Borrowed
+SDMA and selected-lane owners are restored before that resume. If a panicking
+callee already consumed an owner, only terminal/process poison disposition is
+known; no retained owner or native-resource custody is claimed. Drop still
+performs no native cleanup.
+
 There is no initialization boolean or caller-supplied read premise. Implicit
 fields outside the exact geometry/dynamic-LDS subset remain unsupported.
 Per-segment GPU permission behavior for the uniformly mapped code allocation,
@@ -588,6 +635,9 @@ concrete effect/alias semantics, CPU/GPU coherence, firmware packet execution,
 acquire-observed device-write visibility, and quiescence remain Contracted. The host
 state machines and mock fault tests are not a concrete Verus or machine
 refinement; the public custody path alone is not hardware execution evidence.
+The certificate is likewise not currentness evidence, a syscall-to-model or
+Rust-to-Verus refinement proof, measured performance evidence, or a hardware
+validity claim.
 
 ### C6 unbacked device-content copy foundation
 
@@ -711,6 +761,37 @@ exercises the shared post-publication cursor/state transition, not the outer
 live-session currentness/poison path. These tests do not claim live native fault
 injection or firmware/coherence proof.
 
+R56 adds a separate experimental
+`enable_gfx942_two_native_sdma_logical_mux_v2` profile. It admits logical lane
+counts 2, 4, 8, 14, or 16 while creating exactly two persistent native queues,
+one on ordinary engine 0 and one on engine 1. A V2 batch contains 2 through 126
+requests. Request `i` is labeled lane `(cursor + i) % L` and assigned to native
+queue `lane % 2`; each native shard is the stable filter of original request
+order. Both nonempty shards are fully prepared before either publication, and
+each has at most 63 copy-plus-fence packets, one write-pointer publication, and
+one doorbell. Completion binds two exact tails and then performs the same full
+original-order audit and all-or-nothing custody retirement as V1. Singleton
+batches are rejected, and the logical cursor advances only after both native
+publications and closing currentness succeed.
+
+A lower-layer-classified first-native no-effect publication failure returns
+the original request vector in canonical order for retry. Any confirmed or
+indeterminate native shard, closing-currentness loss, identity mismatch, or
+post-publication unwind is terminal and retains audit-only custody through
+process teardown.
+
+The mux intentionally imposes ordering between logical lanes that share one
+native queue. It is not HIP stream independence, independent progress,
+priority, event, capture, or per-stream synchronization parity. Its manifest is
+`GFX942_SDMA_LOGICAL_MUX_MANIFEST_V2`. The benchmark accepts
+`logical-mux{2,4,8,14,16}` with final mode `logical-mux` or
+`logical-mux-profiled`; the intended first comparison is depth 112 against the
+corresponding old N-native aggregate profile. Those rows use the separate
+`fe2o3.async-copy-logical-mux-benchmark.v1` schema and identify both native
+queue IDs, exact engine placement, logical and native depths, and the semantic
+exclusion. No hardware, performance, HIP/HSA parity, or formal-refinement claim
+follows until exact retained evidence exists.
+
 `GFX942_SDMA_COPY_MANIFEST_V1` pins the additive KFD SDMA schema and topology
 capability sidecar, reviewed ROCr revision, direction policy and packet sources,
 packet bytes, bounds, currentness, failure, and teardown contracts. Verus proves
@@ -727,6 +808,7 @@ Representative commands are:
 ```text
 cargo run -p fe2o3-kfd --example kfd-sdma-copy-benchmark -- <gpu> <bytes> <depth> <warmups> <samples> directional
 cargo run -p fe2o3-kfd --example kfd-sdma-copy-benchmark -- <gpu> <bytes> <depth> <warmups> <samples> striped8
+cargo run -p fe2o3-kfd --example kfd-sdma-copy-benchmark -- <gpu> <bytes> 112 <warmups> <samples> logical-mux16 logical-mux
 cargo run -p fe2o3-kfd --example kfd-sdma-multi-device-benchmark -- <gpu0> <gpu1> <bytes> <depth-per-device> <warmups> <samples>
 cargo run -p fe2o3-kfd --example kfd-sdma-xgmi-peer-benchmark -- <gpu0> <gpu1> <bytes> <depth> <warmups> <samples>
 ```

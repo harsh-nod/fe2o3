@@ -1,5 +1,8 @@
 //! Bounded subprocess transport for terminal native runtime backends.
 
+mod request_admission;
+pub use request_admission::*;
+
 use core::fmt;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -1448,8 +1451,32 @@ where
     R: Read,
     W: Write,
 {
+    serve_runtime_backend_worker_v5_in_place(&mut backend, input, output)
+}
+
+/// Serves the canonical bounded Worker V5 protocol without consuming the
+/// backend owner.
+///
+/// This is the child-process ownership form: a thread-affine native backend can
+/// remain on the serving thread and perform explicit teardown after the
+/// canonical empty shutdown frame. An I/O or protocol error returns without
+/// implying native quiescence or running teardown.
+pub fn serve_runtime_backend_worker_v5_in_place<B, R, W>(
+    backend: &mut B,
+    input: R,
+    output: W,
+) -> Result<(), RuntimeWorkerErrorV1>
+where
+    B: RuntimeFlushBackendV1
+        + RuntimeAsyncCopyBackendV1
+        + RuntimeCancellationBackendV1
+        + RuntimeAtomicBackendV1
+        + RuntimeCollectiveBackendV1,
+    R: Read,
+    W: Write,
+{
     serve_runtime_worker_v5(input, output, |request| {
-        dispatch_binary_request_v5(&mut backend, request)
+        dispatch_binary_request_v5(backend, request)
     })
 }
 
@@ -1460,8 +1487,19 @@ fn dispatch_binary_request_v4<B>(
 where
     B: RuntimeFlushBackendV1 + RuntimeAsyncCopyBackendV1 + RuntimeCancellationBackendV1,
 {
+    dispatch_binary_request_v4_scoped(backend, request, None)
+}
+
+fn dispatch_binary_request_v4_scoped<B>(
+    backend: &mut B,
+    request: &[u8],
+    allocations: Option<&dyn Fn(u64) -> bool>,
+) -> Result<Vec<u8>, RuntimeWorkerErrorV1>
+where
+    B: RuntimeFlushBackendV1 + RuntimeAsyncCopyBackendV1 + RuntimeCancellationBackendV1,
+{
     let Some(operation) = request.first().copied() else {
-        return dispatch_binary_request_v1(backend, request);
+        return dispatch_binary_request_v1_scoped(backend, request, allocations);
     };
     if !matches!(
         operation,
@@ -1471,7 +1509,7 @@ where
             | OP_CANCEL_V4
             | OP_DRAIN_V4
     ) {
-        return dispatch_binary_request_v1(backend, request);
+        return dispatch_binary_request_v1_scoped(backend, request, allocations);
     }
     let mut input = BinaryCursorV1::new(request);
     let _operation = binary_u8_v1(&mut input)?;
@@ -1493,6 +1531,12 @@ where
             let destination = binary_region_v1(&mut input)?;
             let dependencies = binary_dependencies_v1(&mut input)?;
             require_binary_end_v1(&input)?;
+            if let Some(rejection) = reject_foreign_allocations_v1(
+                allocations,
+                [source.allocation, destination.allocation],
+            ) {
+                return Ok(rejection);
+            }
             encode_handle_response_v1(backend.copy_async_v1(
                 stream,
                 source,
@@ -1547,11 +1591,26 @@ where
         + RuntimeAtomicBackendV1
         + RuntimeCollectiveBackendV1,
 {
+    dispatch_binary_request_v5_scoped(backend, request, None)
+}
+
+fn dispatch_binary_request_v5_scoped<B>(
+    backend: &mut B,
+    request: &[u8],
+    allocations: Option<&dyn Fn(u64) -> bool>,
+) -> Result<Vec<u8>, RuntimeWorkerErrorV1>
+where
+    B: RuntimeFlushBackendV1
+        + RuntimeAsyncCopyBackendV1
+        + RuntimeCancellationBackendV1
+        + RuntimeAtomicBackendV1
+        + RuntimeCollectiveBackendV1,
+{
     let Some(operation) = request.first().copied() else {
-        return dispatch_binary_request_v4(backend, request);
+        return dispatch_binary_request_v4_scoped(backend, request, allocations);
     };
     if !matches!(operation, OP_SUBMIT_ATOMIC_V5 | OP_SUBMIT_COLLECTIVE_V5) {
-        return dispatch_binary_request_v4(backend, request);
+        return dispatch_binary_request_v4_scoped(backend, request, allocations);
     }
     let mut input = BinaryCursorV1::new(request);
     let _operation = binary_u8_v1(&mut input)?;
@@ -1574,6 +1633,15 @@ where
                 geometry: launch.geometry,
             };
             validate_atomic_contract_request_v5(contract, launch.geometry)?;
+            if let Some(rejection) = reject_foreign_allocations_v1(
+                allocations,
+                launch
+                    .bindings
+                    .iter()
+                    .map(|binding| binding.region.allocation),
+            ) {
+                return Ok(rejection);
+            }
             encode_handle_response_v1(backend.submit_atomic_v1(
                 launch.with_semantic_v5(BackendSemanticLaunchV1::Atomic(contract)),
             ))?
@@ -1594,6 +1662,15 @@ where
                 geometry: launch.geometry,
             };
             validate_collective_contract_request_v5(contract, launch.geometry)?;
+            if let Some(rejection) = reject_foreign_allocations_v1(
+                allocations,
+                launch
+                    .bindings
+                    .iter()
+                    .map(|binding| binding.region.allocation),
+            ) {
+                return Ok(rejection);
+            }
             encode_handle_response_v1(backend.submit_collective_v1(
                 launch.with_semantic_v5(BackendSemanticLaunchV1::Collective(contract)),
             ))?
@@ -1613,6 +1690,14 @@ fn dispatch_binary_request_v1<B: RuntimeBackendV1>(
     backend: &mut B,
     request: &[u8],
 ) -> Result<Vec<u8>, RuntimeWorkerErrorV1> {
+    dispatch_binary_request_v1_scoped(backend, request, None)
+}
+
+fn dispatch_binary_request_v1_scoped<B: RuntimeBackendV1>(
+    backend: &mut B,
+    request: &[u8],
+    allocations: Option<&dyn Fn(u64) -> bool>,
+) -> Result<Vec<u8>, RuntimeWorkerErrorV1> {
     let mut input = BinaryCursorV1::new(request);
     let operation = input
         .u8()
@@ -1620,28 +1705,7 @@ fn dispatch_binary_request_v1<B: RuntimeBackendV1>(
     let response = match operation {
         OP_ENUMERATE_DEVICES_V1 => {
             require_binary_end_v1(&input)?;
-            encode_backend_response_v1(backend.enumerate_devices_v1(), |output, devices| {
-                if devices.len() > crate::MAX_RUNTIME_DEVICES_V1 {
-                    return Err(RuntimeBinaryCodecErrorV1::Limit("device count"));
-                }
-                put_count_v1(output, devices.len(), "device count")?;
-                for device in devices {
-                    put_u64_v1(output, device.backend_device);
-                    put_blob_v1(
-                        output,
-                        device.name.as_bytes(),
-                        crate::MAX_RUNTIME_DEVICE_NAME_BYTES_V1,
-                    )?;
-                    put_blob_v1(
-                        output,
-                        device.target.as_bytes(),
-                        crate::MAX_RUNTIME_DEVICE_TARGET_BYTES_V1,
-                    )?;
-                    put_u64_v1(output, device.global_memory_bytes);
-                    put_u16_v1(output, capabilities_bits_v1(device.capabilities));
-                }
-                Ok(())
-            })?
+            encode_devices_response_v1(backend.enumerate_devices_v1())?
         }
         OP_CREATE_STREAM_V1 => {
             let device = binary_u64_v1(&mut input)?;
@@ -1672,6 +1736,9 @@ fn dispatch_binary_request_v1<B: RuntimeBackendV1>(
             let byte_offset = binary_u64_v1(&mut input)?;
             let bytes = binary_blob_v1(&mut input, MAX_RUNTIME_WORKER_FRAME_BYTES_V1)?;
             require_binary_end_v1(&input)?;
+            if let Some(rejection) = reject_foreign_allocations_v1(allocations, [allocation]) {
+                return Ok(rejection);
+            }
             encode_unit_response_v1(backend.write_allocation_v1(allocation, byte_offset, bytes))?
         }
         OP_READ_ALLOCATION_V1 => {
@@ -1682,6 +1749,9 @@ fn dispatch_binary_request_v1<B: RuntimeBackendV1>(
                 return Err(RuntimeWorkerErrorV1::Protocol("allocation read too large"));
             }
             require_binary_end_v1(&input)?;
+            if let Some(rejection) = reject_foreign_allocations_v1(allocations, [allocation]) {
+                return Ok(rejection);
+            }
             let mut bytes = vec![0; byte_len];
             match backend.read_allocation_v1(allocation, byte_offset, &mut bytes) {
                 Ok(()) => encode_success_response_v1(|output| {
@@ -1747,6 +1817,12 @@ fn dispatch_binary_request_v1<B: RuntimeBackendV1>(
             .map_err(|_| RuntimeWorkerErrorV1::Protocol("invalid launch geometry"))?;
             require_binary_end_v1(&input)?;
             validate_binary_bindings_v1(explicit_kernarg, &bindings)?;
+            if let Some(rejection) = reject_foreign_allocations_v1(
+                allocations,
+                bindings.iter().map(|binding| binding.region.allocation),
+            ) {
+                return Ok(rejection);
+            }
             encode_handle_response_v1(backend.submit_v1(BackendLaunchV1 {
                 stream,
                 kernel,
@@ -1798,6 +1874,12 @@ fn dispatch_binary_request_v1<B: RuntimeBackendV1>(
             let destination = binary_region_v1(&mut input)?;
             let dependencies = binary_dependencies_v1(&mut input)?;
             require_binary_end_v1(&input)?;
+            if let Some(rejection) = reject_foreign_allocations_v1(
+                allocations,
+                [source.allocation, destination.allocation],
+            ) {
+                return Ok(rejection);
+            }
             encode_handle_response_v1(backend.peer_copy_v1(
                 stream,
                 source,
@@ -1818,6 +1900,18 @@ fn dispatch_binary_request_v1<B: RuntimeBackendV1>(
         });
     }
     Ok(response)
+}
+
+fn reject_foreign_allocations_v1(
+    scope: Option<&dyn Fn(u64) -> bool>,
+    handles: impl IntoIterator<Item = u64>,
+) -> Option<Vec<u8>> {
+    scope.and_then(|owns| {
+        handles
+            .into_iter()
+            .any(|handle| !owns(handle))
+            .then(|| encode_backend_failure_v1(RuntimeBackendFailureV1::Rejected(())))
+    })
 }
 
 fn require_binary_end_v1(input: &BinaryCursorV1<'_>) -> Result<(), RuntimeWorkerErrorV1> {
@@ -2096,6 +2190,33 @@ fn encode_backend_response_v1<T, E>(
         Ok(value) => encode_success_response_v1(|output| encode(output, value)),
         Err(failure) => Ok(encode_backend_failure_v1(failure)),
     }
+}
+
+fn encode_devices_response_v1<E>(
+    result: Result<Vec<BackendDeviceDescriptionV1>, RuntimeBackendFailureV1<E>>,
+) -> Result<Vec<u8>, RuntimeWorkerErrorV1> {
+    encode_backend_response_v1(result, |output, devices| {
+        if devices.len() > crate::MAX_RUNTIME_DEVICES_V1 {
+            return Err(RuntimeBinaryCodecErrorV1::Limit("device count"));
+        }
+        put_count_v1(output, devices.len(), "device count")?;
+        for device in devices {
+            put_u64_v1(output, device.backend_device);
+            put_blob_v1(
+                output,
+                device.name.as_bytes(),
+                crate::MAX_RUNTIME_DEVICE_NAME_BYTES_V1,
+            )?;
+            put_blob_v1(
+                output,
+                device.target.as_bytes(),
+                crate::MAX_RUNTIME_DEVICE_TARGET_BYTES_V1,
+            )?;
+            put_u64_v1(output, device.global_memory_bytes);
+            put_u16_v1(output, capabilities_bits_v1(device.capabilities));
+        }
+        Ok(())
+    })
 }
 
 fn encode_handle_response_v1<E>(
@@ -3705,7 +3826,10 @@ fn read_frame_v1(input: &mut impl Read) -> Result<Vec<u8>, RuntimeWorkerErrorV1>
 
 #[cfg(test)]
 mod tests {
+    mod transport_deadlines;
+
     use super::*;
+    mod allocation_outcome_tests;
     use crate::{
         RuntimeAccessV1, RuntimeAllocationIdV1, RuntimeArgumentsV1, RuntimeAsyncEngineConfigV1,
         RuntimeAsyncEngineV1, RuntimeAsyncEventErrorV1, RuntimeAsyncProgressConfigV1,
@@ -4106,6 +4230,7 @@ mod tests {
     struct ProtocolBackendV1 {
         next: u64,
         calls: Vec<&'static str>,
+        settled_allocation: bool,
         last_atomic: Option<RuntimeAtomicLaunchContractV1>,
         last_collective: Option<RuntimeCollectiveLaunchContractV1>,
     }
@@ -4173,7 +4298,33 @@ mod tests {
             _byte_len: u64,
             _alignment: u64,
         ) -> Result<u64, RuntimeBackendFailureV1<Self::Error>> {
+            if self.settled_allocation {
+                self.calls.push("allocate_legacy_quiescent");
+                return Err(RuntimeBackendFailureV1::Quiescent(TestCodecError(
+                    "settled allocation",
+                )));
+            }
             Ok(self.handle("allocate"))
+        }
+
+        fn allocate_with_outcome_v1(
+            &mut self,
+            device: u64,
+            kind: RuntimeMemoryKindV1,
+            byte_len: u64,
+            alignment: u64,
+        ) -> Result<
+            crate::RuntimeBackendAllocationOutcomeV1<Self::Error>,
+            RuntimeBackendFailureV1<Self::Error>,
+        > {
+            if self.settled_allocation {
+                self.calls.push("allocate_settled");
+                return Ok(crate::RuntimeBackendAllocationOutcomeV1::SettledNoOwner(
+                    TestCodecError("settled allocation"),
+                ));
+            }
+            self.allocate_v1(device, kind, byte_len, alignment)
+                .map(crate::RuntimeBackendAllocationOutcomeV1::Allocated)
         }
 
         fn release_allocation_v1(
@@ -6511,6 +6662,134 @@ time.sleep(60)
     }
 
     #[test]
+    fn v5_in_place_server_returns_backend_only_after_canonical_shutdown_frame() {
+        let mut requests = Vec::new();
+        write_frame_v1(&mut requests, &[]).unwrap();
+        let mut responses = Vec::new();
+        let mut backend = ProtocolBackendV1::default();
+
+        serve_runtime_backend_worker_v5_in_place(
+            &mut backend,
+            Cursor::new(requests),
+            &mut responses,
+        )
+        .unwrap();
+
+        assert!(backend.calls.is_empty());
+        assert_eq!(
+            read_frame_v1(&mut Cursor::new(responses)).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V5
+        );
+        assert_eq!(backend.enumerate_devices_v1().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn v5_in_place_server_does_not_treat_truncated_eof_as_clean_shutdown() {
+        let mut responses = Vec::new();
+        let mut backend = ProtocolBackendV1::default();
+
+        let error = serve_runtime_backend_worker_v5_in_place(
+            &mut backend,
+            Cursor::new(Vec::<u8>::new()),
+            &mut responses,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeWorkerErrorV1::Io(ref error)
+                if error.kind() == io::ErrorKind::UnexpectedEof
+        ));
+        assert!(backend.calls.is_empty());
+        assert_eq!(
+            read_frame_v1(&mut Cursor::new(responses)).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V5
+        );
+        assert_eq!(backend.enumerate_devices_v1().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn v5_in_place_server_rejects_every_truncated_frame_header() {
+        for byte_len in 1..size_of::<u32>() {
+            let mut responses = Vec::new();
+            let mut backend = ProtocolBackendV1::default();
+
+            let error = serve_runtime_backend_worker_v5_in_place(
+                &mut backend,
+                Cursor::new(vec![0_u8; byte_len]),
+                &mut responses,
+            )
+            .unwrap_err();
+
+            assert!(matches!(
+                error,
+                RuntimeWorkerErrorV1::Io(ref error)
+                    if error.kind() == io::ErrorKind::UnexpectedEof
+            ));
+            assert!(backend.calls.is_empty());
+            assert_eq!(
+                read_frame_v1(&mut Cursor::new(responses)).unwrap(),
+                RUNTIME_WORKER_HANDSHAKE_V5
+            );
+            assert_eq!(backend.enumerate_devices_v1().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn v5_in_place_server_rejects_truncated_frame_payload() {
+        let mut requests = 4_u32.to_le_bytes().to_vec();
+        requests.extend_from_slice(&[1, 2, 3]);
+        let mut responses = Vec::new();
+        let mut backend = ProtocolBackendV1::default();
+
+        let error = serve_runtime_backend_worker_v5_in_place(
+            &mut backend,
+            Cursor::new(requests),
+            &mut responses,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeWorkerErrorV1::Io(ref error)
+                if error.kind() == io::ErrorKind::UnexpectedEof
+        ));
+        assert!(backend.calls.is_empty());
+        assert_eq!(
+            read_frame_v1(&mut Cursor::new(responses)).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V5
+        );
+        assert_eq!(backend.enumerate_devices_v1().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn v5_in_place_server_rejects_oversized_declared_frame() {
+        let declared = MAX_RUNTIME_WORKER_FRAME_BYTES_V1 + 1;
+        let requests = u32::try_from(declared).unwrap().to_le_bytes();
+        let mut responses = Vec::new();
+        let mut backend = ProtocolBackendV1::default();
+
+        let error = serve_runtime_backend_worker_v5_in_place(
+            &mut backend,
+            Cursor::new(requests),
+            &mut responses,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeWorkerErrorV1::FrameTooLarge { actual, maximum }
+                if actual == declared && maximum == MAX_RUNTIME_WORKER_FRAME_BYTES_V1
+        ));
+        assert!(backend.calls.is_empty());
+        assert_eq!(
+            read_frame_v1(&mut Cursor::new(responses)).unwrap(),
+            RUNTIME_WORKER_HANDSHAKE_V5
+        );
+        assert_eq!(backend.enumerate_devices_v1().unwrap().len(), 1);
+    }
+
+    #[test]
     fn v4_and_v5_server_bounds_preserve_native_xgmi_hosting() {
         fn require_complete_v4_server_backend<B>()
         where
@@ -7527,170 +7806,6 @@ time.sleep(60)
         assert_delayed_wait_times_out_and_reaps(DELAYED_READ_WORKER_SERVER);
     }
 
-    #[test]
-    fn delayed_worker_response_cannot_extend_wait_deadline() {
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return;
-        }
-        assert_delayed_wait_times_out_and_reaps(DELAYED_RESPONSE_WORKER_SERVER);
-    }
-
-    #[test]
-    fn worker_wait_reserves_response_grace_inside_parent_deadline() {
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return;
-        }
-        let command = RuntimeWorkerCommandV1::new("python3")
-            .argument("-u")
-            .argument("-c")
-            .argument(WAIT_BUDGET_OBSERVER_WORKER_SERVER);
-        let mut backend = RuntimeWorkerBackendV1::spawn(
-            &command,
-            RuntimeBinaryCodecV1,
-            Duration::from_secs(2),
-            Duration::from_secs(2),
-        )
-        .unwrap();
-        let deadline = Instant::now() + Duration::from_millis(400);
-
-        assert_eq!(
-            backend.wait_v1(1, deadline).unwrap(),
-            BackendPollV1::Pending
-        );
-        assert!(Instant::now() < deadline);
-        assert!(!backend.is_terminal());
-    }
-
-    #[test]
-    fn decoded_terminal_failure_seals_the_worker_backend() {
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return;
-        }
-        let command = RuntimeWorkerCommandV1::new("python3")
-            .argument("-u")
-            .argument("-c")
-            .argument(SINGLE_RESPONSE_WORKER_SERVER);
-        let mut backend = RuntimeWorkerBackendV1::spawn(
-            &command,
-            TestWorkerCodecV1,
-            Duration::from_secs(2),
-            Duration::from_secs(2),
-        )
-        .unwrap();
-        assert!(matches!(
-            backend.enumerate_devices_v1(),
-            Err(RuntimeBackendFailureV1::Terminal(_))
-        ));
-        assert!(backend.is_terminal());
-        assert!(matches!(
-            backend.enumerate_devices_v1(),
-            Err(RuntimeBackendFailureV1::Terminal(
-                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited)
-            ))
-        ));
-    }
-
-    #[test]
-    fn response_shape_mismatch_seals_the_worker_backend() {
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return;
-        }
-        let command = RuntimeWorkerCommandV1::new("python3")
-            .argument("-u")
-            .argument("-c")
-            .argument(SINGLE_RESPONSE_WORKER_SERVER);
-        let mut backend = RuntimeWorkerBackendV1::spawn(
-            &command,
-            MismatchedCodecV1,
-            Duration::from_secs(2),
-            Duration::from_secs(2),
-        )
-        .unwrap();
-        assert!(matches!(
-            backend.create_stream_v1(1),
-            Err(RuntimeBackendFailureV1::Terminal(
-                RuntimeWorkerBackendErrorV1::Protocol("nonzero handle")
-            ))
-        ));
-        assert!(backend.is_terminal());
-        assert!(matches!(
-            backend.create_stream_v1(1),
-            Err(RuntimeBackendFailureV1::Terminal(
-                RuntimeWorkerBackendErrorV1::Transport(RuntimeWorkerErrorV1::WorkerExited)
-            ))
-        ));
-    }
-
-    #[test]
-    fn worker_backend_codec_drives_context_and_cleanup_over_child_process() {
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return;
-        }
-        let command = RuntimeWorkerCommandV1::new("python3")
-            .argument("-u")
-            .argument("-c")
-            .argument(TEST_WORKER_SERVER);
-        let backend = RuntimeWorkerBackendV1::spawn(
-            &command,
-            TestWorkerCodecV1,
-            Duration::from_secs(2),
-            Duration::from_secs(2),
-        )
-        .unwrap();
-        let mut context = RuntimeContextV1::open(backend).unwrap();
-        let device = context.devices()[0].id();
-        let stream = context.create_stream(device).unwrap();
-        let allocation = context
-            .allocate(device, RuntimeMemoryKindV1::DeviceLocal, 64, 16)
-            .unwrap();
-        let module = context.load_module(device, b"object").unwrap();
-        let kernel = context
-            .resolve_kernel::<WorkerArgumentsV1>(module, "kernel")
-            .unwrap();
-        let mut submission = context
-            .launch(
-                stream,
-                &kernel,
-                &WorkerArgumentsV1 { allocation },
-                RuntimeLaunchGeometryV1 {
-                    grid: [64, 1, 1],
-                    workgroup: [64, 1, 1],
-                    dynamic_shared_bytes: 0,
-                },
-                &[],
-            )
-            .unwrap();
-        assert_eq!(
-            context
-                .wait(&mut submission, Duration::from_secs(1))
-                .unwrap(),
-            crate::RuntimePollV1::Succeeded
-        );
-        context.record_event(&submission).unwrap();
-        let backend = context.shutdown().unwrap();
-        backend.shutdown(Duration::from_secs(2)).unwrap();
-    }
-
     fn assert_teardown_disconnects_full_response_channel(
         terminal: bool,
         child_succeeds: bool,
@@ -7764,71 +7879,5 @@ time.sleep(60)
             completed.try_recv().unwrap(),
             "teardown joined the reader without disconnecting its full response channel"
         );
-    }
-
-    #[test]
-    fn worker_termination_disconnects_full_response_channel() {
-        assert_teardown_disconnects_full_response_channel(false, true, |mut transport| {
-            transport.terminate();
-            assert!(transport.is_terminal());
-            assert!(transport.responses.is_none());
-            assert!(transport.reader.is_none());
-            assert!(transport.writer.is_none());
-            transport.terminate();
-        });
-    }
-
-    #[test]
-    fn worker_shutdown_disconnects_full_response_channel() {
-        assert_teardown_disconnects_full_response_channel(false, true, |transport| {
-            transport.shutdown(Duration::from_secs(2)).unwrap();
-        });
-    }
-
-    #[test]
-    fn failed_worker_shutdown_disconnects_full_response_channel() {
-        assert_teardown_disconnects_full_response_channel(false, false, |transport| {
-            assert!(matches!(
-                transport.shutdown(Duration::from_secs(2)),
-                Err(RuntimeWorkerErrorV1::WorkerExited)
-            ));
-        });
-    }
-
-    #[test]
-    fn terminal_worker_shutdown_disconnects_full_response_channel() {
-        assert_teardown_disconnects_full_response_channel(true, true, |transport| {
-            transport.shutdown(Duration::from_secs(2)).unwrap();
-        });
-    }
-
-    #[test]
-    fn worker_drop_disconnects_full_response_channel() {
-        assert_teardown_disconnects_full_response_channel(false, true, drop);
-    }
-
-    #[test]
-    fn terminal_worker_drop_disconnects_full_response_channel() {
-        assert_teardown_disconnects_full_response_channel(true, true, drop);
-    }
-
-    #[test]
-    fn worker_shutdown_rejects_deadline_overflow() {
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
-            return;
-        }
-        let command = RuntimeWorkerCommandV1::new("python3")
-            .argument("-u")
-            .argument("-c")
-            .argument(TEST_WORKER_SERVER);
-        let transport = RuntimeWorkerTransportV1::spawn(&command, Duration::from_secs(2)).unwrap();
-        assert!(matches!(
-            transport.shutdown(Duration::MAX),
-            Err(RuntimeWorkerErrorV1::InvalidDeadline)
-        ));
     }
 }

@@ -95,7 +95,7 @@ fn backing_is_zeroed_aligned_and_includes_rustix_padding() {
     let (buffer, armed) = guard.parts();
     assert_eq!(
         buffer.len(),
-        rustix::cmsg_space!(ScmRights(3), ScmRights(1))
+        rustix::cmsg_space!(ScmRights(5), ScmRights(1))
     );
     assert_eq!((buffer.as_ptr() as usize) % align_of::<libc::cmsghdr>(), 0);
     assert!(align_of::<Backing>() >= align_of::<usize>());

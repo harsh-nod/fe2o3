@@ -107,6 +107,9 @@ impl Admission<'_> {
     /// The V3 inherited entrypoint supplies its mandatory FD12 endpoint. The
     /// direct root launcher stages that ABI; unsupported indirect launches refuse.
     /// Root-owned publication observation and retirement are separate integrations.
+    /// Only an authenticated original-root native currentness gate selects the
+    /// reduced VerifyCurrent/Cancel role; argv, environment and client packets
+    /// cannot select it. The compiler gate retains its original occurrence path.
     pub fn serve_native_with_root_readiness(
         self,
         manifest: &Manifest,
@@ -130,10 +133,19 @@ impl Admission<'_> {
                 b,
                 root_control::TIMEOUT,
                 |a, deadline, b| {
-                    root.handshake(a, manifest, deadline, b)?;
-                    let (context, growth) = OccurrenceContext::from_root(root, manifest, b)?;
-                    b.reserve_storage(growth)?;
-                    Ok(Session::with_context(context))
+                    match root.handshake(a, manifest, deadline, b)? {
+                        None => {
+                            let (context, growth) = OccurrenceContext::from_root(root, manifest, b)?;
+                            b.reserve_storage(growth)?;
+                            Ok(Session::with_context(context))
+                        }
+                        Some(gate) => {
+                            b.reserve_storage(fe2o3_runtime_protocol::NativeApplicationCurrentnessRootRecordV1::STORAGE)?;
+                            let (root, growth) = root_control::CurrentnessRoot::from_authenticated(root, gate, b)?;
+                            b.reserve_storage(growth)?;
+                            Ok(Session::with_context(OccurrenceContext::from_currentness(root)))
+                        }
+                    }
                 },
             );
             result

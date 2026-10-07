@@ -129,6 +129,35 @@ fn request(slices: &[ConditionalDispatchSliceV1], sizes: &[usize]) -> Gfx942KfdD
 }
 
 #[test]
+fn request_parts_preserve_attached_conditional_premises_without_copying() {
+    let slices = [slice(0, 3, Some(0)), slice(1, 3, Some(1))];
+    let premises = premises(&slices, &[guarded(1)], 64).unwrap();
+    let identity = *premises.identity();
+    let slice_storage = premises.slices.as_ptr();
+    let read_storage = premises.reads.as_ptr();
+    let request = request(&slices, &[12, 12])
+        .with_conditional_premises_v1(premises)
+        .unwrap();
+    assert_eq!(
+        request
+            .inspection_v1()
+            .conditional_premises
+            .unwrap()
+            .identity(),
+        &identity
+    );
+    let parts = request.into_parts_v1();
+    assert!(parts.mixed_conditional_premises.is_none());
+    let retained = parts.conditional_premises.unwrap();
+    assert_eq!(retained.identity(), &identity);
+    assert_eq!(retained.slices.as_ptr(), slice_storage);
+    assert_eq!(retained.reads.as_ptr(), read_storage);
+    retained
+        .check_live(&[facts(0x1000, 12, 1, 1), facts(0x2000, 12, 2, 1)])
+        .unwrap();
+}
+
+#[test]
 fn actual_request_transition_accepts_unpadded_guarded_domains() {
     let s = [slice(0, 3, Some(0)), slice(1, 3, Some(1))];
     let p = premises(&s, &[guarded(1)], 64).unwrap();

@@ -6,6 +6,17 @@ use std::marker::PhantomData;
 pub(super) struct OccurrenceContext<'work>(PhantomData<&'work Budget<'work>>);
 
 impl OccurrenceContext<'_> {
+    pub(super) fn require_carriage(&self, _carriage: &Carriage) -> Result<()> {
+        Ok(())
+    }
+    pub(super) fn require_kind(&self, _kind: Kind) -> Result<()> {
+        Ok(())
+    }
+
+    pub(super) fn validate_service(&self, _a: &Admission<'_>, _b: &mut Budget<'_>) -> Result<()> {
+        Ok(())
+    }
+
     pub(super) fn require_available(&self) -> Result<()> {
         Ok(())
     }

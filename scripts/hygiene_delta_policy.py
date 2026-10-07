@@ -20,7 +20,11 @@ DUPLICATE_MIN_NONBLANK_LINES = 80
 ALLOW_PANIC_MARKER = "fe2o3-hygiene: allow-panic"
 PANIC_MACRO_RE = re.compile(r"\b(?:panic|todo|unimplemented)\s*!")
 CFG_TEST_RE = re.compile(r"#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]")
-MODULE_OPEN_RE = re.compile(r"\bmod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{")
+TEST_BLOCK_RE = re.compile(
+    r"(?:(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?"
+    r"(?:unsafe\s+)?(?:extern\s+)?(?:fn|mod|impl)\b|"
+    r"(?:if|while|for|match|loop)\b|\{)"
+)
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
@@ -112,7 +116,7 @@ def is_test_source(path: str) -> bool:
     relative = parts[3:]
     name = relative[-1]
     return (
-        relative[0] == "tests"
+        any(part == "tests" or part.endswith("_tests") for part in relative[:-1])
         or name == "tests.rs"
         or name.endswith("_tests.rs")
         or "/tests/fixtures/" in f"/{path}/"
@@ -349,32 +353,54 @@ def sanitize_rust_lines(lines: list[str]) -> list[str]:
     return sanitized
 
 
-def cfg_test_module_lines(lines: list[str]) -> set[int]:
-    sanitized = sanitize_rust_lines(lines)
-    pending_cfg_test = False
-    depth = 0
-    active_closing_depths: list[int] = []
-    skipped: set[int] = set()
+def cfg_test_regions(sanitized: list[str]) -> list[tuple[int, int]]:
+    """Exact test-only block spans in the existing comment/string-stripped view.
 
-    for line_number, line in enumerate(sanitized, start=1):
-        if active_closing_depths:
-            skipped.add(line_number)
-        if CFG_TEST_RE.search(line):
-            pending_cfg_test = True
-        starts_test_module = pending_cfg_test and MODULE_OPEN_RE.search(line) is not None
-        if starts_test_module:
-            skipped.add(line_number)
-            active_closing_depths.append(depth)
-            pending_cfg_test = False
-
-        depth += line.count("{") - line.count("}")
-        while active_closing_depths and depth <= active_closing_depths[-1]:
-            active_closing_depths.pop()
-
-        stripped = line.strip()
-        if pending_cfg_test and stripped and not stripped.startswith("#"):
-            pending_cfg_test = False
-    return skipped
+    This intentionally recognizes only literal cfg(test), not arbitrary cfg
+    expressions. Unknown syntax stays subject to the production panic check.
+    Byte-for-byte line offsets are unnecessary: all positions use this same view.
+    """
+    text = "\n".join(sanitized)
+    if re.match(r"\s*#\s*!\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]", text):
+        return [(0, len(text))]
+    regions: list[tuple[int, int]] = []
+    for attribute in CFG_TEST_RE.finditer(text):
+        cursor = attribute.end()
+        while cursor < len(text):
+            while cursor < len(text) and text[cursor].isspace():
+                cursor += 1
+            extra = re.match(r"#\s*\[", text[cursor:])
+            if extra is None:
+                break
+            cursor += extra.end()
+            depth = 1
+            while cursor < len(text) and depth:
+                depth += (text[cursor] == "[") - (text[cursor] == "]")
+                cursor += 1
+        if TEST_BLOCK_RE.match(text, cursor) is None:
+            continue
+        opening = None
+        parentheses = brackets = 0
+        for position in range(cursor, len(text)):
+            token = text[position]
+            if token == "{" and parentheses == brackets == 0:
+                opening = position
+                break
+            if token == ";" and parentheses == brackets == 0:
+                break
+            parentheses += (token == "(") - (token == ")")
+            brackets += (token == "[") - (token == "]")
+            if parentheses < 0 or brackets < 0:
+                break
+        if opening is None:
+            continue
+        depth, end = 1, opening + 1
+        while end < len(text) and depth:
+            depth += (text[end] == "{") - (text[end] == "}")
+            end += 1
+        if depth == 0:
+            regions.append((attribute.start(), end))
+    return regions
 
 
 def added_lines(repo: Path, base: str, head: str, path: str) -> list[int]:
@@ -416,17 +442,27 @@ def check_added_panic_macros(
             continue
         lines = content.decode("utf-8", "replace").splitlines()
         sanitized = sanitize_rust_lines(lines)
-        cfg_test_lines = cfg_test_module_lines(lines)
+        test_regions = cfg_test_regions(sanitized)
+        offsets = []
+        offset = 0
+        for line in sanitized:
+            offsets.append(offset)
+            offset += len(line) + 1
         for line_number in added_lines(repo, base, head, path):
             if line_number < 1 or line_number > len(lines):
-                continue
-            if line_number in cfg_test_lines:
                 continue
             raw = lines[line_number - 1]
             previous = lines[line_number - 2] if line_number >= 2 else ""
             if ALLOW_PANIC_MARKER in raw or ALLOW_PANIC_MARKER in previous:
                 continue
-            if PANIC_MACRO_RE.search(sanitized[line_number - 1]):
+            production_panic = any(
+                not any(
+                    start <= offsets[line_number - 1] + match.start() < end
+                    for start, end in test_regions
+                )
+                for match in PANIC_MACRO_RE.finditer(sanitized[line_number - 1])
+            )
+            if production_panic:
                 violations.append(f"{path}:{line_number}: new production panic macro")
     return violations
 

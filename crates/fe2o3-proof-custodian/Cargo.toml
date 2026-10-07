@@ -1,0 +1,76 @@
+[package]
+name = "fe2o3-proof-custodian"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Fixed keyless conditional-fill proof controller and root-owned process custody."
+
+[dependencies]
+fe2o3-artifact-transaction.workspace = true
+fe2o3-broker-authority-service.workspace = true
+fe2o3-compiler-execution-protocol.workspace = true
+fe2o3-compiler-execution-coordinator.workspace = true
+fe2o3-compiler-closure-capability.workspace = true
+fe2o3-compiler-ffi.workspace = true
+fe2o3-functional-proof.workspace = true
+fe2o3-host.workspace = true
+fe2o3-kernel-analysis = { workspace = true, features = ["authenticated-machine-effect"] }
+fe2o3-kernel-descriptor.workspace = true
+fe2o3-kernel-ir.workspace = true
+fe2o3-process-identity.workspace = true
+fe2o3-protected-service-profile.workspace = true
+fe2o3-protected-service-spawn.workspace = true
+fe2o3-protected-static-executable.workspace = true
+fe2o3-runtime-protocol.workspace = true
+fe2o3-verifier.workspace = true
+libc.workspace = true
+rustix = { workspace = true, features = ["event", "fs", "net", "pipe", "process", "rand", "thread"] }
+sha2.workspace = true
+
+[dev-dependencies]
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
+fe2o3-compiler-lineage.workspace = true
+fe2o3-kfd.workspace = true
+fe2o3-lower-mir-kernel.workspace = true
+serde.workspace = true
+serde_json = "1"
+tempfile = "=3.21.0"
+
+[[bin]]
+name = "fe2o3-conditional-fill-proof-controller"
+path = "src/bin/controller.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-proof-manager"
+path = "src/bin/manager.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-application-proof-controller"
+path = "src/bin/application-controller.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-native-application-proof-controller"
+path = "src/bin/native-application-controller.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-native-application-manager"
+path = "src/bin/native_application_manager.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "fe2o3-proof-custodian-provision"
+path = "src/bin/provision.rs"
+test = false
+bench = false

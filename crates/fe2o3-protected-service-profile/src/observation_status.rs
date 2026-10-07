@@ -10,6 +10,8 @@ pub(super) struct ProcStatusProfile {
     no_new_privs: u32,
     tracer_pid: u32,
     umask: u32,
+    seccomp: Option<u32>,
+    seccomp_filters: Option<u32>,
 }
 
 impl ProcStatusProfile {
@@ -26,6 +28,8 @@ impl ProcStatusProfile {
         let mut no_new_privs = None;
         let mut tracer_pid = None;
         let mut umask = None;
+        let mut seccomp = None;
+        let mut seccomp_filters = None;
         for line in text.lines() {
             let Some((name, value)) = line.split_once(':') else {
                 continue;
@@ -43,6 +47,8 @@ impl ProcStatusProfile {
                 "NoNewPrivs" => set_once(&mut no_new_privs, parse_decimal(value)?)?,
                 "TracerPid" => set_once(&mut tracer_pid, parse_decimal(value)?)?,
                 "Umask" => set_once(&mut umask, parse_octal(value)?)?,
+                "Seccomp" => set_once(&mut seccomp, parse_decimal(value)?)?,
+                "Seccomp_filters" => set_once(&mut seccomp_filters, parse_decimal(value)?)?,
                 _ => {}
             }
         }
@@ -65,6 +71,8 @@ impl ProcStatusProfile {
                 .ok_or(Error::ProcessProfile("proc status lacks NoNewPrivs"))?,
             tracer_pid: tracer_pid.ok_or(Error::ProcessProfile("proc status lacks TracerPid"))?,
             umask: umask.ok_or(Error::ProcessProfile("proc status lacks Umask"))?,
+            seccomp,
+            seccomp_filters,
         })
     }
 
@@ -94,6 +102,10 @@ impl ProcStatusProfile {
             None => Ok(()),
         }
     }
+
+    pub(super) fn require_no_seccomp(self) -> Result<(), Error> {
+        super::require_no_seccomp_fields(self.seccomp, self.seccomp_filters)
+    }
 }
 
 pub(super) fn read_proc_status(path: &CStr) -> Result<ProcStatusProfile, Error> {
@@ -115,6 +127,63 @@ fn set_once<T>(slot: &mut Option<T>, value: T) -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod proof_controller_tests {
+    use super::*;
+
+    fn status(seccomp: &str) -> Vec<u8> {
+        format!(
+            "Uid:\t61000\t61000\t61000\t61000\n\
+             Gid:\t61001\t61001\t61001\t61001\n\
+             Groups:\nCapInh:\t0\nCapPrm:\t0\nCapEff:\t0\n\
+             CapBnd:\t0\nCapAmb:\t0\nNoNewPrivs:\t1\n\
+             TracerPid:\t0\nUmask:\t0077\n{seccomp}"
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn proof_seccomp_admission_requires_both_exact_zero_fields() {
+        let bytes = status("Seccomp:\t0\nSeccomp_filters:\t0\n");
+        let observed = ProcStatusProfile::parse(&bytes).unwrap();
+        observed
+            .require(ProtectedServiceCredentialProfileV1::new(61000, 61001).unwrap())
+            .unwrap();
+        observed.require_no_seccomp().unwrap();
+        for facts in [
+            "",
+            "Seccomp:\t0\n",
+            "Seccomp_filters:\t0\n",
+            "Seccomp:\t1\nSeccomp_filters:\t0\n",
+            "Seccomp:\t2\nSeccomp_filters:\t1\n",
+            "Seccomp:\t0\nSeccomp_filters:\t1\n",
+        ] {
+            assert!(
+                ProcStatusProfile::parse(&status(facts))
+                    .unwrap()
+                    .require_no_seccomp()
+                    .is_err(),
+                "{facts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_or_malformed_seccomp_facts_reject_before_admission() {
+        for facts in [
+            "Seccomp:\t0\nSeccomp:\t0\nSeccomp_filters:\t0\n",
+            "Seccomp:\t0\nSeccomp_filters:\t0\nSeccomp_filters:\t0\n",
+            "Seccomp:\t-1\nSeccomp_filters:\t0\n",
+            "Seccomp:\t0\nSeccomp_filters:\t4294967296\n",
+        ] {
+            assert!(
+                ProcStatusProfile::parse(&status(facts)).is_err(),
+                "{facts:?}"
+            );
+        }
+    }
 }
 
 pub(super) fn parse_four_decimal(value: &str) -> Result<[u32; 4], Error> {

@@ -745,6 +745,7 @@ name = "fe2o3-amdhsa-loader"
 version = "0.1.0"
 dependencies = [
  "fe2o3-hsaco",
+ "rmpv",
  "sha2 0.11.0",
 ]
 
@@ -802,6 +803,7 @@ dependencies = [
  "fe2o3-process-identity",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-service-spawn",
+ "fe2o3-protected-static-executable",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
  "libc",
@@ -850,6 +852,8 @@ dependencies = [
  "fe2o3-compiler-execution-protocol",
  "fe2o3-external-anchor-protocol",
  "fe2o3-kernel-ir",
+ "fe2o3-process-identity",
+ "fe2o3-runtime-protocol",
  "libc",
  "rustix",
  "sha2 0.11.0",
@@ -1197,18 +1201,26 @@ dependencies = [
  "fe2o3-artifact-transaction",
  "fe2o3-artifacts",
  "fe2o3-build-authority",
+ "fe2o3-compiler-closure-capability",
  "fe2o3-compiler-execution-client",
+ "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
  "fe2o3-compiler-lineage",
  "fe2o3-core",
  "fe2o3-device",
  "fe2o3-external-anchor-protocol",
+ "fe2o3-functional-proof",
  "fe2o3-hsaco",
  "fe2o3-hsaco-finalize",
+ "fe2o3-kernel-analysis",
  "fe2o3-kernel-descriptor",
  "fe2o3-kernel-ir",
  "fe2o3-kfd",
+ "fe2o3-mir-model",
+ "fe2o3-proof-contracts",
+ "fe2o3-resource-accounting",
  "fe2o3-runtime",
+ "fe2o3-runtime-model",
  "fe2o3-runtime-protocol",
  "fe2o3-rustc-invocation",
  "fe2o3-service-host",
@@ -1220,6 +1232,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "trybuild",
 ]
 
@@ -1313,8 +1326,10 @@ name = "fe2o3-kernel-analysis"
 version = "0.1.0"
 dependencies = [
  "fe2o3-artifact-transaction",
+ "fe2o3-hsaco",
  "fe2o3-kernel-ir",
  "fe2o3-mir-model",
+ "rmpv",
  "rustc_apfloat",
  "rustix",
  "sha2 0.11.0",
@@ -1352,13 +1367,17 @@ dependencies = [
 name = "fe2o3-kfd"
 version = "0.1.0"
 dependencies = [
+ "arrayvec",
  "fe2o3-amdhsa-loader",
  "fe2o3-aql",
  "fe2o3-drm-uapi",
  "fe2o3-hsaco",
+ "fe2o3-kernel-analysis",
  "fe2o3-kfd-uapi",
+ "fe2o3-resource-accounting",
  "fe2o3-runtime-model",
  "libc",
+ "rmpv",
  "rustix",
  "serde",
  "serde_json",
@@ -1585,6 +1604,7 @@ version = "0.1.0"
 dependencies = [
  "fe2o3-amd-target",
  "fe2o3-build-authority",
+ "fe2o3-kernel-ir",
  "fe2o3-rustc-invocation",
  "libc",
  "rustix",
@@ -1628,6 +1648,39 @@ dependencies = [
 [[package]]
 name = "fe2o3-proof-contracts"
 version = "0.1.0"
+
+[[package]]
+name = "fe2o3-proof-custodian"
+version = "0.1.0"
+dependencies = [
+ "ed25519-dalek",
+ "fe2o3-artifact-transaction",
+ "fe2o3-broker-authority-service",
+ "fe2o3-compiler-closure-capability",
+ "fe2o3-compiler-execution-coordinator",
+ "fe2o3-compiler-execution-protocol",
+ "fe2o3-compiler-ffi",
+ "fe2o3-compiler-lineage",
+ "fe2o3-functional-proof",
+ "fe2o3-host",
+ "fe2o3-kernel-analysis",
+ "fe2o3-kernel-descriptor",
+ "fe2o3-kernel-ir",
+ "fe2o3-kfd",
+ "fe2o3-lower-mir-kernel",
+ "fe2o3-process-identity",
+ "fe2o3-protected-service-profile",
+ "fe2o3-protected-service-spawn",
+ "fe2o3-protected-static-executable",
+ "fe2o3-runtime-protocol",
+ "fe2o3-verifier",
+ "libc",
+ "rustix",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+]
 
 [[package]]
 name = "fe2o3-protected-publisher"
@@ -1744,22 +1797,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "fe2o3-resource-accounting"
+version = "0.1.0"
+dependencies = [
+ "fe2o3-runtime-model",
+]
+
+[[package]]
 name = "fe2o3-runtime"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "fe2o3-amdhsa-loader",
  "fe2o3-aql",
+ "fe2o3-completion",
  "fe2o3-debug-protocol",
  "fe2o3-host-api",
  "fe2o3-hsaco",
  "fe2o3-kfd",
  "fe2o3-kfd-uapi",
  "fe2o3-profiler-protocol",
+ "fe2o3-resource-accounting",
  "fe2o3-runtime-model",
+ "futures-executor",
+ "futures-util",
  "libc",
  "rmpv",
  "rustix",
+ "serde_json",
  "sha2 0.11.0",
+ "tokio",
 ]
 
 [[package]]
@@ -1782,6 +1849,7 @@ dependencies = [
 name = "fe2o3-runtime-protocol"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "fe2o3-artifact-transaction",
  "fe2o3-compiler-execution-protocol",
  "fe2o3-compiler-ffi",
@@ -2054,6 +2122,7 @@ dependencies = [
  "fe2o3-lower-mir-kernel",
  "fe2o3-mir-model",
  "fe2o3-pliron",
+ "fe2o3-process-identity",
  "fe2o3-proof-contracts",
  "fe2o3-protected-service-profile",
  "fe2o3-protected-service-spawn",
@@ -2189,6 +2258,17 @@ name = "futures-core"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
+
+[[package]]
+name = "futures-executor"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "031b47cf1a3c6cc8bc2fc76cd437f521619387907d469316e7c0bc278f1f5432"
+dependencies = [
+ "futures-core",
+ "futures-task",
+ "futures-util",
+]
 
 [[package]]
 name = "futures-task"

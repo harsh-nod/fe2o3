@@ -8,7 +8,8 @@ use fe2o3_compiler_execution_protocol::{
 use rustix::fs::{Mode, OFlags};
 
 use crate::sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};
-use crate::trusted_profile_tree::{self, TrustedFileSnapshot};
+use crate::trusted_profile_tree;
+pub(super) use crate::trusted_profile_tree::TrustedFileSnapshot;
 
 const ROLE: CapabilityRole = CapabilityRole {
     name: "compiler-execution client-profile capability",
@@ -159,7 +160,7 @@ impl CompilerExecutionClientProfileCapabilityV1 {
     }
 }
 
-fn validate_trusted_directory(
+pub(super) fn validate_trusted_directory(
     directory: &File,
     expected_uid: u32,
     expected_gid: u32,
@@ -175,13 +176,24 @@ fn validate_trusted_profile_file(
     expected_gid: u32,
     label: &str,
 ) -> Result<TrustedFileSnapshot, String> {
-    trusted_profile_tree::validate_file(
+    validate_trusted_file(
         profile,
         expected_uid,
         expected_gid,
+        label,
         COMPILER_EXECUTION_CLIENT_PROFILE_BYTES_V1,
     )
-    .map_err(|error| error.legacy(label, false))
+}
+
+pub(super) fn validate_trusted_file(
+    profile: &File,
+    expected_uid: u32,
+    expected_gid: u32,
+    label: &str,
+    expected_len: usize,
+) -> Result<TrustedFileSnapshot, String> {
+    trusted_profile_tree::validate_file(profile, expected_uid, expected_gid, expected_len)
+        .map_err(|error| error.legacy(label, false))
 }
 
 fn decode(bytes: &[u8]) -> Result<CompilerExecutionClientProfileV1, String> {

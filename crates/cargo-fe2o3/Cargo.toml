@@ -66,6 +66,7 @@ syn = { workspace = true, features = ["visit"] }
 toml = "1.1.4"
 
 [dev-dependencies]
+fe2o3-compiler-execution-client = { workspace = true, features = ["test-support"] }
 dialect-amdgcn.workspace = true
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }
 fe2o3-artifact-transaction = { workspace = true, features = ["test-hooks"] }

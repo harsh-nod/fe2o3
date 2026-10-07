@@ -26,6 +26,9 @@ const _: () = assert!(CreatorScope::CONTROL_WORK + 4096 <= root::LOCAL_WORK);
 pub(crate) const FRAME: usize =
     4 * size_of::<Native<'static>>() + 4 * size_of::<Failure>() + 2 * size_of::<Account>() + 16384;
 
+#[path = "native_compiler_phase.rs"]
+pub(crate) mod fixed_phase;
+
 /// Runs one fixed native V3 activation with two independent, nonrenewable accounts.
 ///
 /// The maximum schedule is 86,400 monitoring attempts and 20 cleanup attempts.
@@ -38,7 +41,8 @@ pub(crate) const FRAME: usize =
 /// intake consumes its whole original request into fixed-origin compiler backing.
 /// The original request controls gated launch, runtime enforcement, publication,
 /// terminal wait, trace retirement and delivery of its bound completion record.
-/// Completion ends monitoring, but cannot bypass foreground or aggregate cleanup.
+/// The original completion is retained through foreground and aggregate cleanup;
+/// publication occurs only after empty-pool shutdown and signal restoration.
 /// Helper READY alone is not proof or permission to open the compiler exec gate.
 /// Successful service completion does not replace the compiler terminal status
 /// carried in the completion record or establish deployment qualification.
@@ -109,6 +113,7 @@ pub unsafe fn run_inherited_compiler_execution_coordinator_v3() -> Result<()> {
                 request: None,
                 activation: None,
                 signals: None,
+                admission: Admission::Inherited,
                 // SAFETY: the caller supplies the full external deployment and
                 // outside-custodian contract above; this scope authenticates neither.
                 // Native keeps this original pool through cleanup or fail-stop.
@@ -125,6 +130,27 @@ fn run_scoped<'work, R: Runtime<'work>>(
     cleanup_turns: usize,
     create: impl FnOnce() -> Result<R>,
 ) -> Result<()> {
+    run_scoped_with(
+        b,
+        monitor_turns,
+        cleanup_turns,
+        create,
+        |runtime, outcome, b| {
+            if outcome == MonitorOutcome::CompletionReady {
+                runtime.complete(&AggregateCleanupComplete { _private: () }, b)?;
+            }
+            Ok(())
+        },
+    )
+}
+
+fn run_scoped_with<'work, R: Runtime<'work>, T>(
+    b: &mut Budget<'work>,
+    monitor_turns: usize,
+    cleanup_turns: usize,
+    create: impl FnOnce() -> Result<R>,
+    after_cleanup: impl FnOnce(&mut R, MonitorOutcome, &mut Budget<'work>) -> Result<T>,
+) -> Result<T> {
     if monitor_turns == 0 || cleanup_turns == 0 {
         return Err(root::invalid("startup", "turn limits must be positive"));
     }
@@ -142,8 +168,22 @@ fn run_scoped<'work, R: Runtime<'work>>(
         let wait_error = drain(&mut runtime, cleanup_turns, b)?;
         runtime.restore(b)?;
         // Cleanup/restoration failures take priority over the original failure.
-        outcome.and(wait_error.map_or(Ok(()), Err))
+        let outcome = outcome.and_then(|outcome| wait_error.map_or(Ok(outcome), Err))?;
+        after_cleanup(&mut runtime, outcome, b)
     })
+}
+
+// Only the original orchestration can construct this witness, after successful
+// foreground retirement, empty-pool shutdown and signal restoration. It is not
+// a public cleanup claim or a replacement for the retained completion/receiver.
+pub(crate) struct AggregateCleanupComplete {
+    _private: (),
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum MonitorOutcome {
+    Stopped,
+    CompletionReady,
 }
 
 // Private orchestration seam: tests substitute effects, never admitted authority.
@@ -155,8 +195,8 @@ trait Runtime<'work> {
         self.wait(b)
     }
     fn continuity(&mut self, b: &mut Budget<'_>) -> Result<()>;
-    /// True means the original request sent its terminal publication completion,
-    /// not that intake, helper readiness, compiler launch or publication began.
+    /// True means the original request retains its actual terminal completion;
+    /// delivery still requires foreground and aggregate cleanup below.
     fn intake(&mut self, _b: &mut Budget<'work>) -> Result<bool> {
         Ok(false)
     }
@@ -168,23 +208,24 @@ trait Runtime<'work> {
     fn pump(&mut self) -> Result<()>;
     fn shutdown(&mut self) -> Result<()>;
     fn restore(&mut self, b: &mut Budget<'_>) -> Result<()>;
+    fn complete(&mut self, cleanup: &AggregateCleanupComplete, b: &mut Budget<'_>) -> Result<()>;
 }
 
 fn monitor<'work>(
     runtime: &mut impl Runtime<'work>,
     turns: usize,
     b: &mut Budget<'work>,
-) -> Result<()> {
+) -> Result<MonitorOutcome> {
     runtime.start(b)?;
     runtime.publish(b)?;
     for _ in 0..turns {
         b.charge_work(root::TURN_WORK)?;
         if runtime.wait_monitor(b)?.is_some() {
-            return Ok(());
+            return Ok(MonitorOutcome::Stopped);
         }
         runtime.continuity(b)?;
         if runtime.intake(b)? {
-            return Ok(());
+            return Ok(MonitorOutcome::CompletionReady);
         }
         runtime.pump()?;
     }
@@ -207,10 +248,10 @@ fn drain<'work>(
     }
     let mut wait_error = None;
     for _ in 0..turns {
-        if wait_error.is_none() {
-            if let Err(error) = runtime.wait(b) {
-                wait_error = Some(error);
-            }
+        if wait_error.is_none()
+            && let Err(error) = runtime.wait(b)
+        {
+            wait_error = Some(error);
         }
         runtime.pump()?;
         if runtime.retire_foreground(b)? {
@@ -231,23 +272,41 @@ struct Native<'work> {
     request: Option<RootCompilerRequest<'work>>,
     activation: Option<Activation>,
     signals: Option<TerminationSignals>,
+    admission: Admission,
     creator: CreatorScope,
+}
+
+// Fixed deployment custody is already budgeted inline, without a fallible heap handoff.
+#[allow(clippy::large_enum_variant)]
+enum Admission {
+    Inherited,
+    Fixed(Option<Deployment>),
 }
 
 impl<'work> Runtime<'work> for Native<'work> {
     #[allow(unsafe_code)]
     fn start(&mut self, b: &mut Budget<'_>) -> Result<()> {
-        // SAFETY: only the unique dedicated entrypoint constructs Native.
-        let (activation, charge) = unsafe { Activation::capture(b) }?;
-        self.activation = Some(activation);
-        b.reserve_storage(charge.additional_storage())?;
+        if matches!(self.admission, Admission::Inherited) {
+            // SAFETY: only the unique inherited entrypoint selects this branch.
+            let (activation, charge) = unsafe { Activation::capture(b) }?;
+            self.activation = Some(activation);
+            b.reserve_storage(charge.additional_storage())?;
+        }
         // SAFETY: the entrypoint owns the main thread's mask until exit/restoration.
         let (signals, charge) = unsafe { TerminationSignals::install(b) }?;
         self.signals = Some(signals);
         b.reserve_storage(charge.additional_storage())?;
-        // SAFETY: activation succeeded and this is the one FD ownership transfer.
-        let (deployment, charge) = unsafe { Deployment::admit(b) }?;
-        b.reserve_storage(charge.additional_storage())?;
+        let deployment = match &mut self.admission {
+            Admission::Inherited => {
+                // SAFETY: activation succeeded and this is the one FD ownership transfer.
+                let (deployment, charge) = unsafe { Deployment::admit(b) }?;
+                b.reserve_storage(charge.additional_storage())?;
+                deployment
+            }
+            Admission::Fixed(deployment) => deployment.take().ok_or_else(|| {
+                root::invalid("startup", "fixed original sources already consumed")
+            })?,
+        };
         // SAFETY: this closed synchronous composition borrows, never replaces,
         // the original pool on the creator's main thread. Native retains the scope
         // through cancellation and empty shutdown or fail-stop. The entrypoint's
@@ -271,6 +330,11 @@ impl<'work> Runtime<'work> for Native<'work> {
     }
 
     fn publish(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        if matches!(self.admission, Admission::Fixed(_)) {
+            // The fixed-source manager does not inherit activation descriptors or
+            // manufacture systemd readiness. Its original root listener is active.
+            return Ok(());
+        }
         self.activation
             .as_mut()
             .ok_or_else(|| root::invalid("activation", "missing readiness plan"))?
@@ -375,7 +439,11 @@ impl<'work> Runtime<'work> for Native<'work> {
     }
 
     fn shutdown(&mut self) -> Result<()> {
-        let _original_account = self.creator.shutdown()?;
+        if matches!(self.admission, Admission::Fixed(_)) {
+            self.creator.checkpoint_quiescent_phase()?;
+        } else {
+            let _original_account = self.creator.shutdown()?;
+        }
         Ok(())
     }
 
@@ -384,6 +452,13 @@ impl<'work> Runtime<'work> for Native<'work> {
             signals.restore(b)?;
         }
         Ok(())
+    }
+
+    fn complete(&mut self, cleanup: &AggregateCleanupComplete, b: &mut Budget<'_>) -> Result<()> {
+        self.request
+            .as_mut()
+            .ok_or_else(|| root::invalid("completion", "missing original request"))?
+            .publish_after_cleanup(cleanup, b)
     }
 }
 

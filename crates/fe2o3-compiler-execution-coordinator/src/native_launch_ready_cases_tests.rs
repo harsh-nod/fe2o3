@@ -158,55 +158,62 @@ fn native_launch_descriptor_table_and_retained_layout_cover_actual_types() {
 
 #[test]
 fn native_exec_status_is_distinct_from_credential_enabled_bootstrap() {
-    use std::os::fd::AsFd;
-    let channels = Channels::new().unwrap();
-    let boot = rustix::fs::fstat(&channels.child).unwrap();
-    let exec = rustix::fs::fstat(&channels.exec_writer).unwrap();
-    assert_ne!((boot.st_dev, boot.st_ino), (exec.st_dev, exec.st_ino));
-    assert!(rustix::net::sockopt::socket_passcred(&channels.root).unwrap());
-    for fd in [
-        &channels.root,
-        &channels.child,
-        &channels.exec_reader,
-        &channels.exec_writer,
-    ] {
-        assert!(
-            rustix::io::fcntl_getfd(fd)
-                .unwrap()
-                .contains(rustix::io::FdFlags::CLOEXEC)
-        );
-        assert!(
-            rustix::fs::fcntl_getfl(fd)
-                .unwrap()
-                .contains(rustix::fs::OFlags::NONBLOCK)
-        );
-        assert_eq!(
-            rustix::net::sockopt::socket_type(fd).unwrap(),
-            rustix::net::SocketType::SEQPACKET
-        );
-    }
-    drop(channels.exec_writer);
-    let mut bytes = [0; 2];
-    assert_eq!(
-        rustix::net::recv(
-            &channels.exec_reader,
-            &mut bytes,
-            rustix::net::RecvFlags::DONTWAIT
-        )
-        .unwrap(),
-        (0, 0)
+    crate::eof_test_process::isolated(
+        module_path!(),
+        "native_exec_status_is_distinct_from_credential_enabled_bootstrap",
+        || {
+            use std::os::fd::AsFd;
+            let channels = Channels::new().unwrap();
+            let boot = rustix::fs::fstat(&channels.child).unwrap();
+            let exec = rustix::fs::fstat(&channels.exec_writer).unwrap();
+            assert_ne!((boot.st_dev, boot.st_ino), (exec.st_dev, exec.st_ino));
+            assert!(rustix::net::sockopt::socket_passcred(&channels.root).unwrap());
+            for fd in [
+                &channels.root,
+                &channels.child,
+                &channels.exec_reader,
+                &channels.exec_writer,
+            ] {
+                assert!(
+                    rustix::io::fcntl_getfd(fd)
+                        .unwrap()
+                        .contains(rustix::io::FdFlags::CLOEXEC)
+                );
+                assert!(
+                    rustix::fs::fcntl_getfl(fd)
+                        .unwrap()
+                        .contains(rustix::fs::OFlags::NONBLOCK)
+                );
+                assert_eq!(
+                    rustix::net::sockopt::socket_type(fd).unwrap(),
+                    rustix::net::SocketType::SEQPACKET
+                );
+            }
+            drop(channels.exec_writer);
+            let mut bytes = [0; 2];
+            assert_eq!(
+                rustix::net::recv(
+                    &channels.exec_reader,
+                    &mut bytes,
+                    rustix::net::RecvFlags::DONTWAIT
+                )
+                .unwrap(),
+                (0, 0)
+            );
+            rustix::net::send(
+                channels.child.as_fd(),
+                &[1, 2],
+                rustix::net::SendFlags::NOSIGNAL,
+            )
+            .unwrap();
+            assert_eq!(
+                rustix::net::recv(&channels.root, &mut bytes, rustix::net::RecvFlags::DONTWAIT)
+                    .unwrap(),
+                (2, 2)
+            );
+            assert_eq!(bytes, [1, 2]);
+        },
     );
-    rustix::net::send(
-        channels.child.as_fd(),
-        &[1, 2],
-        rustix::net::SendFlags::NOSIGNAL,
-    )
-    .unwrap();
-    assert_eq!(
-        rustix::net::recv(&channels.root, &mut bytes, rustix::net::RecvFlags::DONTWAIT).unwrap(),
-        (2, 2)
-    );
-    assert_eq!(bytes, [1, 2]);
 }
 
 #[test]

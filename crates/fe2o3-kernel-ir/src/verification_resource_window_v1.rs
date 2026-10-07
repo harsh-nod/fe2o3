@@ -15,12 +15,14 @@ pub struct CanonicalKernelIrStorageAccountIdentityV1(usize);
 pub(super) struct WindowState {
     floor: AtomicUsize,
     ceiling: AtomicUsize,
+    pub(super) retention: Option<retention::State>,
 }
 impl WindowState {
     pub(super) const fn new() -> Self {
         Self {
             floor: AtomicUsize::new(0),
             ceiling: AtomicUsize::new(usize::MAX),
+            retention: Some(retention::State::new()),
         }
     }
     pub(super) fn floor(&self) -> usize {
@@ -34,6 +36,7 @@ impl WindowState {
         Self {
             floor: AtomicUsize::new(floor),
             ceiling: AtomicUsize::new(ceiling),
+            retention: None,
         }
     }
 

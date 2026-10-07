@@ -606,6 +606,20 @@ pub(super) fn mint<S: Schema>(
     }
     let output = PinnedOutput::open_existing(output_dir)?;
     let _lock = output.try_lock()?.ok_or(HandoffEngineError::Busy)?;
+    mint_locked::<S>(output, producer, receipt, resources)
+}
+
+fn mint_locked<S: Schema>(
+    output: PinnedOutput,
+    producer: &ProducerIdentity,
+    receipt: S::Receipt,
+    resources: &mut Resources<'_, '_>,
+) -> Result<Arc<Current<S>>> {
+    resources.require::<S>()?;
+    let fields = S::receipt_fields(receipt);
+    if !S::binding_matches_length(fields.binding, fields.length) {
+        return Err(HandoffEngineError::PayloadBindingMismatch);
+    }
     output.verify_path_identity()?;
     authorize_for_custody(&output, producer, fields.attempt, S::ATTEMPT_CUSTODY)?;
     let producer_identity = producer_identity_for::<S>(producer);
@@ -616,7 +630,9 @@ pub(super) fn mint<S: Schema>(
         format!("{}{}", S::PARENT_PREFIX, hex(&producer_identity)),
     )?
     .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
-    cleanup_stale_slots::<S>(&parent, producer_identity, fields.attempt)?;
+    if !output.observation_only {
+        cleanup_stale_slots::<S>(&parent, producer_identity, fields.attempt)?;
+    }
     let slot_directory = open_private_directory(
         &parent.fd,
         &parent.path,
@@ -657,7 +673,9 @@ pub(super) fn finish_mint<S: Schema>(
     } = location;
     parent.verify()?;
     slot_directory.verify()?;
-    recover_slot::<S>(&slot_directory, resources)?;
+    if !output.observation_only {
+        recover_slot::<S>(&slot_directory, resources)?;
+    }
     shape::<S>(&slot_directory)?;
     let ready_file = pin(&slot_directory, READY_ENTRY, S::RECORD_BYTES)?;
     let payload_file = pin(&slot_directory, PAYLOAD_ENTRY, fields.length)?;
@@ -692,8 +710,36 @@ pub(super) fn recover<S: Schema>(
         false,
         S::MAX_HANDOFF_BYTES,
         None,
+        None,
         resources,
     )
+}
+
+// One lock spans nonrepairing receipt recovery and the same retained binding's
+// admission. The private observed-output branch below is used only here.
+pub(super) fn observe<S: Schema>(
+    output_dir: &Path,
+    producer: &ProducerIdentity,
+    attempt: BuildAttempt,
+    slot: S::Slot,
+    resources: &mut Resources<'_, '_>,
+) -> Result<(Arc<Current<S>>, crate::OutputLock)> {
+    let mut output = PinnedOutput::open_existing(output_dir)?;
+    output.observation_only = true;
+    let lock = output.try_lock()?.ok_or(HandoffEngineError::Busy)?;
+    let receipt = recover_with_lock::<S>(
+        output_dir,
+        producer,
+        attempt,
+        slot,
+        true,
+        S::MAX_HANDOFF_BYTES,
+        None,
+        Some(&output),
+        resources,
+    )?;
+    let binding = mint_locked::<S>(output, producer, receipt, resources)?;
+    Ok((binding, lock))
 }
 
 pub(super) fn try_recover<S: Schema>(
@@ -713,6 +759,7 @@ pub(super) fn try_recover<S: Schema>(
         true,
         maximum_handoff_bytes,
         maximum_location_storage,
+        None,
         resources,
     )
 }
@@ -725,6 +772,7 @@ fn recover_with_lock<S: Schema>(
     nonblocking: bool,
     maximum_handoff_bytes: usize,
     maximum_location_storage: Option<usize>,
+    observed_output: Option<&PinnedOutput>,
     resources: &mut Resources<'_, '_>,
 ) -> Result<S::Receipt> {
     resources.scoped(|resources| {
@@ -737,7 +785,13 @@ fn recover_with_lock<S: Schema>(
             .into());
         }
         resources.reserve(std::mem::size_of::<Sha256>())?;
-        let output = PinnedOutput::open_existing(output_dir)?;
+        let opened;
+        let output = if let Some(output) = observed_output {
+            output
+        } else {
+            opened = PinnedOutput::open_existing(output_dir)?;
+            &opened
+        };
         if let Some(maximum) = maximum_location_storage
             && output
                 .display_path
@@ -755,10 +809,12 @@ fn recover_with_lock<S: Schema>(
                 fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting.into(),
             );
         }
-        let _lock = if nonblocking {
-            output.try_lock()?.ok_or(HandoffEngineError::Busy)?
+        let _lock = if observed_output.is_some() {
+            None
+        } else if nonblocking {
+            Some(output.try_lock()?.ok_or(HandoffEngineError::Busy)?)
         } else {
-            output.lock()?
+            Some(output.lock()?)
         };
         output.verify_path_identity()?;
         authorize_for_custody(&output, producer, attempt, S::ATTEMPT_CUSTODY)?;
@@ -770,7 +826,9 @@ fn recover_with_lock<S: Schema>(
             format!("{}{}", S::PARENT_PREFIX, hex(&producer_identity)),
         )?
         .ok_or(CompilerModuleHandoffErrorV1::NotPublished)?;
-        cleanup_stale_slots::<S>(&parent, producer_identity, attempt)?;
+        if !output.observation_only {
+            cleanup_stale_slots::<S>(&parent, producer_identity, attempt)?;
+        }
         let directory = open_private_directory(
             &parent.fd,
             &parent.path,
@@ -784,7 +842,9 @@ fn recover_with_lock<S: Schema>(
                 fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Accounting.into(),
             );
         }
-        recover_slot::<S>(&directory, resources)?;
+        if !output.observation_only {
+            recover_slot::<S>(&directory, resources)?;
+        }
         shape::<S>(&directory)?;
         let ready = pin(&directory, READY_ENTRY, S::RECORD_BYTES)?;
         let record_bytes = read_file(

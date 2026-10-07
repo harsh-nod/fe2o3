@@ -3,6 +3,134 @@ use vstd::prelude::*;
 verus! {
 
 #[derive(PartialEq, Eq)]
+pub enum DeviceAdmissionTargetProfileV1 {
+    Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0,
+    Gfx950XnackMinusSpxNps1Kfd1_18Drm3_64_0,
+}
+
+pub open spec fn profile_target_v1(profile: DeviceAdmissionTargetProfileV1) -> nat {
+    match profile {
+        DeviceAdmissionTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0 => 942,
+        DeviceAdmissionTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18Drm3_64_0 => 950,
+    }
+}
+
+// Target-binding projection of the model-only correlation, not all adapter checks.
+// Identity/schema commitments remain untrusted inputs, never target discriminators.
+pub struct CorrelationProfileV1 {
+    pub target_profile: DeviceAdmissionTargetProfileV1,
+    pub identity: nat,
+    pub kfd_schema: nat,
+    pub drm_schema: nat,
+}
+
+pub struct CorrelationObservationV1 {
+    pub domain: nat,
+    pub physical: nat,
+    pub target: nat,
+    pub kfd_schema: nat,
+    pub drm_schema: nat,
+}
+
+pub struct CorrelatedTargetDeviceV1 {
+    pub domain: nat,
+    pub physical: nat,
+    pub profile_identity: nat,
+    pub target_profile: DeviceAdmissionTargetProfileV1,
+}
+
+pub open spec fn can_correlate_target_v1(
+    profile: CorrelationProfileV1,
+    observation: CorrelationObservationV1,
+) -> bool {
+    &&& observation.domain > 0
+    &&& observation.physical > 0
+    &&& observation.target == profile_target_v1(profile.target_profile)
+    &&& observation.kfd_schema == profile.kfd_schema
+    &&& observation.drm_schema == profile.drm_schema
+}
+
+pub open spec fn correlate_target_v1(
+    profile: CorrelationProfileV1,
+    observation: CorrelationObservationV1,
+) -> Option<CorrelatedTargetDeviceV1> {
+    if can_correlate_target_v1(profile, observation) {
+        Some(CorrelatedTargetDeviceV1 {
+            domain: observation.domain,
+            physical: observation.physical,
+            profile_identity: profile.identity,
+            target_profile: profile.target_profile,
+        })
+    } else {
+        None
+    }
+}
+
+pub proof fn correlated_device_retains_target_and_identity_v1(
+    profile: CorrelationProfileV1,
+    observation: CorrelationObservationV1,
+)
+    requires
+        can_correlate_target_v1(profile, observation),
+    ensures
+        correlate_target_v1(profile, observation).is_some(),
+        correlate_target_v1(profile, observation).unwrap().target_profile
+            == profile.target_profile,
+        correlate_target_v1(profile, observation).unwrap().profile_identity == profile.identity,
+        correlate_target_v1(profile, observation).unwrap().domain == observation.domain,
+        correlate_target_v1(profile, observation).unwrap().physical == observation.physical,
+        profile_target_v1(correlate_target_v1(profile, observation).unwrap().target_profile)
+            == observation.target,
+{
+}
+
+pub proof fn wrong_observed_target_cannot_correlate_v1(
+    profile: CorrelationProfileV1,
+    observation: CorrelationObservationV1,
+)
+    requires
+        observation.target != profile_target_v1(profile.target_profile),
+    ensures
+        !can_correlate_target_v1(profile, observation),
+        correlate_target_v1(profile, observation).is_none(),
+{
+}
+
+pub proof fn equal_profile_digests_do_not_authorize_target_substitution_v1(
+    original: CorrelationProfileV1,
+    substituted: CorrelationProfileV1,
+    observation: CorrelationObservationV1,
+)
+    requires
+        original.identity == substituted.identity,
+        original.kfd_schema == substituted.kfd_schema,
+        original.drm_schema == substituted.drm_schema,
+        original.target_profile != substituted.target_profile,
+        can_correlate_target_v1(original, observation),
+    ensures
+        !can_correlate_target_v1(substituted, observation),
+        correlate_target_v1(substituted, observation).is_none(),
+{
+}
+
+pub proof fn both_target_correlations_are_inhabited_v1(
+    target_profile: DeviceAdmissionTargetProfileV1,
+    profile_identity: nat,
+)
+    ensures
+        can_correlate_target_v1(
+            CorrelationProfileV1 {
+                target_profile, identity: profile_identity, kfd_schema: 1, drm_schema: 2,
+            },
+            CorrelationObservationV1 {
+                domain: 1, physical: 1, target: profile_target_v1(target_profile),
+                kfd_schema: 1, drm_schema: 2,
+            },
+        ),
+{
+}
+
+#[derive(PartialEq, Eq)]
 pub struct DeviceKeyV1 {
     pub physical: nat,
     pub generation: nat,

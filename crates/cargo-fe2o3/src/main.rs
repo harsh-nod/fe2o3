@@ -21,6 +21,7 @@ mod example_manifest;
 mod generation;
 mod inert_rustc_invocation_capture;
 mod inspect;
+mod native_policy_export;
 mod non_production_reproduction;
 mod observer_telemetry;
 #[allow(dead_code)]
@@ -34,6 +35,7 @@ mod process_execution;
 mod production_cargo_plan;
 mod production_census_v91;
 mod production_graph_capture_v92;
+mod production_host_binding;
 mod profile_command;
 mod profile_dispatch_import_v1;
 mod profile_live_qualification_v1;
@@ -174,6 +176,15 @@ fn main() -> ExitCode {
         .is_some_and(|argument| argument == BINDING_HOST_TEST_RUNNER_ARG)
     {
         return binding_host_test_runner(&raw_args[1..]);
+    }
+    if env::var_os(production_host_binding::MODE_ENV).is_some() {
+        return match production_host_binding::run(raw_args) {
+            Ok(status) => ExitCode::from(binding_check_wrapper::exit_code(status)),
+            Err(error) => {
+                eprintln!("cargo-fe2o3 production host binding: {error}");
+                ExitCode::FAILURE
+            }
+        };
     }
     if env::var_os(binding_check_wrapper::MODE_ENV_V1).is_some() {
         return match binding_check_wrapper::run(raw_args) {
@@ -1148,11 +1159,63 @@ fn cargo_with_protected_release(
     }
 }
 
+fn parse_application_proof_route(
+    command: &str,
+    args: &[OsString],
+) -> Result<
+    (
+        Vec<OsString>,
+        application_handoff::ApplicationCompilerServiceExposureV1,
+    ),
+    String,
+> {
+    use application_handoff::ApplicationCompilerServiceExposureV1 as Service;
+    let mut service = Service::Required;
+    let mut forwarded = Vec::with_capacity(args.len());
+    let mut application_args = false;
+    for argument in args {
+        if !application_args
+            && (argument == "--application-proof-custodian"
+                || argument == "--native-application-proof-custodian")
+        {
+            if command != "run" || service != Service::Required {
+                return Err("one explicit application proof-custodian route requires run".into());
+            }
+            service = if argument == "--native-application-proof-custodian" {
+                Service::NativeCustodianRequired
+            } else {
+                Service::CustodianRequired
+            };
+        } else {
+            application_args |= argument == "--";
+            forwarded.push(argument.clone());
+        }
+    }
+    Ok((forwarded, service))
+}
+
 fn cargo_with_backend_result(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
 ) -> Result<(), String> {
+    let (export_args, policy_export) = native_policy_export::parse(command, args)?;
+    native_policy_export::reject_ambient(env::var_os(native_policy_export::ENV).as_deref())?;
+    if policy_export.is_some()
+        && protected_release
+            .and_then(|release| release.compiler_execution_profile_v3())
+            .is_none()
+    {
+        return Err(
+            "native policy input export requires the original protected V3 build route".into(),
+        );
+    }
+    let output_parent = policy_export
+        .as_ref()
+        .map(|request| request.preflight())
+        .transpose()?;
+    let (forwarded_args, compiler_service) = parse_application_proof_route(command, &export_args)?;
+    let args = forwarded_args.as_slice();
     reject_obsolete_codegen_pipeline(env::var_os(OBSOLETE_CODEGEN_PIPELINE_ENV).as_deref())?;
     validate_production_compilation_environment(
         env::var_os(build_config::QUALIFICATION_ORACLE_ENV).as_deref(),
@@ -1281,7 +1344,18 @@ fn cargo_with_backend_result(
         authorized_closure,
     };
     let mut context = BackendRunContext::prepare(preparation, args)?;
-    run_cargo_with_backend(&mut context, command, args, protected_release)
+    run_cargo_with_backend(
+        &mut context,
+        command,
+        args,
+        protected_release,
+        compiler_service,
+        policy_export.as_ref(),
+    )?;
+    if let Some(parent) = output_parent {
+        parent.require_bundle()?;
+    }
+    Ok(())
 }
 
 fn validate_production_compilation_environment(
@@ -1609,8 +1683,17 @@ fn run_cargo_with_backend(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+    compiler_service: application_handoff::ApplicationCompilerServiceExposureV1,
+    policy_export: Option<&native_policy_export::Request>,
 ) -> Result<(), String> {
-    run_cargo_with_backend_inner(context, command, args, protected_release)
+    run_cargo_with_backend_inner(
+        context,
+        command,
+        args,
+        protected_release,
+        compiler_service,
+        policy_export,
+    )
 }
 
 fn run_cargo_with_backend_inner(
@@ -1618,16 +1701,34 @@ fn run_cargo_with_backend_inner(
     command: &str,
     args: &[OsString],
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+    compiler_service: application_handoff::ApplicationCompilerServiceExposureV1,
+    policy_export: Option<&native_policy_export::Request>,
 ) -> Result<(), String> {
+    if policy_export.is_some()
+        && context.target_profile != fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942
+    {
+        return Err("native policy input export is closed to gfx942".into());
+    }
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
     context.generation.reject_if_substituted()?;
-    let mut production_plan = production_cargo_plan::ProductionCargoPlan::new(
-        command,
-        args,
-        &context.host_target,
-        context.requires_locked_closure,
-    )?;
+    let mut production_plan = if compiler_service.requires_custodian() {
+        if command != "run" {
+            return Err("custodian application route requires run".into());
+        }
+        production_cargo_plan::ProductionCargoPlan::new_for_custodian_run(
+            args,
+            &context.host_target,
+            context.requires_locked_closure,
+        )?
+    } else {
+        production_cargo_plan::ProductionCargoPlan::new(
+            command,
+            args,
+            &context.host_target,
+            context.requires_locked_closure,
+        )?
+    };
     let cargo_command = production_plan.device().command();
     eprintln!(
         "cargo fe2o3 {command}: device phase uses backend {} for target {}",
@@ -1805,6 +1906,7 @@ fn run_cargo_with_backend_inner(
         )
         .env(BUILD_SESSION_ENV, context.build_session.to_hex());
     configure_production_cargo_tool_environment(cargo.as_command_mut());
+    native_policy_export::configure(cargo.as_command_mut(), policy_export)?;
     scrub_simulation_build_environment(cargo.as_command_mut());
     configure_production_target_environment(cargo.as_command_mut(), context.target_profile);
     if context.requires_locked_closure {
@@ -1910,14 +2012,17 @@ fn run_cargo_with_backend_inner(
             );
         }
         inject_production_application_runner(
-            &context.project,
-            &context.pinned_cargo,
-            &context.pinned_rustc,
-            context.generation.artifact_dir(),
+            context,
             production_plan.host_mut().args_mut(),
+            compiler_service,
         )?;
     }
-    run_production_host_cargo(context, production_plan.host(), protected_release)?;
+    run_production_host_cargo(
+        context,
+        production_plan.host(),
+        protected_release,
+        compiler_service,
+    )?;
     Ok(())
 }
 
@@ -2197,6 +2302,70 @@ fn run_production_host_cargo(
     context: &BackendRunContext,
     phase: &production_cargo_plan::CargoPhase,
     protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+    compiler_service: application_handoff::ApplicationCompilerServiceExposureV1,
+) -> Result<(), String> {
+    if compiler_service
+        == application_handoff::ApplicationCompilerServiceExposureV1::NativeCustodianRequired
+    {
+        if phase.command() != "run" {
+            return Err("native custodian host binding is restricted to run".into());
+        }
+        let admission =
+            protected_release.ok_or("native custodian run requires protected release")?;
+        let profile = admission
+            .compiler_execution_profile_v3()
+            .ok_or("native custodian run requires the actual native V3 profile")?;
+        return profile.with_profile_budget(|capability, budget| {
+            let projection =
+                production_host_binding::CommittedNativeHostBindingProjection::prepare(
+                    context, admission, capability, budget,
+                )?;
+            let result =
+                run_production_host_cargo_inner(context, phase, Some(admission), Some(&projection));
+            aggregate_post_spawn_results(
+                result,
+                [(
+                    "native committed host binding revalidation",
+                    projection.revalidate(budget),
+                )],
+            )
+        });
+    }
+    let mut projection = if compiler_service.requires_custodian() {
+        if phase.command() != "run" {
+            return Err("custodian host binding is restricted to run".into());
+        }
+        let admission =
+            protected_release.ok_or("custodian run requires protected release admission")?;
+        Some(production_host_binding::CommittedHostBindingProjection::prepare(context, admission)?)
+    } else {
+        None
+    };
+    let result = run_production_host_cargo_inner(
+        context,
+        phase,
+        protected_release,
+        projection
+            .as_ref()
+            .map(|p| p as &dyn production_host_binding::HostBindingProjection),
+    );
+    aggregate_post_spawn_results(
+        result,
+        [(
+            "committed host binding revalidation",
+            projection.as_mut().map_or(
+                Ok(()),
+                production_host_binding::CommittedHostBindingProjection::revalidate,
+            ),
+        )],
+    )
+}
+
+fn run_production_host_cargo_inner(
+    context: &BackendRunContext,
+    phase: &production_cargo_plan::CargoPhase,
+    protected_release: Option<&authority_release::ProtectedReleaseAdmission>,
+    projection: Option<&dyn production_host_binding::HostBindingProjection>,
 ) -> Result<(), String> {
     context.project.validate_paths()?;
     context.target_dir.validate_path("Cargo target directory")?;
@@ -2226,6 +2395,8 @@ fn run_production_host_cargo(
         .env("RUSTC_WORKSPACE_WRAPPER", "")
         .env_remove(CARGO_PRIMARY_PACKAGE_ENV)
         .env_remove(BINDING_WRAPPER_MODE_ENV)
+        .env_remove(production_host_binding::MODE_ENV)
+        .env_remove(reserved_fe2o3_symbols::CRATE_BINDING_ID_ENV_V1)
         .env_remove(MANAGED_RUSTC_ARGS_ENV)
         .env_remove(EXPECTED_RUSTC_SHA256_ENV)
         .env_remove(EXPECTED_COMPILER_CLOSURE_SHA256_ENV)
@@ -2266,22 +2437,37 @@ fn run_production_host_cargo(
         admission.configure_descendant(cargo.as_command_mut());
     }
 
+    if let Some(projection) = projection {
+        projection.configure_child(cargo.as_command_mut(), &context.pinned_binding_wrapper)?;
+    } else if phase.command() == "run" {
+        context
+            .pinned_binding_wrapper
+            .inherit_for_child_at(cargo.as_command_mut(), CARGO_BINDING_CHECK_WRAPPER_CHILD_FD)
+            .map_err(|error| format!("inherit production application runner: {error}"))?;
+    }
     let invocation_authorization =
         cargo_invocation_boundary::InvocationAuthorizationRegistryV1::new();
-    let pending_invocation_boundary =
-        cargo_invocation_boundary::PendingCargoInvocationBoundary::start(
+    // Host run has no compiler broker or permit consumer. Its application installs
+    // the one-exec/no-fork listener; Linux rejects nesting another USER_NOTIF listener.
+    let pending_invocation_boundary = if phase.command() == "run" {
+        None
+    } else {
+        let pending = cargo_invocation_boundary::PendingCargoInvocationBoundary::start(
             &context.pinned_cargo,
             &context.pinned_binding_wrapper,
             None,
             invocation_authorization.clone(),
         )?;
-    pending_invocation_boundary.configure_child(cargo.as_command_mut());
+        pending.configure_child(cargo.as_command_mut());
+        Some(pending)
+    };
     let mut cargo_child = cargo
         .spawn()
         .map_err(|error| format!("failed to run pinned host Cargo: {error}"))?;
-    let invocation_boundary =
-        match pending_invocation_boundary.complete(cargo_child.id(), invocation_authorization) {
-            Ok(boundary) => boundary,
+    let invocation_boundary = match pending_invocation_boundary {
+        None => None,
+        Some(pending) => match pending.complete(cargo_child.id(), invocation_authorization) {
+            Ok(boundary) => Some(boundary),
             Err(error) => {
                 let _ = cargo_child.kill();
                 let cleanup_result = cargo_child.wait().map(|_| ()).map_err(|cleanup| {
@@ -2301,9 +2487,10 @@ fn run_production_host_cargo(
                     ],
                 );
             }
-        };
+        },
+    };
     let status = cargo_child.wait();
-    let boundary_result = invocation_boundary.finish();
+    let boundary_result = invocation_boundary.map_or(Ok(()), |boundary| boundary.finish());
     let lib_tree_result = context.pinned_rustc.revalidate_lib_tree();
     let closure_result = context
         .authorized_closure
@@ -2416,29 +2603,55 @@ fn resolve_application_runner(
 }
 
 fn inject_production_application_runner(
-    project: &project::CargoProject,
-    pinned_cargo: &pinned_executable::PinnedExecutable,
-    pinned_rustc: &PinnedRustc,
-    artifact_dir: &project::PinnedDirectory,
+    context: &BackendRunContext,
     args: &mut Vec<OsString>,
+    compiler_service: application_handoff::ApplicationCompilerServiceExposureV1,
 ) -> Result<(), String> {
-    let (target, original_runner) =
-        resolve_application_runner(project, pinned_cargo, pinned_rustc, args, true)?;
+    let (target, original_runner) = resolve_application_runner(
+        &context.project,
+        &context.pinned_cargo,
+        &context.pinned_rustc,
+        args,
+        true,
+    )?;
     if !original_runner.is_empty() {
         return Err(
             "production Worker V3 application handoff does not permit an intermediate Cargo runner"
                 .to_owned(),
         );
     }
-    let executable = application_runner_executable()?;
+    let executable = context
+        .pinned_binding_wrapper
+        .fixed_child_path(CARGO_BINDING_CHECK_WRAPPER_CHILD_FD)
+        .map_err(|error| format!("retain production application runner: {error}"))?;
+    let artifact_dir = context.generation.artifact_dir();
     let (artifact_device, artifact_inode) = artifact_dir.identity_parts();
     inject_serialized_application_runner_config(
         args,
         &target,
         vec![
-            executable,
+            executable.to_string_lossy().into_owned(),
             INTERNAL_RUNNER_ARG.to_string(),
-            application_handoff::RUNNER_CONTEXT_VERSION.to_string(),
+            match compiler_service {
+                application_handoff::ApplicationCompilerServiceExposureV1::CustodianRequired => {
+                    application_handoff::RUNNER_CUSTODIAN_CONTEXT_VERSION
+                }
+                application_handoff::ApplicationCompilerServiceExposureV1::NativeCustodianRequired => {
+                    application_handoff::RUNNER_NATIVE_CUSTODIAN_CONTEXT_VERSION
+                }
+                application_handoff::ApplicationCompilerServiceExposureV1::Required => {
+                    application_handoff::RUNNER_CONTEXT_VERSION
+                }
+                #[cfg(any(
+                    test,
+                    feature = "application-handoff-adversarial-fixture",
+                    feature = "application-handoff-fault-injection-test-only"
+                ))]
+                application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled => {
+                    return Err("production runner requires compiler service custody".into());
+                }
+            }
+            .to_string(),
             hex_encode(os_bytes(artifact_dir.display_path().as_os_str())),
             artifact_device.to_string(),
             artifact_inode.to_string(),
@@ -2446,15 +2659,6 @@ fn inject_production_application_runner(
             "0".to_owned(),
         ],
     )
-}
-
-fn application_runner_executable() -> Result<String, String> {
-    let executable = env::current_exe()
-        .map_err(|error| format!("failed to locate cargo-fe2o3 runner executable: {error}"))?;
-    executable.to_str().map(str::to_owned).ok_or_else(|| {
-        "cargo fe2o3 run requires a UTF-8 cargo-fe2o3 executable path for Cargo runner configuration"
-            .to_string()
-    })
 }
 
 fn inject_serialized_application_runner_config(
@@ -2820,6 +3024,15 @@ fn run_application_boundary_result(args: &[OsString]) -> Result<std::process::Ex
             "production Worker V3 runner does not admit an intermediate Cargo runner".to_owned(),
         );
     }
+    if compiler_service
+        == application_handoff::ApplicationCompilerServiceExposureV1::NativeCustodianRequired
+    {
+        return application_handoff::native::run(
+            &artifact_dir,
+            application,
+            &args[application_index + 1..],
+        );
+    }
     let handoff = application_handoff::PinnedApplicationEnvelope::discover(&artifact_dir)?
         .ok_or_else(|| {
             "production Worker V3 runner requires a canonical load envelope".to_owned()
@@ -2843,6 +3056,14 @@ fn application_runner_policy(
     String,
 > {
     match context.to_str() {
+        Some(application_handoff::RUNNER_NATIVE_CUSTODIAN_CONTEXT_VERSION) => Ok((
+            application_handoff::ApplicationTimeouts::PRODUCTION,
+            application_handoff::ApplicationCompilerServiceExposureV1::NativeCustodianRequired,
+        )),
+        Some(application_handoff::RUNNER_CUSTODIAN_CONTEXT_VERSION) => Ok((
+            application_handoff::ApplicationTimeouts::PRODUCTION,
+            application_handoff::ApplicationCompilerServiceExposureV1::CustodianRequired,
+        )),
         Some(application_handoff::RUNNER_CONTEXT_VERSION) => Ok((
             application_handoff::ApplicationTimeouts::PRODUCTION,
             application_handoff::ApplicationCompilerServiceExposureV1::Required,
@@ -2918,29 +3139,45 @@ fn run_application_with_handoff(
         application_timeouts,
         compiler_service,
     )?;
-    let mut process = process_execution::spawn(child.as_command_mut())
+    let process = process_execution::spawn(child.as_command_mut())
         .map_err(|error| format!("failed to launch pinned Cargo application: {error}"))?;
+    let mut spawned_ack = match pending_ack.after_spawn(&process) {
+        Ok(spawned_ack) => spawned_ack,
+        Err(failure) => {
+            let (error, cleanup) = failure.into_parts();
+            drop(handoff);
+            return terminate_application_with_error(process, cleanup, error);
+        }
+    };
     let compiler_execution_readiness = match compiler_execution_boundary {
-        Some(boundary) => match boundary.finish(process.id()) {
-            Ok(readiness) => Some(readiness),
-            Err(error) => {
-                let mut primary = error.to_string();
-                let cleanup = match pending_ack.into_cleanup_after_spawn(&process) {
-                    Ok(cleanup) => cleanup,
-                    Err(failure) => {
-                        let (cleanup_error, cleanup) = failure.into_parts();
-                        primary.push_str("; application sandbox cleanup admission failed: ");
-                        primary.push_str(&cleanup_error);
-                        cleanup
-                    }
-                };
-                drop(handoff);
-                return terminate_application_with_error(process, cleanup, primary);
+        Some(boundary) => {
+            match spawned_ack.take_registration_transfer().and_then(
+                |(proof, inputs, selected_service)| {
+                    boundary
+                        .finish_application(
+                            spawned_ack.retained_child(),
+                            proof,
+                            inputs,
+                            spawned_ack.deadline(),
+                            selected_service,
+                        )
+                        .map_err(|error| error.to_string())
+                },
+            ) {
+                Ok(readiness) => Some(readiness),
+                Err(error) => {
+                    drop(handoff);
+                    return terminate_application_with_error(
+                        process,
+                        spawned_ack.into_cleanup(),
+                        error.to_string(),
+                    );
+                }
             }
-        },
+        }
         None => None,
     };
-    let active_handoff = match pending_ack.await_after_spawn(&mut process) {
+    let active_handoff = match spawned_ack.await_ack(&process) {
         Ok(active_handoff) => active_handoff,
         Err(failure) => {
             let (error, cleanup) = failure.into_parts();
@@ -3960,6 +4197,8 @@ mod production_source_isa_characteristic_matrix_v2;
 
 #[cfg(test)]
 mod tests {
+    mod application_custody;
+
     use super::{
         BindingHostMode, MAX_SOURCE_ISA_COLLECTION_STDERR_LINE_BYTES_V1, ObserverFinishOnDropV1,
         TARGET_ENV, aggregate_post_spawn_results,
@@ -3983,20 +4222,6 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static OBSERVER_FINISH_CALLS: AtomicUsize = AtomicUsize::new(0);
-
-    #[test]
-    fn internal_short_timeout_runner_context_selects_short_policy() {
-        assert_eq!(
-            application_runner_policy(OsStr::new(
-                crate::application_handoff::RUNNER_SHORT_TIMEOUT_TEST_CONTEXT_VERSION
-            ))
-            .unwrap(),
-            (
-                crate::application_handoff::ApplicationTimeouts::TEST_SHORT,
-                crate::application_handoff::ApplicationCompilerServiceExposureV1::TestDisabled,
-            )
-        );
-    }
 
     struct FailingWriter {
         bytes_before_failure: usize,

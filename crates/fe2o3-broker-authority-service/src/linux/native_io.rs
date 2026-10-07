@@ -111,6 +111,25 @@ pub(super) fn inspect_process_start_time_ticks(pid: u32) -> Result<u64> {
     read_stat_record_with(pid, |bytes| rustix::io::read(&record, bytes))
 }
 
+pub(super) fn inspect_process_parent(pid: u32, start_time: u64, parent: u32) -> Result<()> {
+    let _validated_self = open_validated_procfs_self()?;
+    let mut path = [0; PATH_BYTES];
+    let path = decimal_path(b"/proc/", pid, b"/stat", &mut path)?;
+    let record = rustix::fs::open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty())
+        .map(File::from)
+        .map_err(|errno| {
+            Error::io(
+                Kind::InspectClientStartTime,
+                "cannot open bounded client parentage record",
+                errno,
+            )
+        })?;
+    checks::require_procfs(&record, "client process parentage record")?;
+    read_parent_record_with(pid, start_time, parent, |bytes| {
+        rustix::io::read(&record, bytes)
+    })
+}
+
 fn open_validated_procfs_self() -> Result<File> {
     let self_entry = rustix::fs::open(
         c"/proc/self",
@@ -198,6 +217,48 @@ fn read_stat_record_with(
         ));
     }
     checks::parse_process_start_time_ticks(&bytes[..length], pid)
+}
+
+fn read_parent_record_with(
+    pid: u32,
+    start_time: u64,
+    parent: u32,
+    read: impl FnMut(&mut [u8]) -> rustix::io::Result<usize>,
+) -> Result<()> {
+    let mut bytes = [0; RECORD_BYTES];
+    let length = read_record_with(
+        &mut bytes,
+        Kind::InspectClientStartTime,
+        "cannot read bounded client parentage record",
+        read,
+    )?;
+    if length == 0 || length > MAX_PROC_STAT_BYTES as usize {
+        return Err(Error::new(
+            Kind::InspectClientStartTime,
+            "client parentage record is empty or exceeds 4096 bytes",
+        ));
+    }
+    let contents = &bytes[..length];
+    checks::require_client_start_time(
+        checks::parse_process_start_time_ticks(contents, pid)?,
+        start_time,
+    )?;
+    let close = contents
+        .iter()
+        .rposition(|byte| *byte == b')')
+        .expect("stat validated");
+    let recorded_parent = contents[close + 1..]
+        .split(u8::is_ascii_whitespace)
+        .filter(|field| !field.is_empty())
+        .nth(1);
+    let mut digits = [0; PATH_BYTES];
+    if recorded_parent != Some(decimal_path(b"", parent, b"", &mut digits)?.to_bytes()) {
+        return Err(Error::new(
+            Kind::InspectClientStartTime,
+            "retained process does not have the expected live parent",
+        ));
+    }
+    Ok(())
 }
 
 fn read_record_with(

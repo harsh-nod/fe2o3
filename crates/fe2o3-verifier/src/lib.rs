@@ -12,6 +12,9 @@
 //! work, and neither path grants proof or GPU authority. The legacy planning path
 //! retains caller-supplied identities for compatibility.
 
+#[cfg(test)]
+extern crate self as fe2o3_verifier;
+
 mod artifact_record;
 mod authenticated_execution;
 mod authenticated_proof_binding;
@@ -20,6 +23,7 @@ mod compiler_multi_root_proof_v1;
 mod compiler_multi_root_target_lineage_v1;
 mod compiler_native_conditional_handoff_v5;
 mod compiler_native_conditional_policy_roster_v1;
+mod native_conditional_root_policy_file_v1;
 pub use compiler_native_conditional_handoff_v5::{
     CompilerConditionalNativeSemanticHandoffErrorV5,
     RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
@@ -33,6 +37,12 @@ pub use compiler_native_conditional_policy_roster_v1::{
     reconstruct_inert_native_conditional_policy_roster_in_original_account_v1,
     reconstruct_inert_native_conditional_policy_roster_v1,
 };
+pub use native_conditional_root_policy_file_v1::{
+    MAX_NATIVE_CONDITIONAL_ROOT_POLICY_FILE_BYTES_V1,
+    encode_native_conditional_root_policy_file_v1,
+    recover_native_conditional_handoff_under_policy_file_v1,
+    validate_native_conditional_root_policy_file_v1,
+};
 pub mod compiler_native_conditional_source_packet_v2;
 pub use compiler_native_conditional_source_packet_v2::{
     NativeConditionalPacketErrorV2, NativeConditionalSourcePacketInputV2,
@@ -43,9 +53,14 @@ mod compiler_native_source_proof_v1;
 mod compiler_native_symbol_manifest_v1;
 mod compiler_nominal_abi_v3;
 mod compiler_proof_binding_v3;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod compiler_proof_broker_v1;
 mod compiler_refined_forwarding_output_v1;
 mod compiler_target_lineage_v1;
 mod conditional_contract_request_v2;
+mod conditional_fill_program_v1;
+mod conditional_fill_refinement_v1;
+mod conditional_output_evidence_v1;
 mod conditional_ranked_formulas_v1;
 mod mixed_native_correspondence_v60;
 mod mixed_native_correspondence_v89;
@@ -144,9 +159,9 @@ pub use authenticated_verus_execution_v2::{
     RuntimeExecutableBaselineV2, VerusExecutionRoleV2, execute_authenticated_verus_v2,
 };
 pub use compiler_multi_root_proof_v1::{
-    CompilerMultiRootProofValidationErrorV1, ValidatedCompilerMultiRootKernelIrV1,
-    ValidatedCompilerMultiRootProofInputsV1, ValidatedCompilerMultiRootProofRootV1,
-    validate_compiler_multi_root_proof_inputs_v1,
+    CompilerMultiRootProofValidationErrorV1, ValidatedCompilerKernelIrV1,
+    ValidatedCompilerMultiRootKernelIrV1, ValidatedCompilerMultiRootProofInputsV1,
+    ValidatedCompilerMultiRootProofRootV1, validate_compiler_multi_root_proof_inputs_v1,
 };
 pub use compiler_multi_root_target_lineage_v1::{
     ValidatedCompilerMultiRootTargetLineageV1, validate_compiler_multi_root_target_lineage_v1,
@@ -158,9 +173,10 @@ pub use compiler_nominal_abi_v3::{
 };
 pub use compiler_proof_binding_v3::{
     CompilerProofInputValidationErrorV3, CompilerProofInputValidationErrorV4,
-    ValidatedCompilerProofInputsV3, ValidatedCompilerProofInputsV4,
+    ConditionalCompilerProofInputValidationErrorV1, ValidatedCompilerProofInputsV3,
+    ValidatedCompilerProofInputsV4, ValidatedConditionalCompilerProofInputsV1,
     VerifiedSemanticU32InductionKirAnchorV1, validate_compiler_proof_inputs_v3,
-    validate_compiler_proof_inputs_v4,
+    validate_compiler_proof_inputs_v4, validate_conditional_compiler_proof_inputs_v1,
 };
 pub use compiler_refined_forwarding_output_v1::{
     CheckedCompilerRefinedForwardingOutputV1, CompilerRefinedForwardingOutputErrorV1,
@@ -198,9 +214,35 @@ pub use authenticated_proof_binding::{
     PersistentlyFreshProofExecutableBindingV1, PersistentlyFreshProofExecutableIdentityV1,
     bind_authenticated_proof_executable_persistent_v1, bind_authenticated_proof_executable_v1,
 };
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use compiler_proof_broker_v1::{
+    COMPILER_PROOF_BROKER_CHILD_FD_V1, COMPILER_PROOF_ENDPOINT_CHILD_FD_V1,
+    CompilerProofBootstrapV1, CompilerProofBrokerV1, CompilerProofSessionCancellationV1,
+    PendingCompilerProofDelegationV1, PendingCompilerProofServerV1,
+    SpawnedCompilerProofDelegationV1, admit_inherited_compiler_proof_runtime_v1,
+};
 pub use compiler_target_lineage_v1::{
     CompilerTargetLineageValidationErrorV1, ValidatedCompilerTargetLineageV1,
-    validate_compiler_target_lineage_v1,
+    validate_compiler_target_lineage_v1, validate_conditional_compiler_target_lineage_v1,
+};
+pub use conditional_fill_program_v1::native_v1::{
+    CheckedNativeConditionalFillProgramV1, NativeConditionalFillProgramErrorV1,
+    NativeConditionalFillProgramStorageV1, check_native_conditional_fill_program_v1,
+};
+pub use conditional_fill_program_v1::{
+    CheckedConditionalFillProgramV1, ConditionalFillProgramErrorV1,
+    check_conditional_fill_program_v1,
+};
+pub use conditional_fill_refinement_v1::{
+    ConditionalFillRefinementErrorV1, NativeConditionalFillRefinementErrorV1,
+    NativeConditionalFillRefinementExecutionV1, NativeConditionalFillRefinementStorageV1,
+    OwnedConditionalFillRefinementExecutionV1, ProductionConditionalFillRefinementExecutionV1,
+    execute_conditional_fill_refinement_v1, execute_native_conditional_fill_refinement_v1,
+    execute_owned_conditional_fill_refinement_v1,
+};
+pub use conditional_output_evidence_v1::{
+    CanonicalConditionalOutputEvidenceV1, ConditionalOutputEvidenceErrorV1,
+    ConditionalOutputLocationV1, InertConditionalOutputObligationV1,
 };
 pub use control_flow_binding::{
     AUTHENTICATED_CONTROL_FLOW_EXECUTABLE_BINDING_DOMAIN_V1,
@@ -231,7 +273,11 @@ pub use functional_refinement_receipt_v2::{
 };
 pub use functional_refinement_runtime_v1::{
     FunctionalRefinementRuntimeErrorV1, FunctionalRefinementVerusRuntimeIdentityV1,
-    FunctionalRefinementVerusRuntimeLeaseV1,
+    FunctionalRefinementVerusRuntimeLeaseV1, PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+};
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use functional_refinement_runtime_v1::{
+    FunctionalRefinementRuntimeResourceErrorV1, FunctionalRefinementRuntimeStorageV1,
 };
 pub use generated_verus_proof_input_v3::{
     CanonicalGeneratedVerusProofInputV3, GeneratedVerusProofInputErrorV3,

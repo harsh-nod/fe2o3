@@ -45,3 +45,6 @@ use ProtectedIssuerDispatchLimitsV3 as DispatchLimits;
 use ProtectedIssuerDispatchReportV3 as DispatchReport;
 use ProtectedIssuerDispatchStopV3 as DispatchStop;
 include!("listener_native_controller_body.rs");
+
+#[path = "listener_native_application_v3.rs"]
+pub(crate) mod application;

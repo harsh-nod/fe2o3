@@ -425,12 +425,13 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
         let floor = native::sum(&[self.retained, publication.retained_storage()])?;
         b.with_prepaid_scope(floor, 8, LOCAL_WORK, FRAME, |b| {
             self.require_publication_phase()?;
-            Ok(match &self.trace {
+            match &self.trace {
                 TraceOwner::Original(trace) => publication.revalidate(trace, b)?,
                 TraceOwner::Runtime(trace) => {
                     publication.revalidate_runtime(trace.observation(), b)?
                 }
-            })
+            }
+            Ok(())
         })
     }
 
@@ -445,9 +446,7 @@ impl<'work, T: Send + 'static> CompilerTrace<'work, T> {
 
     /// One original-account consuming wait; this does not release the spawn lease.
     pub(crate) fn poll(&mut self, b: &mut Budget<'_>) -> Result<Event> {
-        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
-            Ok(self.trace.poll(b)?)
-        })
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| self.trace.poll(b))
     }
 
     /// Confirm only the owned, still-held first-exec observation. This releases

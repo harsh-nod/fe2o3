@@ -14,6 +14,10 @@ use fe2o3_protected_static_executable::{
 };
 use std::fs::File;
 
+#[path = "native_application_mode.rs"]
+mod application_mode;
+pub use application_mode::run_inherited_native_supervisor_v3;
+
 /// Local startup work including descriptor custody, root checks and invocation.
 /// Native admission, profile, image, readiness and dispatch operations charge extra.
 /// The extra 128 fixed 1024-unit allowances cover local checks and owner cleanup,

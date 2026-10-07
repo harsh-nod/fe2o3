@@ -39,6 +39,10 @@ mod gfx942_atomic_collective_structure;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_exec_control;
 #[cfg(feature = "authenticated-machine-effect")]
+mod gfx942_fill_analysis_v1;
+#[cfg(feature = "gfx942-fill-model")]
+mod gfx942_fill_wave_v1;
+#[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_machine_dataflow;
 #[cfg(feature = "authenticated-machine-effect")]
 mod gfx942_machine_register;
@@ -94,6 +98,10 @@ pub use formal_path_conflicts_v1::*;
 pub use gfx942_atomic_collective_structure::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_exec_control::*;
+#[cfg(feature = "authenticated-machine-effect")]
+pub use gfx942_fill_analysis_v1::*;
+#[cfg(feature = "gfx942-fill-model")]
+pub use gfx942_fill_wave_v1::*;
 #[cfg(feature = "authenticated-machine-effect")]
 pub use gfx942_machine_dataflow::*;
 #[cfg(feature = "authenticated-machine-effect")]

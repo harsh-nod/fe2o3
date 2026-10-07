@@ -15,6 +15,35 @@ pub struct VmKeyV1 {
 }
 
 #[derive(PartialEq, Eq)]
+pub enum DeviceAdmissionTargetProfileV1 {
+    Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0,
+    Gfx950XnackMinusSpxNps1Kfd1_18Drm3_64_0,
+}
+
+#[derive(PartialEq, Eq)]
+pub enum ComputeAqlTargetProfileV1 {
+    Gfx942XnackMinusSpxNps1Kfd1_18,
+    Gfx950XnackMinusSpxNps1Kfd1_18,
+}
+
+pub open spec fn device_target_profile_v1(
+    target: ComputeAqlTargetProfileV1,
+) -> DeviceAdmissionTargetProfileV1 {
+    match target {
+        ComputeAqlTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18 =>
+            DeviceAdmissionTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0,
+        ComputeAqlTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18 =>
+            DeviceAdmissionTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18Drm3_64_0,
+    }
+}
+
+pub struct AdmittedQueueDeviceV1 {
+    pub key: DeviceKeyV1,
+    pub target_profile: DeviceAdmissionTargetProfileV1,
+    pub profile_identity: nat,
+}
+
+#[derive(PartialEq, Eq)]
 pub struct MappingKeyV1 {
     pub vm: VmKeyV1,
     pub allocation_id: nat,
@@ -40,12 +69,19 @@ pub struct QueueResourceV1 {
 }
 
 pub struct QueuePlanV1 {
+    pub target: ComputeAqlTargetProfileV1,
+    pub current_device: AdmittedQueueDeviceV1,
     pub vm: VmKeyV1,
     pub plan_id: nat,
     pub queue_instance_id: nat,
     pub queue_generation: nat,
     pub configuration_id: nat,
     pub resources: Seq<QueueResourceV1>,
+}
+
+pub open spec fn queue_target_binding_v1(plan: QueuePlanV1) -> bool {
+    &&& plan.vm.device == plan.current_device.key
+    &&& device_target_profile_v1(plan.target) == plan.current_device.target_profile
 }
 
 pub open spec fn queue_resources_distinct_v1(
@@ -58,6 +94,7 @@ pub open spec fn queue_resources_distinct_v1(
 }
 
 pub open spec fn canonical_queue_resources_v1(plan: QueuePlanV1) -> bool {
+    &&& queue_target_binding_v1(plan)
     &&& plan.vm.device.physical > 0
     &&& plan.vm.device.generation > 0
     &&& plan.vm.id > 0
@@ -120,6 +157,12 @@ pub struct QueueRecordV1 {
     pub native_queue_id: Option<nat>,
     pub configuration_id: nat,
     pub resume_phase: Option<QueuePhaseV1>,
+}
+
+// The executable invariant rechecks plan shape in every phase, including terminals.
+pub open spec fn queue_lifecycle_target_invariant_v1(queues: Seq<QueueRecordV1>) -> bool {
+    forall |i: int| 0 <= i < queues.len()
+        ==> queue_target_binding_v1(#[trigger] queues[i].plan)
 }
 
 pub open spec fn queue_retains_resources_v1(phase: QueuePhaseV1) -> bool {
@@ -434,6 +477,13 @@ pub open spec fn example_resource_v1(
 
 pub open spec fn example_plan_v1() -> QueuePlanV1 {
     QueuePlanV1 {
+        target: ComputeAqlTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18,
+        current_device: AdmittedQueueDeviceV1 {
+            key: example_vm_v1().device,
+            target_profile:
+                DeviceAdmissionTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0,
+            profile_identity: 1,
+        },
         vm: example_vm_v1(),
         plan_id: 1,
         queue_instance_id: 1,
@@ -447,10 +497,115 @@ pub open spec fn example_plan_v1() -> QueuePlanV1 {
     }
 }
 
+pub open spec fn example_plan_for_target_v1(target: ComputeAqlTargetProfileV1) -> QueuePlanV1 {
+    let original = example_plan_v1();
+    QueuePlanV1 {
+        target,
+        current_device: AdmittedQueueDeviceV1 {
+            key: original.current_device.key,
+            target_profile: device_target_profile_v1(target),
+            profile_identity: original.current_device.profile_identity,
+        },
+        vm: original.vm,
+        plan_id: original.plan_id,
+        queue_instance_id: original.queue_instance_id,
+        queue_generation: original.queue_generation,
+        configuration_id: original.configuration_id,
+        resources: original.resources,
+    }
+}
+
 pub proof fn canonical_four_resource_plan_is_inhabited_v1()
     ensures
         canonical_queue_resources_v1(example_plan_v1()),
 {
+}
+
+pub proof fn both_target_queue_plans_are_inhabited_v1(target: ComputeAqlTargetProfileV1)
+    ensures
+        canonical_queue_resources_v1(example_plan_for_target_v1(target)),
+        example_plan_for_target_v1(target).target == target,
+{
+}
+
+pub proof fn same_device_key_does_not_authorize_wrong_target_queue_v1(plan: QueuePlanV1)
+    requires
+        plan.vm.device == plan.current_device.key,
+        device_target_profile_v1(plan.target) != plan.current_device.target_profile,
+    ensures
+        !queue_target_binding_v1(plan),
+        !canonical_queue_resources_v1(plan),
+{
+}
+
+pub proof fn target_binding_is_retained_by_every_modeled_transition_v1(
+    old: QueueRecordV1,
+    status: QueueStatusV1,
+    field: CreateQueueIdFieldV1,
+    collision: bool,
+    unresolved: bool,
+    operation: QueueOperationV1,
+)
+    requires
+        canonical_queue_resources_v1(old.plan),
+    ensures
+        canonical_queue_resources_v1(
+            observe_create_v1(old, status, field, collision, unresolved).plan,
+        ),
+        observe_create_v1(old, status, field, collision, unresolved).plan.target == old.plan.target,
+        observe_create_v1(old, status, field, collision, unresolved).plan.current_device
+            == old.plan.current_device,
+        canonical_queue_resources_v1(observe_non_create_indeterminate_v1(old, operation).plan),
+        observe_non_create_indeterminate_v1(old, operation).plan.target == old.plan.target,
+        observe_non_create_indeterminate_v1(old, operation).plan.current_device
+            == old.plan.current_device,
+        canonical_queue_resources_v1(cancel_plan_v1(old).plan),
+        cancel_plan_v1(old).plan.target == old.plan.target,
+        cancel_plan_v1(old).plan.current_device == old.plan.current_device,
+        canonical_queue_resources_v1(begin_destroy_v1(old).plan),
+        begin_destroy_v1(old).plan.target == old.plan.target,
+        begin_destroy_v1(old).plan.current_device == old.plan.current_device,
+        canonical_queue_resources_v1(observe_destroy_success_v1(old).plan),
+        observe_destroy_success_v1(old).plan.target == old.plan.target,
+        observe_destroy_success_v1(old).plan.current_device == old.plan.current_device,
+        canonical_queue_resources_v1(observe_destroy_failed_no_effect_v1(old).plan),
+        observe_destroy_failed_no_effect_v1(old).plan.target == old.plan.target,
+        observe_destroy_failed_no_effect_v1(old).plan.current_device == old.plan.current_device,
+{
+}
+
+pub proof fn lifecycle_invariant_rejects_target_substitution_in_any_phase_v1(
+    queues: Seq<QueueRecordV1>,
+    index: int,
+)
+    requires
+        0 <= index < queues.len(),
+        device_target_profile_v1(queues[index].plan.target)
+            != queues[index].plan.current_device.target_profile,
+    ensures
+        !queue_lifecycle_target_invariant_v1(queues),
+{
+}
+
+pub proof fn appending_matching_queue_preserves_target_invariant_v1(
+    queues: Seq<QueueRecordV1>,
+    next: QueueRecordV1,
+)
+    requires
+        queue_lifecycle_target_invariant_v1(queues),
+        canonical_queue_resources_v1(next.plan),
+    ensures
+        queue_lifecycle_target_invariant_v1(queues.push(next)),
+{
+    assert forall |i: int| 0 <= i < queues.push(next).len()
+        implies queue_target_binding_v1(#[trigger] queues.push(next)[i].plan) by {
+        if i < queues.len() {
+            assert(queues.push(next)[i] == queues[i]);
+        } else {
+            assert(i == queues.len());
+            assert(queues.push(next)[i] == next);
+        }
+    }
 }
 
 pub proof fn exact_four_resources_are_compositely_rooted_and_distinct_v1(plan: QueuePlanV1)

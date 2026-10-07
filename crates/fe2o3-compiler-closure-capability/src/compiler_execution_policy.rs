@@ -162,7 +162,11 @@ mod tests {
 
     #[test]
     fn inherited_policy_is_retained_at_a_private_descriptor() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "compiler_execution_policy::tests::inherited_policy_is_retained_at_a_private_descriptor",
+        ) {
+            return;
+        }
         let expected = policy(7);
         let capability = CompilerExecutionPolicyCapabilityV1::create(expected.clone()).unwrap();
         let child_fd = 511;
@@ -183,7 +187,11 @@ mod tests {
 
     #[test]
     fn child_receives_only_the_requested_policy_descriptor() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "compiler_execution_policy::tests::child_receives_only_the_requested_policy_descriptor",
+        ) {
+            return;
+        }
         let capability = CompilerExecutionPolicyCapabilityV1::create(policy(7)).unwrap();
         let child_fd = 511;
         let mut command = std::process::Command::new("/bin/sh");
@@ -199,7 +207,11 @@ mod tests {
 
     #[test]
     fn canonical_child_installation_reserves_fd_202_and_exact_bytes() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "compiler_execution_policy::tests::canonical_child_installation_reserves_fd_202_and_exact_bytes",
+        ) {
+            return;
+        }
         let expected = policy(7);
         let path = std::env::temp_dir().join(format!(
             "fe2o3-compiler-execution-policy-expected-{}",

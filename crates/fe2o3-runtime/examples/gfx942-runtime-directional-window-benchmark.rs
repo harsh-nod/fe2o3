@@ -18,6 +18,9 @@ const USAGE: &str =
 
 type BenchmarkResult<T> = Result<T, Box<dyn Error>>;
 
+#[path = "support/directional_copy_diagnostic.rs"]
+mod diagnostic;
+
 #[derive(Debug)]
 struct CopyOnlyAuthorityV1;
 
@@ -155,6 +158,9 @@ fn run_copy(
 
 fn main() -> BenchmarkResult<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    if let Some(config) = diagnostic::parse_config_v1(&args)? {
+        return diagnostic::run_v1(config, &mut std::io::stdout().lock());
+    }
     if args.len() != 4 {
         return Err(USAGE.into());
     }

@@ -90,3 +90,34 @@ Live construction, opaque durable persistence, and strict V2 restart recovery ar
 implemented. They remain authority-free: protected policy comparison, rollback
 currentness, and Worker verifier authority are still required. Cargo and host
 require the top-level V2 envelope in the sole production path.
+
+## Native application proof transport
+
+The distinct native transport preserves the V3 compiler handoff and V5 readiness
+association without projecting either into legacy application records. Its proof
+session binds registration, application/root/controller nonces, native deployment
+identity and controller credentials. These are inert descriptions; original pidfds,
+protected deployment provenance, sender credentials and activation custody remain
+mandatory independent checks.
+
+Native proof inputs occupy 232 bytes and describe exactly two ordered sealed files:
+V5 readiness and finalized machine payload. The 808-byte evidence record binds
+those inputs to the V5 handoff, final V12 KIR, analyzer request/bundle/receipt and
+execution challenge, generated source/obligation/signed receipt, receipt key and
+native V3 carriage/subject/policy identities. Every byte digest includes an exact
+length. Only final-KIR-to-gfx942 conditional-fill boundary 6 is described. These
+caller-declared fields must be recomputed from actual recovered and retained owners;
+decoding does not execute a proof or authenticate a self-signed receipt.
+
+Frames are bounded to 904 bytes. Request requires exactly two rights; Active,
+Proved, Probe, Retained and Rejected require none. There is no release, settlement,
+or launch operation. Codecs enforce canonical framing, session equality and local
+kind/sequence shapes; live owners must enforce direction, request-once and monotonic
+probe phases. Construction, nested decoding and equality checks charge the original
+logical resource account. Output charges are returned unreserved, input reservations
+remain owned by the caller, and work/peak/denial histories are never reset.
+
+Proof content refinement does not certify currentness. The host must separately
+retain the protected native V3 current-record exchange and join it with the original
+V5 publication, carriage and protected proof custody. No current-attestation claim,
+legacy conversion, native loading authority or GPU execution is provided here.

@@ -23,6 +23,9 @@ It provides:
 - an additive V2 fixed-batch type and reservation transition for 1 through
   8192 packets, with the exact-cardinality packet array heap-owned, while
   retaining the exact V1 256-packet boundary;
+- an additive dependency-dispatch planner that packs zero through 256 distinct
+  aligned signal observations into five-wide BARRIER_AND packets, followed by
+  one independent or wait-for-prior kernel dispatch, with at most 53 packets;
 - the exact 64-byte, 64-aligned busy-wait completion signal initialized to one,
   plus an exact inert pending-signal byte image;
 - pure classification of a completion value already acquired elsewhere;
@@ -62,6 +65,18 @@ The prepared-batch target preserves body-before-header call order but remains
 inert. Its callback trait does not authenticate a target implementation,
 perform a release atomic, or prove that indices name the reservation's native
 slots. Those joins remain private responsibilities of the queue owner.
+
+The dependency-dispatch planner reserves its complete arithmetic packet range
+before invoking a target, writes every INVALID body before any release header,
+publishes the final dispatch header last, and names one final doorbell callback.
+Ring occupancy returns the unchanged prepared owner; once target callbacks
+begin, an error returns nonretryable inert terminal custody. This classification
+does not itself retain a native signal, perform a counter or MMIO operation, or
+establish BARRIER_AND consumption, memory visibility, liveness, completion, or
+safe signal recycling. The `no_std` planner also cannot catch a target panic;
+the production `std` adapter must catch unwind and retain and poison the exact
+reservation and native owners as terminal. Those remain KFD queue and
+completion-owner obligations.
 
 The prepared BARRIER_AND value is likewise inert. Its exact bytes and typed
 publication callback do not by themselves prove queue consumption, signal

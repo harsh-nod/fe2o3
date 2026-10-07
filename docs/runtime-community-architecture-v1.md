@@ -282,6 +282,62 @@ scopes; prospective reset and operational checks remain on the publication and
 completion path. This API still requires process teardown after terminal native
 ambiguity.
 
+## Borrowed Native Application Scopes
+
+The additive `with_generated_gfx942_scope_async_v1` API retains generated
+carriers borrowing an original native application proof and resource account.
+It does not move those owners to the threaded engine or synthesize replacement
+accounts. The ownership chain is the original consuming account scope, the
+host's native invocation epoch, and the Context's exclusive lexical epoch.
+Each outer owner retains a private guard, including when an inner future is
+forgotten. Unknown or forgotten live custody fails stop before its enclosing
+resources can be destroyed. These are checked implementation boundaries, not
+a whole-Context formal-refinement claim.
+
+The caller supplies the executor and wake source. Polling an observation future
+does not submit or progress work. The scope's driver progresses existing native
+mechanisms on the caller's thread and awaits the supplied wake source when a
+scan cannot advance. No per-operation thread or nested executor is introduced.
+Deadlines stop observation; they do not establish GPU quiescence. An explicit
+`cancel_before_adoption_v1` operation is narrower: it disposes the original
+never-adopted carrier and releases its exact unpublished hold before reporting
+`CancelledBeforeSubmission`. It produces no decoder/readback result, never
+reuses the slot quota, and refuses graph-owned or already-adopted operations.
+Dropping an observer is not cancellation.
+
+The lexical DAG adapter and threaded engine share `PreparedGraphAdmissionV1`
+and `AdmittedGraphV1`, including the original completion authority, reservation
+token and version ledger. Preparation retains the original graph request on
+refusal. A generated node acquires its exact graph-scoped native hold only when
+the original core makes it ready; native release and original result decoding
+precede graph success. Ordinary copy leaves use the existing Context scheduler
+with one cooperative progress call per stream per pass, not a whole-stream
+flush. The 64 MiB backing-array limit does not purport to bound pointees,
+lower-layer allocations or total process RSS.
+
+This adapter currently admits a single same-device graph in an otherwise empty
+scope. Generated dependency edges order frozen arguments; they do not rebind
+kernel arguments to predecessor-produced data. Cross-device graphs, physical
+overlap, and full A1/A2/A3 refinement remain separate acceptance requirements.
+
+The native production composition is an explicit V5 application handoff over
+the existing protected V3 compiler/currentness deployment. Its root manager,
+native controller, application proof and fixed semantic policy have separate
+identities and approval boundaries. Neither the build-only inert policy-input
+export nor the offline policy-candidate encoder approves that policy or grants
+execution authority. The manager's external cgroup owns process teardown;
+application output or an empty registry cannot substitute for exact child
+reaping and cleanup observations. The closed native kernel profile remains
+`gfx942:xnack-`; an available gfx950 host is not permission to widen it.
+
+The generic CPU pipeline checks the actual native application binding-only
+composition, scoped tests and lifetime/thread-escape compile-fail cases. The
+static CPU lane rebuilds the installed images and exercises deployment contracts
+in disposable private mount namespaces. Neither lane establishes a genuine
+manager/application exchange or GPU execution. Current source-bound results and
+unmet deployment/hardware gates are recorded in
+[`runtime-a123-production-20261006`](evidence/runtime-a123-production-20261006/README.md).
+
 ## Performance Rules
 
 - `fe2o3-completion` transitions update only direct successors. No transition

@@ -1,4 +1,81 @@
 #[test]
+fn closed_fill_policy_binds_limits_command_and_distinct_execution_identity() {
+    use crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2 as P;
+    let closed = P::ClosedConditionalFillV1;
+    assert_eq!(closed.max_total(), 12);
+    assert_eq!(closed.max_live(), 2);
+    assert_eq!(closed.verifier_thread_stack_bytes(), 32 * 1024 * 1024);
+    assert_eq!(closed.extra_verifier_arguments(), ["-V", "no-bv-simplify"]);
+    assert_eq!(closed.canonical_bytes(), b"FE2O3/GENERATED-PROOF/PROCESS-POLICY/CLOSED-CONDITIONAL-FILL/V1\0pinned-verus-b677dd5;max-total=12;max-live=2;num-threads=1;no-bv-simplify;direct-verifier-children;exact-retained-exec-fd-maps;authenticated-terminal;verifier-thread-stack-max=33554432;other-thread-stack-max=33554432;process-stack-max=33554432");
+    let source = CanonicalGeneratedVerusProofInputV3::new(
+        b"verus! { proof fn check() { assert(true); } }\n".to_vec(),
+    )
+    .unwrap();
+    let binding = FunctionalRefinementBindingV2::from_subjects(subjects(), digest(15)).unwrap();
+    let mut observed = output(0, b"verification results:: 1 verified, 0 errors\n", b"");
+    observed.policy = closed;
+    let closed_execution = execution_identity_for_runtime([0x3a; 32], &source, binding, &observed);
+    for other in [
+        P::LegacySingleSolverV1,
+        P::PinnedSingleThreadContextsV2,
+        P::PinnedSingleThreadContextsV3,
+    ] {
+        assert!(other.extra_verifier_arguments().is_empty());
+        assert_ne!(closed.canonical_bytes(), other.canonical_bytes());
+        for (domain, configuration) in [
+            (
+                VERUS_CONFIGURATION_DOMAIN,
+                b"sealed-generated-source-fd;fixed-env".as_slice(),
+            ),
+            (
+                SOLVER_CONFIGURATION_DOMAIN,
+                b"rust_verify-managed-z3;fixed-env".as_slice(),
+            ),
+        ] {
+            assert_ne!(
+                process_configuration_digest(domain, configuration, closed),
+                process_configuration_digest(domain, configuration, other)
+            );
+        }
+        observed.policy = other;
+        assert_ne!(
+            closed_execution,
+            execution_identity_for_runtime([0x3a; 32], &source, binding, &observed)
+        );
+    }
+}
+
+#[test]
+fn closed_fill_boundary_refuses_reciprocal_process_policy_substitutions() {
+    use crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2 as P;
+    use FunctionalRefinementBoundaryV2 as B;
+    for policy in [
+        P::ClosedConditionalFillV1,
+        P::LegacySingleSolverV1,
+        P::PinnedSingleThreadContextsV2,
+        P::PinnedSingleThreadContextsV3,
+    ] {
+        for boundary in [
+            B::SafeReferenceMirToKernelMir,
+            B::SafeReferenceMirToLivePliron,
+            B::SafeReferenceMirToLivePlironConditionalCoverage,
+            B::SemanticMirToGfx942FillDispatchConditional,
+            B::FinalKernelIrToGfx942FillDispatchConditional,
+        ] {
+            assert_eq!(
+                require_composition_process_policy(policy, boundary).is_ok(),
+                (policy == P::ClosedConditionalFillV1)
+                    == matches!(
+                        boundary,
+                        B::SemanticMirToGfx942FillDispatchConditional
+                            | B::FinalKernelIrToGfx942FillDispatchConditional
+                    )
+            );
+        }
+    }
+}
+
+#[test]
 fn context_policy_preserves_legacy_config_hashes_and_versions_both_configurations() {
     use crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2::{
         LegacySingleSolverV1, PinnedSingleThreadContextsV2,
@@ -83,7 +160,8 @@ fn context_policy_preserves_exact_legacy_execution_transcript_and_versions_new_o
 #[test]
 fn legacy_receipt_import_policy_refuses_context_policy_even_with_same_tools_and_signature() {
     use crate::retained_functional_refinement_runtime_v1::GeneratedProofProcessPolicyV2::{
-        LegacySingleSolverV1, PinnedSingleThreadContextsV2, PinnedSingleThreadContextsV3,
+        ClosedConditionalFillV1, LegacySingleSolverV1, PinnedSingleThreadContextsV2,
+        PinnedSingleThreadContextsV3,
     };
     let toolchain = |policy| {
         VerusToolchainIdentityV2::new(
@@ -107,6 +185,7 @@ fn legacy_receipt_import_policy_refuses_context_policy_even_with_same_tools_and_
     let signing = SigningKey::from_bytes(&[0x69; 32]);
     let binding = FunctionalRefinementBindingV2::from_subjects(subjects(), digest(15)).unwrap();
     for accepted in [
+        ClosedConditionalFillV1,
         LegacySingleSolverV1,
         PinnedSingleThreadContextsV2,
         PinnedSingleThreadContextsV3,
@@ -118,6 +197,7 @@ fn legacy_receipt_import_policy_refuses_context_policy_even_with_same_tools_and_
         )
         .unwrap();
         for observed in [
+            ClosedConditionalFillV1,
             LegacySingleSolverV1,
             PinnedSingleThreadContextsV2,
             PinnedSingleThreadContextsV3,

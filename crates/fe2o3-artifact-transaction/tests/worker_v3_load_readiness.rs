@@ -1,3 +1,5 @@
+#[path = "worker_v3_load_readiness/native_current.rs"]
+mod native_current;
 #[path = "support/process.rs"]
 mod test_process;
 

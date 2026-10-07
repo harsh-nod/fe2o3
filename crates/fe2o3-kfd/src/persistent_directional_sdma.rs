@@ -144,7 +144,7 @@ impl Gfx942PersistentDirectionalSdmaHostBindingV1 {
         }
     }
 
-    fn matches(self, host: &Gfx942SdmaBufferV1) -> bool {
+    pub(crate) fn matches(self, host: &Gfx942SdmaBufferV1) -> bool {
         host.belongs_to(self.queue)
             && host.storage_identity() == self.storage_identity
             && host.pool_generation() == self.pool_generation
@@ -376,6 +376,14 @@ impl Gfx942DirectionalPersistentSdmaSubmissionV1 {
     pub const fn copy_bytes(&self) -> u32 {
         self.copy_bytes
     }
+
+    pub const fn host_offset(&self) -> u64 {
+        self.host_offset
+    }
+
+    pub const fn device_offset(&self) -> u64 {
+        self.device_offset
+    }
 }
 
 impl fmt::Debug for Gfx942DirectionalPersistentSdmaSubmissionV1 {
@@ -397,10 +405,17 @@ pub enum Gfx942DirectionalPersistentSdmaTerminalStageV1 {
     PreparedQueueRetained,
     PublishedQueueRetained,
     CompletedUnrestored,
+    /// A synchronous transition could not settle its retained use lease.
+    SynchronousUnsettled,
 }
 
 #[allow(dead_code)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "terminal custody must not allocate after native effects"
+)]
 pub(crate) enum Gfx942DirectionalPersistentSdmaTerminalStateV1 {
+    Synchronous(crate::queue::SdmaSynchronousCustodyV1),
     AdmissionRestored {
         allocation: Gfx942DirectionalQueuePersistentAllocationV1,
         host: Gfx942SdmaBufferV1,
@@ -444,7 +459,8 @@ impl Gfx942DirectionalPersistentSdmaTerminalCustodyV1 {
     }
 
     pub const fn stage(&self) -> Gfx942DirectionalPersistentSdmaTerminalStageV1 {
-        match self.state {
+        match &self.state {
+            Gfx942DirectionalPersistentSdmaTerminalStateV1::Synchronous(root) => root.stage,
             Gfx942DirectionalPersistentSdmaTerminalStateV1::AdmissionRestored { .. } => {
                 Gfx942DirectionalPersistentSdmaTerminalStageV1::AdmissionRestored
             }
@@ -515,16 +531,53 @@ pub struct Gfx942DirectionalPersistentSdmaCompletedV1 {
     host: Gfx942SdmaBufferV1,
     frontier: Gfx942PersistentDependencyFrontierV1,
     direction: Gfx942PersistentSdmaDirectionV1,
+    host_offset: u64,
+    device_offset: u64,
     copy_bytes: u32,
 }
 
 impl Gfx942DirectionalPersistentSdmaCompletedV1 {
+    pub(crate) fn from_settled_v1(
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+        frontier: Gfx942PersistentDependencyFrontierV1,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        host_offset: u64,
+        device_offset: u64,
+        copy_bytes: u32,
+    ) -> Self {
+        Self {
+            allocation,
+            host,
+            frontier,
+            direction,
+            host_offset,
+            device_offset,
+            copy_bytes,
+        }
+    }
+
     pub const fn direction(&self) -> Gfx942PersistentSdmaDirectionV1 {
         self.direction
     }
 
     pub const fn copy_bytes(&self) -> u32 {
         self.copy_bytes
+    }
+
+    pub(crate) fn into_single_packet_window_v1(
+        self,
+    ) -> Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
+        Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
+            allocation: self.allocation,
+            host: self.host,
+            frontier: self.frontier,
+            direction: self.direction,
+            host_offset: self.host_offset,
+            device_offset: self.device_offset,
+            copy_bytes: self.copy_bytes,
+            packet_count: 1,
+        }
     }
 
     pub fn into_parts(
@@ -545,6 +598,10 @@ pub enum Gfx942DirectionalPersistentSdmaCopyPollV1 {
 }
 
 #[must_use = "a timeout returns the submission; terminal custody requires teardown"]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "terminal custody must not allocate after native effects"
+)]
 pub enum Gfx942DirectionalPersistentSdmaExecutionCustodyV1 {
     Pending(Gfx942DirectionalPersistentSdmaSubmissionV1),
     ProcessTeardown(Gfx942DirectionalPersistentSdmaTerminalCustodyV1),
@@ -569,6 +626,17 @@ impl Gfx942DirectionalPersistentSdmaExecutionFailureV1 {
     ) {
         (self.error, self.custody)
     }
+}
+
+/// Internal composition result used by the runtime's bounded synchronous
+/// single-packet path. Standalone asynchronous submission and observation keep
+/// their existing APIs and custody transitions.
+#[doc(hidden)]
+#[must_use = "inspect the submission or execution failure and retain its custody"]
+#[allow(clippy::large_enum_variant)]
+pub enum Gfx942DirectionalPersistentSdmaSynchronousExecutionFailureV1 {
+    Submission(Gfx942DirectionalPersistentSdmaSubmissionFailureV1),
+    Execution(Gfx942DirectionalPersistentSdmaExecutionFailureV1),
 }
 
 #[must_use = "published directional persistent SDMA window custody must be observed"]
@@ -753,6 +821,33 @@ pub struct Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
 }
 
 impl Gfx942DirectionalPersistentSdmaWindowCompletedV1 {
+    pub(crate) fn belongs_to(&self, queue: QueueKeyV1) -> bool {
+        self.allocation.attachment.queue == queue && self.host.belongs_to(queue)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_parts_for_terminal(
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        host: Gfx942SdmaBufferV1,
+        frontier: Gfx942PersistentDependencyFrontierV1,
+        direction: Gfx942PersistentSdmaDirectionV1,
+        host_offset: u64,
+        device_offset: u64,
+        copy_bytes: u32,
+        packet_count: usize,
+    ) -> Self {
+        Self {
+            allocation,
+            host,
+            frontier,
+            direction,
+            host_offset,
+            device_offset,
+            copy_bytes,
+            packet_count,
+        }
+    }
+
     pub const fn direction(&self) -> Gfx942PersistentSdmaDirectionV1 {
         self.direction
     }
@@ -878,6 +973,10 @@ pub(crate) enum DirectionalPersistentSdmaPublicationObservationV1 {
     Confirmed(Gfx942SdmaCopyTicketV1),
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "terminal custody must not allocate after native effects"
+)]
 pub(crate) enum DirectionalPersistentSdmaPublicationTransitionV1 {
     Retryable {
         allocation: Gfx942DirectionalQueuePersistentAllocationV1,
@@ -895,6 +994,10 @@ pub(crate) enum DirectionalPersistentSdmaCompletionObservationV1 {
     Completed(Gfx942SdmaCompletedCopyV1),
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "terminal custody must not allocate after native effects"
+)]
 pub(crate) enum DirectionalPersistentSdmaCompletionTransitionV1 {
     Pending(Gfx942DirectionalPersistentSdmaSubmissionV1),
     Timeout(Gfx942DirectionalPersistentSdmaSubmissionV1),
@@ -1189,6 +1292,8 @@ pub(crate) fn transition_directional_persistent_sdma_completion_v1(
                             host,
                             frontier,
                             direction,
+                            host_offset,
+                            device_offset,
                             copy_bytes,
                         },
                     )
@@ -1670,6 +1775,60 @@ pub(crate) fn restore_directional_persistent_sdma_request_v1(
         Gfx942SdmaCopyRequestV1,
     ),
 > {
+    if !directional_persistent_sdma_request_matches_v1(
+        &allocation,
+        direction,
+        host_offset,
+        device_offset,
+        copy_bytes,
+        host_binding,
+        &request,
+    ) {
+        return Err((allocation, request));
+    }
+    let Gfx942SdmaCopyRequestV1 {
+        source,
+        destination,
+        copy_bytes,
+        ..
+    } = request;
+    let (device, host) = match direction {
+        Gfx942PersistentSdmaDirectionV1::HostToDevice => (destination, source),
+        Gfx942PersistentSdmaDirectionV1::DeviceToHost => (source, destination),
+    };
+    if let Err(device) = allocation.owner.restore_sdma_buffer(device) {
+        let (source, source_offset, destination, destination_offset) = match direction {
+            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
+                (host, host_offset, device, device_offset)
+            }
+            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
+                (device, device_offset, host, host_offset)
+            }
+        };
+        return Err((
+            allocation,
+            Gfx942SdmaCopyRequestV1 {
+                source,
+                source_offset,
+                destination,
+                destination_offset,
+                copy_bytes,
+            },
+        ));
+    }
+    Ok((allocation, host))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn directional_persistent_sdma_request_matches_v1(
+    allocation: &Gfx942DirectionalQueuePersistentAllocationV1,
+    direction: Gfx942PersistentSdmaDirectionV1,
+    host_offset: u64,
+    device_offset: u64,
+    copy_bytes: u32,
+    host_binding: Gfx942PersistentDirectionalSdmaHostBindingV1,
+    request: &Gfx942SdmaCopyRequestV1,
+) -> bool {
     let offsets_exact = request.copy_bytes == copy_bytes
         && match direction {
             Gfx942PersistentSdmaDirectionV1::HostToDevice => {
@@ -1686,62 +1845,19 @@ pub(crate) fn restore_directional_persistent_sdma_request_v1(
             }
         };
     if !offsets_exact {
-        return Err((allocation, request));
+        return false;
     }
-    let Gfx942SdmaCopyRequestV1 {
-        source,
-        destination,
-        copy_bytes,
-        ..
-    } = request;
     let (device, host) = match direction {
-        Gfx942PersistentSdmaDirectionV1::HostToDevice => (destination, source),
-        Gfx942PersistentSdmaDirectionV1::DeviceToHost => (source, destination),
+        Gfx942PersistentSdmaDirectionV1::HostToDevice => (&request.destination, &request.source),
+        Gfx942PersistentSdmaDirectionV1::DeviceToHost => (&request.source, &request.destination),
     };
     let attachment = allocation.attachment;
-    if !device.belongs_to(attachment.queue)
-        || !host_binding.matches(&host)
-        || device.storage_identity() != attachment.storage_identity
-        || device.pool_generation() != attachment.pool_generation
-        || device.requested_bytes() != attachment.logical_bytes
-        || device.physical_bytes() != attachment.physical_bytes
-    {
-        return Err((
-            allocation,
-            directional_persistent_sdma_request_v1(
-                direction,
-                host,
-                host_offset,
-                device,
-                device_offset,
-                copy_bytes,
-            ),
-        ));
-    }
-    let (storage, owner, pool_generation, logical_bytes) = device.into_bridge_parts();
-    let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
-        unreachable!("checked device-local storage")
-    };
-    if let Err((_, lease)) = allocation.owner.restore_local_native_from_sdma(lease) {
-        let device = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(lease),
-            owner,
-            pool_generation,
-            logical_bytes,
-        );
-        return Err((
-            allocation,
-            directional_persistent_sdma_request_v1(
-                direction,
-                host,
-                host_offset,
-                device,
-                device_offset,
-                copy_bytes,
-            ),
-        ));
-    }
-    Ok((allocation, host))
+    device.belongs_to(attachment.queue)
+        && host_binding.matches(host)
+        && device.storage_identity() == attachment.storage_identity
+        && device.pool_generation() == attachment.pool_generation
+        && device.requested_bytes() == attachment.logical_bytes
+        && device.physical_bytes() == attachment.physical_bytes
 }
 
 #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -1829,23 +1945,17 @@ pub(crate) fn promote_directional_persistent_sdma_custody_v1(
     pair: Gfx942PersistentDirectionalSdmaPairV1,
     outstanding_buffers: usize,
 ) -> Result<(Gfx942DirectionalQueuePersistentAllocationV1, usize), Gfx942SdmaBufferV1> {
-    if outstanding_buffers == 0 {
+    if outstanding_buffers == 0 || buffer.kind() != Gfx942SdmaBufferKindV1::DeviceLocal {
         return Err(buffer);
     }
     let storage_identity = buffer.storage_identity();
     let physical_bytes = buffer.physical_bytes();
-    let (storage, queue, pool_generation, logical_bytes) = buffer.into_bridge_parts();
-    let Gfx942SdmaBufferStorageV1::Device(lease) = storage else {
-        return Err(Gfx942SdmaBufferV1::from_bridge_parts(
-            storage,
-            queue,
-            pool_generation,
-            logical_bytes,
-        ));
-    };
+    let queue = buffer.queue_owner();
+    let pool_generation = buffer.pool_generation();
+    let logical_bytes = buffer.requested_bytes();
     Ok((
         Gfx942DirectionalQueuePersistentAllocationV1 {
-            owner: Gfx942PersistentDeviceAllocationV1::from_local_mapping(lease),
+            owner: Gfx942PersistentDeviceAllocationV1::from_sdma_buffer(buffer)?,
             attachment: Gfx942PersistentDirectionalSdmaAttachmentV1 {
                 queue,
                 pair,
@@ -1945,1063 +2055,5 @@ pub(crate) fn map_directional_persistent_sdma_use_error_v1(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::persistent_allocation::Gfx942PersistentOperationV1;
-    use crate::sdma::{
-        GFX942_SDMA_MAX_IN_FLIGHT_V1, GFX942_SDMA_RING_BYTES_V1, Gfx942SdmaQueueObservationV1,
-        persistent_sdma_buffers_for_test, persistent_sdma_ticket_coordinates_for_test,
-    };
-    use fe2o3_runtime_model::{
-        DeviceGenerationV1, DeviceKeyV1, PhysicalDeviceIdV1, QueueGenerationV1, QueueInstanceIdV1,
-        VmIdV1, VmKeyV1,
-    };
-    use sha2::{Digest, Sha256};
-
-    fn queue_key() -> QueueKeyV1 {
-        queue_key_with_generation(1)
-    }
-
-    fn queue_key_with_generation(generation: u64) -> QueueKeyV1 {
-        let device = DeviceKeyV1 {
-            physical: PhysicalDeviceIdV1(7),
-            generation: DeviceGenerationV1(1),
-        };
-        QueueKeyV1 {
-            vm: VmKeyV1 {
-                device,
-                id: VmIdV1(1),
-            },
-            id: QueueInstanceIdV1(3),
-            generation: QueueGenerationV1(generation),
-        }
-    }
-
-    fn queue_observation(queue_id: u32, engine_index: u32) -> Gfx942SdmaQueueObservationV1 {
-        Gfx942SdmaQueueObservationV1 {
-            queue_id,
-            ring_bytes: GFX942_SDMA_RING_BYTES_V1,
-            maximum_in_flight: GFX942_SDMA_MAX_IN_FLIGHT_V1 as u16,
-            engine_index: Some(engine_index),
-        }
-    }
-
-    fn pair_observation(h2d_queue: u32, d2h_queue: u32) -> Gfx942DirectionalSdmaQueueObservationV1 {
-        Gfx942DirectionalSdmaQueueObservationV1 {
-            host_to_device: queue_observation(h2d_queue, GFX942_SDMA_H2D_ENGINE_INDEX_V1),
-            device_to_host: queue_observation(d2h_queue, GFX942_SDMA_D2H_ENGINE_INDEX_V1),
-            admitted_engine_count: 2,
-            admitted_queues_per_engine: 8,
-        }
-    }
-
-    fn promoted_fixture(
-        id: u64,
-        logical_bytes: u64,
-    ) -> (
-        Gfx942DirectionalQueuePersistentAllocationV1,
-        Gfx942SdmaBufferV1,
-    ) {
-        let (mut device, host) = persistent_sdma_buffers_for_test(queue_key(), id);
-        device.set_logical_bytes(logical_bytes);
-        let pair = admit_persistent_directional_sdma_pair_v1(pair_observation(17, 23)).unwrap();
-        let (allocation, outstanding) =
-            promote_directional_persistent_sdma_custody_v1(device, pair, 2).unwrap();
-        assert_eq!(outstanding, 2);
-        (allocation, host)
-    }
-
-    fn prepared_fixture(
-        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
-        host: Gfx942SdmaBufferV1,
-        dependency: Option<&Gfx942PersistentDependencyFrontierV1>,
-        direction: Gfx942PersistentSdmaDirectionV1,
-        ticket_generation: u32,
-    ) -> (
-        DirectionalPersistentSdmaPreparedCustodyV1,
-        Gfx942SdmaCopyRequestV1,
-        Gfx942SdmaCopyTicketV1,
-    ) {
-        let mut allocation = allocation;
-        let operation = match direction {
-            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
-                Gfx942PersistentOperationV1::LocalSdmaDestination
-            }
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
-                Gfx942PersistentOperationV1::LocalSdmaSource
-            }
-        };
-        let reserved = allocation
-            .owner
-            .reserve(
-                Gfx942PersistentUseRequestV1::new(operation, 16, 32).unwrap(),
-                dependency,
-            )
-            .unwrap();
-        let prepared = allocation.owner.prepare(reserved).unwrap();
-        let lease = allocation.owner.detach_local_native_for_sdma().unwrap();
-        let device = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(lease),
-            allocation.attachment.queue,
-            allocation.attachment.pool_generation,
-            allocation.attachment.logical_bytes,
-        );
-        let host_binding =
-            Gfx942PersistentDirectionalSdmaHostBindingV1::capture(&host, queue_key());
-        let request = directional_persistent_sdma_request_v1(direction, host, 8, device, 16, 32);
-        let ticket = persistent_sdma_ticket_coordinates_for_test(
-            queue_key(),
-            allocation.attachment.pair.queue_id(direction),
-            (ticket_generation as u16) % GFX942_SDMA_MAX_IN_FLIGHT_V1 as u16,
-            ticket_generation,
-        );
-        (
-            DirectionalPersistentSdmaPreparedCustodyV1 {
-                allocation,
-                prepared,
-                planned_ticket: ticket,
-                host_binding,
-                direction,
-                host_offset: 8,
-                device_offset: 16,
-                copy_bytes: 32,
-            },
-            request,
-            ticket,
-        )
-    }
-
-    fn published_fixture(
-        id: u64,
-        direction: Gfx942PersistentSdmaDirectionV1,
-    ) -> (
-        Gfx942DirectionalPersistentSdmaSubmissionV1,
-        Gfx942SdmaCopyRequestV1,
-    ) {
-        let (allocation, host) = promoted_fixture(id, 2048);
-        let (prepared, request, ticket) = prepared_fixture(allocation, host, None, direction, 1);
-        let DirectionalPersistentSdmaPublicationTransitionV1::Published(submission) =
-            transition_directional_persistent_sdma_publication_v1(
-                prepared,
-                DirectionalPersistentSdmaPublicationObservationV1::Confirmed(ticket),
-                true,
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        (submission, request)
-    }
-
-    fn completed_request(request: Gfx942SdmaCopyRequestV1) -> Gfx942SdmaCompletedCopyV1 {
-        Gfx942SdmaCompletedCopyV1 {
-            source: request.source,
-            destination: request.destination,
-            copy_bytes: request.copy_bytes,
-            source_offset: request.source_offset,
-            destination_offset: request.destination_offset,
-        }
-    }
-
-    fn prepared_window_fixture(
-        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
-        host: Gfx942SdmaBufferV1,
-        direction: Gfx942PersistentSdmaDirectionV1,
-        packet_count: usize,
-    ) -> (
-        DirectionalPersistentSdmaWindowPreparedCustodyV1,
-        Gfx942SdmaCopyRequestV1,
-        Vec<Gfx942SdmaCopyTicketV1>,
-    ) {
-        let mut allocation = allocation;
-        let operation = match direction {
-            Gfx942PersistentSdmaDirectionV1::HostToDevice => {
-                Gfx942PersistentOperationV1::LocalSdmaDestination
-            }
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost => {
-                Gfx942PersistentOperationV1::LocalSdmaSource
-            }
-        };
-        let reserved = allocation
-            .owner
-            .reserve(
-                Gfx942PersistentUseRequestV1::new(operation, 16, 32).unwrap(),
-                None,
-            )
-            .unwrap();
-        let prepared = allocation.owner.prepare(reserved).unwrap();
-        let lease = allocation.owner.detach_local_native_for_sdma().unwrap();
-        let device = Gfx942SdmaBufferV1::from_bridge_parts(
-            Gfx942SdmaBufferStorageV1::Device(lease),
-            allocation.attachment.queue,
-            allocation.attachment.pool_generation,
-            allocation.attachment.logical_bytes,
-        );
-        let host_binding =
-            Gfx942PersistentDirectionalSdmaHostBindingV1::capture(&host, queue_key());
-        let request = directional_persistent_sdma_request_v1(direction, host, 8, device, 16, 32);
-        let tickets = (0..packet_count)
-            .map(|index| {
-                persistent_sdma_ticket_coordinates_for_test(
-                    queue_key(),
-                    allocation.attachment.pair.queue_id(direction),
-                    index as u16,
-                    1,
-                )
-            })
-            .collect::<Vec<_>>();
-        (
-            DirectionalPersistentSdmaWindowPreparedCustodyV1 {
-                allocation,
-                prepared,
-                planned_tickets: tickets.clone(),
-                host_binding,
-                direction,
-                host_offset: 8,
-                device_offset: 16,
-                copy_bytes: 32,
-                packet_count,
-            },
-            request,
-            tickets,
-        )
-    }
-
-    fn published_window_fixture(
-        id: u64,
-        direction: Gfx942PersistentSdmaDirectionV1,
-        packet_count: usize,
-    ) -> (
-        Gfx942DirectionalPersistentSdmaWindowSubmissionV1,
-        Gfx942SdmaCopyRequestV1,
-    ) {
-        let (allocation, host) = promoted_fixture(id, 2048);
-        let (prepared, request, tickets) =
-            prepared_window_fixture(allocation, host, direction, packet_count);
-        let DirectionalPersistentSdmaWindowPublicationTransitionV1::Published(submission) =
-            transition_directional_persistent_sdma_window_publication_v1(
-                prepared,
-                DirectionalPersistentSdmaWindowPublicationObservationV1::Confirmed(tickets),
-                true,
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        (submission, request)
-    }
-
-    #[test]
-    fn manifest_digest_is_frozen() {
-        let digest = Sha256::digest(GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_ADAPTER_MANIFEST_V1);
-        let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-        assert_eq!(
-            rendered,
-            GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_ADAPTER_MANIFEST_SHA256_V1
-        );
-    }
-
-    #[test]
-    fn window_manifest_digest_is_frozen() {
-        let digest = Sha256::digest(GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_WINDOW_MANIFEST_V1);
-        let rendered: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-        assert_eq!(
-            rendered,
-            GFX942_PERSISTENT_DIRECTIONAL_LOCAL_SDMA_WINDOW_MANIFEST_SHA256_V1
-        );
-    }
-
-    #[test]
-    fn window_clean_recovery_restores_the_exact_owner_pair() {
-        for (id, direction) in [
-            Gfx942PersistentSdmaDirectionV1::HostToDevice,
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let (allocation, host) = promoted_fixture(100 + id as u64, 2048);
-            let identity = allocation.attachment.storage_identity;
-            let (prepared, request, _) = prepared_window_fixture(allocation, host, direction, 3);
-            let DirectionalPersistentSdmaWindowPublicationTransitionV1::Retryable {
-                allocation,
-                host,
-            } = transition_directional_persistent_sdma_window_publication_v1(
-                prepared,
-                DirectionalPersistentSdmaWindowPublicationObservationV1::Recoverable(request),
-                true,
-                true,
-            )
-            else {
-                panic!("clean window rejection must restore exact custody")
-            };
-            assert_eq!(allocation.attachment.storage_identity, identity);
-            assert_eq!(host.kind(), Gfx942SdmaBufferKindV1::HostVisibleCoherent);
-            assert!(allocation.owner.local_native_is_attached_for_sdma());
-        }
-    }
-
-    #[test]
-    fn window_retained_and_substituted_publications_quarantine_the_whole_roster() {
-        let (allocation, host) = promoted_fixture(110, 2048);
-        let (prepared, _, tickets) = prepared_window_fixture(
-            allocation,
-            host,
-            Gfx942PersistentSdmaDirectionV1::HostToDevice,
-            3,
-        );
-        let DirectionalPersistentSdmaWindowPublicationTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_window_publication_v1(
-                prepared,
-                DirectionalPersistentSdmaWindowPublicationObservationV1::Retained(tickets),
-                true,
-                true,
-            )
-        else {
-            panic!("retained window publication must be terminal")
-        };
-        assert_eq!(custody.packet_count(), 3);
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::PreparedQueueRetained
-        );
-
-        let (allocation, host) = promoted_fixture(111, 2048);
-        let (prepared, _, mut tickets) = prepared_window_fixture(
-            allocation,
-            host,
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
-            3,
-        );
-        tickets.swap(0, 1);
-        let DirectionalPersistentSdmaWindowPublicationTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_window_publication_v1(
-                prepared,
-                DirectionalPersistentSdmaWindowPublicationObservationV1::Confirmed(tickets),
-                true,
-                true,
-            )
-        else {
-            panic!("reordered window tickets must be terminal")
-        };
-        assert_eq!(custody.packet_count(), 3);
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::PublishedQueueRetained
-        );
-    }
-
-    #[test]
-    fn window_pending_timeout_and_exact_completion_are_aggregate() {
-        let (submission, request) =
-            published_window_fixture(120, Gfx942PersistentSdmaDirectionV1::DeviceToHost, 3);
-        let DirectionalPersistentSdmaWindowCompletionTransitionV1::Pending(submission) =
-            transition_directional_persistent_sdma_window_completion_v1(
-                submission,
-                DirectionalPersistentSdmaWindowCompletionObservationV1::Pending,
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        assert_eq!(submission.packet_count(), 3);
-        let DirectionalPersistentSdmaWindowCompletionTransitionV1::Timeout(submission) =
-            transition_directional_persistent_sdma_window_completion_v1(
-                submission,
-                DirectionalPersistentSdmaWindowCompletionObservationV1::Timeout,
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        assert_eq!(submission.packet_count(), 3);
-        let DirectionalPersistentSdmaWindowCompletionTransitionV1::Completed(completed) =
-            transition_directional_persistent_sdma_window_completion_v1(
-                submission,
-                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
-                    CompletedPersistentSdmaWindowV1 {
-                        request,
-                        packet_count: 3,
-                    },
-                ),
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        assert_eq!(completed.packet_count(), 3);
-        assert_eq!(completed.copy_bytes(), 32);
-        assert_eq!(completed.host_offset(), 8);
-        assert_eq!(completed.device_offset(), 16);
-        assert_eq!(
-            completed.direction(),
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost
-        );
-        let (allocation, _, frontier) = completed.into_parts();
-        let allocation = allocation.retire_settled_frontier_v1(frontier).unwrap();
-        assert!(allocation.owner.local_native_is_attached_for_sdma());
-    }
-
-    #[test]
-    fn window_completion_metadata_mismatch_is_terminal() {
-        let (submission, request) =
-            published_window_fixture(121, Gfx942PersistentSdmaDirectionV1::HostToDevice, 3);
-        let DirectionalPersistentSdmaWindowCompletionTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_window_completion_v1(
-                submission,
-                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
-                    CompletedPersistentSdmaWindowV1 {
-                        request,
-                        packet_count: 2,
-                    },
-                ),
-                true,
-            )
-        else {
-            panic!("partial window completion must retain terminal custody")
-        };
-        assert_eq!(custody.packet_count(), 3);
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::CompletedUnrestored
-        );
-    }
-
-    #[test]
-    fn window_completion_offset_substitution_is_terminal() {
-        let (submission, mut request) =
-            published_window_fixture(122, Gfx942PersistentSdmaDirectionV1::HostToDevice, 3);
-        request.source_offset += 1;
-        let DirectionalPersistentSdmaWindowCompletionTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_window_completion_v1(
-                submission,
-                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
-                    CompletedPersistentSdmaWindowV1 {
-                        request,
-                        packet_count: 3,
-                    },
-                ),
-                true,
-            )
-        else {
-            panic!("host-offset substitution must retain terminal custody")
-        };
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::CompletedUnrestored
-        );
-
-        let (submission, mut request) =
-            published_window_fixture(123, Gfx942PersistentSdmaDirectionV1::HostToDevice, 3);
-        request.destination_offset += 1;
-        let DirectionalPersistentSdmaWindowCompletionTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_window_completion_v1(
-                submission,
-                DirectionalPersistentSdmaWindowCompletionObservationV1::Completed(
-                    CompletedPersistentSdmaWindowV1 {
-                        request,
-                        packet_count: 3,
-                    },
-                ),
-                true,
-            )
-        else {
-            panic!("device-offset substitution must retain terminal custody")
-        };
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::CompletedUnrestored
-        );
-    }
-
-    #[test]
-    fn pair_admission_rejects_swapped_engines_and_duplicate_children() {
-        let pair = admit_persistent_directional_sdma_pair_v1(pair_observation(17, 23)).unwrap();
-        assert_eq!(pair.host_to_device_queue_id, 17);
-        assert_eq!(pair.device_to_host_queue_id, 23);
-
-        let mut swapped = pair_observation(17, 23);
-        swapped.host_to_device.engine_index = Some(GFX942_SDMA_D2H_ENGINE_INDEX_V1);
-        swapped.device_to_host.engine_index = Some(GFX942_SDMA_H2D_ENGINE_INDEX_V1);
-        assert!(admit_persistent_directional_sdma_pair_v1(swapped).is_err());
-        assert!(admit_persistent_directional_sdma_pair_v1(pair_observation(17, 17)).is_err());
-        let mut wrong_inventory = pair_observation(17, 23);
-        wrong_inventory.admitted_queues_per_engine = 7;
-        assert!(admit_persistent_directional_sdma_pair_v1(wrong_inventory).is_err());
-    }
-
-    #[test]
-    fn pooled_logical_extent_preserves_physical_owner_and_buffer_debit() {
-        let (allocation, _host) = promoted_fixture(10, 2048);
-        assert_eq!(allocation.byte_len(), 2048);
-        assert_eq!(allocation.physical_byte_len(), 4096);
-        let original_generation = allocation.attachment.pool_generation;
-        let (device, outstanding) =
-            demote_directional_persistent_sdma_custody_v1(allocation, 2).unwrap();
-        assert_eq!(outstanding, 2);
-        assert_eq!(device.requested_bytes(), 2048);
-        assert_eq!(device.physical_bytes(), 4096);
-        assert_eq!(device.pool_generation(), original_generation + 1);
-        assert!(!directional_persistent_sdma_queue_destroy_is_admitted_v1(
-            outstanding
-        ));
-        assert!(directional_persistent_sdma_queue_destroy_is_admitted_v1(0));
-    }
-
-    #[test]
-    fn extent_admission_is_bounded_and_page_rounded_only_physically() {
-        assert!(directional_persistent_sdma_extents_are_admitted_v1(
-            1, 4096, 1
-        ));
-        assert!(directional_persistent_sdma_extents_are_admitted_v1(
-            2048, 4096, 1
-        ));
-        assert!(!directional_persistent_sdma_extents_are_admitted_v1(
-            4097, 4096, 1
-        ));
-        assert!(!directional_persistent_sdma_extents_are_admitted_v1(
-            1, 4095, 1
-        ));
-        assert!(!directional_persistent_sdma_extents_are_admitted_v1(
-            1,
-            GFX942_PERSISTENT_DIRECTIONAL_SDMA_MAX_ALLOCATION_BYTES_V1 + 4096,
-            1,
-        ));
-    }
-
-    #[test]
-    fn promotion_and_demotion_failures_preserve_explicit_owner_custody() {
-        let (device, _) = persistent_sdma_buffers_for_test(queue_key(), 80);
-        let identity = device.storage_identity();
-        let failure = classify_directional_persistent_sdma_promotion_failure_v1(
-            ComputeAqlQueueSessionErrorV1::Contract("retryable promotion"),
-            device,
-            false,
-        );
-        let (_, custody) = failure.into_parts();
-        let Gfx942DirectionalPersistentSdmaPromotionCustodyV1::Retryable(device) = custody else {
-            panic!("recoverable promotion must return retryable device custody")
-        };
-        assert_eq!(device.storage_identity(), identity);
-
-        let (device, _) = persistent_sdma_buffers_for_test(queue_key(), 81);
-        let identity = device.storage_identity();
-        let failure = classify_directional_persistent_sdma_promotion_failure_v1(
-            ComputeAqlQueueSessionErrorV1::Contract("terminal promotion"),
-            device,
-            true,
-        );
-        let (_, custody) = failure.into_parts();
-        let Gfx942DirectionalPersistentSdmaPromotionCustodyV1::ProcessTeardown(terminal) = custody
-        else {
-            panic!("terminal promotion must retain opaque device custody")
-        };
-        assert_eq!(terminal.buffer.storage_identity(), identity);
-
-        let (allocation, _) = promoted_fixture(82, 2048);
-        let identity = allocation.attachment.storage_identity;
-        let failure = classify_directional_persistent_sdma_demotion_failure_v1(
-            ComputeAqlQueueSessionErrorV1::Contract("retryable demotion"),
-            allocation,
-            false,
-        );
-        let (_, custody) = failure.into_parts();
-        let Gfx942DirectionalPersistentSdmaDemotionCustodyV1::Retryable(allocation) = custody
-        else {
-            panic!("recoverable demotion must return retryable allocation custody")
-        };
-        assert_eq!(allocation.attachment.storage_identity, identity);
-
-        let (allocation, _) = promoted_fixture(83, 2048);
-        let identity = allocation.attachment.storage_identity;
-        let failure = classify_directional_persistent_sdma_demotion_failure_v1(
-            ComputeAqlQueueSessionErrorV1::Contract("terminal demotion"),
-            allocation,
-            true,
-        );
-        let (_, custody) = failure.into_parts();
-        let Gfx942DirectionalPersistentSdmaDemotionCustodyV1::ProcessTeardown(terminal) = custody
-        else {
-            panic!("terminal demotion must retain opaque allocation custody")
-        };
-        assert_eq!(terminal.allocation.attachment.storage_identity, identity);
-    }
-
-    #[test]
-    fn live_r19_path_uses_physical_promotion_and_operational_hot_path_checks() {
-        let live = include_str!("queue_live.rs");
-        let promotion = live
-            .split("pub fn promote_sdma_device_buffer_to_directional_persistent_allocation_v1")
-            .nth(1)
-            .unwrap()
-            .split("pub fn demote_directional_persistent_allocation_to_sdma_device_buffer_v1")
-            .next()
-            .unwrap();
-        assert!(promotion.contains("validate_physical_device_mapping"));
-        assert!(!promotion.contains("checked_gpu_subrange"));
-
-        let submission = live
-            .split("pub fn submit_directional_persistent_sdma_copy_v1")
-            .nth(1)
-            .unwrap()
-            .split("pub fn poll_directional_persistent_sdma_copy_v1")
-            .next()
-            .unwrap();
-        assert_eq!(
-            submission
-                .matches("check_directional_persistent_sdma_operational_currentness")
-                .count(),
-            3
-        );
-        assert!(!submission.contains("self.check_currentness()"));
-        assert!(submission.contains("prepare_single_recoverable"));
-        assert!(!submission.contains("vec![request]"));
-
-        let pair = admit_persistent_directional_sdma_pair_v1(pair_observation(17, 23)).unwrap();
-        assert_eq!(
-            pair.queue_id(Gfx942PersistentSdmaDirectionV1::HostToDevice),
-            17
-        );
-        assert_eq!(
-            pair.queue_id(Gfx942PersistentSdmaDirectionV1::DeviceToHost),
-            23
-        );
-    }
-
-    #[test]
-    fn recoverable_publication_restores_exact_owners_in_both_directions() {
-        for (index, direction) in [
-            Gfx942PersistentSdmaDirectionV1::HostToDevice,
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let (allocation, host) = promoted_fixture(20 + index as u64, 2048);
-            let identity = allocation.attachment.storage_identity;
-            let (prepared, request, _) = prepared_fixture(allocation, host, None, direction, 1);
-            let DirectionalPersistentSdmaPublicationTransitionV1::Retryable { allocation, host } =
-                transition_directional_persistent_sdma_publication_v1(
-                    prepared,
-                    DirectionalPersistentSdmaPublicationObservationV1::Recoverable(request),
-                    true,
-                    true,
-                )
-            else {
-                panic!("clean lower rejection must be retryable")
-            };
-            assert_eq!(allocation.attachment.storage_identity, identity);
-            assert_eq!(host.kind(), Gfx942SdmaBufferKindV1::HostVisibleCoherent);
-            assert!(allocation.owner.local_native_is_attached_for_sdma());
-        }
-    }
-
-    #[test]
-    fn retained_and_substituted_ticket_publications_are_terminal() {
-        let (allocation, host) = promoted_fixture(30, 2048);
-        let (prepared, _request, ticket) = prepared_fixture(
-            allocation,
-            host,
-            None,
-            Gfx942PersistentSdmaDirectionV1::HostToDevice,
-            1,
-        );
-        let DirectionalPersistentSdmaPublicationTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_publication_v1(
-                prepared,
-                DirectionalPersistentSdmaPublicationObservationV1::Retained(ticket),
-                true,
-                true,
-            )
-        else {
-            panic!("retained lower custody must be terminal")
-        };
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::PreparedQueueRetained
-        );
-
-        let (allocation, host) = promoted_fixture(31, 2048);
-        let (prepared, _request, _ticket) = prepared_fixture(
-            allocation,
-            host,
-            None,
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
-            1,
-        );
-        let substituted = persistent_sdma_ticket_coordinates_for_test(queue_key(), 24, 1, 1);
-        let DirectionalPersistentSdmaPublicationTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_publication_v1(
-                prepared,
-                DirectionalPersistentSdmaPublicationObservationV1::Confirmed(substituted),
-                true,
-                true,
-            )
-        else {
-            panic!("substituted full ticket must be terminal")
-        };
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::PublishedQueueRetained
-        );
-    }
-
-    #[test]
-    fn every_full_ticket_coordinate_is_authenticated() {
-        for case in 0..4 {
-            let (allocation, host) = promoted_fixture(32 + case, 2048);
-            let (prepared, _request, _ticket) = prepared_fixture(
-                allocation,
-                host,
-                None,
-                Gfx942PersistentSdmaDirectionV1::DeviceToHost,
-                1,
-            );
-            let substituted = match case {
-                0 => persistent_sdma_ticket_coordinates_for_test(
-                    queue_key_with_generation(2),
-                    23,
-                    1,
-                    1,
-                ),
-                1 => persistent_sdma_ticket_coordinates_for_test(queue_key(), 24, 1, 1),
-                2 => persistent_sdma_ticket_coordinates_for_test(queue_key(), 23, 2, 1),
-                3 => persistent_sdma_ticket_coordinates_for_test(queue_key(), 23, 1, 2),
-                _ => unreachable!(),
-            };
-            let DirectionalPersistentSdmaPublicationTransitionV1::ProcessTeardown(custody) =
-                transition_directional_persistent_sdma_publication_v1(
-                    prepared,
-                    DirectionalPersistentSdmaPublicationObservationV1::Confirmed(substituted),
-                    true,
-                    true,
-                )
-            else {
-                panic!("ticket substitution case {case} must be terminal")
-            };
-            assert_eq!(
-                custody.stage(),
-                Gfx942DirectionalPersistentSdmaTerminalStageV1::PublishedQueueRetained
-            );
-        }
-    }
-
-    #[test]
-    fn prepared_ticket_must_name_the_selected_child_and_valid_slot_generation() {
-        for case in 0..3 {
-            let (allocation, host) = promoted_fixture(36 + case, 2048);
-            let (mut prepared, _request, _ticket) = prepared_fixture(
-                allocation,
-                host,
-                None,
-                Gfx942PersistentSdmaDirectionV1::HostToDevice,
-                1,
-            );
-            prepared.planned_ticket = match case {
-                0 => persistent_sdma_ticket_coordinates_for_test(queue_key(), 23, 1, 1),
-                1 => persistent_sdma_ticket_coordinates_for_test(queue_key(), 17, 64, 1),
-                2 => persistent_sdma_ticket_coordinates_for_test(queue_key(), 17, 1, 0),
-                _ => unreachable!(),
-            };
-            let substituted = prepared.planned_ticket;
-            let DirectionalPersistentSdmaPublicationTransitionV1::ProcessTeardown(custody) =
-                transition_directional_persistent_sdma_publication_v1(
-                    prepared,
-                    DirectionalPersistentSdmaPublicationObservationV1::Confirmed(substituted),
-                    true,
-                    true,
-                )
-            else {
-                panic!("invalid prepared ticket case {case} must be terminal")
-            };
-            assert_eq!(
-                custody.stage(),
-                Gfx942DirectionalPersistentSdmaTerminalStageV1::PublishedQueueRetained
-            );
-        }
-    }
-
-    #[test]
-    fn pending_timeout_and_exact_completion_preserve_direction_and_size() {
-        let (submission, request) =
-            published_fixture(40, Gfx942PersistentSdmaDirectionV1::DeviceToHost);
-        let DirectionalPersistentSdmaCompletionTransitionV1::Pending(submission) =
-            transition_directional_persistent_sdma_completion_v1(
-                submission,
-                DirectionalPersistentSdmaCompletionObservationV1::Pending,
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        let DirectionalPersistentSdmaCompletionTransitionV1::Timeout(submission) =
-            transition_directional_persistent_sdma_completion_v1(
-                submission,
-                DirectionalPersistentSdmaCompletionObservationV1::Timeout,
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        assert_eq!(
-            submission.direction(),
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost
-        );
-        assert_eq!(submission.copy_bytes(), 32);
-        let DirectionalPersistentSdmaCompletionTransitionV1::Completed(completed) =
-            transition_directional_persistent_sdma_completion_v1(
-                submission,
-                DirectionalPersistentSdmaCompletionObservationV1::Completed(completed_request(
-                    request,
-                )),
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        assert_eq!(
-            completed.direction(),
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost
-        );
-        assert_eq!(completed.copy_bytes(), 32);
-    }
-
-    #[test]
-    fn next_use_requires_exact_frontier_retirement_not_dependency_chaining() {
-        let (submission, request) =
-            published_fixture(45, Gfx942PersistentSdmaDirectionV1::HostToDevice);
-        let DirectionalPersistentSdmaCompletionTransitionV1::Completed(completed) =
-            transition_directional_persistent_sdma_completion_v1(
-                submission,
-                DirectionalPersistentSdmaCompletionObservationV1::Completed(completed_request(
-                    request,
-                )),
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        let (mut allocation, host, frontier) = completed.into_parts();
-        let error = allocation
-            .owner
-            .reserve(
-                Gfx942PersistentUseRequestV1::new(
-                    Gfx942PersistentOperationV1::LocalSdmaDestination,
-                    16,
-                    32,
-                )
-                .unwrap(),
-                None,
-            )
-            .expect_err("an unretired overlapping frontier must block the next use");
-        assert_eq!(
-            error.error(),
-            Gfx942PersistentUseErrorV1::DependencyRequired
-        );
-        let allocation = allocation
-            .retire_settled_frontier_v1(frontier)
-            .expect("the exact frontier must retire");
-        let (_prepared, _request, _ticket) = prepared_fixture(
-            allocation,
-            host,
-            None,
-            Gfx942PersistentSdmaDirectionV1::HostToDevice,
-            2,
-        );
-    }
-
-    #[test]
-    fn demotion_requires_exact_frontier_retirement() {
-        let (submission, request) =
-            published_fixture(46, Gfx942PersistentSdmaDirectionV1::DeviceToHost);
-        let DirectionalPersistentSdmaCompletionTransitionV1::Completed(completed) =
-            transition_directional_persistent_sdma_completion_v1(
-                submission,
-                DirectionalPersistentSdmaCompletionObservationV1::Completed(completed_request(
-                    request,
-                )),
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        let (allocation, _host, frontier) = completed.into_parts();
-        let (error, allocation) = demote_directional_persistent_sdma_custody_v1(allocation, 2)
-            .expect_err("an unretired frontier must block demotion");
-        assert_eq!(error, Gfx942PersistentUseErrorV1::OutstandingUses);
-        let allocation = allocation
-            .retire_settled_frontier_v1(frontier)
-            .expect("the exact frontier must retire");
-        let (buffer, outstanding) = demote_directional_persistent_sdma_custody_v1(allocation, 2)
-            .expect("retired custody must demote");
-        assert_eq!(buffer.kind(), Gfx942SdmaBufferKindV1::DeviceLocal);
-        assert_eq!(outstanding, 2);
-    }
-
-    #[test]
-    fn closing_currentness_loss_is_terminal_before_and_after_completion() {
-        let (allocation, host) = promoted_fixture(50, 2048);
-        let (prepared, request, _) = prepared_fixture(
-            allocation,
-            host,
-            None,
-            Gfx942PersistentSdmaDirectionV1::HostToDevice,
-            1,
-        );
-        let DirectionalPersistentSdmaPublicationTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_publication_v1(
-                prepared,
-                DirectionalPersistentSdmaPublicationObservationV1::Recoverable(request),
-                true,
-                false,
-            )
-        else {
-            unreachable!()
-        };
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::PreparedRestored
-        );
-
-        let (submission, request) =
-            published_fixture(51, Gfx942PersistentSdmaDirectionV1::HostToDevice);
-        let DirectionalPersistentSdmaCompletionTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_completion_v1(
-                submission,
-                DirectionalPersistentSdmaCompletionObservationV1::Completed(completed_request(
-                    request,
-                )),
-                false,
-            )
-        else {
-            unreachable!()
-        };
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::CompletedUnrestored
-        );
-    }
-
-    #[test]
-    fn host_and_range_substitution_are_terminal() {
-        let (allocation, host) = promoted_fixture(60, 2048);
-        let (prepared, mut request, _) = prepared_fixture(
-            allocation,
-            host,
-            None,
-            Gfx942PersistentSdmaDirectionV1::HostToDevice,
-            1,
-        );
-        request.source_offset += 1;
-        let DirectionalPersistentSdmaPublicationTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_publication_v1(
-                prepared,
-                DirectionalPersistentSdmaPublicationObservationV1::Recoverable(request),
-                true,
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::PreparedUnrestored
-        );
-
-        let (allocation, host) = promoted_fixture(61, 2048);
-        let (prepared, request, _) = prepared_fixture(
-            allocation,
-            host,
-            None,
-            Gfx942PersistentSdmaDirectionV1::DeviceToHost,
-            1,
-        );
-        let (_unused, foreign_host) = persistent_sdma_buffers_for_test(queue_key(), 999);
-        let Gfx942SdmaCopyRequestV1 {
-            source: device,
-            source_offset,
-            destination: _,
-            destination_offset,
-            copy_bytes,
-        } = request;
-        let substituted = Gfx942SdmaCopyRequestV1::new(
-            device,
-            source_offset,
-            foreign_host,
-            destination_offset,
-            copy_bytes,
-        );
-        let DirectionalPersistentSdmaPublicationTransitionV1::ProcessTeardown(custody) =
-            transition_directional_persistent_sdma_publication_v1(
-                prepared,
-                DirectionalPersistentSdmaPublicationObservationV1::Recoverable(substituted),
-                true,
-                true,
-            )
-        else {
-            unreachable!()
-        };
-        assert_eq!(
-            custody.stage(),
-            Gfx942DirectionalPersistentSdmaTerminalStageV1::PreparedUnrestored
-        );
-    }
-
-    fn exercise_sequential_directions(
-        id: u64,
-        direction_for_cycle: impl Fn(usize) -> Gfx942PersistentSdmaDirectionV1,
-    ) {
-        let (mut allocation, mut host) = promoted_fixture(id, 2048);
-        for cycle in 0..(crate::GFX942_MAX_PERSISTENT_ALLOCATION_USES_V1 + 2) {
-            let direction = direction_for_cycle(cycle);
-            let generation = u32::try_from(cycle + 1).unwrap();
-            let (prepared, request, ticket) =
-                prepared_fixture(allocation, host, None, direction, generation);
-            let DirectionalPersistentSdmaPublicationTransitionV1::Published(submission) =
-                transition_directional_persistent_sdma_publication_v1(
-                    prepared,
-                    DirectionalPersistentSdmaPublicationObservationV1::Confirmed(ticket),
-                    true,
-                    true,
-                )
-            else {
-                panic!("cycle {cycle} must publish")
-            };
-            assert_eq!(submission.direction(), direction);
-            let DirectionalPersistentSdmaCompletionTransitionV1::Completed(completed) =
-                transition_directional_persistent_sdma_completion_v1(
-                    submission,
-                    DirectionalPersistentSdmaCompletionObservationV1::Completed(completed_request(
-                        request,
-                    )),
-                    true,
-                )
-            else {
-                panic!("cycle {cycle} must complete")
-            };
-            let (next_allocation, next_host, frontier) = completed.into_parts();
-            allocation = next_allocation
-                .retire_settled_frontier_v1(frontier)
-                .unwrap_or_else(|_| panic!("cycle {cycle} frontier must retire"));
-            host = next_host;
-        }
-        assert_eq!(allocation.owner.retained_settled_use_count(), 0);
-    }
-
-    #[test]
-    fn more_than_64_repeated_same_direction_uses_are_admitted() {
-        exercise_sequential_directions(70, |_| Gfx942PersistentSdmaDirectionV1::HostToDevice);
-        exercise_sequential_directions(71, |_| Gfx942PersistentSdmaDirectionV1::DeviceToHost);
-    }
-
-    #[test]
-    fn more_than_64_arbitrarily_alternating_directions_are_admitted() {
-        exercise_sequential_directions(72, |cycle| {
-            if cycle.is_multiple_of(3) {
-                Gfx942PersistentSdmaDirectionV1::DeviceToHost
-            } else {
-                Gfx942PersistentSdmaDirectionV1::HostToDevice
-            }
-        });
-    }
-}
+#[path = "persistent_directional_sdma/tests.rs"]
+mod tests;

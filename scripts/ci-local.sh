@@ -93,8 +93,14 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-amdgcn-model
   fe2o3-amdhsa-loader
   fe2o3-aql
+  fe2o3-broker-authority-service
   fe2o3-completion
   fe2o3-compiler-api
+  fe2o3-compiler-closure-capability
+  fe2o3-compiler-execution-client
+  fe2o3-compiler-execution-coordinator
+  fe2o3-compiler-execution-protocol
+  fe2o3-compiler-execution-supervisor
   fe2o3-artifacts
   fe2o3-contracts
   fe2o3-device
@@ -124,7 +130,11 @@ readonly CPU_TEST_PACKAGES=(
   fe2o3-process-identity
   fe2o3-profiler-protocol
   fe2o3-proof-contracts
+  fe2o3-proof-custodian
+  fe2o3-resource-accounting
   fe2o3-protected-service-profile
+  fe2o3-protected-service-spawn
+  fe2o3-protected-static-executable
   fe2o3-rustc-front
   fe2o3-rustc-invocation
   fe2o3-service-host
@@ -687,6 +697,10 @@ run_check() {
     env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
     "${CARGO_FE2O3_BINARY}" check --locked --all-targets \
       --manifest-path examples/flash_attention_general_v1/Cargo.toml
+  run_step native-conditional-application-binding-check \
+    env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
+    "${CARGO_FE2O3_BINARY}" check --locked --bins \
+      --manifest-path crates/cargo-fe2o3/tests/fixtures/conditional-custodian-application/Cargo.toml
 }
 
 run_artifact_transaction_tests() {
@@ -707,6 +721,15 @@ run_runtime_release_tests() {
       CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=false \
     cargo test --locked --release -p fe2o3-runtime \
       --features hardware-qualification --lib -- --test-threads=1
+  run_step fe2o3-resource-accounting-release-tests \
+    env CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=false \
+      cargo test --locked --release -p fe2o3-resource-accounting --lib
+  run_step fe2o3-runtime-scale-cpu-tests \
+    cargo test --locked -p fe2o3-runtime \
+      --features scale-qualification,cpu-runtime-fixtures --lib -- --test-threads=1
+  run_step fe2o3-runtime-scoped-ownership-doc-tests \
+    cargo test --locked -p fe2o3-runtime \
+      --features scale-qualification,cpu-runtime-fixtures --doc generated_scope
 }
 
 run_host_reference_tests() {
@@ -949,6 +972,37 @@ run_auxiliary_tests() {
     bash scripts/tests/compiler-execution-deployment-bundle.sh
   run_step compiler-execution-qualification-base-contract \
     bash scripts/tests/compiler-execution-qualification-base.sh
+  run_step proof-manager-systemd-contract \
+    bash scripts/tests/proof-manager-systemd.sh
+  run_step native-application-manager-systemd-contract \
+    python3 -I -B scripts/tests/native-application-manager-systemd.py
+  run_step native-application-startup-observer \
+    python3 -I -B scripts/tests/native_application_startup_test.py
+  run_step native-manager-packaged-cpu-observer \
+    python3 -I -B scripts/tests/qualify_native_manager_cpu_test.py
+  run_step native-application-qualification-oracle \
+    python3 -I -B scripts/tests/qualify_native_conditional_application_test.py
+  run_step native-cpu-chain-proof-oracle \
+    python3 -I -B scripts/tests/qualify_native_conditional_cpu_chain_test.py
+  run_step native-application-fixture-oracles \
+    cargo test --locked -p cargo-fe2o3 \
+      --test native_v5_case --test native_v5_roster_case --test native_proof_case
+  run_step runtime-planner-input-checker-tests \
+    python3 -I -B crates/fe2o3-runtime-model/verus/test-producer-planner-input-composition.py
+  run_step runtime-planner-input-source-check \
+    python3 -I -B crates/fe2o3-runtime-model/verus/check-producer-planner-input-composition.py
+  run_step functional-refinement-qualification-inputs \
+    bash scripts/tests/functional-refinement-qualification-inputs.sh
+  run_step qualification-input-bundle-tests \
+    python3 -I -B scripts/tests/qualification_input_bundle_test.py
+  run_step qualification-host-link-tests \
+    python3 -I -B scripts/tests/qualification_host_link_test.py
+  run_step qualification-host-link-shell-tests \
+    python3 -I -B scripts/tests/qualification_host_link_shell_test.py
+  run_step two-gpu-mount-contract \
+    bash scripts/tests/qualify-two-gpu-mounts.sh
+  run_step device-roster-mount-contract \
+    bash scripts/tests/qualify-device-roster-mounts.sh
   run_step native-readiness-fixture-builder-contract \
     bash scripts/tests/native-ready-fixture.sh
   run_step s09-debug-checker bash scripts/tests/s09-debug.sh
@@ -1491,6 +1545,8 @@ run_generic_core() {
     python3 -I -B scripts/tests/generic-core-groups.py
   run_step generic-cpu-group-tests \
     python3 -I -B scripts/tests/generic-cpu-groups.py
+  run_step runtime-production-proof-pipeline-tests \
+    python3 -I -B scripts/tests/runtime-production-proof-pipeline.py
   if [[ "${group}" == all ]]; then
     run_generic_core cpu
     run_generic_core auxiliary

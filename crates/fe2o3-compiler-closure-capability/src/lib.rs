@@ -39,6 +39,7 @@ mod compiler_execution_policy_family_v1;
 mod compiler_execution_policy_native;
 mod compiler_execution_policy_v2;
 mod compiler_execution_policy_v3;
+mod compiler_execution_production_deployment;
 pub use compiler_execution_policy_family_v1::inspect_compiler_execution_policy_family_v1;
 mod compiler_execution_service_launch;
 mod compiler_execution_service_launch_native;
@@ -90,6 +91,15 @@ pub use compiler_execution_policy::{
 };
 pub use compiler_execution_policy_v2::CompilerExecutionPolicyCapabilityV2;
 pub use compiler_execution_policy_v3::CompilerExecutionPolicyCapabilityV3;
+pub use compiler_execution_production_deployment::{
+    ProductionCompilerExecutionDeploymentErrorV3, ProductionCompilerExecutionDeploymentStorageV3,
+    ProductionCompilerExecutionDeploymentV1, ProductionCompilerExecutionDeploymentV3,
+    ProductionNativeApplicationProofProfileErrorV1,
+    ProductionNativeApplicationProofProfileStorageV1, ProductionNativeApplicationProofProfileV1,
+    RootProductionCompilerExecutionDeploymentErrorV3,
+    RootProductionCompilerExecutionDeploymentStorageV3,
+    RootProductionCompilerExecutionDeploymentV3,
+};
 pub use compiler_execution_service_launch::{
     COMPILER_EXECUTION_SERVICE_LAUNCH_MANIFEST_CHILD_FD_V1,
     CompilerExecutionServiceLaunchCapabilityV1,
@@ -121,7 +131,7 @@ pub use rustc_invocation::{RUSTC_INVOCATION_CHILD_FD_V1, RustcInvocationCapabili
 use sealed_image::{CapabilityRole, ImageLength, SealedCapabilityImage};
 
 #[cfg(test)]
-pub(crate) static FIXED_DESCRIPTOR_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+mod test_isolation;
 
 const MAGIC: &[u8] = b"FE2O3-COMPILER-CLOSURE-CAPABILITY-V1\0";
 const VERSION: u16 = 1;
@@ -478,7 +488,11 @@ mod tests {
 
     #[test]
     fn child_inherits_only_the_requested_exact_descriptor() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "tests::child_inherits_only_the_requested_exact_descriptor",
+        ) {
+            return;
+        }
         let capability = CompilerClosureCapabilityV1::create(closure()).unwrap();
         let child_fd = 511;
         let mut command = Command::new("/bin/sh");
@@ -494,7 +508,11 @@ mod tests {
 
     #[test]
     fn inherited_descriptor_is_retained_and_revalidated_before_use() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "tests::inherited_descriptor_is_retained_and_revalidated_before_use",
+        ) {
+            return;
+        }
         let capability = CompilerClosureCapabilityV1::create(closure()).unwrap();
         let child_fd = 511;
         let installed =
@@ -716,7 +734,11 @@ mod tests {
 
     #[test]
     fn canonical_inherited_invocation_is_retained_after_source_close() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "tests::canonical_inherited_invocation_is_retained_after_source_close",
+        ) {
+            return;
+        }
         assert_eq!(RUSTC_INVOCATION_CHILD_FD_V1, 199);
         let expected = invocation();
         let capability = RustcInvocationCapabilityV1::create(expected.clone()).unwrap();
@@ -740,7 +762,11 @@ mod tests {
 
     #[test]
     fn invocation_child_installation_uses_fd_199_and_exact_bytes() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "tests::invocation_child_installation_uses_fd_199_and_exact_bytes",
+        ) {
+            return;
+        }
         let descriptor = invocation();
         let bytes = encode_descriptor_v3(&descriptor).unwrap();
         let path = temporary_path("expected-invocation");

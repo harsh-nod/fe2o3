@@ -92,7 +92,7 @@ const DF_SYMBOLIC: u64 = 2;
 const NT_AMDGPU_METADATA: u32 = 32;
 const AMDGPU_NOTE_NAME: &[u8] = b"AMDGPU\0";
 
-/// Stable name of this data-only parser/planner profile.
+/// Stable name of the original gfx942 data-only parser/planner profile.
 pub const LOADER_PROFILE_ID: &str = "fe2o3-amdhsa-cov6-gfx942-xnack-off-envelope-v1";
 /// Data-only gfx950 envelope profile, not KFD device or queue admission.
 pub const GFX950_LOADER_PROFILE_ID: &str = "fe2o3-amdhsa-cov6-gfx950-xnack-off-envelope-v1";
@@ -122,6 +122,22 @@ pub enum AdmittedProfile {
 }
 
 impl AdmittedProfile {
+    /// Stable target-specific profile bound into the selected-kernel identity.
+    pub const fn profile_id(self) -> &'static str {
+        match self {
+            Self::Gfx942XnackOffCov6 => LOADER_PROFILE_ID,
+            Self::Gfx950XnackOffCov6 => GFX950_LOADER_PROFILE_ID,
+        }
+    }
+
+    /// Exact processor required in the AMDHSA metadata target.
+    pub const fn processor(self) -> &'static str {
+        match self {
+            Self::Gfx942XnackOffCov6 => "gfx942",
+            Self::Gfx950XnackOffCov6 => "gfx950",
+        }
+    }
+
     /// Returns the canonical target spelling represented by the ELF flags.
     pub const fn target(self) -> &'static str {
         match self {
@@ -135,21 +151,6 @@ impl AdmittedProfile {
         match self {
             Self::Gfx942XnackOffCov6 => ELF_FLAGS_GFX942_XNACK_OFF,
             Self::Gfx950XnackOffCov6 => ELF_FLAGS_GFX950_XNACK_OFF,
-        }
-    }
-
-    /// Profile-specific domain separator for the selected-kernel closure.
-    pub const fn profile_id(self) -> &'static str {
-        match self {
-            Self::Gfx942XnackOffCov6 => LOADER_PROFILE_ID,
-            Self::Gfx950XnackOffCov6 => GFX950_LOADER_PROFILE_ID,
-        }
-    }
-
-    const fn processor(self) -> &'static str {
-        match self {
-            Self::Gfx942XnackOffCov6 => "gfx942",
-            Self::Gfx950XnackOffCov6 => "gfx950",
         }
     }
 }
@@ -597,6 +598,11 @@ impl OwnedValidatedEnvelope {
 }
 
 impl<'a> ValidatedEnvelope<'a> {
+    /// Exact immutable object bytes retained by this descriptive envelope.
+    pub const fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
     /// Length of the exact input borrow retained by this envelope.
     pub const fn input_len(&self) -> u64 {
         self.bytes.len() as u64

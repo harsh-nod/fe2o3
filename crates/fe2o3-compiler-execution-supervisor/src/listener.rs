@@ -5,7 +5,7 @@ mod native_accept;
 #[path = "listener_v2.rs"]
 mod native_v2;
 #[path = "listener_v3.rs"]
-mod native_v3;
+pub(crate) mod native_v3;
 pub use native_v2::*;
 pub use native_v3::*;
 
@@ -658,6 +658,13 @@ pub(super) struct ProvisionedProtectedIssuerSocketV1 {
 }
 
 impl ProvisionedProtectedIssuerSocketV1 {
+    pub(super) fn has_native_application_path(&self) -> bool {
+        self.socket.expected_path
+            == Path::new(
+                fe2o3_compiler_execution_protocol::NATIVE_APPLICATION_SUPERVISOR_SOCKET_PATH_V3,
+            )
+    }
+
     pub(super) fn admit(
         descriptor: OwnedFd,
         expected_path: &Path,

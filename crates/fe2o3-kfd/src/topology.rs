@@ -1,4 +1,4 @@
-//! Strict, read-only discovery of an explicitly selected KFD topology target.
+//! Strict, target-explicit read-only discovery of KFD topology observations.
 //!
 //! Values returned by this module are contracted sysfs observations. They are
 //! not authenticated device identity and grant no VM, memory, queue, or ioctl
@@ -6,11 +6,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fs::{self, File, Metadata};
+use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+
+mod link_properties;
+mod node_properties;
 
 /// Kernel-owned topology tree used by the first Linux KFD profile.
 pub const DEFAULT_TOPOLOGY_ROOT: &str = "/sys/class/kfd/kfd/topology";
@@ -57,9 +60,9 @@ const GFX942_SDMA_XGMI_ENGINE_COUNT_V1: u32 = 14;
 const GFX942_SDMA_TOTAL_ENGINE_COUNT_V1: u32 =
     GFX942_SDMA_ENGINE_COUNT_V1 + GFX942_SDMA_XGMI_ENGINE_COUNT_V1;
 
-/// GPU targets accepted by read-only topology discovery.
+/// Exact targets supported by read-only topology discovery.
 ///
-/// Discovery of a target does not admit its devices to the direct-KFD runtime.
+/// Discovery support does not admit a target for native device or queue use.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum GfxTarget {
     Gfx942,
@@ -915,20 +918,33 @@ impl HostTopologySnapshot {
     }
 }
 
-/// Discovers the default gfx942 KFD topology without opening a device or
-/// granting runtime authority. Other targets continue to reject.
+/// Discovers gfx942 KFD topology without opening a device or granting runtime
+/// authority. Other targets require explicit read-only selection.
 pub fn discover_default_topology() -> Result<HostTopologySnapshot, TopologyError> {
-    discover_default_topology_for_target(GfxTarget::Gfx942)
+    discover_default_topology_with::<crate::currentness_diagnostic::Disabled>()
+        .map(|(snapshot, ())| snapshot)
 }
 
-/// Discovers one homogeneous, explicitly selected target without opening a
-/// device, changing XNACK, or granting VM, queue, dispatch, or XGMI authority.
-/// Every GPU in the complete topology must match; mixed-target inventories
-/// reject rather than silently dropping devices from the snapshot.
+pub(crate) fn discover_default_topology_with<M: crate::currentness_diagnostic::Mode>()
+-> Result<(HostTopologySnapshot, M::Topology), TopologyError> {
+    discover_default_topology_for_target_with::<M>(GfxTarget::Gfx942)
+}
+
+/// Observes exactly one selected target across the complete KFD GPU inventory.
+///
+/// A mismatched or mixed inventory is rejected. This does not grant device,
+/// memory, queue, dispatch, or gfx942-specific route authority for gfx950.
 pub fn discover_default_topology_for_target(
     target: GfxTarget,
 ) -> Result<HostTopologySnapshot, TopologyError> {
-    discover_host_topology_for_target(
+    discover_default_topology_for_target_with::<crate::currentness_diagnostic::Disabled>(target)
+        .map(|(snapshot, ())| snapshot)
+}
+
+fn discover_default_topology_for_target_with<M: crate::currentness_diagnostic::Mode>(
+    target: GfxTarget,
+) -> Result<(HostTopologySnapshot, M::Topology), TopologyError> {
+    discover_host_topology_with::<M>(
         &DiscoveryPaths {
             topology_root: Path::new(DEFAULT_TOPOLOGY_ROOT),
             boot_id: Path::new(DEFAULT_BOOT_ID_PATH),
@@ -1359,6 +1375,10 @@ fn io_error(operation: &'static str, path: &Path, source: io::Error) -> Topology
 }
 
 fn inspect(path: &Path) -> Result<Metadata, TopologyError> {
+    #[cfg(test)]
+    tests::host_diagnostics::io("inspect", path, 0);
+    #[cfg(test)]
+    tests::prechecked_reads::record_inspect(path);
     fs::symlink_metadata(path).map_err(|source| io_error("inspect", path, source))
 }
 
@@ -1376,7 +1396,12 @@ fn ensure_directory(path: &Path) -> Result<FileIdentity, TopologyError> {
     Ok(FileIdentity::from_metadata(&metadata))
 }
 
-fn read_bounded_regular(path: &Path, maximum: usize) -> Result<Vec<u8>, TopologyError> {
+struct RegularFileObservation<'a> {
+    path: &'a Path,
+    identity: FileIdentity,
+}
+
+fn inspect_regular(path: &Path) -> Result<RegularFileObservation<'_>, TopologyError> {
     let before = inspect(path)?;
     if before.file_type().is_symlink() {
         return Err(TopologyError::Symlink(path.to_path_buf()));
@@ -1387,36 +1412,90 @@ fn read_bounded_regular(path: &Path, maximum: usize) -> Result<Vec<u8>, Topology
             expected: "regular file",
         });
     }
-    let expected = FileIdentity::from_metadata(&before);
-    let mut file = File::open(path).map_err(|source| io_error("open", path, source))?;
+    Ok(RegularFileObservation {
+        path,
+        identity: FileIdentity::from_metadata(&before),
+    })
+}
+
+fn open_observed_regular(path: &Path) -> Result<File, TopologyError> {
+    #[cfg(test)]
+    tests::host_diagnostics::io("open", path, 0);
+    // A replacement must neither redirect the final component nor block on a FIFO.
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|source| {
+            if source.raw_os_error() == Some(libc::ELOOP) {
+                TopologyError::Symlink(path.to_path_buf())
+            } else {
+                io_error("open", path, source)
+            }
+        })
+}
+
+fn read_bounded_regular(
+    before: RegularFileObservation<'_>,
+    maximum: usize,
+) -> Result<Vec<u8>, TopologyError> {
+    let mut bytes = Vec::new();
+    read_bounded_regular_into(before, maximum, &mut bytes)?;
+    Ok(bytes)
+}
+
+fn read_bounded_regular_into(
+    before: RegularFileObservation<'_>,
+    maximum: usize,
+    bytes: &mut Vec<u8>,
+) -> Result<(), TopologyError> {
+    bytes.clear();
+    let RegularFileObservation { path, identity } = before;
+    let mut file = open_observed_regular(path)?;
+    #[cfg(test)]
+    tests::host_diagnostics::io("opened metadata", path, 0);
     let opened = file
         .metadata()
         .map_err(|source| io_error("inspect opened file", path, source))?;
-    if FileIdentity::from_metadata(&opened) != expected {
+    if FileIdentity::from_metadata(&opened) != identity {
         return Err(TopologyError::ChangedDuringRead(path.to_path_buf()));
     }
-    let mut bytes = Vec::with_capacity(maximum.min(1024));
+    bytes.reserve_exact(maximum.min(1024));
+    #[cfg(test)]
+    tests::host_diagnostics::io("bounded read", path, maximum + 1);
     (&mut file)
         .take((maximum + 1) as u64)
-        .read_to_end(&mut bytes)
+        .read_to_end(bytes)
         .map_err(|source| io_error("read", path, source))?;
+    #[cfg(test)]
+    tests::prechecked_reads::after_regular_read(path);
     if bytes.len() > maximum {
         return Err(TopologyError::FileTooLarge {
             path: path.to_path_buf(),
             maximum,
         });
     }
+    #[cfg(test)]
+    tests::host_diagnostics::io("closing metadata", path, 0);
     let after = file
         .metadata()
         .map_err(|source| io_error("reinspect opened file", path, source))?;
-    if FileIdentity::from_metadata(&after) != expected {
+    if FileIdentity::from_metadata(&after) != identity {
         return Err(TopologyError::ChangedDuringRead(path.to_path_buf()));
     }
-    Ok(bytes)
+    Ok(())
 }
 
 fn read_text(path: &Path, maximum: usize) -> Result<String, TopologyError> {
-    String::from_utf8(read_bounded_regular(path, maximum)?)
+    read_text_prechecked(inspect_regular(path)?, maximum)
+}
+
+fn read_text_prechecked(
+    before: RegularFileObservation<'_>,
+    maximum: usize,
+) -> Result<String, TopologyError> {
+    let path = before.path;
+    String::from_utf8(read_bounded_regular(before, maximum)?)
         .map_err(|_| TopologyError::InvalidUtf8(path.to_path_buf()))
 }
 
@@ -1500,6 +1579,8 @@ fn read_optional_module_field(
     path: &Path,
     predicate: impl Fn(u8) -> bool,
 ) -> Result<Option<String>, TopologyError> {
+    #[cfg(test)]
+    tests::host_diagnostics::io("optional inspect", path, 0);
     match fs::symlink_metadata(path) {
         Ok(_) => {}
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -1662,110 +1743,13 @@ fn read_memory_partition(path: &Path) -> Result<MemoryPartition, TopologyError> 
     }
 }
 
-fn property_range(key: &str) -> Option<(u64, u64)> {
-    let range = match key {
-        "array_count" => (0, 4096),
-        "caches_count" => (0, 16_384),
-        "capability" | "capability2" | "hive_id" | "unique_id" => (0, u64::MAX),
-        "cpu_core_id_base" | "simd_id_base" | "location_id" => (0, u32::MAX as u64),
-        "cpu_cores_count" | "simd_count" => (0, 65_536),
-        "cu_per_simd_array" | "max_waves_per_simd" | "simd_arrays_per_engine" => (0, 4096),
-        "debug_prop" => (0, u64::MAX),
-        "device_id" | "domain" | "vendor_id" => (0, u16::MAX as u64),
-        "drm_render_minor" => (0, u32::MAX as u64),
-        "fw_version" | "sdma_fw_version" => (0, u32::MAX as u64),
-        "gds_size_in_kb" | "lds_size_in_kb" => (0, 1 << 30),
-        "gfx_target_version" => (0, 999_999),
-        "io_links_count" | "mem_banks_count" | "p2p_links_count" => (0, 4096),
-        "local_mem_size" => (0, 1 << 60),
-        "max_engine_clk_ccompute" | "max_engine_clk_fcompute" => (0, 100_000_000),
-        "max_slots_scratch_cu" | "num_cp_queues" | "num_gws" => (0, 1 << 20),
-        "num_sdma_engines" | "num_sdma_queues_per_engine" | "num_sdma_xgmi_engines" => (0, 4096),
-        "num_xcc" => (0, 64),
-        "simd_per_cu" => (0, 64),
-        "wave_front_size" => (0, 128),
-        _ => return None,
-    };
-    Some(range)
-}
-
-fn parse_properties(path: &Path) -> Result<BTreeMap<String, u64>, TopologyError> {
+fn parse_properties(path: &Path) -> Result<node_properties::NodeProperties, TopologyError> {
     let text = read_text(path, MAX_PROPERTY_BYTES)?;
-    if !text.ends_with('\n') {
-        return Err(TopologyError::MalformedPropertyLine {
-            path: path.to_path_buf(),
-            line: 1,
-        });
-    }
-    let mut properties = BTreeMap::new();
-    for (index, line) in text.split_terminator('\n').enumerate() {
-        let line_number = index + 1;
-        if line_number > MAX_PROPERTY_LINES {
-            return Err(TopologyError::TooManyProperties {
-                path: path.to_path_buf(),
-                maximum: MAX_PROPERTY_LINES,
-            });
-        }
-        let mut fields = line.split(' ');
-        let Some(key) = fields.next() else {
-            return Err(TopologyError::MalformedPropertyLine {
-                path: path.to_path_buf(),
-                line: line_number,
-            });
-        };
-        let Some(raw_value) = fields.next() else {
-            return Err(TopologyError::MalformedPropertyLine {
-                path: path.to_path_buf(),
-                line: line_number,
-            });
-        };
-        if fields.next().is_some()
-            || key.is_empty()
-            || !key
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-            || raw_value.is_empty()
-            || raw_value.starts_with('0') && raw_value != "0"
-            || !raw_value.bytes().all(|byte| byte.is_ascii_digit())
-        {
-            return Err(TopologyError::MalformedPropertyLine {
-                path: path.to_path_buf(),
-                line: line_number,
-            });
-        }
-        let Some((minimum, maximum)) = property_range(key) else {
-            return Err(TopologyError::UnknownProperty {
-                path: path.to_path_buf(),
-                key: key.to_owned(),
-            });
-        };
-        let value = raw_value
-            .parse::<u64>()
-            .map_err(|_| TopologyError::MalformedPropertyLine {
-                path: path.to_path_buf(),
-                line: line_number,
-            })?;
-        if value < minimum || value > maximum {
-            return Err(TopologyError::PropertyOutOfRange {
-                path: path.to_path_buf(),
-                key: key.to_owned(),
-                value,
-                minimum,
-                maximum,
-            });
-        }
-        if properties.insert(key.to_owned(), value).is_some() {
-            return Err(TopologyError::DuplicateProperty {
-                path: path.to_path_buf(),
-                key: key.to_owned(),
-            });
-        }
-    }
-    Ok(properties)
+    node_properties::parse(path, &text)
 }
 
 fn required_property(
-    properties: &BTreeMap<String, u64>,
+    properties: &node_properties::NodeProperties,
     path: &Path,
     key: &'static str,
 ) -> Result<u64, TopologyError> {
@@ -1779,7 +1763,7 @@ fn required_property(
 }
 
 fn bounded_u32(
-    properties: &BTreeMap<String, u64>,
+    properties: &node_properties::NodeProperties,
     path: &Path,
     key: &'static str,
     minimum: u64,
@@ -1799,7 +1783,7 @@ fn bounded_u32(
 }
 
 fn optional_bounded_u32(
-    properties: &BTreeMap<String, u64>,
+    properties: &node_properties::NodeProperties,
     path: &Path,
     key: &'static str,
     minimum: u64,
@@ -1840,7 +1824,15 @@ fn parse_named_properties(
     path: &Path,
     allowed: &[(&'static str, u64, u64)],
 ) -> Result<BTreeMap<String, u64>, TopologyError> {
-    let text = read_text(path, MAX_PROPERTY_BYTES)?;
+    parse_named_properties_prechecked(inspect_regular(path)?, allowed)
+}
+
+fn parse_named_properties_prechecked(
+    before: RegularFileObservation<'_>,
+    allowed: &[(&'static str, u64, u64)],
+) -> Result<BTreeMap<String, u64>, TopologyError> {
+    let path = before.path;
+    let text = read_text_prechecked(before, MAX_PROPERTY_BYTES)?;
     if !text.ends_with('\n') {
         return Err(TopologyError::MalformedPropertyLine {
             path: path.to_path_buf(),
@@ -1911,8 +1903,28 @@ fn parse_named_properties(
     Ok(result)
 }
 
-fn read_directory(path: &Path, maximum: usize) -> Result<Vec<(String, PathBuf)>, TopologyError> {
+struct DirectoryEntry {
+    path: PathBuf,
+}
+
+impl DirectoryEntry {
+    fn new(path: PathBuf) -> Result<Self, TopologyError> {
+        if path.file_name().and_then(|name| name.to_str()).is_none() {
+            return Err(TopologyError::InvalidEntryName(path));
+        }
+        Ok(Self { path })
+    }
+
+    fn name(&self) -> &str {
+        // Construction validates the basename; the owned path is never mutated.
+        self.path.file_name().unwrap().to_str().unwrap()
+    }
+}
+
+fn read_directory(path: &Path, maximum: usize) -> Result<Vec<DirectoryEntry>, TopologyError> {
     ensure_directory(path)?;
+    #[cfg(test)]
+    tests::host_diagnostics::io("read directory", path, maximum);
     let entries = fs::read_dir(path).map_err(|source| io_error("list", path, source))?;
     let mut result = Vec::new();
     for entry in entries {
@@ -1923,37 +1935,36 @@ fn read_directory(path: &Path, maximum: usize) -> Result<Vec<(String, PathBuf)>,
                 maximum,
             });
         }
-        let entry_path = entry.path();
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| TopologyError::InvalidEntryName(entry_path.clone()))?;
-        result.push((name, entry_path));
+        result.push(DirectoryEntry::new(entry.path())?);
     }
-    result.sort_by(|left, right| left.0.cmp(&right.0));
+    // On Linux, validated UTF-8 basenames have the same byte and string order.
+    result.sort_by(|left, right| left.path.file_name().cmp(&right.path.file_name()));
     Ok(result)
 }
 
 fn validate_root(root: &Path) -> Result<(), TopologyError> {
     let expected = ["generation_id", "nodes", "system_properties"];
     let mut observed = BTreeSet::new();
-    for (name, path) in read_directory(root, MAX_ROOT_ENTRIES)? {
-        if !expected.contains(&name.as_str()) {
+    let entries = read_directory(root, MAX_ROOT_ENTRIES)?;
+    for entry in &entries {
+        let name = entry.name();
+        let path = &entry.path;
+        if !expected.contains(&name) {
             return Err(TopologyError::UnexpectedEntry {
                 path: root.to_path_buf(),
-                name,
+                name: name.to_owned(),
             });
         }
         if name == "nodes" {
-            ensure_directory(&path)?;
+            ensure_directory(path)?;
         } else {
-            let metadata = inspect(&path)?;
+            let metadata = inspect(path)?;
             if metadata.file_type().is_symlink() {
-                return Err(TopologyError::Symlink(path));
+                return Err(TopologyError::Symlink(path.clone()));
             }
             if !metadata.is_file() {
                 return Err(TopologyError::UnexpectedFileType {
-                    path,
+                    path: path.clone(),
                     expected: "regular file",
                 });
             }
@@ -1988,30 +1999,33 @@ fn validate_node_entries(path: &Path) -> Result<(), TopologyError> {
     const FILES: [&str; 3] = ["gpu_id", "name", "properties"];
     const DIRECTORIES: [&str; 5] = ["caches", "io_links", "mem_banks", "p2p_links", "perf"];
     let mut files = BTreeSet::new();
-    for (name, entry_path) in read_directory(path, MAX_NODE_ENTRIES)? {
-        let metadata = inspect(&entry_path)?;
+    let entries = read_directory(path, MAX_NODE_ENTRIES)?;
+    for entry in &entries {
+        let name = entry.name();
+        let entry_path = &entry.path;
+        let metadata = inspect(entry_path)?;
         if metadata.file_type().is_symlink() {
-            return Err(TopologyError::Symlink(entry_path));
+            return Err(TopologyError::Symlink(entry_path.clone()));
         }
-        if FILES.contains(&name.as_str()) {
+        if FILES.contains(&name) {
             if !metadata.is_file() {
                 return Err(TopologyError::UnexpectedFileType {
-                    path: entry_path,
+                    path: entry_path.clone(),
                     expected: "regular file",
                 });
             }
             files.insert(name);
-        } else if DIRECTORIES.contains(&name.as_str()) {
+        } else if DIRECTORIES.contains(&name) {
             if !metadata.is_dir() {
                 return Err(TopologyError::UnexpectedFileType {
-                    path: entry_path,
+                    path: entry_path.clone(),
                     expected: "directory",
                 });
             }
         } else {
             return Err(TopologyError::UnexpectedEntry {
                 path: path.to_path_buf(),
-                name,
+                name: name.to_owned(),
             });
         }
     }
@@ -2042,53 +2056,28 @@ fn parse_topology_links(
         });
     }
     let mut links = Vec::with_capacity(entries.len());
-    for (position, (name, path)) in entries.into_iter().enumerate() {
-        let index = parse_node_id(&name)?;
+    let mut property_bytes = Vec::new();
+    for (position, entry) in entries.into_iter().enumerate() {
+        let index = parse_node_id(entry.name())?;
+        let path = entry.path;
         if usize::try_from(index) != Ok(position) {
             return Err(TopologyError::NonCanonicalLinkIndex { path, index });
         }
-        ensure_directory(&path)?;
         let contents = read_directory(&path, 2)?;
-        if contents.len() != 1 || contents[0].0 != "properties" {
+        if contents.len() != 1 || contents[0].name() != "properties" {
             return Err(TopologyError::UnexpectedLinkEntry(path));
         }
-        let properties_metadata = inspect(&contents[0].1)?;
-        if properties_metadata.file_type().is_symlink() {
-            return Err(TopologyError::Symlink(contents[0].1.clone()));
-        }
-        if !properties_metadata.is_file() {
-            return Err(TopologyError::UnexpectedFileType {
-                path: contents[0].1.clone(),
-                expected: "regular file",
-            });
-        }
-        let properties = parse_named_properties(
-            &contents[0].1,
-            &[
-                ("type", 0, u32::MAX as u64),
-                ("version_major", 0, u32::MAX as u64),
-                ("version_minor", 0, u32::MAX as u64),
-                ("node_from", 0, u16::MAX as u64),
-                ("node_to", 0, u16::MAX as u64),
-                ("weight", 0, u32::MAX as u64),
-                ("min_latency", 0, u64::MAX),
-                ("max_latency", 0, u64::MAX),
-                ("min_bandwidth", 0, u64::MAX),
-                ("max_bandwidth", 0, u64::MAX),
-                ("recommended_transfer_size", 0, u64::MAX),
-                ("recommended_sdma_engine_id_mask", 0, u64::MAX),
-                ("flags", 0, u32::MAX as u64),
-            ],
-        )?;
-        let node_from = properties["node_from"] as u32;
-        let node_to = properties["node_to"] as u32;
-        let min_latency = properties["min_latency"];
-        let max_latency = properties["max_latency"];
-        let min_bandwidth = properties["min_bandwidth"];
-        let max_bandwidth = properties["max_bandwidth"];
+        let properties_observation = inspect_regular(&contents[0].path)?;
+        let properties = link_properties::read(properties_observation, &mut property_bytes)?;
+        let node_from = properties.node_from;
+        let node_to = properties.node_to;
+        let min_latency = properties.min_latency;
+        let max_latency = properties.max_latency;
+        let min_bandwidth = properties.min_bandwidth;
+        let max_bandwidth = properties.max_bandwidth;
         if node_from != node_id || node_to == node_id {
             return Err(TopologyError::InvalidLinkEndpoint {
-                path: contents[0].1.clone(),
+                path: contents[0].path.clone(),
                 expected_from: node_id,
                 observed_from: node_from,
                 observed_to: node_to,
@@ -2097,24 +2086,24 @@ fn parse_topology_links(
         if min_latency > max_latency && max_latency != 0
             || min_bandwidth > max_bandwidth && max_bandwidth != 0
         {
-            return Err(TopologyError::InvalidLinkRange(contents[0].1.clone()));
+            return Err(TopologyError::InvalidLinkRange(contents[0].path.clone()));
         }
         links.push(KfdTopologyLinkV1 {
             set,
             index,
-            link_type: properties["type"] as u32,
-            version_major: properties["version_major"] as u32,
-            version_minor: properties["version_minor"] as u32,
+            link_type: properties.link_type,
+            version_major: properties.version_major,
+            version_minor: properties.version_minor,
             node_from,
             node_to,
-            weight: properties["weight"] as u32,
+            weight: properties.weight,
             min_latency,
             max_latency,
             min_bandwidth,
             max_bandwidth,
-            recommended_transfer_size: properties["recommended_transfer_size"],
-            recommended_sdma_engine_id_mask: properties["recommended_sdma_engine_id_mask"],
-            flags: properties["flags"] as u32,
+            recommended_transfer_size: properties.recommended_transfer_size,
+            recommended_sdma_engine_id_mask: properties.recommended_sdma_engine_id_mask,
+            flags: properties.flags,
         });
     }
     Ok(links)
@@ -2125,7 +2114,7 @@ fn parse_gpu_node(
     gpu_id: u64,
     name: String,
     properties_path: &Path,
-    properties: &BTreeMap<String, u64>,
+    properties: &node_properties::NodeProperties,
     target: GfxTarget,
 ) -> Result<GpuTopologyNode, TopologyError> {
     let encoded_target = required_property(properties, properties_path, "gfx_target_version")?;
@@ -2260,6 +2249,8 @@ struct DiscoveryPaths<'a> {
 }
 
 fn canonicalize(path: &Path) -> Result<PathBuf, TopologyError> {
+    #[cfg(test)]
+    tests::host_diagnostics::io("canonicalize", path, 0);
     fs::canonicalize(path).map_err(|source| io_error("canonicalize", path, source))
 }
 
@@ -2398,61 +2389,67 @@ fn correlate_render_node(
     })
 }
 
-fn discover_host_topology_for_target(
+fn discover_host_topology_with<M: crate::currentness_diagnostic::Mode>(
     paths: &DiscoveryPaths<'_>,
     target: GfxTarget,
-) -> Result<HostTopologySnapshot, TopologyError> {
-    let topology = discover_topology_at_for_target(paths.topology_root, target)?;
-    let boot_id = read_boot_id(paths.boot_id)?;
-    let kernel_release = read_kernel_release(paths.os_release)?;
-    let amdgpu_module = observe_amdgpu_module(paths.amdgpu_module_root)?;
-    ensure_directory(paths.device_character_root)?;
-    ensure_directory(paths.sysfs_devices_root)?;
-    let sysfs_devices_root = canonicalize(paths.sysfs_devices_root)?;
-    let mut render_nodes = Vec::with_capacity(topology.gpu_nodes.len());
-    for gpu in &topology.gpu_nodes {
-        render_nodes.push(correlate_render_node(gpu, paths, &sysfs_devices_root)?);
-    }
-    let generation_after = read_scalar(&paths.topology_root.join("generation_id"))?;
-    if generation_after != topology.provenance.generation {
-        return Err(TopologyError::TopologyChanged {
-            before: topology.provenance.generation,
-            after: generation_after,
-        });
-    }
-    if read_boot_id(paths.boot_id)? != boot_id {
-        return Err(TopologyError::ChangedDuringRead(
-            paths.boot_id.to_path_buf(),
-        ));
-    }
-    if read_kernel_release(paths.os_release)? != kernel_release {
-        return Err(TopologyError::ChangedDuringRead(
-            paths.os_release.to_path_buf(),
-        ));
-    }
-    if observe_amdgpu_module(paths.amdgpu_module_root)? != amdgpu_module {
-        return Err(TopologyError::ChangedDuringRead(
-            paths.amdgpu_module_root.to_path_buf(),
-        ));
-    }
-    Ok(HostTopologySnapshot {
-        topology,
-        boot_id,
-        kernel_release,
-        amdgpu_module,
-        render_nodes,
-    })
+) -> Result<(HostTopologySnapshot, M::Topology), TopologyError> {
+    use crate::currentness_diagnostic::Timing;
+    let mut timer = M::Timer::<4>::new();
+    let topology = timer.measure(0, || discover_topology_at(paths.topology_root, target))?;
+    let (boot_id, kernel_release, amdgpu_module) = timer.measure(1, || {
+        let boot_id = read_boot_id(paths.boot_id)?;
+        let kernel_release = read_kernel_release(paths.os_release)?;
+        let amdgpu_module = observe_amdgpu_module(paths.amdgpu_module_root)?;
+        Ok::<_, TopologyError>((boot_id, kernel_release, amdgpu_module))
+    })?;
+    let render_nodes = timer.measure(2, || {
+        ensure_directory(paths.device_character_root)?;
+        ensure_directory(paths.sysfs_devices_root)?;
+        let sysfs_devices_root = canonicalize(paths.sysfs_devices_root)?;
+        let mut render_nodes = Vec::with_capacity(topology.gpu_nodes.len());
+        for gpu in &topology.gpu_nodes {
+            render_nodes.push(correlate_render_node(gpu, paths, &sysfs_devices_root)?);
+        }
+        Ok::<_, TopologyError>(render_nodes)
+    })?;
+    timer.measure(3, || {
+        let generation_after = read_scalar(&paths.topology_root.join("generation_id"))?;
+        if generation_after != topology.provenance.generation {
+            return Err(TopologyError::TopologyChanged {
+                before: topology.provenance.generation,
+                after: generation_after,
+            });
+        }
+        if read_boot_id(paths.boot_id)? != boot_id {
+            return Err(TopologyError::ChangedDuringRead(
+                paths.boot_id.to_path_buf(),
+            ));
+        }
+        if read_kernel_release(paths.os_release)? != kernel_release {
+            return Err(TopologyError::ChangedDuringRead(
+                paths.os_release.to_path_buf(),
+            ));
+        }
+        if observe_amdgpu_module(paths.amdgpu_module_root)? != amdgpu_module {
+            return Err(TopologyError::ChangedDuringRead(
+                paths.amdgpu_module_root.to_path_buf(),
+            ));
+        }
+        Ok(())
+    })?;
+    Ok((
+        HostTopologySnapshot {
+            topology,
+            boot_id,
+            kernel_release,
+            amdgpu_module,
+            render_nodes,
+        },
+        M::topology(timer),
+    ))
 }
 
-#[cfg(test)]
-fn discover_topology_at(root: &Path) -> Result<TopologySnapshot, TopologyError> {
-    discover_topology_at_for_target(root, GfxTarget::Gfx942)
-}
-
-fn discover_topology_at_for_target(
-    root: &Path,
-    target: GfxTarget,
-) -> Result<TopologySnapshot, TopologyError> {
+fn discover_topology_at(root: &Path, target: GfxTarget) -> Result<TopologySnapshot, TopologyError> {
     let root_identity = ensure_directory(root)?;
     validate_root(root)?;
     let generation_path = root.join("generation_id");
@@ -2468,16 +2465,16 @@ fn discover_topology_at_for_target(
     let nodes_identity = ensure_directory(&nodes_path)?;
     let mut node_directories = Vec::new();
     let mut node_ids = BTreeSet::new();
-    for (name, path) in read_directory(&nodes_path, MAX_TOPOLOGY_NODES)? {
-        let node_id = parse_node_id(&name)?;
+    for entry in read_directory(&nodes_path, MAX_TOPOLOGY_NODES)? {
+        let node_id = parse_node_id(entry.name())?;
         if !node_ids.insert(node_id) {
             return Err(TopologyError::DuplicateIdentity {
                 field: "node_id",
                 value: node_id.to_string(),
             });
         }
-        let identity = ensure_directory(&path)?;
-        node_directories.push((node_id, path, identity));
+        let identity = ensure_directory(&entry.path)?;
+        node_directories.push((node_id, entry.path, identity));
     }
     node_directories.sort_by_key(|entry| entry.0);
 
@@ -2588,7 +2585,27 @@ fn discover_topology_at_for_target(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    mod directory_entries;
+    pub(super) mod host_diagnostics;
+    mod link_properties;
+    mod node_properties;
+    pub(super) mod prechecked_reads;
+    mod target_selection;
+
+    pub(crate) fn count_allocations_for_test<R>(operation: impl FnOnce() -> R) -> (R, usize) {
+        directory_entries::allocation_counter::counted(operation)
+    }
+
+    pub(crate) use directory_entries::allocation_counter::AllocationCounter;
+
+    pub(crate) fn fail_allocation_for_test<R>(
+        ordinal: usize,
+        operation: impl FnOnce() -> R,
+    ) -> (R, bool) {
+        directory_entries::allocation_counter::fail_one(ordinal, operation)
+    }
+
     use super::*;
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -2731,7 +2748,7 @@ mod tests {
         }
 
         fn discover(&self) -> Result<TopologySnapshot, TopologyError> {
-            discover_topology_at(&self.root)
+            discover_topology_at(&self.root, GfxTarget::Gfx942)
         }
     }
 
@@ -2904,6 +2921,31 @@ mod tests {
         assert_eq!(snapshot.gpu_nodes()[1].node_id(), 2);
     }
 
+    pub(crate) fn admitted_xgmi_routes() -> [Gfx942XgmiRouteV1; 2] {
+        admitted_xgmi_routes_with_bandwidth(64000)
+    }
+
+    pub(crate) fn admitted_xgmi_routes_with_bandwidth(bandwidth: u32) -> [Gfx942XgmiRouteV1; 2] {
+        let fixture = Fixture::valid(2);
+        if bandwidth != 64000 {
+            for node in 1..=2 {
+                let path = fixture.node(node).join("io_links/1/properties");
+                let properties = fs::read_to_string(&path).unwrap();
+                fs::write(
+                    path,
+                    properties
+                        .replace("max_bandwidth 64000", &format!("max_bandwidth {bandwidth}")),
+                )
+                .unwrap();
+            }
+        }
+        let snapshot = fixture.discover().unwrap();
+        [
+            snapshot.admit_gfx942_xgmi_route(1001, 1002).unwrap(),
+            snapshot.admit_gfx942_xgmi_route(1002, 1001).unwrap(),
+        ]
+    }
+
     #[test]
     fn explicit_gfx950_discovery_preserves_eight_gpu_inventory_and_capacity() {
         let fixture = Fixture::valid(8);
@@ -2919,7 +2961,7 @@ mod tests {
                 fixture.replace_property(node, old, new);
             }
         }
-        let snapshot = discover_topology_at_for_target(&fixture.root, GfxTarget::Gfx950).unwrap();
+        let snapshot = discover_topology_at(&fixture.root, GfxTarget::Gfx950).unwrap();
         assert_eq!(snapshot.observed_node_count(), 9);
         assert_eq!(snapshot.gpu_nodes().len(), 8);
         for gpu in snapshot.gpu_nodes() {
@@ -2949,7 +2991,7 @@ mod tests {
     fn explicit_targets_reject_mixed_and_wrong_inventories() {
         let fixture = Fixture::valid(2);
         assert!(matches!(
-            discover_topology_at_for_target(&fixture.root, GfxTarget::Gfx950),
+            discover_topology_at(&fixture.root, GfxTarget::Gfx950),
             Err(TopologyError::UnsupportedTarget {
                 node_id: 1,
                 encoded: 90_402
@@ -2957,7 +2999,7 @@ mod tests {
         ));
         fixture.replace_property(1, "gfx_target_version 90402", "gfx_target_version 90500");
         assert!(matches!(
-            discover_topology_at_for_target(&fixture.root, GfxTarget::Gfx950),
+            discover_topology_at(&fixture.root, GfxTarget::Gfx950),
             Err(TopologyError::UnsupportedTarget {
                 node_id: 2,
                 encoded: 90_402
@@ -2980,7 +3022,7 @@ mod tests {
         }
         fixture.replace_property(2, "unique_id 2002", "unique_id 2001");
         assert!(matches!(
-            discover_topology_at_for_target(&fixture.root, GfxTarget::Gfx950),
+            discover_topology_at(&fixture.root, GfxTarget::Gfx950),
             Err(TopologyError::DuplicateIdentity {
                 field: "unique_id",
                 ..
@@ -3299,7 +3341,7 @@ mod tests {
         let fixture = Fixture::valid(1);
         let alias = fixture.root.with_extension("alias");
         symlink(&fixture.root, &alias).unwrap();
-        let error = discover_topology_at(&alias).unwrap_err();
+        let error = discover_topology_at(&alias, GfxTarget::Gfx942).unwrap_err();
         fs::remove_file(alias).unwrap();
         assert!(matches!(error, TopologyError::Symlink(_)));
     }

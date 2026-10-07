@@ -224,7 +224,7 @@ const TRUSTED_GIT_PROC_MACROS: [(&str, &str, &str, &str); 2] = [
 // nested fixture lockfiles. Source changes require review and a fresh tree pin;
 // they do not change the independent external-source admission below.
 const TRUSTED_FE2O3_MACROS_TREE: &str =
-    "29dda5ea9c4d3e8077bed3d4eac2bc9bd5a21636eb32fc31de38a0c83e0ec925";
+    "0456f54f422af97e3292bc14622ab618026bf0627ec9a80c794fe8a5b354d052";
 // This digest belongs to TRUSTED_FE2O3_EXTERNAL_SOURCE and is intentionally
 // independent of the workspace-local macros tree.
 const TRUSTED_FE2O3_EXTERNAL_MACROS_TREE: &str =
@@ -238,6 +238,7 @@ pub(crate) struct AuthorizedKernelClosureV1 {
 }
 
 struct ObservedSourceTree {
+    package_name: String,
     root: PathBuf,
     excluded: Option<PathBuf>,
     digest: [u8; 32],
@@ -245,12 +246,14 @@ struct ObservedSourceTree {
 
 impl ObservedSourceTree {
     fn capture(
+        package_name: String,
         root: PathBuf,
         excluded: Option<PathBuf>,
         mutation_journal: Option<&MutationJournal>,
     ) -> Result<Self, String> {
         let digest = canonical_tree_digest_monitored(&root, excluded.as_deref(), mutation_journal)?;
         Ok(Self {
+            package_name,
             root,
             excluded,
             digest,
@@ -512,6 +515,20 @@ impl AuthorizedKernelClosureV1 {
         &self.snapshot
     }
 
+    pub(crate) fn package_name_for_root(&self, root: &Path) -> Result<&str, String> {
+        let mut matches = self.source_trees.iter().filter(|tree| tree.root == root);
+        let owner = matches.next().ok_or_else(|| {
+            format!(
+                "host binding source has no retained package owner: {}",
+                root.display()
+            )
+        })?;
+        if matches.next().is_some() {
+            return Err("host binding source has multiple retained package owners".to_owned());
+        }
+        Ok(&owner.package_name)
+    }
+
     pub(crate) fn revalidate(&self) -> Result<(), String> {
         self.mutation_journal.ensure_quiet()?;
         for tree in &self.source_trees {
@@ -582,6 +599,7 @@ impl AuthorizedKernelClosureV1 {
                 )
             })?;
             let observed_tree = ObservedSourceTree::capture(
+                required_string(package, "name")?.to_owned(),
                 root.to_path_buf(),
                 target_directory
                     .as_ref()
@@ -1796,8 +1814,13 @@ mod tests {
         .unwrap();
         let library = source.join("lib.rs");
         fs::write(&library, b"pub fn reviewed() {}\n").unwrap();
-        let observed =
-            ObservedSourceTree::capture(directory.path().to_path_buf(), None, None).unwrap();
+        let observed = ObservedSourceTree::capture(
+            "test".to_owned(),
+            directory.path().to_path_buf(),
+            None,
+            None,
+        )
+        .unwrap();
 
         fs::write(&library, b"pub fn injected_after_preflight() {}\n").unwrap();
         let error = observed.revalidate().unwrap_err();
@@ -1814,9 +1837,13 @@ mod tests {
         let reviewed = b"pub fn reviewed() {}\n";
         fs::write(&library, reviewed).unwrap();
         let journal = MutationJournal::new(Vec::new()).unwrap();
-        let observed =
-            ObservedSourceTree::capture(directory.path().to_path_buf(), None, Some(&journal))
-                .unwrap();
+        let observed = ObservedSourceTree::capture(
+            "test".to_owned(),
+            directory.path().to_path_buf(),
+            None,
+            Some(&journal),
+        )
+        .unwrap();
         journal.ensure_quiet().unwrap();
 
         fs::write(&library, b"pub fn injected() {}\n").unwrap();

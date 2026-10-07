@@ -2443,6 +2443,64 @@ mod tests {
     }
 
     #[test]
+    fn qualification_real_builder_image_distinguishes_absent_and_uncompressed_xattrs() {
+        let bytes = include_bytes!("../tests/fixtures/qualification-base-v1.squashfs");
+        assert_eq!(u16::from_le_bytes([bytes[24], bytes[25]]), 0x0240);
+        let (_base_root, base_path, digest) = qualification_base_fixture(bytes);
+        let (installed, _install_parent) = installed_for_qualification();
+        let parent = private_install_parent();
+        let prepared = qualification::prepare_compiler_execution_qualification_for_test_v1(
+            installed,
+            &base_path,
+            &digest,
+            parent.path(),
+            current_owner(),
+        )
+        .unwrap();
+        assert_eq!(prepared.base_image_byte_len(), bytes.len() as u64);
+        assert_eq!(prepared.base_image_created_epoch(), 1_700_000_000);
+
+        for flags in [0x0040_u16, 0x0140] {
+            let mut malformed = bytes.to_vec();
+            malformed[24..26].copy_from_slice(&flags.to_le_bytes());
+            let (_base_root, base_path, digest) = qualification_base_fixture(&malformed);
+            let (installed, _install_parent) = installed_for_qualification();
+            assert_eq!(
+                qualification::prepare_compiler_execution_qualification_for_test_v1(
+                    installed,
+                    &base_path,
+                    &digest,
+                    parent.path(),
+                    current_owner(),
+                )
+                .unwrap_err()
+                .kind(),
+                DeploymentVerificationErrorKindV1::InvalidQualificationBase
+            );
+        }
+    }
+
+    #[test]
+    fn qualification_rejects_mount_only_gzip_fixture() {
+        let bytes = include_bytes!("../tests/fixtures/mount-only-gzip.squashfs");
+        let (_base_root, base_path, digest) = qualification_base_fixture(bytes);
+        let (installed, _install_parent) = installed_for_qualification();
+        let parent = private_install_parent();
+        assert_eq!(
+            qualification::prepare_compiler_execution_qualification_for_test_v1(
+                installed,
+                &base_path,
+                &digest,
+                parent.path(),
+                current_owner(),
+            )
+            .unwrap_err()
+            .kind(),
+            DeploymentVerificationErrorKindV1::InvalidQualificationBase
+        );
+    }
+
+    #[test]
     fn qualification_preparation_retains_exact_installed_and_base_evidence() {
         let (installed, _install_parent) = installed_for_qualification();
         let expected_manifest_sha256 = installed.manifest_sha256();

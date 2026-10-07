@@ -57,6 +57,11 @@
 //! against a malicious process running as the artifact-store owner.
 
 mod attempt;
+mod native_current_publication;
+pub use native_current_publication::{
+    NativeCurrentPublicationErrorV1, NativeCurrentPublicationLimitsV1,
+    NativeCurrentPublicationStorageV1, NativeCurrentPublicationV1,
+};
 mod attempt_scoped_hsaco_publication;
 mod compiler_artifact_generation_v1;
 mod compiler_execution_subject;
@@ -75,6 +80,7 @@ pub use compiler_execution_subject::native_v2::{
     InertCompilerExecutionSubjectV2,
 };
 mod compiler_module_handoff;
+mod compiler_module_handoff_lock_retention;
 pub use compiler_module_handoff::conditional_v5::receipt_transport_v3::{
     COMPILER_EXECUTION_RECEIPT_TRANSPORT_MAGIC_V3, COMPILER_EXECUTION_RECEIPT_TRANSPORT_VERSION_V3,
     CompilerExecutionReceiptTransportErrorV3, CompilerExecutionReceiptTransportIdentityV3,
@@ -231,7 +237,9 @@ pub use compiler_module_handoff::{
     publish_simulation_kernel_ir_handoff_v1, recover_compiler_execution_receipt_transport_v1,
     recover_compiler_execution_receipt_transport_with_currentness_v1,
     recover_compiler_module_handoff_receipt_in_slot_v3, recover_compiler_module_handoff_receipt_v3,
+    try_observe_compiler_module_handoff_currentness_in_slot_v3,
 };
+pub use compiler_module_handoff_lock_retention::CompilerModuleHandoffLockRetentionV3;
 pub use durable_link_publication::{
     DurableArtifactBoundaryV1, DurableCurrentLinkPublicationLeaseV1,
     DurableCurrentLinkPublicationTokenV1, DurableFaultTimingV1, DurableJournalBoundaryV1,
@@ -3804,6 +3812,8 @@ struct PinnedOutput {
     inode: u64,
     path_guard: Option<FilesystemPathGuardDomain>,
     identity_revalidation: OutputIdentityRevalidationV1,
+    observation_only: bool,
+    native_read_limits: Option<NativeCurrentPublicationLimitsV1>,
 }
 
 #[derive(Clone, Copy)]
@@ -3994,6 +4004,8 @@ impl PinnedOutput {
             inode: stat.st_ino,
             path_guard,
             identity_revalidation: OutputIdentityRevalidationV1::Path,
+            observation_only: false,
+            native_read_limits: None,
         })
     }
 
@@ -4042,6 +4054,8 @@ impl PinnedOutput {
                 .map(FilesystemPathGuardDomain::try_clone)
                 .transpose()?,
             identity_revalidation: self.identity_revalidation,
+            observation_only: self.observation_only,
+            native_read_limits: self.native_read_limits,
         })
     }
 
@@ -4166,7 +4180,14 @@ impl PinnedOutput {
             let fd = openat(
                 &self.fd,
                 LOCK_FILE,
-                OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                OFlags::RDWR
+                    | OFlags::NOFOLLOW
+                    | OFlags::CLOEXEC
+                    | if self.observation_only {
+                        OFlags::NONBLOCK
+                    } else {
+                        OFlags::CREATE
+                    },
                 Mode::RUSR | Mode::WUSR,
             )
             .map_err(std::io::Error::from)?;
@@ -4191,7 +4212,11 @@ impl PinnedOutput {
             break (fd, ProcessLockReservation { identity });
         };
 
-        match acquire_linux_ofd_exclusive_lock(&fd, nonblocking) {
+        match if self.native_read_limits.is_some() {
+            native_current_publication::try_ofd_lock(&fd)
+        } else {
+            acquire_linux_ofd_exclusive_lock(&fd, nonblocking)
+        } {
             Ok(true) => {}
             Ok(false) => {
                 drop(fd);
@@ -4270,7 +4295,11 @@ impl PinnedOutput {
             Ok(())
         };
         validate_identity(&fstat(&descriptor).map_err(std::io::Error::from)?)?;
-        match acquire_linux_descriptor_flock(&descriptor, nonblocking) {
+        match if self.native_read_limits.is_some() {
+            native_current_publication::try_directory_lock(&descriptor)
+        } else {
+            acquire_linux_descriptor_flock(&descriptor, nonblocking)
+        } {
             Ok(true) => {}
             Ok(false) => return Ok(None),
             Err(error) if error.kind() == io::ErrorKind::Unsupported => {
@@ -6244,6 +6273,15 @@ fn read_attempt_registry(output: &PinnedOutput) -> Result<AttemptRegistry, EmitE
 }
 
 fn recover_attempt_registry(output: &PinnedOutput) -> Result<(), EmitError> {
+    if output.observation_only {
+        return match statat(&output.fd, RECOVERY_ATTEMPT_FILE, AtFlags::SYMLINK_NOFOLLOW) {
+            Err(error) if error == rustix::io::Errno::NOENT => Ok(()),
+            Err(error) => Err(std::io::Error::from(error).into()),
+            Ok(_) => Err(build_attempt_error(
+                "read-only observation rejects build-attempt recovery residue",
+            )),
+        };
+    }
     let Some(bytes) = read_control_file(
         output,
         RECOVERY_ATTEMPT_FILE,
@@ -6274,7 +6312,14 @@ fn read_control_file(
     let fd = match openat(
         &output.fd,
         entry,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        OFlags::RDONLY
+            | OFlags::NOFOLLOW
+            | OFlags::CLOEXEC
+            | if output.observation_only {
+                OFlags::NONBLOCK
+            } else {
+                OFlags::empty()
+            },
         Mode::empty(),
     ) {
         Ok(fd) => fd,
@@ -6292,6 +6337,24 @@ fn read_control_file(
         });
     }
     let mut bytes = Vec::new();
+    if output.native_read_limits.is_some() {
+        let length = usize::try_from(stat.st_size).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "negative control-file length")
+        })?;
+        if length > maximum_bytes {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "control-file bound").into());
+        }
+        bytes = native_current_publication::read_exact_file(&fd, length)?;
+        let after = fstat(&fd).map_err(io::Error::from)?;
+        let named =
+            statat(&output.fd, entry, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
+        if !native_current_publication::same_file(&stat, &after)
+            || !native_current_publication::same_file(&stat, &named)
+        {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "control-file changed").into());
+        }
+        return Ok(Some(bytes));
+    }
     fs::File::from(fd)
         .take((maximum_bytes + 1) as u64)
         .read_to_end(&mut bytes)?;

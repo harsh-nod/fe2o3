@@ -66,6 +66,8 @@ pub(super) enum Phase {
     Cancelled,
 }
 
+// Issuer retention is prepaid inline; do not introduce allocation during custody transfer.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Owner<'work> {
     Gated(Trace<'work>),
     Issued(Issued<'work, Helper>),
@@ -99,6 +101,19 @@ impl Owner<'_> {
 }
 
 impl<'work> Attempt<'work> {
+    fn cancel_after_refusal(&mut self) {
+        match self.cancel() {
+            CleanupPollV1::Pending | CleanupPollV1::Quarantined => {
+                // Original custody remains in the owner/pool; refusal does not
+                // release it or replace the required foreground/aggregate drain.
+            }
+            CleanupPollV1::Reaped => {
+                // This compiler disposition does not settle the retained issuer,
+                // helper or aggregate pool. The same final drain is mandatory.
+            }
+        }
+    }
+
     pub(super) fn gated_trace(&self) -> AttemptResult<&Trace<'work>> {
         match &self.owner {
             Some(Owner::Gated(trace)) => Ok(trace),
@@ -144,7 +159,7 @@ impl<'work> Attempt<'work> {
             return Ok(false);
         }
         if !event.is_original_interrupt() {
-            self.cancel();
+            self.cancel_after_refusal();
             return Err(Failure::Invalid(
                 "compiler gate acquired an unexpected original stop",
             ));
@@ -198,7 +213,7 @@ impl<'work> Attempt<'work> {
             Ok(Runtime::STORAGE_GROWTH)
         });
         if result.is_err() {
-            self.cancel();
+            self.cancel_after_refusal();
         }
         result
     }
@@ -271,7 +286,7 @@ impl<'work> Attempt<'work> {
             )
         })();
         if result.is_err() {
-            self.cancel();
+            self.cancel_after_refusal();
         }
         result
     }
@@ -305,7 +320,7 @@ impl<'work> Attempt<'work> {
             Ok(found)
         });
         if result.is_err() {
-            self.cancel();
+            self.cancel_after_refusal();
         }
         result
     }
@@ -347,7 +362,7 @@ impl<'work> Attempt<'work> {
             Ok(Controller::STORAGE)
         });
         if result.is_err() {
-            self.cancel();
+            self.cancel_after_refusal();
         }
         result
     }
@@ -393,7 +408,7 @@ impl<'work> Attempt<'work> {
             Ok(())
         });
         if result.is_err() {
-            self.cancel();
+            self.cancel_after_refusal();
         }
         result
     }
@@ -450,7 +465,7 @@ impl<'work> Attempt<'work> {
             Ok(growth.additional_storage())
         });
         if result.is_err() {
-            self.cancel();
+            self.cancel_after_refusal();
         }
         result
     }
@@ -490,7 +505,7 @@ impl<'work> Attempt<'work> {
             // This wrapper owns the genuine trace; no supplied runtime can be
             // cancelled. The controller's standalone wrong-owner refusal stays
             // non-mutating for an unrelated runtime passed to that lower API.
-            self.cancel();
+            self.cancel_after_refusal();
         }
         result
     }
@@ -520,7 +535,7 @@ impl<'work> Attempt<'work> {
             Ok(growth.additional_storage())
         });
         if result.is_err() {
-            self.cancel();
+            self.cancel_after_refusal();
         }
         result
     }
@@ -550,7 +565,7 @@ impl<'work> Attempt<'work> {
             })
         })();
         if result.is_err() {
-            self.cancel();
+            self.cancel_after_refusal();
         }
         result
     }
@@ -583,7 +598,7 @@ impl<'work> Attempt<'work> {
             Ok(())
         });
         if result.is_err() {
-            self.cancel();
+            self.cancel_after_refusal();
         }
         result
     }
@@ -684,7 +699,7 @@ impl<'work> Attempt<'work> {
                 Ok(value)
             }
             Err(error) => {
-                self.cancel();
+                self.cancel_after_refusal();
                 Err(error)
             }
         }

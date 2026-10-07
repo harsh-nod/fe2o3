@@ -195,6 +195,71 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  native-static-cpu:
+    name: Native static CPU contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      FE2O3_HIP_SYS_DISABLE: '1'
+      FE2O3_STATIC_PROOF_CUSTODIAN_TARGET_DIR: ${{ github.workspace }}/target/ci/native-static
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install static build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential binutils musl-tools
+          rustup show active-toolchain
+      - name: Check static images and isolated root deployment
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          diagnostics="$(mktemp -d "${RUNNER_TEMP}/fe2o3-native-static.XXXXXXXX")"
+          printf 'NATIVE_STATIC_DIAGNOSTICS=%s\n' "${diagnostics}" >> "${GITHUB_ENV}"
+          bash scripts/qualify-native-static-cpu.sh 2>&1 | tee "${diagnostics}/qualification.log"
+
+      - name: Collect static image identities and ELF reports
+        if: ${{ always() && env.NATIVE_STATIC_DIAGNOSTICS != '' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          images="${FE2O3_STATIC_PROOF_CUSTODIAN_TARGET_DIR}/x86_64-unknown-linux-musl/release"
+          for name in fe2o3-proof-manager fe2o3-native-application-manager \
+            fe2o3-application-proof-controller fe2o3-native-application-proof-controller \
+            fe2o3-proof-custodian-provision; do
+            if [[ -f "${images}/${name}" ]]; then
+              sha256sum -- "${images}/${name}" >> "${NATIVE_STATIC_DIAGNOSTICS}/images.sha256"
+            fi
+            report="${FE2O3_STATIC_PROOF_CUSTODIAN_TARGET_DIR}/${name}.readelf.txt"
+            if [[ -f "${report}" ]]; then cp -- "${report}" "${NATIVE_STATIC_DIAGNOSTICS}/"; fi
+          done
+
+      - name: Retain native static CPU diagnostics
+        if: ${{ always() && env.NATIVE_STATIC_DIAGNOSTICS != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-static-cpu-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.NATIVE_STATIC_DIAGNOSTICS }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove private static diagnostics directory
+        if: ${{ always() && env.NATIVE_STATIC_DIAGNOSTICS != '' }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$(dirname -- "${NATIVE_STATIC_DIAGNOSTICS}")" == "${RUNNER_TEMP}" ]]
+          [[ "$(basename -- "${NATIVE_STATIC_DIAGNOSTICS}")" == fe2o3-native-static.* ]]
+          [[ -d "${NATIVE_STATIC_DIAGNOSTICS}" && ! -L "${NATIVE_STATIC_DIAGNOSTICS}" ]]
+          rm -r -- "${NATIVE_STATIC_DIAGNOSTICS}"
+
   rustc-codegen-shards:
     name: Rustc codegen shard (${{ matrix.shard }})
     runs-on: ubuntu-24.04
@@ -254,6 +319,7 @@ jobs:
     needs:
       - generic-core
       - rustc-codegen-shards
+      - native-static-cpu
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -267,7 +333,9 @@ jobs:
         env:
           GENERIC_CORE_RESULT: ${{ needs.generic-core.result }}
           RUSTC_CODEGEN_SHARDS_RESULT: ${{ needs.rustc-codegen-shards.result }}
+          NATIVE_STATIC_CPU_RESULT: ${{ needs.native-static-cpu.result }}
         run: >-
           scripts/require-ci-success.sh
           "${GENERIC_CORE_RESULT}"
           "${RUSTC_CODEGEN_SHARDS_RESULT}"
+          "${NATIVE_STATIC_CPU_RESULT}"

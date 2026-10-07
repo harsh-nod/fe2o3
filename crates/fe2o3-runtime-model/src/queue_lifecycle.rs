@@ -15,10 +15,24 @@ pub const MAX_COMPUTE_AQL_QUEUES_V1: usize = 16;
 pub const MAX_QUEUE_HISTORY_ENTRIES_V1: usize = 256;
 pub const CREATE_QUEUE_ID_SENTINEL_V1: u32 = u32::MAX;
 
-/// The single target profile admitted by this foundation.
+/// Closed target profiles for model-only queue admission.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ComputeAqlTargetProfileV1 {
     Gfx942XnackMinusSpxNps1Kfd1_18,
+    Gfx950XnackMinusSpxNps1Kfd1_18,
+}
+
+impl ComputeAqlTargetProfileV1 {
+    pub const fn device_target_profile(self) -> DeviceAdmissionTargetProfileV1 {
+        match self {
+            Self::Gfx942XnackMinusSpxNps1Kfd1_18 => {
+                DeviceAdmissionTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18Drm3_64_0
+            }
+            Self::Gfx950XnackMinusSpxNps1Kfd1_18 => {
+                DeviceAdmissionTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18Drm3_64_0
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -274,6 +288,7 @@ pub enum QueueRecordKindV1 {
 pub enum QueueInvariantViolationV1 {
     CapacityExceeded(QueueRecordKindV1),
     DomainMismatch(QueueKeyV1),
+    TargetProfileMismatch(QueueKeyV1),
     DuplicateQueue(QueueKeyV1),
     InvalidIdentity(QueueKeyV1),
     StaleQueueGeneration(QueueKeyV1),
@@ -651,6 +666,10 @@ impl QueueLifecycleStateV1 {
             || queue.vm.device != plan.current_device.model_key()
         {
             return Err(QueueInvariantViolationV1::DomainMismatch(queue));
+        }
+        if plan.target.device_target_profile() != plan.current_device.correlation().target_profile()
+        {
+            return Err(QueueInvariantViolationV1::TargetProfileMismatch(queue));
         }
         if queue.vm.id.0 == 0
             || queue.id.0 == 0
@@ -1238,4 +1257,32 @@ fn history_edge_is_valid(entry: QueueHistoryEntryV1) -> bool {
                 Phase::Ambiguous
             )
     )
+}
+
+#[cfg(test)]
+mod target_profile_tests {
+    use super::*;
+
+    #[test]
+    fn invariant_replay_rejects_reciprocal_target_substitution() {
+        let targets = [
+            ComputeAqlTargetProfileV1::Gfx942XnackMinusSpxNps1Kfd1_18,
+            ComputeAqlTargetProfileV1::Gfx950XnackMinusSpxNps1Kfd1_18,
+        ];
+        for target in targets {
+            let (mut queue, identity, memory) =
+                crate::queue_lifecycle_tests::active_target_fixture(target);
+            assert_eq!(queue.validate_global_invariants(&identity, &memory), Ok(()));
+            let mut record = queue.queues()[0];
+            record.plan.target = targets.into_iter().find(|other| *other != target).unwrap();
+            queue.queues = IndexedJournalV1::new(queue_record_key_v1);
+            queue.queues.push(record);
+            assert_eq!(
+                queue.validate_global_invariants(&identity, &memory),
+                Err(QueueInvariantViolationV1::TargetProfileMismatch(
+                    record.plan.queue
+                ))
+            );
+        }
+    }
 }

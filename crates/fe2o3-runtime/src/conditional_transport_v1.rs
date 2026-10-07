@@ -30,6 +30,10 @@ pub enum Gfx942RuntimeInvocationBindingV1 {
         contract_identity: [u8; 32],
         premise_identity: [u8; 32],
     },
+    NativeConditionalFill64V1 {
+        contract_identity: [u8; 32],
+        premise_identity: [u8; 32],
+    },
 }
 
 /// A conditional variant always owns its complete bounded payload. No fallback
@@ -171,6 +175,17 @@ pub(crate) fn dispatch_identity(
             let mut hash = Sha256::new();
             hash.update(b"FE2O3/RUNTIME/GFX942/CONDITIONAL-MIXED-V26-DISPATCH/V1\0");
             hash.update(26_u16.to_le_bytes());
+            hash.update(ordinary_identity);
+            hash.update(contract_identity);
+            hash.update(premise_identity);
+            hash.finalize().into()
+        }
+        Gfx942RuntimeInvocationBindingV1::NativeConditionalFill64V1 {
+            contract_identity,
+            premise_identity,
+        } => {
+            let mut hash = Sha256::new();
+            hash.update(b"FE2O3/RUNTIME/GFX942/NATIVE-V5-CONDITIONAL-FILL64-DISPATCH/V1\0");
             hash.update(ordinary_identity);
             hash.update(contract_identity);
             hash.update(premise_identity);

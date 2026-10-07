@@ -1,0 +1,74 @@
+mod coexistence_case;
+mod gpu;
+mod native_case;
+mod roster_case;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    use fe2o3_conditional_custodian_application::fill_write_only_gpu;
+    use fe2o3_host::{
+        CompilerGeneratedKernelExpectationV1, KernelId,
+        consume_inherited_worker_v3_application_custodian_handoff_v1,
+    };
+    use std::time::{Duration, Instant};
+
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let coexistence = coexistence_case::parse_case(&args)?;
+    if coexistence.is_some() && !cfg!(feature = "receipt-coexistence") {
+        return Err("--receipt-coexistence requires the receipt-coexistence Cargo feature".into());
+    }
+    let case = if coexistence.is_some() {
+        None
+    } else {
+        roster_case::parse_execution_case(args)?
+    };
+    assert!(std::env::var_os("FE2O3_PRODUCTION_HOST_BINDING_MODE_V1").is_none());
+    for descriptor in [200, 201] {
+        let error = std::fs::symlink_metadata(format!("/proc/self/fd/{descriptor}"))
+            .expect_err("host binding descriptor leaked into the application");
+        assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    }
+    let deadline = Instant::now() + Duration::from_secs(180);
+    let kernel = KernelId::from_bytes(fill_write_only_gpu::Marker::KERNEL_BINDING_ID_V1);
+    // SAFETY: single-threaded startup exclusively consumes Cargo's inherited handoff once.
+    let application =
+        unsafe { consume_inherited_worker_v3_application_custodian_handoff_v1(kernel)? };
+    // SAFETY: startup also exclusively transfers the separate inherited FD 195.
+    // No Rust owner, outstanding borrow, or concurrent descriptor mutation exists,
+    // and this application never retries the transfer, including on failure.
+    let artifact = unsafe {
+        application.into_remote_conditional_fill::<fill_write_only_gpu::Marker>(deadline)?
+    };
+    artifact.revalidate(deadline)?;
+    assert_eq!(artifact.descriptor().kernel_id(), kernel);
+    assert!(!artifact.grants_launch_authority());
+    println!("genuine compiler audit and retained conditional proof admitted");
+    #[cfg(feature = "receipt-coexistence")]
+    if let Some(case) = coexistence {
+        let report = gpu::coexistence::run(std::sync::Arc::new(artifact), case, deadline)?;
+        println!("{}", report.json());
+        return Ok(());
+    }
+    if let Some(roster_case::ExecutionCase::Roster(case)) = case {
+        let report = gpu::run_roster(std::sync::Arc::new(artifact), case, deadline)?;
+        println!("{}", report.json());
+    } else if let Some(roster_case::ExecutionCase::Pair(case)) = case {
+        gpu::run(std::sync::Arc::new(artifact), case, deadline)?;
+        let devices = case.devices;
+        if case.mode != native_case::Mode::Positive {
+            println!(
+                "{{\"schema\":\"fe2o3.genuine-two-gpu-control.v1\",\"devices\":[\"{:#018x}\",\"{:#018x}\"],\"mode\":\"{}\",\"shutdown\":\"released\"}}",
+                devices[0],
+                devices[1],
+                case.mode.token()
+            );
+            // A matched negative test succeeds without claiming positive GPU execution.
+            // Normal exit also retains Cargo's full post-application revalidation.
+            return Ok(());
+        }
+        println!(
+            "{{\"schema\":\"fe2o3.genuine-two-gpu.v1\",\"devices\":[\"{:#018x}\",\"{:#018x}\"],\"elements\":65,\"native_peer_completions\":2,\"shutdown\":\"released\"}}",
+            devices[0], devices[1]
+        );
+    }
+    Ok(())
+}

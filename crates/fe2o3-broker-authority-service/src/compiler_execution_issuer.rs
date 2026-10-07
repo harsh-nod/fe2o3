@@ -46,6 +46,7 @@ pub use native::{
     ProtectedCompilerExecutionIssuerServiceErrorV2, ProtectedCompilerExecutionIssuerStorageV2,
 };
 use native_checks::IssuerInspectionError;
+pub(crate) use native_image::validate_original_supervisor_image_v3;
 pub use native_image::{
     RootIssuerImageErrorV3, RootIssuerImageQuotaV3, retained_issuer_image_quota_v3,
     validate_retained_issuer_image_v3,
@@ -445,6 +446,8 @@ pub struct ProtectedCompilerExecutionIssuerAdmissionV1 {
     executable: RetainedStaticIssuerExecutableV1,
     signing_key: ProtectedIssuerSigningKeyV1,
     external_anchor: ProtectedCompilerExecutionExternalAnchorV1,
+    #[cfg(target_arch = "x86_64")]
+    observer: Option<crate::ProtectedCompilerExecutionObserverV1>,
 }
 
 impl fmt::Debug for ProtectedCompilerExecutionIssuerAdmissionV1 {
@@ -512,6 +515,8 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
             executable,
             signing_key,
             external_anchor,
+            #[cfg(target_arch = "x86_64")]
+            observer: None,
         };
         admitted.validate_continuity()?;
         Ok(admitted)
@@ -521,6 +526,10 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
     pub fn validate_continuity(
         &self,
     ) -> Result<(), ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        #[cfg(target_arch = "x86_64")]
+        if let Some(observer) = &self.observer {
+            observer.validate_continuity()?;
+        }
         self.process.validate()?;
         self.executable.validate()?;
         self.service
@@ -545,6 +554,31 @@ impl ProtectedCompilerExecutionIssuerAdmissionV1 {
             ));
         }
         Ok(())
+    }
+
+    /// Attaches the authenticated observer to this exact retained service and pinned policy.
+    /// An attached observer is never removed or replaced; any observer failure is terminal.
+    #[cfg(target_arch = "x86_64")]
+    pub fn with_observer(
+        mut self,
+        observer: crate::ProtectedCompilerExecutionObserverV1,
+    ) -> Result<Self, ProtectedCompilerExecutionIssuerAdmissionErrorV1> {
+        self.validate_continuity()?;
+        if self.observer.is_some() || !observer.matches_admission(&self.service, &self.policy) {
+            return Err(ProtectedCompilerExecutionIssuerAdmissionErrorV1::new(
+                IssuerAdmissionErrorKindV1::Observer,
+                "observer does not match this original issuer admission",
+            ));
+        }
+        observer.validate_continuity()?;
+        self.observer = Some(observer);
+        self.validate_continuity()?;
+        Ok(self)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(crate) fn observer(&self) -> Option<&crate::ProtectedCompilerExecutionObserverV1> {
+        self.observer.as_ref()
     }
 
     /// Returns the exact caller-pinned policy.
@@ -659,6 +693,7 @@ pub enum IssuerAdmissionErrorKindV1 {
     PolicyChanged,
     ServiceAdmission,
     ExternalAnchorKeyMismatch,
+    Observer,
     Protocol,
 }
 
@@ -676,6 +711,8 @@ pub enum ProtectedCompilerExecutionIssuerAdmissionErrorV1 {
     },
     ServiceAdmission(ProtectedServiceAdmissionErrorV1),
     Protocol(CompilerExecutionAttestationErrorV1),
+    #[cfg(target_arch = "x86_64")]
+    Observer(Box<crate::CompilerExecutionObserverErrorV1>),
 }
 
 impl ProtectedCompilerExecutionIssuerAdmissionErrorV1 {
@@ -706,6 +743,8 @@ impl ProtectedCompilerExecutionIssuerAdmissionErrorV1 {
             Self::StaticImage { .. } => IssuerAdmissionErrorKindV1::ExecutableNotStatic,
             Self::ServiceAdmission(_) => IssuerAdmissionErrorKindV1::ServiceAdmission,
             Self::Protocol(_) => IssuerAdmissionErrorKindV1::Protocol,
+            #[cfg(target_arch = "x86_64")]
+            Self::Observer(_) => IssuerAdmissionErrorKindV1::Observer,
         }
     }
 }
@@ -719,6 +758,8 @@ impl fmt::Display for ProtectedCompilerExecutionIssuerAdmissionErrorV1 {
                 write!(formatter, "protected service changed: {error}")
             }
             Self::Protocol(error) => write!(formatter, "issuer protocol input is invalid: {error}"),
+            #[cfg(target_arch = "x86_64")]
+            Self::Observer(error) => write!(formatter, "issuer observer failed: {error}"),
         }
     }
 }
@@ -732,7 +773,18 @@ impl Error for ProtectedCompilerExecutionIssuerAdmissionErrorV1 {
             Self::StaticImage { source, .. } => Some(source),
             Self::ServiceAdmission(error) => Some(error),
             Self::Protocol(error) => Some(error),
+            #[cfg(target_arch = "x86_64")]
+            Self::Observer(error) => Some(error),
         }
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+impl From<crate::CompilerExecutionObserverErrorV1>
+    for ProtectedCompilerExecutionIssuerAdmissionErrorV1
+{
+    fn from(error: crate::CompilerExecutionObserverErrorV1) -> Self {
+        Self::Observer(Box::new(error))
     }
 }
 

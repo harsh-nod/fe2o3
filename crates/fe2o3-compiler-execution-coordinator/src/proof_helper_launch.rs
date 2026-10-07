@@ -748,21 +748,23 @@ fn send_record(
     b: &mut Budget<'_>,
     deadline: Instant,
 ) -> Result<()> {
-    let (record, charge) = Record::new(
-        kind,
-        native::pid_u32(rustix::process::getpid())?,
-        session,
-        runtime,
-        b,
-    )?;
-    b.reserve_storage(charge.additional_storage())?;
-    launch_io::send_ready(
-        bootstrap,
-        record.canonical_bytes(),
-        &mut Observer { child, budget: b },
-        deadline,
-    )?;
-    drop(record);
+    let charge = {
+        let (record, charge) = Record::new(
+            kind,
+            native::pid_u32(rustix::process::getpid())?,
+            session,
+            runtime,
+            b,
+        )?;
+        b.reserve_storage(charge.additional_storage())?;
+        launch_io::send_ready(
+            bootstrap,
+            record.canonical_bytes(),
+            &mut Observer { child, budget: b },
+            deadline,
+        )?;
+        charge
+    };
     b.release_storage(charge.additional_storage())?;
     Ok(())
 }
@@ -808,10 +810,13 @@ fn check_record(
     runtime: [u8; 32],
     b: &mut Budget<'_>,
 ) -> Result<()> {
-    let (record, charge) = Record::decode(bytes, b)?;
-    b.reserve_storage(charge.additional_storage())?;
-    let matches = record.matches_association(kind, native::pid_u32(pid)?, session, runtime, b)?;
-    drop(record);
+    let (matches, charge) = {
+        let (record, charge) = Record::decode(bytes, b)?;
+        b.reserve_storage(charge.additional_storage())?;
+        let matches =
+            record.matches_association(kind, native::pid_u32(pid)?, session, runtime, b)?;
+        (matches, charge)
+    };
     b.release_storage(charge.additional_storage())?;
     if !matches {
         return Err(ProofHelperLaunchError::Invalid(

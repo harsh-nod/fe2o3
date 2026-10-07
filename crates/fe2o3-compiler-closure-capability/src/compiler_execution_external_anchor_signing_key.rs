@@ -620,7 +620,11 @@ mod tests {
 
     #[test]
     fn inherited_key_is_retained_privately() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "compiler_execution_external_anchor_signing_key::tests::inherited_key_is_retained_privately",
+        ) {
+            return;
+        }
         let expected = deployment(7, 1003);
         let mut seed = [7; KEY_BYTES];
         let capability = CompilerExecutionExternalAnchorSigningKeyCapabilityV1::create_and_zeroize(

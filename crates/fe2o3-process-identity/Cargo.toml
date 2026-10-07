@@ -10,6 +10,7 @@ description = "Canonical identities for prepared and running fe2o3 compiler proc
 
 [dependencies]
 fe2o3-amd-target.workspace = true
+fe2o3-kernel-ir.workspace = true
 fe2o3-rustc-invocation.workspace = true
 libc.workspace = true
 rustix.workspace = true

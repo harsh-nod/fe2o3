@@ -1,0 +1,74 @@
+//! Owner-only drain observations through the ordinary completion transition.
+
+use super::*;
+use std::collections::VecDeque;
+
+impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
+    pub(crate) fn snapshot_async_drain_v1(
+        &self,
+    ) -> Result<(VecDeque<RuntimeSubmissionIdV1>, Vec<RuntimeStreamIdV1>), RuntimeValidationErrorV1>
+    {
+        self.require_live()?;
+        let mut submissions = Vec::new();
+        submissions
+            .try_reserve(self.submissions.len())
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        submissions.extend(self.submissions.iter().filter_map(|(&id, record)| {
+            // The generated registry alone progresses and removes its
+            // exact submissions. Snapshotting them here would create a
+            // second observer and leave stale IDs after C4 retirement.
+            let generated = self
+                .generated_issues
+                .get(&record.stream)
+                .is_some_and(|attempt| attempt.owns_submission_v1(id));
+            (!record.status.is_terminal() && !generated).then_some(id)
+        }));
+        submissions.sort_unstable();
+        let mut streams = Vec::new();
+        streams
+            .try_reserve(self.streams.len())
+            .map_err(|_| RuntimeValidationErrorV1::Capacity)?;
+        streams.extend(self.streams.keys().copied());
+        streams.sort_unstable();
+        Ok((submissions.into(), streams))
+    }
+
+    pub(crate) fn poll_async_drain_v1(
+        &mut self,
+        id: RuntimeSubmissionIdV1,
+    ) -> Result<RuntimeCompletionStatusV1, RuntimeErrorV1<B::Error>> {
+        self.require_live()?;
+        let record = *self
+            .submissions
+            .get(&id)
+            .ok_or(RuntimeValidationErrorV1::UnknownSubmission)?;
+        self.require_ordinary_submission_v1(id)?;
+        if record.status.is_terminal() {
+            return Ok(record.status);
+        }
+        self.observe_completion_step_v1(id, |backend, id| backend.poll_v1(id))
+    }
+
+    pub(crate) fn async_drain_counts_v1(&self) -> RuntimeStreamObservationV1 {
+        let mut counts = RuntimeStreamObservationV1::default();
+        let mut first_failure = None;
+        for (&id, record) in &self.submissions {
+            counts.total_submissions += 1;
+            match record.status {
+                RuntimeCompletionStatusV1::Pending => counts.pending += 1,
+                RuntimeCompletionStatusV1::Succeeded => counts.succeeded += 1,
+                RuntimeCompletionStatusV1::Failed(failure) => {
+                    counts.failed += 1;
+                    if first_failure.is_none_or(|(prior, _)| id < prior) {
+                        first_failure = Some((id, failure));
+                    }
+                }
+                RuntimeCompletionStatusV1::QuiescentWithoutResult => {
+                    counts.quiescent_without_result += 1
+                }
+            }
+        }
+        counts.first_failure = first_failure.map(|(_, failure)| failure);
+        counts
+    }
+}

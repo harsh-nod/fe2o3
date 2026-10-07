@@ -22,7 +22,7 @@ use fe2o3_kernel_descriptor::{
 };
 use fe2o3_runtime_protocol::{
     CompilerExecutionReceiptCarriageV1, RecoveredWorkerV3LoadEnvelopeV2,
-    WorkerV3LoadEnvelopeErrorV2,
+    WorkerV3LoadEnvelopeErrorV2, WorkerV3LoadEnvelopeWireV2,
 };
 use sha2::{Digest, Sha256};
 
@@ -60,6 +60,8 @@ pub use mixed_v89::{
     PreparedMixedWorkerV89Invocation, RecoveredMixedWorkerV89PinnedRoster,
     admit_recovered_mixed_worker_v89_roster,
 };
+mod compiler_closure;
+pub use compiler_closure::{CheckedWorkerV3CompilerClosureV1, check_worker_v3_compiler_closure_v1};
 
 /// Canonical identity of every V3 compiler, publication, descriptor, and selected-kernel axis
 /// independently retained by host admission.
@@ -425,6 +427,54 @@ impl fmt::Debug for RecoveredWorkerV3PinnedDescriptorV1 {
 }
 
 impl RecoveredWorkerV3PinnedDescriptorV1 {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn request_application_custodian_proof(
+        &self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+        deadline: std::time::Instant,
+    ) -> Result<Vec<u8>, crate::WorkerV3ApplicationDescriptorHandoffErrorV1> {
+        use crate::WorkerV3ApplicationDescriptorHandoffErrorV1 as E;
+        self.revalidate_retained_currentness_token(current)
+            .map_err(E::Admission)?;
+        let descriptors = self
+            .artifact
+            .application_descriptors
+            .as_ref()
+            .ok_or(E::Admission(
+                RecoveredWorkerV3AdmissionErrorV1::ApplicationDescriptorsChanged,
+            ))?;
+        let subject = descriptors.request_custodian_proof(
+            self.descriptor().kernel_id(),
+            current.exact_artifact_bytes(),
+            deadline,
+        )?;
+        self.revalidate_retained_currentness_token(current)
+            .map_err(E::Admission)?;
+        Ok(subject)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn probe_application_custodian_proof(
+        &self,
+        current: &DurableCurrentLinkPublicationTokenV1,
+        deadline: std::time::Instant,
+    ) -> Result<(), crate::WorkerV3ApplicationDescriptorHandoffErrorV1> {
+        use crate::WorkerV3ApplicationDescriptorHandoffErrorV1 as E;
+        self.revalidate_retained_currentness_token(current)
+            .map_err(E::Admission)?;
+        let descriptors = self
+            .artifact
+            .application_descriptors
+            .as_ref()
+            .ok_or(E::Admission(
+                RecoveredWorkerV3AdmissionErrorV1::ApplicationDescriptorsChanged,
+            ))?;
+        descriptors.probe_custodian_proof(deadline)?;
+        self.revalidate_retained_currentness_token(current)
+            .map_err(E::Admission)?;
+        Ok(())
+    }
+
     pub fn revalidate_currentness(&self) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
         let current = self.acquire_retained_currentness_token()?;
         drop(current);
@@ -504,6 +554,12 @@ impl RecoveredWorkerV3PinnedDescriptorV1 {
         &self,
     ) -> &fe2o3_runtime_protocol::WorkerV3LoadEnvelopeWireV1 {
         self.artifact.finalizer_replay()
+    }
+
+    pub(crate) fn load_envelope_evidence_view(
+        &self,
+    ) -> fe2o3_runtime_protocol::WorkerV3LoadEnvelopeEvidenceViewV2<'_> {
+        self.artifact.load_envelope_evidence_view()
     }
 
     pub fn target(&self) -> fe2o3_amd_target::AmdTargetId {
@@ -699,7 +755,7 @@ fn reconstruct_replay_custody(
     )
     .map_err(RecoveredWorkerV3AdmissionErrorV1::FinalizerDerivation)?;
     validate_finalizer_derivation_association(
-        envelope,
+        envelope.wire(),
         current.exact_artifact_bytes(),
         &finalizer_derivation,
     )?;
@@ -738,7 +794,7 @@ fn validate_retained_replay_custody(
         .validate_reacquired_publication_lease_v2(envelope.current_publication_lease())
         .map_err(RecoveredWorkerV3AdmissionErrorV1::Envelope)?;
     validate_finalizer_derivation_association(
-        envelope,
+        envelope.wire(),
         current.exact_artifact_bytes(),
         derivation,
     )?;
@@ -769,20 +825,34 @@ fn select_entrypoint(
     artifact: &RecoveredWorkerV3ArtifactStateV1,
     kernel_id: KernelId,
 ) -> Result<RecoveredWorkerV3EntrypointV1, RecoveredWorkerV3AdmissionErrorV1> {
-    let (descriptor_index, physical_kernel_index) =
-        select_exact_kernel(&artifact.outer_handoff, &artifact.inspection, kernel_id)?;
-    let lineage = derive_host_lineage_identity(
+    select_entrypoint_from_evidence(
+        artifact.envelope.wire(),
         &artifact.outer_handoff,
-        artifact
-            .envelope
-            .wire()
-            .replay()
-            .publication_intent_record(),
         &artifact.inspection,
-        kernel_id,
         &artifact.compiler_execution_subject,
-        artifact.envelope.wire().compiler_execution_receipt(),
         &artifact.finalizer_derivation,
+        kernel_id,
+    )
+}
+
+fn select_entrypoint_from_evidence(
+    wire: &WorkerV3LoadEnvelopeWireV2,
+    outer: &InertSemanticCompilerModuleHandoffV3,
+    inspection: &FinalizedDescriptorInspection,
+    compiler_execution_subject: &InertCompilerExecutionSubjectV1,
+    finalizer_derivation: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
+    kernel_id: KernelId,
+) -> Result<RecoveredWorkerV3EntrypointV1, RecoveredWorkerV3AdmissionErrorV1> {
+    let (descriptor_index, physical_kernel_index) =
+        select_exact_kernel(outer, inspection, kernel_id)?;
+    let lineage = derive_host_lineage_identity(
+        outer,
+        wire.replay().publication_intent_record(),
+        inspection,
+        kernel_id,
+        compiler_execution_subject,
+        wire.compiler_execution_receipt(),
+        finalizer_derivation,
     );
     Ok(RecoveredWorkerV3EntrypointV1 {
         ordinal: descriptor_index,
@@ -896,11 +966,11 @@ fn derive_descriptor_host_lineage_identity(
 }
 
 fn validate_finalizer_derivation_association(
-    envelope: &RecoveredWorkerV3LoadEnvelopeV2,
+    wire: &WorkerV3LoadEnvelopeWireV2,
     finalized: &[u8],
     derivation: &RevalidatedProtectedWorkerV3FinalizerDerivationV1,
 ) -> Result<(), RecoveredWorkerV3AdmissionErrorV1> {
-    let record = envelope.wire().replay().publication_intent_record();
+    let record = wire.replay().publication_intent_record();
     if !derivation.finalized_hsaco_identity().matches(finalized)
         || derivation.finalized_hsaco_identity().sha256() != &record.output_sha256()
         || derivation.finalized_hsaco_identity().byte_len()

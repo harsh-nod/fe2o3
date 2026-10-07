@@ -1068,7 +1068,7 @@ pub fn recover_worker_v3_load_readiness_for_attempt_from_retained_directory_v1(
     recover_worker_v3_load_readiness_for_attempt_locked_v1(output, attempt)
 }
 
-fn recover_worker_v3_load_readiness_for_attempt_locked_v1(
+pub(crate) fn recover_worker_v3_load_readiness_for_attempt_locked_v1(
     output: &PinnedOutput,
     attempt: BuildAttempt,
 ) -> Result<WorkerV3LoadReadinessResultV1, WorkerV3LoadReadinessErrorV1> {
@@ -1081,7 +1081,11 @@ fn recover_worker_v3_load_readiness_for_attempt_locked_v1(
         return Err(WorkerV3LoadReadinessErrorV1::AttemptState);
     };
     let names = ReadinessNames::new(backend)?;
-    cleanup_temps(output, &names)?;
+    // Native intake observes only exact canonical names. Temporary entries are
+    // neither authority nor recovery inputs, and are never scanned or mutated.
+    if output.native_read_limits.is_none() {
+        cleanup_temps(output, &names)?;
+    }
     let actual = validate_terminal_receipt(output, &names, attempt, backend, None)?;
     if actual != expected {
         return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
@@ -1487,7 +1491,7 @@ fn validate_terminal_receipt(
         MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1,
     )?;
     let mut bytes = [0_u8; MAX_WORKER_V3_LOAD_READINESS_RECEIPT_BYTES_V1];
-    file.read_exact(&mut bytes)?;
+    read_exact_using(output, &mut file, &mut bytes)?;
     finish_private_read(output, &names.receipt, &file, &before)?;
     let receipt = WorkerV3LoadReadinessReceiptV1::decode_canonical(&bytes)?;
     if receipt.output_directory
@@ -1527,7 +1531,7 @@ fn read_validated_claim_file(
     }
     let mut exact = fallible_vec(expected_length)?;
     exact.resize(expected_length, 0);
-    file.read_exact(&mut exact)?;
+    read_exact_using(output, &mut file, &mut exact)?;
     finish_private_read(output, &names.claim, &file, &before)?;
     if <[u8; 32]>::from(Sha256::digest(&exact)) != receipt.durable_claim_sha256 {
         return Err(WorkerV3LoadReadinessErrorV1::ReceiptMismatch);
@@ -1554,6 +1558,12 @@ fn read_validated_envelope_file(
 ) -> Result<Vec<u8>, WorkerV3LoadReadinessErrorV1> {
     let expected_length = usize::try_from(receipt.envelope.byte_length)
         .map_err(|_| WorkerV3LoadReadinessErrorV1::EnvelopeMismatch)?;
+    if output
+        .native_read_limits
+        .is_some_and(|limits| expected_length > limits.readiness_bytes())
+    {
+        return Err(WorkerV3LoadReadinessErrorV1::EnvelopeMismatch);
+    }
     let mut exact = fallible_vec(expected_length)?;
     inspect_validated_envelope_file(output, names, receipt, |chunk| {
         exact.extend_from_slice(chunk);
@@ -1585,7 +1595,7 @@ fn inspect_validated_envelope_file(
     let mut buffer = [0_u8; 64 * 1024];
     while remaining != 0 {
         let length = remaining.min(buffer.len());
-        file.read_exact(&mut buffer[..length])?;
+        read_exact_using(output, &mut file, &mut buffer[..length])?;
         digest.update(&buffer[..length]);
         inspect_chunk(&buffer[..length])?;
         remaining -= length;
@@ -1635,7 +1645,7 @@ fn compare_bytes_and_snapshot(
     let mut buffer = [0_u8; 64 * 1024];
     for expected_chunk in expected.chunks(buffer.len()) {
         let actual = &mut buffer[..expected_chunk.len()];
-        file.read_exact(actual)?;
+        read_exact_using(output, &mut file, actual)?;
         if actual != expected_chunk {
             return Err(WorkerV3LoadReadinessErrorV1::EnvelopeMismatch);
         }
@@ -1648,10 +1658,24 @@ fn open_private_file(
     entry: &str,
     exact_length: usize,
 ) -> Result<(fs::File, rustix::fs::Stat), WorkerV3LoadReadinessErrorV1> {
+    if entry.ends_with(ENVELOPE_SUFFIX_V1)
+        && output
+            .native_read_limits
+            .is_some_and(|limits| exact_length > limits.readiness_bytes())
+    {
+        return Err(WorkerV3LoadReadinessErrorV1::EnvelopeMismatch);
+    }
     let fd = match openat(
         &output.fd,
         entry,
-        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        OFlags::RDONLY
+            | OFlags::NOFOLLOW
+            | OFlags::CLOEXEC
+            | if output.native_read_limits.is_some() {
+                OFlags::NONBLOCK
+            } else {
+                OFlags::empty()
+            },
         Mode::empty(),
     ) {
         Ok(fd) => fd,
@@ -1673,6 +1697,25 @@ fn open_private_file(
         });
     }
     Ok((fs::File::from(fd), stat))
+}
+
+fn read_exact_using(
+    output: &PinnedOutput,
+    file: &mut fs::File,
+    bytes: &mut [u8],
+) -> std::io::Result<()> {
+    if output.native_read_limits.is_some() {
+        let read = rustix::io::read(file, &mut *bytes).map_err(std::io::Error::from)?;
+        if read != bytes.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "short native readiness read",
+            ));
+        }
+        Ok(())
+    } else {
+        file.read_exact(bytes)
+    }
 }
 
 fn finish_private_read(

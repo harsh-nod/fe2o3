@@ -160,7 +160,7 @@ impl<'work> RootCompilerRequest<'work> {
                         return Err(rejected("completion differs from consumed original wait"));
                     }
                     self.completion = Some(record);
-                    State::SendingCompletion
+                    State::CompletionReady
                 }
                 _ => {
                     return Err(rejected(
@@ -168,16 +168,94 @@ impl<'work> RootCompilerRequest<'work> {
                     ));
                 }
             },
-            State::SendingCompletion => {
-                if self.send_completion(b)? {
-                    State::Completed
-                } else {
-                    State::SendingCompletion
-                }
-            }
             _ => return Err(rejected("compiler request cannot be reused")),
         };
-        Ok(self.state == State::Completed)
+        Ok(self.state == State::CompletionReady)
+    }
+
+    pub(crate) fn completion_quota() -> Result<root::CompilerExecutionRootAdmissionQuotaV2> {
+        Ok(root::CompilerExecutionRootAdmissionQuotaV2 {
+            work: root::sum(&[root::LOCAL_WORK, EXCHANGE_WORK])?,
+            scratch: root::sum(&[FRAME, io::packet_receive_scratch(N)])?,
+        })
+    }
+
+    /// One finite publication attempt after the original orchestration confirms
+    /// aggregate shutdown. Every refusal consumes publication; neither cleanup
+    /// nor a received description can reconstruct this original record.
+    pub(crate) fn publish_after_cleanup(
+        &mut self,
+        _cleanup: &crate::native_entrypoint::AggregateCleanupComplete,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.publish_retired_completion(b)
+    }
+
+    pub(crate) fn publish_after_compiler_phase(
+        &mut self,
+        _phase: &crate::native_entrypoint::fixed_phase::OriginalCompilerPhaseRetired,
+        b: &mut Budget<'_>,
+    ) -> Result<()> {
+        self.publish_retired_completion(b)
+    }
+
+    pub(crate) fn require_pending_completion_account(&self, b: &Budget<'_>) -> Result<()> {
+        self.check_account(b)?;
+        if self.state != State::DrainingCompletion
+            || self
+                .receiver
+                .deadline
+                .is_none_or(|deadline| Instant::now() >= deadline)
+        {
+            return Err(rejected(
+                "original compiler completion is no longer pending",
+            ));
+        }
+        Ok(())
+    }
+
+    fn publish_retired_completion(&mut self, b: &mut Budget<'_>) -> Result<()> {
+        let state = self.state;
+        self.state = State::Failed;
+        b.charge_work(root::LOCAL_WORK)?;
+        self.check_account(b)?;
+        if state != State::DrainingCompletion
+            || self.prepared.is_some()
+            || self.attempt.is_some()
+            || self.helper.is_some()
+        {
+            return Err(rejected("completion requires original terminal cleanup"));
+        }
+        if self
+            .receiver
+            .deadline
+            .is_none_or(|deadline| Instant::now() >= deadline)
+        {
+            return Err(rejected("intake deadline exceeded before completion"));
+        }
+        let connection = self
+            .receiver
+            .connection
+            .as_ref()
+            .ok_or_else(|| rejected("missing original connection"))?;
+        let peer = net::sockopt::socket_peercred(connection).map_err(|source| Error::Io {
+            operation: "original compiler completion peer",
+            source,
+        })?;
+        if self.receiver.sender
+            != Some(io::MessageSender::new(
+                peer.pid.as_raw_pid(),
+                peer.uid.as_raw(),
+                peer.gid.as_raw(),
+            ))
+        {
+            return Err(rejected("original compiler completion peer changed"));
+        }
+        if !self.send_completion(b)? {
+            return Err(rejected("original completion publication unavailable"));
+        }
+        self.state = State::Completed;
+        Ok(())
     }
 
     fn send_completion(&self, b: &mut Budget<'_>) -> Result<bool> {

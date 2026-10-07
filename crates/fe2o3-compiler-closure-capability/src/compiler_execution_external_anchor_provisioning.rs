@@ -191,7 +191,11 @@ mod tests {
 
     #[test]
     fn inherited_provisioning_is_retained_privately() {
-        let _guard = crate::FIXED_DESCRIPTOR_TEST_LOCK.lock().unwrap();
+        if !crate::test_isolation::enter(
+            "compiler_execution_external_anchor_provisioning::tests::inherited_provisioning_is_retained_privately",
+        ) {
+            return;
+        }
         let expected = provisioning();
         let capability =
             CompilerExecutionExternalAnchorProvisioningCapabilityV1::create(expected.clone())

@@ -197,6 +197,7 @@ fn dispatch(
     attempts: &mut usize,
     b: &mut Budget<'_>,
 ) -> Result<Response> {
+    session.require_kind(packet.kind())?;
     if packet.policy_identity() != a.policy.identity() {
         return Err(Error::rejected("native service policy mismatch"));
     }
@@ -289,6 +290,7 @@ fn dispatch(
         }
         Kind::VerifyCurrent => {
             let carriage = retain(packet.decode_carriage(b)?, b)?;
+            session.require_carriage(&carriage)?;
             let challenge = packet
                 .verification_challenge()
                 .ok_or_else(|| Error::rejected("native currentness challenge absent"))?;

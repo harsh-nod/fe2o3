@@ -188,13 +188,24 @@ macro_rules! inherited {
             /// ```
             #[allow(unsafe_code)]
             pub unsafe fn admit(b: &mut Budget<'_>) -> Result<(Self, Storage)> {
+                // SAFETY: the caller transfers the original fixed inherited slots.
+                Self::admit_sources(root::ListenerRole::Compiler, b, |b| unsafe {
+                    root::take(&Self::SOURCE_LIMITS, b)
+                }, |_, _| Ok(()))
+            }
+
+            fn admit_sources<'work>(
+                role: root::ListenerRole,
+                b: &mut Budget<'work>,
+                acquire: impl FnOnce(&mut Budget<'work>) -> Result<[std::fs::File; 14]>,
+                before_commit: impl FnOnce(&Self, &mut Budget<'work>) -> Result<()>,
+            ) -> Result<(Self, Storage)> {
                 b.with_prepaid_scope(0, 8, root::LOCAL_WORK, Self::FRAME, |b| {
                     crate::native::require_root()?;
                     b.reserve_storage(Self::SOURCE_STORAGE)?;
-                    // SAFETY: inherited ownership is transferred by this API's caller.
                     let [runtime_root, supervisor_root, anchor_root, supervisor, launcher, issuer,
                         helper, daemon, supervisor_file, policy_file, anchor_file, provisioning_file,
-                        issuer_seed, anchor_seed] = unsafe { root::take(&Self::SOURCE_LIMITS, b) }?;
+                        issuer_seed, anchor_seed] = acquire(b)?;
 
                     // Three independent OFDs, joined to the same canonical parent,
                     // before either secret is read or any child can exist.
@@ -246,9 +257,15 @@ macro_rules! inherited {
 
                     let credentials = Credentials::new(deployment.deployment().service_uid(),
                         deployment.deployment().service_gid())?;
-                    let (mut listener, c) = root::listener(runtime_root.into(), credentials.gid(), b)?;
+                    let (mut listener, c) = match role {
+                        root::ListenerRole::Compiler => root::listener(runtime_root.into(), credentials.gid(), b)?,
+                        root::ListenerRole::NativeApplication => root::listener_for(runtime_root.into(), credentials.gid(), role, b)?,
+                    };
                     b.reserve_storage(c)?;
-                    let (inputs, c) = Inputs::admit(listener.take_descriptor()?, supervisor_root, credentials, b)?;
+                    let (inputs, c) = match role {
+                        root::ListenerRole::Compiler => Inputs::admit(listener.take_descriptor()?, supervisor_root, credentials, b)?,
+                        root::ListenerRole::NativeApplication => Inputs::admit_native_application(listener.take_descriptor()?, supervisor_root, credentials, b)?,
+                    };
                     b.reserve_storage(c.additional_storage())?;
                     inputs.validate_lifecycle(&lifecycle, b)?;
                     inputs.validate_lifecycle(&supervisor_lifecycle, b)?;
@@ -295,6 +312,7 @@ macro_rules! inherited {
                     b.reserve_storage(Self::ENVELOPE)?;
                     let value = Self { programs: Sources::new(supervisor, launcher, issuer), trust,
                         inputs, anchor, supervisor_lifecycle, lifecycle, retained };
+                    before_commit(&value, b)?;
                     // Only complete admission may leave the fixed listener pathname.
                     listener.disarm_cleanup();
                     Ok((value, Storage(retained)))
@@ -326,6 +344,11 @@ macro_rules! inherited {
             // neither duplicates trust, lifecycle obligations or the listener.
             fn prepare_inner(self, timeout: Duration, cleanup: &mut Cleanup,
                 b: &mut Budget<'_>) -> Result<Prepared> {
+                self.prepare_inner_with_guard(timeout, cleanup, true, b)
+            }
+
+            fn prepare_inner_with_guard(self, timeout: Duration, cleanup: &mut Cleanup,
+                install_guard: bool, b: &mut Budget<'_>) -> Result<Prepared> {
                 crate::native::require_root()?;
                 self.trust.revalidate(b)?;
                 self.inputs.validate_lifecycle(&self.lifecycle, b)?;
@@ -335,7 +358,11 @@ macro_rules! inherited {
                     (&launcher, self.trust.deployment().deployment().launcher()), (&issuer, self.trust.policy().policy().executable())] {
                     source::validate_executable(file, length(measurement.byte_len())?, b)?;
                 }
-                self.anchor.retain_cleanup_guard(self.trust.deployment(), self.trust.policy(), cleanup, b)?;
+                if install_guard {
+                    self.anchor.retain_cleanup_guard(self.trust.deployment(), self.trust.policy(), cleanup, b)?;
+                }
+                // Launch always validates the actual retained guard against this
+                // preparation. The closed joined phase skips only reinstallation.
                 let (anchor, c) = self.anchor.launch(self.trust.deployment(), self.trust.policy(), timeout, cleanup, b)?;
                 b.reserve_storage(c.additional_storage())?;
                 let (prepared, c) = Prepared::prepare(Sources::new(supervisor, launcher, issuer), self.trust,

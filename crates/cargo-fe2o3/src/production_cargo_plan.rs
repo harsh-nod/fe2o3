@@ -35,6 +35,24 @@ impl ProductionCargoPlan {
         host_target: &str,
         locked: bool,
     ) -> Result<Self, String> {
+        Self::prepare(command, args, host_target, locked, false)
+    }
+
+    pub(crate) fn new_for_custodian_run(
+        args: &[OsString],
+        host_target: &str,
+        locked: bool,
+    ) -> Result<Self, String> {
+        Self::prepare("run", args, host_target, locked, true)
+    }
+
+    fn prepare(
+        command: &str,
+        args: &[OsString],
+        host_target: &str,
+        locked: bool,
+        device_library: bool,
+    ) -> Result<Self, String> {
         if !matches!(command, "build" | "run") {
             return Err(format!(
                 "production Cargo plan does not support command {command:?}"
@@ -50,7 +68,11 @@ impl ProductionCargoPlan {
         }
         let cargo_args_end = separator.unwrap_or(args.len());
 
-        let mut device_args = args[..cargo_args_end].to_vec();
+        let mut device_args = if device_library {
+            device_library_args(&args[..cargo_args_end])?
+        } else {
+            args[..cargo_args_end].to_vec()
+        };
         device_args.push(OsString::from(PRODUCTION_DEVICE_BUILD_STD_V1));
         append_target(
             &mut device_args,
@@ -85,6 +107,57 @@ impl ProductionCargoPlan {
     pub(crate) fn host_mut(&mut self) -> &mut CargoPhase {
         &mut self.host
     }
+}
+
+fn device_library_args(args: &[OsString]) -> Result<Vec<OsString>, String> {
+    let mut device = Vec::with_capacity(args.len() + 1);
+    let mut selected_bin = false;
+    let mut index = 0;
+    while index < args.len() {
+        let argument = &args[index];
+        let bytes = crate::os_bytes(argument);
+        if bytes == b"--bin" || bytes.starts_with(b"--bin=") {
+            if selected_bin {
+                return Err("cargo fe2o3 run accepts only one host --bin selection".to_owned());
+            }
+            selected_bin = true;
+            let name = if bytes == b"--bin" {
+                index += 1;
+                crate::os_bytes(args.get(index).ok_or("--bin requires a host binary name")?)
+            } else {
+                &bytes[b"--bin=".len()..]
+            };
+            if name.is_empty() || name.starts_with(b"-") {
+                return Err("--bin requires a nonempty host binary name".to_owned());
+            }
+        } else {
+            for selector in [
+                "--lib",
+                "--bins",
+                "--example",
+                "--examples",
+                "--test",
+                "--tests",
+                "--bench",
+                "--benches",
+                "--all-targets",
+            ] {
+                if bytes == selector.as_bytes()
+                    || bytes
+                        .strip_prefix(selector.as_bytes())
+                        .is_some_and(|tail| tail.starts_with(b"="))
+                {
+                    return Err(format!(
+                        "cargo fe2o3 run compiles the package library for the device and selects a host binary; {selector} is not supported"
+                    ));
+                }
+            }
+            device.push(argument.clone());
+        }
+        index += 1;
+    }
+    device.push(OsString::from("--lib"));
+    Ok(device)
 }
 
 fn reject_caller_build_std(args: &[OsString]) -> Result<(), String> {
@@ -299,5 +372,58 @@ mod tests {
         assert!(!plan.device().args().contains(&application));
         assert!(plan.host().args().contains(&cargo));
         assert!(plan.host().args().contains(&application));
+    }
+
+    #[test]
+    fn custodian_run_selects_only_device_library_without_changing_default_run() {
+        let args = strings(&["--features", "fill", "--bin", "app", "--", "--bin=payload"]);
+        let ordinary =
+            ProductionCargoPlan::new("run", &args, "x86_64-unknown-linux-gnu", false).unwrap();
+        let custodian =
+            ProductionCargoPlan::new_for_custodian_run(&args, "x86_64-unknown-linux-gnu", false)
+                .unwrap();
+        assert_eq!(custodian.host(), ordinary.host());
+        assert_eq!(
+            custodian.device().args(),
+            strings(&[
+                "--features",
+                "fill",
+                "--lib",
+                "-Zbuild-std=core",
+                "--target",
+                "amdgcn-amd-amdhsa",
+            ])
+        );
+        assert!(ordinary.device().args().contains(&OsString::from("--bin")));
+        assert!(!ordinary.device().args().contains(&OsString::from("--lib")));
+    }
+
+    #[test]
+    fn custodian_run_rejects_conflicting_or_malformed_host_selectors() {
+        for args in [
+            vec!["--bin"],
+            vec!["--bin="],
+            vec!["--bin", "--release"],
+            vec!["--bin", "a", "--bin=b"],
+            vec!["--lib"],
+            vec!["--bins"],
+            vec!["--example=app"],
+            vec!["--examples"],
+            vec!["--test", "app"],
+            vec!["--tests"],
+            vec!["--bench=app"],
+            vec!["--benches"],
+            vec!["--all-targets"],
+        ] {
+            assert!(
+                ProductionCargoPlan::new_for_custodian_run(
+                    &strings(&args),
+                    "x86_64-unknown-linux-gnu",
+                    false,
+                )
+                .is_err(),
+                "{args:?}"
+            );
+        }
     }
 }

@@ -149,6 +149,117 @@ fn validate(record: DeviceProjectionRecordV1) -> ValidatedDeviceProjectionV1 {
     validate_device_projection_model_only_v1(record, &profile()).unwrap()
 }
 
+fn gfx950_profile() -> DeviceAdmissionProfileV1 {
+    DeviceAdmissionProfileV1::gfx950_xnack_minus_spx_nps1_kfd_1_18_drm_3_64_0(
+        profile().identity(),
+        profile().kfd_schema_identity(),
+        profile().drm_schema_identity(),
+    )
+}
+
+fn gfx950_record(seed: u8) -> DeviceProjectionRecordV1 {
+    let mut record = record(seed);
+    record.source.amdgpu_module =
+        AmdgpuModuleObservationV1::Version6_16_13Source703b1127e578bc5d4bd6615;
+    record.topology.target = GpuTargetObservationV1::Gfx950;
+    record.topology.device_id = GFX950_PCI_DEVICE_ID_V1;
+    record.topology.firmware_version = GFX950_KFD_FIRMWARE_VERSION_V1;
+    record.topology.sdma_firmware_version = GFX950_SDMA_FIRMWARE_VERSION_V1;
+    record.topology.wavefront_size = GFX950_WAVEFRONT_SIZE_V1;
+    record.topology.simd_count = GFX950_SPX_SIMD_COUNT_V1;
+    record.topology.xcc_count = GFX950_SPX_XCC_COUNT_V1;
+    record.inventory[0].target = GpuTargetObservationV1::Gfx950;
+    record.inventory[0].device_id = GFX950_PCI_DEVICE_ID_V1;
+    record.inventory[0].pci_revision_id = GFX950_PCI_REVISION_V1;
+    record.render.device_id = GFX950_PCI_DEVICE_ID_V1;
+    record.render.pci_revision_id = GFX950_PCI_REVISION_V1;
+    record.render.chip_revision = GFX950_CHIP_REVISION_V1;
+    record.render.external_revision = GFX950_EXTERNAL_REVISION_V1;
+    record
+}
+
+#[test]
+fn gfx950_projection_preserves_closed_target_for_two_device_inventory() {
+    let mut first = gfx950_record(4);
+    let second = gfx950_record(5);
+    first.inventory.push(second.inventory[0]);
+    first.apertures.push(second.apertures[0]);
+    let projection =
+        validate_device_projection_model_only_v1(first.clone(), &gfx950_profile()).unwrap();
+    assert_eq!(projection.record(), &first);
+    assert_eq!(projection.authority_domain(), AuthorityDomainV1::ModelOnly);
+    assert_eq!(
+        projection.correlation().target_profile(),
+        gfx950_profile().target_profile()
+    );
+    assert_eq!(
+        projection.correlation().target(),
+        GpuTargetObservationV1::Gfx950
+    );
+    assert_eq!(projection.record().inventory.len(), 2);
+    assert!(validate_device_projection_model_only_v1(first, &profile()).is_err());
+    assert!(validate_device_projection_model_only_v1(record(4), &gfx950_profile()).is_err());
+}
+
+#[test]
+fn gfx950_projection_rejects_exact_platform_capacity_and_drm_substitutions() {
+    let changes: [fn(&mut DeviceProjectionRecordV1); 24] = [
+        |r| r.source.kernel_release = KernelReleaseObservationV1::Other,
+        |r| {
+            r.source.amdgpu_module =
+                AmdgpuModuleObservationV1::Version6_16_13SourceA6f143bec60c0afc3263226
+        },
+        |r| r.kfd.uapi_minor = 19,
+        |r| r.kfd.xnack = XnackObservationV1::Unknown,
+        |r| r.kfd.schema_identity = digest(99),
+        |r| r.topology.target = GpuTargetObservationV1::Gfx942,
+        |r| r.topology.device_id = MI300X_PCI_DEVICE_ID_V1,
+        |r| r.topology.firmware_version = MI300X_KFD_FIRMWARE_VERSION_V1,
+        |r| r.topology.sdma_firmware_version = MI300X_SDMA_FIRMWARE_VERSION_V1,
+        |r| r.topology.wavefront_size = 32,
+        |r| r.topology.simd_count = MI300X_SPX_SIMD_COUNT_V1,
+        |r| r.topology.xcc_count = 4,
+        |r| r.topology.compute_partition = ComputePartitionObservationV1::Cpx,
+        |r| r.topology.memory_partition = MemoryPartitionObservationV1::Nps4,
+        |r| r.render.driver_minor = 65,
+        |r| r.render.pci_revision_id = 1,
+        |r| r.render.chip_revision = MI300X_CHIP_REVISION_V1,
+        |r| r.render.external_revision = MI300X_EXTERNAL_REVISION_V1,
+        |r| r.render.family_id = 142,
+        |r| r.render.acceleration_working = false,
+        |r| r.render.schema_identity = digest(98),
+        |r| r.commit_fence.reset_fence_clear_before_commit = false,
+        |r| r.apertures[0].kfd_gpu_id = 99,
+        |r| r.profile_id = DeviceAdmissionProfileIdV1::from_untrusted_digest(digest(97)),
+    ];
+    for (index, change) in changes.into_iter().enumerate() {
+        let mut candidate = gfx950_record(4);
+        change(&mut candidate);
+        assert!(
+            validate_device_projection_model_only_v1(candidate, &gfx950_profile()).is_err(),
+            "mutation {index}"
+        );
+    }
+}
+
+#[test]
+fn gfx950_projection_rejects_foreign_inventory_target_and_incomplete_apertures() {
+    let mut candidate = gfx950_record(4);
+    let other = record(5);
+    candidate.inventory.push(other.inventory[0]);
+    candidate.apertures.push(other.apertures[0]);
+    assert_eq!(
+        validate_device_projection_model_only_v1(candidate, &gfx950_profile()),
+        Err(DeviceProjectionErrorV1::InvalidInventory)
+    );
+    let mut candidate = gfx950_record(4);
+    candidate.inventory.push(gfx950_record(5).inventory[0]);
+    assert_eq!(
+        validate_device_projection_model_only_v1(candidate, &gfx950_profile()),
+        Err(DeviceProjectionErrorV1::InvalidInventory)
+    );
+}
+
 #[test]
 fn canonical_projection_preserves_every_model_identity_and_schema() {
     let record = record(4);
@@ -158,6 +269,8 @@ fn canonical_projection_preserves_every_model_identity_and_schema() {
     let correlation = projection.correlation();
     assert_eq!(correlation.domain_id(), record.domain_id);
     assert_eq!(correlation.profile_id(), record.profile_id);
+    assert_eq!(correlation.target_profile(), profile().target_profile());
+    assert_eq!(correlation.target(), record.topology.target);
     assert_eq!(correlation.epoch().0, record.source.topology_generation);
     assert_eq!(
         correlation.identity().gpu_unique_id,

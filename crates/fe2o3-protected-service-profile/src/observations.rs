@@ -49,7 +49,7 @@ const CURRENT_STATUS_PATH: &std::ffi::CStr = c"/proc/thread-self/status";
 // A bounded N-byte file needs at most N+1 reads, plus open and close.
 // Status parsing: 64 units per byte cover zeroing, UTF-8, line/name scans,
 // trimming, whitespace splitting, numeric validation/conversion, and field
-// dispatch (12 names), presence checks and comparisons. A token/line cannot
+// dispatch (14 names), presence checks and comparisons. A token/line cannot
 // outnumber bytes. 8 units per path byte cover build/validation/decimal format;
 // 256 extra units cover fixed control and final profile comparisons.
 const SYSCALL_WORK: usize = 1024;
@@ -192,7 +192,34 @@ impl ProcessProfile {
     }
 
     pub fn revalidate_current(&self) -> Result<(), Error> {
-        read_proc_status(CURRENT_STATUS_PATH)?.require(self.credentials)?;
+        self.revalidate_current_with_securebits(self.credentials.securebits(), false)
+    }
+
+    pub(crate) fn capture_proof_controller(
+        credentials: ProtectedServiceCredentialProfileV1,
+    ) -> Result<Self, Error> {
+        let profile = Self {
+            credentials,
+            cap_last_cap: read_cap_last_cap()?,
+        };
+        profile.revalidate_proof_controller()?;
+        Ok(profile)
+    }
+
+    pub(crate) fn revalidate_proof_controller(&self) -> Result<(), Error> {
+        self.revalidate_current_with_securebits(0, true)
+    }
+
+    fn revalidate_current_with_securebits(
+        &self,
+        expected_securebits: u32,
+        proof_controller: bool,
+    ) -> Result<(), Error> {
+        let status = read_proc_status(CURRENT_STATUS_PATH)?;
+        status.require(self.credentials)?;
+        if proof_controller {
+            status.require_no_seccomp()?;
+        }
         let capabilities = rustix::thread::capabilities(None)
             .map_err(|source| io_error("inspect service capabilities", source))?;
         if !capabilities.effective.is_empty()
@@ -205,7 +232,7 @@ impl ProcessProfile {
         }
         let securebits = rustix::thread::capabilities_secure_bits()
             .map_err(|source| io_error("inspect service securebits", source))?;
-        if securebits.bits() != self.credentials.securebits() {
+        if securebits.bits() != expected_securebits {
             return Err(Error::ProcessProfile("securebits are not exact and locked"));
         }
         if !rustix::thread::no_new_privs()
@@ -298,6 +325,40 @@ pub fn validate_process(
 ) -> Result<(), Error> {
     let path = ProcPath::new(Some(pid), "status")?;
     read_proc_status(path.as_c_str()?)?.require(credentials)
+}
+
+pub(crate) fn validate_proof_controller_process(
+    credentials: ProtectedServiceCredentialProfileV1,
+    pid: Pid,
+) -> Result<(), Error> {
+    let path = ProcPath::new(Some(pid), "status")?;
+    let status = read_proc_status(path.as_c_str()?)?;
+    status.require(credentials)?;
+    status.require_no_seccomp()
+}
+
+pub(crate) fn require_proof_controller_parent() -> Result<(), Error> {
+    let securebits = rustix::thread::capabilities_secure_bits()
+        .map_err(|source| io_error("inspect proof-controller parent securebits", source))?;
+    if !securebits.is_empty() {
+        return Err(Error::ProcessProfile(
+            "proof-controller parent securebits are not zero",
+        ));
+    }
+    read_proc_status(CURRENT_STATUS_PATH)?.require_no_seccomp()
+}
+
+pub(crate) fn require_no_seccomp_fields(
+    seccomp: Option<u32>,
+    filters: Option<u32>,
+) -> Result<(), Error> {
+    if seccomp == Some(0) && filters == Some(0) {
+        Ok(())
+    } else {
+        Err(Error::ProcessProfile(
+            "proof controller has inherited seccomp or missing seccomp facts",
+        ))
+    }
 }
 
 /// Requires default SIGCHLD without SA_NOCLDWAIT or SA_NOCLDSTOP.

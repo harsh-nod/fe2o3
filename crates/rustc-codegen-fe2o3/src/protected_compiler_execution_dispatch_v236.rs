@@ -56,9 +56,11 @@ impl Admitted<'_, '_> {
     ) -> Result<u64, ProductionPipelineError> {
         match self {
             Self::Legacy { session, budget } => transaction
+                .select_compiler_proof_family_v1(Family::LegacyV1)?
                 .publish_worker_handoff(budget, session)
                 .map(|subject| subject.outer_handoff().byte_len()),
             Self::Native(session) => transaction
+                .select_compiler_proof_family_v1(Family::NativeV3)?
                 .publish_native_worker_handoff(session)
                 .map(|subject| subject.outer_handoff().byte_len()),
         }

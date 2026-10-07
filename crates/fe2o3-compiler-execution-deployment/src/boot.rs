@@ -141,6 +141,8 @@ pub(super) fn pinned_systemd_nspawn_plan_v1(
         "--keep-unit".to_owned(),
         "--private-users=no".to_owned(),
         "--private-network".to_owned(),
+        // The root observer duplicates original compiler descriptors across service UIDs.
+        "--system-call-filter=pidfd_getfd".to_owned(),
         "--volatile=no".to_owned(),
         "--link-journal=no".to_owned(),
         "--resolv-conf=off".to_owned(),
@@ -780,6 +782,7 @@ mod tests {
                 "--keep-unit",
                 "--private-users=no",
                 "--private-network",
+                "--system-call-filter=pidfd_getfd",
                 "--volatile=no",
                 "--link-journal=no",
                 "--resolv-conf=off",

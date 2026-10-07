@@ -1,0 +1,739 @@
+use super::*;
+use fe2o3_kfd::Gfx942FixedDispatchCapacityProfileV1;
+use fe2o3_resource_accounting::{
+    HostMetadataTableV1, ResourceCreditAccountV1, ResourceCreditErrorV1,
+};
+
+#[cfg(test)]
+#[path = "compute_state/capacity_tests.rs"]
+mod capacity_tests;
+
+#[path = "compute_state/publication.rs"]
+mod publication;
+
+#[path = "compute_state/lifecycle.rs"]
+mod lifecycle;
+
+#[cfg(test)]
+#[path = "compute_state/publication_tests.rs"]
+mod publication_tests;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct NativeDirtyExtentV1 {
+    pub(super) compute_lane: usize,
+    pub(super) data_index: usize,
+    pub(super) allocation_offset: usize,
+    pub(super) data_offset: u64,
+    pub(super) byte_len: u64,
+}
+
+pub(super) struct ModuleRecordV1 {
+    pub(super) device: u64,
+    pub(super) validated: ResidentModuleImageV1,
+    pub(super) image_sha256: [u8; 32],
+}
+
+pub(super) struct KernelRecordV1 {
+    pub(super) module: u64,
+    pub(super) validated: ResidentKernelImageV1,
+    pub(super) signature: [u8; 32],
+}
+
+impl fmt::Debug for ModuleRecordV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ModuleRecordV1")
+            .field("device", &self.device)
+            .field("image_bytes", &self.validated.bytes().len())
+            .field("image_sha256", &self.image_sha256)
+            .finish()
+    }
+}
+
+impl fmt::Debug for KernelRecordV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("KernelRecordV1")
+            .field("module", &self.module)
+            .field("name", &self.validated.selected_kernel().name())
+            .field("signature", &self.signature)
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WritebackV1 {
+    pub(super) allocation: u64,
+    pub(super) allocation_offset: usize,
+    pub(super) data_index: usize,
+    pub(super) data_offset: u64,
+    pub(super) byte_len: u64,
+}
+
+pub(super) struct ActiveSubmissionV1 {
+    pub(super) source_event: super::materialized_source_event::MaterializedSourceEventV1,
+    pub(super) id: u64,
+    pub(super) stream: u64,
+    pub(super) ordered_predecessor: Option<u64>,
+    pub(super) deferred_ordered_predecessor_retain: bool,
+    pub(super) kernel: u64,
+    pub(super) dependency_depth: usize,
+    pub(super) allocations: HashSet<u64>,
+    pub(super) writebacks: Vec<WritebackV1>,
+    pub(super) resident_descriptors: Vec<ResidentDataDescriptorV1>,
+    pub(super) ordinary_recipe: Option<Arc<RetainedComputeLaunchV1>>,
+    pub(super) dispatch_shape_sha256: [u8; 32],
+    pub(super) published_at: Instant,
+    pub(super) performance: KfdRuntimeLaunchPerformanceV1,
+    pub(super) execution: Option<ActiveComputeExecutionV1>,
+}
+
+pub(super) struct PersistentPublicationProfileV1 {
+    pub(super) launch: KfdProfileLaunchV1,
+    pub(super) semantic_contract: Option<KfdProfileSemanticContractV1>,
+    pub(super) bindings: Option<Result<Vec<KfdProfileBindingV1>, ()>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MaterializedPreparationOriginV1 {
+    NewBinding,
+    RecycledAttachment { generation: u64 },
+}
+
+pub(super) struct MaterializedPreparedV1 {
+    pub(super) profile: PersistentPublicationProfileV1,
+    pub(super) origin: MaterializedPreparationOriginV1,
+    #[cfg(test)]
+    pub(super) scripted: Option<(Vec<DataSpecV1>, usize)>,
+}
+
+impl MaterializedPreparedV1 {
+    pub(super) fn new(
+        profile: PersistentPublicationProfileV1,
+        origin: MaterializedPreparationOriginV1,
+    ) -> Self {
+        Self {
+            profile,
+            origin,
+            #[cfg(test)]
+            scripted: None,
+        }
+    }
+}
+
+pub(super) enum PreparedReceiptV1<T> {
+    Armed(T),
+    // The consuming lower operation now owns the native publication obligation.
+    NativeOwned,
+}
+
+impl<T> PreparedReceiptV1<T> {
+    pub(super) fn armed(&self) -> Option<&T> {
+        match self {
+            Self::Armed(receipt) => Some(receipt),
+            Self::NativeOwned => None,
+        }
+    }
+
+    pub(super) fn into_armed(self) -> Option<T> {
+        match self {
+            Self::Armed(receipt) => Some(receipt),
+            Self::NativeOwned => None,
+        }
+    }
+}
+
+// The large test-only scripted owner keeps failure-path custody inline so the
+// tests exercise the same allocation-free terminal-recovery invariant.
+#[allow(clippy::large_enum_variant)]
+pub(super) enum ActiveComputeExecutionV1 {
+    MaterializedBinding(super::materialized_publication::MaterializedBindingV1),
+    MaterializedSuccessorPublication(super::ordered_publication::OrderedPublicationV1),
+    MaterializedPrepared(MaterializedPreparedV1),
+    MaterializedCancelling(Box<super::materialized_cancellation::MaterializedCancellationV1>),
+    Materialized(MaterializedCompletionReceiptV1),
+    PersistentPrepared {
+        allocation: u64,
+        access: RuntimeAccessV1,
+        source: PersistentFullRangeComputeSourceV1,
+        prepared: PreparedReceiptV1<Gfx942PreparedPersistentComputeDispatchV1>,
+        completion: Box<PersistentComputeCompletionV1>,
+        profile: PersistentPublicationProfileV1,
+    },
+    Persistent {
+        allocation: u64,
+        access: RuntimeAccessV1,
+        dispatch: Gfx942PersistentComputeDispatchV1,
+        completion: Box<PersistentComputeCompletionV1>,
+    },
+    ThreeBindingPersistentPrepared {
+        admissions: [PersistentFullRangeComputeAdmissionV1; 3],
+        promotions: [Option<KfdRuntimeReadyPromotionPerformanceV1>; 3],
+        restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
+        prepared: PreparedReceiptV1<Gfx942PreparedThreeBindingPersistentComputeDispatchV1>,
+        completion: Box<ThreeBindingPersistentCompletionV1>,
+        profile: PersistentPublicationProfileV1,
+    },
+    ThreeBindingPersistent {
+        admissions: [PersistentFullRangeComputeAdmissionV1; 3],
+        restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
+        dispatch: Gfx942ThreeBindingPersistentComputeDispatchV1,
+        completion: Box<ThreeBindingPersistentCompletionV1>,
+    },
+    #[cfg(test)]
+    ScriptedPersistent {
+        allocation: u64,
+        access: RuntimeAccessV1,
+        device: Box<DirectionalSdmaDeviceOwnerV1>,
+        completion: Box<PersistentComputeCompletionV1>,
+    },
+    #[cfg(test)]
+    ScriptedPersistentPrepared {
+        allocation: u64,
+        access: RuntimeAccessV1,
+        source: PersistentFullRangeComputeSourceV1,
+        input: PreparedReceiptV1<Box<KfdRuntimePersistentComputeInputV1>>,
+        completion: Box<PersistentComputeCompletionV1>,
+        profile: PersistentPublicationProfileV1,
+    },
+    PersistentCancelling(Box<super::prepared_cancellation::PreparedComputeCancellationV1>),
+    PersistentCompleting(Box<PersistentComputeCompletionV1>),
+    ThreeBindingPersistentCompleting(Box<ThreeBindingPersistentCompletionV1>),
+    #[cfg(test)]
+    ScriptedThreeBindingPersistentPrepared {
+        admissions: [PersistentFullRangeComputeAdmissionV1; 3],
+        promotions: [Option<KfdRuntimeReadyPromotionPerformanceV1>; 3],
+        restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
+        inputs: PreparedReceiptV1<[KfdRuntimePersistentComputeInputV1; 3]>,
+        completion: Box<ThreeBindingPersistentCompletionV1>,
+        profile: PersistentPublicationProfileV1,
+    },
+    #[cfg(test)]
+    ScriptedThreeBindingPersistent {
+        admissions: [PersistentFullRangeComputeAdmissionV1; 3],
+        restore_shells: [ThreeBindingPersistentRestoreShellV1; 3],
+        devices: [DirectionalSdmaDeviceOwnerV1; 3],
+        completion: Box<ThreeBindingPersistentCompletionV1>,
+    },
+    #[cfg(test)]
+    ScriptedMaterialized,
+    #[cfg(test)]
+    ScriptedMaterializedCompleted,
+    #[cfg(test)]
+    ScriptedMaterializedRetired,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ScriptedPersistentTransitionFailureV1 {
+    Poll,
+    Recycle,
+    Detach,
+    UnwindBeforeTake,
+    ReserveCompletion,
+    UnwindAfterRetire,
+    CompletionSlotMismatch,
+    CompletionShellMismatch,
+    CompletionEffectMismatch,
+    CompletionCommitRosterMismatch,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct OwnedComputeLaunchV1 {
+    pub(super) stream: u64,
+    pub(super) kernel: u64,
+    pub(super) explicit_kernarg: Box<[u8]>,
+    pub(super) bindings: Box<[BackendBindingV1]>,
+    pub(super) geometry: crate::RuntimeLaunchGeometryV1,
+    pub(super) semantic_launch: KfdRuntimeSemanticLaunchV1,
+}
+
+impl OwnedComputeLaunchV1 {
+    #[cfg(test)]
+    pub(super) fn unaccounted_copy_for_test(&self) -> Self {
+        Self {
+            stream: self.stream,
+            kernel: self.kernel,
+            explicit_kernarg: self.explicit_kernarg.clone(),
+            bindings: self.bindings.clone(),
+            geometry: self.geometry,
+            semantic_launch: self.semantic_launch,
+        }
+    }
+
+    pub(super) fn borrowed(&self) -> BackendLaunchV1<'_> {
+        BackendLaunchV1 {
+            stream: self.stream,
+            kernel: self.kernel,
+            explicit_kernarg: &self.explicit_kernarg,
+            bindings: &self.bindings,
+            dependencies: &[],
+            geometry: self.geometry,
+            semantic_launch: self.semantic_launch,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct PendingComputeSubmissionV1 {
+    pub(super) id: u64,
+    pub(super) module: u64,
+    pub(super) launch: Arc<RetainedComputeLaunchV1>,
+    pub(super) retained_allocations: Box<[u64]>,
+    pub(super) ordered_predecessor: Option<u64>,
+    pub(super) explicit_success_dependencies: Box<[u64]>,
+    pub(super) explicit_dependency_cursor: usize,
+    pub(super) quiescence_dependencies: Box<[u64]>,
+    pub(super) quiescence_cursor: usize,
+    pub(super) dependency_depth: usize,
+    pub(super) peer_gate: Option<PeerComputeGateV1>,
+    pub(super) peer_access: PeerComputePermitsV1,
+}
+
+#[cfg(test)]
+pub(super) const RUNTIME_COMPUTE_PIPELINE_CAPACITY_V1: usize =
+    fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RuntimeComputePipelineIdentityV1 {
+    slot: u16,
+    slot_generation: u64,
+    logical_epoch: u64,
+    submission: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum RuntimeComputePipelinePhaseV1 {
+    Publishing,
+    Published,
+    Completed,
+    PhysicallyRetired,
+    Quarantined,
+}
+
+pub(super) struct RuntimeComputePipelineEntryV1 {
+    pub(super) identity: RuntimeComputePipelineIdentityV1,
+    pub(super) phase: RuntimeComputePipelinePhaseV1,
+    pub(super) active: ActiveSubmissionV1,
+}
+
+struct RuntimeComputePipelineSlotV1 {
+    generation: u64,
+    entry: Option<RuntimeComputePipelineEntryV1>,
+}
+
+pub(super) struct RuntimeComputePipelineV1 {
+    slots: HostMetadataTableV1<RuntimeComputePipelineSlotV1>,
+    live: usize,
+    next_logical_epoch: Option<u64>,
+    commit_frontier: Option<u64>,
+    staged: Option<RuntimeComputePipelineIdentityV1>,
+}
+
+impl RuntimeComputePipelineV1 {
+    #[cfg(test)]
+    pub(super) fn vacant() -> Self {
+        Self::try_vacant(Gfx942FixedDispatchCapacityProfileV1::Default64, None)
+            .expect("fixed runtime compute pipeline allocation")
+    }
+
+    pub(super) fn try_vacant(
+        profile: Gfx942FixedDispatchCapacityProfileV1,
+        account: Option<&ResourceCreditAccountV1>,
+    ) -> Result<Self, ResourceCreditErrorV1> {
+        if profile == Gfx942FixedDispatchCapacityProfileV1::Qualification1024 && account.is_none() {
+            return Err(ResourceCreditErrorV1::Capacity);
+        }
+        let slots = HostMetadataTableV1::try_new(profile.slots(), account, || {
+            RuntimeComputePipelineSlotV1 {
+                generation: 0,
+                entry: None,
+            }
+        })?;
+        Ok(Self {
+            slots,
+            live: 0,
+            next_logical_epoch: Some(1),
+            commit_frontier: None,
+            staged: None,
+        })
+    }
+
+    pub(super) const fn len(&self) -> usize {
+        self.live
+    }
+
+    pub(super) const fn is_empty(&self) -> bool {
+        self.live == 0
+    }
+
+    pub(super) fn has_successor_capacity(&self) -> bool {
+        // The logical frontier is retained separately in the lane's `active` slot.
+        publication::has_capacity(&self.slots, self.live, self.next_logical_epoch, self.staged)
+    }
+
+    // The rejected linear owner stays inline so roster insertion cannot add a
+    // recovery-path allocation or lose custody on allocator failure.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn stage_publication_v1(
+        &mut self,
+        active: ActiveSubmissionV1,
+    ) -> Result<RuntimeComputePipelineIdentityV1, ActiveSubmissionV1> {
+        publication::stage(
+            &mut self.slots,
+            &mut self.live,
+            self.next_logical_epoch,
+            self.commit_frontier,
+            &mut self.staged,
+            active,
+        )
+    }
+
+    // The publication adapter authenticates the native outcome before either
+    // metadata-only transition. A withdrawn attempt burns only its slot generation.
+    pub(super) fn confirm_publication_v1(
+        &mut self,
+        identity: RuntimeComputePipelineIdentityV1,
+    ) -> Result<(), ()> {
+        publication::confirm(
+            &mut self.slots,
+            self.live,
+            &mut self.next_logical_epoch,
+            &mut self.commit_frontier,
+            &mut self.staged,
+            identity,
+        )
+    }
+
+    pub(super) fn withdraw_publication_v1(
+        &mut self,
+        identity: RuntimeComputePipelineIdentityV1,
+    ) -> Option<ActiveSubmissionV1> {
+        publication::withdraw(
+            &mut self.slots,
+            &mut self.live,
+            self.next_logical_epoch,
+            self.commit_frontier,
+            &mut self.staged,
+            identity,
+        )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn insert_published(
+        &mut self,
+        active: ActiveSubmissionV1,
+    ) -> Result<RuntimeComputePipelineIdentityV1, ActiveSubmissionV1> {
+        let identity = self.stage_publication_v1(active)?;
+        self.confirm_publication_v1(identity).unwrap();
+        Ok(identity)
+    }
+
+    pub(super) fn contains(&self, submission: u64) -> bool {
+        self.get(submission).is_some()
+    }
+
+    pub(super) fn get(&self, submission: u64) -> Option<&ActiveSubmissionV1> {
+        self.slots.iter().find_map(|slot| {
+            slot.entry
+                .as_ref()
+                .filter(|entry| entry.active.id == submission)
+                .map(|entry| &entry.active)
+        })
+    }
+
+    pub(super) fn iter(&self) -> impl Iterator<Item = &ActiveSubmissionV1> {
+        self.slots
+            .iter()
+            .filter_map(|slot| slot.entry.as_ref().map(|entry| &entry.active))
+    }
+
+    pub(super) fn phase(&self, submission: u64) -> Option<RuntimeComputePipelinePhaseV1> {
+        self.slots.iter().find_map(|slot| {
+            slot.entry
+                .as_ref()
+                .filter(|entry| entry.active.id == submission)
+                .map(|entry| entry.phase)
+        })
+    }
+
+    pub(super) fn quarantine_all(&mut self) {
+        lifecycle::quarantine(&mut self.slots);
+    }
+
+    #[cfg(test)]
+    pub(super) fn take_physical_owner(
+        &mut self,
+        submission: u64,
+    ) -> Option<(RuntimeComputePipelineIdentityV1, ActiveSubmissionV1)> {
+        let slot = self.slots.iter_mut().find(|slot| {
+            slot.entry.as_ref().is_some_and(|entry| {
+                entry.active.id == submission
+                    && matches!(
+                        entry.phase,
+                        RuntimeComputePipelinePhaseV1::Published
+                            | RuntimeComputePipelinePhaseV1::Completed
+                    )
+            })
+        })?;
+        let entry = slot.entry.take().expect("selected pipeline entry");
+        Some((entry.identity, entry.active))
+    }
+
+    // Restoration returns the exact inline owner to the caller on identity
+    // mismatch; boxing it would make terminal custody recovery allocate.
+    #[cfg(test)]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn restore(
+        &mut self,
+        identity: RuntimeComputePipelineIdentityV1,
+        phase: RuntimeComputePipelinePhaseV1,
+        active: ActiveSubmissionV1,
+    ) -> Result<(), ActiveSubmissionV1> {
+        let Some(slot) = self.slots.get_mut(identity.slot as usize) else {
+            return Err(active);
+        };
+        if slot.generation != identity.slot_generation
+            || slot.entry.is_some()
+            || active.id != identity.submission
+        {
+            return Err(active);
+        }
+        slot.entry = Some(RuntimeComputePipelineEntryV1 {
+            identity,
+            phase,
+            active,
+        });
+        Ok(())
+    }
+
+    pub(super) fn take_commit_frontier(
+        &mut self,
+    ) -> Option<(RuntimeComputePipelinePhaseV1, ActiveSubmissionV1)> {
+        lifecycle::take_frontier(
+            &mut self.slots,
+            &mut self.live,
+            &mut self.commit_frontier,
+            self.staged,
+        )
+    }
+
+    pub(super) fn identity_for_submission_v1(
+        &self,
+        submission: u64,
+    ) -> Option<RuntimeComputePipelineIdentityV1> {
+        self.slots.iter().find_map(|slot| {
+            slot.entry
+                .as_ref()
+                .filter(|entry| entry.active.id == submission)
+                .map(|entry| entry.identity)
+        })
+    }
+
+    pub(super) fn entry_v1(
+        &self,
+        identity: RuntimeComputePipelineIdentityV1,
+    ) -> Option<&RuntimeComputePipelineEntryV1> {
+        publication::exact_entry(&self.slots, identity)
+    }
+
+    pub(super) fn entry_mut_v1(
+        &mut self,
+        identity: RuntimeComputePipelineIdentityV1,
+    ) -> Option<&mut RuntimeComputePipelineEntryV1> {
+        publication::exact_entry_mut(&mut self.slots, identity)
+    }
+
+    pub(super) fn checked_frontier_v1(&self) -> Result<Option<&RuntimeComputePipelineEntryV1>, ()> {
+        publication::checked_frontier(&self.slots, self.live, self.commit_frontier, self.staged)
+            .map(|index| index.and_then(|index| self.slots[index].entry.as_ref()))
+    }
+
+    #[cfg(test)]
+    pub(super) fn publication_heads_v1(
+        &self,
+    ) -> (
+        Option<u64>,
+        Option<u64>,
+        Option<RuntimeComputePipelineIdentityV1>,
+    ) {
+        (self.next_logical_epoch, self.commit_frontier, self.staged)
+    }
+
+    #[cfg(test)]
+    pub(super) fn exhaust_vacant_identities_for_test_v1(&mut self) {
+        assert!(self.is_empty());
+        for slot in self.slots.iter_mut() {
+            slot.generation = u64::MAX;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn exhaust_logical_epochs_for_test_v1(&mut self) {
+        assert!(self.is_empty());
+        self.next_logical_epoch = None;
+    }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PersistentComputeReadyFactsV1 {
+    pub(super) logical_bytes: u64,
+    pub(super) physical_bytes: u64,
+    pub(super) authenticated_sha256: [u8; 32],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct PersistentFullRangeComputeAdmissionV1 {
+    pub(super) allocation: u64,
+    pub(super) access: RuntimeAccessV1,
+    pub(super) source: PersistentFullRangeComputeSourceV1,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PersistentFullRangeComputeSourceV1 {
+    InitializedStorage,
+    AuthenticatedH2d,
+    RetainedControlReplay,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ThreeBindingPersistentComputeAdmissionV1 {
+    pub(super) bindings: [PersistentFullRangeComputeAdmissionV1; 3],
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct RetainedPersistentDispatchV1 {
+    pub(super) allocation: u64,
+    pub(super) dispatch_shape_sha256: [u8; 32],
+}
+impl fmt::Debug for ActiveSubmissionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ActiveSubmissionV1")
+            .field("id", &self.id)
+            .field("stream", &self.stream)
+            .field("ordered_predecessor", &self.ordered_predecessor)
+            .field(
+                "deferred_ordered_predecessor_retain",
+                &self.deferred_ordered_predecessor_retain,
+            )
+            .field("kernel", &self.kernel)
+            .field("allocations", &self.allocations)
+            .field("writebacks", &self.writebacks)
+            .field("source_event", &self.source_event)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct DataSpecV1 {
+    pub(super) allocation: u64,
+    pub(super) kind: RuntimeMemoryKindV1,
+    pub(super) alignment: u64,
+    pub(super) allocation_offset: u64,
+    pub(super) bytes: Arc<[u8]>,
+    pub(super) byte_range: Range<usize>,
+    pub(super) content_sha256: Option<[u8; 32]>,
+}
+
+impl DataSpecV1 {
+    pub(super) fn bytes(&self) -> &[u8] {
+        &self.bytes[self.byte_range.clone()]
+    }
+
+    pub(super) fn try_owned_bytes(&self) -> Result<Box<[u8]>, String> {
+        let source = self.bytes();
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(source.len())
+            .map_err(|_| "KFD native-data content allocation failed".to_owned())?;
+        bytes.extend_from_slice(source);
+        Ok(bytes.into_boxed_slice())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct StagedPlacementV1 {
+    pub(super) data_index: usize,
+    pub(super) allocation_offset: u64,
+}
+
+#[derive(Debug)]
+pub(super) struct StagedDataRosterV1 {
+    pub(super) data: Vec<DataSpecV1>,
+    pub(super) placements: HashMap<u64, StagedPlacementV1>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ResidentDataDescriptorV1 {
+    pub(super) allocation: u64,
+    pub(super) kind: RuntimeMemoryKindV1,
+    pub(super) alignment: u64,
+    pub(super) allocation_offset: u64,
+    pub(super) byte_len: u64,
+    pub(super) host_content_sha256: Option<[u8; 32]>,
+    pub(super) device_may_have_modified: bool,
+}
+
+pub(super) struct ResidentDataRosterV1 {
+    pub(super) descriptors: Vec<ResidentDataDescriptorV1>,
+    pub(super) data: Vec<Gfx942FixedDispatchDataV1>,
+}
+
+pub(super) struct RecycledDispatchV1 {
+    pub(super) kernel: u64,
+    pub(super) dispatch_shape_sha256: [u8; 32],
+    pub(super) descriptors: Vec<ResidentDataDescriptorV1>,
+}
+
+pub(super) struct NativeComputeLaneRuntimeV1 {
+    pub(super) owner_stream: Option<u64>,
+    pub(super) active: Option<ActiveSubmissionV1>,
+    pub(super) pipeline: RuntimeComputePipelineV1,
+    pub(super) resident_data: Option<ResidentDataRosterV1>,
+    pub(super) recycled_dispatch: Option<RecycledDispatchV1>,
+}
+
+pub(super) struct PreparedLaunchV1 {
+    pub(super) stream: u64,
+    pub(super) kernel: u64,
+    pub(super) program: ResidentKernelImageV1,
+    pub(super) signature: [u8; 32],
+    pub(super) kernarg: Box<[u8]>,
+    pub(super) geometry: AqlDispatchGeometryV1,
+    pub(super) dynamic_shared_bytes: u32,
+    pub(super) buffer_bindings: Box<[Gfx942DispatchBufferBindingV1]>,
+    pub(super) abi_rows: Vec<OwnedAbiRowV1>,
+    pub(super) storage: PreparedLaunchStorageV1,
+    pub(super) allocations: HashSet<u64>,
+    pub(super) writebacks: Vec<WritebackV1>,
+    pub(super) dispatch_shape_sha256: [u8; 32],
+    pub(super) profile_launch: KfdProfileLaunchV1,
+    pub(super) profile_semantic_contract: Option<KfdProfileSemanticContractV1>,
+    pub(super) profile_bindings: Option<Result<Vec<KfdProfileBindingV1>, ()>>,
+    pub(super) performance: KfdRuntimeLaunchPerformanceV1,
+}
+
+pub(super) enum PreparedLaunchStorageV1 {
+    Materialized(Vec<DataSpecV1>),
+    PersistentFullRange(PersistentFullRangePreparedV1),
+    ThreeBindingPersistent(ThreeBindingPersistentPreparedV1),
+}
+
+pub(super) struct PersistentFullRangePreparedV1 {
+    pub(super) allocation: u64,
+    pub(super) access: RuntimeAccessV1,
+    pub(super) source: PersistentFullRangeComputeSourceV1,
+    pub(super) descriptors: Vec<ResidentDataDescriptorV1>,
+}
+
+pub(super) struct ThreeBindingPersistentPreparedV1 {
+    pub(super) admissions: [PersistentFullRangeComputeAdmissionV1; 3],
+    pub(super) descriptors: Vec<ResidentDataDescriptorV1>,
+}
+#[derive(Debug)]
+pub(super) struct OwnedAbiRowV1 {
+    pub(super) explicit_argument_index: usize,
+    pub(super) offset: u64,
+    pub(super) pointee_alignment: u64,
+    pub(super) access: ArgumentAccess,
+}

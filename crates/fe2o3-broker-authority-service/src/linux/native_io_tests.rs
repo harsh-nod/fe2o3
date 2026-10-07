@@ -296,6 +296,44 @@ fn decimal_paths_cover_zero_digit_transitions_and_maximum_identifiers() {
 }
 
 #[test]
+fn parent_record_binds_pid_start_time_and_canonical_ppid_without_retries() {
+    for parent in ["456", "457", "+456", "0456", "-456", "4294967296"] {
+        let mut record = format!("1234 (name with ) embedded) R {parent} ").into_bytes();
+        for _ in 0..17 {
+            record.extend_from_slice(b"0 ");
+        }
+        record.extend_from_slice(b"789\n");
+        for fragment in [1, 7, 4097] {
+            let mut calls = 0;
+            let result =
+                read_parent_record_with(1234, 789, 456, reader(&record, fragment, &mut calls));
+            assert_eq!(result.is_ok(), parent == "456");
+            assert!(calls <= MAX_READ_CALLS);
+        }
+        for (pid, start) in [(1235, 789), (1234, 790)] {
+            let mut calls = 0;
+            assert!(
+                read_parent_record_with(pid, start, 456, reader(&record, 7, &mut calls)).is_err()
+            );
+        }
+    }
+    for record in [vec![], vec![b' '; 4097], b"1234 malformed".to_vec()] {
+        let mut calls = 0;
+        assert!(read_parent_record_with(1234, 789, 456, reader(&record, 7, &mut calls)).is_err());
+        assert!(calls <= MAX_READ_CALLS);
+    }
+    for errno in [Errno::INTR, Errno::AGAIN, Errno::IO] {
+        let mut calls = 0;
+        let result = read_parent_record_with(1234, 789, 456, |_| {
+            calls += 1;
+            Err(errno)
+        });
+        assert_eq!(result.unwrap_err().errno(), Some(errno.raw_os_error()));
+        assert_eq!(calls, 1);
+    }
+}
+
+#[test]
 fn poll_primitive_returns_raw_observation_and_never_retries_errors() {
     let file = File::open("/dev/null").unwrap();
     let descriptor: OwnedFd = file.into();

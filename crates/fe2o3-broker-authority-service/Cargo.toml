@@ -22,6 +22,7 @@ fe2o3-kernel-ir.workspace = true
 fe2o3-process-identity.workspace = true
 fe2o3-protected-service-profile.workspace = true
 fe2o3-protected-service-spawn.workspace = true
+fe2o3-protected-static-executable.workspace = true
 fe2o3-rustc-invocation.workspace = true
 fe2o3-runtime-protocol.workspace = true
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["fast", "zeroize"] }

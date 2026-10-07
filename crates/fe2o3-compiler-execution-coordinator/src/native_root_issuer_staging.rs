@@ -98,8 +98,8 @@ pub(super) fn source_storage(issuer_bytes: u64) -> Result<usize> {
 }
 
 #[allow(unsafe_code)]
-pub(super) fn stage<T: Send + 'static>(
-    p: &Payload<T>,
+pub(super) fn stage(
+    p: &StageInputs<'_>,
     anchor: AnchorTransfer,
     peer: BorrowedFd<'_>,
     pidfd: BorrowedFd<'_>,
@@ -184,8 +184,8 @@ pub(super) fn bindings(sources: [BorrowedFd<'_>; 10]) -> Result<[Binding<'_>; 10
 }
 
 #[allow(clippy::too_many_arguments)]
-fn validate<T: Send + 'static>(
-    p: &Payload<T>,
+fn validate(
+    p: &StageInputs<'_>,
     stage: &Stage,
     peer: BorrowedFd<'_>,
     pidfd: BorrowedFd<'_>,

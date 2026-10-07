@@ -9,6 +9,8 @@ use fe2o3_protected_service_spawn::{
     },
 };
 
+// Keep charged custody inline; boxing would add an unaccounted allocation at handoff.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum TraceOwner<'work, T: Send + 'static> {
     Original(Trace<'work, T>),
     Runtime(Runtime<'work, T>),

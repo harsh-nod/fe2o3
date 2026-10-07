@@ -79,6 +79,15 @@ struct Payload<T: Send + 'static> {
     manifest: ManifestCap,
     retained: usize,
 }
+
+// Policy-neutral staging view over actual retained owners. Compiler and
+// application payloads remain distinct; this view cannot create either one.
+struct StageInputs<'a> {
+    prepared: &'a Prepared,
+    key: &'a ServiceKey,
+    manifest: &'a ManifestCap,
+    retained: usize,
+}
 impl<T: Send + 'static> Payload<T> {
     const ENVELOPE: usize = size_of::<(Self, usize)>()
         - size_of::<Prepared>()
@@ -592,8 +601,20 @@ unsafe fn launch_inputs<'work, T: Send + 'static>(
             // Only the issuer end enters the staged descriptor table below.
             let (mut root_channel, charge) = RootChannel::create(b)?;
             b.reserve_storage(charge.additional_storage())?;
-            let (stage, stage_charge) =
-                staging::stage(&payload, anchor, peer, pidfd, &channels, &root_channel, b)?;
+            let (stage, stage_charge) = staging::stage(
+                &StageInputs {
+                    prepared: &payload.prepared,
+                    key: &payload.key,
+                    manifest: &payload.manifest,
+                    retained: payload.retained,
+                },
+                anchor,
+                peer,
+                pidfd,
+                &channels,
+                &root_channel,
+                b,
+            )?;
             b.reserve_storage(stage_charge)?;
             check_deadline(deadline, "issuer staging")?;
             // SAFETY: final staged image/root/policy/fresh-key/manifest/anchor Files
@@ -741,6 +762,8 @@ fn check_deadline(deadline: Instant, phase: &'static str) -> Result<()> {
 mod staging {
     include!("native_root_issuer_staging.rs");
 }
+#[path = "native_application_currentness.rs"]
+pub(crate) mod application_currentness;
 mod quota {
     include!("native_root_issuer_quota.rs");
 }

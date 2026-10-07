@@ -52,6 +52,10 @@ mod platform {
         BuildSession,
     };
     use fe2o3_process_identity::LinuxObjectIdentityV3;
+    use fe2o3_verifier::{
+        CompilerProofBrokerV1, PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+        PendingCompilerProofDelegationV1,
+    };
     use rustix::net::{
         RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer,
         SendAncillaryMessage, SendFlags, recvmsg, sendmsg,
@@ -124,7 +128,12 @@ mod platform {
     const RESPONSE_AUTH_DOMAIN: &[u8] = b"FE2O3/CAPABILITY-BROKER/RESPONSE-AUTH/V3\0";
     const MAX_PROC_STAT_BYTES: usize = 4096;
     const EXECUTABLE_PIN_ATTEMPTS: usize = 8;
-    const RECEIVED_DESCRIPTOR_FLOOR: i32 = 210;
+    const RECEIVED_DESCRIPTOR_FLOOR: i32 = 226;
+    #[cfg(test)]
+    const _: () = assert!(
+        RECEIVED_DESCRIPTOR_FLOOR > fe2o3_verifier::COMPILER_PROOF_ENDPOINT_CHILD_FD_V1
+            && RECEIVED_DESCRIPTOR_FLOOR > fe2o3_verifier::COMPILER_PROOF_BROKER_CHILD_FD_V1
+    );
     const BROKER_AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(30);
     const BROKER_CLIENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
     const _: () = assert!(
@@ -144,6 +153,79 @@ mod platform {
     const BROKERED_INVOCATION_REQUEST_MAGIC_V1: &[u8; 8] = b"F2BRKIV1";
     const BROKERED_INVOCATION_REQUEST_MAGIC_V2: &[u8; 8] = b"F2BRKIV2";
     const BROKERED_SOURCE_ISA_PREPARED_V1: &[u8; 16] = b"F2SI-PREPARED-V1";
+    const PROOF_PREPARE_MAGIC: &[u8; 8] = b"F3CPRPV1";
+    const PROOF_PREPARE_BYTES: usize = 192;
+    const PROOF_RESPONSE_MAGIC: &[u8; 8] = b"F3CPRSV1";
+    const PROOF_RESPONSE_BYTES: usize = 72;
+    const PROOF_PREPARE_DOMAIN: &[u8] = b"FE2O3/COMPILER-PROOF/PREPARE/V1\0";
+    const PROOF_RESPONSE_DOMAIN: &[u8] = b"FE2O3/COMPILER-PROOF/PREPARED/V1\0";
+
+    struct ProofPreparationRequest {
+        attempt: BuildAttempt,
+        challenge: [u8; 32],
+        authentication: [u8; 32],
+    }
+
+    impl ProofPreparationRequest {
+        fn encode(&self, secret: &[u8; 32]) -> [u8; PROOF_PREPARE_BYTES] {
+            let mut bytes = [0; PROOF_PREPARE_BYTES];
+            let attempt = self.attempt.to_env_value();
+            bytes[..8].copy_from_slice(PROOF_PREPARE_MAGIC);
+            bytes[8..40].copy_from_slice(&self.challenge);
+            bytes[40..42].copy_from_slice(&(attempt.len() as u16).to_le_bytes());
+            bytes[42..42 + attempt.len()].copy_from_slice(attempt.as_bytes());
+            let auth = keyed_digest(PROOF_PREPARE_DOMAIN, secret, &[&bytes[..160]]);
+            bytes[160..].copy_from_slice(&auth);
+            bytes
+        }
+
+        fn decode(bytes: &[u8; PROOF_PREPARE_BYTES]) -> io::Result<Self> {
+            let length = u16::from_le_bytes(bytes[40..42].try_into().unwrap()) as usize;
+            if &bytes[..8] != PROOF_PREPARE_MAGIC
+                || !(1..=118).contains(&length)
+                || bytes[42 + length..160].iter().any(|byte| *byte != 0)
+                || bytes[8..40] == [0; 32]
+            {
+                return Err(io::Error::other("noncanonical compiler-proof preparation"));
+            }
+            let attempt = std::str::from_utf8(&bytes[42..42 + length]).map_err(io::Error::other)?;
+            let attempt = BuildAttempt::from_env_value(attempt).map_err(io::Error::other)?;
+            Ok(Self {
+                attempt,
+                challenge: bytes[8..40].try_into().unwrap(),
+                authentication: bytes[160..].try_into().unwrap(),
+            })
+        }
+
+        fn require_authenticated(
+            &self,
+            secret: &[u8; 32],
+            session: BuildSession,
+        ) -> io::Result<()> {
+            if self.attempt.session() == BuildSession::DIRECT
+                || self.attempt.session() != session
+                || self.encode(secret)[160..] != self.authentication
+            {
+                return Err(io::Error::other(
+                    "compiler-proof preparation is not authenticated to this build session",
+                ));
+            }
+            Ok(())
+        }
+
+        fn response(&self, secret: &[u8; 32], session: [u8; 32]) -> [u8; PROOF_RESPONSE_BYTES] {
+            let mut bytes = [0; PROOF_RESPONSE_BYTES];
+            bytes[..8].copy_from_slice(PROOF_RESPONSE_MAGIC);
+            bytes[8..40].copy_from_slice(&session);
+            let auth = keyed_digest(
+                PROOF_RESPONSE_DOMAIN,
+                secret,
+                &[&self.encode(secret), &bytes[..40]],
+            );
+            bytes[40..].copy_from_slice(&auth);
+            bytes
+        }
+    }
 
     #[derive(Clone, Copy)]
     struct BrokerLimits {
@@ -160,10 +242,10 @@ mod platform {
         invocation_lifetime: BROKER_INVOCATION_LIFETIME,
     };
 
-    #[derive(Clone, Copy)]
     struct BrokerCompilerCapabilities<'profile> {
         closure: Option<fe2o3_build_authority::CompilerClosureV2>,
         execution_profile: Option<BrokerProfileRef<'profile>>,
+        proof: Option<Arc<CompilerProofBrokerV1>>,
     }
 
     #[derive(Clone)]
@@ -462,17 +544,25 @@ mod platform {
             Self {
                 closure: None,
                 execution_profile: None,
+                proof: None,
             }
         }
 
-        const fn protected(
+        fn protected(
             closure: fe2o3_build_authority::CompilerClosureV2,
             execution_profile: &'profile CompilerExecutionClientProfileCapabilityV1,
-        ) -> Self {
-            Self {
+        ) -> Result<Self, String> {
+            execution_profile.revalidate()?;
+            let proof = CompilerProofBrokerV1::open(
+                closure,
+                PROTECTED_FUNCTIONAL_REFINEMENT_RUNTIME_ROOT_V1,
+            )
+            .map_err(|error| format!("cannot open protected compiler proof executor: {error}"))?;
+            Ok(Self {
                 closure: Some(closure),
                 execution_profile: Some(BrokerProfileRef::V1(execution_profile)),
-            }
+                proof: Some(Arc::new(proof)),
+            })
         }
     }
 
@@ -929,6 +1019,7 @@ mod platform {
         authentication_available: Condvar,
         max_concurrent_authentications: usize,
         max_active_connections: usize,
+        compiler_proof: Option<Arc<CompilerProofBrokerV1>>,
     }
 
     impl BrokerShutdown {
@@ -940,6 +1031,7 @@ mod platform {
                 max_concurrent_authentications: max_active_connections
                     .min(MAX_CONCURRENT_AUTHENTICATIONS),
                 max_active_connections,
+                compiler_proof: None,
             }
         }
 
@@ -1029,6 +1121,9 @@ mod platform {
         }
 
         fn begin(&self) {
+            if let Some(proof) = &self.compiler_proof {
+                proof.stop();
+            }
             let mut state = self.state();
             state.stopping = true;
             for active in state.active.values() {
@@ -1128,7 +1223,10 @@ mod platform {
             Self::start_with_compiler_capabilities(
                 session,
                 binding,
-                BrokerCompilerCapabilities::protected(compiler_closure, compiler_execution_profile),
+                BrokerCompilerCapabilities::protected(
+                    compiler_closure,
+                    compiler_execution_profile,
+                )?,
                 backend,
                 artifact,
                 pinned_cargo_image,
@@ -1152,7 +1250,10 @@ mod platform {
             Self::start_with_compiler_capabilities(
                 session,
                 binding,
-                BrokerCompilerCapabilities::protected(compiler_closure, compiler_execution_profile),
+                BrokerCompilerCapabilities::protected(
+                    compiler_closure,
+                    compiler_execution_profile,
+                )?,
                 backend,
                 artifact,
                 pinned_cargo_image,
@@ -1180,6 +1281,7 @@ mod platform {
                 BrokerCompilerCapabilities {
                     closure: Some(compiler_closure),
                     execution_profile: Some(BrokerProfileRef::V3(compiler_execution_profile)),
+                    proof: None,
                 },
                 backend,
                 artifact,
@@ -1230,6 +1332,8 @@ mod platform {
             }
             if binding.requires_compiler_closure_v2() != compiler.closure.is_some()
                 || compiler.closure.is_some() != compiler.execution_profile.is_some()
+                || matches!(compiler.execution_profile, Some(BrokerProfileRef::V1(_)))
+                    != compiler.proof.is_some()
             {
                 return Err(
                     "capability binding and protected compiler capability presence differ"
@@ -1316,7 +1420,9 @@ mod platform {
                 peer: executable,
             }
             .encode();
-            let shutdown = Arc::new(BrokerShutdown::new(limits.max_active_connections));
+            let mut shutdown = BrokerShutdown::new(limits.max_active_connections);
+            shutdown.compiler_proof = compiler.proof.clone();
+            let shutdown = Arc::new(shutdown);
             let invocation_authorization = InvocationAuthorizationRegistryV1::new();
             let worker_invocation_authorization = invocation_authorization.clone();
             let worker_shutdown = Arc::clone(&shutdown);
@@ -1336,6 +1442,7 @@ mod platform {
                         artifact,
                         compiler_closure,
                         compiler_execution_profile,
+                        compiler_proof: compiler.proof,
                         source_isa_observer,
                         authentication_timeout: limits.authentication_timeout,
                         invocation_frame_timeout: limits.invocation_frame_timeout,
@@ -1409,6 +1516,14 @@ mod platform {
     pub(crate) struct BrokeredInvocationAuthorityV1 {
         stream: UnixStream,
         profile_account: Option<ClientProfileAccountV3>,
+        proof: Option<ProofPreparationContext>,
+    }
+
+    struct ProofPreparationContext {
+        session: BuildSession,
+        closure: fe2o3_build_authority::CompilerClosureV2,
+        peer: BrokerPeerIdentityV2,
+        secret: [u8; 32],
     }
 
     pub(crate) struct SourceIsaObservationSinkV1 {
@@ -1423,6 +1538,7 @@ mod platform {
         fn from_authenticated_stream_with_account(
             stream: UnixStream,
             profile_account: Option<ClientProfileAccountV3>,
+            proof: Option<ProofPreparationContext>,
         ) -> Result<Self, String> {
             let normalized = rustix::io::fcntl_dupfd_cloexec(&stream, RECEIVED_DESCRIPTOR_FLOOR)
                 .map_err(|error| {
@@ -1431,7 +1547,90 @@ mod platform {
             Ok(Self {
                 stream: UnixStream::from(normalized),
                 profile_account,
+                proof,
             })
+        }
+
+        pub(crate) fn prepare_compiler_proof(
+            &mut self,
+            attempt: BuildAttempt,
+        ) -> Result<PendingCompilerProofDelegationV1, String> {
+            let context = self.proof.take().ok_or_else(|| {
+                "compiler proof preparation is unavailable or already consumed".to_owned()
+            })?;
+            let result = (|| -> io::Result<_> {
+                if attempt.session() != context.session || attempt.session() == BuildSession::DIRECT
+                {
+                    return Err(io::Error::other(
+                        "compiler proof attempt is outside authenticated session",
+                    ));
+                }
+                context
+                    .peer
+                    .authenticate(&self.stream)
+                    .map_err(io::Error::other)?;
+                let deadline = BrokerDeadline::new(Instant::now(), BROKER_CLIENT_RESPONSE_TIMEOUT);
+                let request = ProofPreparationRequest {
+                    attempt,
+                    challenge: random_bytes()?,
+                    authentication: [0; 32],
+                };
+                let mut stream = &self.stream;
+                stream.set_write_timeout(Some(deadline.remaining()?))?;
+                stream.write_all(&request.encode(&context.secret))?;
+                stream.set_read_timeout(Some(deadline.remaining()?))?;
+                let mut response = [0; PROOF_RESPONSE_BYTES];
+                let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
+                let mut ancillary = RecvAncillaryBuffer::new(&mut space);
+                let message = recvmsg(
+                    stream,
+                    &mut [IoSliceMut::new(&mut response)],
+                    &mut ancillary,
+                    RecvFlags::CMSG_CLOEXEC,
+                )?;
+                let mut descriptors = Vec::new();
+                let mut rights_messages = 0;
+                let mut unexpected = false;
+                for item in ancillary.drain() {
+                    match item {
+                        RecvAncillaryMessage::ScmRights(rights) => {
+                            rights_messages += 1;
+                            descriptors.extend(rights);
+                        }
+                        _ => unexpected = true,
+                    }
+                }
+                let session: [u8; 32] = response[8..40].try_into().unwrap();
+                if message.bytes != PROOF_RESPONSE_BYTES
+                    || !(message.flags - ReturnFlags::CMSG_CLOEXEC).is_empty()
+                    || unexpected
+                    || rights_messages != 1
+                    || descriptors.len() != 2
+                    || session == [0; 32]
+                    || response != request.response(&context.secret, session)
+                {
+                    return Err(io::Error::other(
+                        "malformed authenticated compiler-proof preparation response",
+                    ));
+                }
+                context
+                    .peer
+                    .authenticate(stream)
+                    .map_err(io::Error::other)?;
+                deadline.require_remaining()?;
+                let descriptors: [OwnedFd; 2] = descriptors
+                    .try_into()
+                    .map_err(|_| io::Error::other("compiler-proof descriptor roster"))?;
+                PendingCompilerProofDelegationV1::from_authenticated_transfer(
+                    session,
+                    descriptors,
+                    &context.closure,
+                )
+            })();
+            if result.is_err() {
+                let _ = self.stream.shutdown(Shutdown::Both);
+            }
+            result.map_err(|error| format!("compiler proof preparation failed: {error}"))
         }
 
         pub(crate) fn release(self) -> Result<(), String> {
@@ -1642,10 +1841,27 @@ mod platform {
         let invocation_account = account.as_ref().map(Arc::clone);
         let mut capabilities =
             decode_received_descriptors_with_account(descriptors, binding, account)?;
+        let proof = if capabilities.compiler_execution_profile.is_some() {
+            Some(ProofPreparationContext {
+                session,
+                closure: capabilities
+                    .compiler_closure
+                    .as_ref()
+                    .ok_or_else(|| {
+                        "compiler proof profile requires its authenticated closure".to_owned()
+                    })?
+                    .closure(),
+                peer: route.peer,
+                secret: route.secret,
+            })
+        } else {
+            None
+        };
         capabilities.invocation_authority = Some(
             BrokeredInvocationAuthorityV1::from_authenticated_stream_with_account(
                 stream,
                 invocation_account,
+                proof,
             )?,
         );
         capabilities.authenticated_binding = Some(binding);
@@ -1825,6 +2041,7 @@ mod platform {
         artifact: File,
         compiler_closure: Option<CompilerClosureCapabilityV1>,
         compiler_execution_profile: Option<RetainedBrokerProfile>,
+        compiler_proof: Option<Arc<CompilerProofBrokerV1>>,
         source_isa_observer: Option<BrokerSourceIsaObserverV1>,
         authentication_timeout: Duration,
         invocation_frame_timeout: Duration,
@@ -1885,9 +2102,18 @@ mod platform {
                 .authenticate_client(stream)
                 .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
             drop(authentication);
-            self.invocation_authorization
-                .consume(client)
-                .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+            let original_wrapper = if self.compiler_proof.is_some() {
+                Some(
+                    self.invocation_authorization
+                        .consume_original(client)
+                        .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?,
+                )
+            } else {
+                self.invocation_authorization
+                    .consume(client)
+                    .map_err(|error| io::Error::new(io::ErrorKind::PermissionDenied, error))?;
+                None
+            };
             deadline.require_remaining()?;
             let mut request = vec![0_u8; self.binding.request_bytes()];
             deadline.read_exact(stream, &mut request)?;
@@ -1916,13 +2142,14 @@ mod platform {
             let response = response_bytes_for(self.binding, &self.secret, challenge, request_auth);
             self.shutdown
                 .send_response(stream, &response, &descriptors, deadline)?;
-            self.serve_invocation_authority(stream, client)
+            self.serve_invocation_authority(stream, client, original_wrapper)
         }
 
         fn serve_invocation_authority(
             &self,
             stream: &UnixStream,
             client: ProcessIdentityV1,
+            original_wrapper: Option<File>,
         ) -> io::Result<()> {
             let liveness = InvocationLiveness {
                 client,
@@ -1931,11 +2158,93 @@ mod platform {
                 lifetime: self.invocation_lifetime,
             };
             let request = read_invocation_request(liveness, stream)?;
+            let BrokerInvocationRequest::PrepareProof(preparation) = request else {
+                return self.serve_invocation_request(stream, liveness, request, None);
+            };
+            preparation.require_authenticated(&self.secret, self.session)?;
+            if self
+                .executable
+                .authenticate_client(stream)
+                .map_err(io::Error::other)?
+                != client
+            {
+                return Err(io::Error::other("compiler-proof wrapper identity changed"));
+            }
+            let credentials = rustix::net::sockopt::socket_peercred(stream)?;
+            let broker = self
+                .compiler_proof
+                .as_ref()
+                .ok_or_else(|| io::Error::other("compiler proof is unavailable for this broker"))?;
+            let original_wrapper = original_wrapper.ok_or_else(|| {
+                io::Error::other("compiler proof requires the original wrapper exec permit")
+            })?;
+            let deadline = Instant::now() + self.invocation_frame_timeout;
+            let (server, bootstrap) = broker
+                .prepare(
+                    original_wrapper.into(),
+                    (
+                        client.pid(),
+                        credentials.uid.as_raw(),
+                        credentials.gid.as_raw(),
+                    ),
+                    client.start_time_ticks(),
+                    preparation.attempt,
+                    deadline,
+                )
+                .map_err(io::Error::other)?;
+            let response = preparation.response(&self.secret, bootstrap.session());
+            let descriptors = bootstrap.into_descriptors();
+            self.shutdown.send_response(
+                stream,
+                &response,
+                &[descriptors[0].as_fd(), descriptors[1].as_fd()],
+                BrokerDeadline::new(Instant::now(), self.invocation_frame_timeout),
+            )?;
+            drop(descriptors);
+
+            thread::scope(|scope| {
+                // Cancel before the scoped join on both errors and unwinding.
+                let cancellation = server.cancellation();
+                let worker = thread::Builder::new().spawn_scoped(scope, move || {
+                    server.serve(liveness.started_at + liveness.lifetime)
+                })?;
+                let result = read_invocation_request(liveness, stream).and_then(|request| {
+                    self.serve_invocation_request(
+                        stream,
+                        liveness,
+                        request,
+                        Some(preparation.attempt),
+                    )
+                });
+                if result.is_err() {
+                    cancellation.cancel();
+                }
+                // EOF or compiler exit ends the proof channel normally. Proof failures are
+                // delivered to the compiler, which must revalidate before publication.
+                let _ = worker
+                    .join()
+                    .map_err(|_| io::Error::other("compiler proof worker panicked"))?;
+                result
+            })
+        }
+
+        fn serve_invocation_request(
+            &self,
+            stream: &UnixStream,
+            liveness: InvocationLiveness,
+            request: BrokerInvocationRequest,
+            proof_attempt: Option<BuildAttempt>,
+        ) -> io::Result<()> {
             if let BrokerInvocationRequest::V2(request) = request {
+                if proof_attempt.is_some_and(|attempt| attempt != request.attempt()) {
+                    return Err(io::Error::other(
+                        "source/ISA attempt differs from compiler proof",
+                    ));
+                }
                 return self.receive_source_isa_observation(stream, liveness, request);
             }
             let BrokerInvocationRequest::V1(request) = request else {
-                unreachable!("V2 observer request returned above")
+                return Err(io::Error::other("duplicate compiler proof preparation"));
             };
             let claim = match request {
                 BrokeredInvocationCapabilityRequestV1::Release => {
@@ -1944,7 +2253,8 @@ mod platform {
                     return Ok(());
                 }
                 BrokeredInvocationCapabilityRequestV1::Prepare(claim)
-                    if claim.attempt().session() == self.session =>
+                    if claim.attempt().session() == self.session
+                        && proof_attempt.is_none_or(|attempt| attempt == claim.attempt()) =>
                 {
                     claim
                 }
@@ -2135,6 +2445,7 @@ mod platform {
     enum BrokerInvocationRequest {
         V1(BrokeredInvocationCapabilityRequestV1),
         V2(BrokeredInvocationCapabilityRequestV2),
+        PrepareProof(ProofPreparationRequest),
     }
 
     fn read_invocation_request(
@@ -2143,6 +2454,13 @@ mod platform {
     ) -> io::Result<BrokerInvocationRequest> {
         let mut magic = [0; 8];
         liveness.read_frame(stream, &mut magic)?;
+        if &magic == PROOF_PREPARE_MAGIC {
+            let mut encoded = [0; PROOF_PREPARE_BYTES];
+            encoded[..8].copy_from_slice(&magic);
+            liveness.read_frame(stream, &mut encoded[8..])?;
+            return ProofPreparationRequest::decode(&encoded)
+                .map(BrokerInvocationRequest::PrepareProof);
+        }
         if &magic == BROKERED_INVOCATION_REQUEST_MAGIC_V1 {
             let mut encoded = [0; BROKERED_INVOCATION_REQUEST_BYTES_V1];
             encoded[..magic.len()].copy_from_slice(&magic);
@@ -2479,842 +2797,7 @@ mod platform {
     }
 
     #[cfg(test)]
-    mod tests {
-        use super::*;
-        include!("capability_broker_v4_tests.rs");
-        use fe2o3_artifact_transaction::{BuildAttempt, BuildInvocation};
-        use fe2o3_source_isa_observation::wire_v1::{
-            MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1,
-            MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1,
-            SOURCE_ISA_COLLECTION_HEADER_BYTES_V1, SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1,
-            SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1, SOURCE_ISA_COLLECTION_MAGIC_V1,
-            SourceIsaObservationContextV1, SourceIsaObservationErrorCodeV1,
-            SourceIsaObservationFrameV1, SourceIsaObservationOutcomeV1,
-            SourceIsaObservationUnavailableReasonV1, source_isa_collection_encoded_length,
-        };
-
-        fn liveness() -> InvocationLiveness {
-            InvocationLiveness {
-                client: ProcessIdentityV1::observe(std::process::id()).unwrap(),
-                started_at: Instant::now(),
-                frame_timeout: Duration::from_millis(100),
-                lifetime: Duration::from_secs(1),
-            }
-        }
-
-        fn read_request(encoded: &[u8]) -> io::Result<BrokerInvocationRequest> {
-            let (mut writer, reader) = UnixStream::pair().unwrap();
-            writer.write_all(encoded).unwrap();
-            writer.shutdown(Shutdown::Write).unwrap();
-            read_invocation_request(liveness(), &reader)
-        }
-
-        fn attempt(generation: u64, session: [u8; 16], invocation: [u8; 32]) -> BuildAttempt {
-            BuildAttempt::from_env_value(&format!(
-                "{generation}:{}:{}",
-                BuildSession::from_bytes(session),
-                BuildInvocation::from_bytes(invocation)
-            ))
-            .unwrap()
-        }
-
-        fn frame_with_context(
-            config: [u8; 32],
-            unit: [u8; 32],
-            attempt: BuildAttempt,
-            outcome: SourceIsaObservationOutcomeV1,
-        ) -> SourceIsaObservationFrameV1 {
-            SourceIsaObservationFrameV1::new(
-                SourceIsaObservationContextV1::new(
-                    config,
-                    unit,
-                    crate::source_isa_observation::inert_source_isa_attempt_v1(attempt).unwrap(),
-                    [0x33; 32],
-                )
-                .unwrap(),
-                outcome,
-            )
-        }
-
-        fn frame(
-            unit: [u8; 32],
-            outcome: SourceIsaObservationOutcomeV1,
-        ) -> SourceIsaObservationFrameV1 {
-            frame_with_context(
-                [0x30; 32],
-                unit,
-                attempt(3, [0x31; 16], [0x32; 32]),
-                outcome,
-            )
-        }
-
-        fn collector(units: &[[u8; 32]]) -> SourceIsaObservationCollectorStateV1 {
-            SourceIsaObservationCollectorStateV1::with_expected_context(
-                [0x30; 32],
-                BuildSession::from_bytes([0x31; 16]),
-                units,
-                ProductionSourceIsaObservationKindV1::Summary,
-            )
-            .unwrap()
-        }
-
-        fn characteristic_collector(unit: [u8; 32]) -> SourceIsaObservationCollectorStateV1 {
-            SourceIsaObservationCollectorStateV1::with_expected_context(
-                [0x30; 32],
-                BuildSession::from_bytes([0x31; 16]),
-                &[unit],
-                ProductionSourceIsaObservationKindV1::Characteristic,
-            )
-            .unwrap()
-        }
-
-        #[test]
-        fn production_census_collector_requires_all_units_and_exact_payload_duplicates() {
-            let row = crate::production_census_v91::test_census();
-            let make = |units: &[[u8; 32]]| {
-                SourceIsaObservationCollectorStateV1::with_expected_context(
-                    row.config,
-                    BuildSession::from_bytes(row.session),
-                    units,
-                    ProductionSourceIsaObservationKindV1::ProductionCensusV91,
-                )
-                .unwrap()
-            };
-            let observed = frame(
-                row.unit,
-                SourceIsaObservationOutcomeV1::Unavailable(
-                    SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV18,
-                ),
-            );
-            let bytes = row.encode().unwrap();
-            let mut collector = make(&[row.unit]);
-            collector
-                .insert(observed.clone(), Some(bytes.clone()))
-                .unwrap();
-            collector
-                .insert(observed.clone(), Some(bytes.clone()))
-                .unwrap();
-            let completed = collector.finish();
-            assert!(completed.summary.failure().is_none());
-            assert_eq!(completed.census, vec![(row.unit, bytes.clone())]);
-            assert!(completed.characteristic.is_none());
-            let mut collector = make(&[row.unit, [0x41; 32]]);
-            collector
-                .insert(observed.clone(), Some(bytes.clone()))
-                .unwrap();
-            assert_eq!(
-                collector.finish().summary.failure(),
-                Some(SourceIsaObservationTransportFailureV1::MissingSelectedUnits)
-            );
-            let mut collector = make(&[row.unit]);
-            collector.insert(observed.clone(), Some(bytes)).unwrap();
-            let mut changed = row;
-            changed.artifact[0] ^= 1;
-            assert_eq!(
-                collector.insert(observed, Some(changed.encode().unwrap())),
-                Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
-            );
-            assert_eq!(
-                collector.finish().summary.failure(),
-                Some(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
-            );
-        }
-
-        #[test]
-        fn production_census_transport_does_not_accept_summary_or_characteristic_payloads() {
-            let row = crate::production_census_v91::test_census();
-            let observed = frame(
-                row.unit,
-                SourceIsaObservationOutcomeV1::Unavailable(
-                    SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV18,
-                ),
-            );
-            for body in [
-                None,
-                Some(b"{}".to_vec()),
-                Some(vec![b' '; crate::production_census_v91::MAX_BYTES + 1]),
-            ] {
-                let mut collector = SourceIsaObservationCollectorStateV1::with_expected_context(
-                    row.config,
-                    BuildSession::from_bytes(row.session),
-                    &[row.unit],
-                    ProductionSourceIsaObservationKindV1::ProductionCensusV91,
-                )
-                .unwrap();
-                assert_eq!(
-                    collector.insert(observed.clone(), body),
-                    Err(SourceIsaObservationTransportFailureV1::RejectedFrame)
-                );
-            }
-            let mut legacy = collector(&[row.unit]);
-            assert!(
-                legacy
-                    .insert(observed, Some(row.encode().unwrap()))
-                    .is_err()
-            );
-        }
-
-        fn observer(units: &[[u8; 32]]) -> BrokerSourceIsaObserverV1 {
-            BrokerSourceIsaObserverV1 {
-                config_identity: [0x30; 32],
-                session: BuildSession::from_bytes([0x31; 16]),
-                selected_units: units.to_vec(),
-                kind: ProductionSourceIsaObservationKindV1::Summary,
-                collector: Arc::new(Mutex::new(collector(units))),
-            }
-        }
-
-        #[test]
-        fn configuration_presence_and_identity_bind_request_and_response_authentication() {
-            let session = BuildSession::from_bytes([0x31; 16]);
-            let challenge = [0x32; CHALLENGE_BYTES];
-            let secret = [0x33; SECRET_BYTES];
-            let binding = CapabilityBindingV3::new(
-                CapabilityProfileV1::Ordinary,
-                Some([0x34; CONFIG_ID_BYTES]),
-                [0x35; 32],
-                [0x36; 32],
-                [0x37; 32],
-            )
-            .unwrap();
-            let request = request_bytes(session, binding, challenge, &secret);
-            let auth = |request: &[u8]| -> [u8; REQUEST_AUTH_BYTES] {
-                request[REQUEST_BYTES - REQUEST_AUTH_BYTES..]
-                    .try_into()
-                    .unwrap()
-            };
-            let response = response_bytes(&secret, challenge, auth(&request));
-            for identity in [
-                None,
-                Some([0; CONFIG_ID_BYTES]),
-                Some([0x38; CONFIG_ID_BYTES]),
-            ] {
-                let changed = CapabilityBindingV3 {
-                    config_identity: identity,
-                    ..binding
-                };
-                assert_eq!(changed.config_identity(), identity);
-                let changed_request = request_bytes(session, changed, challenge, &secret);
-                assert_ne!(changed_request, request);
-                assert_ne!(auth(&changed_request), auth(&request));
-                assert_ne!(
-                    response_bytes(&secret, challenge, auth(&changed_request)),
-                    response
-                );
-            }
-        }
-
-        #[test]
-        fn invocation_request_dispatch_preserves_v1_and_accepts_exact_v2_width() {
-            let v1 = BrokeredInvocationCapabilityRequestV1::Release.encode();
-            assert!(matches!(
-                read_request(&v1).unwrap(),
-                BrokerInvocationRequest::V1(BrokeredInvocationCapabilityRequestV1::Release)
-            ));
-
-            let expected = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                [0x30; 32],
-                [0x40; 32],
-                attempt(3, [0x31; 16], [0x32; 32]),
-            )
-            .unwrap();
-            assert!(matches!(
-                read_request(&expected.encode()).unwrap(),
-                BrokerInvocationRequest::V2(actual) if actual == expected
-            ));
-        }
-
-        #[test]
-        fn invocation_request_dispatch_rejects_unknown_and_every_truncated_width() {
-            assert!(read_request(b"UNKNOWN!").is_err());
-            let requests = [
-                BrokeredInvocationCapabilityRequestV1::Release
-                    .encode()
-                    .to_vec(),
-                BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                    [0x30; 32],
-                    [0x40; 32],
-                    attempt(3, [0x31; 16], [0x32; 32]),
-                )
-                .unwrap()
-                .encode()
-                .to_vec(),
-            ];
-            for request in requests {
-                for length in 0..request.len() {
-                    assert!(
-                        read_request(&request[..length]).is_err(),
-                        "truncated request length {length} was accepted"
-                    );
-                }
-            }
-        }
-
-        #[test]
-        fn v1_release_waits_for_the_frozen_prepared_ack_and_rejects_substitution() {
-            let (client, mut server) = UnixStream::pair().unwrap();
-            let (result_sender, result_receiver) = std::sync::mpsc::channel();
-            let worker = std::thread::spawn(move || {
-                result_sender
-                    .send(
-                        BrokeredInvocationAuthorityV1 {
-                            stream: client,
-                            profile_account: None,
-                        }
-                        .release(),
-                    )
-                    .unwrap();
-            });
-            let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V1];
-            server.read_exact(&mut request).unwrap();
-            assert_eq!(
-                BrokeredInvocationCapabilityRequestV1::decode(&request),
-                Ok(BrokeredInvocationCapabilityRequestV1::Release)
-            );
-            assert!(matches!(
-                result_receiver.recv_timeout(Duration::from_millis(25)),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-            ));
-            server.write_all(BROKERED_INVOCATION_PREPARED_V1).unwrap();
-            assert!(
-                result_receiver
-                    .recv_timeout(Duration::from_secs(1))
-                    .unwrap()
-                    .is_ok()
-            );
-            worker.join().unwrap();
-
-            for response in [Some([0xa5; 16]), None] {
-                let (client, mut server) = UnixStream::pair().unwrap();
-                let worker = std::thread::spawn(move || {
-                    let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V1];
-                    server.read_exact(&mut request).unwrap();
-                    if let Some(response) = response {
-                        server.write_all(&response).unwrap();
-                    }
-                });
-                assert!(
-                    BrokeredInvocationAuthorityV1 {
-                        stream: client,
-                        profile_account: None
-                    }
-                    .release()
-                    .is_err()
-                );
-                worker.join().unwrap();
-            }
-        }
-
-        #[test]
-        fn observer_frame_requires_exact_request_config_unit_and_attempt() {
-            let broker_session = BuildSession::from_bytes([0x31; 16]);
-            let exact_attempt = attempt(3, [0x31; 16], [0x32; 32]);
-            let request = BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                [0x30; 32],
-                [0x40; 32],
-                exact_attempt,
-            )
-            .unwrap();
-            let selected_units = vec![[0x40; 32], [0x41; 32]];
-            let observer = observer(&selected_units);
-            assert!(observer.accepts(request));
-            assert!(
-                observer.accepts(
-                    BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                        [0x30; 32],
-                        [0x41; 32],
-                        exact_attempt,
-                    )
-                    .unwrap()
-                )
-            );
-            let outcome = SourceIsaObservationOutcomeV1::Unavailable(
-                SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9,
-            );
-            let exact_frame = frame_with_context([0x30; 32], [0x40; 32], exact_attempt, outcome);
-            assert!(
-                validate_source_isa_observer_frame_binding(broker_session, request, &exact_frame,)
-                    .is_ok()
-            );
-
-            for substituted in [
-                frame_with_context([0x35; 32], [0x40; 32], exact_attempt, outcome),
-                // A different configured unit must not substitute for the request's exact unit.
-                frame_with_context([0x30; 32], [0x41; 32], exact_attempt, outcome),
-                frame_with_context(
-                    [0x30; 32],
-                    [0x40; 32],
-                    attempt(4, [0x31; 16], [0x32; 32]),
-                    outcome,
-                ),
-                frame_with_context(
-                    [0x30; 32],
-                    [0x40; 32],
-                    attempt(3, [0x31; 16], [0x36; 32]),
-                    outcome,
-                ),
-            ] {
-                assert!(
-                    validate_source_isa_observer_frame_binding(
-                        broker_session,
-                        request,
-                        &substituted,
-                    )
-                    .is_err()
-                );
-            }
-
-            for substituted_attempt in [
-                attempt(4, [0x31; 16], [0x32; 32]),
-                attempt(3, [0x31; 16], [0x36; 32]),
-            ] {
-                let substituted_request =
-                    BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                        [0x30; 32],
-                        [0x40; 32],
-                        substituted_attempt,
-                    )
-                    .unwrap();
-                assert!(
-                    validate_source_isa_observer_frame_binding(
-                        broker_session,
-                        substituted_request,
-                        &exact_frame,
-                    )
-                    .is_err()
-                );
-            }
-
-            let wrong_session_attempt = attempt(3, [0x37; 16], [0x32; 32]);
-            let wrong_session_request =
-                BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                    [0x30; 32],
-                    [0x40; 32],
-                    wrong_session_attempt,
-                )
-                .unwrap();
-            assert!(
-                validate_source_isa_observer_frame_binding(
-                    broker_session,
-                    wrong_session_request,
-                    &frame_with_context([0x30; 32], [0x40; 32], wrong_session_attempt, outcome,),
-                )
-                .is_err()
-            );
-        }
-
-        #[test]
-        fn observer_sink_is_returned_only_after_exact_server_preparation() {
-            fn release(
-                observer: BrokerSourceIsaObserverV1,
-                config: [u8; 32],
-                unit: [u8; 32],
-                request_attempt: BuildAttempt,
-            ) -> Result<SourceIsaObservationSinkV1, String> {
-                let (client, server) = UnixStream::pair().unwrap();
-                let worker = std::thread::spawn(move || {
-                    let BrokerInvocationRequest::V2(request) =
-                        read_invocation_request(liveness(), &server).unwrap()
-                    else {
-                        panic!("expected V2 observer request");
-                    };
-                    prepare_source_isa_observer_request(
-                        &observer,
-                        BuildSession::from_bytes([0x31; 16]),
-                        &server,
-                        request,
-                    )
-                });
-                let result = BrokeredInvocationAuthorityV1 {
-                    stream: client,
-                    profile_account: None,
-                }
-                .release_with_source_isa_observer(config, unit, request_attempt);
-                let server_result = worker.join().unwrap();
-                assert_eq!(result.is_ok(), server_result.is_ok());
-                result
-            }
-
-            let units = [[0x40; 32], [0x41; 32]];
-            let exact_attempt = attempt(3, [0x31; 16], [0x32; 32]);
-
-            let (client, mut server) = UnixStream::pair().unwrap();
-            let (result_sender, result_receiver) = std::sync::mpsc::channel();
-            let worker = std::thread::spawn(move || {
-                let result = BrokeredInvocationAuthorityV1 {
-                    stream: client,
-                    profile_account: None,
-                }
-                .release_with_source_isa_observer([0x30; 32], [0x40; 32], exact_attempt)
-                .map(drop);
-                result_sender.send(result).unwrap();
-            });
-            let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V2];
-            server.read_exact(&mut request).unwrap();
-            assert!(BrokeredInvocationCapabilityRequestV2::decode(&request).is_ok());
-            assert!(matches!(
-                result_receiver.recv_timeout(Duration::from_millis(25)),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
-            ));
-            server.write_all(BROKERED_SOURCE_ISA_PREPARED_V1).unwrap();
-            assert!(
-                result_receiver
-                    .recv_timeout(Duration::from_secs(1))
-                    .unwrap()
-                    .is_ok()
-            );
-            worker.join().unwrap();
-
-            assert!(release(observer(&units), [0x30; 32], units[0], exact_attempt).is_ok());
-            assert!(release(observer(&units), [0x35; 32], units[0], exact_attempt).is_err());
-            assert!(release(observer(&units), [0x30; 32], [0x45; 32], exact_attempt).is_err());
-            assert!(
-                release(
-                    observer(&units),
-                    [0x30; 32],
-                    units[0],
-                    attempt(3, [0x37; 16], [0x32; 32]),
-                )
-                .is_err()
-            );
-
-            let (client, mut server) = UnixStream::pair().unwrap();
-            let worker = std::thread::spawn(move || {
-                let mut request = [0; BROKERED_INVOCATION_REQUEST_BYTES_V2];
-                server.read_exact(&mut request).unwrap();
-                server.write_all(&[0xa5; 16]).unwrap();
-            });
-            assert!(
-                BrokeredInvocationAuthorityV1 {
-                    stream: client,
-                    profile_account: None
-                }
-                .release_with_source_isa_observer([0x30; 32], units[0], exact_attempt,)
-                .is_err()
-            );
-            worker.join().unwrap();
-
-            let mut direct =
-                BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                    [0x30; 32],
-                    units[0],
-                    exact_attempt,
-                )
-                .unwrap()
-                .encode();
-            direct[88..136].fill(0);
-            assert!(read_request(&direct).is_err());
-            assert!(
-                BrokeredInvocationCapabilityRequestV2::release_with_source_isa_observer(
-                    [0x30; 32],
-                    units[0],
-                    attempt(3, [0; 16], [0; 32]),
-                )
-                .is_err()
-            );
-        }
-
-        #[test]
-        fn collector_deduplicates_exact_recovery_and_preserves_partial_failure() {
-            let units = [[0x40; 32], [0x41; 32]];
-            let mut collector = collector(&units);
-            let accepted = frame(
-                units[0],
-                SourceIsaObservationOutcomeV1::Unavailable(
-                    SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9,
-                ),
-            );
-            assert!(collector.insert(accepted.clone(), None).is_ok());
-            assert!(collector.insert(accepted, None).is_ok());
-            collector.fail(SourceIsaObservationTransportFailureV1::RejectedFrame);
-            let conflicting = frame(
-                units[0],
-                SourceIsaObservationOutcomeV1::Error(
-                    SourceIsaObservationErrorCodeV1::ResourceLimit,
-                ),
-            );
-            assert_eq!(
-                collector.insert(conflicting, None),
-                Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
-            );
-            collector
-                .insert(
-                    frame(
-                        units[1],
-                        SourceIsaObservationOutcomeV1::Unavailable(
-                            SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
-                        ),
-                    ),
-                    None,
-                )
-                .unwrap();
-            collector.fail(SourceIsaObservationTransportFailureV1::AggregateByteBound);
-            let collection = collector.finish().summary;
-            assert_eq!(collection.frames().len(), 2);
-            assert!(collection.missing_units().is_empty());
-            assert_eq!(
-                collection.failure(),
-                Some(SourceIsaObservationTransportFailureV1::RejectedFrame)
-            );
-            let encoded = collection.encode_canonical().unwrap();
-            assert_eq!(&encoded[..8], SOURCE_ISA_COLLECTION_MAGIC_V1);
-            assert_eq!(&encoded[32..64], &[0x30; 32]);
-            assert_eq!(&encoded[64..80], &[0x31; 16]);
-            assert_eq!(u32::from_le_bytes(encoded[16..20].try_into().unwrap()), 2);
-            assert_eq!(
-                u16::from_le_bytes(encoded[24..26].try_into().unwrap()),
-                SourceIsaObservationTransportFailureV1::RejectedFrame.code()
-            );
-            assert!(!collection.grants_compiler_authority());
-            assert!(!collection.grants_publication_authority());
-            assert!(!collection.grants_runtime_authority());
-            assert_eq!(
-                SourceIsaObservationCollectionV1::decode_canonical(&encoded),
-                Ok(collection)
-            );
-        }
-
-        #[test]
-        fn characteristic_collector_requires_byte_identical_duplicate_recovery() {
-            let unit = [0x40; 32];
-            let accepted = frame(
-                unit,
-                SourceIsaObservationOutcomeV1::Unavailable(
-                    SourceIsaObservationUnavailableReasonV1::SourceProjectionForKirV9,
-                ),
-            );
-            let mut collector = characteristic_collector(unit);
-            assert!(
-                collector
-                    .insert(accepted.clone(), Some(vec![0x51, 0x52]))
-                    .is_ok()
-            );
-            assert!(
-                collector
-                    .insert(accepted.clone(), Some(vec![0x51, 0x52]))
-                    .is_ok()
-            );
-            assert_eq!(
-                collector.insert(accepted, Some(vec![0x51, 0x53])),
-                Err(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
-            );
-            let completed = collector.finish();
-            assert_eq!(completed.summary.frames().len(), 1);
-            assert_eq!(completed.characteristic, Some((unit, vec![0x51, 0x52])));
-            assert_eq!(
-                completed.summary.failure(),
-                Some(SourceIsaObservationTransportFailureV1::ConflictingDuplicate)
-            );
-        }
-
-        #[test]
-        fn collector_deduplicates_exact_recovery_at_the_unit_bound() {
-            let units = (0..MAX_SOURCE_ISA_OBSERVATION_UNITS_V1)
-                .map(|index| {
-                    let mut unit = [0x40; 32];
-                    unit[..8].copy_from_slice(&(index as u64).to_le_bytes());
-                    unit
-                })
-                .collect::<Vec<_>>();
-            let mut collector = collector(&units);
-            for &unit in &units {
-                collector
-                    .insert(
-                        frame(
-                            unit,
-                            SourceIsaObservationOutcomeV1::Unavailable(
-                                SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
-                            ),
-                        ),
-                        None,
-                    )
-                    .unwrap();
-            }
-
-            assert!(
-                collector
-                    .insert(
-                        frame(
-                            units[MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 - 1],
-                            SourceIsaObservationOutcomeV1::Unavailable(
-                                SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
-                            ),
-                        ),
-                        None
-                    )
-                    .is_ok()
-            );
-            let collection = collector.finish().summary;
-            assert_eq!(
-                collection.frames().len(),
-                MAX_SOURCE_ISA_OBSERVATION_UNITS_V1
-            );
-            assert!(collection.missing_units().is_empty());
-            assert_eq!(collection.failure(), None);
-        }
-
-        #[test]
-        fn collector_reports_missing_selected_units_without_discarding_frames() {
-            let units = [[0x40; 32], [0x41; 32]];
-            let mut collector = collector(&units);
-            collector
-                .insert(
-                    frame(
-                        units[1],
-                        SourceIsaObservationOutcomeV1::Unavailable(
-                            SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
-                        ),
-                    ),
-                    None,
-                )
-                .unwrap();
-            let collection = collector.finish().summary;
-            assert_eq!(collection.frames().len(), 1);
-            assert_eq!(collection.missing_units(), &[units[0]]);
-            assert_eq!(
-                collection.failure(),
-                Some(SourceIsaObservationTransportFailureV1::MissingSelectedUnits)
-            );
-        }
-
-        #[test]
-        fn all_missing_collection_retains_exact_config_and_session() {
-            let collection = collector(&[[0x40; 32], [0x41; 32]]).finish().summary;
-            assert_eq!(collection.config_identity(), [0x30; 32]);
-            assert_eq!(
-                collection.session(),
-                crate::source_isa_observation::inert_source_isa_session_v1(
-                    BuildSession::from_bytes([0x31; 16])
-                )
-            );
-            assert_eq!(collection.frames().len(), 0);
-            assert_eq!(collection.missing_units(), &[[0x40; 32], [0x41; 32]]);
-            assert_eq!(
-                SourceIsaObservationCollectionV1::decode_canonical(
-                    &collection.encode_canonical().unwrap()
-                ),
-                Ok(collection)
-            );
-        }
-
-        #[test]
-        fn canonical_collection_length_is_bounded_and_fallible() {
-            assert_eq!(
-                source_isa_collection_encoded_length(MAX_SOURCE_ISA_OBSERVATION_UNITS_V1, 0,),
-                Ok(MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1)
-            );
-            assert_eq!(MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1, 696_432);
-            assert!(
-                source_isa_collection_encoded_length(MAX_SOURCE_ISA_OBSERVATION_UNITS_V1, 1,)
-                    .is_err()
-            );
-            assert!(
-                source_isa_collection_encoded_length(MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 + 1, 0,)
-                    .is_err()
-            );
-            assert!(source_isa_collection_encoded_length(usize::MAX, usize::MAX).is_err());
-            assert_eq!(
-                MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1,
-                MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1 * 2
-            );
-            assert_eq!(
-                MAX_SOURCE_ISA_OBSERVATION_COLLECTION_HEX_BYTES_V1,
-                1_392_864
-            );
-        }
-
-        #[test]
-        fn canonical_collection_decoder_rejects_hostile_framing_and_payloads() {
-            fn rehash(encoded: &mut [u8]) {
-                let identity_start = encoded.len() - SOURCE_ISA_COLLECTION_IDENTITY_BYTES_V1;
-                let mut digest = Sha256::new();
-                digest.update(SOURCE_ISA_COLLECTION_IDENTITY_DOMAIN_V1);
-                digest.update(&encoded[..identity_start]);
-                encoded[identity_start..].copy_from_slice(&digest.finalize());
-            }
-
-            let units = [[0x40; 32], [0x41; 32]];
-            let mut collector = collector(&units);
-            collector
-                .insert(
-                    frame(
-                        units[0],
-                        SourceIsaObservationOutcomeV1::Unavailable(
-                            SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
-                        ),
-                    ),
-                    None,
-                )
-                .unwrap();
-            let encoded = collector.finish().summary.encode_canonical().unwrap();
-
-            let mut truncated = encoded.clone();
-            truncated.pop();
-            assert!(SourceIsaObservationCollectionV1::decode_canonical(&truncated).is_err());
-            let mut trailing = encoded.clone();
-            trailing.push(0);
-            assert!(SourceIsaObservationCollectionV1::decode_canonical(&trailing).is_err());
-            let oversized = vec![0; MAX_SOURCE_ISA_OBSERVATION_COLLECTION_BYTES_V1 + 1];
-            assert!(SourceIsaObservationCollectionV1::decode_canonical(&oversized).is_err());
-
-            let mut over_combined_count = encoded.clone();
-            over_combined_count[16..20]
-                .copy_from_slice(&(MAX_SOURCE_ISA_OBSERVATION_UNITS_V1 as u32).to_le_bytes());
-            over_combined_count[20..24].copy_from_slice(&1_u32.to_le_bytes());
-            rehash(&mut over_combined_count);
-            assert!(
-                SourceIsaObservationCollectionV1::decode_canonical(&over_combined_count).is_err()
-            );
-
-            for substituted in [
-                frame_with_context(
-                    [0x35; 32],
-                    units[0],
-                    attempt(3, [0x31; 16], [0x32; 32]),
-                    SourceIsaObservationOutcomeV1::Unavailable(
-                        SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
-                    ),
-                ),
-                frame_with_context(
-                    [0x30; 32],
-                    units[0],
-                    attempt(3, [0x36; 16], [0x32; 32]),
-                    SourceIsaObservationOutcomeV1::Unavailable(
-                        SourceIsaObservationUnavailableReasonV1::AnchorNoOperations,
-                    ),
-                ),
-            ] {
-                let mut mixed_context = encoded.clone();
-                mixed_context[SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
-                    ..SOURCE_ISA_COLLECTION_HEADER_BYTES_V1
-                        + SOURCE_ISA_OBSERVATION_FRAME_BYTES_V1]
-                    .copy_from_slice(&substituted.encode());
-                rehash(&mut mixed_context);
-                assert!(
-                    SourceIsaObservationCollectionV1::decode_canonical(&mixed_context).is_err()
-                );
-            }
-
-            for offset in [0, 8, 12, 16, 20, 24, 28, 32, 64, 80, encoded.len() - 1] {
-                let mut changed = encoded.clone();
-                changed[offset] ^= 1;
-                assert!(
-                    SourceIsaObservationCollectionV1::decode_canonical(&changed).is_err(),
-                    "hostile byte {offset} was accepted"
-                );
-            }
-
-            let mut unknown_failure = encoded.clone();
-            unknown_failure[24..26].copy_from_slice(&99_u16.to_le_bytes());
-            rehash(&mut unknown_failure);
-            assert!(SourceIsaObservationCollectionV1::decode_canonical(&unknown_failure).is_err());
-
-            let mut nonzero_truth = encoded;
-            nonzero_truth[28] = 1;
-            rehash(&mut nonzero_truth);
-            assert!(SourceIsaObservationCollectionV1::decode_canonical(&nonzero_truth).is_err());
-        }
-    }
+    mod tests;
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

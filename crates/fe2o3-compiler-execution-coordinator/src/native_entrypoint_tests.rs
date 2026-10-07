@@ -8,6 +8,9 @@ use std::{cell::RefCell, panic::AssertUnwindSafe, rc::Rc};
 #[path = "native_root_request_process_tests.rs"]
 mod root_request;
 
+#[path = "native_compiler_phase_control_tests.rs"]
+mod phase_control;
+
 const EFFECT_WORK: usize = 7;
 const RETAINED: usize = 42;
 
@@ -148,6 +151,15 @@ impl<'work> Runtime<'work> for Fake {
     }
     fn restore(&mut self, b: &mut Budget<'_>) -> Result<()> {
         self.request("restore", b)
+    }
+    fn complete(&mut self, _: &AggregateCleanupComplete, b: &mut Budget<'_>) -> Result<()> {
+        assert!(self.intake);
+        assert_eq!(self.intake_pending, 0);
+        assert_eq!(self.foreground_pending, 0);
+        assert_eq!(self.busy, 0);
+        assert!(self.shutdowns > 0);
+        assert_eq!(self.trace.borrow().events.last(), Some(&"restore"));
+        self.request("complete", b)
     }
 }
 impl Drop for Fake {
@@ -609,23 +621,24 @@ fn root_request_completion_or_error_cancels_before_original_cleanup_drain() {
                 Err(Failure::Invalid { role: actual, .. }) if actual == role
             )),
         }
-        assert_eq!(
-            trace.borrow().events,
-            [
-                "start",
-                "publish",
-                "wait",
-                "continuity",
-                "intake",
-                "cancel",
-                "shutdown",
-                "wait",
-                "pump",
-                "shutdown",
-                "restore",
-                "drop"
-            ]
-        );
+        let mut expected = vec![
+            "start",
+            "publish",
+            "wait",
+            "continuity",
+            "intake",
+            "cancel",
+            "shutdown",
+            "wait",
+            "pump",
+            "shutdown",
+            "restore",
+        ];
+        if fail.is_none() {
+            expected.push("complete");
+        }
+        expected.push("drop");
+        assert_eq!(trace.borrow().events, expected);
     }
 }
 
@@ -657,12 +670,13 @@ fn only_completed_request_ends_monitoring_on_the_original_account() {
             "cancel",
             "shutdown",
             "restore",
+            "complete",
             "drop"
         ]
     );
     assert_eq!(
         request.work(),
-        17 + 2 * root::LOCAL_WORK + 4 * root::TURN_WORK + 12 * EFFECT_WORK
+        17 + 2 * root::LOCAL_WORK + 4 * root::TURN_WORK + 13 * EFFECT_WORK
     );
     assert_eq!(request.peak_storage(), 13 + FRAME + RETAINED);
     assert_eq!(request.failed_work(), None);
@@ -723,6 +737,7 @@ fn completed_request_still_requires_foreground_pool_and_signal_retirement() {
             ]
         );
         assert_eq!(trace.events.iter().filter(|&&e| e == "intake").count(), 1);
+        assert!(!trace.events.contains(&"complete"));
         assert_eq!(
             trace.events.contains(&"restore"),
             matches!(phase, "wait" | "restore")
@@ -742,6 +757,94 @@ fn completed_request_with_busy_cleanup_cannot_restore_signals_or_report_success(
     assert_eq!(trace.events.iter().filter(|&&e| e == "intake").count(), 1);
     assert_eq!(trace.events.iter().filter(|&&e| e == "shutdown").count(), 3);
     assert!(!trace.events.contains(&"restore"));
+    assert!(!trace.events.contains(&"complete"));
+}
+
+#[test]
+fn completion_is_published_once_only_after_foreground_and_nested_cleanup() {
+    let mut fake = Fake::new();
+    fake.signal_at = usize::MAX;
+    fake.intake = true;
+    fake.foreground = true;
+    fake.foreground_pending = 2;
+    fake.busy = 2;
+    let (result, trace, request) = run(fake, 1, 4);
+    result.unwrap();
+    let trace = trace.borrow();
+    assert_eq!(trace.events.iter().filter(|&&e| e == "intake").count(), 1);
+    assert_eq!(trace.events.iter().filter(|&&e| e == "shutdown").count(), 3);
+    assert_eq!(trace.events.iter().filter(|&&e| e == "complete").count(), 1);
+    assert_eq!(
+        &trace.events[trace.events.len() - 4..],
+        ["shutdown", "restore", "complete", "drop"]
+    );
+    assert_eq!(request.failed_work(), None);
+}
+
+#[test]
+fn completion_refusal_is_not_retried_and_does_not_reopen_original_cleanup() {
+    let mut fake = Fake::new();
+    fake.signal_at = usize::MAX;
+    fake.intake = true;
+    fake.fail = Some("complete");
+    let (result, trace, _) = run(fake, 2, 2);
+    assert!(matches!(
+        result,
+        Err(Failure::Invalid {
+            role: "complete",
+            ..
+        })
+    ));
+    let trace = trace.borrow();
+    assert_eq!(trace.events.iter().filter(|&&e| e == "complete").count(), 1);
+    assert_eq!(trace.events.iter().filter(|&&e| e == "cancel").count(), 1);
+    assert_eq!(trace.events.iter().filter(|&&e| e == "shutdown").count(), 1);
+    assert_eq!(
+        &trace.events[trace.events.len() - 4..],
+        ["shutdown", "restore", "complete", "drop"]
+    );
+}
+
+#[test]
+fn cleanup_unwind_never_exposes_the_retained_completion() {
+    for phase in ["foreground", "pump", "shutdown", "restore"] {
+        let mut fake = Fake::new();
+        fake.signal_at = usize::MAX;
+        fake.intake = true;
+        fake.foreground = true;
+        fake.foreground_pending = 1;
+        fake.panic = Some(phase);
+        let trace = fake.trace.clone();
+        let mut account = Account::new(Work::new(usize::MAX), FRAME + RETAINED);
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            account.with_budget(|b| run_scoped(b, 1, 2, || Ok(fake)))
+        }));
+        assert!(result.is_err());
+        let trace = trace.borrow();
+        assert!(trace.events.contains(&"intake"));
+        assert!(!trace.events.contains(&"complete"));
+        assert_eq!(trace.events.last(), Some(&"drop"));
+    }
+}
+
+#[test]
+fn exhausted_original_request_withholds_completion_after_successful_cleanup() {
+    let mut fake = Fake::new();
+    fake.signal_at = usize::MAX;
+    fake.intake = true;
+    let trace = fake.trace.clone();
+    let limit = 2 * root::LOCAL_WORK + 2 * root::TURN_WORK + 7 * EFFECT_WORK - 1;
+    let mut account = Account::new(Work::new(limit), FRAME + RETAINED);
+    let result = account.with_budget(|b| run_scoped(b, 1, 1, || Ok(fake)));
+    assert!(matches!(result, Err(Failure::Resource(Resource::Work(_)))));
+    assert_eq!(account.failed_work(), Some(limit + 1));
+    let trace = trace.borrow();
+    assert_eq!(
+        &trace.events[trace.events.len() - 3..],
+        ["shutdown", "restore", "drop"]
+    );
+    assert!(!trace.events.contains(&"complete"));
+    assert_eq!(trace.cleanup.work(), 0);
 }
 
 #[test]
@@ -757,6 +860,7 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
     let (cleanup_work, cleanup_storage) = RootCompilerRequest::cleanup_growth().unwrap();
     let runtime = RootCompilerRequest::runtime_turn_quota().unwrap();
     let issuer = RootCompilerRequest::runtime_startup_quota().unwrap();
+    let completion = RootCompilerRequest::completion_quota().unwrap();
     let (runtime_cleanup_work, runtime_cleanup_storage) =
         RootCompilerRequest::runtime_cleanup_growth(2, 1).unwrap();
     assert_eq!(
@@ -775,6 +879,7 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
             + request.work()
             + launch.work()
             + issuer.work()
+            + completion.work()
             + 2 * cancellation.work()
             + 2 * (Receiver::TURN_WORK + continuity.work() + refusal.work() + runtime.work())
     );
@@ -791,6 +896,7 @@ fn original_root_schedule_explicitly_adds_complete_receiver_and_prepared_quotes(
                 + cancellation.scratch()
                 + runtime.scratch()
                 + issuer.scratch()
+                + completion.scratch()
     );
     assert!(Deployment::original_root_startup_quota(usize::MAX, 1).is_err());
     assert!(Deployment::original_root_startup_quota(1, usize::MAX).is_err());
@@ -852,6 +958,9 @@ impl<'work> Runtime<'work> for GuardedFake {
     }
     fn restore(&mut self, b: &mut Budget<'_>) -> Result<()> {
         self.inner.restore(b)
+    }
+    fn complete(&mut self, cleanup: &AggregateCleanupComplete, b: &mut Budget<'_>) -> Result<()> {
+        self.inner.complete(cleanup, b)
     }
 }
 

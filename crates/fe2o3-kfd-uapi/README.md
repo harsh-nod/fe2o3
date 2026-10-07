@@ -45,6 +45,28 @@ queue ABI plus the exact reviewed gfx942 queue semantic source set. Neither
 version admission nor the two prerequisite manifests authenticate this queue
 schema.
 
+Gfx950 non-MES compute/AQL queue outputs have an independent observation-only
+profile, `KFD_GFX950_QUEUE_OUTPUT_PROFILE_MANIFEST_V1`, with SHA-256
+`e84371e6caa91667ab4279731296dd30989a0d618af8aca9eb72320fecea07fe`.
+It pins the reviewed MI350 driver source and ROCr 7.2.1 text, exact platform
+premises and existing gfx950 read-only geometry profile. Separate queue-ID,
+output and doorbell types cannot substitute for gfx942 types. Only private
+numeric decoding is shared; all existing manifests and gfx942 APIs remain
+unchanged. The 16-bit wire hash is not full GPU identity: the new observation
+retains the caller-supplied full ID for a later exact-ID check. This does not
+prove syscall success, unchanged inputs, device admission, currentness or
+resource custody, and grants no mmap, doorbell-store or queue authority.
+
+The CPU-only output oracle copies encoding macros verbatim from hash-checked
+`kfd_priv.h`, compiles against the reviewed `kfd_ioctl.h`, and compares its
+record with the Rust decoder tests. Its source bundle contains the
+`queue-source/` and `doorbell-audit/` directories from the gfx950
+model/planning evidence archive:
+
+```sh
+sh tests/oracles/run-kfd-gfx950-queue-outputs-oracle.sh /path/to/source-bundle
+```
+
 Future VM or memory authority must bind the R1 and R2 manifests along with the
 runtime device and process evidence. Future queue authority must additionally
 bind the R4 queue manifest. R1 version or device admission alone does not

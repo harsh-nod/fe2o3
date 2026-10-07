@@ -13,9 +13,18 @@ name = "fe2o3_kfd"
 
 [features]
 default = []
+# Opt-in native observations only; no additional execution authority.
+hardware-diagnostic = []
+# Explicit per-attempt native host-preparation denial for repository qualification.
+# No general launch authority; excluded from default/community builds.
+hardware-qualification = []
 # Process-forking hardware validation only. This is not runtime authority.
 live-validation = ["rustix/process", "rustix/runtime"]
 engineering-gfx950 = ["dep:serde", "dep:serde_json"]
+# Development-only accounted epoch capacity; not native qualification or authority.
+scale-qualification = []
+# CPU-only receipt composition tests. No native resources or execution authority.
+cpu-runtime-fixtures = []
 
 [[bin]]
 name = "fe2o3-gfx950-engineering-worker"
@@ -61,19 +70,35 @@ name = "kfd-compute-aql-queue-policy"
 name = "kfd-sdma-xgmi-peer-benchmark"
 required-features = ["live-validation"]
 
+[[example]]
+name = "kfd-xgmi-retained-host-diagnostic"
+required-features = ["hardware-diagnostic"]
+
+[[example]]
+name = "kfd-xgmi-retained-cadence-experiment"
+required-features = ["hardware-diagnostic"]
+
 [dependencies]
+arrayvec = "0.7.8"
 fe2o3-amdhsa-loader.workspace = true
 fe2o3-aql.workspace = true
 fe2o3-drm-uapi.workspace = true
 fe2o3-hsaco.workspace = true
 fe2o3-kfd-uapi.workspace = true
+fe2o3-kernel-analysis = { workspace = true, default-features = false, features = ["gfx942-fill-model"] }
 fe2o3-runtime-model.workspace = true
+fe2o3-resource-accounting.workspace = true
 libc.workspace = true
-rustix = { workspace = true, features = ["mm", "param", "pipe", "process", "thread"] }
+rustix = { workspace = true, features = ["event", "mm", "param", "pipe", "process", "thread", "time"] }
 sha2.workspace = true
 serde = { workspace = true, optional = true }
 serde_json = { version = "1", optional = true }
 zeroize = "=1.9.0"
+
+[dev-dependencies]
+rmpv = { version = "1.3.1", default-features = false }
+# Decode the captured Worker request in CPU tests, not in the native runtime.
+fe2o3-kernel-analysis = { workspace = true, default-features = false, features = ["authenticated-machine-effect"] }
 
 [lints.rust]
 unsafe_code = "deny"

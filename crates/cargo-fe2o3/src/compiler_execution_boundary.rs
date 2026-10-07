@@ -14,14 +14,19 @@ use fe2o3_compiler_closure_capability::{
     CompilerExecutionClientProfileCapabilityV1, CompilerExecutionPolicyCapabilityV1,
 };
 use fe2o3_compiler_execution_client::{
+    ApplicationProofTransferPeerV1, ApplicationSupervisorHandoffErrorV1,
     CompilerExecutionChildChannelErrorV1, CompilerExecutionHandoffErrorV1,
     CompilerExecutionSupervisorCredentialsV1, MAX_COMPILER_EXECUTION_SUPERVISOR_HANDOFF_TIMEOUT_V1,
-    PendingCompilerExecutionChildChannelV1,
+    PendingCompilerExecutionChildChannelV1, RetainedCompilerExecutionChildV1,
 };
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionClientProfileIdentityV1, CompilerExecutionReceiptCarriageV1,
     CompilerExecutionReceiptPublicationErrorV1, CompilerExecutionServiceLaunchManifestV1,
-    CompilerExecutionServiceReadyV1,
+    CompilerExecutionServiceReadyV1, CompilerExecutionSupervisorHandoffV1,
+};
+use fe2o3_runtime_protocol::{
+    WorkerV3ApplicationCustodianSupervisorReadyV1, WorkerV3ApplicationRegistrationBindingV1,
+    WorkerV3ApplicationRegistrationInputsV1, WorkerV3ApplicationSupervisorReadyV1,
 };
 
 const COMPILER_EXECUTION_BOUNDARY_TIMEOUT: Duration =
@@ -129,6 +134,197 @@ impl PreparedCompilerExecutionBoundaryV1 {
             profile, policy, supervisor, child_pid, manifest, readiness,
         )
     }
+
+    pub(crate) fn finish_with_retained_child(
+        self,
+        child: RetainedCompilerExecutionChildV1,
+    ) -> Result<ParentCompilerExecutionReadinessCustodyV1, CompilerExecutionBoundaryErrorV1> {
+        let Self {
+            profile,
+            policy,
+            child_channel,
+        } = self;
+        let deadline = Instant::now()
+            .checked_add(COMPILER_EXECUTION_BOUNDARY_TIMEOUT)
+            .ok_or(CompilerExecutionBoundaryErrorV1::DeadlineOverflow)?;
+        let launch = child_channel
+            .finish_until_with_retained_child(&child, deadline)
+            .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
+        let submitter = launch.submitter();
+        let supervisor = CompilerExecutionSupervisorCredentialsV1::new(
+            profile.profile().supervisor_uid(),
+            profile.profile().supervisor_gid(),
+        )
+        .map_err(CompilerExecutionBoundaryErrorV1::SupervisorCredentials)?;
+        let pending = launch
+            .transfer_to_supervisor_until(profile.profile(), deadline)
+            .map_err(CompilerExecutionBoundaryErrorV1::SupervisorTransfer)?;
+        let manifest = pending.manifest().clone();
+        let handoff = CompilerExecutionSupervisorHandoffV1::new(submitter, manifest.clone())
+            .map_err(|error| CompilerExecutionBoundaryErrorV1::Evidence(error.to_string()))?;
+        let readiness = pending
+            .await_readiness_until(profile.profile(), deadline)
+            .map_err(CompilerExecutionBoundaryErrorV1::SupervisorReadiness)?;
+        let mut custody = ParentCompilerExecutionReadinessCustodyV1::admit(
+            profile,
+            policy,
+            supervisor,
+            child.child_pid(),
+            manifest,
+            readiness,
+        )?;
+        custody.original_child = Some((child, handoff));
+        custody.revalidate()?;
+        Ok(custody)
+    }
+
+    pub(crate) fn finish_application(
+        self,
+        child: &RetainedCompilerExecutionChildV1,
+        proof: ApplicationProofTransferPeerV1,
+        inputs: WorkerV3ApplicationRegistrationInputsV1,
+        deadline: Instant,
+        compiler_service: crate::application_handoff::ApplicationCompilerServiceExposureV1,
+    ) -> Result<ParentApplicationSupervisorReadinessCustodyV1, CompilerExecutionBoundaryErrorV1>
+    {
+        let Self {
+            profile,
+            policy,
+            child_channel,
+        } = self;
+        let launch = child_channel
+            .finish_application_until(child, deadline)
+            .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
+        let supervisor = CompilerExecutionSupervisorCredentialsV1::new(
+            profile.profile().supervisor_uid(),
+            profile.profile().supervisor_gid(),
+        )
+        .map_err(CompilerExecutionBoundaryErrorV1::SupervisorCredentials)?;
+        let manifest = CompilerExecutionServiceLaunchManifestV1::new(
+            launch.client(),
+            profile.profile().external_anchor_service(),
+            policy.policy(),
+        );
+        let handoff =
+            CompilerExecutionSupervisorHandoffV1::new(launch.submitter(), manifest.clone())
+                .map_err(|error| CompilerExecutionBoundaryErrorV1::Evidence(error.to_string()))?;
+        let binding = inputs
+            .bind(handoff)
+            .map_err(|error| CompilerExecutionBoundaryErrorV1::Evidence(error.to_string()))?;
+        use crate::application_handoff::ApplicationCompilerServiceExposureV1 as Service;
+        let readiness = match compiler_service {
+            Service::Required => ApplicationReadinessV1::Legacy(
+                launch
+                    .transfer_to_supervisor_until(
+                        proof,
+                        binding.clone(),
+                        profile.profile(),
+                        deadline,
+                    )
+                    .map_err(CompilerExecutionBoundaryErrorV1::ApplicationTransfer)?
+                    .await_readiness_until(profile.profile(), deadline)
+                    .map_err(CompilerExecutionBoundaryErrorV1::ApplicationReadiness)?,
+            ),
+            Service::CustodianRequired => ApplicationReadinessV1::Custodian(
+                launch
+                    .transfer_custodian_to_supervisor_until(
+                        proof,
+                        binding.clone(),
+                        profile.profile(),
+                        deadline,
+                    )
+                    .map_err(CompilerExecutionBoundaryErrorV1::ApplicationTransfer)?
+                    .await_readiness_until(profile.profile(), deadline)
+                    .map_err(CompilerExecutionBoundaryErrorV1::ApplicationReadiness)?,
+            ),
+            Service::NativeCustodianRequired => {
+                return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+                    "native application requires the distinct V3 custody boundary".into(),
+                ));
+            }
+            #[cfg(any(
+                test,
+                feature = "application-handoff-adversarial-fixture",
+                feature = "application-handoff-fault-injection-test-only"
+            ))]
+            Service::TestDisabled => {
+                return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+                    "application registration requires compiler service custody".into(),
+                ));
+            }
+        };
+        let compiler = ParentCompilerExecutionReadinessCustodyV1::admit(
+            profile,
+            policy,
+            supervisor,
+            child.child_pid(),
+            manifest,
+            readiness.application().compiler_readiness().clone(),
+        )?;
+        let custody = ParentApplicationSupervisorReadinessCustodyV1 {
+            compiler,
+            binding,
+            readiness,
+        };
+        custody.revalidate()?;
+        Ok(custody)
+    }
+}
+
+/// Application-only inert readiness. No conversion to compiler receipt admission is exposed.
+pub(crate) struct ParentApplicationSupervisorReadinessCustodyV1 {
+    compiler: ParentCompilerExecutionReadinessCustodyV1,
+    binding: WorkerV3ApplicationRegistrationBindingV1,
+    readiness: ApplicationReadinessV1,
+}
+
+// Retain both complete canonical profiles inline with the original startup custody.
+#[allow(clippy::large_enum_variant)]
+enum ApplicationReadinessV1 {
+    Legacy(WorkerV3ApplicationSupervisorReadyV1),
+    Custodian(WorkerV3ApplicationCustodianSupervisorReadyV1),
+}
+
+impl ApplicationReadinessV1 {
+    fn application(&self) -> &WorkerV3ApplicationSupervisorReadyV1 {
+        match self {
+            Self::Legacy(ready) => ready,
+            Self::Custodian(ready) => ready.application_readiness(),
+        }
+    }
+
+    fn is_canonical(&self) -> bool {
+        match self {
+            Self::Legacy(ready) => {
+                WorkerV3ApplicationSupervisorReadyV1::decode(ready.canonical_bytes()).as_ref()
+                    == Ok(ready)
+            }
+            Self::Custodian(ready) => {
+                WorkerV3ApplicationCustodianSupervisorReadyV1::decode(ready.canonical_bytes())
+                    .as_ref()
+                    == Ok(ready)
+            }
+        }
+    }
+}
+
+impl ParentApplicationSupervisorReadinessCustodyV1 {
+    pub(crate) fn revalidate(&self) -> Result<(), CompilerExecutionBoundaryErrorV1> {
+        self.compiler.revalidate()?;
+        if !self.readiness.is_canonical()
+            || self.binding.compiler_handoff().launch_manifest() != &self.compiler.manifest
+            || self.readiness.application().compiler_readiness() != &self.compiler.readiness
+            || !self
+                .readiness
+                .application()
+                .matches_binding(&self.binding, self.compiler.policy.policy())
+        {
+            return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+                "application readiness differs from retained registration".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -142,6 +338,10 @@ enum ChildPolicyExposureV1 {
 /// The value contains public, inert evidence and sealed public trust configuration only. It grants
 /// no compiler, signing, linking, publication, loading, launch, or execution authority.
 pub(crate) struct ParentCompilerExecutionReadinessCustodyV1 {
+    original_child: Option<(
+        RetainedCompilerExecutionChildV1,
+        CompilerExecutionSupervisorHandoffV1,
+    )>,
     profile: CompilerExecutionClientProfileCapabilityV1,
     policy: CompilerExecutionPolicyCapabilityV1,
     supervisor: CompilerExecutionSupervisorCredentialsV1,
@@ -169,6 +369,7 @@ impl ParentCompilerExecutionReadinessCustodyV1 {
         readiness: CompilerExecutionServiceReadyV1,
     ) -> Result<Self, CompilerExecutionBoundaryErrorV1> {
         let custody = Self {
+            original_child: None,
             profile,
             policy,
             supervisor,
@@ -181,6 +382,22 @@ impl ParentCompilerExecutionReadinessCustodyV1 {
     }
 
     pub(crate) fn revalidate(&self) -> Result<(), CompilerExecutionBoundaryErrorV1> {
+        if let Some((child, handoff)) = &self.original_child {
+            child
+                .validate_custody()
+                .map_err(CompilerExecutionBoundaryErrorV1::ChildChannel)?;
+            if !retained_child_matches_handoff_v1(
+                child.child_pid(),
+                child.submitter(),
+                self.child_pid,
+                &self.manifest,
+                handoff,
+            ) {
+                return Err(CompilerExecutionBoundaryErrorV1::Evidence(
+                    "original compiler child differs from retained readiness".to_owned(),
+                ));
+            }
+        }
         self.profile
             .revalidate()
             .map_err(CompilerExecutionBoundaryErrorV1::Profile)?;
@@ -277,6 +494,19 @@ impl ParentCompilerExecutionReadinessCustodyV1 {
     }
 }
 
+fn retained_child_matches_handoff_v1(
+    retained_child_pid: u32,
+    retained_submitter: fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1,
+    selected_child_pid: u32,
+    manifest: &CompilerExecutionServiceLaunchManifestV1,
+    handoff: &CompilerExecutionSupervisorHandoffV1,
+) -> bool {
+    retained_child_pid == selected_child_pid
+        && manifest.client().pid() == selected_child_pid
+        && handoff.submitter() == retained_submitter
+        && handoff.launch_manifest() == manifest
+}
+
 pub(crate) fn admit_compiler_execution_receipt_transport(
     profile: &CompilerExecutionClientProfileCapabilityV1,
     subject: &fe2o3_artifact_transaction::InertCompilerExecutionSubjectV1,
@@ -346,6 +576,8 @@ pub(crate) enum CompilerExecutionBoundaryErrorV1 {
     SupervisorCredentials(CompilerExecutionHandoffErrorV1),
     SupervisorTransfer(CompilerExecutionHandoffErrorV1),
     SupervisorReadiness(CompilerExecutionHandoffErrorV1),
+    ApplicationTransfer(ApplicationSupervisorHandoffErrorV1),
+    ApplicationReadiness(ApplicationSupervisorHandoffErrorV1),
     Receipt(CompilerExecutionReceiptPublicationErrorV1),
     Evidence(String),
 }
@@ -361,6 +593,8 @@ impl CompilerExecutionBoundaryErrorV1 {
             Self::SupervisorCredentials(_) => "supervisor credential admission",
             Self::SupervisorTransfer(_) => "fixed supervisor transfer",
             Self::SupervisorReadiness(_) => "supervisor readiness",
+            Self::ApplicationTransfer(_) => "application supervisor transfer",
+            Self::ApplicationReadiness(_) => "application supervisor readiness",
             Self::Receipt(_) => "compiler receipt admission",
             Self::Evidence(_) => "readiness evidence admission",
         }
@@ -381,6 +615,9 @@ impl fmt::Display for CompilerExecutionBoundaryErrorV1 {
             | Self::SupervisorTransfer(error)
             | Self::SupervisorReadiness(error) => error.fmt(formatter),
             Self::Receipt(error) => error.fmt(formatter),
+            Self::ApplicationTransfer(error) | Self::ApplicationReadiness(error) => {
+                error.fmt(formatter)
+            }
         }
     }
 }
@@ -395,13 +632,14 @@ impl Error for CompilerExecutionBoundaryErrorV1 {
             | Self::SupervisorTransfer(error)
             | Self::SupervisorReadiness(error) => Some(error),
             Self::Receipt(error) => Some(error),
+            Self::ApplicationTransfer(error) | Self::ApplicationReadiness(error) => Some(error),
             Self::Profile(_) | Self::Policy(_) | Self::Evidence(_) => None,
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::os::unix::process::CommandExt;
 
     use ed25519_dalek::SigningKey;
@@ -417,7 +655,7 @@ mod tests {
 
     const ISOLATED_BOUNDARY_TEST_ENV: &str = "FE2O3_COMPILER_EXECUTION_BOUNDARY_ISOLATED_TEST_V1";
 
-    pub(super) fn run_in_isolated_boundary_test_process(test_name: &str) -> bool {
+    pub(crate) fn run_in_isolated_boundary_test_process(test_name: &str) -> bool {
         match std::env::var_os(ISOLATED_BOUNDARY_TEST_ENV) {
             None => {}
             Some(value) if value == std::ffi::OsStr::new(test_name) => return false,
@@ -460,7 +698,10 @@ mod tests {
         .unwrap()
     }
 
-    fn client_profile(seed: u8, supervisor_uid: u32) -> CompilerExecutionClientProfileCapabilityV1 {
+    pub(crate) fn client_profile(
+        seed: u8,
+        supervisor_uid: u32,
+    ) -> CompilerExecutionClientProfileCapabilityV1 {
         CompilerExecutionClientProfileCapabilityV1::create(
             fe2o3_compiler_execution_protocol::CompilerExecutionClientProfileV1::new(
                 supervisor_uid,
@@ -518,6 +759,25 @@ mod tests {
         custody.revalidate().unwrap();
         assert!(!custody.grants_compiler_authority());
         assert_ne!(custody.profile_identity().as_bytes(), &[0; 32]);
+    }
+
+    #[test]
+    fn retained_child_binds_parent_and_compiler_to_distinct_handoff_fields() {
+        let accepted = policy(7);
+        let (manifest, _) = evidence(&accepted, 8_765, 1_000);
+        let parent = CompilerExecutionClientProcessIdentityV1::new(4_321, 1_000, 1_000).unwrap();
+        let handoff = CompilerExecutionSupervisorHandoffV1::new(parent, manifest.clone()).unwrap();
+        let matches = |pid, submitter, selected, manifest: &_| {
+            retained_child_matches_handoff_v1(pid, submitter, selected, manifest, &handoff)
+        };
+        assert!(matches(8_765, parent, 8_765, &manifest));
+        assert!(!matches(8_765, manifest.client(), 8_765, &manifest));
+        assert!(!matches(4_321, parent, 8_765, &manifest));
+        assert!(!matches(8_765, parent, 4_321, &manifest));
+        let (other, _) = evidence(&accepted, 8_766, 1_000);
+        assert!(!matches(8_766, parent, 8_766, &other));
+        let (other, _) = evidence(&policy(8), 8_765, 1_000);
+        assert!(!matches(8_765, parent, 8_765, &other));
     }
 
     #[test]

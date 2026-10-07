@@ -37,6 +37,10 @@ pub enum CompilerExecutionRootDeploymentErrorV2 {
     Source(source::RootSourceErrorV2),
     /// Native sealed capability construction refused.
     Capability(fe2o3_compiler_closure_capability::CompilerExecutionCapabilityErrorV2),
+    /// Independently opened native root installation no longer matches this admission.
+    Installation(
+        fe2o3_compiler_closure_capability::RootProductionCompilerExecutionDeploymentErrorV3,
+    ),
     /// Native V2 policy decoding refused.
     PolicyV2(CompilerExecutionAttestationErrorV2),
     /// Native V3 policy decoding refused.
@@ -114,6 +118,7 @@ macro_rules! errors {
 }
 errors!(Resource => Resource, source::RootSourceErrorV2 => Source,
     fe2o3_compiler_closure_capability::CompilerExecutionCapabilityErrorV2 => Capability,
+    fe2o3_compiler_closure_capability::RootProductionCompilerExecutionDeploymentErrorV3 => Installation,
     CompilerExecutionAttestationErrorV2 => PolicyV2, CompilerExecutionAttestationErrorV3 => PolicyV3,
     CompilerExecutionSupervisorDeploymentErrorV2 => SupervisorV2, CompilerExecutionSupervisorDeploymentErrorV3 => SupervisorV3,
     CompilerExecutionExternalAnchorDeploymentErrorV2 => AnchorV2, CompilerExecutionExternalAnchorDeploymentErrorV3 => AnchorV3,
@@ -333,7 +338,11 @@ fn single_thread_entries(tasks: OwnedFd, expected_pid: u32) -> Result<()> {
     ))
 }
 
-fn check_source_shape(index: usize, limits: &[usize; 11], stat: &rustix::fs::Stat) -> Result<()> {
+pub(crate) fn check_source_shape(
+    index: usize,
+    limits: &[usize; 11],
+    stat: &rustix::fs::Stat,
+) -> Result<()> {
     use rustix::fs::FileType;
     let kind = FileType::from_raw_mode(stat.st_mode);
     let valid = if index < 3 {
@@ -360,6 +369,21 @@ pub(crate) fn listener(
     group: u32,
     b: &mut Budget<'_>,
 ) -> Result<(RuntimeListener, usize)> {
+    listener_for(runtime_root, group, ListenerRole::Compiler, b)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ListenerRole {
+    Compiler,
+    NativeApplication,
+}
+
+pub(crate) fn listener_for(
+    runtime_root: OwnedFd,
+    group: u32,
+    role: ListenerRole,
+    b: &mut Budget<'_>,
+) -> Result<(RuntimeListener, usize)> {
     b.with_prepaid_scope(FILE_STORAGE, 8, LOCAL_WORK, LISTENER_SCRATCH, |b| {
         b.reserve_storage(LISTENER_GROWTH)?;
         let root = RuntimeRoot::admit(
@@ -369,10 +393,20 @@ pub(crate) fn listener(
             0,
             COMPILER_EXECUTION_SUPERVISOR_RUNTIME_DIRECTORY_MODE_V1,
         )?;
+        let (path, name) = match role {
+            ListenerRole::Compiler => (
+                COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1,
+                "compiler-execution-supervisor.sock",
+            ),
+            ListenerRole::NativeApplication => (
+                NATIVE_APPLICATION_SUPERVISOR_SOCKET_PATH_V3,
+                "native-application-supervisor.sock",
+            ),
+        };
         let listener = RuntimeListener::construct(
             root,
-            Path::new(COMPILER_EXECUTION_SUPERVISOR_SOCKET_PATH_V1),
-            "compiler-execution-supervisor.sock",
+            Path::new(path),
+            name,
             0,
             group,
             COMPILER_EXECUTION_SUPERVISOR_SOCKET_MODE_V1,

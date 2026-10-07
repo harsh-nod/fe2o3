@@ -42,6 +42,24 @@ does not enable proof RPC or grant compiler, proof, artifact or GPU authority.
 The byte-only `fe2o3-static-executable-format` parser belongs to canonical
 contracts and MUST NOT depend on the host runtime.
 
+Runtime conditional-dispatch checking reuses the target-specific machine model
+in `fe2o3-kernel-analysis`. The reviewed normal dependency from `fe2o3-host`
+enables authenticated analysis; `fe2o3-kfd` enables only `gfx942-fill-model` in
+production and authenticated analysis for CPU tests. The keyless
+`fe2o3-proof-custodian` has the same exact normal dependency for authenticated
+conditional-fill analysis. These exact package/kind
+exceptions do not permit dependencies on Pliron or the optimizer, build-time
+dependencies, or a direct dependency from `fe2o3-runtime`. They grant no compiler,
+proof or GPU execution authority. `fe2o3-resource-accounting` belongs to canonical
+contracts and retains the prohibition on host-runtime dependencies.
+
+The custodian's offline policy-candidate tests also use the exact dev-only edge
+`fe2o3-proof-custodian -> fe2o3-lower-mir-kernel` for canonical inert source-packet
+fixture inputs. This exception does not admit a normal or build dependency,
+other host-runtime consumers, or Pliron/optimizer dependencies. The fixtures do
+not establish source provenance, semantic approval or execution authority; the
+production exporter still requires independently supplied source and roster pins.
+
 ## Workspace Topology
 
 Immediate crates are workspace members through `crates/*`. Nested test fixtures

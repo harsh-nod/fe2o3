@@ -6,7 +6,7 @@ use std::{
 
 // SCM_PIDFD has one int payload, just like a one-descriptor SCM_RIGHTS record.
 // The first term also includes rustix's extra cmsghdr alignment allowance.
-pub(super) const BYTES: usize = rustix::cmsg_space!(ScmRights(3), ScmRights(1));
+pub(super) const BYTES: usize = rustix::cmsg_space!(ScmRights(5), ScmRights(1));
 
 // Linux UAPI value; the pinned libc and rustix do not expose SCM_PIDFD.
 const SCM_PIDFD: libc::c_int = 0x04;
@@ -43,6 +43,7 @@ struct Backing {
 pub(super) struct Guard {
     backing: Backing,
     armed: bool,
+    credentials: bool,
 }
 
 impl Guard {
@@ -53,7 +54,16 @@ impl Guard {
                 bytes: [MaybeUninit::new(0); BYTES],
             },
             armed: false,
+            credentials: false,
         }
+    }
+
+    /// Allows structurally exact SCM_CREDENTIALS only; the native caller still
+    /// validates one exact sender. Legacy receivers retain the default refusal.
+    pub(super) fn with_credentials() -> Self {
+        let mut value = Self::new();
+        value.credentials = true;
+        value
     }
 
     pub(super) fn parts(&mut self) -> (&mut [MaybeUninit<u8>], &mut bool) {
@@ -98,7 +108,13 @@ impl Guard {
             if length < HEADER || length > bytes.len() - offset {
                 return true;
             }
-            if header.cmsg_level != libc::SOL_SOCKET || header.cmsg_type != libc::SCM_RIGHTS {
+            let credentials = self.credentials
+                && header.cmsg_level == libc::SOL_SOCKET
+                && header.cmsg_type == libc::SCM_CREDENTIALS
+                && length == HEADER + size_of::<libc::ucred>();
+            if !credentials
+                && (header.cmsg_level != libc::SOL_SOCKET || header.cmsg_type != libc::SCM_RIGHTS)
+            {
                 unexpected = true;
                 if header.cmsg_level == libc::SOL_SOCKET
                     && header.cmsg_type == SCM_PIDFD

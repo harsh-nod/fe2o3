@@ -1,0 +1,1120 @@
+//! Single-allocation bridge between directional persistent SDMA and fixed compute.
+//!
+//! Public values in this module are addressless, move-only custody. The queue
+//! retains the exact mapped device lease while a compute attachment is active;
+//! the persistent owner retains its incarnation and use ledger with the native
+//! lease temporarily absent.
+
+use core::fmt;
+use core::marker::PhantomData;
+use core::ops::Deref;
+use std::rc::Rc;
+use std::time::Instant;
+
+use arrayvec::ArrayVec;
+use fe2o3_runtime_model::QueueKeyV1;
+
+use crate::persistent_allocation::{
+    Gfx942PersistentCompletedV1, Gfx942PersistentDependencyFrontierV1, Gfx942PersistentPreparedV1,
+    Gfx942PersistentPublishedV1, Gfx942PersistentReservedV1, Gfx942PersistentUseLeaseV1,
+};
+use crate::persistent_directional_sdma::{
+    Gfx942DirectionalPersistentSdmaFrontierRetirementFailureV1,
+    Gfx942DirectionalPersistentSdmaWindowCompletedV1, Gfx942DirectionalQueuePersistentAllocationV1,
+};
+use crate::queue::dispatch_binding::control_release::ReturningControlCleanupCustodyV1;
+use crate::queue::dispatch_binding::{
+    FixedDispatchPreparationCustodyV1, MAX_DISPATCH_DATA_LEASES_V1,
+};
+use crate::queue::{
+    ComputeAqlQueueSessionErrorV1, Gfx942CompletedDispatchBatchV1,
+    Gfx942CompletionRecycleObservationV1, Gfx942DispatchBatchV1, Gfx942FixedDispatchDataV1,
+};
+use crate::sdma::{Gfx942SdmaBufferStorageV1, Gfx942SdmaBufferV1};
+use crate::shared_memory::{
+    Gfx942DeviceMemoryIdentityV1, Gfx942DeviceMemoryLeaseV1, Gfx942DeviceMemoryMappedV1,
+};
+
+/// Historical R52 claim boundary for the first persistent SDMA/compute bridge.
+///
+/// Its exclusion claim is unchanged. R66's separately named coexistence profile
+/// does not inherit that profile's evidence or claim quiescence for disjoint work.
+pub const GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1: &str = concat!(
+    "profile=fe2o3-gfx942-kfd-persistent-local-compute-r52-v1\n",
+    "target=gfx942:xnack-,one-primary-compute-queue-and-one-directional-sdma-pair\n",
+    "admission=one-local-fresh-or-exact-size-pooled-logical-equals-physical-allocation,one-fixed-compute-packet,one-full-allocation-device-local-binding,complete-live-device-set-of-one,metadata-derived-access\n",
+    "binding=exact-parent-and-compute-queue-occurrence,attachment-generation,pool-generation,logical-and-physical-extent,mapped-storage-identity,persistent-owner-incarnation,dispatch-generation,and-prepare-once-control-identity-over-code-abi-packet-geometry-kernarg-content-role-and-storage-layout\n",
+    "initialization=read-or-readwrite-requires-one-exact-full-h2d-completion-and-exact-pre-h2d-host-certificate-content-descriptor-match,certificate-is-minted-only-by-userspace-hash-while-copy-and-bound-to-queue-storage-identity-pool-generation-full-extents-and-range,h2d-source-linear-custody-preserves-certificate,d2h-or-any-other-host-mutation-invalidates-before-publication,promotion-retains-pre-post-operational-currentness,h2d-source-host-owner-is-returned-separately,ready-retains-only-device-owner-and-sealed-byte-digest,bind-relabels-the-digest-to-the-final-kernel-role-without-copy,write-only-may-use-quiescent-uninitialized-custody,no-compute-write-initialization-promotion\n",
+    "lifecycle=first-launch-preflight-reserve-prepare-detach-and-allocate-map-retain-control,confirmed-only-publish,pending-retains-all-custody,exact-completion-then-signal-recycle-then-data-only-detach-native-restore-and-settle,subsequent-exact-replay-reattaches-only-data-to-the-retained-control-and-advances-generation,explicit-frontier-retirement,ordinary-destroy-releases-retained-control-exactly-once\n",
+    "ledger=the-existing-directional-sdma-outstanding-buffer-debit-and-pool-generation-are-preserved\n",
+    "failure=pre-retention-rejection-returns-input-only-after-confirmed-reserved-or-prepared-cancellation,cancellation-failure-retains-the-exact-typed-lease-in-a-terminal-attachment,confirmed-no-effect-ring-or-completion-signal-occupancy-retains-prepared-retry,post-retention-publication-completion-recycle-detach-restore-or-consuming-unwind-ambiguity-preserves-the-owner-ledger-phase-claims-no-exact-native-stage-when-consumed-and-requires-process-teardown\n",
+    "partial-prepare=after-first-code-or-kernarg-allocation,the-terminal-queue-owned-shared-memory-session-registry-retains-every-native-record,linear-token-drop-performs-no-native-cleanup,and-process-teardown-is-required\n",
+    "terminal-custody=queue-or-returned-failure-retains-an-exact-attached-published-completed-recycled-data-storage-or-restored-owner-stage-only-when-that-native-token-remains-known,otherwise-stage-observation-is-none\n",
+    "authority=no-native-address-handle-pointer-fd-packet-signal-or-storage-identity-export\n",
+    "limits=no-auxiliary-lane,no-padded-pooled-or-partial-range,no-second-device-allocation,no-concurrent-sdma,no-xgmi,no-generic-fixed-dispatch-escape-while-attached,certificate-is-userspace-write-evidence-not-kernel-attestation-or-loaded-kernel-proof,sha256-collision-resistance-and-cpu-gpu-coherence-contracted\n",
+    "evidence=native-neutral-transition-cancellation-quarantine-and-unwind-failure-tests-only,no-rust-to-model-refinement,no-hardware-execution-or-performance-evidence\n",
+);
+
+/// SHA-256 of [`GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_V1`].
+pub const GFX942_PERSISTENT_LOCAL_COMPUTE_ADAPTER_MANIFEST_SHA256_V1: &str =
+    "86d284a16c6bdb43c03d78d09bd34d9eb8247b9cb23d1d7e4a223d4927531f87";
+
+/// Descriptive R66 coexistence boundary, not execution or release authority.
+pub const GFX942_COMPUTE_SDMA_COEXISTENCE_MANIFEST_V1: &str = concat!(
+    "profile=fe2o3-gfx942-kfd-compute-directional-sdma-coexistence-r66-v1\n",
+    "target=gfx942:xnack-,one-primary-persistent-compute-lane,one-exact-directional-sdma-pair\n",
+    "admission=one-or-three-full-extent-device-compute-bindings,disjoint-whole-device-allocations,exact-device-vm-queue-pool-storage-and-generation-custody,reciprocal-check-before-bind-or-copy-publication\n",
+    "copy=directional-persistent-h2d-or-d2h-single-or-window,private-publication-provenance,complete-both-64-slot-record-and-window-ledgers,exact-host-session-and-device-endpoints,settled-but-retained-records-included\n",
+    "failure=unknown-stale-incomplete-terminal-or-aliased-custody-rejects,no-new-retry-or-release-authority,existing-completion-retirement-quarantine-and-shutdown-retention-preserved\n",
+    "limits=no-auxiliary-compute,no-generic-or-ordinary-copy-coexistence,no-striped-sdma,no-same-device-d2d,no-xgmi,no-partial-range-alias-exception,no-new-compiler-execution-authority\n",
+    "proof=bounded-device-storage-scan-and-cyclic-slot-predicates,reviewed-rust-verus-correspondence,native-roster-and-identity-extraction-not-executable-refined,physical-nonaliasing-and-gpu-behavior-contracted\n",
+    "evidence=cpu-model-and-scripted-custody-validation,no-new-live-native-admission-qualification,no-device-timeline-overlap-or-performance-claim\n",
+);
+
+/// SHA-256 of [`GFX942_COMPUTE_SDMA_COEXISTENCE_MANIFEST_V1`].
+pub const GFX942_COMPUTE_SDMA_COEXISTENCE_MANIFEST_SHA256_V1: &str =
+    "f0dc4b8483d6a479a4db8e28c7b62fb447c92f5944869a5afc0b61e4275f88f3";
+
+/// Metadata-derived aggregate access of the exact persistent compute binding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942PersistentComputeEffectV1 {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+impl Gfx942PersistentComputeEffectV1 {
+    pub const fn writes(self) -> bool {
+        matches!(self, Self::Write | Self::ReadWrite)
+    }
+}
+
+const fn replay_authenticated_sha256_v1(
+    effect: Gfx942PersistentComputeEffectV1,
+    authenticated_sha256: Option<[u8; 32]>,
+) -> Option<[u8; 32]> {
+    if effect.writes() {
+        None
+    } else {
+        authenticated_sha256
+    }
+}
+
+/// Authenticated full-allocation H2D result that may satisfy a compute read.
+#[must_use = "ready persistent compute custody must be bound or normalized"]
+pub struct Gfx942PersistentComputeReadyV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    pub(crate) authenticated_sha256: [u8; 32],
+}
+
+impl Gfx942PersistentComputeReadyV1 {}
+
+impl fmt::Debug for Gfx942PersistentComputeReadyV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputeReadyV1")
+            .field("byte_len", &self.byte_len())
+            .field("physical_byte_len", &self.physical_byte_len())
+            .finish_non_exhaustive()
+    }
+}
+
+pub fn normalize_persistent_compute_ready_v1(
+    ready: Gfx942PersistentComputeReadyV1,
+) -> Gfx942DirectionalQueuePersistentAllocationV1 {
+    ready.into_allocation()
+}
+
+pub type Gfx942PersistentComputeReadyPartsV1 = (
+    Gfx942DirectionalQueuePersistentAllocationV1,
+    Gfx942SdmaBufferV1,
+    Gfx942PersistentDependencyFrontierV1,
+);
+
+/// Linear H2D custody returned by a failed ready transition.
+#[must_use = "retryable custody may be restored; terminal custody requires process teardown"]
+pub enum Gfx942PersistentComputeReadyFailureCustodyV1 {
+    Retryable(Gfx942PersistentComputeReadyPartsV1),
+    ForeignQueue(Gfx942DirectionalPersistentSdmaWindowCompletedV1),
+    ProcessTeardown(Gfx942PersistentComputeReadyTerminalCustodyV1),
+}
+
+#[must_use = "terminal H2D completion custody must remain opaque until process teardown"]
+pub struct Gfx942PersistentComputeReadyTerminalCustodyV1 {
+    pub(crate) completed: Gfx942DirectionalPersistentSdmaWindowCompletedV1,
+}
+
+impl Gfx942PersistentComputeReadyTerminalCustodyV1 {
+    pub fn direction(&self) -> crate::persistent_sdma::Gfx942PersistentSdmaDirectionV1 {
+        self.completed.direction()
+    }
+
+    pub const fn copy_bytes(&self) -> u32 {
+        self.completed.copy_bytes()
+    }
+
+    pub const fn packet_count(&self) -> usize {
+        self.completed.packet_count()
+    }
+}
+
+#[must_use = "inspect the error and retain the returned H2D custody"]
+pub struct Gfx942PersistentComputeReadyFailureV1 {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) custody: Gfx942PersistentComputeReadyFailureCustodyV1,
+}
+
+impl Gfx942PersistentComputeReadyFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Gfx942PersistentComputeReadyFailureCustodyV1,
+    ) {
+        (self.error, self.custody)
+    }
+}
+
+impl fmt::Debug for Gfx942PersistentComputeReadyFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputeReadyFailureV1")
+            .field("error", &self.error)
+            .field(
+                "custody",
+                &match self.custody {
+                    Gfx942PersistentComputeReadyFailureCustodyV1::Retryable(_) => "retryable",
+                    Gfx942PersistentComputeReadyFailureCustodyV1::ForeignQueue(_) => {
+                        "foreign-queue"
+                    }
+                    Gfx942PersistentComputeReadyFailureCustodyV1::ProcessTeardown(_) => {
+                        "process-teardown"
+                    }
+                },
+            )
+            .finish()
+    }
+}
+
+/// Sealed, digest-free initialization authority restored from exact compute custody.
+/// Normalizing to a bare allocation consumes this authority.
+///
+/// Bare storage cannot mint an initialized input:
+/// ```compile_fail,E0308
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInputV1};
+/// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInputV1 {
+///     Gfx942PersistentComputeInputV1::InitializedAfterDispatch(allocation)
+/// }
+/// ```
+/// Internal recovery cannot be used as a public initialization constructor:
+/// ```compile_fail,E0624
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInputV1};
+/// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInputV1 {
+///     Gfx942PersistentComputeInputV1::from_parts(allocation, unreachable!())
+/// }
+/// ```
+/// The payload has no public constructor or mutable allocation access:
+/// ```compile_fail,E0451
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInitializedAfterDispatchV1};
+/// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInitializedAfterDispatchV1 {
+///     Gfx942PersistentComputeInitializedAfterDispatchV1 { allocation }
+/// }
+/// ```
+/// ```compile_fail,E0616
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInitializedAfterDispatchV1};
+/// fn replace(value: &mut Gfx942PersistentComputeInitializedAfterDispatchV1, bare: Gfx942DirectionalQueuePersistentAllocationV1) {
+///     value.allocation = bare;
+/// }
+/// ```
+/// Authority cannot be duplicated or reused after normalization:
+/// ```compile_fail,E0599
+/// use fe2o3_kfd::Gfx942PersistentComputeInitializedAfterDispatchV1;
+/// fn duplicate(value: Gfx942PersistentComputeInitializedAfterDispatchV1) {
+///     let _copy = value.clone();
+/// }
+/// ```
+/// ```compile_fail,E0382
+/// use fe2o3_kfd::{Gfx942PersistentComputeInitializedAfterDispatchV1, Gfx942PersistentComputeInputV1};
+/// fn reuse(value: Gfx942PersistentComputeInitializedAfterDispatchV1) {
+///     let _bare = value.into_allocation();
+///     let _forged = Gfx942PersistentComputeInputV1::InitializedAfterDispatch(value);
+/// }
+/// ```
+#[derive(Debug)]
+#[must_use = "initialized compute custody must be bound or normalized"]
+pub struct Gfx942PersistentComputeInitializedAfterDispatchV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+}
+
+impl Gfx942PersistentComputeInitializedAfterDispatchV1 {}
+
+/// Sealed full-extent initialization from queue-authenticated native storage.
+/// This does not attest content or claim a preceding compute dispatch.
+///
+/// ```compile_fail,E0308
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInputV1};
+/// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInputV1 {
+///     Gfx942PersistentComputeInputV1::InitializedStorage(allocation)
+/// }
+/// ```
+/// ```compile_fail,E0451
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInitializedStorageV1};
+/// fn forge(allocation: Gfx942DirectionalQueuePersistentAllocationV1) -> Gfx942PersistentComputeInitializedStorageV1 {
+///     Gfx942PersistentComputeInitializedStorageV1 { allocation }
+/// }
+/// ```
+/// ```compile_fail,E0616
+/// use fe2o3_kfd::{Gfx942DirectionalQueuePersistentAllocationV1, Gfx942PersistentComputeInitializedStorageV1};
+/// fn replace(value: &mut Gfx942PersistentComputeInitializedStorageV1, bare: Gfx942DirectionalQueuePersistentAllocationV1) {
+///     value.allocation = bare;
+/// }
+/// ```
+/// ```compile_fail,E0599
+/// use fe2o3_kfd::Gfx942PersistentComputeInitializedStorageV1;
+/// fn duplicate(value: Gfx942PersistentComputeInitializedStorageV1) { let _copy = value.clone(); }
+/// ```
+/// ```compile_fail,E0382
+/// use fe2o3_kfd::{Gfx942PersistentComputeInitializedStorageV1, Gfx942PersistentComputeInputV1};
+/// fn reuse(value: Gfx942PersistentComputeInitializedStorageV1) {
+///     let _bare = value.into_allocation();
+///     let _input = Gfx942PersistentComputeInputV1::InitializedStorage(value);
+/// }
+/// ```
+#[derive(Debug)]
+#[must_use = "initialized storage must be bound or normalized"]
+pub struct Gfx942PersistentComputeInitializedStorageV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+}
+
+impl Gfx942PersistentComputeInitializedStorageV1 {}
+
+/// An authenticated storage shape without the full-storage conversion premise.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942PersistentComputeStorageIneligibilityV1 {
+    PartialExtent,
+    IncompleteInitialization,
+}
+
+/// A clean metadata admission result. Errors, including retryable errors, are not fallback permission.
+/// `NotEligible` does not perform live currentness or mapped-memory validation;
+/// any fallback must independently validate its own native operation.
+#[derive(Debug)]
+#[must_use = "retain either the sealed input or the unchanged allocation"]
+pub enum Gfx942PersistentComputeStorageAttemptV1 {
+    Promoted(Gfx942PersistentComputeInitializedStorageV1),
+    NotEligible {
+        allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+        reason: Gfx942PersistentComputeStorageIneligibilityV1,
+    },
+}
+
+/// Original allocation custody returned by failed storage initialization admission.
+#[must_use = "retryable custody may be restored; terminal custody requires process teardown"]
+pub enum Gfx942PersistentComputeStoragePromotionCustodyV1 {
+    Retryable(Gfx942DirectionalQueuePersistentAllocationV1),
+    ForeignQueue(Gfx942DirectionalQueuePersistentAllocationV1),
+    ProcessTeardown(Gfx942PersistentComputeStoragePromotionTerminalCustodyV1),
+}
+
+/// Opaque original allocation after ambiguous queue/model currentness.
+#[must_use = "terminal storage custody must remain opaque until process teardown"]
+pub struct Gfx942PersistentComputeStoragePromotionTerminalCustodyV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+}
+
+#[must_use = "inspect the error and retain the original allocation custody"]
+pub struct Gfx942PersistentComputeStoragePromotionFailureV1 {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) custody: Gfx942PersistentComputeStoragePromotionCustodyV1,
+}
+
+impl Gfx942PersistentComputeStoragePromotionFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Gfx942PersistentComputeStoragePromotionCustodyV1,
+    ) {
+        (self.error, self.custody)
+    }
+}
+
+impl fmt::Debug for Gfx942PersistentComputeStoragePromotionFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputeStoragePromotionFailureV1")
+            .field("error", &self.error)
+            .field(
+                "custody",
+                &match self.custody {
+                    Gfx942PersistentComputeStoragePromotionCustodyV1::Retryable(_) => "retryable",
+                    Gfx942PersistentComputeStoragePromotionCustodyV1::ForeignQueue(_) => {
+                        "foreign-queue"
+                    }
+                    Gfx942PersistentComputeStoragePromotionCustodyV1::ProcessTeardown(_) => {
+                        "process-teardown"
+                    }
+                },
+            )
+            .finish()
+    }
+}
+
+/// Describes initialization only while paired with the exact retained owner.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PersistentComputeInitializationV1 {
+    Uninitialized,
+    AuthenticatedH2d([u8; 32]),
+    InitializedStorage,
+    AfterDispatch,
+}
+
+impl PersistentComputeInitializationV1 {
+    pub(crate) const fn is_fully_initialized(self) -> bool {
+        !matches!(self, Self::Uninitialized)
+    }
+    pub(crate) const fn authenticated_sha256(self) -> Option<[u8; 32]> {
+        match self {
+            Self::AuthenticatedH2d(digest) => Some(digest),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "persistent_compute/initialization_fixture.rs"]
+mod initialization_fixture;
+
+/// Quiescent input for one persistent compute attachment.
+#[must_use = "persistent compute input must be bound or normalized"]
+pub enum Gfx942PersistentComputeInputV1 {
+    /// No sealed initialization premise; only inspected write-only access is admitted.
+    Uninitialized(Gfx942DirectionalQueuePersistentAllocationV1),
+    /// Exact full-H2D initialization was authenticated before frontier retirement.
+    Initialized(Gfx942PersistentComputeReadyV1),
+    /// Exact quiescent storage has full native initialization coverage, without a digest.
+    InitializedStorage(Gfx942PersistentComputeInitializedStorageV1),
+    /// Exact predecessor compute completed, recycled, detached, restored, and
+    /// retired its dependency frontier while proving the full extent initialized.
+    InitializedAfterDispatch(Gfx942PersistentComputeInitializedAfterDispatchV1),
+}
+
+/// Exact input roster for the bounded two-read/one-write persistent dispatch.
+///
+/// The queue derives access from inspected AMDHSA metadata. Construction alone
+/// does not authorize the roster: binding additionally requires distinct,
+/// full-extent device allocations in exact data-index order and effects
+/// `Read`, `Read`, `Write`.
+#[must_use = "three-binding persistent compute custody must be bound or normalized"]
+pub struct Gfx942ThreeBindingPersistentComputeInputsV1 {
+    pub(crate) inputs: [Gfx942PersistentComputeInputV1; 3],
+}
+
+impl Gfx942ThreeBindingPersistentComputeInputsV1 {
+    pub fn new(inputs: [Gfx942PersistentComputeInputV1; 3]) -> Self {
+        Self { inputs }
+    }
+
+    pub fn into_inputs(self) -> [Gfx942PersistentComputeInputV1; 3] {
+        self.inputs
+    }
+}
+
+impl fmt::Debug for Gfx942ThreeBindingPersistentComputeInputsV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942ThreeBindingPersistentComputeInputsV1")
+            .field("input_count", &self.inputs.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Gfx942PersistentComputeInputV1 {}
+
+impl fmt::Debug for Gfx942PersistentComputeInputV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputeInputV1")
+            .field("initialized", &self.is_fully_initialized())
+            .field("byte_len", &self.byte_len())
+            .field("physical_byte_len", &self.physical_byte_len())
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PersistentComputeBindingKeyV1 {
+    pub(crate) queue: QueueKeyV1,
+    pub(crate) attachment_generation: u64,
+}
+
+macro_rules! receipt {
+    ($name:ident) => {
+        #[must_use = "persistent compute custody must be advanced or retained"]
+        pub struct $name {
+            pub(crate) binding: PersistentComputeBindingKeyV1,
+            pub(crate) thread_affinity: PhantomData<Rc<()>>,
+        }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter
+                    .debug_struct(stringify!($name))
+                    .field("attachment_generation", &self.binding.attachment_generation)
+                    .finish_non_exhaustive()
+            }
+        }
+    };
+}
+
+receipt!(Gfx942PreparedPersistentComputeDispatchV1);
+receipt!(Gfx942PreparedThreeBindingPersistentComputeDispatchV1);
+
+#[must_use = "published persistent compute custody must be polled"]
+pub struct Gfx942PersistentComputeDispatchV1 {
+    pub(crate) binding: PersistentComputeBindingKeyV1,
+    pub(crate) batch: Gfx942DispatchBatchV1<1>,
+    pub(crate) thread_affinity: PhantomData<Rc<()>>,
+}
+
+impl fmt::Debug for Gfx942PersistentComputeDispatchV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputeDispatchV1")
+            .field("attachment_generation", &self.binding.attachment_generation)
+            .finish_non_exhaustive()
+    }
+}
+
+#[must_use = "published three-binding persistent compute custody must be polled"]
+pub struct Gfx942ThreeBindingPersistentComputeDispatchV1 {
+    pub(crate) binding: PersistentComputeBindingKeyV1,
+    pub(crate) batch: Gfx942DispatchBatchV1<1>,
+    pub(crate) thread_affinity: PhantomData<Rc<()>>,
+}
+
+impl fmt::Debug for Gfx942ThreeBindingPersistentComputeDispatchV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942ThreeBindingPersistentComputeDispatchV1")
+            .field("attachment_generation", &self.binding.attachment_generation)
+            .finish_non_exhaustive()
+    }
+}
+
+#[must_use = "completed persistent compute custody must be recycled"]
+pub struct Gfx942CompletedPersistentComputeDispatchV1 {
+    pub(crate) binding: PersistentComputeBindingKeyV1,
+    pub(crate) completed: Gfx942CompletedDispatchBatchV1<1>,
+    pub(crate) thread_affinity: PhantomData<Rc<()>>,
+}
+
+impl fmt::Debug for Gfx942CompletedPersistentComputeDispatchV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942CompletedPersistentComputeDispatchV1")
+            .field("attachment_generation", &self.binding.attachment_generation)
+            .finish_non_exhaustive()
+    }
+}
+
+#[must_use = "recycled persistent compute custody must be detached and restored"]
+pub struct Gfx942RecycledPersistentComputeDispatchV1 {
+    pub(crate) binding: PersistentComputeBindingKeyV1,
+    pub(crate) recycle: Gfx942CompletionRecycleObservationV1,
+    pub(crate) thread_affinity: PhantomData<Rc<()>>,
+}
+
+impl fmt::Debug for Gfx942RecycledPersistentComputeDispatchV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942RecycledPersistentComputeDispatchV1")
+            .field("attachment_generation", &self.binding.attachment_generation)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Gfx942RecycledPersistentComputeDispatchV1 {
+    pub const fn recycle_observation(&self) -> Gfx942CompletionRecycleObservationV1 {
+        self.recycle
+    }
+}
+
+#[must_use = "recycled three-binding persistent compute custody must be detached"]
+pub struct Gfx942RecycledThreeBindingPersistentComputeDispatchV1 {
+    pub(crate) binding: PersistentComputeBindingKeyV1,
+    pub(crate) recycle: Gfx942CompletionRecycleObservationV1,
+    pub(crate) thread_affinity: PhantomData<Rc<()>>,
+}
+
+impl fmt::Debug for Gfx942RecycledThreeBindingPersistentComputeDispatchV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942RecycledThreeBindingPersistentComputeDispatchV1")
+            .field("attachment_generation", &self.binding.attachment_generation)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Gfx942RecycledThreeBindingPersistentComputeDispatchV1 {
+    pub const fn recycle_observation(&self) -> Gfx942CompletionRecycleObservationV1 {
+        self.recycle
+    }
+}
+
+#[must_use = "pending persistent compute custody must be polled again"]
+pub enum Gfx942PersistentComputePollV1 {
+    Pending(Gfx942PersistentComputeDispatchV1),
+    Ready(Gfx942CompletedPersistentComputeDispatchV1),
+}
+
+/// One persistent-compute poll with immediate signal recycle on Ready.
+///
+/// `completion_observed_at` is captured after the completion and allocation
+/// ledgers advance but before the completion signal is reset. It preserves the
+/// runtime profiler boundary while the private currentness handoff remains
+/// inside the queue implementation.
+#[must_use = "pending custody must be polled again and recycled custody must be detached"]
+pub enum Gfx942PersistentComputePollAndRecycleV1 {
+    Pending(Gfx942PersistentComputeDispatchV1),
+    Recycled {
+        recycled: Gfx942RecycledPersistentComputeDispatchV1,
+        completion_observed_at: Instant,
+    },
+}
+
+/// One exact three-binding persistent-compute poll with immediate signal
+/// recycle when completion is observed.
+#[must_use = "pending custody must be polled again and recycled custody must be detached"]
+pub enum Gfx942ThreeBindingPersistentComputePollAndRecycleV1 {
+    Pending(Gfx942ThreeBindingPersistentComputeDispatchV1),
+    Recycled {
+        recycled: Gfx942RecycledThreeBindingPersistentComputeDispatchV1,
+        completion_observed_at: Instant,
+    },
+}
+
+/// Bounded observation of one exact three-binding dispatch with immediate
+/// signal recycle on completion.
+#[must_use = "timeout custody must be waited again and recycled custody must be detached"]
+pub enum Gfx942ThreeBindingPersistentComputeWaitAndRecycleV1 {
+    Timeout {
+        dispatch: Gfx942ThreeBindingPersistentComputeDispatchV1,
+        observations: u64,
+    },
+    Recycled {
+        recycled: Gfx942RecycledThreeBindingPersistentComputeDispatchV1,
+        completion_observed_at: Instant,
+        observations: u64,
+    },
+}
+
+/// Bounded persistent-compute observation with immediate signal recycle on Ready.
+///
+/// Timeout retains the exact Published dispatch and reports how many completion
+/// observations were made. Ready reports the same midpoint and Recycled custody
+/// as [`Gfx942PersistentComputePollAndRecycleV1`].
+///
+/// ```compile_fail
+/// use fe2o3_kfd::Gfx942PersistentComputeWaitAndRecycleV1;
+///
+/// fn assert_clone<T: Clone>() {}
+/// assert_clone::<Gfx942PersistentComputeWaitAndRecycleV1>();
+/// ```
+#[must_use = "timeout custody must be waited again and recycled custody must be detached"]
+pub enum Gfx942PersistentComputeWaitAndRecycleV1 {
+    Timeout {
+        dispatch: Gfx942PersistentComputeDispatchV1,
+        observations: u64,
+    },
+    Recycled {
+        recycled: Gfx942RecycledPersistentComputeDispatchV1,
+        completion_observed_at: Instant,
+        observations: u64,
+    },
+}
+
+/// Failure from the fused persistent-compute completion/recycle operation.
+///
+/// The variant identifies whether exact retryable custody, when any, remains
+/// Published or Completed. Terminal custody can additionally report Recycled
+/// after an unambiguous reset followed by a failed dispatch-ledger transition.
+#[must_use = "inspect the failure and retain any returned custody"]
+pub enum Gfx942PersistentComputePollAndRecycleFailureV1 {
+    Poll(Gfx942PersistentComputePollFailureV1),
+    Recycle(Gfx942PersistentComputeRecycleFailureV1),
+}
+
+impl Gfx942PersistentComputePollAndRecycleFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        match self {
+            Self::Poll(failure) => failure.error(),
+            Self::Recycle(failure) => failure.error(),
+        }
+    }
+}
+
+impl fmt::Debug for Gfx942PersistentComputePollAndRecycleFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputePollAndRecycleFailureV1")
+            .field(
+                "stage",
+                &match self {
+                    Self::Poll(_) => "poll",
+                    Self::Recycle(_) => "recycle",
+                },
+            )
+            .field("error", self.error())
+            .finish()
+    }
+}
+
+impl fmt::Display for Gfx942PersistentComputePollAndRecycleFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error().fmt(formatter)
+    }
+}
+
+impl std::error::Error for Gfx942PersistentComputePollAndRecycleFailureV1 {}
+
+/// Restored persistent ownership after exact compute completion and detach.
+#[must_use = "completed persistent compute ownership must be retired or reused"]
+pub struct Gfx942PersistentComputeCompletedV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    pub(crate) frontier: Gfx942PersistentDependencyFrontierV1,
+    pub(crate) effect: Gfx942PersistentComputeEffectV1,
+    pub(crate) authenticated_sha256: Option<[u8; 32]>,
+    pub(crate) fully_initialized: bool,
+}
+
+impl Gfx942PersistentComputeCompletedV1 {}
+
+/// Restored ownership for the exact two-read/one-write persistent dispatch.
+#[must_use = "completed three-binding ownership must be retired or reused"]
+pub struct Gfx942ThreeBindingPersistentComputeCompletedV1 {
+    pub(crate) completed: [Gfx942PersistentComputeCompletedV1; 3],
+}
+
+impl Gfx942ThreeBindingPersistentComputeCompletedV1 {}
+
+impl fmt::Debug for Gfx942ThreeBindingPersistentComputeCompletedV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942ThreeBindingPersistentComputeCompletedV1")
+            .field("completed_count", &self.completed.len())
+            .finish_non_exhaustive()
+    }
+}
+
+pub(crate) enum PersistentComputeUseStateV1 {
+    Reserved(#[allow(dead_code)] Gfx942PersistentUseLeaseV1<Gfx942PersistentReservedV1>),
+    Prepared(Gfx942PersistentUseLeaseV1<Gfx942PersistentPreparedV1>),
+    Published(Gfx942PersistentUseLeaseV1<Gfx942PersistentPublishedV1>),
+    Completed(Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>),
+    Recycled(Gfx942PersistentUseLeaseV1<Gfx942PersistentCompletedV1>),
+    Quarantined,
+}
+
+// Terminal authority stays inline so failure handling never allocates.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum PersistentComputeTerminalNativeCustodyV1 {
+    Preparation(FixedDispatchPreparationCustodyV1<1>),
+    Attached,
+    Published(Gfx942DispatchBatchV1<1>),
+    Completed(Gfx942CompletedDispatchBatchV1<1>),
+    Recycled(Gfx942CompletionRecycleObservationV1),
+    Data(PersistentComputeTerminalDataV1),
+    Storage(Gfx942SdmaBufferStorageV1),
+    Restored,
+    Cancellation(PersistentComputeCancellationCustodyV1),
+}
+
+// Native suffix only: the enclosing attachment retains the allocation ledgers.
+pub(crate) struct PersistentComputeCancellationCustodyV1 {
+    pub(crate) cleanup: Option<ReturningControlCleanupCustodyV1>,
+    pub(crate) returned: Vec<Gfx942FixedDispatchDataV1>,
+    pub(crate) generation: Option<u64>,
+    pub(crate) mapped: [Option<Gfx942DeviceMemoryLeaseV1<Gfx942DeviceMemoryMappedV1>>; 3],
+    pub(crate) count: usize,
+    pub(crate) original_attached: bool,
+    pub(crate) restore_started: bool,
+    pub(crate) restored: usize,
+    pub(crate) cancelled: usize,
+    pub(crate) output: ArrayVec<Gfx942PersistentComputeInputV1, 3>,
+}
+
+pub(crate) struct PersistentComputeTerminalDataV1 {
+    data: ArrayVec<Gfx942FixedDispatchDataV1, MAX_DISPATCH_DATA_LEASES_V1>,
+}
+
+impl PersistentComputeTerminalDataV1 {}
+
+impl Deref for PersistentComputeTerminalDataV1 {
+    type Target = [Gfx942FixedDispatchDataV1];
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+/// Address-free observation of native custody retained after a terminal fault.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Gfx942PersistentComputeTerminalStageV1 {
+    Preparing,
+    Attached,
+    Published,
+    Completed,
+    Recycled,
+    DataDetached,
+    StorageDetached,
+    Restored,
+}
+
+impl PersistentComputeTerminalNativeCustodyV1 {}
+
+pub(crate) struct PersistentComputeAttachmentV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    pub(crate) initialization: PersistentComputeInitializationV1,
+    pub(crate) state: PersistentComputeUseStateV1,
+    pub(crate) binding: PersistentComputeBindingKeyV1,
+    pub(crate) storage_identity: Gfx942DeviceMemoryIdentityV1,
+    pub(crate) effect: Gfx942PersistentComputeEffectV1,
+    pub(crate) predecessor_dispatch_generation: Option<u64>,
+    pub(crate) terminal_custody: Option<PersistentComputeTerminalNativeCustodyV1>,
+}
+
+pub(crate) struct PersistentComputeAttachmentEntryV1 {
+    pub(crate) allocation: Gfx942DirectionalQueuePersistentAllocationV1,
+    pub(crate) initialization: PersistentComputeInitializationV1,
+    pub(crate) state: PersistentComputeUseStateV1,
+    pub(crate) storage_identity: Option<Gfx942DeviceMemoryIdentityV1>,
+    pub(crate) effect: Gfx942PersistentComputeEffectV1,
+}
+
+pub(crate) struct ThreeBindingPersistentComputeAttachmentV1 {
+    pub(crate) entries: [PersistentComputeAttachmentEntryV1; 3],
+    pub(crate) binding: PersistentComputeBindingKeyV1,
+    pub(crate) predecessor_dispatch_generation: Option<u64>,
+    pub(crate) terminal_custody: Option<PersistentComputeTerminalNativeCustodyV1>,
+}
+
+pub(crate) struct BoundedPersistentComputeAttachmentV1 {
+    pub(crate) entries: ArrayVec<PersistentComputeAttachmentEntryV1, MAX_DISPATCH_DATA_LEASES_V1>,
+    pub(crate) binding: PersistentComputeBindingKeyV1,
+    pub(crate) predecessor_dispatch_generation: Option<u64>,
+    pub(crate) terminal_custody: Option<PersistentComputeTerminalNativeCustodyV1>,
+}
+
+impl BoundedPersistentComputeAttachmentV1 {}
+
+#[must_use = "retryable input must be recovered; terminal input requires process teardown"]
+pub enum Gfx942PersistentComputeBindFailureCustodyV1 {
+    Retryable(Gfx942PersistentComputeInputV1),
+    ProcessTeardown(Gfx942PersistentComputeBindTerminalCustodyV1),
+}
+
+#[must_use = "terminal persistent-compute input must remain opaque until process teardown"]
+pub struct Gfx942PersistentComputeBindTerminalCustodyV1 {
+    pub(crate) input: Option<Gfx942PersistentComputeInputV1>,
+}
+
+impl Gfx942PersistentComputeBindTerminalCustodyV1 {
+    pub const fn retains_prebinding_input(&self) -> bool {
+        self.input.is_some()
+    }
+}
+
+#[must_use = "inspect the error and retain the returned bind custody"]
+pub struct Gfx942PersistentComputeBindFailureV1 {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) custody: Gfx942PersistentComputeBindFailureCustodyV1,
+}
+
+impl Gfx942PersistentComputeBindFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Gfx942PersistentComputeBindFailureCustodyV1,
+    ) {
+        (self.error, self.custody)
+    }
+}
+
+impl fmt::Debug for Gfx942PersistentComputeBindFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputeBindFailureV1")
+            .field("error", &self.error)
+            .field(
+                "custody",
+                &match self.custody {
+                    Gfx942PersistentComputeBindFailureCustodyV1::Retryable(_) => "retryable",
+                    Gfx942PersistentComputeBindFailureCustodyV1::ProcessTeardown(_) => {
+                        "process-teardown"
+                    }
+                },
+            )
+            .finish()
+    }
+}
+
+#[must_use = "retryable inputs must be recovered; terminal inputs require process teardown"]
+pub enum Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1 {
+    Retryable(Gfx942ThreeBindingPersistentComputeInputsV1),
+    ProcessTeardown(Gfx942ThreeBindingPersistentComputeBindTerminalCustodyV1),
+}
+
+#[must_use = "terminal three-binding inputs must remain opaque until process teardown"]
+pub struct Gfx942ThreeBindingPersistentComputeBindTerminalCustodyV1 {
+    pub(crate) inputs: Option<Gfx942ThreeBindingPersistentComputeInputsV1>,
+}
+
+impl Gfx942ThreeBindingPersistentComputeBindTerminalCustodyV1 {
+    pub const fn retains_prebinding_inputs(&self) -> bool {
+        self.inputs.is_some()
+    }
+}
+
+#[must_use = "inspect the error and retain the returned three-binding custody"]
+pub struct Gfx942ThreeBindingPersistentComputeBindFailureV1 {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) custody: Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1,
+}
+
+impl Gfx942ThreeBindingPersistentComputeBindFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1,
+    ) {
+        (self.error, self.custody)
+    }
+}
+
+impl fmt::Debug for Gfx942ThreeBindingPersistentComputeBindFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942ThreeBindingPersistentComputeBindFailureV1")
+            .field("error", &self.error)
+            .field(
+                "custody",
+                &match self.custody {
+                    Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1::Retryable(_) => {
+                        "retryable"
+                    }
+                    Gfx942ThreeBindingPersistentComputeBindFailureCustodyV1::ProcessTeardown(_) => {
+                        "process-teardown"
+                    }
+                },
+            )
+            .finish()
+    }
+}
+
+#[must_use = "retryable prepared custody must be retried; terminal failure requires teardown"]
+pub struct Gfx942PersistentComputeExecutionFailureV1 {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) retryable: Option<Gfx942PreparedPersistentComputeDispatchV1>,
+}
+
+impl Gfx942PersistentComputeExecutionFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Option<Gfx942PreparedPersistentComputeDispatchV1>,
+    ) {
+        (self.error, self.retryable)
+    }
+}
+
+impl fmt::Debug for Gfx942PersistentComputeExecutionFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputeExecutionFailureV1")
+            .field("error", &self.error)
+            .field("retryable", &self.retryable.is_some())
+            .finish()
+    }
+}
+
+#[must_use = "retryable prepared custody must be retried; terminal failure requires teardown"]
+pub struct Gfx942ThreeBindingPersistentComputeExecutionFailureV1 {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) retryable: Option<Gfx942PreparedThreeBindingPersistentComputeDispatchV1>,
+}
+
+impl Gfx942ThreeBindingPersistentComputeExecutionFailureV1 {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Option<Gfx942PreparedThreeBindingPersistentComputeDispatchV1>,
+    ) {
+        (self.error, self.retryable)
+    }
+}
+
+impl fmt::Debug for Gfx942ThreeBindingPersistentComputeExecutionFailureV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942ThreeBindingPersistentComputeExecutionFailureV1")
+            .field("error", &self.error)
+            .field("retryable", &self.retryable.is_some())
+            .finish()
+    }
+}
+
+#[must_use = "terminal three-binding transition requires process teardown"]
+pub struct Gfx942ThreeBindingPersistentComputeTransitionFailureV1<T> {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) recovered: Option<T>,
+}
+
+impl<T> Gfx942ThreeBindingPersistentComputeTransitionFailureV1<T> {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(self) -> (ComputeAqlQueueSessionErrorV1, Option<T>) {
+        (self.error, self.recovered)
+    }
+}
+
+impl<T> fmt::Debug for Gfx942ThreeBindingPersistentComputeTransitionFailureV1<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942ThreeBindingPersistentComputeTransitionFailureV1")
+            .field("error", &self.error)
+            .field("recovered", &self.recovered.is_some())
+            .finish()
+    }
+}
+
+pub type Gfx942ThreeBindingPersistentComputePollAndRecycleFailureV1 =
+    Gfx942ThreeBindingPersistentComputeTransitionFailureV1<
+        Gfx942ThreeBindingPersistentComputeDispatchV1,
+    >;
+pub type Gfx942ThreeBindingPersistentComputeCancelFailureV1 =
+    Gfx942ThreeBindingPersistentComputeTransitionFailureV1<
+        Gfx942PreparedThreeBindingPersistentComputeDispatchV1,
+    >;
+pub type Gfx942ThreeBindingPersistentComputeDetachFailureV1 =
+    Gfx942ThreeBindingPersistentComputeTransitionFailureV1<
+        Gfx942RecycledThreeBindingPersistentComputeDispatchV1,
+    >;
+
+#[must_use = "recover foreign custody or retain terminal native custody until process teardown"]
+pub struct Gfx942PersistentComputeTransitionFailureV1<T> {
+    pub(crate) error: ComputeAqlQueueSessionErrorV1,
+    pub(crate) recovered: Option<T>,
+    pub(crate) retained: Option<PersistentComputeTerminalNativeCustodyV1>,
+}
+
+#[must_use = "terminal persistent-compute custody must remain retained until process teardown"]
+pub struct Gfx942PersistentComputeTerminalCustodyV1 {
+    native: Option<PersistentComputeTerminalNativeCustodyV1>,
+}
+
+impl Gfx942PersistentComputeTerminalCustodyV1 {
+    pub fn stage(&self) -> Option<Gfx942PersistentComputeTerminalStageV1> {
+        self.native
+            .as_ref()
+            .and_then(PersistentComputeTerminalNativeCustodyV1::stage)
+    }
+}
+
+#[must_use = "retryable custody must be retried; terminal custody requires process teardown"]
+#[allow(clippy::large_enum_variant)]
+pub enum Gfx942PersistentComputeTransitionFailureCustodyV1<T> {
+    Retryable(T),
+    ProcessTeardown(Gfx942PersistentComputeTerminalCustodyV1),
+}
+
+impl<T> fmt::Debug for Gfx942PersistentComputeTransitionFailureV1<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Gfx942PersistentComputeTransitionFailureV1")
+            .field("error", &self.error)
+            .field("recovered", &self.recovered.is_some())
+            .field("retained_stage", &self.retained_stage())
+            .finish()
+    }
+}
+
+impl<T> Gfx942PersistentComputeTransitionFailureV1<T> {
+    pub const fn error(&self) -> &ComputeAqlQueueSessionErrorV1 {
+        &self.error
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        ComputeAqlQueueSessionErrorV1,
+        Gfx942PersistentComputeTransitionFailureCustodyV1<T>,
+    ) {
+        let custody = match self.recovered {
+            Some(recovered) => {
+                Gfx942PersistentComputeTransitionFailureCustodyV1::Retryable(recovered)
+            }
+            None => Gfx942PersistentComputeTransitionFailureCustodyV1::ProcessTeardown(
+                Gfx942PersistentComputeTerminalCustodyV1 {
+                    native: self.retained,
+                },
+            ),
+        };
+        (self.error, custody)
+    }
+
+    pub fn retained_stage(&self) -> Option<Gfx942PersistentComputeTerminalStageV1> {
+        self.retained
+            .as_ref()
+            .and_then(PersistentComputeTerminalNativeCustodyV1::stage)
+    }
+}
+
+pub type Gfx942PersistentComputeCancelFailureV1 =
+    Gfx942PersistentComputeTransitionFailureV1<Gfx942PreparedPersistentComputeDispatchV1>;
+pub type Gfx942PersistentComputePollFailureV1 =
+    Gfx942PersistentComputeTransitionFailureV1<Gfx942PersistentComputeDispatchV1>;
+pub type Gfx942PersistentComputeRecycleFailureV1 =
+    Gfx942PersistentComputeTransitionFailureV1<Gfx942CompletedPersistentComputeDispatchV1>;
+pub type Gfx942PersistentComputeDetachFailureV1 =
+    Gfx942PersistentComputeTransitionFailureV1<Gfx942RecycledPersistentComputeDispatchV1>;
+
+#[cfg(test)]
+#[path = "persistent_compute/tests.rs"]
+mod tests;
+
+#[path = "persistent_compute/custody.rs"]
+mod custody;
+
+#[path = "persistent_compute/initialized_input.rs"]
+mod initialized_input;

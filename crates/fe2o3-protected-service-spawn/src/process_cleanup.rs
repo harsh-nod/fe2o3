@@ -6,6 +6,7 @@
 //! module creates no worker, reserves no slot, and supplies no persistent ledger.
 
 use std::os::fd::{AsFd, OwnedFd};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use fe2o3_artifact_transaction::ArtifactProcessSpawnLeaseV1;
@@ -15,6 +16,12 @@ use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, WaitIdStatus};
 use crate::native_cgroup::NativeCgroupDomainV1;
 use crate::native_spawn::{ProtectedServiceSpawnErrorV2 as SpawnError, Result as SpawnResult};
 use crate::native_user_namespace::NativeUserNamespaceV1;
+
+pub(crate) const NATIVE_PROOF_RETIREMENT_STORAGE: usize = size_of::<(
+    AtomicBool,
+    std::sync::atomic::AtomicUsize,
+    std::sync::atomic::AtomicUsize,
+)>();
 
 /// Disposition of one finite cleanup attempt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,6 +46,7 @@ pub struct ChildCleanupV1 {
     pid: Pid,
     custody: CleanupCustodyV1<OwnedFd, ArtifactProcessSpawnLeaseV1, NativeCgroupDomainV1>,
     namespace: Option<NativeUserNamespaceV1>,
+    native_proof_retirement: Option<Arc<AtomicBool>>,
 }
 
 impl ChildCleanupV1 {
@@ -56,6 +64,7 @@ impl ChildCleanupV1 {
             pid,
             custody: CleanupCustodyV1::new(pidfd, spawn_lease),
             namespace: None,
+            native_proof_retirement: None,
         }
     }
 
@@ -71,6 +80,7 @@ impl ChildCleanupV1 {
             pid,
             custody: CleanupCustodyV1::with_domain(pidfd, spawn_lease, domain),
             namespace: None,
+            native_proof_retirement: None,
         }
     }
 
@@ -87,6 +97,7 @@ impl ChildCleanupV1 {
             pid,
             custody: CleanupCustodyV1::with_domain(pidfd, spawn_lease, domain),
             namespace: Some(namespace),
+            native_proof_retirement: None,
         }
     }
 
@@ -290,7 +301,49 @@ impl ChildCleanupV1 {
     /// bypasses its signal/exec/group stops, so no ptrace resume is owed here.
     /// Linux permits this exact-child terminal wait from another parent thread.
     pub fn step(&mut self) -> CleanupPollV1 {
-        self.custody.step(&mut PidfdCleanupSyscallsV1)
+        let result = self.custody.step(&mut PidfdCleanupSyscallsV1);
+        record_native_proof_retirement(&self.native_proof_retirement, result);
+        result
+    }
+
+    /// Native proof launch alone installs this fresh, original-record cell.
+    pub(crate) fn attach_native_proof_retirement(&mut self, retirement: Arc<AtomicBool>) {
+        assert!(self.native_proof_retirement.is_none());
+        assert!(self.custody.domain.is_some());
+        assert!(!retirement.load(Ordering::Acquire));
+        self.native_proof_retirement = Some(retirement);
+    }
+}
+
+fn record_native_proof_retirement(cell: &Option<Arc<AtomicBool>>, result: CleanupPollV1) {
+    if result == CleanupPollV1::Reaped {
+        if let Some(retirement) = cell {
+            retirement.store(true, Ordering::Release);
+        }
+    }
+}
+
+#[cfg(test)]
+mod native_proof_retirement_tests {
+    use super::*;
+    #[test]
+    fn only_exact_completed_record_changes_its_monotonic_cell() {
+        let first = Arc::new(AtomicBool::new(false));
+        let second = Arc::new(AtomicBool::new(false));
+        let original = Some(Arc::clone(&first));
+        record_native_proof_retirement(&original, CleanupPollV1::Pending);
+        record_native_proof_retirement(&original, CleanupPollV1::Quarantined);
+        assert!(!first.load(Ordering::Acquire));
+        assert!(!second.load(Ordering::Acquire));
+        record_native_proof_retirement(&original, CleanupPollV1::Reaped);
+        assert!(first.load(Ordering::Acquire));
+        assert!(!second.load(Ordering::Acquire));
+        record_native_proof_retirement(&original, CleanupPollV1::Pending);
+        assert!(first.load(Ordering::Acquire));
+        drop(original);
+        let next_generation = Arc::new(AtomicBool::new(false));
+        assert!(!Arc::ptr_eq(&first, &next_generation));
+        assert!(!next_generation.load(Ordering::Acquire));
     }
 }
 
