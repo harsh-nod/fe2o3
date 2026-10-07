@@ -19,6 +19,7 @@ enum ReturnClass {
     Pointer,
     Slice(u32),
     Aggregate(u32),
+    Product(u32),
     Enum(u32),
     Descriptor,
 }
@@ -29,6 +30,7 @@ struct DestinationComponent {
     result_type: TypeId,
     first_leaf: usize,
     depth: usize,
+    product: bool,
 }
 
 pub(super) struct SourceFrameReturn<'slots, 'view, 'source> {
@@ -100,7 +102,12 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 "original helper execution reference return requires loan snapshot transport",
             ));
         }
-        let class = if descriptor_helpers::nominal_reference(slots, ty, out)? {
+        let class = if slots.is_product_v282(ty, out)? {
+            if instance == 0 || row.incoming.is_none() {
+                return Err(mismatch());
+            }
+            ReturnClass::Product(ty.index())
+        } else if descriptor_helpers::nominal_reference(slots, ty, out)? {
             if instance == 0 || row.incoming.is_none() {
                 return Err(mismatch());
             }
@@ -313,13 +320,21 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                     if matches!(class, ReturnClass::Enum(_) | ReturnClass::Descriptor) {
                         return Err(mismatch());
                     }
-                    let (range, result_type) = slots
-                        .aggregate_component_range(
+                    let product = slots.is_product_v282(root_type, out)?;
+                    let (range, result_type) = if product {
+                        slots.product_component_range_v282(
                             root_type,
                             destination.place().projections(),
                             out,
                         )?
-                        .ok_or_else(mismatch)?;
+                    } else {
+                        slots.aggregate_component_range(
+                            root_type,
+                            destination.place().projections(),
+                            out,
+                        )?
+                    }
+                    .ok_or_else(mismatch)?;
                     if result_type != ty || range.is_empty() {
                         return Err(mismatch());
                     }
@@ -328,6 +343,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                         result_type,
                         first_leaf: range.start,
                         depth: destination.place().projections().len(),
+                        product,
                     });
                 }
             }
@@ -433,7 +449,10 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
         if self.class != ReturnClass::Unit
             && !matches!(
                 self.class,
-                ReturnClass::Aggregate(_) | ReturnClass::Enum(_) | ReturnClass::Descriptor
+                ReturnClass::Aggregate(_)
+                    | ReturnClass::Product(_)
+                    | ReturnClass::Enum(_)
+                    | ReturnClass::Descriptor
             )
         {
             let local = self.returned.ok_or_else(mismatch)?;
@@ -444,7 +463,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 ReturnClass::Pointer => write!(out, "match source.machine.values[{local}] {{ MemoryValueV30::Pointer(_) => true, _ => false }}"),
                 ReturnClass::Slice(bits) => write!(out, "match source.machine.values[{local}] {{ MemoryValueV30::Slice(slice) => 0 <= slice.length < memory_value_modulus_v30({}), _ => false }}", bits / 8),
                 ReturnClass::Unit => unreachable!(),
-                ReturnClass::Aggregate(_) | ReturnClass::Enum(_) | ReturnClass::Descriptor => unreachable!(),
+                ReturnClass::Aggregate(_) | ReturnClass::Product(_) | ReturnClass::Enum(_) | ReturnClass::Descriptor => unreachable!(),
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
         }
@@ -476,6 +495,8 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
             .map_err(|_| out.error())?;
         } else if let ReturnClass::Aggregate(ty) = self.class {
             write!(out, "match invocation_source_aggregate_snapshot_v42(source, {}, {ty}, seq![], {ty}) {{ Some(value) => InvocationSourceValueV42::Aggregate(value), None => InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }}", self.returned.ok_or_else(mismatch)?).map_err(|_| out.error())?;
+        } else if let ReturnClass::Product(ty) = self.class {
+            write!(out, "match invocation_source_product_return_snapshot_v282(source, {}, {ty}, little_endian) {{ Some(value) => InvocationSourceValueV42::Product(value), None => InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }}", self.returned.ok_or_else(mismatch)?).map_err(|_| out.error())?;
         } else if let ReturnClass::Enum(ty) = self.class {
             write!(out, "match invocation_source_enum_snapshot_v50(source, {}, {ty}, little_endian) {{ Some(value) => InvocationSourceValueV42::Enum(value), None => InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }}", self.returned.ok_or_else(mismatch)?).map_err(|_| out.error())?;
         } else {
@@ -508,18 +529,34 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                             component.result_type.index()
                         )
                         .map_err(|_| out.error())?;
-                        let leaf = self.slots.aggregate_leaf(
-                            component.root_type,
-                            component.first_leaf,
-                            out,
-                        )?;
-                        let path = leaf.path(out)?;
-                        if component.depth > path.len() {
-                            return Err(mismatch());
-                        }
-                        for field in &path[..component.depth] {
-                            out.budget.charge_work(1)?;
-                            write!(out, "{field}int,").map_err(|_| out.error())?;
+                        if component.product {
+                            let atom = self.slots.product_component_v282(
+                                component.root_type,
+                                component.first_leaf,
+                                out,
+                            )?;
+                            let path = atom.path(out)?;
+                            if component.depth > path.len() {
+                                return Err(mismatch());
+                            }
+                            for field in &path[..component.depth] {
+                                out.budget.charge_work(1)?;
+                                write!(out, "{field}int,").map_err(|_| out.error())?;
+                            }
+                        } else {
+                            let leaf = self.slots.aggregate_leaf(
+                                component.root_type,
+                                component.first_leaf,
+                                out,
+                            )?;
+                            let path = leaf.path(out)?;
+                            if component.depth > path.len() {
+                                return Err(mismatch());
+                            }
+                            for field in &path[..component.depth] {
+                                out.budget.charge_work(1)?;
+                                write!(out, "{field}int,").map_err(|_| out.error())?;
+                            }
                         }
                         write!(out, "]))").map_err(|_| out.error())?;
                     }
@@ -602,6 +639,7 @@ spec fn invocation_source_return_value_defined_v42(value: InvocationSourceValueV
         InvocationSourceValueV42::Carrier(value) => match value {
             MemoryValueV30::Undefined => false, _ => true },
         InvocationSourceValueV42::Aggregate(value) => invocation_source_aggregate_complete_v42(value),
+        InvocationSourceValueV42::Product(value) => invocation_source_product_complete_v282(value),
         InvocationSourceValueV42::Enum(value) => invocation_source_enum_complete_v47(value),
         InvocationSourceValueV42::Descriptor(value) => matches!(value.value, MemoryValueV30::Slice(_)),
     }
@@ -637,12 +675,19 @@ spec fn invocation_source_return_install_v42(
         } }
     } else { match destination.component {
         Some((root_type, result_type, path)) => {
+            if invocation_source_product_type_v282(root_type) {
+                match invocation_source_product_pack_v282(result_type, value, None) {
+                    Some(components) => invocation_source_product_replace_path_v282(source,
+                        destination.local, root_type, path, result_type, components, little_endian),
+                    None => invocation_source_byte_refused_v36(source),
+                }
+            } else {
             let aggregate = match value {
                 InvocationSourceValueV42::Carrier(value) => Some(InvocationSourceAggregateV42 {
                     source_type: result_type, leaves: Map::empty().insert(seq![], value),
                     execution_lease: None }),
                 InvocationSourceValueV42::Aggregate(value) => Some(value),
-                InvocationSourceValueV42::Enum(_) | InvocationSourceValueV42::Descriptor(_)
+                InvocationSourceValueV42::Product(_) | InvocationSourceValueV42::Enum(_) | InvocationSourceValueV42::Descriptor(_)
                 | InvocationSourceValueV42::Execution(_) => None,
             };
             match aggregate {
@@ -652,12 +697,15 @@ spec fn invocation_source_return_install_v42(
                 } else { invocation_source_byte_refused_v36(source) },
                 None => invocation_source_byte_refused_v36(source),
             }
+            }
         },
         None => match value {
             InvocationSourceValueV42::Carrier(value) =>
                 invocation_source_byte_put_local_v36(source, destination.local, value),
             InvocationSourceValueV42::Aggregate(value) =>
                 invocation_source_aggregate_install_v42(source, destination.local, value),
+            InvocationSourceValueV42::Product(value) =>
+                invocation_source_product_install_v282(source, destination.local, value, little_endian),
             InvocationSourceValueV42::Enum(value) =>
                 if invocation_source_enum_snapshot_current_v50(source, value, little_endian) {
                     invocation_source_enum_install_v47(source, destination.local, value)
@@ -677,6 +725,7 @@ spec fn invocation_source_snapshot_escapes_frame_v42(
             (match value.execution_lease { Some(lease) => lease.frame == frame, None => false })
             || (exists|path: Seq<int>| value.leaves.contains_key(path)
                 && invocation_source_value_escapes_frame_v36(value.leaves[path], frame)),
+        InvocationSourceValueV42::Product(value) => invocation_source_product_return_escapes_frame_v282(value, frame),
         InvocationSourceValueV42::Execution(_) => true,
         InvocationSourceValueV42::Enum(value) => exists|field: int|
             value.fields.contains_key(field) && invocation_source_value_escapes_frame_v36(value.fields[field], frame),
@@ -782,6 +831,8 @@ spec fn invocation_source_return_v36(
             if begin <= i < end { MemoryValueV30::Undefined } else { source.machine.values[i] });
         let logical = invocation_source_logical_clear_v38(source.logical, begin, end);
         let escapes = invocation_source_snapshot_escapes_frame_v42(returned, frame)
+            || (exists|local: int| logical.products.contains_key(local)
+                && invocation_source_product_escapes_frame_v282(logical.products[local], frame))
             || (exists|i: int| 0 <= i < values.len()
                 && invocation_source_value_escapes_frame_v36(values[i], frame))
             || (exists|local: int, path: Seq<int>| logical.aggregates.contains_key(local)

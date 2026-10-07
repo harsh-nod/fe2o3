@@ -62,6 +62,24 @@ spec fn invocation_source_statement_effects_v36(
     } else {
         match observation.event {
             None => seq![MemoryOperationEffectV30::Refused],
+            Some(InvocationSourceByteEventV36::ProductTransfer { destination, input }) => {
+                let result = invocation_source_product_transfer_v282(observation.before, destination,
+                    input, observation.root, observation.instance, little_endian);
+                if result.source == observation.after {
+                    Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
+                } else { seq![MemoryOperationEffectV30::Refused] }
+            }
+            Some(InvocationSourceByteEventV36::ProductDeinitialize(place)) => {
+                if invocation_source_product_remove_v282(observation.before, place, little_endian) == observation.after { seq![] }
+                else { seq![MemoryOperationEffectV30::Refused] }
+            }
+            Some(InvocationSourceByteEventV36::ProductConstruct { destination, source_type, fields }) => {
+                let result = invocation_source_product_construct_v282(observation.before, destination,
+                    source_type, fields, observation.root, observation.instance, little_endian);
+                if result.source == observation.after {
+                    Seq::new(result.observations.len(), |i: int| result.observations[i].effect)
+                } else { seq![MemoryOperationEffectV30::Refused] }
+            }
             Some(InvocationSourceByteEventV36::ThreadWrite(write)) => {
                 let result = invocation_source_thread_write_v88(observation.before, write,
                     observation.root, observation.instance, little_endian);
@@ -208,6 +226,7 @@ spec fn invocation_source_operands_effects_v36(
                     head.root, head.instance, little_endian),
             InvocationSourceOperandV36::Pointer { .. }
             | InvocationSourceOperandV36::Slice { .. } => seq![],
+            InvocationSourceOperandV36::Product { .. } |
             InvocationSourceOperandV36::Execution(_) |
             InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }
             | InvocationSourceOperandV36::Descriptor { .. } => {

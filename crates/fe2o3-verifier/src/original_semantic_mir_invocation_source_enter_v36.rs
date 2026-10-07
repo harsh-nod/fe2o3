@@ -13,6 +13,7 @@ enum Class {
     Pointer,
     Slice(u32),
     Aggregate(u32),
+    Product(u32),
     Enum(u32),
     Descriptor(Recipe),
 }
@@ -229,7 +230,12 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 .types()
                 .get(declaration.ty().index() as usize)
                 .ok_or_else(mismatch)?;
-            let class = if let Some(recipe) = execution_loans::entry_recipe(
+            let class = if slots.is_product_v282(declaration.ty(), out)? {
+                if instance == 0 || row.incoming.is_none() {
+                    return Err(unsupported());
+                }
+                Class::Product(declaration.ty().index())
+            } else if let Some(recipe) = execution_loans::entry_recipe(
                 slots,
                 plan,
                 root,
@@ -459,6 +465,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 Class::Pointer => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(MemoryValueV30::Pointer(_)) => true, _ => false }}"),
                 Class::Slice(bits) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(MemoryValueV30::Slice(slice)) => 0 <= slice.length < memory_value_modulus_v30({}), _ => false }}", bits / 8),
                 Class::Aggregate(ty) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Aggregate(value) => value.source_type == {ty} && invocation_source_aggregate_complete_v42(value), _ => false }}"),
+                Class::Product(ty) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Product(value) => value.source_type == {ty} && invocation_source_product_complete_v282(value) && invocation_source_product_current_v282(source, value, little_endian), _ => false }}"),
                 Class::Enum(ty) => write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Enum(value) => value.source_type == {ty} && invocation_source_enum_snapshot_current_v50(source, value, little_endian), _ => false }}"),
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
@@ -514,6 +521,10 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             }
             if matches!(argument.class, Class::Aggregate(_)) {
                 write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::Aggregate(value) => invocation_source_aggregate_install_v42(entered, {}, value), _ => invocation_source_byte_refused_v36(entered) }};\n", argument.local).map_err(|_| out.error())?;
+                continue;
+            }
+            if matches!(argument.class, Class::Product(_)) {
+                write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::Product(value) => invocation_source_product_install_v282(entered, {}, value, little_endian), _ => invocation_source_byte_refused_v36(entered) }};\n", argument.local).map_err(|_| out.error())?;
                 continue;
             }
             write!(out, " let argument_{i} = match arguments[{i}] {{ InvocationSourceValueV42::Carrier(value) => value, _ => MemoryValueV30::Undefined }};\n").map_err(|_| out.error())?;

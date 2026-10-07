@@ -180,6 +180,36 @@ Its emitted artifact is support/input only: no whole initialization, step, read,
 effect, lifetime or trace proof, executed proof, Policy11 transcript, publication
 receipt, default activation or tutorial qualification is established.
 
+The original typed-product extension V282 models ordinary tuple, aggregate and
+array construction separately from the scalar-only V42 aggregate carrier. It
+joins the retained original statement and each ordered operand type to a bounded,
+owner-backed field-path schema. Construction evaluates operands left to right,
+preserves move invalidations and read observations, and checks every retained
+atom again after later operands and destination replacement. Plain scalar leaves,
+tagged pointers/slices, existing enum snapshots, and authenticated descriptor or
+execution snapshots remain distinct. Nominal Context/Workgroup values are opaque
+whole aggregates; their physical fields cannot manufacture a role or lease.
+Projected product transport retains the exact descriptor recipe with its snapshot.
+
+Schema classification is not operational admission. Mutable execution-reference
+snapshots remain unsupported, and returning an execution reference remains refused
+even when nested in a product. Surviving caller products instead use frame-specific
+reachability checks. Copy follows the original pointer kind (raw mutable pointers
+are Copy; mutable references and execution aggregates are not). Original object
+storage and projections outside admitted field/constant-index paths remain refused.
+Product transport does not create general scalar arithmetic, dereference, dynamic
+index, enum-field, or address-taking support for projected product operands.
+Unsupported schema rows refuse at construction admission rather than producing an
+apparently admitted constructor that can only fail at runtime.
+
+This extension changes the shared generated logical state, value enum and support
+prelude even for models that do not use products. Earlier complete nominal-byte
+identity results remain historical; qualification must record the explicit model
+delta and new complete outputs, not silently replace old hashes. Rust generation
+tests do not typecheck generated Verus, prove product preservation laws, or integrate
+product demands into the separate current/suspended-frame contract. Genuine model
+frontend checks, semantic proofs and that frame-demand join remain distinct gates.
+
 Reference rows come from the existing authenticated binding adapter. The
 expanded stage still refuses every nonempty reference-obligation set before its
 consumer; an owner-backed empty roster is not a discharged reference proof.
@@ -192,7 +222,7 @@ recorded qualification before a passing-run claim.
 The backend CI entry explicitly runs both ignored real-rustc parent tests after
 its ordinary library suite: the expanded-source parent (including the complete
 multi-root matrix) and the authenticated terminal-census parent. Their target
-matrix is gfx942/gfx950 with MIR optimization levels 0 and 3. They establish
+matrix is gfx942/gfx950 with `-Copt-level=0/3` and fixed `-Zmir-opt-level=0`. They establish
 compilation-stage behavior, not GPU execution or protected-runtime qualification.
 Record their exact source and terminal results before claiming a passing run.
 

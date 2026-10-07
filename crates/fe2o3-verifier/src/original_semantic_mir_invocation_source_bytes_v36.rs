@@ -34,6 +34,8 @@ pub(super) mod execution_loans;
 mod integer_casts;
 #[path = "original_semantic_mir_source_enum_events_v47.rs"]
 mod logical_enums;
+#[path = "original_semantic_mir_source_product_events_v282.rs"]
+mod products;
 #[path = "original_semantic_mir_source_scalar_operands_v48.rs"]
 mod scalar_operands;
 #[path = "original_semantic_mir_source_slice_reads_v41.rs"]
@@ -166,6 +168,10 @@ pub(super) enum Value {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OperandKind {
+    Product {
+        place: products::ProductPlace,
+        moved: bool,
+    },
     Execution(execution_loans::ExecutionOperand),
     Descriptor(descriptor_helpers::DescriptorOperand),
     Enum {
@@ -240,6 +246,9 @@ pub(super) enum Event {
     Pointer(pointer_events::Event),
     Discriminant(discriminants::Read),
     EnumConstruct(enum_construction::Construct),
+    ProductConstruct(products::Construct),
+    ProductTransfer(products::Transfer),
+    ProductDeinitialize(products::ProductPlace),
     LogicalEnum(logical_enums::LogicalEvent),
     IntegerCast(integer_casts::Cast),
     ScalarOperands(scalar_operands::Operation),
@@ -362,6 +371,7 @@ pub(super) struct SourceByteBody<'slots, 'view, 'source> {
     blocks: Vec<Range<usize>>,
     events: Vec<Event>,
     enum_payloads: Vec<enum_construction::Payload>,
+    product_payloads: Vec<TypedOperand>,
     required: usize,
 }
 
@@ -521,6 +531,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
         }
         let mut count = 0usize;
         let mut payload_count = 0usize;
+        let mut product_count = 0usize;
         for block in function.blocks() {
             out.budget.charge_work(1)?;
             count = count
@@ -530,12 +541,16 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                 out.budget.charge_work(1)?;
                 if let Statement::Assign(assignment) = statement.kind()
                     && let Rvalue::Aggregate(aggregate) = assignment.value().kind()
-                    && matches!(
+                {
+                    let target = if matches!(
                         aggregate.kind(),
                         fe2o3_mir_model::semantic_mir_v1::SemanticAggregateKindV1::EnumVariant(_)
-                    )
-                {
-                    payload_count = payload_count
+                    ) {
+                        &mut payload_count
+                    } else {
+                        &mut product_count
+                    };
+                    *target = target
                         .checked_add(aggregate.operands().len())
                         .ok_or(Resource::Arithmetic)?;
                 }
@@ -544,6 +559,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
         let mut blocks = vector(function.blocks().len(), out)?;
         let mut events = vector(count, out)?;
         let mut enum_payloads = vector(payload_count, out)?;
+        let mut product_payloads = vector(product_count, out)?;
         let context = Context {
             slots,
             types: semantic.types(),
@@ -565,8 +581,22 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                     block_ordinal,
                     statement_ordinal,
                 ];
-                let borrowed = match statement.kind() {
-                    Statement::Assign(assignment) => witness_events::Borrow::derive(
+                let transported = match statement.kind() {
+                    Statement::Assign(assignment) => products::Transfer::derive(
+                        &context,
+                        plan,
+                        row.function,
+                        block_ordinal,
+                        statement_ordinal,
+                        assignment,
+                        out,
+                    ),
+                    _ => Ok(None),
+                }
+                .map_err(|error| statement_error(error, site, statement.kind(), context.types))?;
+                let borrowed = match (transported, statement.kind()) {
+                    (Some(transfer), _) => Some(Event::ProductTransfer(transfer)),
+                    (None, Statement::Assign(assignment)) => witness_events::Borrow::derive(
                         &context,
                         row.function,
                         block_ordinal,
@@ -578,7 +608,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                     .map_err(|error| {
                         statement_error(error, site, statement.kind(), context.types)
                     })?,
-                    _ => None,
+                    (None, _) => None,
                 };
                 let borrowed = match (borrowed, statement.kind()) {
                     (None, Statement::Assign(assignment)) => execution_loans::derive(
@@ -670,9 +700,35 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                             (None, Some(constructed)) => Event::EnumConstruct(constructed),
                             (Some(_), Some(_)) => return Err(mismatch()),
                             (None, None) => {
-                                context.statement(statement.kind(), out).map_err(|error| {
+                                let product = match statement.kind() {
+                                    Statement::Assign(assignment) => products::Construct::derive(
+                                        &context,
+                                        plan,
+                                        row.function,
+                                        block_ordinal,
+                                        statement_ordinal,
+                                        assignment,
+                                        &mut product_payloads,
+                                        out,
+                                    ),
+                                    _ => Ok(None),
+                                }
+                                .map_err(|error| {
                                     statement_error(error, site, statement.kind(), context.types)
-                                })?
+                                })?;
+                                match product {
+                                    Some(product) => Event::ProductConstruct(product),
+                                    None => context.statement(statement.kind(), out).map_err(
+                                        |error| {
+                                            statement_error(
+                                                error,
+                                                site,
+                                                statement.kind(),
+                                                context.types,
+                                            )
+                                        },
+                                    )?,
+                                }
                             }
                         }
                     }
@@ -699,6 +755,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
             blocks,
             events,
             enum_payloads,
+            product_payloads,
             required: out.budget.storage(),
         })
     }
@@ -769,6 +826,22 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
         argument: usize,
         out: &mut Writer<'_, '_>,
     ) -> Result<TypedOperand> {
+        let context = self.context(out)?;
+        out.budget.charge_work(3)?;
+        let Some(Terminator::Call(call)) = context
+            .function
+            .blocks()
+            .get(block)
+            .map(|body| body.terminator().kind())
+        else {
+            return Err(mismatch());
+        };
+        let original = call.arguments().get(argument).ok_or_else(mismatch)?;
+        if let Operand::Copy(place) | Operand::Move(place) = original
+            && products::ProductPlace::derive(&context, place, out)?.is_some()
+        {
+            return context.typed_operand(original, out);
+        }
         if let Some(operand) = execution_loans::call_argument(
             self.slots,
             plan,
@@ -923,7 +996,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                     " if block == {block} && statement == {statement} {{ Some("
                 )
                 .map_err(|_| out.error())?;
-                emit_event(*event, &self.enum_payloads, out)?;
+                emit_event(*event, &self.enum_payloads, &self.product_payloads, out)?;
                 write!(out, ") }} else").map_err(|_| out.error())?;
             }
         }
@@ -1259,6 +1332,23 @@ impl Context<'_, '_, '_> {
     fn typed_operand(&self, operand: &Operand, out: &mut Writer<'_, '_>) -> Result<TypedOperand> {
         out.budget.charge_work(3)?;
         let ty = operand.ty();
+        if let Operand::Copy(place) | Operand::Move(place) = operand
+            && let Some(place) = products::ProductPlace::derive(self, place, out)?
+        {
+            if !self.slots.product_type_supported_v282(ty, out)?
+                || matches!(operand, Operand::Copy(_))
+                    && !self.slots.product_type_copyable_v282(ty, out)?
+            {
+                return Err(unsupported());
+            }
+            return Ok(TypedOperand {
+                ty,
+                kind: OperandKind::Product {
+                    place,
+                    moved: matches!(operand, Operand::Move(_)),
+                },
+            });
+        }
         let declaration = self.types.get(ty.index() as usize).ok_or_else(mismatch)?;
         let kind = if let Shape::Pointer(pointer) = declaration.shape() {
             if execution_loans::nominal_reference(self.types, ty)?.is_some() {
@@ -1374,6 +1464,11 @@ impl Context<'_, '_, '_> {
 
     fn statement(&self, statement: &Statement, out: &mut Writer<'_, '_>) -> Result<Event> {
         out.budget.charge_work(2)?;
+        if let Statement::Deinitialize(place) = statement
+            && let Some(place) = products::ProductPlace::derive(self, place, out)?
+        {
+            return Ok(Event::ProductDeinitialize(place));
+        }
         if let Statement::Assign(assignment) = statement
             && let Some(cast) = integer_casts::Cast::derive(self, assignment, out)?
         {
@@ -1514,10 +1609,11 @@ impl Context<'_, '_, '_> {
                         .get(local.index() as usize)
                         .ok_or_else(mismatch)?
                         .ty();
-                    if matches!(
-                        self.types.get(ty.index() as usize).map(Type::shape),
-                        Some(Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. })
-                    ) && self.slots.aggregate_leaf_count(ty, out)?.is_some()
+                    if self.slots.is_product_v282(ty, out)?
+                        || (matches!(
+                            self.types.get(ty.index() as usize).map(Type::shape),
+                            Some(Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. })
+                        ) && self.slots.aggregate_leaf_count(ty, out)?.is_some())
                     {
                         return Ok(Event::AggregateReset {
                             local: self.local(local.index())?,
@@ -1561,6 +1657,11 @@ impl TypedOperand {
     pub(super) fn emit(self, out: &mut Writer<'_, '_>) -> Result<()> {
         out.budget.charge_work(1)?;
         match self.kind {
+            OperandKind::Product { place, moved } => {
+                write!(out, "InvocationSourceOperandV36::Product {{ place: ").map_err(|_| out.error())?;
+                place.emit(out)?;
+                write!(out, ", moved: {moved} }}").map_err(|_| out.error())
+            }
             OperandKind::Execution(operand) => {
                 write!(out, "InvocationSourceOperandV36::Execution(").map_err(|_| out.error())?;
                 operand.emit(out)?;
@@ -1675,6 +1776,7 @@ fn emit_destination(destination: Destination, out: &mut Writer<'_, '_>) -> Resul
 fn emit_event(
     event: Event,
     enum_payloads: &[enum_construction::Payload],
+    product_payloads: &[TypedOperand],
     out: &mut Writer<'_, '_>,
 ) -> Result<()> {
     out.budget.charge_work(1)?;
@@ -1715,6 +1817,14 @@ fn emit_event(
         }
         Event::Discriminant(read) => read.emit(out)?,
         Event::EnumConstruct(constructed) => constructed.emit(enum_payloads, out)?,
+        Event::ProductConstruct(constructed) => constructed.emit(product_payloads, out)?,
+        Event::ProductTransfer(transfer) => transfer.emit(out)?,
+        Event::ProductDeinitialize(place) => {
+            write!(out, "InvocationSourceByteEventV36::ProductDeinitialize(")
+                .map_err(|_| out.error())?;
+            place.emit(out)?;
+            write!(out, ")").map_err(|_| out.error())?;
+        }
         Event::LogicalEnum(event) => event.emit(enum_payloads, out)?,
         Event::IntegerCast(cast) => cast.emit(out)?,
         Event::ScalarOperands(operation) => operation.emit(out)?,
@@ -1776,6 +1886,7 @@ fn headers() -> usize {
     h::<SourceByteBody<'_, '_, '_>>()
         + h::<Context<'_, '_, '_>>()
         + h::<Vec<Event>>()
+        + h::<Vec<TypedOperand>>()
         + h::<Vec<Range<usize>>>()
         + h::<Range<usize>>()
         + h::<Event>()
@@ -1811,6 +1922,7 @@ fn headers() -> usize {
         + slice_reads::headers()
         + discriminants::headers()
         + aggregates::headers()
+        + products::headers()
         + enum_construction::headers()
         + logical_enums::headers()
         + integer_casts::headers()
@@ -1834,6 +1946,7 @@ pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_memory_values_v51.vrs"),
     include_str!("original_semantic_mir_source_memory_laws_v51.vrs"),
     include_str!("original_semantic_mir_source_aggregate_values_v42.vrs"),
+    include_str!("original_semantic_mir_source_product_values_v282.vrs"),
     include_str!("original_semantic_mir_source_checked_objects_v44.vrs"),
     include_str!("original_semantic_mir_source_aggregate_laws_v42.vrs"),
     include_str!("original_semantic_mir_source_integer_casts_v43.vrs"),
@@ -1875,6 +1988,9 @@ spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByt
                     _ => false,
                 })
         && (forall|local: int| source.logical.aggregates.contains_key(local) ==>
+            source.machine.values[local] == MemoryValueV30::Undefined
+                && !source.objects.contains_key(local))
+        && (forall|local: int| source.logical.products.contains_key(local) ==>
             source.machine.values[local] == MemoryValueV30::Undefined
                 && !source.objects.contains_key(local))
         && (forall|local: int| source.logical.enums.contains_key(local) ==>
@@ -1929,6 +2045,7 @@ enum InvocationSourceByteValueV36 {
 }
 
 enum InvocationSourceOperandV36 {
+    Product { place: InvocationSourceProductPlaceV282, moved: bool },
     Execution(InvocationSourceExecutionOperandV168),
     Descriptor { local: int, recipe: InvocationSourceDescriptorRecipeV51, moved: bool },
     Enum { local: int, source_type: int, moved: bool },
@@ -1947,6 +2064,11 @@ enum InvocationSourceByteDestinationV36 {
 // Named destinations deliberately distinguish aggregate places, locals, and memory.
 #[allow(inconsistent_fields)]
 enum InvocationSourceByteEventV36 {
+    ProductDeinitialize(InvocationSourceProductPlaceV282),
+    ProductTransfer { destination: InvocationSourceProductDestinationV282,
+        input: InvocationSourceProductOperandV282 },
+    ProductConstruct { destination: InvocationSourceProductDestinationV282,
+        source_type: int, fields: Seq<InvocationSourceProductOperandV282> },
     AggregateDeinitialize(InvocationSourceAggregatePlaceV42),
     AggregateReset { local: int },
     AggregateTransfer { destination: InvocationSourceAggregatePlaceV42,
@@ -2190,6 +2312,7 @@ spec fn invocation_source_operand_evaluate_v36(
     root: int, instance: int, little_endian: bool,
 ) -> InvocationSourceByteEvaluationV36 {
     match operand {
+        InvocationSourceOperandV36::Product { .. } |
         InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }
         | InvocationSourceOperandV36::Descriptor { .. } | InvocationSourceOperandV36::Execution(_) => InvocationSourceByteEvaluationV36 {
             source: invocation_source_byte_refused_v36(source), value: MemoryValueV30::Undefined },
@@ -2245,6 +2368,7 @@ spec fn invocation_source_byte_end_v36(
             // allocations all retain provenance until explicitly cleared.
             if cleared.machine.valid
                 && !invocation_memory_names_allocation_v37(cleared.machine.memory, pointer.allocation)
+                && !invocation_source_products_name_allocation_v282(cleared.logical, pointer.allocation)
                 && !invocation_source_enums_name_allocation_v49(cleared.logical, pointer.allocation)
                 && (forall|i: int| 0 <= i < cleared.machine.values.len() ==>
                     !invocation_value_names_allocation_v36(cleared.machine.values[i], pointer.allocation)) {
@@ -2320,6 +2444,13 @@ spec fn invocation_source_byte_step_v36(
             invocation_source_discriminant_read_v41(source, read, root, instance, little_endian).source,
         InvocationSourceByteEventV36::EnumConstruct(constructed) =>
             invocation_source_enum_construct_v43(source, constructed, root, instance, little_endian).source,
+        InvocationSourceByteEventV36::ProductConstruct { destination, source_type, fields } =>
+            invocation_source_product_construct_v282(source, destination, source_type, fields,
+                root, instance, little_endian).source,
+        InvocationSourceByteEventV36::ProductTransfer { destination, input } =>
+            invocation_source_product_transfer_v282(source, destination, input, root, instance, little_endian).source,
+        InvocationSourceByteEventV36::ProductDeinitialize(place) =>
+            invocation_source_product_remove_v282(source, place, little_endian),
         InvocationSourceByteEventV36::LogicalEnum(event) =>
             invocation_source_logical_enum_step_v47(source, event, root, instance, little_endian).source,
         InvocationSourceByteEventV36::IntegerCast(cast) =>

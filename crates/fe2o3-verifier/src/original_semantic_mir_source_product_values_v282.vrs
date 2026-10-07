@@ -1,0 +1,726 @@
+// Product schemas describe original field paths. These atoms contain values
+// evaluated from retained source operands, never values derived from a schema.
+enum InvocationSourceProductAtomKindV282 {
+    Unsupported,
+    Scalar(int),
+    Pointer { mutable: bool, reference: bool },
+    Slice { metadata_bits: int, mutable: bool, reference: bool },
+    ExecutionAggregate(int),
+    ExecutionReference { role: int, mutable: bool },
+    DescriptorReference { mutable: bool },
+    Enum,
+}
+
+enum InvocationSourceProductAtomV282 {
+    Carrier(MemoryValueV30),
+    Aggregate(InvocationSourceAggregateV42),
+    Execution(InvocationSourceExecutionReferenceV168),
+    Descriptor { recipe: InvocationSourceDescriptorRecipeV51,
+        snapshot: InvocationSourceDescriptorSnapshotV53 },
+    Enum(InvocationSourceEnumV47),
+}
+
+struct InvocationSourceProductV282 {
+    source_type: int,
+    components: Map<Seq<int>, InvocationSourceProductAtomV282>,
+}
+
+struct InvocationSourceProductPlaceV282 {
+    local: int,
+    root_type: int,
+    result_type: int,
+    first_component: int,
+    depth: int,
+}
+
+struct InvocationSourceProductOperandV282 {
+    source_type: int,
+    operand: InvocationSourceOperandV36,
+    descriptor: Option<InvocationSourceDescriptorRecipeV51>,
+}
+
+enum InvocationSourceProductDestinationV282 {
+    Local { local: int, source_type: int },
+    Product(InvocationSourceProductPlaceV282),
+    Aggregate(InvocationSourceAggregatePlaceV42),
+}
+
+struct InvocationSourceProductBuildV282 {
+    source: InvocationSourceByteStateV36,
+    components: Map<Seq<int>, InvocationSourceProductAtomV282>,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+}
+
+spec fn invocation_source_product_type_at_v282(source_type: int, path: Seq<int>)
+    -> Option<int>
+    decreases path.len(),
+{
+    if path.len() == 0 { Some(source_type) }
+    else { match invocation_source_product_child_v282(source_type, path[0]) {
+        Some(child) => invocation_source_product_type_at_v282(child, path.drop_first()),
+        None => None,
+    } }
+}
+
+spec fn invocation_source_product_role_v282(role: InvocationSourceExecutionRoleV168) -> int {
+    match role {
+        InvocationSourceExecutionRoleV168::Context => 0,
+        InvocationSourceExecutionRoleV168::Workgroup => 1,
+    }
+}
+
+spec fn invocation_source_product_atom_typed_v282(
+    ty: int, atom: InvocationSourceProductAtomV282,
+) -> bool {
+    match (invocation_source_product_atom_kind_v282(ty), atom) {
+        (InvocationSourceProductAtomKindV282::Scalar(bits),
+            InvocationSourceProductAtomV282::Carrier(value)) =>
+            invocation_source_byte_value_typed_v36(value, bits),
+        (InvocationSourceProductAtomKindV282::Pointer { .. },
+            InvocationSourceProductAtomV282::Carrier(MemoryValueV30::Pointer(_))) => true,
+        (InvocationSourceProductAtomKindV282::Slice { metadata_bits, .. },
+            InvocationSourceProductAtomV282::Carrier(MemoryValueV30::Slice(value))) =>
+            (metadata_bits == 8 || metadata_bits == 16 || metadata_bits == 32 || metadata_bits == 64)
+                && 0 <= value.length < memory_value_modulus_v30(metadata_bits / 8),
+        (InvocationSourceProductAtomKindV282::ExecutionAggregate(role),
+            InvocationSourceProductAtomV282::Aggregate(value)) =>
+            value.source_type == ty && invocation_source_aggregate_complete_v42(value)
+                && (role == 0 && value.execution_lease.is_none()
+                    || role == 1 && value.execution_lease.is_some()),
+        (InvocationSourceProductAtomKindV282::ExecutionReference { role, mutable },
+            InvocationSourceProductAtomV282::Execution(value)) =>
+            value.recipe.reference_type == ty && value.recipe.mutable == mutable
+                && invocation_source_product_role_v282(value.recipe.role) == role,
+        (InvocationSourceProductAtomKindV282::DescriptorReference { mutable },
+            InvocationSourceProductAtomV282::Descriptor { recipe, snapshot }) =>
+            recipe.reference_type == ty && recipe.mutable == mutable
+                && snapshot.reference.reference_type == ty
+                && snapshot.reference.mutable == mutable,
+        (InvocationSourceProductAtomKindV282::Enum,
+            InvocationSourceProductAtomV282::Enum(value)) =>
+            value.source_type == ty && invocation_source_enum_complete_v47(value),
+        _ => false,
+    }
+}
+
+spec fn invocation_source_product_well_formed_v282(value: InvocationSourceProductV282) -> bool {
+    invocation_source_product_type_v282(value.source_type)
+        && (forall|path: Seq<int>| value.components.contains_key(path) ==>
+            exists|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(value.source_type)
+                && path == invocation_source_product_component_path_v282(value.source_type, ordinal)
+                && match invocation_source_product_component_type_v282(value.source_type, ordinal) {
+                    Some(ty) => invocation_source_product_atom_typed_v282(ty, value.components[path]),
+                    None => false,
+                })
+}
+
+spec fn invocation_source_product_complete_v282(value: InvocationSourceProductV282) -> bool {
+    invocation_source_product_well_formed_v282(value)
+        && (forall|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(value.source_type) ==>
+            value.components.contains_key(invocation_source_product_component_path_v282(value.source_type, ordinal)))
+}
+
+spec fn invocation_source_product_atom_current_v282(
+    source: InvocationSourceByteStateV36, ty: int, atom: InvocationSourceProductAtomV282,
+    little_endian: bool,
+) -> bool {
+    invocation_source_product_atom_typed_v282(ty, atom)
+        && match atom {
+            InvocationSourceProductAtomV282::Carrier(_) => true,
+            InvocationSourceProductAtomV282::Aggregate(value) =>
+                invocation_source_product_execution_payload_v282(source, value)
+                    && match value.execution_lease {
+                        Some(lease) => invocation_source_execution_lease_current_v170(source, lease),
+                        None => true,
+                    },
+            InvocationSourceProductAtomV282::Execution(value) =>
+                // The existing immutable snapshot contract remains the limit
+                // even though the schema can identify a mutable reference.
+                !value.recipe.mutable
+                    && invocation_source_execution_snapshot_current_v170(source, value, value.recipe),
+            InvocationSourceProductAtomV282::Descriptor { recipe, snapshot } =>
+                invocation_source_descriptor_snapshot_current_v53(source, snapshot, recipe),
+            InvocationSourceProductAtomV282::Enum(value) =>
+                invocation_source_enum_snapshot_current_v50(source, value, little_endian),
+        }
+}
+
+spec fn invocation_source_product_execution_payload_v282(
+    source: InvocationSourceByteStateV36, value: InvocationSourceAggregateV42,
+) -> bool {
+    invocation_source_aggregate_complete_v42(value)
+        && match source.machine.frames.execution {
+            Some(execution) => byte_execution_well_formed_v37(execution)
+                && match invocation_source_product_atom_kind_v282(value.source_type) {
+                    InvocationSourceProductAtomKindV282::ExecutionAggregate(0) =>
+                        invocation_source_context_shape_v161(value.source_type)
+                            && (forall|i: int| 0 <= i < 5 ==> value.leaves[seq![i]] == MemoryValueV30::Unit),
+                    InvocationSourceProductAtomKindV282::ExecutionAggregate(1) =>
+                        invocation_source_workgroup_shape_v168(value.source_type)
+                            && value.leaves[seq![0int]] == MemoryValueV30::Scalar(invocation_source_workgroup_size_v168(execution))
+                            && value.leaves[seq![1int]] == MemoryValueV30::Scalar(invocation_source_workgroup_rank_v168(execution))
+                            && (forall|i: int| 0 <= i < 3 ==> value.leaves[seq![2int, i]] == MemoryValueV30::Unit)
+                            && value.leaves[seq![3int]] == MemoryValueV30::Unit,
+                    _ => false,
+                },
+            None => false,
+        }
+}
+
+spec fn invocation_source_product_execution_pair_v282(
+    left: InvocationSourceExecutionReferenceV168, right: InvocationSourceExecutionReferenceV168,
+    same_place: bool,
+) -> bool {
+    (left.identity == right.identity ==> left == right && (!left.recipe.mutable || same_place))
+        && (left.ancestors.contains(right.identity) ==>
+            invocation_source_execution_same_origin_v168(left, right)
+                && right.ancestors.len() < left.ancestors.len()
+                && left.ancestors.take(right.ancestors.len() as int) == right.ancestors
+                && left.ancestors[right.ancestors.len() as int] == right.identity)
+}
+
+spec fn invocation_source_product_execution_ancestry_v282(logical: InvocationSourceLogicalV38) -> bool {
+    (forall|local: int, path: Seq<int>| logical.products.contains_key(local)
+        && logical.products[local].components.contains_key(path) ==>
+        match logical.products[local].components[path] {
+            InvocationSourceProductAtomV282::Execution(value) =>
+                invocation_source_execution_reference_shape_v168(value, logical.versions)
+                    && (forall|other: int| logical.execution_references.contains_key(other) ==>
+                        invocation_source_product_execution_pair_v282(value, logical.execution_references[other], false)
+                            && invocation_source_product_execution_pair_v282(logical.execution_references[other], value, false))
+                    && (forall|other: int, other_path: Seq<int>| logical.products.contains_key(other)
+                        && logical.products[other].components.contains_key(other_path) ==>
+                        match logical.products[other].components[other_path] {
+                            InvocationSourceProductAtomV282::Execution(reference) =>
+                                invocation_source_product_execution_pair_v282(value, reference,
+                                    local == other && path == other_path),
+                            _ => true,
+                        }),
+            _ => true,
+        })
+}
+
+spec fn invocation_source_product_execution_no_conflict_v282(
+    source: InvocationSourceByteStateV36, candidate: InvocationSourceExecutionReferenceV168,
+) -> bool {
+    forall|local: int, path: Seq<int>| source.logical.products.contains_key(local)
+        && source.logical.products[local].components.contains_key(path) ==>
+        match source.logical.products[local].components[path] {
+            InvocationSourceProductAtomV282::Execution(other) =>
+                invocation_source_execution_record_current_v168(source, other)
+                    && invocation_source_execution_same_origin_v168(candidate, other)
+                    && candidate.identity != other.identity
+                    && !candidate.ancestors.contains(other.identity)
+                    ==> !candidate.recipe.mutable && !other.recipe.mutable,
+            InvocationSourceProductAtomV282::Aggregate(value) => match value.execution_lease {
+                Some(lease) => invocation_source_execution_lease_current_v170(source, lease)
+                    ==> !invocation_source_execution_same_origin_v168(candidate, lease),
+                None => true,
+            },
+            _ => true,
+        }
+}
+
+spec fn invocation_source_product_current_v282(
+    source: InvocationSourceByteStateV36, value: InvocationSourceProductV282, little_endian: bool,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && invocation_source_product_well_formed_v282(value)
+        && (forall|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(value.source_type) ==>
+            ({ let path = invocation_source_product_component_path_v282(value.source_type, ordinal);
+                value.components.contains_key(path) ==>
+                    match invocation_source_product_component_type_v282(value.source_type, ordinal) {
+                        Some(ty) => invocation_source_product_atom_current_v282(source, ty, value.components[path], little_endian),
+                        None => false,
+                    } }))
+}
+
+spec fn invocation_source_product_atom_copyable_v282(ty: int) -> bool {
+    match invocation_source_product_atom_kind_v282(ty) {
+        InvocationSourceProductAtomKindV282::Scalar(_) => true,
+        InvocationSourceProductAtomKindV282::Pointer { mutable, reference }
+        | InvocationSourceProductAtomKindV282::Slice { mutable, reference, .. } => !reference || !mutable,
+        InvocationSourceProductAtomKindV282::ExecutionReference { mutable, .. }
+        | InvocationSourceProductAtomKindV282::DescriptorReference { mutable } => !mutable,
+        InvocationSourceProductAtomKindV282::Enum => invocation_source_enum_type_copyable_v47(ty),
+        InvocationSourceProductAtomKindV282::ExecutionAggregate(_)
+        | InvocationSourceProductAtomKindV282::Unsupported => false,
+    }
+}
+
+spec fn invocation_source_product_copyable_v282(ty: int) -> bool {
+    invocation_source_product_component_count_v282(ty) > 0
+        && (forall|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(ty) ==>
+            match invocation_source_product_component_type_v282(ty, ordinal) {
+                Some(component) => invocation_source_product_atom_copyable_v282(component),
+                None => false,
+            })
+}
+
+spec fn invocation_source_product_atom_names_allocation_v282(
+    atom: InvocationSourceProductAtomV282, allocation: MemoryAllocationV30,
+) -> bool {
+    match atom {
+        InvocationSourceProductAtomV282::Carrier(value) => invocation_value_names_allocation_v36(value, allocation),
+        InvocationSourceProductAtomV282::Aggregate(value) => exists|path: Seq<int>|
+            value.leaves.contains_key(path) && invocation_value_names_allocation_v36(value.leaves[path], allocation),
+        InvocationSourceProductAtomV282::Execution(_) => false,
+        InvocationSourceProductAtomV282::Descriptor { snapshot, .. } =>
+            invocation_value_names_allocation_v36(snapshot.value, allocation),
+        InvocationSourceProductAtomV282::Enum(value) => exists|field: int|
+            value.fields.contains_key(field) && invocation_value_names_allocation_v36(value.fields[field], allocation),
+    }
+}
+
+spec fn invocation_source_products_name_allocation_v282(
+    logical: InvocationSourceLogicalV38, allocation: MemoryAllocationV30,
+) -> bool {
+    exists|local: int, path: Seq<int>| logical.products.contains_key(local)
+        && logical.products[local].components.contains_key(path)
+        && invocation_source_product_atom_names_allocation_v282(logical.products[local].components[path], allocation)
+}
+
+spec fn invocation_source_product_atom_escapes_frame_v282(
+    atom: InvocationSourceProductAtomV282, frame: MemoryDynamicFrameV30,
+) -> bool {
+    match atom {
+        InvocationSourceProductAtomV282::Carrier(value) => invocation_source_value_escapes_frame_v36(value, frame),
+        InvocationSourceProductAtomV282::Aggregate(value) =>
+            (match value.execution_lease { Some(lease) => lease.frame == frame, None => false })
+                || (exists|path: Seq<int>| value.leaves.contains_key(path)
+                    && invocation_source_value_escapes_frame_v36(value.leaves[path], frame)),
+        InvocationSourceProductAtomV282::Execution(value) => value.frame == frame,
+        InvocationSourceProductAtomV282::Descriptor { snapshot, .. } =>
+            invocation_source_descriptor_snapshot_escapes_frame_v53(snapshot, frame),
+        InvocationSourceProductAtomV282::Enum(value) =>
+            exists|field: int| value.fields.contains_key(field)
+                && invocation_source_value_escapes_frame_v36(value.fields[field], frame),
+    }
+}
+
+spec fn invocation_source_product_escapes_frame_v282(
+    value: InvocationSourceProductV282, frame: MemoryDynamicFrameV30,
+) -> bool {
+    exists|path: Seq<int>| value.components.contains_key(path)
+        && invocation_source_product_atom_escapes_frame_v282(value.components[path], frame)
+}
+
+// Surviving caller storage uses frame-specific reachability above. A returned
+// value retains the existing stricter ban on execution-reference transport;
+// nesting must not bypass the direct return restriction.
+spec fn invocation_source_product_return_escapes_frame_v282(
+    value: InvocationSourceProductV282, frame: MemoryDynamicFrameV30,
+) -> bool {
+    invocation_source_product_escapes_frame_v282(value, frame)
+        || (exists|path: Seq<int>| value.components.contains_key(path)
+            && matches!(value.components[path], InvocationSourceProductAtomV282::Execution(_)))
+}
+
+spec fn invocation_source_product_install_v282(
+    source: InvocationSourceByteStateV36, local: int, value: InvocationSourceProductV282,
+    little_endian: bool,
+) -> InvocationSourceByteStateV36 {
+    if !(0 <= local < source.machine.values.len()) || source.objects.contains_key(local)
+        || !invocation_source_product_current_v282(source, value, little_endian) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let cleared = invocation_source_byte_put_local_v36(source, local, MemoryValueV30::Undefined);
+        // Replacing the container may invalidate a captured origin. Never
+        // retarget that origin, refresh its version, or reconstruct a lease.
+        if !invocation_source_product_current_v282(cleared, value, little_endian) {
+            invocation_source_byte_refused_v36(cleared)
+        } else {
+            let installed = InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+                products: cleared.logical.products.insert(local, value), ..cleared.logical }, ..cleared };
+            if invocation_source_product_current_v282(installed, value, little_endian) { installed }
+            else { invocation_source_byte_refused_v36(installed) }
+        }
+    }
+}
+
+spec fn invocation_source_product_place_path_v282(place: InvocationSourceProductPlaceV282) -> Seq<int> {
+    invocation_source_product_component_path_v282(place.root_type, place.first_component).take(place.depth)
+}
+
+spec fn invocation_source_product_place_valid_v282(place: InvocationSourceProductPlaceV282) -> bool {
+    invocation_source_product_type_v282(place.root_type)
+        && 0 <= place.first_component < invocation_source_product_component_count_v282(place.root_type)
+        && 0 <= place.depth <= invocation_source_product_component_path_v282(place.root_type, place.first_component).len()
+        && invocation_source_product_type_at_v282(place.root_type,
+            invocation_source_product_place_path_v282(place)) == Some(place.result_type)
+        && invocation_source_product_component_count_v282(place.result_type) > 0
+}
+
+spec fn invocation_source_product_remove_v282(
+    source: InvocationSourceByteStateV36, place: InvocationSourceProductPlaceV282,
+    little_endian: bool,
+) -> InvocationSourceByteStateV36 {
+    if !invocation_source_product_place_valid_v282(place)
+        || !source.logical.products.contains_key(place.local)
+        || source.logical.products[place.local].source_type != place.root_type {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let original = source.logical.products[place.local];
+        let prefix = invocation_source_product_place_path_v282(place);
+        let remaining = InvocationSourceProductV282 { source_type: place.root_type,
+            components: Map::new(original.components.dom().filter(|key: Seq<int>|
+                !invocation_source_path_prefix_v42(prefix, key)), |key: Seq<int>| original.components[key]) };
+        invocation_source_product_install_v282(source, place.local, remaining, little_endian)
+    }
+}
+
+spec fn invocation_source_product_snapshot_components_v282(
+    source: InvocationSourceByteStateV36, place: InvocationSourceProductPlaceV282,
+    little_endian: bool,
+) -> Option<Map<Seq<int>, InvocationSourceProductAtomV282>> {
+    if !invocation_source_product_place_valid_v282(place)
+        || !source.logical.products.contains_key(place.local)
+        || source.logical.products[place.local].source_type != place.root_type
+        || !invocation_source_product_current_v282(source, source.logical.products[place.local], little_endian) {
+        None
+    } else {
+        let original = source.logical.products[place.local];
+        let prefix = invocation_source_product_place_path_v282(place);
+        if !(forall|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(place.result_type) ==>
+            original.components.contains_key(prefix + invocation_source_product_component_path_v282(place.result_type, ordinal))) {
+            None
+        } else {
+            Some(Map::new(original.components.dom().filter(|key: Seq<int>|
+                invocation_source_path_prefix_v42(prefix, key))
+                .map(|key: Seq<int>| key.subrange(prefix.len() as int, key.len() as int)),
+                |suffix: Seq<int>| original.components[prefix + suffix]))
+        }
+    }
+}
+
+spec fn invocation_source_product_components_complete_v282(
+    ty: int, components: Map<Seq<int>, InvocationSourceProductAtomV282>,
+) -> bool {
+    invocation_source_product_component_count_v282(ty) > 0
+        && (forall|path: Seq<int>| components.contains_key(path) ==>
+            exists|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(ty)
+                && path == invocation_source_product_component_path_v282(ty, ordinal)
+                && match invocation_source_product_component_type_v282(ty, ordinal) {
+                    Some(component) => invocation_source_product_atom_typed_v282(component, components[path]),
+                    None => false,
+                })
+        && (forall|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(ty) ==>
+            components.contains_key(invocation_source_product_component_path_v282(ty, ordinal)))
+}
+
+spec fn invocation_source_product_pack_v282(
+    ty: int, value: InvocationSourceValueV42,
+    descriptor: Option<InvocationSourceDescriptorRecipeV51>,
+) -> Option<Map<Seq<int>, InvocationSourceProductAtomV282>> {
+    let components = match value {
+        InvocationSourceValueV42::Product(value) =>
+            if value.source_type == ty && invocation_source_product_complete_v282(value) {
+                Some(value.components)
+            } else { None },
+        InvocationSourceValueV42::Carrier(value) =>
+            Some(Map::empty().insert(seq![], InvocationSourceProductAtomV282::Carrier(value))),
+        InvocationSourceValueV42::Aggregate(value) => {
+            if value.source_type != ty || !invocation_source_aggregate_complete_v42(value) { None }
+            else if matches!(invocation_source_product_atom_kind_v282(ty), InvocationSourceProductAtomKindV282::ExecutionAggregate(_)) {
+                Some(Map::empty().insert(seq![], InvocationSourceProductAtomV282::Aggregate(value)))
+            } else if value.execution_lease.is_some() { None }
+            else { Some(Map::new(value.leaves.dom(), |path: Seq<int>| InvocationSourceProductAtomV282::Carrier(value.leaves[path]))) }
+        },
+        InvocationSourceValueV42::Execution(value) =>
+            Some(Map::empty().insert(seq![], InvocationSourceProductAtomV282::Execution(value))),
+        InvocationSourceValueV42::Descriptor(snapshot) => match descriptor {
+            Some(recipe) => Some(Map::empty().insert(seq![], InvocationSourceProductAtomV282::Descriptor { recipe, snapshot })),
+            None => None,
+        },
+        InvocationSourceValueV42::Enum(value) =>
+            Some(Map::empty().insert(seq![], InvocationSourceProductAtomV282::Enum(value))),
+    };
+    match components {
+        Some(components) => if invocation_source_product_components_complete_v282(ty, components) { Some(components) } else { None },
+        None => None,
+    }
+}
+
+spec fn invocation_source_product_unpack_v282(
+    ty: int, components: Map<Seq<int>, InvocationSourceProductAtomV282>,
+) -> Option<InvocationSourceValueV42> {
+    if !invocation_source_product_components_complete_v282(ty, components) { None }
+    else if invocation_source_product_type_v282(ty) {
+        Some(InvocationSourceValueV42::Product(InvocationSourceProductV282 { source_type: ty, components }))
+    } else if !invocation_source_product_composite_v282(ty) && components.contains_key(seq![]) {
+        match components[seq![]] {
+            InvocationSourceProductAtomV282::Carrier(value) => Some(InvocationSourceValueV42::Carrier(value)),
+            InvocationSourceProductAtomV282::Aggregate(value) => Some(InvocationSourceValueV42::Aggregate(value)),
+            InvocationSourceProductAtomV282::Execution(value) => Some(InvocationSourceValueV42::Execution(value)),
+            InvocationSourceProductAtomV282::Descriptor { snapshot, .. } => Some(InvocationSourceValueV42::Descriptor(snapshot)),
+            InvocationSourceProductAtomV282::Enum(value) => Some(InvocationSourceValueV42::Enum(value)),
+        }
+    } else if forall|path: Seq<int>| components.contains_key(path) ==>
+        matches!(components[path], InvocationSourceProductAtomV282::Carrier(_)) {
+        let aggregate = InvocationSourceAggregateV42 { source_type: ty, execution_lease: None,
+            leaves: Map::new(components.dom(), |path: Seq<int>| match components[path] {
+                InvocationSourceProductAtomV282::Carrier(value) => value,
+                _ => MemoryValueV30::Undefined,
+            }) };
+        if invocation_source_aggregate_complete_v42(aggregate) { Some(InvocationSourceValueV42::Aggregate(aggregate)) }
+        else { None }
+    } else { None }
+}
+
+spec fn invocation_source_product_evaluate_v282(
+    source: InvocationSourceByteStateV36, place: InvocationSourceProductPlaceV282,
+    moved: bool, little_endian: bool,
+) -> InvocationSourceValueEvaluationV42 {
+    let snapshot = if moved || invocation_source_product_copyable_v282(place.result_type) {
+        invocation_source_product_snapshot_components_v282(source, place, little_endian)
+    } else { None };
+    let value = match snapshot {
+        Some(components) => invocation_source_product_unpack_v282(place.result_type, components),
+        None => None,
+    };
+    match value {
+        Some(value) => InvocationSourceValueEvaluationV42 {
+            source: if moved { invocation_source_product_remove_v282(source, place, little_endian) } else { source },
+            value,
+        },
+        None => InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(source),
+            value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) },
+    }
+}
+
+spec fn invocation_source_product_replace_components_v282(
+    source: InvocationSourceByteStateV36, destination: InvocationSourceProductPlaceV282,
+    components: Map<Seq<int>, InvocationSourceProductAtomV282>, little_endian: bool,
+) -> InvocationSourceByteStateV36 {
+    if !invocation_source_product_place_valid_v282(destination)
+        || !invocation_source_product_components_complete_v282(destination.result_type, components)
+        || source.logical.products.contains_key(destination.local)
+            && source.logical.products[destination.local].source_type != destination.root_type {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let old = if source.logical.products.contains_key(destination.local) {
+            source.logical.products[destination.local].components
+        } else { Map::empty() };
+        let path = invocation_source_product_place_path_v282(destination);
+        let changed = InvocationSourceProductV282 { source_type: destination.root_type,
+            components: Map::new(old.dom().filter(|key: Seq<int>| !invocation_source_path_prefix_v42(path, key))
+                .union(components.dom().map(|suffix: Seq<int>| path + suffix)),
+                |key: Seq<int>| if invocation_source_path_prefix_v42(path, key) {
+                    components[key.subrange(path.len() as int, key.len() as int)]
+                } else { old[key] }) };
+        invocation_source_product_install_v282(source, destination.local, changed, little_endian)
+    }
+}
+
+spec fn invocation_source_product_components_current_v282(
+    source: InvocationSourceByteStateV36, ty: int,
+    components: Map<Seq<int>, InvocationSourceProductAtomV282>, little_endian: bool,
+) -> bool {
+    source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && (forall|path: Seq<int>| components.contains_key(path) ==>
+            match invocation_source_product_type_at_v282(ty, path) {
+                Some(component) => invocation_source_product_atom_current_v282(
+                    source, component, components[path], little_endian),
+                None => false,
+            })
+}
+
+// Product projections retain their atom records directly. In particular a
+// descriptor recipe is not discarded by a temporary untyped value carrier.
+spec fn invocation_source_product_operand_v282(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceProductOperandV282,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceProductBuildV282 {
+    let snapshot = match operand.operand {
+        InvocationSourceOperandV36::Product { place, moved } => {
+            if place.result_type == operand.source_type && operand.descriptor.is_none()
+                && (moved || invocation_source_product_copyable_v282(place.result_type)) {
+                invocation_source_product_snapshot_components_v282(source, place, little_endian)
+            } else { None }
+        },
+        _ => None,
+    };
+    let evaluated = invocation_source_value_evaluate_v42(source, operand.operand,
+        root, instance, little_endian);
+    let components = match operand.operand {
+        InvocationSourceOperandV36::Product { .. } => snapshot,
+        _ => {
+            let copy_allowed = match operand.operand {
+                InvocationSourceOperandV36::Aggregate { moved, .. }
+                | InvocationSourceOperandV36::Enum { moved, .. }
+                | InvocationSourceOperandV36::Pointer { moved, .. }
+                | InvocationSourceOperandV36::Slice { moved, .. }
+                | InvocationSourceOperandV36::Descriptor { moved, .. } =>
+                    moved || invocation_source_product_copyable_v282(operand.source_type),
+                InvocationSourceOperandV36::Execution(value) =>
+                    value.moved || invocation_source_product_copyable_v282(operand.source_type),
+                InvocationSourceOperandV36::Scalar { .. } => true,
+                InvocationSourceOperandV36::Product { .. } => false,
+            };
+            if copy_allowed { invocation_source_product_pack_v282(
+                operand.source_type, evaluated.value, operand.descriptor) } else { None }
+        },
+    };
+    let after = match components {
+        Some(components) => if invocation_source_product_components_complete_v282(operand.source_type, components)
+            && invocation_source_product_components_current_v282(evaluated.source,
+                operand.source_type, components, little_endian) {
+            evaluated.source
+        } else { invocation_source_byte_refused_v36(evaluated.source) },
+        None => invocation_source_byte_refused_v36(evaluated.source),
+    };
+    let effects = if !after.machine.valid { seq![MemoryOperationEffectV30::Refused] }
+        else { match operand.operand {
+            InvocationSourceOperandV36::Scalar { value, bits } =>
+                invocation_source_read_effect_v36(source, value, bits, root, instance, little_endian),
+            _ => seq![],
+        } };
+    InvocationSourceProductBuildV282 { source: after,
+        components: match components { Some(components) => components, None => Map::empty() },
+        observations: invocation_source_observe_effects_v39(effects, source, after) }
+}
+
+spec fn invocation_source_product_fields_v282(
+    source: InvocationSourceByteStateV36, source_type: int,
+    fields: Seq<InvocationSourceProductOperandV282>, ordinal: int,
+    components: Map<Seq<int>, InvocationSourceProductAtomV282>,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceProductBuildV282
+    decreases fields.len() - ordinal,
+{
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !(0 <= ordinal <= fields.len())
+        || invocation_source_product_child_count_v282(source_type) != fields.len()
+        || !invocation_source_product_components_current_v282(source, source_type, components, little_endian) {
+        let refused = invocation_source_byte_refused_v36(source);
+        InvocationSourceProductBuildV282 { source: refused, components,
+            observations: invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused], source, refused) }
+    } else if ordinal == fields.len() {
+        InvocationSourceProductBuildV282 { source, components, observations: seq![] }
+    } else if invocation_source_product_child_v282(source_type, ordinal) != Some(fields[ordinal].source_type) {
+        let refused = invocation_source_byte_refused_v36(source);
+        InvocationSourceProductBuildV282 { source: refused, components,
+            observations: invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused], source, refused) }
+    } else {
+        let evaluated = invocation_source_product_operand_v282(source, fields[ordinal], root, instance, little_endian);
+        let prefix = seq![ordinal];
+        let added = evaluated.components.dom().map(|path: Seq<int>| prefix + path);
+        let combined = Map::new(components.dom().union(added), |path: Seq<int>|
+            if added.contains(path) { evaluated.components[path.drop_first()] } else { components[path] });
+        let ready = if components.dom().disjoint(added) { evaluated.source }
+            else { invocation_source_byte_refused_v36(evaluated.source) };
+        let rest = invocation_source_product_fields_v282(ready, source_type, fields, ordinal + 1,
+            combined, root, instance, little_endian);
+        InvocationSourceProductBuildV282 { source: rest.source, components: rest.components,
+            observations: evaluated.observations + rest.observations }
+    }
+}
+
+spec fn invocation_source_product_store_v282(
+    source: InvocationSourceByteStateV36, destination: InvocationSourceProductDestinationV282,
+    source_type: int, components: Map<Seq<int>, InvocationSourceProductAtomV282>,
+    little_endian: bool,
+) -> InvocationSourceByteStateV36 {
+    if !invocation_source_product_components_complete_v282(source_type, components)
+        || !invocation_source_product_components_current_v282(source, source_type, components, little_endian) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+      let installed = match destination {
+        InvocationSourceProductDestinationV282::Product(place) =>
+            if place.result_type == source_type {
+                invocation_source_product_replace_components_v282(source, place, components, little_endian)
+            } else { invocation_source_byte_refused_v36(source) },
+        InvocationSourceProductDestinationV282::Local { local, source_type: expected } =>
+            if expected != source_type { invocation_source_byte_refused_v36(source) }
+            else { match invocation_source_product_unpack_v282(source_type, components) {
+                Some(InvocationSourceValueV42::Product(value)) =>
+                    invocation_source_product_install_v282(source, local, value, little_endian),
+                Some(InvocationSourceValueV42::Aggregate(value)) =>
+                    invocation_source_aggregate_install_v42(source, local, value),
+                Some(InvocationSourceValueV42::Carrier(value)) =>
+                    invocation_source_byte_put_local_v36(source, local, value),
+                Some(InvocationSourceValueV42::Execution(value)) =>
+                    invocation_source_execution_snapshot_install_v170(source, local, value.recipe, value),
+                Some(InvocationSourceValueV42::Descriptor(value)) =>
+                    match components[seq![]] {
+                        InvocationSourceProductAtomV282::Descriptor { recipe, snapshot } =>
+                            if snapshot == value { invocation_source_descriptor_snapshot_install_v53(source, local, recipe, snapshot) }
+                            else { invocation_source_byte_refused_v36(source) },
+                        _ => invocation_source_byte_refused_v36(source),
+                    },
+                Some(InvocationSourceValueV42::Enum(value)) =>
+                    invocation_source_enum_install_v47(source, local, value),
+                _ => invocation_source_byte_refused_v36(source),
+            } },
+        InvocationSourceProductDestinationV282::Aggregate(place) =>
+            if place.result_type != source_type { invocation_source_byte_refused_v36(source) }
+            else { match invocation_source_product_unpack_v282(source_type, components) {
+                Some(InvocationSourceValueV42::Aggregate(value)) =>
+                    invocation_source_aggregate_place_replace_v42(source, place, value),
+                _ => invocation_source_byte_refused_v36(source),
+            } },
+      };
+      if invocation_source_product_components_current_v282(installed, source_type, components, little_endian) {
+          installed
+      } else { invocation_source_byte_refused_v36(installed) }
+    }
+}
+
+spec fn invocation_source_product_transfer_v282(
+    source: InvocationSourceByteStateV36, destination: InvocationSourceProductDestinationV282,
+    input: InvocationSourceProductOperandV282, root: int, instance: int, little_endian: bool,
+) -> InvocationSourceProductBuildV282 {
+    let evaluated = invocation_source_product_operand_v282(source, input, root, instance, little_endian);
+    let installed = invocation_source_product_store_v282(evaluated.source, destination, input.source_type,
+        evaluated.components, little_endian);
+    InvocationSourceProductBuildV282 { source: installed, components: evaluated.components,
+        observations: evaluated.observations + if installed.machine.valid { seq![] } else {
+            invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused], evaluated.source, installed)
+        } }
+}
+
+spec fn invocation_source_product_construct_v282(
+    source: InvocationSourceByteStateV36, destination: InvocationSourceProductDestinationV282,
+    source_type: int, fields: Seq<InvocationSourceProductOperandV282>,
+    root: int, instance: int, little_endian: bool,
+) -> InvocationSourceProductBuildV282 {
+    let initial = if fields.len() == 0 && invocation_source_product_child_count_v282(source_type) == 0 {
+        Map::empty().insert(seq![], InvocationSourceProductAtomV282::Carrier(MemoryValueV30::Unit))
+    } else { Map::empty() };
+    let built = invocation_source_product_fields_v282(source, source_type, fields, 0, initial,
+        root, instance, little_endian);
+    let installed = invocation_source_product_store_v282(built.source, destination, source_type,
+        built.components, little_endian);
+    InvocationSourceProductBuildV282 { source: installed, components: built.components,
+        observations: built.observations + if installed.machine.valid { seq![] } else {
+            invocation_source_observe_effects_v39(seq![MemoryOperationEffectV30::Refused], built.source, installed)
+        } }
+}
+
+spec fn invocation_source_product_return_snapshot_v282(
+    source: InvocationSourceByteStateV36, local: int, ty: int, little_endian: bool,
+) -> Option<InvocationSourceProductV282> {
+    if source.logical.products.contains_key(local)
+        && source.logical.products[local].source_type == ty
+        && invocation_source_product_complete_v282(source.logical.products[local])
+        && invocation_source_product_current_v282(source, source.logical.products[local], little_endian) {
+        Some(source.logical.products[local])
+    } else { None }
+}
+
+spec fn invocation_source_product_replace_path_v282(
+    source: InvocationSourceByteStateV36, local: int, root_type: int, path: Seq<int>, result_type: int,
+    components: Map<Seq<int>, InvocationSourceProductAtomV282>, little_endian: bool,
+) -> InvocationSourceByteStateV36 {
+    let selects = |ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(root_type)
+        && invocation_source_path_prefix_v42(path, invocation_source_product_component_path_v282(root_type, ordinal));
+    if invocation_source_product_type_at_v282(root_type, path) != Some(result_type)
+        || !(exists|ordinal: int| selects(ordinal)) {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let first = choose|ordinal: int| selects(ordinal);
+        invocation_source_product_replace_components_v282(source, InvocationSourceProductPlaceV282 {
+            local, root_type, result_type, first_component: first, depth: path.len() as int,
+        }, components, little_endian)
+    }
+}
