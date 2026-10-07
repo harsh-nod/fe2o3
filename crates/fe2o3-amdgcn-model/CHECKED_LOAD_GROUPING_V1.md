@@ -51,8 +51,8 @@ execution and the nontermination negative test. The source base was fe2o3
 `1736eff451d445f1f194abe145af242cf51ec322`; qualification used a path-preserving
 workspace projection with an audited dependency-subset lockfile. A separate
 baseline suite completed 112 tests with 11 provider/device cases explicitly
-ignored. Its clean outer result was observed; the subsequent SSH outage
-prevented retrieval of that suite's full raw logs for independent retention.
+ignored. Its full raw logs and clean outer result were recovered after the
+SSH interruption; the complete source roster and lock stayed unchanged.
 
 Strict library Clippy failed on eight diagnostics in unchanged code. No lint
 was suppressed or unrelated source repaired. No device image or native timing
