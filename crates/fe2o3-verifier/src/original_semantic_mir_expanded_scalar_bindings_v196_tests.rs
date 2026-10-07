@@ -1131,6 +1131,7 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
 
 #[test]
 fn expanded_forwarding_observer_resource_failure_remains_owner_latched() {
+    let mut selected = None;
     let result = run_fixture(Layout::Blocked, LIMIT, LIMIT, |slots, _, out| {
         let target = TileTargetV176::derive(slots, out)?;
         let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
@@ -1152,27 +1153,48 @@ fn expanded_forwarding_observer_resource_failure_remains_owner_latched() {
         let mut called = 0;
         let refused = pairs.source_transport_definition_observed(index, out, &mut |_, out| {
             called += 1;
-            out.budget.reserve_storage(usize::MAX)?;
-            unreachable!("observer cannot admit unbounded backing")
+            let floor = out.budget.storage();
+            let ceiling = out.budget.storage_limit();
+            let error = out.budget.reserve_storage(usize::MAX).unwrap_err();
+            let Resource::Storage(denial) = error else {
+                panic!("storage overflow must retain its storage denial: {error:?}")
+            };
+            assert_eq!(denial.actual(), usize::MAX);
+            // The immediate diagnostic includes any narrower active window.
+            assert!(floor <= denial.limit() && denial.limit() <= ceiling);
+            assert_eq!(out.budget.storage(), floor);
+            assert_eq!(out.budget.storage_limit(), ceiling);
+            assert_eq!(out.budget.failed_storage(), Some(usize::MAX));
+            selected = Some(error);
+            Err(error.into())
         });
         assert_eq!(called, 1);
-        assert!(matches!(
-            &refused,
-            Err(Error::Resource(Resource::Arithmetic))
-                | Err(Error::Source(SourceError::Resource(Resource::Arithmetic)))
-        ));
-        assert!(matches!(
-            pairs.source_transport_definition(index, out),
-            Err(Error::Resource(Resource::Arithmetic))
-                | Err(Error::Source(SourceError::Resource(Resource::Arithmetic)))
-        ));
+        assert!(
+            matches!(
+                &refused,
+                Err(Error::Source(SourceError::Resource(error))) if Some(*error) == selected
+            ),
+            "first owner refusal changed the selected denial: {refused:?}"
+        );
+        let next = pairs.source_transport_definition(index, out);
+        assert!(
+            matches!(
+                &next,
+                Err(Error::Source(SourceError::Resource(error))) if Some(*error) == selected
+            ),
+            "subsequent owner query changed the selected denial: {next:?}"
+        );
         refused.map(|_| ())
     });
-    assert!(matches!(
-        result.0,
-        Err(Error::Resource(Resource::Arithmetic))
-            | Err(Error::Source(SourceError::Resource(Resource::Arithmetic)))
-    ));
+    let selected = selected.expect("the genuine observer must select a storage denial");
+    assert!(
+        matches!(
+            &result.0,
+            Err(Error::Source(SourceError::Resource(error))) if *error == selected
+        ),
+        "outer cleanup changed the selected denial: {:?}",
+        result.0
+    );
 }
 
 #[test]
