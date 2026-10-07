@@ -24,6 +24,19 @@ fn run_width(
         &mut Budget<'w>,
     ) -> Result<((), usize)>,
 ) -> (Result<()>, usize, usize, usize) {
+    run_width_with_panic_observer(work, storage, width, consume, |_| {})
+}
+
+fn run_width_with_panic_observer(
+    work: usize,
+    storage: usize,
+    width: FormalIndexWidth,
+    consume: impl for<'m, 's, 'w> FnOnce(
+        &ExpandedSupportModelV280<'m, 's>,
+        &mut Budget<'w>,
+    ) -> Result<((), usize)>,
+    observe_panic: impl FnOnce(&(dyn std::any::Any + Send)),
+) -> (Result<()>, usize, usize, usize) {
     run_fixture_with_plan(
         ExecutionTileLayoutV1::Blocked,
         work,
@@ -64,7 +77,10 @@ fn run_width(
             assert_eq!(out.budget.storage(), floor);
             let result = match result {
                 Ok(result) => result,
-                Err(payload) => std::panic::resume_unwind(payload),
+                Err(payload) => {
+                    observe_panic(payload.as_ref());
+                    std::panic::resume_unwind(payload)
+                }
             };
             let ((), bytes) = result??;
             assert_eq!(bytes, 0);
@@ -215,21 +231,29 @@ fn expanded_support_transfers_complete_payload_after_scratch_refund() {
 
 #[test]
 fn expanded_support_borrowed_queries_refuse_foreign_account() {
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
     let mut checked = false;
     let result = run(LIMIT, LIMIT, |model, budget| {
         let mut work = Work::new(LIMIT);
         let mut foreign = Budget::new(&mut work, LIMIT);
         foreign.reserve_storage(budget.storage())?;
         let before = budget.work();
-        assert!(model.generated_source(&mut foreign).is_err());
+        assert!(matches!(
+            model.generated_source(&mut foreign),
+            Err(Error::Source(SourceError::Resource(Resource::Accounting)))
+        ));
         assert_eq!(budget.work(), before);
+        assert!(matches!(
+            model.census(budget),
+            Err(Error::Source(SourceError::Resource(Resource::Accounting)))
+        ));
         checked = true;
         Err(Error::Statement("foreign account refused"))
     });
     assert!(checked);
     assert!(matches!(
         result.0,
-        Err(Error::Statement("foreign account refused"))
+        Err(Error::Source(SourceError::Resource(Resource::Accounting)))
     ));
 }
 
@@ -307,14 +331,33 @@ fn expanded_support_runtime_rejects_mutated_physical_and_source_rows() {
 #[test]
 fn expanded_support_unwind_restores_original_floor_and_pending_drop_keeps_error() {
     let mut reached = false;
+    let mut original_payload = false;
     let result = catch_unwind(AssertUnwindSafe(|| {
-        run(LIMIT, LIMIT, |_, _| {
-            reached = true;
-            std::panic::panic_any(280u32)
-        })
+        run_width_with_panic_observer(
+            LIMIT,
+            LIMIT,
+            FormalIndexWidth::Bits64,
+            |_, _| {
+                reached = true;
+                std::panic::panic_any(280u32)
+            },
+            |payload| {
+                assert_eq!(payload.downcast_ref::<u32>(), Some(&280));
+                original_payload = true;
+            },
+        )
     }));
-    assert!(reached);
-    assert_eq!(*result.err().unwrap().downcast::<u32>().unwrap(), 280);
+    assert!(reached && original_payload);
+    // The existing neutral-optimizer fixture converts the rethrown payload only
+    // after the bridge's original payload and account restoration were checked.
+    assert_eq!(
+        result
+            .err()
+            .unwrap()
+            .downcast_ref::<String>()
+            .map(String::as_str),
+        Some("original tile fixture preparation: Adoption(Panicked)")
+    );
     struct Bomb;
     impl Drop for Bomb {
         fn drop(&mut self) {
