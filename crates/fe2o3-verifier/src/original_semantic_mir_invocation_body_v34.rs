@@ -49,6 +49,12 @@ mod byte_bindings;
 #[path = "original_semantic_mir_invocation_effects_v36.rs"]
 mod effects;
 
+#[path = "original_semantic_mir_source_component_demands_v42.rs"]
+mod component_demands;
+
+#[path = "original_semantic_mir_source_frame_demands_v281.rs"]
+mod source_frame_demands;
+
 #[path = "original_semantic_mir_invocation_paired_v36.rs"]
 mod paired;
 

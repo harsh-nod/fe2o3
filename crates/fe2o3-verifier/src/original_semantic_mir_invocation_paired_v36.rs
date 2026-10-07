@@ -11,7 +11,12 @@ use super::source_function::{
     SourceCallHintsV85, SourceCutHintsV85, SourceEntryHintsV85, SourceStepHintsV85,
 };
 use super::{
-    Error, Resource, Result, Writer, slots::SourceSlots, source_function::SourceByteProgram, vector,
+    Error, Resource, Result, Writer,
+    component_demands::ComponentDemandsV42,
+    slots::SourceSlots,
+    source_frame_demands::{self, ComponentCut},
+    source_function::SourceByteProgram,
+    vector,
 };
 use fe2o3_kernel_ir::{
     CanonicalKirDefinitionCoordinateV1 as Definition, FormalIndexWidth, FunctionRole,
@@ -37,23 +42,15 @@ pub(super) use expanded_live::emit_source_cut_values_v213;
 mod logical;
 use logical::LogicalBinding;
 
-#[path = "original_semantic_mir_source_component_demands_v42.rs"]
-mod component_demands;
-
 #[path = "original_semantic_mir_aggregate_bindings_v42.rs"]
 mod aggregate_bindings;
 use aggregate_bindings::AggregateBindingV42;
-use component_demands::ComponentDemandsV42;
 #[path = "original_semantic_mir_enum_bindings_v49.rs"]
 mod enum_bindings;
 use enum_bindings::EnumBinding;
 #[path = "original_semantic_mir_object_returns_v42.rs"]
 mod object_returns;
 use object_returns::ObjectReturnsV42;
-
-#[path = "original_semantic_mir_source_frame_demands_v281.rs"]
-mod source_frame_demands;
-use source_frame_demands::ComponentCut;
 
 #[derive(Clone, Copy, Debug)]
 enum SourceValue {
