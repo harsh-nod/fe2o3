@@ -295,6 +295,32 @@ impl Gfx950EngineeringPeerGroupV1 {
 mod tests;
 
 impl Gfx950EngineeringPeerGroupV1 {
+    /// Rearm exactly36 completed reusable exact-own-residual pairs under one
+    /// full-entry/full-exit window. All private proof, signal, queue, identity,
+    /// generation and acquired-state checks remain; internal topology checks
+    /// become participant-local checks with fresh root/generation brackets.
+    /// Transient changes which revert without generation advancement can
+    /// escape. This is not temporally equivalent to ordinary full rearm.
+    /// No shader, user callback, signal reset or lasting policy is introduced.
+    /// Returned counts describe only this bank window, not a layer or route.
+    ///
+    /// # Safety
+    /// All safety obligations of rearm_guarded_mlp_bank_unchecked_v1 apply.
+    /// Every old Prefix producer/consumer must be permanently retired under
+    /// the caller's whole-bank completion ledger. No queued or host access may
+    /// interleave with this exclusive Group and typed36-entry borrow. Entries
+    /// must belong to the same bank and generation; copied state observations
+    /// are not retirement authority. Errors and unwinds quarantine the entire
+    /// roster and Group, including partially reset or committed owners.
+    pub unsafe fn rearm_guarded_mlp_bank_scoped_currentness_unchecked_v1(
+        &mut self,
+        entries: &mut [Gfx950EngineeringPeerGuardedMlpBankEntryV1<'_>],
+        timeout_ms: u32,
+    ) -> Result<Gfx950EngineeringPeerScopedBankRearmObservationV1> {
+        // SAFETY: the caller supplies the same permanent-retirement premise.
+        unsafe { retained::rearm_bank_scoped(self, entries, timeout_ms) }
+    }
+
     /// A separately named temporal policy: full entry/exit, participant-local
     /// checks and fresh root/generation brackets inside one warm layer. Changes
     /// that revert without generation advancement can escape; not equivalent to

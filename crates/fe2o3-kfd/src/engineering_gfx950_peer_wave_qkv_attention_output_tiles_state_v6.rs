@@ -339,6 +339,25 @@ pub(super) unsafe fn observe_within_idle_bank_fence(
     group: &mut Gfx950EngineeringPeerGroupV1,
     state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
 ) -> Result<[u32; STATE_WORDS]> {
+    observe_bank_state(group, state)
+}
+
+/// # Safety
+/// Only the closed scoped bank transaction may call this, holding every typed
+/// owner and Group through its participant checkpoints and mandatory full exit.
+/// Refusal/unwind must quarantine the entire bank. This does not satisfy the
+/// legacy immediate full-fence contract.
+pub(super) unsafe fn observe_within_scoped_bank(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+) -> Result<[u32; STATE_WORDS]> {
+    observe_bank_state(group, state)
+}
+
+fn observe_bank_state(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+) -> Result<[u32; STATE_WORDS]> {
     group.require_active()?;
     let result = (|| {
         validate_idle_bank_state(group, state)?;
@@ -348,6 +367,67 @@ pub(super) unsafe fn observe_within_idle_bank_fence(
         }
         .observe(state)
     })();
+    group.finish(result)
+}
+
+struct ScopedRearmState<'group, 'route, 'window> {
+    native: NativeState<'group>,
+    currentness: &'route mut scoped_currentness::Currentness<'window>,
+}
+
+impl StateBackend for ScopedRearmState<'_, '_, '_> {
+    fn check(&mut self) -> Result<()> {
+        self.currentness.idle_group(self.native.group)
+    }
+
+    fn allocate(&mut self) -> Result<Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6> {
+        Err("scoped bank rearm cannot allocate".into())
+    }
+
+    fn initialize(
+        &mut self,
+        _: &mut Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+    ) -> Result<()> {
+        Err("scoped bank rearm cannot initialize fresh storage".into())
+    }
+
+    fn observe(
+        &mut self,
+        state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+    ) -> Result<[u32; STATE_WORDS]> {
+        self.native.observe(state)
+    }
+
+    fn rearm(
+        &mut self,
+        state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+    ) -> Result<()> {
+        self.native.rearm(state)
+    }
+}
+
+/// # Safety
+/// The closed scoped bank retains permanent old-command retirement and all
+/// typed owner custody, validates every bank member before any reset, and
+/// quarantines all owners on error/unwind through its final full exit.
+pub(super) unsafe fn rearm_within_scoped_bank(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    state: &mut Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+    expected: &[u32; STATE_WORDS],
+    currentness: &mut scoped_currentness::Currentness<'_>,
+) -> Result<()> {
+    group.require_active()?;
+    let result = rearm_terminal(
+        &mut ScopedRearmState {
+            native: NativeState {
+                group: &mut *group,
+                owner: state.owner_rank(),
+            },
+            currentness,
+        },
+        state,
+        expected,
+    );
     group.finish(result)
 }
 

@@ -6,6 +6,9 @@ use crate::engineering_gfx950::wave_qkv_attention_output_tiles_v6 as prefix_prof
 const MAX_ENTRIES: usize = 36;
 type Prefix = Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6;
 
+#[path = "engineering_gfx950_peer_scoped_bank_rearm_v1.rs"]
+pub(super) mod scoped;
+
 /// Borrowed typed custody, not a snapshot or a reusable completion proof.
 /// Rank order is zero, then one; each pair belongs to the caller's same layer.
 pub struct Entry<'a> {

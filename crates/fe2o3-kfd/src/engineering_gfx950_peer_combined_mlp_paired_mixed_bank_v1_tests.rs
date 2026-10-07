@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "engineering_gfx950_peer_scoped_bank_rearm_v1_tests.rs"]
+mod scoped_bank_tests;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum Event {
     Enter,
@@ -440,7 +443,7 @@ fn mixed_bank_every_deadline_boundary_blocks_the_next_operation() {
     }
 }
 
-fn native_group() -> Gfx950EngineeringPeerGroupV1 {
+pub(super) fn native_group() -> Gfx950EngineeringPeerGroupV1 {
     Gfx950EngineeringPeerGroupV1 {
         incarnation: 7,
         contexts: vec![],
@@ -462,7 +465,7 @@ fn token(rank: usize, id: u64, bytes: u64) -> Gfx950EngineeringPeerBufferV1 {
     }
 }
 
-fn native_pair(index: usize) -> RetainedPair {
+pub(super) fn native_pair(index: usize) -> RetainedPair {
     RetainedPair {
         owners: std::array::from_fn(|rank| CombinedMlpStateV1 {
             buffer: token(rank, (4 * index + rank + 3) as u64, 2208),
@@ -507,7 +510,7 @@ fn mixed_bank_reuse_custody_is_unavailable_until_all_36_pairs_pass() {
     assert_eq!(fake.quarantined, 0);
 }
 
-fn native_prefixes(index: usize) -> [Prefix; 2] {
+pub(super) fn native_prefixes(index: usize) -> [Prefix; 2] {
     std::array::from_fn(|rank| Prefix {
         buffer: token(rank, (4 * index + rank + 1) as u64, 1136),
         activation: prefix_state::Activation::Ready,

@@ -20,6 +20,7 @@ enum TerminalPolicy {
 
 #[path = "engineering_gfx950_peer_combined_mlp_paired_retained_v1.rs"]
 mod retained;
+pub use retained::Gfx950EngineeringPeerScopedBankRearmObservationV1;
 pub(super) use retained::{RetainedPair, UnboundPair, rearm_pairs};
 
 #[path = "engineering_gfx950_peer_combined_mlp_paired_facade_v1.rs"]

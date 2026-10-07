@@ -288,10 +288,31 @@ impl CombinedMlpStateV1 {
         expected: &CombinedMlpSnapshotV1,
         generation: u64,
     ) -> Result<()> {
+        // SAFETY: unchanged legacy full-currentness rearm obligations.
+        unsafe {
+            self.rearm_quiescent_currentness(
+                group,
+                expected,
+                generation,
+                &mut scoped_currentness::Currentness::Full,
+            )
+        }
+    }
+
+    /// # Safety
+    /// The closed bank owner retains all rearm obligations and all-owner
+    /// quarantine through its scoped full exit. No caller-supplied route.
+    pub(super) unsafe fn rearm_quiescent_currentness(
+        &mut self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        expected: &CombinedMlpSnapshotV1,
+        generation: u64,
+        currentness: &mut scoped_currentness::Currentness<'_>,
+    ) -> Result<()> {
         let result = (|| {
             require_rearm(self.activation, self.generation, generation)?;
             require_terminal(expected, self.generation)?;
-            check_contexts(&mut group.contexts, group.shared_full_currentness)?;
+            currentness.idle_group(group)?;
             if self.observe(group)? != *expected {
                 return Err("combined MLP terminal words changed before rearm".into());
             }
@@ -313,7 +334,7 @@ impl CombinedMlpStateV1 {
             .map_err(explain)?;
             let observed = self.observe(group)?;
             require_initial(&observed, generation)?;
-            check_contexts(&mut group.contexts, group.shared_full_currentness)?;
+            currentness.idle_group(group)?;
             self.generation = generation;
             self.activation = Activation::Ready;
             Ok(())

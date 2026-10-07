@@ -7,6 +7,8 @@ pub(super) mod scoped_layer;
 #[path = "engineering_gfx950_peer_combined_mlp_paired_mixed_bank_v1.rs"]
 mod mixed_bank;
 pub use mixed_bank::Entry as GuardedBankEntry;
+pub use mixed_bank::scoped::Gfx950EngineeringPeerScopedBankRearmObservationV1;
+pub(in super::super) use mixed_bank::scoped::rearm_bank_scoped;
 pub(in super::super) use mixed_bank::{initial_bank, rearm_bank};
 
 #[derive(Eq, PartialEq)]
@@ -616,6 +618,24 @@ fn validate_completed_pair(
     arena_ids: &mut BTreeSet<(u64, u64)>,
     until: Instant,
 ) -> Result<u64> {
+    validate_completed_pair_currentness(
+        group,
+        pair,
+        owner_ids,
+        arena_ids,
+        until,
+        &mut scoped_currentness::Currentness::Full,
+    )
+}
+
+fn validate_completed_pair_currentness(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    pair: &mut RetainedPair,
+    owner_ids: &mut BTreeSet<(u64, u64)>,
+    arena_ids: &mut BTreeSet<(u64, u64)>,
+    until: Instant,
+    currentness: &mut scoped_currentness::Currentness<'_>,
+) -> Result<u64> {
     if pair.phase != Phase::Busy || pair.binding.group != group.incarnation {
         return Err("retained paired rearm custody/group mismatch".into());
     }
@@ -623,7 +643,7 @@ fn validate_completed_pair(
         .completed
         .as_mut()
         .ok_or("retained paired terminal proof missing")?;
-    old.proof.recheck(group, until)?;
+    old.proof.recheck_currentness(group, until, currentness)?;
     for id in old.proof.identities() {
         if !arena_ids.insert(id) {
             return Err("retained paired duplicate arena".into());

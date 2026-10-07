@@ -49,8 +49,10 @@ mod combined_mlp_state_v1;
 pub use combined_mlp_state_v1::paired::{
     Gfx950EngineeringPeerGuardedMlpBankEntryV1, Gfx950EngineeringPeerGuardedMlpInputsV1,
     Gfx950EngineeringPeerGuardedMlpObservationV1, Gfx950EngineeringPeerGuardedMlpRankInputsV1,
-    Gfx950EngineeringPeerRetainedGuardedMlpPairV1, Gfx950EngineeringPeerScopedCurrentnessCountsV1,
-    Gfx950EngineeringPeerScopedPrefixInputsV1, Gfx950EngineeringPeerScopedWarmLayerObservationV1,
+    Gfx950EngineeringPeerRetainedGuardedMlpPairV1,
+    Gfx950EngineeringPeerScopedBankRearmObservationV1,
+    Gfx950EngineeringPeerScopedCurrentnessCountsV1, Gfx950EngineeringPeerScopedPrefixInputsV1,
+    Gfx950EngineeringPeerScopedWarmLayerObservationV1,
     Gfx950EngineeringPeerUnboundGuardedMlpPairV1,
 };
 #[path = "engineering_gfx950_peer_wave_mlp_tiles_state_v2.rs"]
