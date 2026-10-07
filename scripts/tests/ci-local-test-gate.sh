@@ -570,7 +570,7 @@ assert_source_isa_characteristic_matrix_v2_gate() {
 
 assert_codegen_lib_steps() {
   local step index
-  for step in rustc-codegen-lib-tests rustc-codegen-expanded-source-tests rustc-codegen-expanded-model-tests rustc-codegen-tile-census-source-tests rustc-codegen-extractor-bin-tests rustc-codegen-exporter-bin-tests; do
+  for step in rustc-codegen-lib-tests rustc-codegen-expanded-source-tests rustc-codegen-expanded-model-tests rustc-codegen-product-frame-tests rustc-codegen-tile-census-source-tests rustc-codegen-extractor-bin-tests rustc-codegen-exporter-bin-tests; do
     assert_step_count "${step}" 1 "backend unit step ${step} did not run exactly once"
   done
   assert_equals \
@@ -585,6 +585,10 @@ assert_codegen_lib_steps() {
     "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_overflow -- --ignored --exact --test-threads=1" \
     "$(step_command rustc-codegen-expanded-model-tests)" \
     'expanded model tests are not explicitly selected with their isolated serial parent'
+  assert_equals \
+    "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::product_frames::actual_rustc_product_carriers_retain_current_and_suspended_source_demands_v283 -- --ignored --exact --test-threads=1" \
+    "$(step_command rustc-codegen-product-frame-tests)" \
+    'Product frame tests are not explicitly selected with their isolated serial parent'
   assert_equals \
     "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::tile_census_tests::actual_rustc_collected_tile_census_preserves_shared_body_counts -- --ignored --exact --test-threads=1" \
     "$(step_command rustc-codegen-tile-census-source-tests)" \
@@ -603,11 +607,13 @@ assert_codegen_lib_steps() {
         'expanded source tests did not follow the backend library'
       assert_equals rustc-codegen-expanded-model-tests "${STEP_NAMES[index+2]:-}" \
         'expanded model tests did not follow the expanded source tests'
-      assert_equals rustc-codegen-tile-census-source-tests "${STEP_NAMES[index+3]:-}" \
-        'tile census source tests did not follow the expanded model tests'
-      assert_equals rustc-codegen-extractor-bin-tests "${STEP_NAMES[index+4]:-}" \
+      assert_equals rustc-codegen-product-frame-tests "${STEP_NAMES[index+3]:-}" \
+        'Product frame tests did not follow the expanded model tests'
+      assert_equals rustc-codegen-tile-census-source-tests "${STEP_NAMES[index+4]:-}" \
+        'tile census source tests did not follow the Product frame tests'
+      assert_equals rustc-codegen-extractor-bin-tests "${STEP_NAMES[index+5]:-}" \
         'extractor unit tests did not follow the tile census source tests'
-      assert_equals rustc-codegen-exporter-bin-tests "${STEP_NAMES[index+5]:-}" \
+      assert_equals rustc-codegen-exporter-bin-tests "${STEP_NAMES[index+6]:-}" \
         'exporter unit tests did not follow the extractor'
     fi
   done
@@ -615,7 +621,7 @@ assert_codegen_lib_steps() {
 
 assert_codegen_lib_fail_fast() {
   local step status trace
-  for step in rustc-codegen-lib-tests rustc-codegen-expanded-source-tests rustc-codegen-tile-census-source-tests rustc-codegen-extractor-bin-tests rustc-codegen-exporter-bin-tests; do
+  for step in rustc-codegen-lib-tests rustc-codegen-expanded-source-tests rustc-codegen-expanded-model-tests rustc-codegen-product-frame-tests rustc-codegen-tile-census-source-tests rustc-codegen-extractor-bin-tests rustc-codegen-exporter-bin-tests; do
     trace="${TIMEOUT_TEST_ROOT}/${step}.trace"
     status=0
     timeout --signal=TERM --kill-after=2s 10s \

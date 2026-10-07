@@ -212,6 +212,7 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
             "stage:rustc-codegen-lib-tests",
             "stage:rustc-codegen-expanded-source-tests",
             "stage:rustc-codegen-expanded-model-tests",
+            "stage:rustc-codegen-product-frame-tests",
             "stage:rustc-codegen-tile-census-source-tests",
             "stage:rustc-codegen-extractor-bin-tests",
             "stage:rustc-codegen-exporter-bin-tests",
@@ -242,6 +243,13 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
                 "test", "--locked", "-p", "rustc-codegen-fe2o3", "--lib",
                 "production_rustc_driver_v1::checked_output_source_v1_tests::"
                 "context_source_v29_tests::pending_source_tests::expanded_source_tests::"
+                "expanded_model_tests::product_frames::actual_rustc_product_carriers_retain_current_and_suspended_source_demands_v283",
+                "--", "--ignored", "--exact", "--test-threads=1",
+            ]},
+            {"command": "cargo", "arguments": [
+                "test", "--locked", "-p", "rustc-codegen-fe2o3", "--lib",
+                "production_rustc_driver_v1::checked_output_source_v1_tests::"
+                "context_source_v29_tests::pending_source_tests::expanded_source_tests::"
                 "tile_census_tests::actual_rustc_collected_tile_census_preserves_shared_body_counts",
                 "--", "--ignored", "--exact", "--test-threads=1",
             ]},
@@ -266,6 +274,21 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
             "stage:rustc-codegen-expanded-model-tests",
         ])
         self.assertEqual(len(calls), 5)
+        self.assertEqual(calls[-1]["command"], "cargo")
+        self.assertTrue(calls[-1]["arguments"][5].endswith("::" + suffix))
+
+    def test_product_frame_failure_stops_before_later_backend_stages(self) -> None:
+        suffix = "actual_rustc_product_carriers_retain_current_and_suspended_source_demands_v283"
+        result, calls, _ = self.invoke(test_failure=suffix)
+        self.assertEqual(result.returncode, 29, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            "stage:rustc-codegen-sysroot-dependencies",
+            "stage:rustc-codegen-lib-tests",
+            "stage:rustc-codegen-expanded-source-tests",
+            "stage:rustc-codegen-expanded-model-tests",
+            "stage:rustc-codegen-product-frame-tests",
+        ])
+        self.assertEqual(len(calls), 6)
         self.assertEqual(calls[-1]["command"], "cargo")
         self.assertTrue(calls[-1]["arguments"][5].endswith("::" + suffix))
 
