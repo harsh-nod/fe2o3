@@ -95,6 +95,29 @@ fn flag<'a>(args: &'a [String], prefix: &str) -> io::Result<&'a str> {
 }
 
 #[derive(Serialize)]
+#[serde(untagged)]
+enum ExportObservation<'a> {
+    Expanded(&'a ModelObservation),
+    ProductFrame(&'a super::product_frames::Observation),
+}
+
+impl ExportObservation<'_> {
+    fn format(&self) -> &'static str {
+        match self {
+            Self::Expanded(_) => "fe2o3-actual-expanded-model-export-v282",
+            Self::ProductFrame(_) => "fe2o3-actual-product-frame-export-v283",
+        }
+    }
+
+    fn model(&self) -> [u8; 32] {
+        match self {
+            Self::Expanded(observation) => observation.model,
+            Self::ProductFrame(observation) => observation.model,
+        }
+    }
+}
+
+#[derive(Serialize)]
 struct Record<'a> {
     format: &'static str,
     qualification: bool,
@@ -108,7 +131,7 @@ struct Record<'a> {
     source_file: String,
     model_file: String,
     model_bytes: usize,
-    observation: &'a ModelObservation,
+    observation: ExportObservation<'a>,
 }
 
 fn export(
@@ -118,6 +141,24 @@ fn export(
     source: &Path,
     bytes: &[u8],
     observation: &ModelObservation,
+) -> io::Result<()> {
+    export_observation(
+        directory,
+        request,
+        response,
+        source,
+        bytes,
+        ExportObservation::Expanded(observation),
+    )
+}
+
+fn export_observation(
+    directory: &Path,
+    request: &Path,
+    response: &Path,
+    source: &Path,
+    bytes: &[u8],
+    observation: ExportObservation<'_>,
 ) -> io::Result<()> {
     if !directory.is_absolute()
         || !std::fs::symlink_metadata(directory)?.is_dir()
@@ -129,7 +170,7 @@ fn export(
     }
     if bytes.is_empty()
         || bytes.len() > fe2o3_verifier::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3
-        || <[u8; 32]>::from(Sha256::digest(bytes)) != observation.model
+        || <[u8; 32]>::from(Sha256::digest(bytes)) != observation.model()
     {
         return Err(invalid(
             "model export differs from the observed bounded model",
@@ -150,7 +191,7 @@ fn export(
         .map_err(|_| invalid("invalid MIR optimization level"))?;
     let stem = file_stem(response)?;
     let record = Record {
-        format: "fe2o3-actual-expanded-model-export-v282",
+        format: observation.format(),
         qualification: false,
         target,
         codegen_opt_level: opt,
@@ -179,6 +220,22 @@ pub(super) fn observe(
     observation: &ModelObservation,
     budget: &mut Budget<'_>,
 ) -> Result<(), SourceError> {
+    observe_observation(bytes, ExportObservation::Expanded(observation), budget)
+}
+
+pub(super) fn observe_product_frame(
+    bytes: &[u8],
+    observation: &super::product_frames::Observation,
+    budget: &mut Budget<'_>,
+) -> Result<(), SourceError> {
+    observe_observation(bytes, ExportObservation::ProductFrame(observation), budget)
+}
+
+fn observe_observation(
+    bytes: &[u8],
+    observation: ExportObservation<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), SourceError> {
     let Some(directory) = env::var_os(EXPANDED_MODEL_EXPORT_V282) else {
         return Ok(());
     };
@@ -193,7 +250,7 @@ pub(super) fn observe(
             let response = env::var_os(RESULT).ok_or_else(|| invalid("missing model response"))?;
             let source = env::var_os("FE2O3_CONTEXT_PROTOCOL_SOURCE")
                 .ok_or_else(|| invalid("missing actual Rust source"))?;
-            export(
+            export_observation(
                 Path::new(&directory),
                 Path::new(&request),
                 Path::new(&response),
@@ -287,6 +344,7 @@ fn expanded_model_export_preserves_observed_bytes_and_original_input_digests() {
     )
     .unwrap();
     assert_eq!(record["qualification"], false);
+    assert_eq!(record["format"], "fe2o3-actual-expanded-model-export-v282");
     assert_eq!(record["target"], "gfx942");
     assert_eq!(record["codegen_opt_level"], 3);
     assert_eq!(record["mir_opt_level"], 0);
@@ -324,6 +382,104 @@ fn expanded_model_export_preserves_observed_bytes_and_original_input_digests() {
         .kind(),
         io::ErrorKind::AlreadyExists
     );
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 4);
+}
+
+#[test]
+fn product_frame_export_preserves_distinct_carrier_observation_and_original_inputs() {
+    let temporary = crate::test_temp_dir::TestTempDir::create("fe2o3-frame-export-v283");
+    let root = temporary.path().canonicalize().unwrap();
+    let directory = root.join("exports");
+    std::fs::create_dir(&directory).unwrap();
+    let request = root.join("request.json");
+    let response = root.join("response-gfx950-0-0-1.json");
+    let source = root.join("carrier.rs");
+    let args = br#"["rustc","-Ctarget-cpu=gfx950","-Copt-level=0","-Zmir-opt-level=0"]"#;
+    create_new(&request, args).unwrap();
+    create_new(&source, b"fn carrier() {}\n").unwrap();
+    // File/record custody only; these synthetic bytes are not a generated model.
+    let bytes = b"synthetic carrier export";
+    let observation = super::product_frames::Observation {
+        model: Sha256::digest(bytes).into(),
+        census: [1; 32],
+        runtime: [2; 32],
+        carries: [1, 1],
+    };
+    export_observation(
+        &directory,
+        &request,
+        &response,
+        &source,
+        bytes,
+        ExportObservation::ProductFrame(&observation),
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 4);
+    let record: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(directory.join(response.file_name().unwrap())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["format"], "fe2o3-actual-product-frame-export-v283");
+    assert_eq!(record["qualification"], false);
+    assert_eq!(record["target"], "gfx950");
+    assert_eq!(record["codegen_opt_level"], 0);
+    assert_eq!(record["mir_opt_level"], 0);
+    assert_eq!(record["case"], "carrier");
+    let recorded: super::product_frames::Observation =
+        serde_json::from_value(record["observation"].clone()).unwrap();
+    assert_eq!(recorded, observation);
+    assert!(record["observation"].get("graphs").is_none());
+    for (key, expected) in [
+        ("model_file", bytes.as_slice()),
+        ("request_file", args.as_slice()),
+        ("source_file", b"fn carrier() {}\n".as_slice()),
+    ] {
+        assert_eq!(
+            std::fs::read(directory.join(record[key].as_str().unwrap())).unwrap(),
+            expected
+        );
+    }
+    assert_eq!(
+        record["request_sha256"],
+        serde_json::to_value(<[u8; 32]>::from(Sha256::digest(args))).unwrap()
+    );
+    assert_eq!(
+        record["rust_source_sha256"],
+        serde_json::to_value(<[u8; 32]>::from(Sha256::digest(b"fn carrier() {}\n"))).unwrap()
+    );
+    assert_eq!(
+        export_observation(
+            &directory,
+            &request,
+            &response,
+            &source,
+            bytes,
+            ExportObservation::ProductFrame(&observation),
+        )
+        .unwrap_err()
+        .kind(),
+        io::ErrorKind::AlreadyExists
+    );
+    assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 4);
+    let wrong = super::product_frames::Observation {
+        model: [0; 32],
+        ..observation
+    };
+    for invalid_bytes in [b"".as_slice(), bytes.as_slice()] {
+        assert_eq!(
+            export_observation(
+                &directory,
+                &request,
+                &response,
+                &source,
+                invalid_bytes,
+                ExportObservation::ProductFrame(&wrong),
+            )
+            .unwrap_err()
+            .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
     assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 4);
 }
 
