@@ -16,6 +16,8 @@ default = []
 # Process-forking hardware validation only. This is not runtime authority.
 live-validation = ["rustix/process", "rustix/runtime"]
 engineering-gfx950 = ["dep:serde", "dep:serde_json"]
+# Data-only timing of existing scoped callbacks; no currentness-policy change.
+engineering-currentness-duration-diagnostics = ["engineering-gfx950"]
 
 [[bin]]
 name = "fe2o3-gfx950-engineering-worker"

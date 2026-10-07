@@ -96,6 +96,14 @@ pub(in crate::engineering_gfx950) struct Window {
 }
 
 impl Window {
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    pub(super) fn durations(&self) -> Result<crate::Gfx950EngineeringCurrentnessDurationsV1> {
+        if !self.closed {
+            return Err("duration observation requires closed Group window".into());
+        }
+        self.scope.durations().map_err(explain)
+    }
+
     // Only closed layer, bank-rearm and TailOperation owners retain
     // this data between effects. Each owns its exact quarantine boundary through
     // successful result construction and final deadline admission.

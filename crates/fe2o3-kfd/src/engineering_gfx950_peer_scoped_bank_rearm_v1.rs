@@ -7,6 +7,10 @@ pub struct Gfx950EngineeringPeerScopedBankRearmObservationV1 {
     pub generation: u64,
     pub entries: u32,
     pub currentness: Gfx950EngineeringPeerScopedCurrentnessCountsV1,
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    pub currentness_durations: crate::Gfx950EngineeringCurrentnessDurationsV1,
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    pub bank_guarded_body_ns: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -287,6 +291,8 @@ pub(in crate::engineering_gfx950) unsafe fn rearm_bank_scoped(
         counts: None,
         committed: false,
     };
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    let diagnostic_started = backend.now();
     let until = deadline(backend.now(), timeout_ms)?;
     backend.until = Some(until);
     let generation = transact(&mut backend, count, Mode::Rearm, timeout_ms, Some(until))?;
@@ -296,6 +302,23 @@ pub(in crate::engineering_gfx950) unsafe fn rearm_bank_scoped(
         currentness: backend
             .counts
             .ok_or("scoped bank result lacks full-exit counts")?,
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        currentness_durations: backend
+            .window
+            .as_ref()
+            .ok_or("scoped bank duration window absent")?
+            .durations()?,
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        bank_guarded_body_ns: 0,
+    };
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    let result = {
+        let mut result = result;
+        result.bank_guarded_body_ns = result
+            .currentness_durations
+            .bank_interval_ns(diagnostic_started, backend.now())
+            .map_err(explain)?;
+        result
     };
     deadline_check(backend.now(), until)?;
     backend.committed = true;
@@ -306,6 +329,72 @@ pub(in crate::engineering_gfx950) unsafe fn rearm_bank_scoped(
 mod custody_tests {
     use super::super::tests::{native_group, native_pair, native_prefixes};
     use super::*;
+
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    #[test]
+    fn scoped_bank_duration_refusal_and_unwind_preserve_outer_custody() {
+        for fault in 0..4 {
+            let mut group = native_group();
+            let mut pair = native_pair(0);
+            let mut prefixes = native_prefixes(0);
+            let [left, right] = &mut prefixes;
+            let mut entries = [Entry {
+                prefixes: [left, right],
+                pair: &mut pair,
+            }];
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let mut backend = ScopedNative {
+                    native: Native {
+                        group: &mut group,
+                        entries: &mut entries,
+                        prefixes: Vec::new(),
+                        all_ids: BTreeSet::new(),
+                        owner_ids: BTreeSet::new(),
+                        arena_ids: BTreeSet::new(),
+                    },
+                    until: None,
+                    window: None,
+                    boundary: Boundary::Closed,
+                    counts: None,
+                    committed: false,
+                };
+                backend.native.entries[0].pair.phase = Phase::Ready;
+                let start = Instant::now();
+                let mut totals = crate::Gfx950EngineeringCurrentnessDurationsV1::default();
+                totals.before.elapsed_ns = 1;
+                let refused = match fault {
+                    0 => totals.bank_interval_ns(start, start),
+                    1 => {
+                        totals.before.elapsed_ns = u64::MAX;
+                        totals.after.elapsed_ns = 1;
+                        totals.bank_interval_ns(start, start)
+                    }
+                    2 => totals.bank_interval_ns(
+                        start,
+                        start
+                            .checked_sub(std::time::Duration::from_nanos(1))
+                            .unwrap(),
+                    ),
+                    _ => panic!("diagnostic bank commit-tail unwind"),
+                };
+                assert!(refused.is_err());
+            }));
+            assert_eq!(result.is_err(), fault == 3);
+            drop(entries);
+            assert!(group.poisoned);
+            assert_eq!(pair.phase, Phase::Poisoned);
+            assert!(
+                pair.owners
+                    .iter()
+                    .all(|v| v.activation == Activation::Poisoned)
+            );
+            assert!(
+                prefixes
+                    .iter()
+                    .all(|v| v.activation == prefix_state::Activation::Submitted)
+            );
+        }
+    }
 
     #[test]
     fn scoped_bank_outer_owner_quarantines_partial_commit_and_unwind() {

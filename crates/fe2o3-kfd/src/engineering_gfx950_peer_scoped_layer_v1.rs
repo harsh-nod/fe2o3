@@ -43,6 +43,8 @@ pub struct Gfx950EngineeringPeerScopedWarmLayerObservationV1 {
     pub mlp: facade::Gfx950EngineeringPeerGuardedMlpObservationV1,
     pub hidden: [Vec<u8>; 2],
     pub currentness: Gfx950EngineeringPeerScopedCurrentnessCountsV1,
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    pub currentness_durations: crate::Gfx950EngineeringCurrentnessDurationsV1,
 }
 
 struct LayerOperation<'a> {
@@ -310,6 +312,12 @@ impl ClosedBackend for NativeLayer<'_, '_> {
         hidden: Self::Hidden,
         counts: Self::Counts,
     ) -> Result<Self::Output> {
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        let currentness_durations = self
+            .window
+            .as_ref()
+            .ok_or("scoped duration window absent")?
+            .durations()?;
         deadline_check(Instant::now(), self.until.ok_or("scoped deadline absent")?)?;
         // No Completed pair or reusable proof escapes before the full exit.
         self.op.pair.completed = Some(Completed {
@@ -323,6 +331,8 @@ impl ClosedBackend for NativeLayer<'_, '_> {
             mlp: pending.completion.into(),
             hidden,
             currentness: counts.into(),
+            #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+            currentness_durations,
         };
         deadline_check(Instant::now(), self.until.ok_or("scoped deadline absent")?)?;
         self.op.committed = true;

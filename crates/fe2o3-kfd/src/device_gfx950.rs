@@ -31,6 +31,10 @@ pub(crate) use group_currentness::check_engineering_group_currentness;
 #[cfg(feature = "engineering-gfx950")]
 #[path = "device_gfx950_scoped_currentness_v1.rs"]
 mod scoped_currentness;
+#[cfg(feature = "engineering-currentness-duration-diagnostics")]
+pub use scoped_currentness::{
+    Gfx950EngineeringCurrentnessCallDurationV1, Gfx950EngineeringCurrentnessDurationsV1,
+};
 #[cfg(feature = "engineering-gfx950")]
 pub(crate) use scoped_currentness::{ScopedCountsV1, ScopedCurrentnessV1};
 

@@ -34,6 +34,8 @@ pub struct Gfx950EngineeringPeerScopedTailObservationV1 {
     /// Existing serial dispatch host durations, not GPU-only measurements.
     pub host_ns: [u64; 3],
     pub currentness: Counts,
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    pub currentness_durations: crate::Gfx950EngineeringCurrentnessDurationsV1,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -246,6 +248,8 @@ fn observation(
         logits,
         host_ns,
         currentness,
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        currentness_durations: Default::default(),
     })
 }
 
@@ -423,7 +427,18 @@ impl ClosedBackend for NativeTail<'_, '_, '_> {
         host_ns: [u64; 3],
         counts: Counts,
     ) -> Result<Gfx950EngineeringPeerScopedTailObservationV1> {
-        observation(choice, normalized, logits, host_ns, counts)
+        let result = observation(choice, normalized, logits, host_ns, counts)?;
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        let result = {
+            let mut result = result;
+            result.currentness_durations = self
+                .window
+                .as_ref()
+                .ok_or("tail duration window absent")?
+                .durations()?;
+            result
+        };
+        Ok(result)
     }
     fn final_deadline(&mut self) -> Result<()> {
         check_deadline(Instant::now(), self.until)

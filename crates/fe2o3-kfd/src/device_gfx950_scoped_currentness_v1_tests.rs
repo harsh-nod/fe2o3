@@ -2,6 +2,10 @@ use super::*;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 
+#[cfg(feature = "engineering-currentness-duration-diagnostics")]
+#[path = "device_gfx950_currentness_duration_v1_tests.rs"]
+mod duration_tests;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Snapshot {
     root: u64,

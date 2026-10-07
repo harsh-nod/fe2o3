@@ -2,6 +2,14 @@
 use super::*;
 use std::time::Instant;
 
+#[cfg(feature = "engineering-currentness-duration-diagnostics")]
+#[path = "device_gfx950_currentness_duration_v1.rs"]
+mod duration;
+#[cfg(feature = "engineering-currentness-duration-diagnostics")]
+pub use duration::{
+    Gfx950EngineeringCurrentnessCallDurationV1, Gfx950EngineeringCurrentnessDurationsV1,
+};
+
 fn changed(message: &'static str) -> DeviceBindingError {
     DeviceBindingError::ObservableCurrentnessChanged(message)
 }
@@ -37,6 +45,10 @@ trait CheckpointBackend {
     fn after(&mut self, rank: usize) -> Result<(), DeviceBindingError>;
     fn root_generation(&mut self, snapshot: &Self::Snapshot) -> Result<(), DeviceBindingError>;
     fn poison_all(&mut self);
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    fn validate_durations(&self, _counts: &ScopedCountsV1) -> Result<(), DeviceBindingError> {
+        Ok(())
+    }
 }
 
 struct Attempt<'a, B: CheckpointBackend> {
@@ -267,6 +279,8 @@ impl<S: Eq> Window<S> {
         if observed != self.entry || identities(attempt.backend)? != self.identities {
             return Err(changed("scoped exit full observation changed"));
         }
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        attempt.backend.validate_durations(&self.counts)?;
         deadline(attempt.backend, self.until)?;
         self.closed = true;
         attempt.committed = true;
@@ -328,38 +342,72 @@ impl CheckpointBackend for Native<'_, '_> {
 
 /// Internal two-rank observation state. No queue/idle/owner/retirement authority.
 /// The retaining Group operation must poison all owners on drop without finish.
-pub(crate) struct ScopedCurrentnessV1(Window<HostTopologySnapshot>);
+pub(crate) struct ScopedCurrentnessV1(
+    Window<HostTopologySnapshot>,
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    Gfx950EngineeringCurrentnessDurationsV1,
+);
 
 impl ScopedCurrentnessV1 {
     pub(crate) fn enter(
         devices: &mut [&mut CheckedGfx950XnackMinusDevice],
         until: Instant,
     ) -> Result<Self, DeviceBindingError> {
-        Window::enter(&mut Native { devices }, until).map(Self)
+        let mut native = Native { devices };
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        let mut durations = Gfx950EngineeringCurrentnessDurationsV1::default();
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        let mut native = duration::Measured::new(&mut native, &mut durations, duration::Monotonic);
+        let window = Window::enter(&mut native, until)?;
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        drop(native);
+        Ok(Self(
+            window,
+            #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+            durations,
+        ))
     }
     pub(crate) fn checkpoint(
         &mut self,
         devices: &mut [&mut CheckedGfx950XnackMinusDevice],
     ) -> Result<(), DeviceBindingError> {
-        self.0.checkpoint(&mut Native { devices })
+        let mut native = Native { devices };
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        let mut native = duration::Measured::new(&mut native, &mut self.1, duration::Monotonic);
+        self.0.checkpoint(&mut native)
     }
     pub(crate) fn checkpoint_rank(
         &mut self,
         rank: usize,
         device: &mut CheckedGfx950XnackMinusDevice,
     ) -> Result<(), DeviceBindingError> {
-        self.0.checkpoint_rank(
-            &mut Native {
-                devices: &mut [device],
-            },
-            rank,
-        )
+        let mut native = Native {
+            devices: &mut [device],
+        };
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        let mut native = duration::Measured::new(&mut native, &mut self.1, duration::Monotonic);
+        self.0.checkpoint_rank(&mut native, rank)
     }
     pub(crate) fn finish(
         &mut self,
         devices: &mut [&mut CheckedGfx950XnackMinusDevice],
     ) -> Result<ScopedCountsV1, DeviceBindingError> {
-        self.0.finish(&mut Native { devices })
+        let mut native = Native { devices };
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        let mut native = duration::Measured::new(&mut native, &mut self.1, duration::Monotonic);
+        self.0.finish(&mut native)
+    }
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    pub(crate) fn durations(
+        &self,
+    ) -> Result<Gfx950EngineeringCurrentnessDurationsV1, DeviceBindingError> {
+        if !self.0.closed || self.0.poisoned {
+            return Err(changed(
+                "duration observation requires healthy closed scope",
+            ));
+        }
+        self.1.validate(&self.0.counts)?;
+        Ok(self.1)
     }
     pub(crate) fn poison(&mut self, devices: &mut [&mut CheckedGfx950XnackMinusDevice]) {
         self.0.poisoned = true;
