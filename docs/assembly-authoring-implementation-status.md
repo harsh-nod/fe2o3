@@ -3382,3 +3382,46 @@ with all nine overlay dependencies. Those CPU/source results do not qualify a
 new live capture: fresh layout, startup, currentness, owner/controller and
 separately bounded native observation remain required. V3/V4/V5 remain open;
 accepted milestones stay M1/M2/V1/V2/U1/U2/U3 (7/18).
+
+## Canonical simulator atomic scope/range assessment (R82 CPU-qualified implementation)
+
+The existing deterministic byte-access frontier retains atomic scope and the
+complete accessed interval rather than treating every atomic/atomic overlap as
+serialized. Serialization requires reciprocal scope inclusion and an identical
+interval. Device/System cover this single simulated device/launch; Workgroup
+requires the same workgroup. The generic scalar simulation target does not
+select a subgroup width. A same-workgroup Subgroup pair, a mixed-size interval,
+or history whose coverage cannot be proved remains `Incomplete`; workgroup
+size alone is not evidence of a subgroup identity. A workgroup barrier retains
+its existing independent happens-before behavior.
+
+Same-invocation, same-epoch merges retain the narrowest scope and never restore
+a lost interval. A changed barrier epoch is a distinct retained representative,
+including at eviction: a workgroup-local barrier cannot erase evidence that
+still matters to another workgroup. Lost exact sites remain conservatively
+incomplete rather than fabricated race witnesses. Bounded eviction summaries retain the minimum scope and whether
+*all* evicted invocations share one workgroup. They cannot turn later narrower
+operations into race-free evidence. Read/read pairs and failed compare-exchange
+reads remain non-writing accesses. Existing release/acquire/fence limitations
+remain explicit. The record and resident caps are unchanged; the existing
+`size_of::<AccessFrontier>()` accounting charges the enlarged private records.
+No wire schema, public race enum, V21/V22 grammar, or LLVM lowering changes.
+
+The integrated change passed all seven private helper tests, the resident
+accounting regression, all twelve new canonical tests, the complete 543-test
+simulator suite and all 179 device library/integration harness cases on mi350-2.
+The compact access/history records passed actual 24/48-byte layout assertions;
+the BF16 two-wave test passes with its unchanged explicit 16 MiB budget.
+The retained full-run receipt is SHA-256
+`9a98bbf63ab45169a611529e5af3c4cce29eb3e7e4faef74cca66772fdea0725`.
+After rustfmt, the complete 543-test simulator suite passed again in the
+separate source-atomic validation run. No record or resident cap was raised.
+
+These canonical tests do not establish Rust-source atomic admission. The
+existing `core_atomic_rmw_set_reaches_complete_semantic_import` test deliberately
+uses a semantic-import-only route; its expected refusal does not mean the
+production atomic KIR lowerer is missing. Genuine bundle-path tests are tracked
+separately. Authored buffer/atomic/
+wave coverage, genuine source-to-simulator integration, broader pending schedules,
+descriptor reconciliation and applicable hardware qualification still remain
+for M3. No native or GPU behavior is inferred from this bounded simulator fix.

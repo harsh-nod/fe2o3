@@ -66,7 +66,7 @@ pub(super) fn execute(
                     pointer_value.byte_offset,
                     bytes,
                     true,
-                    false,
+                    None,
                 )?;
             }
             engine.observe_and_commit_store(&site, pointer_value, stored, bytes)?;
@@ -115,7 +115,7 @@ pub(super) fn execute(
                     pointer_value.byte_offset,
                     bytes,
                     true,
-                    false,
+                    None,
                 )?;
             }
             engine.observe_and_commit_store(&site, pointer_value, stored, bytes)?;

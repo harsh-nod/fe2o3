@@ -60,6 +60,10 @@ pub use allocation_reuse_v1::{
 mod observed_storage;
 pub use observed_storage::ObservationExecutionOptionsV1;
 
+#[path = "execute_atomic_scope_v1.rs"]
+mod atomic_scope_v1;
+use atomic_scope_v1::{AtomicAccess, AtomicHistory, Relation as AtomicRelation};
+
 #[path = "execute_alloca_v1.rs"]
 mod alloca_v1;
 #[path = "execute_execution_lifecycle_v18.rs"]
@@ -339,7 +343,8 @@ pub enum SimulationRaceAssessmentV1 {
         /// A later access could depend on a representative evicted from the
         /// bounded per-byte read/write frontier.
         access_frontier_incomplete: bool,
-        /// Release/acquire atomic or fence HB may order an observed ordinary conflict.
+        /// Atomic scope/range serialization is unproved, or release/acquire atomic
+        /// or fence HB may order an observed ordinary conflict.
         atomic_or_fence_happens_before_unmodeled: bool,
         record_limit: usize,
     },
@@ -1920,6 +1925,7 @@ struct Engine<'a, S> {
     conflict_incomplete: bool,
     workgroup_happens_before_epoch: u64,
     unmodeled_atomic_or_fence_happens_before: bool,
+    unmodeled_atomic_serialization: bool,
     race_trackers: Vec<RaceTracker>,
     workgroup_allocations: Vec<WorkgroupAllocation>,
 }
@@ -1940,16 +1946,16 @@ struct AccessFrontier {
     raced: bool,
     incomplete: bool,
     lost_write: bool,
-    lost_writes_all_atomic: bool,
+    lost_writes_atomic: Option<AtomicHistory>,
     lost_read: bool,
-    lost_reads_all_atomic: bool,
+    lost_reads_atomic: Option<AtomicHistory>,
 }
 
 #[derive(Clone, Copy)]
 struct LastAccess {
     invocation: SimulationInvocationV1,
     site: CompactSite,
-    atomic: bool,
+    atomic: Option<AtomicAccess>,
     happens_before_epoch: u64,
 }
 
@@ -2290,6 +2296,48 @@ pub(crate) fn conservative_execution_resident_bytes(
 #[cfg(test)]
 mod execution_resident_tests {
     use super::*;
+
+    #[test]
+    fn atomic_scope_frontier_resident_accounting_uses_actual_compact_cells() {
+        let request = SimulationRequestV1::new("frontier-resident", [1, 1, 1], [1, 1, 1], vec![]);
+        let accounted = |records| {
+            let limits = SimulationLimitsV1 {
+                max_call_depth: 1,
+                max_ssa_values: 1,
+                max_allocations: 1,
+                max_allocation_bytes: 1,
+                max_total_bytes: 1,
+                max_memory_access_records: records,
+                ..SimulationLimitsV1::default()
+            };
+            conservative_execution_resident_bytes(
+                0,
+                &request,
+                limits,
+                limits.max_call_depth,
+                0,
+                0,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+            )
+            .expect("bounded resident accounting")
+        };
+        for (small, large) in [(1, 17), (17, 257)] {
+            let actual_delta = accounted(large).checked_sub(accounted(small)).unwrap();
+            let charged_delta = reserved_hash_map_bytes::<(u64, usize), AccessFrontier>(large)
+                .unwrap()
+                .checked_sub(
+                    reserved_hash_map_bytes::<(u64, usize), AccessFrontier>(small).unwrap(),
+                )
+                .unwrap();
+            assert_eq!(actual_delta, charged_delta);
+            assert!(actual_delta > 0);
+        }
+    }
 
     #[test]
     fn successful_assessment_accounts_twelve_live_function_identity_allocations() {
@@ -2950,7 +2998,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
         offset: usize,
         bytes: usize,
         write: bool,
-        atomic: bool,
+        atomic: Option<AtomicAccess>,
     ) -> Result<(), SimulationExecutionErrorV1> {
         let invocation = self.invocation.ok_or_else(|| {
             self.at(
@@ -2995,7 +3043,10 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 if self.first_conflict.is_none() {
                     self.first_conflict = Some(conflict_evidence.clone());
                 }
-                let ordered = if earlier_access.atomic && atomic {
+                let atomic_relation = earlier_access.atomic.zip(atomic).map(|(earlier, later)| {
+                    earlier.relation(earlier_access.invocation, later, invocation)
+                });
+                let ordered = if atomic_relation == Some(AtomicRelation::Serialized) {
                     Some(SimulationHappensBeforeReasonV1::AtomicSerialization)
                 } else if earlier_access.invocation.workgroup == invocation.workgroup
                     && earlier_access.happens_before_epoch < self.workgroup_happens_before_epoch
@@ -3004,6 +3055,9 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 } else {
                     None
                 };
+                let unproved_atomic =
+                    ordered.is_none() && atomic_relation == Some(AtomicRelation::Unproved);
+                self.unmodeled_atomic_serialization |= unproved_atomic;
                 if self.race_trackers.is_empty() {
                     self.race_trackers.try_reserve_exact(1).map_err(|_| {
                         self.at(*site, SimulationExecutionErrorKindV1::AllocationFailure)
@@ -3028,13 +3082,13 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                             reason,
                         });
                     }
-                } else {
+                } else if !unproved_atomic {
                     racing = true;
                     if race.first_race.is_none() {
                         race.first_race = Some(SimulationDataRaceV1 {
                             conflict: conflict_evidence,
-                            earlier_atomic: earlier_access.atomic,
-                            later_atomic: atomic,
+                            earlier_atomic: earlier_access.atomic.is_some(),
+                            later_atomic: atomic.is_some(),
                         });
                     }
                 }
@@ -3056,57 +3110,82 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 // A proven race fixes this byte's race classification and
                 // unique-byte count even if older representatives were lost.
                 frontier.incomplete = false;
-            } else if (frontier.lost_write && !(atomic && frontier.lost_writes_all_atomic))
-                || (write && frontier.lost_read && !(atomic && frontier.lost_reads_all_atomic))
+            } else if (frontier.lost_write
+                && !frontier
+                    .lost_writes_atomic
+                    .zip(atomic)
+                    .is_some_and(|(history, access)| history.serializes_with(access, invocation)))
+                || (write
+                    && frontier.lost_read
+                    && !frontier
+                        .lost_reads_atomic
+                        .zip(atomic)
+                        .is_some_and(|(history, access)| {
+                            history.serializes_with(access, invocation)
+                        }))
             {
-                // A prior bounded-frontier eviction can matter only once a
-                // later access is not known to serialize with every lost
-                // representative. Atomic-only histories remain exact.
+                // Evicted representatives are complete only when every exact
+                // interval and both scope directions are still covered. Unknown
+                // or mixed atomic history must not become race-free evidence.
                 frontier.incomplete = true;
             }
 
             if previous.is_some() || self.accesses.len() < self.limits.max_memory_access_records {
                 let slot = if write {
                     if let Some(earlier) = frontier.write
-                        && earlier.invocation != invocation
+                        && (earlier.invocation != invocation
+                            || earlier.happens_before_epoch != self.workgroup_happens_before_epoch)
                         && !frontier.raced
                     {
-                        if frontier
-                            .displaced_write
-                            .is_some_and(|displaced| displaced.invocation != earlier.invocation)
-                        {
+                        if frontier.displaced_write.is_some_and(|displaced| {
+                            displaced.invocation != earlier.invocation
+                                || displaced.happens_before_epoch != earlier.happens_before_epoch
+                        }) {
                             let displaced = frontier
                                 .displaced_write
                                 .expect("checked displaced write frontier");
-                            frontier.lost_writes_all_atomic = if frontier.lost_write {
-                                frontier.lost_writes_all_atomic && displaced.atomic
+                            let lost = displaced.atomic.and_then(|access| {
+                                AtomicHistory::new(access, displaced.invocation)
+                            });
+                            frontier.lost_writes_atomic = if frontier.lost_write {
+                                frontier
+                                    .lost_writes_atomic
+                                    .zip(lost)
+                                    .and_then(|(history, next)| history.include(next))
                             } else {
-                                displaced.atomic
+                                lost
                             };
                             frontier.lost_write = true;
                         }
-                        // Keep the immediately displaced writer so an
-                        // ordinary access by the replacement writer is still
-                        // compared with its atomic predecessor.
+                        // Keep a displaced epoch even for the same invocation:
+                        // a workgroup barrier does not order another group.
+                        // Ordinary replacement still compares with its atomic predecessor.
                         frontier.displaced_write = Some(earlier);
                     }
                     &mut frontier.write
                 } else {
                     if let Some(earlier) = frontier.read
-                        && earlier.invocation != invocation
+                        && (earlier.invocation != invocation
+                            || earlier.happens_before_epoch != self.workgroup_happens_before_epoch)
                         && !frontier.raced
                     {
-                        if frontier
-                            .displaced_read
-                            .is_some_and(|displaced| displaced.invocation != earlier.invocation)
-                        {
+                        if frontier.displaced_read.is_some_and(|displaced| {
+                            displaced.invocation != earlier.invocation
+                                || displaced.happens_before_epoch != earlier.happens_before_epoch
+                        }) {
                             let displaced = frontier
                                 .displaced_read
                                 .expect("checked displaced read frontier");
-                            frontier.lost_reads_all_atomic = if frontier.lost_read {
-                                frontier.lost_reads_all_atomic && displaced.atomic
+                            let lost = displaced.atomic.and_then(|access| {
+                                AtomicHistory::new(access, displaced.invocation)
+                            });
+                            frontier.lost_reads_atomic = if frontier.lost_read {
+                                frontier
+                                    .lost_reads_atomic
+                                    .zip(lost)
+                                    .and_then(|(history, next)| history.include(next))
                             } else {
-                                displaced.atomic
+                                lost
                             };
                             frontier.lost_read = true;
                         }
@@ -3120,10 +3199,24 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                             && earlier.happens_before_epoch
                                 == self.workgroup_happens_before_epoch =>
                     {
+                        // Keep a concrete narrow/ordinary site when its access
+                        // replaces broader evidence in this invocation/epoch.
+                        let site = if earlier.atomic.is_some()
+                            && (atomic.is_none()
+                                || atomic.zip(earlier.atomic).is_some_and(|(next, previous)| {
+                                    next.is_narrower_than(previous)
+                                })) {
+                            compact_site
+                        } else {
+                            earlier.site
+                        };
                         LastAccess {
                             invocation,
-                            site: earlier.site,
-                            atomic: earlier.atomic && atomic,
+                            site,
+                            atomic: earlier
+                                .atomic
+                                .zip(atomic)
+                                .map(|(old, next)| old.merge(next)),
                             happens_before_epoch: earlier.happens_before_epoch,
                         }
                     }
@@ -3165,8 +3258,9 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
     fn race_assessment(&self) -> SimulationRaceAssessmentV1 {
         let race = self.race_trackers.first();
         let access_frontier_incomplete = self.accesses.values().any(|frontier| frontier.incomplete);
-        let synchronization_incomplete = self.unmodeled_atomic_or_fence_happens_before
-            && race.is_some_and(|race| race.first_race.is_some());
+        let synchronization_incomplete = self.unmodeled_atomic_serialization
+            || (self.unmodeled_atomic_or_fence_happens_before
+                && race.is_some_and(|race| race.first_race.is_some()));
         if self.conflict_incomplete || access_frontier_incomplete || synchronization_incomplete {
             return SimulationRaceAssessmentV1::Incomplete {
                 racing_bytes: race.map_or(0, |race| race.racing_bytes),
@@ -3663,6 +3757,7 @@ fn execute_with_physical_debug(
         conflict_incomplete: false,
         workgroup_happens_before_epoch: 0,
         unmodeled_atomic_or_fence_happens_before: false,
+        unmodeled_atomic_serialization: false,
         race_trackers: Vec::new(),
         workgroup_allocations,
     };
@@ -7069,7 +7164,7 @@ fn execute_memory_intrinsic(
                     pointer_value.byte_offset,
                     bytes,
                     true,
-                    false,
+                    None,
                 )?;
             }
             engine.observe_and_commit_store(site, &pointer_value, stored, bytes)?;
@@ -7172,7 +7267,7 @@ fn execute_memory_intrinsic(
                     source.byte_offset,
                     bytes,
                     false,
-                    false,
+                    None,
                 )?;
             }
             engine.event(
@@ -7190,7 +7285,7 @@ fn execute_memory_intrinsic(
                     destination.byte_offset,
                     bytes,
                     true,
-                    false,
+                    None,
                 )?;
             }
             engine.event(
@@ -7408,7 +7503,7 @@ fn execute_atomic(
             pointer.byte_offset,
             width,
             committed.is_some(),
-            true,
+            Some(AtomicAccess::new(atomic.scope, pointer.byte_offset, width)),
         )?;
     }
     engine.event(
@@ -7607,7 +7702,7 @@ fn execute_pointer_load(
             pointer.byte_offset,
             bytes,
             false,
-            false,
+            None,
         )?;
     }
     engine.event(
@@ -7646,7 +7741,7 @@ fn execute_pointer_store(
             pointer.byte_offset,
             bytes,
             true,
-            false,
+            None,
         )?;
     }
     engine.observe_and_commit_store(site, pointer, value, bytes)
@@ -8767,6 +8862,7 @@ mod tests {
             conflict_incomplete: false,
             workgroup_happens_before_epoch: 0,
             unmodeled_atomic_or_fence_happens_before: false,
+            unmodeled_atomic_serialization: false,
             race_trackers: vec![],
             workgroup_allocations: vec![],
         };
