@@ -1,9 +1,7 @@
 //! In-scope numeric refusal facts only; no owner queries or admission receipt.
 use super::{Definition, Error, Type};
-use fe2o3_kernel_ir::{
-    BinaryOp, CanonicalKirDefinitionDescendantV1 as Descendant,
-    CanonicalKirFunctionCoordinateV1 as Function, ScalarType,
-};
+pub(super) use crate::mixed_optimizer_refinement_v26::MixedOptimizerReconstructionRefusalV285 as Facts;
+use fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1 as Descendant;
 use std::mem::size_of;
 
 #[derive(Clone, Copy, Debug)]
@@ -21,19 +19,21 @@ pub(super) enum Phase {
     TargetOwner,
 }
 
-#[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub(super) struct Facts {
-    pub original: usize,
-    pub coordinate: Definition,
-    pub type_class: &'static str,
-    pub scalar: Option<ScalarType>,
-    pub descendant_count: Option<usize>,
-    pub first_descendant: Option<Descendant>,
-    pub target_function: Option<Function>,
-    pub target_range: Option<(usize, usize)>,
-    pub target_index: Option<usize>,
-    pub binary: Option<BinaryOp>,
+impl Phase {
+    fn name(self) -> &'static str {
+        match self {
+            Self::TransportDescendants => "transport-descendants",
+            Self::TransportNonScalar => "transport-non-scalar",
+            Self::TransportNotBlockArgument => "transport-not-block-argument",
+            Self::TransportIncoming => "transport-incoming",
+            Self::RetainedCoordinate => "retained-coordinate",
+            Self::ReplacementLocator => "replacement-locator",
+            Self::RecipeDescendants => "recipe-descendants",
+            Self::ErasedRecipe => "erased-recipe",
+            Self::TargetLookup => "target-lookup",
+            Self::TargetOwner => "target-owner",
+        }
+    }
 }
 
 impl Facts {
@@ -46,6 +46,7 @@ impl Facts {
             _ => ("other", None),
         };
         Self {
+            phase: "unreturned",
             original,
             coordinate,
             type_class,
@@ -66,39 +67,44 @@ impl Facts {
     }
 }
 
-const LINE_BYTES: usize = 2048;
-
 pub(super) fn headers() -> usize {
     // Root, recipe, transport and retained-locator frames can overlap.
     6 * size_of::<Facts>()
-        + LINE_BYTES
+        + 2 * size_of::<Error>()
         + 16 * size_of::<usize>()
         + 4 * size_of::<&()>()
         + 2 * size_of::<Phase>()
 }
 
-#[cfg(test)]
-fn eligible(error: &Error) -> bool {
-    matches!(error, Error::Statement(reason) if *reason != "generated source limit")
+// Diagnostics neither query owners after failure nor replace the first error.
+pub(super) fn annotate(error: Error, phase: Phase, mut facts: Facts) -> Error {
+    match error {
+        Error::Statement("generated source limit") => error,
+        Error::Statement(reason) => {
+            facts.phase = phase.name();
+            Error::SourceReconstruction { facts, reason }
+        }
+        Error::SourceReconstruction {
+            facts: mut first,
+            reason,
+        } => {
+            // The outer authenticated root supplies missing expected-target scope,
+            // never a replacement original coordinate, phase or located index.
+            if first.target_function.is_none() && first.target_range.is_none() {
+                first.target_function = facts.target_function;
+                first.target_range = facts.target_range;
+            }
+            Error::SourceReconstruction {
+                facts: first,
+                reason,
+            }
+        }
+        error => error,
+    }
 }
 
-// Diagnostics neither query owners after failure nor replace the first error.
-pub(super) fn annotate(error: Error, phase: Phase, facts: Facts) -> Error {
-    #[cfg(test)]
-    if eligible(&error) {
-        use std::io::Write as _;
-        let mut line = Line {
-            bytes: [0; LINE_BYTES],
-            len: 0,
-        };
-        if render(&mut line, phase, facts).is_ok() {
-            let _ = std::io::stderr().lock().write_all(&line.bytes[..line.len]);
-        }
-    }
-    #[cfg(not(test))]
-    let _ = (phase, facts);
-    error
-}
+#[cfg(test)]
+const LINE_BYTES: usize = 2048;
 
 #[cfg(test)]
 struct Line {
@@ -130,6 +136,7 @@ fn render(out: &mut Line, phase: Phase, facts: Facts) -> std::fmt::Result {
 mod tests {
     use super::*;
     use crate::mixed_optimizer_refinement_v26::Resource;
+    use fe2o3_kernel_ir::{BinaryOp, CanonicalKirFunctionCoordinateV1 as Function, ScalarType};
 
     #[test]
     fn reconstruction_refusal_metadata_is_bounded_and_preserves_prior_errors() {
@@ -157,15 +164,11 @@ mod tests {
         assert!(text.contains("descendant_count: Some(1)"));
         assert!(text.contains("Substituted") && text.contains("binary: Some(Add)"));
         assert!(line.len < LINE_BYTES);
-        assert!(eligible(&Error::Statement("mismatch")));
-        assert!(!eligible(&Error::Statement("generated source limit")));
-        assert!(!eligible(&Error::Resource(Resource::Accounting)));
         let source = Error::Source(
             fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
                 Resource::Accounting,
             ),
         );
-        assert!(!eligible(&source));
         assert!(matches!(
             annotate(
                 Error::Resource(Resource::Accounting),
@@ -189,6 +192,22 @@ mod tests {
                     Resource::Accounting
                 )
             )
+        ));
+        assert!(matches!(
+            annotate(
+                Error::GeneratedSourceLimit {
+                    section: "original section",
+                    emitted_bytes: 17,
+                    limit_bytes: 23,
+                },
+                Phase::TargetOwner,
+                facts,
+            ),
+            Error::GeneratedSourceLimit {
+                section: "original section",
+                emitted_bytes: 17,
+                limit_bytes: 23,
+            }
         ));
         for phase in [
             Phase::TransportDescendants,
@@ -215,5 +234,50 @@ mod tests {
         };
         assert!(render(&mut short, Phase::TargetOwner, facts).is_err());
         assert_eq!(short.len, LINE_BYTES);
+        let mut inner = Facts::new(11, coordinate, &Type::Scalar(ScalarType::U32));
+        inner.descendant_count = Some(0);
+        let first = annotate(
+            Error::Statement("original refusal"),
+            Phase::ErasedRecipe,
+            inner,
+        );
+        let joined = annotate(first, Phase::TargetOwner, facts);
+        let value = fe2o3_mir_model::SsaValueV1::BlockArgument {
+            block: fe2o3_mir_model::SsaBlockIdV1::new(3),
+            variable: fe2o3_mir_model::SsaVariableIdV1::new(7),
+        };
+        let wrapped = joined.at_frame_binding_v284(
+            [0, 1, 2, 7],
+            value,
+            Some(0),
+            "product",
+            "original-target-reconstruction",
+        );
+        let mut returned_line = Line {
+            bytes: [0; LINE_BYTES],
+            len: 0,
+        };
+        use std::fmt::Write as _;
+        write!(&mut returned_line, "{wrapped}").unwrap();
+        let returned_text = std::str::from_utf8(&returned_line.bytes[..returned_line.len]).unwrap();
+        assert!(returned_text.contains("SourceFrameBinding"));
+        assert!(returned_text.contains("reconstruction: Some("));
+        assert!(returned_text.contains("erased-recipe"));
+        assert!(returned_line.len < LINE_BYTES);
+        // Later reconstruction and source wrappers cannot replace either context.
+        let wrapped = annotate(wrapped, Phase::TargetOwner, facts).at_frame_binding_v284(
+            [9; 4],
+            value,
+            None,
+            "later domain",
+            "later phase",
+        );
+        assert!(matches!(wrapped, Error::SourceFrameBinding {
+            source: [0, 1, 2, 7], value: actual, component: Some(0),
+            domain: "product", phase: "original-target-reconstruction",
+            reason: "original refusal", reconstruction: Some(first),
+        } if actual == value && first.original == 11 && first.phase == "erased-recipe"
+            && first.descendant_count == Some(0) && first.target_function == facts.target_function
+            && first.target_range == facts.target_range && first.target_index.is_none()));
     }
 }
