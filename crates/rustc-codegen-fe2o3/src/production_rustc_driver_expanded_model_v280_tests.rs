@@ -70,94 +70,115 @@ impl Callbacks for AccountCallbacks {
             let floor = budget.storage();
             let ledger = budget.work_ledger_identity_v1();
             let slot = std::ptr::from_ref(&budget) as usize;
-            let mut called = 0;
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                transaction.with_original_source_expanded_model_v280(
-                    &mut budget,
-                    |source, original, tile, _, _, pair, model, budget| {
-                        called += 1;
-                        pair.check(source, original, tile, budget)?;
+            // Production retains root-phase charges until the owning transaction
+            // ends. The callback's dynamic payload is settled inside that scope.
+            let run = |budget: &mut Budget<'_>| {
+                let mut called = 0;
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    transaction.with_original_source_expanded_model_v280(
+                        budget,
+                        |source, original, tile, _, _, pair, model, budget| {
+                            called += 1;
+                            pair.check(source, original, tile, budget)?;
+                            assert!(
+                                !model
+                                    .generated_source(budget)
+                                    .map_err(SourceError::ExpandedModel)?
+                                    .is_empty()
+                            );
+                            match self.case {
+                                AccountCase::Payload => {
+                                    budget.reserve_storage(17)?;
+                                    Ok((CallbackPayload::Heap(Box::new([9; 17])), 17))
+                                }
+                                AccountCase::Overreport => Ok((CallbackPayload::Inline, 1)),
+                                AccountCase::Underreport => {
+                                    budget.reserve_storage(1)?;
+                                    Ok((CallbackPayload::Inline, 0))
+                                }
+                                AccountCase::Refuse => Err(SourceError::Unsupported(
+                                    "selected expanded model consumer error",
+                                )),
+                                AccountCase::Panic => std::panic::panic_any(280usize),
+                                AccountCase::Refund => {
+                                    budget.release_storage(1)?;
+                                    Ok((CallbackPayload::Inline, 0))
+                                }
+                                AccountCase::Foreign => {
+                                    let mut work = Work::new(500_000_000);
+                                    let mut foreign = Budget::new(&mut work, 20_000_000);
+                                    foreign.reserve_storage(budget.storage())?;
+                                    let before = budget.work();
+                                    let error = model
+                                        .census(&mut foreign)
+                                        .err()
+                                        .expect("foreign model account must refuse");
+                                    assert_eq!(budget.work(), before);
+                                    Err(SourceError::ExpandedModel(error))
+                                }
+                            }
+                        },
+                    )
+                }));
+                assert_eq!(
+                    called, 1,
+                    "the actual generated model must precede every callback case"
+                );
+                assert_eq!(slot, std::ptr::from_ref(budget) as usize);
+                assert!(ledger == budget.work_ledger_identity_v1());
+                match self.case {
+                    AccountCase::Panic => {
+                        let payload = outcome
+                            .err()
+                            .expect("original model callback panic must propagate");
+                        assert_eq!(*payload.downcast::<usize>().unwrap(), 280);
+                    }
+                    AccountCase::Payload => {
+                        let result = outcome.unwrap()?;
+                        let CallbackPayload::Heap(payload) = result.into_observation() else {
+                            panic!("owned payload")
+                        };
+                        assert_eq!(*payload, [9; 17]);
+                        let retained = budget.storage();
+                        let root_phase = retained.checked_sub(17).expect("paid payload backing");
+                        drop(payload);
+                        budget.release_storage(17).unwrap();
+                        assert_eq!(budget.storage(), root_phase);
+                    }
+                    AccountCase::Refuse => {
+                        let error = outcome.unwrap().err().expect("selected consumer refusal");
                         assert!(
-                            !model
-                                .generated_source(budget)
-                                .map_err(SourceError::ExpandedModel)?
-                                .is_empty()
+                            is_selected_refusal(&error),
+                            "original error was replaced: {error:?}"
                         );
-                        match self.case {
-                            AccountCase::Payload => {
-                                budget.reserve_storage(17)?;
-                                Ok((CallbackPayload::Heap(Box::new([9; 17])), 17))
-                            }
-                            AccountCase::Overreport => Ok((CallbackPayload::Inline, 1)),
-                            AccountCase::Underreport => {
-                                budget.reserve_storage(1)?;
-                                Ok((CallbackPayload::Inline, 0))
-                            }
-                            AccountCase::Refuse => Err(SourceError::Unsupported(
-                                "selected expanded model consumer error",
-                            )),
-                            AccountCase::Panic => std::panic::panic_any(280usize),
-                            AccountCase::Refund => {
-                                budget.release_storage(1)?;
-                                Ok((CallbackPayload::Inline, 0))
-                            }
-                            AccountCase::Foreign => {
-                                let mut work = Work::new(500_000_000);
-                                let mut foreign = Budget::new(&mut work, 20_000_000);
-                                foreign.reserve_storage(budget.storage())?;
-                                let before = budget.work();
-                                let error = model
-                                    .census(&mut foreign)
-                                    .err()
-                                    .expect("foreign model account must refuse");
-                                assert_eq!(budget.work(), before);
-                                Err(SourceError::ExpandedModel(error))
-                            }
-                        }
-                    },
-                )
-            }));
-            assert_eq!(
-                called, 1,
-                "the actual generated model must precede every callback case"
-            );
+                    }
+                    _ => {
+                        let error = outcome.unwrap().err().expect("accounting refusal");
+                        assert!(is_accounting_refusal(&error), "wrong refusal: {error:?}");
+                    }
+                }
+                Ok::<_, SourceError>(())
+            };
+            let headers = [
+                std::mem::size_of_val(&run)
+                    .checked_mul(2)
+                    .ok_or_else(|| "model account frame arithmetic".to_owned())?,
+                std::mem::align_of_val(&run),
+                2 * std::mem::size_of::<Result<(), SourceError>>(),
+                8 * std::mem::size_of::<usize>(),
+            ]
+            .into_iter()
+            .try_fold(0usize, |sum, bytes| sum.checked_add(bytes))
+            .ok_or_else(|| "model account frame arithmetic".to_owned())?;
+            budget
+                .with_prepaid_scope(floor, 1, 1, headers, run)
+                .map_err(|error| format!("model account transaction: {error:?}"))?;
             assert_eq!(slot, std::ptr::from_ref(&budget) as usize);
             assert!(ledger == budget.work_ledger_identity_v1());
-            match self.case {
-                AccountCase::Panic => {
-                    let payload = outcome
-                        .err()
-                        .expect("original model callback panic must propagate");
-                    assert_eq!(*payload.downcast::<usize>().unwrap(), 280);
-                }
-                AccountCase::Payload => {
-                    let result = outcome
-                        .unwrap()
-                        .map_err(|error| format!("model payload: {error:?}"))?;
-                    let CallbackPayload::Heap(payload) = result.into_observation() else {
-                        panic!("owned payload")
-                    };
-                    assert_eq!(*payload, [9; 17]);
-                    assert_eq!(budget.storage(), floor + 17);
-                    drop(payload);
-                    budget.release_storage(17).unwrap();
-                }
-                AccountCase::Refuse => {
-                    let error = outcome.unwrap().err().expect("selected consumer refusal");
-                    assert!(
-                        is_selected_refusal(&error),
-                        "original error was replaced: {error:?}"
-                    );
-                }
-                _ => {
-                    let error = outcome.unwrap().err().expect("accounting refusal");
-                    assert!(is_accounting_refusal(&error), "wrong refusal: {error:?}");
-                }
-            }
             assert_eq!(
                 budget.storage(),
                 floor,
-                "actual wrapper must return the original floor"
+                "complete owned transaction must return the original floor"
             );
             Ok(())
         })());

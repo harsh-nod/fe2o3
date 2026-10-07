@@ -56,8 +56,13 @@ impl Callbacks for DiagnosticCallbacks {
             let mut work = Work::new(500_000_000);
             let mut budget = Budget::new(&mut work, 20_000_000);
             let floor = budget.storage();
-            let observed = transaction.with_original_source_expanded_v259(
-                &mut budget,
+            let ledger = budget.work_ledger_identity_v1();
+            let slot = std::ptr::from_ref(&budget) as usize;
+            // The production entry retains root-phase charges for its enclosing
+            // transaction. This diagnostic owns that complete transaction scope.
+            let run = |budget: &mut Budget<'_>| {
+                let observed = transaction.with_original_source_expanded_v259(
+                budget,
                 |source, original, tile, _, _, pair, budget| {
                     pair.check(source, original, tile, budget)?;
                     let floor = budget.storage();
@@ -136,8 +141,26 @@ impl Callbacks for DiagnosticCallbacks {
                     Ok((count, 0))
                 },
             )
-            .map_err(|error| format!("actual aggregate diagnostic: {error:?}"))?
+            ?
             .into_observation();
+                Ok::<_, SourceError>(observed)
+            };
+            let headers = [
+                std::mem::size_of_val(&run)
+                    .checked_mul(2)
+                    .ok_or_else(|| "diagnostic frame arithmetic".to_owned())?,
+                std::mem::align_of_val(&run),
+                2 * std::mem::size_of::<Result<usize, SourceError>>(),
+                8 * std::mem::size_of::<usize>(),
+            ]
+            .into_iter()
+            .try_fold(0usize, |sum, bytes| sum.checked_add(bytes))
+            .ok_or_else(|| "diagnostic frame arithmetic".to_owned())?;
+            let observed = budget
+                .with_prepaid_scope(floor, 1, 1, headers, run)
+                .map_err(|error| format!("actual aggregate diagnostic: {error:?}"))?;
+            assert_eq!(slot, std::ptr::from_ref(&budget) as usize);
+            assert!(ledger == budget.work_ledger_identity_v1());
             assert_eq!(budget.storage(), floor);
             Ok(observed)
         })());
