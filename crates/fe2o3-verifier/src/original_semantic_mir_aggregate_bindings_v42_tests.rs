@@ -105,13 +105,13 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  InvocationSourceByteValueV36::Local {{ local: {left}, moved: false }},
  32, {root}, {instance}, little_endian)
  == (InvocationSourceByteEvaluationV36 {{ source, value: MemoryValueV30::Scalar(left) }})) by {{
- reveal(invocation_source_byte_evaluate_v36);
+ invocation_source_local_evaluates_v265(source, {left}, 32, {root}, {instance}, little_endian);
  }}
  assert(invocation_source_byte_evaluate_v36(source,
  InvocationSourceByteValueV36::Local {{ local: {right}, moved: false }},
  32, {root}, {instance}, little_endian)
  == (InvocationSourceByteEvaluationV36 {{ source, value: MemoryValueV30::Scalar(right) }})) by {{
- reveal(invocation_source_byte_evaluate_v36);
+ invocation_source_local_evaluates_v265(source, {right}, 32, {root}, {instance}, little_endian);
  }}
  assert(invocation_source_aggregate_leaf_count_v42({ty}) == 2
  && invocation_source_aggregate_leaf_path_v42({ty}, 0) == seq![0int]
@@ -197,7 +197,8 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
             assert!(!body.contains("reveal(invocation_source_byte_step_v36);"));
             assert!(body.contains("hide(invocation_source_byte_evaluate_v36);"));
             assert_eq!(body.matches("assert(invocation_source_byte_evaluate_v36(source,").count(), 2);
-            assert_eq!(body.matches("reveal(invocation_source_byte_evaluate_v36);").count(), 2);
+            assert_eq!(body.matches("invocation_source_local_evaluates_v265(source,").count(), 2);
+            assert!(!body.contains("reveal(invocation_source_byte_evaluate_v36);"));
             assert!(body.find("value: MemoryValueV30::Scalar(right) }").unwrap()
                 < body.find("checked_add_actual_schema_").unwrap());
         }

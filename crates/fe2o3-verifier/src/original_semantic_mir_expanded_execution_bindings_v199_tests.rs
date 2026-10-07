@@ -381,7 +381,7 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 13);
+    assert_eq!(source.matches("proof fn ").count(), 15);
     let replay = source
         .split_once("proof fn invocation_source_checked_event_replays_v264(")
         .unwrap()
@@ -448,6 +448,16 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
             .unwrap()
             .0
     };
+    assert_eq!(
+        inputs("invocation_source_local_evaluates_v265"),
+        "source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n        0 <= local < source.machine.values.len(),\n        invocation_source_byte_value_typed_v36(source.machine.values[local], bits),\n"
+    );
+    assert_eq!(
+        inputs("invocation_source_tile_installed_valid_v265"),
+        "after.machine.valid,\n"
+    );
+    assert!(source.contains("== (InvocationSourceByteEvaluationV36 { source, value: source.machine.values[local] })"));
+    assert!(source.contains("== (InvocationSourceTileResultV161 { source: after, observations })"));
     assert_eq!(
         inputs("invocation_source_context_issue_replays_install_v263"),
         inputs("invocation_source_context_issue_frame_v262"),
@@ -545,6 +555,8 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         assert!(!body.contains("let leaves ="));
         if name == "invocation_source_context_issue_frame_v262" {
             assert!(body.contains("hide(invocation_source_observe_effects_v39);"));
+            assert!(body.contains("invocation_source_tile_installed_valid_v265(source, installed, Seq::empty());"));
+            assert!(!body.contains("reveal(invocation_source_tile_installed_v161);"));
         }
         for hidden in [
             "invocation_source_aggregate_leaf_count_v42",

@@ -172,7 +172,7 @@ proof fn invocation_source_context_issue_frame_v262(
         == (InvocationSourceTileResultV161 {
             source: installed,
             observations: Seq::empty() })) by {
-        reveal(invocation_source_tile_installed_v161);
+        invocation_source_tile_installed_valid_v265(source, installed, Seq::empty());
     }
 }
 
@@ -592,4 +592,34 @@ proof fn invocation_source_checked_event_replays_v264(
 {
     hide(invocation_source_checked_v42);
     reveal(invocation_source_byte_step_v36);
+}
+
+proof fn invocation_source_local_evaluates_v265(
+    source: InvocationSourceByteStateV36, local: int, bits: int,
+    root: int, instance: int, little_endian: bool,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= local < source.machine.values.len(),
+        invocation_source_byte_value_typed_v36(source.machine.values[local], bits),
+    ensures invocation_source_byte_evaluate_v36(source,
+        InvocationSourceByteValueV36::Local { local, moved: false },
+        bits, root, instance, little_endian)
+        == (InvocationSourceByteEvaluationV36 { source, value: source.machine.values[local] }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_byte_value_typed_v36);
+    reveal(invocation_source_byte_evaluate_v36);
+}
+
+proof fn invocation_source_tile_installed_valid_v265(
+    before: InvocationSourceByteStateV36, after: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+)
+    requires after.machine.valid,
+    ensures invocation_source_tile_installed_v161(before, after, observations)
+        == (InvocationSourceTileResultV161 { source: after, observations }),
+{
+    hide(invocation_source_observe_effects_v39);
+    reveal(invocation_source_tile_installed_v161);
+    assert(observations + Seq::empty() =~= observations);
 }
