@@ -57,10 +57,16 @@ pub(super) fn headers() -> usize {
         + size_of::<usize>()
         + size_of::<Recipe>()
         + size_of::<Result<Recipe>>();
-    let pure_result_frame = 5 * size_of::<&()>()
-        + 3 * size_of::<usize>()
+    // Both inputs, row, operation, binary/operand borrows and a temporary type
+    // borrow coexist with coordinates and fallible operand lookup results.
+    let pure_result_frame = 8 * size_of::<&()>()
+        + 4 * size_of::<usize>()
+        + size_of::<Definition>()
         + size_of::<Constant>()
-        + size_of::<Result<Recipe>>();
+        + size_of::<bool>()
+        + size_of::<Option<usize>>()
+        + 2 * size_of::<Result<Recipe>>()
+        + 2 * size_of::<Result<usize>>();
     let arm_iterator = size_of::<std::array::IntoIter<Block, 2>>();
     let snapshot_path = size_of::<[u32; 2]>() + size_of::<&[u32]>();
     let borrowed_rosters = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>()
@@ -114,9 +120,9 @@ mod tests {
     use super::*;
     use crate::mixed_optimizer_refinement_v26::Budget;
     use fe2o3_kernel_ir::{
-        BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work, Function as IrFunction,
-        Instruction, Module, Signature, StorageLayoutLimitsV1, UnaryOp, ValueDef,
-        VerifiedCanonicalKernelIrModuleV18 as Owner,
+        AccessMode, AddressSpace, BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work,
+        Function as IrFunction, Instruction, MemoryAccess, Module, Signature,
+        StorageLayoutLimitsV1, UnaryOp, ValueDef, VerifiedCanonicalKernelIrModuleV18 as Owner,
     };
 
     const LIMIT: usize = 100_000_000;
@@ -291,6 +297,7 @@ mod tests {
         // source-to-target correspondence witness.
         let word = Type::Scalar(ScalarType::U32);
         let wide = Type::Scalar(ScalarType::U64);
+        let pointer = Type::pointer(word.clone(), AddressSpace::Global, AccessMode::ReadOnly);
         let mut entry = BasicBlock::new(BlockId(0));
         for (id, value) in [
             (3, Constant::U32(u32::MAX)),
@@ -339,14 +346,21 @@ mod tests {
                 operand: ValueId(0),
             },
         ));
+        entry.operations.push(Instruction::new(
+            vec![ValueDef::new(ValueId(15), word.clone())],
+            OperationKind::Load {
+                pointer: ValueId(14),
+                access: MemoryAccess::new(AddressSpace::Global, 4),
+            },
+        ));
         entry.terminator = Some(Terminator::Return {
             values: vec![ValueId(8)],
         });
         let mut module = Module::new("pure-reconstruction-selection");
         module.functions.push(IrFunction::internal_helper(
             "entry",
-            Signature::new(vec![word.clone(), word.clone(), wide], vec![word]),
-            vec![ValueId(0), ValueId(1), ValueId(2)],
+            Signature::new(vec![word.clone(), word.clone(), wide, pointer], vec![word]),
+            vec![ValueId(0), ValueId(1), ValueId(2), ValueId(14)],
             vec![entry],
         ));
         let mut work = Work::new(LIMIT);
@@ -380,7 +394,15 @@ mod tests {
                     if left == index(0) && right == index(3) && actual == overflow)
             );
         }
-        for value in [0, 7, 11, 12, 13] {
+        let Definition::Result { operation, .. } = input.definitions()[index(15)].coordinate else {
+            panic!("the admitted load has one real result");
+        };
+        assert!(
+            !input.operations()[operation_index(&input, operation).unwrap()]
+                .effects
+                .is_empty()
+        );
+        for value in [0, 7, 11, 12, 13, 15] {
             assert!(matches!(
                 pure_result_recipe(&input, index(value), &mut out),
                 Err(Error::Statement(_))
