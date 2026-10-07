@@ -585,11 +585,14 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     );
     let local_body = source
         .split_once("proof fn invocation_source_local_evaluates_v265(")
-        .unwrap().1
+        .unwrap()
+        .1
         .split_once("proof fn invocation_source_tile_installed_valid_v265(")
-        .unwrap().0
+        .unwrap()
+        .0
         .split_once("\n{\n")
-        .unwrap().1;
+        .unwrap()
+        .1;
     assert!(!local_body.contains("hide("));
     assert!(local_body.contains("reveal(invocation_source_byte_evaluate_v36);"));
     assert_eq!(
