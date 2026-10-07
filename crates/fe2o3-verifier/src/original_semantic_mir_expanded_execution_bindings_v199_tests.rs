@@ -592,6 +592,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     assert_eq!(add_replay.matches("invocation_source_checked_pair_replays_install_v269(source, destination, source_type,").count(), 1);
     assert!(!add_replay.contains("reveal(invocation_source_checked_v42);"));
     let add_replay_body = add_replay.split_once("\n{\n").unwrap().1;
+    assert!(!add_replay_body.contains("hide("));
     assert!(add_replay_body.contains("match actual_pair {\n        Some(pair) => {"));
     assert!(add_replay_body.contains("pair.0, pair.1, root, instance, little_endian);"));
     assert!(add_replay_body.contains("None => {},"));

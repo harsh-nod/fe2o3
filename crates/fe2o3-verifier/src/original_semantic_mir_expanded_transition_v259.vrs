@@ -605,13 +605,6 @@ proof fn invocation_source_checked_add_replays_install_v260(
                     .insert(seq![1int], MemoryValueV30::Scalar(
                         if left + right >= 4294967296 { 1int } else { 0int })) }),
 {
-    hide(invocation_source_byte_evaluate_v36);
-    hide(invocation_source_aggregate_install_v42);
-    hide(invocation_source_aggregate_leaf_count_v42);
-    hide(invocation_source_aggregate_leaf_path_v42);
-    hide(invocation_source_aggregate_leaf_bits_v42);
-    hide(invocation_source_checked_pair_v44);
-    hide(invocation_source_checked_v42);
     let actual_pair = invocation_source_checked_pair_v44(
         MemoryValueV30::Scalar(left), MemoryValueV30::Scalar(right), 0, 32, false);
     match actual_pair {
