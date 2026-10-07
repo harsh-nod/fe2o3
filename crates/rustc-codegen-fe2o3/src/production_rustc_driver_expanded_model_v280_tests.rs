@@ -12,6 +12,9 @@ mod model_export;
 #[path = "production_rustc_driver_product_frames_v283_tests.rs"]
 mod product_frames;
 
+#[path = "production_rustc_driver_checked_segments_v300_tests.rs"]
+mod checked_segments;
+
 const MODEL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_child";
 const WIDE_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_wide_runtime_child";
 const ACCOUNT_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_account_child";
@@ -201,6 +204,8 @@ struct ModelObservation {
     census: [u8; 32],
     counts: [usize; 6],
     helper_instances: [usize; 2],
+    checked_segments: [usize; 5],
+    checked_segment_roots: [usize; 2],
     model_consumer_called: bool,
 }
 
@@ -447,6 +452,7 @@ fn census_identity(
 
 struct ModelCallbacks {
     wide: bool,
+    export: bool,
     result: Option<Result<CollectedObservation, String>>,
 }
 
@@ -461,6 +467,7 @@ impl Callbacks for ModelCallbacks {
             let mut budget = Budget::new(&mut work, 20_000_000);
             let mut called = 0;
             let wide = self.wide;
+            let export = self.export;
             let result = transaction.with_original_source_expanded_model_v280(
                 &mut budget,
                 |source, original, tile, roots, _, pair, model, budget| {
@@ -471,6 +478,19 @@ impl Callbacks for ModelCallbacks {
                             fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>,
                         >()
                         + std::mem::size_of::<CollectedObservation>()
+                        + 2 * std::mem::size_of::<[usize; 5]>()
+                        + 2 * std::mem::size_of::<[usize; 2]>()
+                        + 2 * std::mem::size_of::<[&str; 5]>()
+                        + 2 * std::mem::size_of::<[&str; 2]>()
+                        + 2 * std::mem::size_of::<std::iter::Zip<
+                            std::slice::IterMut<'_, usize>,
+                            std::array::IntoIter<&str, 5>,
+                        >>()
+                        + 2 * std::mem::size_of::<std::iter::Zip<
+                            std::slice::IterMut<'_, usize>,
+                            std::array::IntoIter<&str, 2>,
+                        >>()
+                        + 2 * std::mem::size_of::<std::str::Matches<'_, &str>>()
                         + 2 * std::mem::size_of::<WideRuntimeObservation>()
                         + 2 * std::mem::size_of::<[Option<WideRootObservation>; 2]>()
                         + 2 * std::mem::size_of::<WideRootObservation>()
@@ -492,6 +512,25 @@ impl Callbacks for ModelCallbacks {
                     let text = std::str::from_utf8(bytes).unwrap();
                     assert!(text.contains("micro: MemoryMicroStateV30"));
                     assert!(text.contains("micro.observations == target_prefix"));
+                    let mut checked_segments = [0; 5];
+                    for (count, declaration) in checked_segments.iter_mut().zip([
+                        "proof fn checked_actual_source_target_step_",
+                        "proof fn checked_actual_source_prefix_target_step_",
+                        "proof fn checked_target_actual_step_",
+                        "spec fn checked_actual_segment_inputs_",
+                        "spec fn checked_actual_segment_results_",
+                    ]) {
+                        budget.charge_work(text.len())?;
+                        *count = text.matches(declaration).count();
+                    }
+                    let mut checked_segment_roots = [0; 2];
+                    for (count, declaration) in checked_segment_roots.iter_mut().zip([
+                        "proof fn checked_actual_source_target_step_0_",
+                        "proof fn checked_actual_source_target_step_1_",
+                    ]) {
+                        budget.charge_work(text.len())?;
+                        *count = text.matches(declaration).count();
+                    }
                     let wide_runtime = if wide {
                         use fe2o3_kernel_ir::{EndiannessV2, ExplicitLaunchExtent, FormalIndexWidth};
                         let (width, endian) = pair.runtime(budget)?;
@@ -694,11 +733,14 @@ impl Callbacks for ModelCallbacks {
                             rows.zero_edges.len(),
                         ],
                         helper_instances,
+                        checked_segments,
+                        checked_segment_roots,
                         model_consumer_called: true,
                     };
                     // Wide boundary cases are observed in-process only. Their
                     // reused response basenames must not enter the finite export roster.
-                    if !wide {
+                    if export {
+                        assert!(!wide);
                         model_export::observe(bytes, &observation, budget)?;
                     }
                     budget.release_storage(scratch)?;
@@ -715,12 +757,16 @@ impl Callbacks for ModelCallbacks {
     }
 }
 
-fn child(wide: bool) {
+fn child(wide: bool, export: bool) {
     let Some(path) = env::var_os(ARGS) else {
         return;
     };
     let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let mut callbacks = ModelCallbacks { wide, result: None };
+    let mut callbacks = ModelCallbacks {
+        wide,
+        export,
+        result: None,
+    };
     rustc_driver::run_compiler(&args, &mut callbacks);
     let result = callbacks.result.expect("actual expanded model callback");
     if wide {
@@ -752,13 +798,13 @@ fn child(wide: bool) {
 #[test]
 #[ignore = "process helper; exact source request supplied by its parent"]
 fn expanded_model_child() {
-    child(false);
+    child(false, true);
 }
 
 #[test]
 #[ignore = "process helper; exact source request supplied by its parent"]
 fn expanded_model_wide_runtime_child() {
-    child(true);
+    child(true, false);
 }
 
 #[test]

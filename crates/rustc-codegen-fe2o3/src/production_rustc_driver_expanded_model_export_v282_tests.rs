@@ -327,6 +327,8 @@ fn expanded_model_export_preserves_observed_bytes_and_original_input_digests() {
         census: [0; 32],
         counts: [0; 6],
         helper_instances: [0; 2],
+        checked_segments: [0; 5],
+        checked_segment_roots: [0; 2],
         model_consumer_called: true,
     };
     export(
@@ -505,6 +507,8 @@ fn expanded_model_export_refuses_unbounded_inputs_and_mismatched_observations() 
         census: [0; 32],
         counts: [0; 6],
         helper_instances: [0; 2],
+        checked_segments: [0; 5],
+        checked_segment_roots: [0; 2],
         model_consumer_called: true,
     };
     for bytes in [b"".as_slice(), b"wrong model".as_slice()] {
