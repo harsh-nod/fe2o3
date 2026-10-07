@@ -119,7 +119,7 @@ impl Callbacks for ProductCallbacks {
                                             panic!("held Product is constructed from genuine original operands");
                                         };
                                         assert_eq!(assign.value().result_type(), ty);
-                                        assert_eq!(aggregate.kind(), mir::SemanticAggregateKindV1::Tuple);
+                                        assert_eq!(aggregate.kind(), &mir::SemanticAggregateKindV1::Tuple);
                                         assert_eq!(aggregate.operands().len(), 2);
                                         for (operand, field) in aggregate.operands().iter().zip(fields) {
                                             budget.charge_work(2)?;
