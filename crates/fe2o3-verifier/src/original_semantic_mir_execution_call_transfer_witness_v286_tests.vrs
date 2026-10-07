@@ -79,10 +79,12 @@ proof fn execution_call_constructed_context_witness_v286(context_type: int, refe
         None => false,
     });
     assert(invocation_source_byte_state_well_formed_v36(initial));
+    assert(initial.logical.execution_pending =~= Map::empty());
     let issued = invocation_source_context_issue_v161(initial,
         InvocationSourceContextIssueV161 { destination: 0, source_type: context_type });
     assert(issued.source.machine.valid);
     assert(issued.source.logical.versions =~= seq![1int, 0int, 0int]);
+    assert(issued.source.logical.execution_pending =~= Map::empty());
     assert(invocation_source_byte_state_well_formed_v36(issued.source));
     let recipe = execution_call_witness_recipe_v286(context_type, reference_type);
     let source = execution_call_witness_borrowed_v286(context_type, reference_type);
@@ -93,6 +95,7 @@ proof fn execution_call_constructed_context_witness_v286(context_type: int, refe
     assert(source.machine.valid);
     assert(source.logical.versions =~= seq![1int, 1int, 0int]);
     assert(source.logical.execution_references =~= Map::empty().insert(1int, reference));
+    assert(source.logical.execution_pending =~= Map::empty());
     assert(source.logical.aggregates =~= issued.source.logical.aggregates);
     assert(issued.source.logical.aggregates =~= Map::empty().insert(0int,
         issued.source.logical.aggregates[0]));
