@@ -382,6 +382,14 @@ proof fn execution_call_single_context_handoff_succeeds_v286(
     assert(entered.logical.execution_pending =~= pending.logical.execution_pending);
     assert(entered.logical.aggregates =~= pending.logical.aggregates);
     assert(invocation_source_byte_state_well_formed_v36(entered));
+    let caller_index = pending.machine.frames.active.len() as int - 1;
+    assert(entered.machine.frames.active[caller_index] == ticket.caller_frame);
+    assert(entered.machine.frames.active.contains(ticket.caller_frame));
+    assert(entered.logical.versions[site.input] == ticket.moved_version);
+    assert(entered.logical.versions[reference.origin] == reference.origin_version);
+    assert(entered.machine.frames.execution == pending.machine.frames.execution);
+    assert(invocation_source_execution_record_current_v168(entered, reference));
+    assert(invocation_source_execution_no_conflict_v168(entered, reference));
     assert(invocation_source_execution_transfer_current_v286(entered, ticket));
     let detached = InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
         execution_pending: entered.logical.execution_pending.remove(site.input),

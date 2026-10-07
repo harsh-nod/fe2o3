@@ -94,6 +94,10 @@ proof fn execution_call_constructed_context_witness_v286(context_type: int, refe
     assert(source.logical.versions =~= seq![1int, 1int, 0int]);
     assert(source.logical.execution_references =~= Map::empty().insert(1int, reference));
     assert(source.logical.aggregates =~= issued.source.logical.aggregates);
+    assert(issued.source.logical.aggregates =~= Map::empty().insert(0int,
+        issued.source.logical.aggregates[0]));
+    assert(source.logical.aggregates =~= Map::empty().insert(reference.origin,
+        source.logical.aggregates[0]));
     assert(invocation_source_byte_state_well_formed_v36(source));
     assert(invocation_source_execution_reference_current_v168(source, 1, recipe));
     execution_call_single_context_handoff_succeeds_v286(source,
