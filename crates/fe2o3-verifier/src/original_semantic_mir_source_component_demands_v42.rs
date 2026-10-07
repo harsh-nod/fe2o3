@@ -9,7 +9,8 @@ use fe2o3_mir_model::{
         SemanticFunctionDeclV1 as Function, SemanticFunctionIdV1 as FunctionId,
         SemanticLocalRoleV1 as LocalRole, SemanticOperandV1 as Operand, SemanticPlaceV1 as Place,
         SemanticRvalueKindV1 as Rvalue, SemanticStatementKindV1 as Statement,
-        SemanticTerminatorKindV1 as Terminator, SemanticTypeShapeV1 as Shape,
+        SemanticTerminatorKindV1 as Terminator, SemanticTypeIdV1 as TypeId,
+        SemanticTypeShapeV1 as Shape,
     },
 };
 use std::{mem::size_of, ops::Range};
@@ -17,11 +18,53 @@ use std::{mem::size_of, ops::Range};
 pub(super) struct ComponentDemandsV42<'a, 'view, 'source> {
     slots: &'a SourceSlots<'view, 'source>,
     function: FunctionId,
-    locals: Vec<Range<usize>>,
+    locals: Vec<LocalComponents>,
     live: Vec<u64>,
     words: usize,
     blocks: usize,
     required: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ComponentDomainV283 {
+    None,
+    ScalarV42,
+    ProductV282,
+}
+
+struct LocalComponents {
+    ty: TypeId,
+    domain: ComponentDomainV283,
+    range: Range<usize>,
+}
+
+impl LocalComponents {
+    fn projected_range(
+        &self,
+        slots: &SourceSlots<'_, '_>,
+        place: &Place,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<Range<usize>>> {
+        out.budget.charge_work(2)?;
+        let selected = match self.domain {
+            ComponentDomainV283::None => return Ok(None),
+            ComponentDomainV283::ScalarV42 => {
+                slots.aggregate_component_range(self.ty, place.projections(), out)?
+            }
+            ComponentDomainV283::ProductV282 => {
+                slots.product_component_range_v282(self.ty, place.projections(), out)?
+            }
+        };
+        match selected {
+            Some((range, result_type)) => {
+                if result_type != place.ty() || range.end > self.range.len() {
+                    return Err(mismatch());
+                }
+                Ok(Some(range))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 struct Edge {
@@ -33,7 +76,7 @@ struct Edge {
 struct Facts<'a, 'view, 'source, 'data> {
     slots: &'a SourceSlots<'view, 'source>,
     function: &'data Function,
-    locals: &'data [Range<usize>],
+    locals: &'data [LocalComponents],
     generated: &'data mut [u64],
     killed: &'data mut [u64],
 }
@@ -124,16 +167,30 @@ impl<'a, 'view, 'source> ComponentDemandsV42<'a, 'view, 'source> {
                 .types()
                 .get(local.ty().index() as usize)
                 .ok_or_else(mismatch)?;
-            let count = if matches!(
+            let (domain, count) = if slots.is_product_v282(local.ty(), out)? {
+                (
+                    ComponentDomainV283::ProductV282,
+                    slots
+                        .product_component_count_v282(local.ty(), out)?
+                        .ok_or_else(mismatch)?,
+                )
+            } else if matches!(
                 ty.shape(),
                 Shape::Tuple(_) | Shape::Aggregate(_) | Shape::Array { .. }
             ) {
-                slots.aggregate_leaf_count(local.ty(), out)?.unwrap_or(0)
+                match slots.aggregate_leaf_count(local.ty(), out)? {
+                    Some(count) => (ComponentDomainV283::ScalarV42, count),
+                    None => (ComponentDomainV283::None, 0),
+                }
             } else {
-                0
+                (ComponentDomainV283::None, 0)
             };
             let end = add(leaves, count)?;
-            locals.push(leaves..end);
+            locals.push(LocalComponents {
+                ty: local.ty(),
+                domain,
+                range: leaves..end,
+            });
             leaves = end;
         }
         let words = words_for(leaves)?;
@@ -314,6 +371,38 @@ impl<'a, 'view, 'source> ComponentDemandsV42<'a, 'view, 'source> {
         })
     }
 
+    pub(super) fn local_domain_v283(
+        &self,
+        slots: &SourceSlots<'_, '_>,
+        function: FunctionId,
+        local: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<(TypeId, ComponentDomainV283, usize)> {
+        self.slots.with_source_query_v42(out, |out| {
+            self.check_owner_v281(slots, function, out)?;
+            out.budget.charge_work(1)?;
+            let row = self.locals.get(local).ok_or_else(mismatch)?;
+            Ok((row.ty, row.domain, row.range.len()))
+        })
+    }
+
+    pub(super) fn projected_range_v283(
+        &self,
+        slots: &SourceSlots<'_, '_>,
+        function: FunctionId,
+        place: &Place,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<Range<usize>>> {
+        self.slots.with_source_query_v42(out, |out| {
+            self.check_owner_v281(slots, function, out)?;
+            out.budget.charge_work(1)?;
+            self.locals
+                .get(place.local().index() as usize)
+                .ok_or_else(mismatch)?
+                .projected_range(slots, place, out)
+        })
+    }
+
     fn leaf_required_inner(
         &self,
         function: FunctionId,
@@ -326,7 +415,7 @@ impl<'a, 'view, 'source> ComponentDemandsV42<'a, 'view, 'source> {
             return Err(Resource::Accounting.into());
         }
         out.budget.charge_work(4)?;
-        let range = self.locals.get(local).ok_or_else(mismatch)?;
+        let range = &self.locals.get(local).ok_or_else(mismatch)?.range;
         if function != self.function || block >= self.blocks || leaf >= range.len() {
             return Err(mismatch());
         }
@@ -339,19 +428,13 @@ impl Facts<'_, '_, '_, '_> {
     fn range(&self, place: &Place, read: bool, out: &mut Writer<'_, '_>) -> Result<Range<usize>> {
         out.budget.charge_work(3)?;
         let local = place.local().index() as usize;
-        let range = self.locals.get(local).ok_or_else(mismatch)?;
+        let row = self.locals.get(local).ok_or_else(mismatch)?;
+        let range = &row.range;
         if range.is_empty() {
             return Ok(0..0);
         }
-        let ty = self.function.locals().get(local).ok_or_else(mismatch)?.ty();
-        match self
-            .slots
-            .aggregate_component_range(ty, place.projections(), out)?
-        {
-            Some((selected, result_type)) => {
-                if result_type != place.ty() || selected.end > range.len() {
-                    return Err(mismatch());
-                }
+        match row.projected_range(self.slots, place, out)? {
+            Some(selected) => {
                 Ok(add(range.start, selected.start)?..add(range.start, selected.end)?)
             }
             // Dynamic/address projections cannot prove an exact overwrite.
@@ -437,6 +520,7 @@ impl Facts<'_, '_, '_, '_> {
                 self.locals
                     .get(local.index() as usize)
                     .ok_or_else(mismatch)?
+                    .range
                     .clone(),
                 false,
                 out,
@@ -510,7 +594,7 @@ impl Facts<'_, '_, '_, '_> {
                 for (local, declaration) in self.function.locals().iter().enumerate() {
                     out.budget.charge_work(1)?;
                     if declaration.role() == LocalRole::Return {
-                        self.mark(self.locals[local].clone(), true, out)?;
+                        self.mark(self.locals[local].range.clone(), true, out)?;
                     }
                 }
                 Ok(())
@@ -533,14 +617,27 @@ pub(super) fn headers() -> usize {
         + h::<Facts<'_, '_, '_, '_>>()
         + h::<Edge>()
         + h::<Range<usize>>()
+        + h::<LocalComponents>()
+        + h::<ComponentDomainV283>()
+        + h::<Option<Range<usize>>>()
+        + h::<Option<(Range<usize>, TypeId)>>()
+        + h::<(TypeId, ComponentDomainV283, usize)>()
+        // Captures of the two owner-bound query closures above.
+        + size_of::<(&(), &(), FunctionId, usize)>()
+        + size_of::<(&(), &(), FunctionId, &Place)>()
         + 5 * h::<Vec<u64>>()
         + 6 * h::<Vec<usize>>()
         + 2 * h::<Vec<bool>>()
-        + 2 * h::<Vec<Range<usize>>>()
+        + h::<Vec<Range<usize>>>()
+        + h::<Vec<LocalComponents>>()
         + h::<Vec<Edge>>()
         + 32 * size_of::<usize>()
         + 16 * size_of::<&()>()
 }
+
+#[cfg(test)]
+#[path = "original_semantic_mir_product_component_demands_v283_tests.rs"]
+mod product_tests;
 
 #[cfg(test)]
 mod tests {
@@ -566,17 +663,18 @@ mod tests {
         type Retained<'a, 'v, 's> = (
             &'a SourceSlots<'v, 's>,
             FunctionId,
-            Vec<Range<usize>>,
+            Vec<LocalComponents>,
             Vec<u64>,
             usize,
             usize,
             usize,
         );
         type EdgeFields = (usize, usize, Range<usize>);
+        type LocalFields = (TypeId, ComponentDomainV283, Range<usize>);
         type FactFields<'a, 'v, 's, 'd> = (
             &'a SourceSlots<'v, 's>,
             &'d Function,
-            &'d [Range<usize>],
+            &'d [LocalComponents],
             &'d mut [u64],
             &'d mut [u64],
         );
@@ -588,6 +686,7 @@ mod tests {
             size_of::<Retained<'_, '_, '_>>()
         );
         assert_eq!(size_of::<Edge>(), size_of::<EdgeFields>());
+        assert_eq!(size_of::<LocalComponents>(), size_of::<LocalFields>());
         assert_eq!(
             size_of::<Facts<'_, '_, '_, '_>>(),
             size_of::<FactFields<'_, '_, '_, '_>>()
@@ -598,10 +697,18 @@ mod tests {
                 + h::<FactFields<'_, '_, '_, '_>>()
                 + h::<EdgeFields>()
                 + h::<Range<usize>>()
+                + h::<LocalFields>()
+                + h::<ComponentDomainV283>()
+                + h::<Option<Range<usize>>>()
+                + h::<Option<(Range<usize>, TypeId)>>()
+                + h::<(TypeId, ComponentDomainV283, usize)>()
+                + size_of::<(&(), &(), FunctionId, usize)>()
+                + size_of::<(&(), &(), FunctionId, &Place)>()
                 + 5 * h::<Vec<u64>>()
                 + 6 * h::<Vec<usize>>()
                 + 2 * h::<Vec<bool>>()
-                + 2 * h::<Vec<Range<usize>>>()
+                + h::<Vec<Range<usize>>>()
+                + h::<Vec<LocalComponents>>()
                 + h::<Vec<EdgeFields>>()
                 + 32 * size_of::<usize>()
                 + 16 * size_of::<&()>()
