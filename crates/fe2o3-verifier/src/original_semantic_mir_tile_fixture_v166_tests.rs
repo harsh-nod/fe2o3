@@ -357,6 +357,124 @@ pub(in super::super) fn run_fixture_with_plan(
     run_fixture_with_preparation(layout, work, storage, prepared, examine)
 }
 
+// Re-admitted semantic MIR, not a rustc-generated source fixture. The fresh
+// preheader preserves every original block, call boundary and backedge.
+pub(in super::super) fn run_fixture_with_slice_entry_edge_v286(
+    layout: Layout,
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(
+        &SourceSlots<'_, '_>,
+        &TileExpansion<'_, '_>,
+        &mut Writer<'_, '_>,
+    ) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    run_fixture_with_preparation(
+        layout,
+        work,
+        storage,
+        |budget| {
+            prepared_with_owner(budget, || {
+                let original = owner();
+                let semantic = original.source_semantic();
+                let mut functions = semantic.functions().to_vec();
+                let root = &functions[0];
+                let old_entry = root.entry();
+                let entry = SemanticBlockIdV1::from_index(root.blocks().len().try_into().unwrap());
+                let identity = SemanticBlockIdentityV1::from_sha256([255; 32]);
+                assert!(
+                    root.blocks()
+                        .iter()
+                        .all(|block| block.identity() != identity)
+                );
+                let mut blocks = root.blocks().to_vec();
+                blocks.push(
+                    SemanticBasicBlockV1::new(
+                        identity,
+                        root.source(),
+                        vec![],
+                        SemanticTerminatorV1::new(
+                            root.source(),
+                            SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                                SemanticEdgeRoleV1::Goto,
+                                old_entry,
+                            )),
+                        ),
+                    )
+                    .unwrap(),
+                );
+                assert_eq!(&blocks[..root.blocks().len()], root.blocks());
+                functions[0] = SemanticFunctionDeclV1::new(
+                    root.identity(),
+                    root.role(),
+                    root.item_definition_identity(),
+                    root.monomorphization_identity(),
+                    root.generic_type_arguments_identity(),
+                    root.const_generic_arguments_identity(),
+                    root.source(),
+                    root.abi().clone(),
+                    root.locals().to_vec(),
+                    entry,
+                    blocks,
+                )
+                .unwrap()
+                .with_kernel_entry(root.kernel_entry().unwrap().clone());
+                let admitted = InertSemanticMirRequestV1::new_with_callables(
+                    semantic.target(),
+                    semantic.types().to_vec(),
+                    semantic.allocations().to_vec(),
+                    semantic.statics().to_vec(),
+                    semantic.vtables().to_vec(),
+                    functions,
+                    semantic.callables().to_vec(),
+                    semantic.roots().to_vec(),
+                )
+                .unwrap()
+                .admit_exact_v29(SemanticMirLimitsV1::default())
+                .unwrap();
+                let result = ProductionSemanticSsaOwnerV1::try_new(
+                    ProductionSemanticMirOwnerV1::try_new(
+                        admitted,
+                        ProductionSemanticMirLimitsV1::default(),
+                    )
+                    .unwrap(),
+                    ProductionSemanticSsaLimitsV1::default(),
+                )
+                .unwrap();
+                let ssa = result
+                    .plan_for_function(SemanticFunctionIdV1::from_index(0))
+                    .unwrap();
+                let live = ssa
+                    .plan()
+                    .live_in(fe2o3_mir_model::SsaBlockIdV1::new(old_entry.index()))
+                    .unwrap();
+                let mut live_slices = 0;
+                for (local, declaration) in semantic.functions()[0].locals().iter().enumerate() {
+                    if !matches!(declaration.role(), SemanticLocalRoleV1::Argument(_))
+                        || !matches!(semantic.types()[declaration.ty().index() as usize].shape(),
+                            SemanticTypeShapeV1::Pointer(pointer)
+                                if pointer.metadata() == SemanticPointerMetadataV1::SliceLength)
+                    {
+                        continue;
+                    }
+                    let variable = fe2o3_mir_model::SsaVariableIdV1::new(local.try_into().unwrap());
+                    if live.contains(&variable) {
+                        assert!(ssa.plan().promoted_variables().contains(&variable));
+                        assert!(!ssa.retained_cross_edge_variables().contains(&variable));
+                        live_slices += 1;
+                    }
+                }
+                assert!(
+                    live_slices > 0,
+                    "actual Slice arguments cross the new entry edge"
+                );
+                result
+            })
+        },
+        |_, slots, tile, out| examine(slots, tile, out),
+    )
+}
+
 pub(in super::super) fn run_fixture_with_unreachable_root_v281(
     layout: Layout,
     work: usize,

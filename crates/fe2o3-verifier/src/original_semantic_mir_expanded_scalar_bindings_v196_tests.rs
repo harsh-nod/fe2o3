@@ -930,9 +930,10 @@ fn expanded_scalar_bindings_have_exact_and_one_short_full_resource_bounds() {
 
 #[test]
 fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
+    use super::super::super::source_function::tile_fixture_tests::run_fixture_with_slice_entry_edge_v286;
     for layout in [Layout::Blocked, Layout::Striped] {
         let run = |work, storage| {
-            run_fixture(layout, work, storage, |slots, _, out| {
+            run_fixture_with_slice_entry_edge_v286(layout, work, storage, |slots, _, out| {
                 let target = TileTargetV176::derive(slots, out)?;
                 let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
                 let original = slots.correspondence(out)?.inventory(out.budget)?;
