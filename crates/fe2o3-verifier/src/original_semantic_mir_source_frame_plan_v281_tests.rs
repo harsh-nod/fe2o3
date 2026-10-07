@@ -41,6 +41,10 @@ fn inspect(
             let call = &frames.calls[parent];
             assert_eq!(call.root, frame.root);
             assert_eq!(call.child, Some(frame.instance));
+            assert_eq!(call.child_active, frame.active);
+            if !frame.active {
+                assert!(call.demands.is_empty());
+            }
             assert_eq!(
                 original.incoming,
                 Some((call.caller, SourceBlock::from_index(call.block as u32)))
@@ -160,6 +164,88 @@ fn source_frame_plan_rejects_foreign_and_refunded_accounts_before_querying_deman
     }
 }
 
+#[test]
+fn source_frame_inactive_child_keeps_reachable_call_without_suspended_bindings() {
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticBasicBlockV1, SemanticFunctionDeclV1, SemanticTerminatorKindV1,
+        SemanticTerminatorV1,
+    };
+    let mut observed = 0;
+    let result = super::super::super::invocations::tests::run_source_transform(
+        LIMIT,
+        LIMIT,
+        |_, functions| {
+            // A genuine nonreturning first helper leaves each later call in the
+            // original SSA CFG, but its retained child is authenticated inactive.
+            let helper = functions.last_mut().unwrap();
+            let source = helper.source();
+            let old = &helper.blocks()[0];
+            let blocks = vec![
+                SemanticBasicBlockV1::new(
+                    old.identity(),
+                    source,
+                    old.statements().to_vec(),
+                    SemanticTerminatorV1::new(source, SemanticTerminatorKindV1::Abort),
+                )
+                .unwrap(),
+            ];
+            *helper = SemanticFunctionDeclV1::new(
+                helper.identity(),
+                helper.role(),
+                helper.item_definition_identity(),
+                helper.monomorphization_identity(),
+                helper.generic_type_arguments_identity(),
+                helper.const_generic_arguments_identity(),
+                source,
+                helper.abi().clone(),
+                helper.locals().to_vec(),
+                helper.entry(),
+                blocks,
+            )
+            .unwrap();
+        },
+        |plan, out| {
+            super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                let frames = FramePlan::derive(plan, slots, out)?;
+                let source = plan.source(out)?;
+                for frame in &frames.frames {
+                    for call in &frames.calls[frame.calls.clone()] {
+                        let Some(child) = call.child else { continue };
+                        let original = plan.instance(call.root, child, out)?;
+                        assert_eq!(
+                            call.child_active,
+                            source.instance_active(call.root, child, out.budget)?
+                        );
+                        assert_eq!(call.child_active, original.active);
+                        if !frame.active || !call.reachable || call.child_active {
+                            continue;
+                        }
+                        let retained = &frames.frames[frames.roots[call.root].start + child];
+                        assert!(!retained.active);
+                        assert!(retained.parent_call.is_some());
+                        assert!(call.demands.is_empty());
+                        assert_eq!(call.block, 1);
+                        let start = out.text.len();
+                        super::super::expanded_frame_contract::emit_carry(
+                            frame,
+                            call,
+                            out,
+                            |_| panic!("inactive child must not request target bindings"),
+                        )?;
+                        let emitted = &out.text[start..];
+                        assert!(emitted.starts_with("spec fn invocation_expanded_carry_"));
+                        assert!(emitted.ends_with("-> bool { false }\n"));
+                        observed += 1;
+                    }
+                }
+                Ok(())
+            })
+        },
+    );
+    result.0.unwrap();
+    assert_eq!(observed, 2);
+}
+
 fn ancestry(mutation: usize, work: usize) -> (Result<(Option<usize>, usize)>, usize) {
     use super::super::super::invocations::{Instance, Root};
     let root = Root {
@@ -191,6 +277,7 @@ fn ancestry(mutation: usize, work: usize) -> (Result<(Option<usize>, usize)>, us
         caller: 0,
         block: 3,
         child: Some(1),
+        child_active: true,
         kind: CallKind::Direct,
         reachable: true,
         continuation: Some(4),
@@ -212,7 +299,9 @@ fn ancestry(mutation: usize, work: usize) -> (Result<(Option<usize>, usize)>, us
         12 => {
             row.active = false;
             calls[0].reachable = false;
+            calls[0].child_active = false;
         }
+        13 => calls[0].child_active = false,
         _ => unreachable!(),
     }
     let mut work = Work::new(work);
@@ -238,6 +327,7 @@ fn source_frame_ancestry_rejects_missing_foreign_cyclic_and_noncontinuing_edges(
     }
     // Inactive provenance is retained, without declaring a suspended frame.
     assert_eq!(ancestry(12, LIMIT).0.unwrap(), (Some(0), 1));
+    assert!(matches!(ancestry(13, LIMIT).0, Err(Error::Statement(_))));
     let measured = ancestry(0, LIMIT).1;
     assert_eq!(ancestry(0, measured).0.unwrap(), (Some(0), 1));
     assert!(

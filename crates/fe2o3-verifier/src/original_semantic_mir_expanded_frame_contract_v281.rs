@@ -51,6 +51,41 @@ fn headers() -> usize {
         + size_of::<std::slice::Iter<'_, super::source_frame_plan::Call>>()
 }
 
+pub(super) fn emit_carry(
+    frame: &super::source_frame_plan::Frame,
+    call: &super::source_frame_plan::Call,
+    out: &mut Writer<'_, '_>,
+    emit_demands: impl FnOnce(&mut Writer<'_, '_>) -> Result<()>,
+) -> Result<()> {
+    let headers = (2 * size_of_val(&emit_demands))
+        .checked_add(align_of_val(&emit_demands))
+        .and_then(|n| n.checked_add(4 * size_of::<&()>() + 3 * size_of::<usize>()))
+        .ok_or(Resource::Arithmetic)?;
+    out.budget.reserve_storage(headers)?;
+    out.budget.charge_work(5)?;
+    if (call.root, call.caller) != (frame.root, frame.instance)
+        || (call.child_active && call.child.is_none())
+        || (!call.child_active && !call.demands.is_empty())
+    {
+        return Err(mismatch());
+    }
+    emit!(
+        out,
+        "spec fn invocation_expanded_carry_{}_{}_{}_v281(source: InvocationSourceByteStateV36, target: MemoryStateV30, map: InvocationByteMapV36, execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>) -> bool {{ ",
+        call.root,
+        call.caller,
+        call.block
+    );
+    if frame.active && call.reachable && call.child_active {
+        emit!(out, "source.machine.valid && target.valid");
+        emit_demands(out)?;
+    } else {
+        emit!(out, "false");
+    }
+    emit!(out, " }}\n");
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn demands(
     frames: &FramePlan<'_, '_, '_, '_>,
@@ -188,16 +223,7 @@ pub(super) fn emit(
         for (index, frame) in frames.frames.iter().enumerate() {
             for at in frame.calls.clone() {
                 let call = &frames.calls[at];
-                out.budget.charge_work(2)?;
-                emit!(
-                    out,
-                    "spec fn invocation_expanded_carry_{}_{}_{}_v281(source: InvocationSourceByteStateV36, target: MemoryStateV30, map: InvocationByteMapV36, execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>) -> bool {{ ",
-                    call.root,
-                    call.caller,
-                    call.block
-                );
-                if frame.active && call.reachable && call.child.is_some() {
-                    emit!(out, "source.machine.valid && target.valid");
+                emit_carry(frame, call, out, |out| {
                     demands(
                         frames,
                         plan,
@@ -208,11 +234,8 @@ pub(super) fn emit(
                         call.demands.clone(),
                         width,
                         out,
-                    )?;
-                } else {
-                    emit!(out, "false");
-                }
-                emit!(out, " }}\n");
+                    )
+                })?;
             }
             // One reference to the parent's contract shares every ancestor carry.
             emit!(

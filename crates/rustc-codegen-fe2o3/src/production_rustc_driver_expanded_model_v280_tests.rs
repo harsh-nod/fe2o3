@@ -427,6 +427,9 @@ impl Callbacks for ModelCallbacks {
                                     instance
                                 );
                                 let call = &rows.calls[entry.parent_call_v281.unwrap()];
+                                if !entry.active {
+                                    assert!(call.carries_v281.is_empty());
+                                }
                                 assert_eq!(
                                     (call.root, call.caller, call.block, call.child),
                                     (root, parent, block.index(), Some(instance))
