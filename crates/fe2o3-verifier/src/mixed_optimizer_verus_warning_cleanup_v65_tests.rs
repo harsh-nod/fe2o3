@@ -67,12 +67,22 @@ fn generated_warning_cleanup_removes_only_nine_finite_tautologies() {
             expected = expected.replacen(anchor, &format!(
                 " && (forall|local: int| source.logical.execution_references.contains_key(local) ==> source.machine.values[local] == MemoryValueV30::Unit && !source.objects.contains_key(local)){anchor}"
             ), 1);
+            let anchor = " && (forall|local: int| source.logical.enums.contains_key(local) ==>";
+            assert_eq!(expected.matches(anchor).count(), 1);
+            expected = expected.replacen(anchor, &format!(
+                " && (forall|local: int| source.logical.products.contains_key(local) ==> source.machine.values[local] == MemoryValueV30::Undefined && !source.objects.contains_key(local)){anchor}"
+            ), 1);
         }
         if marker == "spec fn invocation_source_logical_well_formed_v38(" {
             let anchor = " && (forall|i: int| logical.descriptor_references.contains_key(i) ==>";
             assert_eq!(expected.matches(anchor).count(), 1);
             expected = expected.replacen(anchor, &format!(
                 " && invocation_source_execution_ancestry_v168(logical.execution_references) && (forall|i: int| logical.execution_references.contains_key(i) ==> 0 <= i < count && invocation_source_execution_reference_shape_v168(logical.execution_references[i], logical.versions) && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i) && !logical.descriptor_references.contains_key(i) && !logical.aggregates.contains_key(i) && !logical.enums.contains_key(i)){anchor}"
+            ), 1);
+            let anchor = " && (forall|i: int| logical.execution_references.contains_key(i) ==>";
+            assert_eq!(expected.matches(anchor).count(), 1);
+            expected = expected.replacen(anchor, &format!(
+                " && invocation_source_product_execution_ancestry_v282(logical) && (forall|i: int| logical.products.contains_key(i) ==> 0 <= i < count && invocation_source_product_well_formed_v282(logical.products[i]) && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i) && !logical.execution_references.contains_key(i) && !logical.descriptor_references.contains_key(i) && !logical.aggregates.contains_key(i) && !logical.enums.contains_key(i)){anchor}"
             ), 1);
         }
         assert_eq!(
@@ -102,6 +112,20 @@ fn generated_event_warning_allowance_preserves_every_variant_and_is_item_scoped(
             "    WorkgroupDerive(InvocationSourceWorkgroupDeriveV168),\n",
             "    TileLoad(InvocationSourceExecutionTileLoadV168),\n",
             "    TileTransport(InvocationSourceTileTransportV161),\n",
+        ),
+        1,
+    );
+    let anchor = "enum InvocationSourceByteEventV36 {\n";
+    assert_eq!(expected.matches(anchor).count(), 1);
+    let expected = expected.replacen(
+        anchor,
+        concat!(
+            "enum InvocationSourceByteEventV36 {\n",
+            "    ProductDeinitialize(InvocationSourceProductPlaceV282),\n",
+            "    ProductTransfer { destination: InvocationSourceProductDestinationV282,\n",
+            "        input: InvocationSourceProductOperandV282 },\n",
+            "    ProductConstruct { destination: InvocationSourceProductDestinationV282,\n",
+            "        source_type: int, fields: Seq<InvocationSourceProductOperandV282> },\n",
         ),
         1,
     );

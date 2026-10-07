@@ -58,12 +58,12 @@ fn finite_domain_compatibility_program_retains_equations_and_private_parent_impo
 }
 
 #[test]
-fn finite_domain_compatibility_source_keeps_all_sixteen_finite_maps() {
+fn finite_domain_compatibility_source_keeps_all_twenty_three_finite_maps() {
     let sources = [
         (super::super::byte_memory_v30::BYTE_MEMORY_V30, 3),
         (
             include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
-            6,
+            7,
         ),
         (
             include_str!("original_semantic_mir_invocation_source_frames_v36.rs"),
@@ -81,6 +81,10 @@ fn finite_domain_compatibility_source_keeps_all_sixteen_finite_maps() {
             include_str!("original_semantic_mir_source_enum_values_v47.vrs"),
             1,
         ),
+        (
+            include_str!("original_semantic_mir_source_product_values_v282.vrs"),
+            6,
+        ),
     ];
     let mut count = 0;
     for (source, expected) in sources {
@@ -92,9 +96,10 @@ fn finite_domain_compatibility_source_keeps_all_sixteen_finite_maps() {
         assert!(!source.contains("new_assuming_finite"));
         count += expected;
     }
-    assert_eq!(count, 16);
+    assert_eq!(count, 23);
     let logical = include_str!("original_semantic_mir_source_logical_locals_v38.vrs");
     assert!(logical.contains("execution_references: Map::new(logical.execution_references.dom().filter(|i: int| !(begin <= i < end)),\n            |i: int| logical.execution_references[i])"));
+    assert!(logical.contains("products: Map::new(logical.products.dom().filter(|i: int| !(begin <= i < end)),\n            |i: int| logical.products[i])"));
     let aggregate = include_str!("original_semantic_mir_source_aggregate_values_v42.vrs");
     assert!(aggregate.contains(".filter(|key: Seq<int>| invocation_source_path_prefix_v42(path, key))\n                .map(|key: Seq<int>| key.subrange(path.len() as int, key.len() as int))"));
     assert!(aggregate.contains(".union(value.leaves.dom().map(|suffix: Seq<int>| path + suffix))"));
@@ -117,6 +122,11 @@ fn generated_indexed_patterns_use_spec_aware_match_syntax() {
     let source = include_str!("original_semantic_mir_invocation_source_bytes_v36.rs");
     assert!(source.contains("match source.machine.values[local]"));
     assert!(!source.contains("matches!(source.machine.values["));
+    let products = include_str!("original_semantic_mir_source_product_values_v282.vrs");
+    assert!(products.contains("match value.components[path] {"));
+    assert!(products.contains("match components[path] {"));
+    assert!(!products.contains("matches!(value.components["));
+    assert!(!products.contains("matches!(components["));
     let vocabulary = super::super::byte_memory_v30::BYTE_MEMORY_V30;
     assert!(vocabulary.contains("match memory.live[pointer.allocation].bytes[i]"));
     assert!(vocabulary.contains("match object.bytes[offset + i]"));
