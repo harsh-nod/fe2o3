@@ -333,3 +333,211 @@ fn product_demand_cache_unwind_releases_owned_domain_storage() {
     result.0.unwrap();
     assert_eq!(result.2, FLOOR);
 }
+
+fn live_transform(types: &mut Vec<SemanticTypeDeclV1>, functions: &mut [Function]) -> Rows {
+    let rows = extend(types, functions);
+    for function in &mut functions[..2] {
+        assert_eq!(function.locals().len(), 4);
+        let source = function.source();
+        let mut locals = function.locals().to_vec();
+        for (index, ty) in [
+            rows.word,
+            rows.pointer,
+            rows.product_type,
+            rows.product_type,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([240 + index as u8; 32]),
+                ty,
+                LocalRole::Temporary,
+                source,
+            ));
+        }
+        let place =
+            |local, ty| Place::new(SemanticLocalIdV1::from_index(local), vec![], ty).unwrap();
+        let assignment = |local, ty, value| {
+            SemanticStatementV1::new(
+                source,
+                Statement::Assign(SemanticAssignmentV1::new(
+                    place(local, ty),
+                    SemanticRvalueV1::new(ty, value),
+                )),
+            )
+        };
+        let mut blocks = function.blocks().to_vec();
+        let mut entry = vec![
+            assignment(
+                4,
+                rows.word,
+                Rvalue::Use(Operand::Copy(place(1, rows.word))),
+            ),
+            assignment(
+                5,
+                rows.pointer,
+                Rvalue::AddressOf {
+                    mutability: SemanticMutabilityV1::Mutable,
+                    place: place(4, rows.word),
+                },
+            ),
+            assignment(
+                6,
+                rows.product_type,
+                Rvalue::Aggregate(
+                    SemanticAggregateRvalueV1::new(
+                        SemanticAggregateKindV1::Tuple,
+                        vec![
+                            Operand::Copy(place(5, rows.pointer)),
+                            Operand::Copy(place(2, rows.word)),
+                        ],
+                    )
+                    .unwrap(),
+                ),
+            ),
+        ];
+        entry.extend_from_slice(blocks[0].statements());
+        blocks[0] = SemanticBasicBlockV1::new(
+            blocks[0].identity(),
+            blocks[0].source(),
+            entry,
+            blocks[0].terminator().clone(),
+        )
+        .unwrap();
+        let mut continuation = vec![assignment(
+            7,
+            rows.product_type,
+            Rvalue::Use(Operand::Copy(place(6, rows.product_type))),
+        )];
+        continuation.extend_from_slice(blocks[1].statements());
+        blocks[1] = SemanticBasicBlockV1::new(
+            blocks[1].identity(),
+            blocks[1].source(),
+            continuation,
+            blocks[1].terminator().clone(),
+        )
+        .unwrap();
+        *function = Function::new(
+            function.identity(),
+            function.role(),
+            function.item_definition_identity(),
+            function.monomorphization_identity(),
+            function.generic_type_arguments_identity(),
+            function.const_generic_arguments_identity(),
+            source,
+            function.abi().clone(),
+            locals,
+            function.entry(),
+            blocks,
+        )
+        .unwrap()
+        .with_kernel_entry(function.kernel_entry().unwrap().clone());
+    }
+    rows
+}
+
+#[test]
+fn product_demand_real_original_ssa_keeps_both_atoms_across_an_actual_call() {
+    use super::super::slots::ProductAtomV282;
+    use fe2o3_mir_model::SsaVariableIdV1 as Variable;
+    let rows = Cell::new(None);
+    let result = super::super::super::invocations::tests::run_source_transform(
+        LIMIT,
+        LIMIT,
+        |types, functions| rows.set(Some(live_transform(types, functions))),
+        |plan, out| {
+            super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                let rows = rows.get().unwrap();
+                let source = plan.source(out)?;
+                let archive = source.source_ssa(out.budget)?;
+                let semantic = source.source_semantic(out.budget)?;
+                let pointer = slots.product_component_v282(rows.product_type, 0, out)?;
+                assert_eq!(pointer.path(out)?, &[0_u32]);
+                assert_eq!(pointer.source_type(out)?, rows.pointer);
+                assert_eq!(
+                    pointer.atom(out)?,
+                    ProductAtomV282::Pointer {
+                        mutable: true,
+                        reference: false,
+                    }
+                );
+                let scalar = slots.product_component_v282(rows.product_type, 1, out)?;
+                assert_eq!(scalar.path(out)?, &[1_u32]);
+                assert_eq!(scalar.source_type(out)?, rows.word);
+                assert_eq!(
+                    scalar.atom(out)?,
+                    ProductAtomV282::Scalar(super::super::super::ScalarV30::from_source(
+                        semantic.types(),
+                        rows.word
+                    )?)
+                );
+                let frames = super::super::source_frame_plan::FramePlan::derive(plan, slots, out)?;
+                let mut observed = 0;
+                for (frame_index, frame) in frames.frames.iter().enumerate() {
+                    if frame.instance != 0 {
+                        continue;
+                    }
+                    assert!(frame.active);
+                    let original = archive.plan_for_function(frame.function).unwrap();
+                    let ssa = original.plan();
+                    assert!(ssa.promoted_variables().contains(&Variable::new(6)));
+                    assert!(
+                        !original
+                            .retained_cross_edge_variables()
+                            .contains(&Variable::new(6))
+                    );
+                    assert!(!slots.has_original_object(frame.root, 0, 6, out)?);
+                    let function = &semantic.functions()[frame.function.index() as usize];
+                    let Statement::Assign(constructed) =
+                        function.blocks()[0].statements()[2].kind()
+                    else {
+                        panic!("actual original Product construction");
+                    };
+                    assert!(matches!(constructed.value().kind(), Rvalue::Aggregate(_)));
+                    assert_eq!(constructed.destination().local().index(), 6);
+                    assert_eq!(constructed.value().result_type(), rows.product_type);
+                    let call = frames.calls[frame.calls.clone()]
+                        .iter()
+                        .find(|call| call.block == 0)
+                        .unwrap();
+                    assert!(call.reachable && call.child_active && call.child.is_some());
+                    let carry = call
+                        .demands
+                        .clone()
+                        .find(|at| frames.demands[*at].source.local == 6)
+                        .unwrap();
+                    let current = frames.cuts[frame.cuts.clone()]
+                        .iter()
+                        .find(|cut| cut.block == 1)
+                        .unwrap();
+                    assert!(current.reachable);
+                    let current = current
+                        .demands
+                        .clone()
+                        .find(|at| frames.demands[*at].source.local == 6)
+                        .unwrap();
+                    for index in [carry, current] {
+                        let demand = &frames.demands[index].source;
+                        let endpoint = slots.correspondence(out)?.ssa_typed_endpoint_v36(
+                            frame.root,
+                            frame.instance,
+                            demand.value,
+                            out.budget,
+                        )?;
+                        assert_eq!(endpoint.source_type(out.budget)?, rows.product_type);
+                        assert_eq!(endpoint.source_local(out.budget)?.index(), 6);
+                        for atom in 0..2 {
+                            assert!(frames.leaf_required(frame_index, index, atom, out)?);
+                        }
+                    }
+                    observed += 1;
+                }
+                assert_eq!(observed, 2);
+                Ok(())
+            })
+        },
+    );
+    result.0.unwrap();
+    assert_eq!(result.2, FLOOR);
+}
