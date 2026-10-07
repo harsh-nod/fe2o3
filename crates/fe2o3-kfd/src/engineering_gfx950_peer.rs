@@ -32,6 +32,9 @@ pub use dependency::{
 #[path = "engineering_gfx950_peer_capacity_v1.rs"]
 mod capacity_v1;
 
+#[path = "engineering_gfx950_peer_read_pair_v1.rs"]
+mod read_pair_v1;
+
 #[path = "engineering_gfx950_peer_wave_output_state_v5.rs"]
 mod wave_output_state_v5;
 pub use wave_output_state_v5::Gfx950EngineeringPeerWaveOutputStateV5;
