@@ -55,6 +55,11 @@ pub(super) fn headers() -> usize {
         + size_of::<Option<Range<usize>>>()
         + size_of::<ComponentCut>()
         + size_of::<SourceDemand>()
+        + size_of::<&[Option<Value>]>()
+        + size_of::<Variable>()
+        + size_of::<ComponentCut>()
+        + 2 * size_of::<bool>()
+        + size_of::<Result<Option<SourceDemand>>>()
         + size_of::<Vec<SourceDemand>>()
         + 2 * size_of::<Result<Vec<SourceDemand>>>()
         + size_of::<Vec<Option<Value>>>()
@@ -106,6 +111,25 @@ fn demanded_value(values: &[Option<Value>], variable: Variable) -> Result<Value>
         .copied()
         .flatten()
         .ok_or_else(mismatch)
+}
+
+// Owner/type/component-cache checks remain in caller_demands. This pure final
+// selection does not admit a source operation or authenticate a component cut.
+fn select_demand(
+    values: &[Option<Value>],
+    variable: Variable,
+    components: ComponentCut,
+    is_destination: bool,
+    unwritten_needed: bool,
+) -> Result<Option<SourceDemand>> {
+    if is_destination && (components.overwritten.is_none() || !unwritten_needed) {
+        return Ok(None);
+    }
+    Ok(Some(SourceDemand {
+        local: variable.get() as usize,
+        value: demanded_value(values, variable)?,
+        components,
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -208,6 +232,7 @@ pub(super) fn caller_demands<'slots, 'view, 'source>(
         for &variable in live {
             out.budget.charge_work(2)?;
             let is_destination = variable.get() == destination.place().local().index();
+            let mut unwritten_needed = false;
             if is_destination {
                 let Some(overwritten) = &overwritten else {
                     continue;
@@ -223,7 +248,6 @@ pub(super) fn caller_demands<'slots, 'view, 'source>(
                 let count = slots
                     .aggregate_leaf_count(function.locals()[variable.get() as usize].ty(), out)?
                     .ok_or_else(mismatch)?;
-                let mut needed = false;
                 for leaf in 0..count {
                     out.budget.charge_work(1)?;
                     if !overwritten.contains(&leaf)
@@ -235,17 +259,14 @@ pub(super) fn caller_demands<'slots, 'view, 'source>(
                             out,
                         )?
                     {
-                        needed = true;
+                        unwritten_needed = true;
                     }
                 }
-                if !needed {
-                    continue;
-                }
             }
-            result.push(SourceDemand {
-                local: variable.get() as usize,
-                value: demanded_value(&values, variable)?,
-                components: ComponentCut {
+            if let Some(demand) = select_demand(
+                &values,
+                variable,
+                ComponentCut {
                     block: next.get() as usize,
                     overwritten: if is_destination {
                         overwritten.as_ref().map(|range| (range.start, range.end))
@@ -253,7 +274,11 @@ pub(super) fn caller_demands<'slots, 'view, 'source>(
                         None
                     },
                 },
-            });
+                is_destination,
+                unwritten_needed,
+            )? {
+                result.push(demand);
+            }
         }
         Ok(result)
     };

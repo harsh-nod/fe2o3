@@ -259,105 +259,175 @@ fn source_frame_caller_demands_match_independent_original_ssa_replay() {
 
 #[test]
 fn source_frame_projected_return_keeps_only_unwritten_continuation_leaves() {
-    super::super::super::invocations::tests::run_source_transform(
+    use fe2o3_lower_mir_kernel::{
+        ProductionPendingScopedSourceErrorV29 as Pending,
+        ProductionSemanticKirErrorV1 as SemanticError,
+    };
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticOperandV1 as Operand, SemanticProjectionKindV1 as Projection,
+        SemanticScalarTypeV1 as Scalar, SemanticTerminatorKindV1 as Terminator,
+        SemanticTypeShapeV1 as Shape,
+    };
+    let transform = |types: &mut Vec<_>, functions: &mut Vec<_>| {
+        super::super::paired::aggregate_tests::call_transform(types, functions, false)
+    };
+    let mut callback = false;
+    let refused = super::super::super::invocations::tests::run_source_transform(
         LIMIT,
         LIMIT,
-        |types, functions| {
-            super::super::paired::aggregate_tests::call_transform(types, functions, false)
+        transform,
+        |_, _| {
+            callback = true;
+            Ok(())
         },
-        |plan, out| {
-            super::super::source_function::tests::with_slots(plan, out, |slots, out| {
-                let source = plan.source(out)?;
-                let semantic = source.source_semantic(out.budget)?;
-                let archive = source.source_ssa(out.budget)?;
-                let mut cache = vector(semantic.functions().len(), out)?;
-                cache.resize_with(semantic.functions().len(), || None);
-                let mut projected = 0;
-                for root in 0..source.root_count(out.budget)? {
-                    let caller = plan.instance(root, 0, out)?;
-                    let function = &semantic.functions()[caller.function.index() as usize];
-                    let ssa = archive.plan_for_function(caller.function).unwrap().plan();
-                    let successors: Vec<Vec<_>> = function
-                        .blocks()
-                        .iter()
-                        .map(|body| {
-                            let mut edges = Vec::new();
-                            body.terminator()
-                                .kind()
-                                .try_for_each_edge(|edge| {
-                                    edges.push(block(edge.target().index() as usize)?);
-                                    Ok::<_, Error>(())
-                                })
-                                .unwrap();
-                            edges
-                        })
-                        .collect();
-                    let boundaries = Boundaries::derive(
-                        ssa,
-                        ControlInput {
-                            entry: block(function.entry().index() as usize)?,
-                            successors: &successors,
-                        },
-                        out,
-                    )?;
-                    for site in plan.calls(root, 0, out)? {
-                        let demands = caller_demands(
-                            slots,
-                            plan,
-                            root,
-                            0,
-                            site.block,
-                            &boundaries,
-                            &mut cache,
-                            out,
-                        )?;
-                        let aggregate = demands.iter().find(|row| row.local == 4).unwrap();
-                        assert_eq!(aggregate.components.overwritten, Some((0, 1)));
-                        assert_eq!(aggregate.components.block, site.block.index() as usize + 1);
-                        let mut original = BTreeMap::new();
-                        for &variable in ssa.live_in(block(site.block.index() as usize)?).unwrap() {
-                            original.insert(
-                                variable.get(),
-                                boundaries.value(
-                                    block(site.block.index() as usize)?,
-                                    variable,
-                                    out,
-                                )?,
-                            );
-                        }
-                        for &(_, event) in ssa
-                            .resolved_events(block(site.block.index() as usize)?)
-                            .unwrap()
-                        {
-                            match event {
-                                Event::Define { variable, value } => {
-                                    original.insert(variable.get(), value);
-                                }
-                                Event::Kill { variable, .. } => {
-                                    original.remove(&variable.get());
-                                }
-                                Event::Use { .. } => (),
-                            }
-                        }
-                        assert_eq!(aggregate.value, original[&4]);
-                        let components = cache[caller.function.index() as usize].as_ref().unwrap();
-                        assert!(components.leaf_required(
-                            caller.function,
-                            aggregate.components.block,
-                            4,
-                            1,
-                            out
-                        )?);
-                        projected += 1;
-                    }
-                }
-                assert_eq!(projected, 4);
-                Ok(())
+    );
+    assert!(!callback);
+    assert!(matches!(
+        refused.0,
+        Err(Error::Source(SourceError::Source(Pending::Source(
+            SemanticError::Unsupported {
+                function: 0,
+                block: None,
+                statement: None,
+                detail: "typed allocation identity or representation requires its exact source contract"
+            }
+        ))))
+    ));
+
+    // The retained tuple argument is not admitted by the KIR importer. Exercise
+    // only the unchanged selection on its genuine original SSA, not a fabricated
+    // SourceSlots owner or an assertion of admitted projected-return support.
+    let owner =
+        super::super::super::invocations::tests::try_source_ssa_transform(transform).unwrap();
+    let semantic = owner.source_semantic();
+    let mut work = Work::new(LIMIT);
+    let mut budget = Budget::new(&mut work, LIMIT);
+    budget
+        .reserve_storage(crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT + headers())
+        .unwrap();
+    let mut out = Writer::new(&mut budget).unwrap();
+    let mut projected = 0;
+    for &root in semantic.roots() {
+        let function = &semantic.functions()[root.index() as usize];
+        let ssa = owner.plan_for_function(root).unwrap().plan();
+        let successors: Vec<Vec<_>> = function
+            .blocks()
+            .iter()
+            .map(|body| {
+                let mut edges = Vec::new();
+                body.terminator()
+                    .kind()
+                    .try_for_each_edge(|edge| {
+                        edges.push(block(edge.target().index() as usize).unwrap());
+                        Ok::<_, ()>(())
+                    })
+                    .unwrap();
+                edges
             })
-        },
-    )
-    .0
-    .unwrap();
+            .collect();
+        let boundaries = Boundaries::derive(
+            ssa,
+            ControlInput {
+                entry: block(function.entry().index() as usize).unwrap(),
+                successors: &successors,
+            },
+            &mut out,
+        )
+        .unwrap();
+        let Shape::Tuple(pair) =
+            semantic.types()[function.locals()[4].ty().index() as usize].shape()
+        else {
+            panic!("original pair")
+        };
+        assert_eq!(pair.fields().len(), 2);
+        assert_eq!(
+            semantic.types()[pair.fields()[1].index() as usize].shape(),
+            &Shape::Scalar(Scalar::Bool)
+        );
+        let Terminator::Assert {
+            condition: Operand::Move(boolean),
+            ..
+        } = function.blocks()[2].terminator().kind()
+        else {
+            panic!("original bool consumer")
+        };
+        assert_eq!(boolean.local().index(), 4);
+        assert_eq!(boolean.projections().len(), 1);
+        assert_eq!(boolean.projections()[0].kind(), Projection::Field(1));
+        assert_eq!(boolean.ty(), pair.fields()[1]);
+        for site in 0..2 {
+            let Terminator::Call(call) = function.blocks()[site].terminator().kind() else {
+                panic!("original call")
+            };
+            let destination = call.destination().unwrap();
+            assert_eq!(destination.place().local().index(), 4);
+            assert_eq!(destination.place().projections().len(), 1);
+            assert_eq!(
+                destination.place().projections()[0].kind(),
+                Projection::Field(0)
+            );
+            assert_eq!(destination.place().ty(), pair.fields()[0]);
+            let next = destination.edge().target().index() as usize;
+            assert_eq!(next, site + 1);
+            let mut values = vec![None; function.locals().len()];
+            let mut original = BTreeMap::new();
+            for &variable in ssa.live_in(block(site).unwrap()).unwrap() {
+                let value = boundaries
+                    .value(block(site).unwrap(), variable, &mut out)
+                    .unwrap();
+                values[variable.get() as usize] = Some(value);
+                original.insert(variable.get(), value);
+            }
+            let events = ssa.resolved_events(block(site).unwrap()).unwrap();
+            replay_events(&mut values, events, out.budget).unwrap();
+            for &(_, event) in events {
+                match event {
+                    Event::Define { variable, value } => {
+                        original.insert(variable.get(), value);
+                    }
+                    Event::Kill { variable, .. } => {
+                        original.remove(&variable.get());
+                    }
+                    Event::Use { .. } => (),
+                }
+            }
+            assert!(
+                ssa.live_in(block(next).unwrap())
+                    .unwrap()
+                    .contains(&Variable::new(4))
+            );
+            let cut = ComponentCut {
+                block: next,
+                overwritten: Some((0, 1)),
+            };
+            // Every path to the real bool use crosses only the second field-0
+            // return; leaf 1 is untouched while leaf 0 is overwritten.
+            let needed = boolean.projections()[0].kind() == Projection::Field(1);
+            let selected = select_demand(&values, Variable::new(4), cut, true, needed)
+                .unwrap()
+                .unwrap();
+            assert_eq!(selected.value, original[&4]);
+            assert_eq!(selected.components, cut);
+            assert!(
+                select_demand(&values, Variable::new(4), cut, true, false)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                select_demand(
+                    &values,
+                    Variable::new(4),
+                    ComponentCut::at(next),
+                    true,
+                    true
+                )
+                .unwrap()
+                .is_none()
+            );
+            projected += 1;
+        }
+    }
+    assert_eq!(projected, 4);
 }
 
 #[test]
