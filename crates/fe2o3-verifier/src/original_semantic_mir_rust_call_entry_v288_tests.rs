@@ -1017,18 +1017,72 @@ fn original_rust_call_projection_preserves_complete_current_atoms_and_recipe_ide
 
 #[test]
 fn original_rust_call_schema_demand_covers_no_local_type_once_per_function() {
+    // Caller temporaries can also demand this schema. This is a structural
+    // wiring check only; the fresh requested/seen replay tests helper behavior.
+    let slots_source = include_str!("original_semantic_mir_invocation_slots_v36.rs");
+    let call_before_locals = concat!(
+        "                demand_expanded_arguments(\n",
+        "                    semantic,\n",
+        "                    row.function,\n",
+        "                    &mut requested,\n",
+        "                    &mut argument_functions,\n",
+        "                    out,\n",
+        "                )?;\n",
+        "                for (local, declaration) in original.locals().iter().enumerate() {",
+    );
+    assert_eq!(slots_source.matches(call_before_locals).count(), 1);
     run(Form::EmptyTuple, LIMIT, LIMIT, |plan, slots, out| {
         let row = plan.instance(0, 1, out)?;
         let source = plan.source(out)?.source_semantic(out.budget)?;
-        let ty = source.functions()[row.function.index() as usize]
-            .abi()
-            .source_input_types()[2];
-        assert!(
-            source
-                .functions()
-                .iter()
-                .all(|function| function.locals().iter().all(|local| local.ty() != ty))
-        );
+        let function = &source.functions()[row.function.index() as usize];
+        let ty = function.abi().source_input_types()[2];
+        // The expanded callee has no tuple holder; callers construct the
+        // same typed tuple in real temporaries before transferring it.
+        assert!(function.locals().iter().all(|local| local.ty() != ty));
+        let logical = source.logical_arguments_v1(row.function).unwrap();
+        assert!(matches!(
+            logical.source_arguments().nth(2).unwrap().binding(),
+            ArgumentBinding::ExpandedTuple(fields) if fields.is_empty()
+        ));
+        let mut calls = 0;
+        for caller in source.functions() {
+            for block in caller.blocks() {
+                let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+                    continue;
+                };
+                let SemanticCallableDeclV1::Defined { function: called } = source
+                    .callables()
+                    .get(call.callee().index() as usize)
+                    .expect("retained original callable")
+                else {
+                    continue;
+                };
+                if *called != row.function {
+                    continue;
+                }
+                calls += 1;
+                let SemanticOperandV1::Move(place) = &call.arguments()[2] else {
+                    panic!("constructed empty tuple argument");
+                };
+                assert_eq!(place.ty(), ty);
+                assert!(place.projections().is_empty());
+                let local = &caller.locals()[place.local().index() as usize];
+                assert_eq!(local.ty(), ty);
+                assert_eq!(local.role(), LocalRole::Temporary);
+                let constructors = block.statements().iter().filter(|statement| {
+                    matches!(statement.kind(),
+                        SemanticStatementKindV1::Assign(assignment)
+                        if assignment.destination() == place
+                            && matches!(assignment.value().kind(),
+                                SemanticRvalueKindV1::Aggregate(value)
+                                if value.kind() == &SemanticAggregateKindV1::Tuple
+                                    && value.operands().is_empty()))
+                });
+                assert_eq!(constructors.count(), 1);
+            }
+        }
+        // Two live calls and one retained unreachable call for each root.
+        assert_eq!(calls, 6);
         assert_eq!(slots.aggregate_leaf_count(ty, out)?, Some(1));
         let leaf = slots.aggregate_leaf(ty, 0, out)?;
         assert_eq!(leaf.scalar(out)?, ScalarV30::Unit);
