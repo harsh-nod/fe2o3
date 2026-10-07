@@ -33,11 +33,7 @@ fn transform(form: Form, types: &mut Vec<SemanticTypeDeclV1>, functions: &mut Ve
                 SemanticTypeLayoutV1::aggregate(
                     Some(0),
                     1,
-                    SemanticAggregateLayoutV1::new(
-                        vec![0; fields.len()],
-                        (0..fields.len() as u32).collect(),
-                    )
-                    .unwrap(),
+                    SemanticAggregateLayoutV1::new(vec![0; fields.len()], vec![]).unwrap(),
                 )
                 .unwrap(),
                 Shape::Tuple(SemanticAggregateTypeV1::new(fields).unwrap()),
