@@ -5,8 +5,8 @@ use crate::mixed_optimizer_refinement_v26::semantics::{block_index, operation_in
 use fe2o3_kernel_analysis::CanonicalKirInventoryV18 as Inventory;
 use fe2o3_kernel_ir::{
     BinaryOp, CanonicalKirBlockCoordinateV1 as Block, CanonicalKirFunctionCoordinateV1 as Function,
-    CheckedBinaryOperator, ExecutionOperationV15 as Execution, ExecutionRoleV15, FormalIndexWidth,
-    OperationKind, ScalarType, Terminator, ValueId,
+    CheckedBinaryOperator, Constant, ExecutionOperationV15 as Execution, ExecutionRoleV15,
+    FormalIndexWidth, OperationKind, ScalarType, Terminator, ValueId,
 };
 use std::fmt::Write as _;
 
@@ -17,6 +17,7 @@ macro_rules! emit {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Recipe {
     Actual(usize),
+    Literal(u32),
     Forward(usize),
     CheckedAdd {
         left: usize,
@@ -56,6 +57,10 @@ pub(super) fn headers() -> usize {
         + size_of::<usize>()
         + size_of::<Recipe>()
         + size_of::<Result<Recipe>>();
+    let pure_result_frame = 5 * size_of::<&()>()
+        + 3 * size_of::<usize>()
+        + size_of::<Constant>()
+        + size_of::<Result<Recipe>>();
     let arm_iterator = size_of::<std::array::IntoIter<Block, 2>>();
     let snapshot_path = size_of::<[u32; 2]>() + size_of::<&[u32]>();
     let borrowed_rosters = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>()
@@ -85,6 +90,7 @@ pub(super) fn headers() -> usize {
         + operand_refs
         + traversal_borrows
         + loader_frame
+        + pure_result_frame
         + arm_iterator
         + snapshot_path
         + borrowed_rosters
@@ -108,8 +114,9 @@ mod tests {
     use super::*;
     use crate::mixed_optimizer_refinement_v26::Budget;
     use fe2o3_kernel_ir::{
-        BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work, Function as IrFunction, Module,
-        Signature, StorageLayoutLimitsV1, ValueDef, VerifiedCanonicalKernelIrModuleV18 as Owner,
+        BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work, Function as IrFunction,
+        Instruction, Module, Signature, StorageLayoutLimitsV1, UnaryOp, ValueDef,
+        VerifiedCanonicalKernelIrModuleV18 as Owner,
     };
 
     const LIMIT: usize = 100_000_000;
@@ -276,6 +283,115 @@ mod tests {
             }
             assert!(out.finish().unwrap().is_empty());
         }
+    }
+
+    #[test]
+    fn reconstruction_pure_results_require_exact_constants_and_u32_addition() {
+        // Canonical-inventory equation selection only, not a source-erasure or
+        // source-to-target correspondence witness.
+        let word = Type::Scalar(ScalarType::U32);
+        let wide = Type::Scalar(ScalarType::U64);
+        let mut entry = BasicBlock::new(BlockId(0));
+        for (id, value) in [
+            (3, Constant::U32(u32::MAX)),
+            (4, Constant::Bool(false)),
+            (5, Constant::Bool(true)),
+            (6, Constant::U32(0)),
+            (7, Constant::U64(1)),
+        ] {
+            entry.operations.push(Instruction::effect_free(
+                ValueDef::new(ValueId(id), value.ty()),
+                OperationKind::Constant(value),
+            ));
+        }
+        for (id, ty, binary, lhs, rhs) in [
+            (8, word.clone(), BinaryOp::Add, 0, 3),
+            (
+                9,
+                word.clone(),
+                BinaryOp::Checked(CheckedBinaryOperator::Add),
+                0,
+                3,
+            ),
+            (11, word.clone(), BinaryOp::Subtract, 0, 1),
+            (12, wide.clone(), BinaryOp::Add, 2, 7),
+        ] {
+            let mut results = vec![ValueDef::new(ValueId(id), ty)];
+            if matches!(binary, BinaryOp::Checked(_)) {
+                results.push(ValueDef::new(
+                    ValueId(id + 1),
+                    Type::Scalar(ScalarType::Bool),
+                ));
+            }
+            entry.operations.push(Instruction::new(
+                results,
+                OperationKind::Binary {
+                    op: binary,
+                    lhs: ValueId(lhs),
+                    rhs: ValueId(rhs),
+                },
+            ));
+        }
+        entry.operations.push(Instruction::effect_free(
+            ValueDef::new(ValueId(13), word.clone()),
+            OperationKind::Unary {
+                op: UnaryOp::Not,
+                operand: ValueId(0),
+            },
+        ));
+        entry.terminator = Some(Terminator::Return {
+            values: vec![ValueId(8)],
+        });
+        let mut module = Module::new("pure-reconstruction-selection");
+        module.functions.push(IrFunction::internal_helper(
+            "entry",
+            Signature::new(vec![word.clone(), word.clone(), wide], vec![word]),
+            vec![ValueId(0), ValueId(1), ValueId(2)],
+            vec![entry],
+        ));
+        let mut work = Work::new(LIMIT);
+        let mut budget = Budget::new(&mut work, LIMIT);
+        budget.reserve_storage(headers()).unwrap();
+        let (owner, storage) =
+            Owner::from_module_ref_with_verification_budget_v18(&module, LAYOUTS, &mut budget)
+                .unwrap();
+        budget.reserve_storage(storage.retained_storage()).unwrap();
+        let (input, storage) = Inventory::derive_v18(&owner, &mut budget).unwrap();
+        budget.reserve_storage(storage.retained_storage()).unwrap();
+        let index = |value| {
+            input
+                .definitions()
+                .iter()
+                .position(|row| row.value == Some(ValueId(value)))
+                .unwrap()
+        };
+        let mut out = Writer::new(&mut budget).unwrap();
+        let floor = out.budget.storage();
+        for (value, bits) in [(3, u32::MAX), (4, 0), (5, 1), (6, 0)] {
+            assert!(
+                matches!(pure_result_recipe(&input, index(value), &mut out).unwrap(),
+                Recipe::Literal(actual) if actual == bits)
+            );
+        }
+        for (value, overflow) in [(8, false), (9, false), (10, true)] {
+            assert!(
+                matches!(pure_result_recipe(&input, index(value), &mut out).unwrap(),
+                Recipe::CheckedAdd { left, right, overflow: actual }
+                    if left == index(0) && right == index(3) && actual == overflow)
+            );
+        }
+        for value in [0, 7, 11, 12, 13] {
+            assert!(matches!(
+                pure_result_recipe(&input, index(value), &mut out),
+                Err(Error::Statement(_))
+            ));
+        }
+        assert!(matches!(
+            pure_result_recipe(&input, input.definitions().len(), &mut out),
+            Err(Error::Statement(_))
+        ));
+        assert_eq!(out.budget.storage(), floor);
+        assert!(out.finish().unwrap().is_empty());
     }
 }
 
@@ -488,6 +604,85 @@ fn phi(
     })
 }
 
+// This selects an equation from the original inventory only. The caller still
+// authenticates erasure, root ownership and every retained dependency.
+fn pure_result_recipe(
+    input: &Inventory<'_>,
+    original: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<Recipe> {
+    out.budget.charge_work(14)?;
+    let row = input.definitions().get(original).ok_or_else(mismatch)?;
+    let Definition::Result { operation, result } = row.coordinate else {
+        return Err(mismatch());
+    };
+    let op = &input.operations()[operation_index(input, operation)?];
+    if op.results.start.checked_add(result as usize) != Some(original)
+        || !op.results.contains(&original)
+        || op.operation.results.len() != op.results.len()
+        || !op.effects.is_empty()
+        || op
+            .operation
+            .results
+            .get(result as usize)
+            .map(|result| &result.ty)
+            != Some(row.ty)
+    {
+        return Err(mismatch());
+    }
+    if let OperationKind::Constant(value) = &op.operation.kind {
+        if result != 0 || op.results.len() != 1 || &value.ty() != row.ty {
+            return Err(mismatch());
+        }
+        return match value {
+            Constant::U32(value) => Ok(Recipe::Literal(*value)),
+            Constant::Bool(value) => Ok(Recipe::Literal(u32::from(*value))),
+            _ => Err(mismatch()),
+        };
+    }
+    let OperationKind::Binary {
+        op: binary,
+        lhs,
+        rhs,
+    } = &op.operation.kind
+    else {
+        return Err(mismatch());
+    };
+    let overflow = match binary {
+        BinaryOp::Add
+            if result == 0 && op.results.len() == 1 && row.ty == &Type::Scalar(ScalarType::U32) =>
+        {
+            false
+        }
+        BinaryOp::Checked(CheckedBinaryOperator::Add)
+            if result <= 1
+                && op.results.len() == 2
+                && op.operation.results[0].ty == Type::Scalar(ScalarType::U32)
+                && op.operation.results[1].ty == Type::Scalar(ScalarType::Bool) =>
+        {
+            result == 1
+        }
+        _ => return Err(mismatch()),
+    };
+    Ok(Recipe::CheckedAdd {
+        left: operand(
+            input,
+            operation.block.function,
+            *lhs,
+            &Type::Scalar(ScalarType::U32),
+            out,
+        )?,
+        right: operand(
+            input,
+            operation.block.function,
+            *rhs,
+            &Type::Scalar(ScalarType::U32),
+            out,
+        )?,
+        overflow,
+    })
+}
+
 impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
     fn reconstruction_recipe(
         &self,
@@ -557,47 +752,14 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
         }
         match row.coordinate {
             Definition::BlockArgument { block, .. } => phi(input, original, block, out),
-            Definition::Result { operation, result } => {
-                out.budget.charge_work(10)?;
+            Definition::Result { operation, .. } => {
+                out.budget.charge_work(2)?;
                 let op = &input.operations()[operation_index(input, operation)?];
                 if let OperationKind::Binary { op, .. } = &op.operation.kind {
                     facts.binary = Some(*op);
                 }
-                let OperationKind::Binary {
-                    op: BinaryOp::Checked(CheckedBinaryOperator::Add),
-                    lhs,
-                    rhs,
-                } = &op.operation.kind
-                else {
-                    return Err(trace_refusal(mismatch(), RefusalPhase::ErasedRecipe, facts));
-                };
-                if result > 1
-                    || op.results.len() != 2
-                    || !op.effects.is_empty()
-                    || op.operation.results.len() != 2
-                    || op.operation.results[0].ty != Type::Scalar(ScalarType::U32)
-                    || op.operation.results[1].ty != Type::Scalar(ScalarType::Bool)
-                    || row.ty != &op.operation.results[result as usize].ty
-                {
-                    return Err(mismatch());
-                }
-                Ok(Recipe::CheckedAdd {
-                    left: operand(
-                        input,
-                        operation.block.function,
-                        *lhs,
-                        &Type::Scalar(ScalarType::U32),
-                        out,
-                    )?,
-                    right: operand(
-                        input,
-                        operation.block.function,
-                        *rhs,
-                        &Type::Scalar(ScalarType::U32),
-                        out,
-                    )?,
-                    overflow: result == 1,
-                })
+                pure_result_recipe(input, original, out)
+                    .map_err(|error| trace_refusal(error, RefusalPhase::ErasedRecipe, facts))
             }
             _ => Err(trace_refusal(mismatch(), RefusalPhase::ErasedRecipe, facts)),
         }
@@ -706,6 +868,12 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
         for &node in &order {
             out.budget.charge_work(2)?;
             match recipes[node].ok_or_else(mismatch)? {
+                Recipe::Literal(bits) => {
+                    emit!(
+                        out,
+                        "let reconstructed_{node} = MemoryValueV30::Scalar({bits}int); let reconstructed_ok_{node} = true; "
+                    );
+                }
                 Recipe::Actual(index) => {
                     let limit = if input.definitions()[node].ty == &Type::Scalar(ScalarType::Bool) {
                         2u64

@@ -145,6 +145,10 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + size_of::<usize>()
         + size_of::<Recipe>()
         + size_of::<Result<Recipe>>();
+    let reconstruction_pure_result_frame = 5 * size_of::<&()>()
+        + 3 * size_of::<usize>()
+        + size_of::<fe2o3_kernel_ir::Constant>()
+        + size_of::<Result<Recipe>>();
     let reconstruction_arm_iteration = size_of::<std::array::IntoIter<RebuildBlock, 2>>();
     let reconstruction_snapshot_path = size_of::<[u32; 2]>() + size_of::<&[u32]>();
     let reconstruction_slice_borrows =
@@ -219,6 +223,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + reconstruction_operand_borrows
         + reconstruction_traversal_borrows
         + reconstruction_loader_frame
+        + reconstruction_pure_result_frame
         + reconstruction_arm_iteration
         + reconstruction_snapshot_path
         + reconstruction_slice_borrows
