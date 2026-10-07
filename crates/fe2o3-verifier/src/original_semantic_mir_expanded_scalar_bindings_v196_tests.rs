@@ -941,10 +941,12 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
                 let predecessor = neutral.output_inventory(out.budget)?;
                 let actual = target.inventory(out)?;
                 let mut forwarded = 0;
+                let mut forwarded_slices = 0;
+                let mut forwarded_scalars = 0;
                 let mut missing_computations = 0;
                 let mut ambiguous_inputs = 0;
                 for (index, row) in original.definitions().iter().enumerate() {
-                    if !matches!(row.ty, Type::Scalar(_))
+                    if !matches!(row.ty, Type::Scalar(_) | Type::Slice(_))
                         || !neutral
                             .definition_descendants(row.coordinate, out.budget)?
                             .is_empty()
@@ -1033,6 +1035,13 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
                                 );
                             }
                             forwarded += 1;
+                            match row.ty {
+                                Type::Slice(_) => forwarded_slices += 1,
+                                Type::Scalar(_) => forwarded_scalars += 1,
+                                _ => {
+                                    unreachable!("oracle selects only complete scalar/slice types")
+                                }
+                            }
                         }
                         None => {
                             refusal(pairs.source_transport_definition(index, out))?;
@@ -1042,8 +1051,12 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
                     }
                 }
                 assert!(
-                    forwarded > 0,
-                    "fixture must have actual unambiguous scalar forwarding"
+                    forwarded_scalars > 0,
+                    "fixture must retain nonvacuous scalar forwarding"
+                );
+                assert!(
+                    forwarded_slices > 0,
+                    "fixture must retain nonvacuous whole-slice forwarding"
                 );
                 assert!(
                     missing_computations > 0,

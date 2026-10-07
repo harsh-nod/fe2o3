@@ -27,8 +27,9 @@ pub(super) fn headers() -> usize {
 }
 
 impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
-    /// Locate only exact, same-typed incoming SSA forwarding. Every source cut
-    /// still requires its original value to relate to this actual target value.
+    /// Locate only exact, same-typed scalar or whole-slice SSA forwarding. Every
+    /// source cut still requires its original value to relate to this actual
+    /// target value; slices are never reduced to their address or length alone.
     /// Computations, absent edges, ambiguous predecessors and cycles refuse.
     pub(in super::super::super) fn source_transport_definition(
         &self,
@@ -58,7 +59,7 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                     });
                 }
                 out.budget.charge_work(2)?;
-                if !matches!(source.ty, Type::Scalar(_)) {
+                if !matches!(source.ty, Type::Scalar(_) | Type::Slice(_)) {
                     return Err(trace_refusal(
                         mismatch(),
                         RefusalPhase::TransportNonScalar,
