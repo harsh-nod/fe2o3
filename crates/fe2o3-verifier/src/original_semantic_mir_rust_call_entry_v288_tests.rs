@@ -681,7 +681,14 @@ fn original_rust_call_empty_composite_fields_retain_types_distinct_from_unit() {
                     let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
                         continue;
                     };
-                    if call.callee() != row.function {
+                    let SemanticCallableDeclV1::Defined { function: called } = source
+                        .callables()
+                        .get(call.callee().index() as usize)
+                        .expect("retained original callable")
+                    else {
+                        continue;
+                    };
+                    if *called != row.function {
                         continue;
                     }
                     calls += 1;
