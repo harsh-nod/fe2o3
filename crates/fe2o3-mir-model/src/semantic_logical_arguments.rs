@@ -147,6 +147,16 @@ impl AdmittedInertSemanticMirV1 {
 }
 
 impl SemanticLogicalArgumentMapV1<'_> {
+    /// Capacities of the owned source-local and expanded-field indexes, in
+    /// elements. Consumers can reconcile prepaid scratch storage before use.
+    /// This describes allocation only, not source or execution authority.
+    pub fn allocation_capacities_v1(&self) -> (usize, usize) {
+        (
+            self.source_locals.capacity(),
+            self.expanded_fields.capacity(),
+        )
+    }
+
     pub fn source_arguments(&self) -> impl ExactSizeIterator<Item = SemanticSourceArgumentV1<'_>> {
         let abi = self.function.abi();
         abi.source_input_types()
