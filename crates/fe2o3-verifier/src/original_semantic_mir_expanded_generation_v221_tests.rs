@@ -43,14 +43,36 @@ fn support_only(
                 .matches("proof fn invocation_context_issue_segment_")
                 .count()
         );
-        for segment in generated.split("proof fn invocation_context_issue_current_map_segment_").skip(1) {
+        for segment in generated
+            .split("proof fn invocation_context_issue_current_map_segment_")
+            .skip(1)
+        {
             let segment = segment.split("\nproof fn ").next().unwrap();
-            assert_eq!(segment.matches("invocation_context_issue_fresh_preserves_frame_v259(").count(), 1);
-            assert!(!segment.contains("invocation_context_issue_fresh_preserves_current_map_v238("));
-            assert_eq!(segment.matches("invocation_context_issue_fresh_has_exact_updates_v211(").count(), 1);
-            assert_eq!(segment.matches("invocation_context_issue_segment_").count(), 1);
-            assert!(segment.contains("invocation_context_issue_fresh_enabled_v211(source.source, target.state,"));
-            assert!(segment.contains("invocation_execution_map_current_v205(source.source, target.state, execution_map)"));
+            assert_eq!(
+                segment
+                    .matches("invocation_context_issue_fresh_preserves_frame_v259(")
+                    .count(),
+                1
+            );
+            assert!(
+                !segment.contains("invocation_context_issue_fresh_preserves_current_map_v238(")
+            );
+            assert_eq!(
+                segment
+                    .matches("invocation_context_issue_fresh_has_exact_updates_v211(")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                segment.matches("invocation_context_issue_segment_").count(),
+                1
+            );
+            assert!(segment.contains(
+                "invocation_context_issue_fresh_enabled_v211(source.source, target.state,"
+            ));
+            assert!(segment.contains(
+                "invocation_execution_map_current_v205(source.source, target.state, execution_map)"
+            ));
             assert!(segment.contains("assert(coupled.source.source.machine == (MemoryStateV30 {"));
             assert!(segment.contains("..source.source.machine }));"));
             assert!(segment.contains("let continued = invocation_source_byte_pc_v36("));
