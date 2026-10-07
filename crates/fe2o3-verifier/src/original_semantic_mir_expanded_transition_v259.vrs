@@ -722,8 +722,6 @@ proof fn invocation_source_local_evaluates_v265(
         bits, root, instance, little_endian)
         == (InvocationSourceByteEvaluationV36 { source, value: source.machine.values[local] }),
 {
-    hide(invocation_source_byte_state_well_formed_v36);
-    hide(invocation_source_byte_value_typed_v36);
     reveal(invocation_source_byte_evaluate_v36);
 }
 
