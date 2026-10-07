@@ -1512,9 +1512,10 @@ mod tests {
                         fe2o3_lower_mir_kernel::ProductionSourceObjectActivationV40::Entry
                     );
                     let entry = SourceFrameEnter::derive(plan, slots, root, instance, out)?;
-                    let EntryArgument::Whole(argument) = entry.arguments[0].unwrap() else {
+                    let EntryArgument::Whole(index) = entry.arguments[0].unwrap() else {
                         panic!("ordinary scalar argument has a whole local");
                     };
+                    let argument = entry.fields.get(index).expect("whole argument field");
                     assert!(argument.object);
                     assert_eq!(argument.class, Class::Scalar(32));
                     assert_eq!(argument.local, row.locals.start + 1);
@@ -1698,9 +1699,10 @@ mod tests {
                     assert_eq!(entry.owner, row.function.index());
                     assert_eq!(entry.owners.len(), if instance == 0 { 1 } else { 2 });
                     assert_eq!(entry.arguments.len(), 2);
-                    let EntryArgument::Whole(argument) = entry.arguments[0].unwrap() else {
+                    let EntryArgument::Whole(index) = entry.arguments[0].unwrap() else {
                         panic!("ordinary scalar argument has a whole local");
                     };
+                    let argument = entry.fields.get(index).expect("whole argument field");
                     assert_eq!(argument.local, row.locals.start + 1);
                     let before = out.text.len();
                     entry.emit(out)?;
