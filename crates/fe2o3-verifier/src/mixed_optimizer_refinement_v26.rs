@@ -133,7 +133,7 @@ pub enum MixedOptimizerRefinementErrorV26 {
     Execution(crate::FunctionalRefinementVerusExecutionErrorV2),
     Receipt(&'static str),
     Statement(&'static str),
-    /// A local-only allocation lookup refused an exact source generation.
+    /// An original allocation or argument binding refused its source coordinates.
     SourceDescriptor {
         /// Source root ordinal.
         root: usize,
@@ -145,7 +145,7 @@ pub enum MixedOptimizerRefinementErrorV26 {
         local: u32,
         /// Static query operation; never a source or workload name.
         phase: &'static str,
-        /// Unchanged diagnostic from the refusing allocation query.
+        /// Unchanged diagnostic from the refusing allocation or argument query.
         reason: &'static str,
     },
     /// Refusal of a necessary original-frame binding, not a proof result.
