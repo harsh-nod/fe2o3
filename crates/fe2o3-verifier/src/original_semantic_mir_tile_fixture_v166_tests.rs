@@ -28,6 +28,8 @@ use fe2o3_pliron::{
 
 #[path = "original_semantic_mir_expanded_component_models_v210_tests.rs"]
 mod component_models;
+#[path = "original_semantic_mir_execution_call_transfer_v286_tests.rs"]
+mod execution_transfer_tests;
 
 fn owner() -> ProductionSemanticSsaOwnerV1 {
     let bytes = include_bytes!("fixtures/original-tile-descriptor-v163.bin");

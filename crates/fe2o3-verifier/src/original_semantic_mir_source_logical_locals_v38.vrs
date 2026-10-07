@@ -15,6 +15,7 @@ struct InvocationSourceLogicalV38 {
     witnesses: Map<int, int>,
     references: Map<int, InvocationSourceReferenceV38>,
     execution_references: Map<int, InvocationSourceExecutionReferenceV168>,
+    execution_pending: Map<int, InvocationSourceExecutionTransferV286>,
     descriptor_references: Map<int, InvocationSourceDescriptorReferenceV51>,
     aggregates: Map<int, InvocationSourceAggregateV42>,
     products: Map<int, InvocationSourceProductV282>,
@@ -24,6 +25,7 @@ struct InvocationSourceLogicalV38 {
 spec fn invocation_source_logical_initial_v38(count: nat) -> InvocationSourceLogicalV38 {
     InvocationSourceLogicalV38 { versions: Seq::new(count, |i: int| 0int),
         witnesses: Map::empty(), references: Map::empty(), execution_references: Map::empty(),
+        execution_pending: Map::empty(),
         descriptor_references: Map::empty(),
         aggregates: Map::empty(), products: Map::empty(), enums: Map::empty() }
 }
@@ -34,6 +36,7 @@ spec fn invocation_source_logical_well_formed_v38(
     logical.versions.len() == count
         && (forall|i: int| 0 <= i < count ==> logical.versions[i] >= 0)
         && invocation_source_execution_ancestry_v168(logical.execution_references)
+        && invocation_source_execution_pending_shape_v286(logical)
         && invocation_source_product_execution_ancestry_v282(logical)
         && (forall|i: int| logical.products.contains_key(i) ==>
             0 <= i < count && invocation_source_product_well_formed_v282(logical.products[i])
@@ -79,6 +82,7 @@ spec fn invocation_source_logical_write_v38(
         witnesses: logical.witnesses.remove(local),
         references: logical.references.remove(local),
         execution_references: logical.execution_references.remove(local),
+        execution_pending: logical.execution_pending.remove(local),
         descriptor_references: logical.descriptor_references.remove(local),
         aggregates: logical.aggregates.remove(local),
         products: logical.products.remove(local),
@@ -98,6 +102,8 @@ spec fn invocation_source_logical_clear_v38(
             |i: int| logical.references[i]),
         execution_references: Map::new(logical.execution_references.dom().filter(|i: int| !(begin <= i < end)),
             |i: int| logical.execution_references[i]),
+        execution_pending: Map::new(logical.execution_pending.dom().filter(|i: int| !(begin <= i < end)),
+            |i: int| logical.execution_pending[i]),
         descriptor_references: Map::new(logical.descriptor_references.dom().filter(|i: int| !(begin <= i < end)),
             |i: int| logical.descriptor_references[i]),
         aggregates: Map::new(logical.aggregates.dom().filter(|i: int| !(begin <= i < end)),

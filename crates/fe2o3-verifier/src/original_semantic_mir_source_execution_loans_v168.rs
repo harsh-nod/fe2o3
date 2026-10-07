@@ -226,7 +226,24 @@ pub(in super::super) fn call_argument(
     }))
 }
 
+#[cfg(test)]
 pub(in super::super) fn entry_recipe(
+    slots: &SourceSlots<'_, '_>,
+    plan: &InvocationPlan<'_, '_>,
+    root: usize,
+    instance: usize,
+    local: fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1,
+    out: &mut Writer<'_, '_>,
+) -> Result<Option<Recipe>> {
+    let recipe = entry_recipe_exact(slots, plan, root, instance, local, out)?;
+    if recipe.is_some_and(|recipe| recipe.mutable) {
+        return Err(unsupported());
+    }
+    Ok(recipe)
+}
+
+// Only the exclusive call binder may transport a mutable entry recipe.
+pub(in super::super) fn entry_recipe_exact(
     slots: &SourceSlots<'_, '_>,
     plan: &InvocationPlan<'_, '_>,
     root: usize,
@@ -291,10 +308,6 @@ pub(in super::super) fn entry_recipe(
         return Err(mismatch());
     }
     let (recipe, _) = Recipe::derive(slots, &endpoint, out)?;
-    // Unique helper loans and reference returns remain explicit unsupported paths.
-    if recipe.mutable {
-        return Err(unsupported());
-    }
     Ok(Some(recipe))
 }
 

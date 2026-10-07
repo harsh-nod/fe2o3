@@ -675,7 +675,8 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                         let mut arguments = vector(call.arguments().len(), out)?;
                         for (argument, ty) in callee.abi().source_input_types().iter().enumerate() {
                             out.budget.charge_work(2)?;
-                            let operand = body.invocation_argument(plan, block, argument, out)?;
+                            let operand =
+                                body.invocation_argument(plan, block, argument, child, out)?;
                             if operand.ty() != *ty {
                                 return Err(mismatch());
                             }
@@ -815,7 +816,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                     write!(out, ", before: cursor.source, after: evaluated.source, value: InvocationSourceValueV42::Carrier(evaluated.value) }}];\n InvocationSourceBlockResultV36 {{ source, before_control: cursor.source, observations: cursor.observations, operands, returned: None }}\n").map_err(|_| out.error())?;
                 }
                 End::Call { child, arguments } => {
-                    write!(out, " let source = cursor.source;\n").map_err(|_| out.error())?;
+                    write!(out, " let source = if cursor.source.logical.execution_pending.dom().len() == 0 {{ cursor.source }} else {{ invocation_source_byte_refused_v36(cursor.source) }};\n").map_err(|_| out.error())?;
                     for (argument, operand) in arguments.iter().enumerate() {
                         out.budget.charge_work(1)?;
                         write!(out, " let evaluated_{argument} = invocation_source_value_evaluate_v42(source, ").map_err(|_| out.error())?;
@@ -940,7 +941,10 @@ spec fn invocation_source_byte_trap_v40(source: InvocationSourceByteStateV36) ->
         || !invocation_source_byte_state_well_formed_v36(source) {
         invocation_source_byte_refused_v36(source)
     } else { InvocationSourceByteStateV36 {
-        machine: MemoryStateV30 { pc: -2, ..source.machine }, ..source } }
+        machine: MemoryStateV30 { pc: -2, ..source.machine },
+        logical: if source.machine.frames.active.len() > 0 {
+            invocation_source_execution_pending_abort_v286(source.logical, source.machine.frames.active.last())
+        } else { source.logical }, ..source } }
 }
 spec fn invocation_source_micro_refused_v36(cursor: InvocationSourceMicroStateV36) -> InvocationSourceMicroStateV36 {
     InvocationSourceMicroStateV36 { source: invocation_source_byte_refused_v36(cursor.source),

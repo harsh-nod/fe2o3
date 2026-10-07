@@ -30,6 +30,8 @@ mod discriminants;
 mod enum_construction;
 #[path = "original_semantic_mir_source_execution_loans_v168.rs"]
 pub(super) mod execution_loans;
+#[path = "original_semantic_mir_execution_call_transfer_v286.rs"]
+pub(super) mod execution_transfer;
 #[path = "original_semantic_mir_source_integer_casts_v43.rs"]
 mod integer_casts;
 #[path = "original_semantic_mir_source_enum_events_v47.rs"]
@@ -173,6 +175,7 @@ enum OperandKind {
         moved: bool,
     },
     Execution(execution_loans::ExecutionOperand),
+    ExecutionTransfer(execution_transfer::Transfer),
     Descriptor(descriptor_helpers::DescriptorOperand),
     Enum {
         local: usize,
@@ -875,6 +878,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
         plan: &InvocationPlan<'_, '_>,
         block: usize,
         argument: usize,
+        child: usize,
         out: &mut Writer<'_, '_>,
     ) -> Result<TypedOperand> {
         let context = self.context(out)?;
@@ -910,12 +914,23 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
         .map_err(|error| call_operand_error(error, site, original, "call-execution-loan"))?
         {
             if operand.recipe.mutable {
-                return Err(call_operand_error(
-                    unsupported(),
-                    site,
-                    original,
-                    "call-mutable-execution-snapshot",
-                ));
+                let transfer = execution_transfer::Transfer::for_call(
+                    self.slots,
+                    plan,
+                    self.root,
+                    self.instance,
+                    block,
+                    argument,
+                    child,
+                    out,
+                )
+                .map_err(|error| {
+                    call_operand_error(error, site, original, "call-exclusive-execution-transfer")
+                })?;
+                return Ok(TypedOperand {
+                    ty: TypeId::from_index(operand.recipe.reference_type),
+                    kind: OperandKind::ExecutionTransfer(transfer),
+                });
             }
             return Ok(TypedOperand {
                 ty: TypeId::from_index(operand.recipe.reference_type),
@@ -1744,6 +1759,7 @@ impl TypedOperand {
                 operand.emit(out)?;
                 write!(out, ")").map_err(|_| out.error())
             }
+            OperandKind::ExecutionTransfer(transfer) => transfer.emit(out),
             OperandKind::Descriptor(operand) => {
                 write!(out, "InvocationSourceOperandV36::Descriptor {{ local: {}int, recipe: ", operand.local)
                     .map_err(|_| out.error())?;
@@ -1997,6 +2013,7 @@ fn headers() -> usize {
         + descriptor_loans::headers()
         + descriptor_helpers::headers()
         + execution_loans::headers()
+        + execution_transfer::headers()
         + slice_reads::headers()
         + discriminants::headers()
         + aggregates::headers()
@@ -2011,6 +2028,7 @@ fn headers() -> usize {
 
 pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_execution_loans_v168.vrs"),
+    include_str!("original_semantic_mir_execution_call_transfer_v286.vrs"),
     include_str!("original_semantic_mir_expanded_execution_bindings_v199.vrs"),
     include_str!("original_semantic_mir_execution_correspondence_v205.vrs"),
     include_str!("original_semantic_mir_expanded_payload_lease_v209.vrs"),
@@ -2057,6 +2075,8 @@ struct InvocationSourceObjectV40 {
 spec fn invocation_source_byte_state_well_formed_v36(source: InvocationSourceByteStateV36) -> bool {
     byte_memory_well_formed_v30(source.machine.memory)
         && invocation_source_logical_well_formed_v38(source.logical, source.machine.values.len() as int)
+        && (forall|local: int| source.logical.execution_pending.contains_key(local) ==>
+            source.machine.values[local] == MemoryValueV30::Undefined && !source.objects.contains_key(local))
         && (forall|local: int| source.logical.execution_references.contains_key(local) ==>
             source.machine.values[local] == MemoryValueV30::Unit && !source.objects.contains_key(local))
         && (forall|local: int| source.logical.descriptor_references.contains_key(local) ==>
@@ -2125,6 +2145,7 @@ enum InvocationSourceByteValueV36 {
 enum InvocationSourceOperandV36 {
     Product { place: InvocationSourceProductPlaceV282, moved: bool },
     Execution(InvocationSourceExecutionOperandV168),
+    ExecutionTransfer { operand: InvocationSourceExecutionOperandV168, site: InvocationSourceExecutionCallSiteV286 },
     Descriptor { local: int, recipe: InvocationSourceDescriptorRecipeV51, moved: bool },
     Enum { local: int, source_type: int, moved: bool },
     Aggregate { place: InvocationSourceAggregatePlaceV42, moved: bool },
@@ -2392,7 +2413,8 @@ spec fn invocation_source_operand_evaluate_v36(
     match operand {
         InvocationSourceOperandV36::Product { .. } |
         InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }
-        | InvocationSourceOperandV36::Descriptor { .. } | InvocationSourceOperandV36::Execution(_) => InvocationSourceByteEvaluationV36 {
+        | InvocationSourceOperandV36::Descriptor { .. } | InvocationSourceOperandV36::Execution(_)
+        | InvocationSourceOperandV36::ExecutionTransfer { .. } => InvocationSourceByteEvaluationV36 {
             source: invocation_source_byte_refused_v36(source), value: MemoryValueV30::Undefined },
         InvocationSourceOperandV36::Scalar { value, bits } =>
             invocation_source_byte_evaluate_v36(source, value, bits, root, instance, little_endian),

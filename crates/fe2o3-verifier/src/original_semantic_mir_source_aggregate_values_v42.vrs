@@ -9,6 +9,7 @@ struct InvocationSourceAggregateV42 {
 
 enum InvocationSourceValueV42 {
     Execution(InvocationSourceExecutionReferenceV168),
+    ExecutionTransfer(InvocationSourceExecutionTransferV286),
     Carrier(MemoryValueV30),
     Aggregate(InvocationSourceAggregateV42),
     Product(InvocationSourceProductV282),
@@ -303,7 +304,8 @@ spec fn invocation_source_aggregate_transfer_v42(
             invocation_source_aggregate_place_replace_v42(evaluated.source, destination, value),
         InvocationSourceValueV42::Carrier(_) | InvocationSourceValueV42::Enum(_)
         | InvocationSourceValueV42::Product(_)
-        | InvocationSourceValueV42::Descriptor(_) | InvocationSourceValueV42::Execution(_) =>
+        | InvocationSourceValueV42::Descriptor(_) | InvocationSourceValueV42::Execution(_)
+        | InvocationSourceValueV42::ExecutionTransfer(_) =>
             invocation_source_byte_refused_v36(evaluated.source),
     }
 }
@@ -317,6 +319,8 @@ spec fn invocation_source_value_evaluate_v42(
             invocation_source_product_evaluate_v282(source, place, moved, little_endian),
         InvocationSourceOperandV36::Execution(operand) =>
             invocation_source_execution_snapshot_evaluate_v170(source, operand),
+        InvocationSourceOperandV36::ExecutionTransfer { operand, site } =>
+            invocation_source_execution_transfer_evaluate_v286(source, operand, site, root, instance),
         InvocationSourceOperandV36::Descriptor { local, recipe, moved } =>
             invocation_source_descriptor_evaluate_v53(source, local, recipe, moved),
         InvocationSourceOperandV36::Aggregate { place, moved } =>

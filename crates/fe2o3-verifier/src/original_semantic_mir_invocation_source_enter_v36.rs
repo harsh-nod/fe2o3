@@ -1,7 +1,9 @@
 //! Source entry lifetimes come from the archive, never from target Alloca order.
 
 use super::super::{Function, LocalRole, ScalarV30, Shape, Statement, invocations::InvocationPlan};
-use super::source_bytes::{descriptor_helpers, descriptor_loans::Recipe, execution_loans};
+use super::source_bytes::{
+    descriptor_helpers, descriptor_loans::Recipe, execution_loans, execution_transfer,
+};
 use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_mir_model::semantic_mir_v1::SemanticPointerMetadataV1 as Metadata;
 use std::{fmt::Write as _, mem::size_of, ops::Range};
@@ -9,6 +11,7 @@ use std::{fmt::Write as _, mem::size_of, ops::Range};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Class {
     Execution(execution_loans::Recipe),
+    ExecutionTransfer(execution_transfer::Transfer),
     Scalar(u32),
     Pointer,
     Slice(u32),
@@ -284,7 +287,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                     return Err(unsupported());
                 }
                 Class::Product(declaration.ty().index())
-            } else if let Some(recipe) = execution_loans::entry_recipe(
+            } else if let Some(recipe) = execution_loans::entry_recipe_exact(
                 slots,
                 plan,
                 root,
@@ -294,7 +297,18 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 ),
                 out,
             )? {
-                Class::Execution(recipe)
+                if recipe.mutable {
+                    Class::ExecutionTransfer(execution_transfer::Transfer::for_entry(
+                        slots,
+                        plan,
+                        root,
+                        instance,
+                        argument as usize,
+                        out,
+                    )?)
+                } else {
+                    Class::Execution(recipe)
+                }
             } else if let Some(recipe) = descriptor_helpers::entry_recipe(
                 slots,
                 plan,
@@ -522,10 +536,36 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             write!(out, " || source.slots.contains_key({})", slot.descriptor)
                 .map_err(|_| out.error())?;
         }
+        out.budget.charge_work(self.arguments.len())?;
+        let transfers = self
+            .arguments
+            .iter()
+            .filter(|argument| {
+                matches!(
+                    argument,
+                    Some(Argument {
+                        class: Class::ExecutionTransfer(_),
+                        ..
+                    })
+                )
+            })
+            .count();
+        write!(
+            out,
+            " || source.logical.execution_pending.dom().len() != {transfers}"
+        )
+        .map_err(|_| out.error())?;
         for (i, argument) in self.arguments.iter().enumerate() {
             out.budget.charge_work(1)?;
             write!(out, " || !(").map_err(|_| out.error())?;
             match argument.ok_or_else(mismatch)?.class {
+                Class::ExecutionTransfer(transfer) => {
+                    write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::ExecutionTransfer(value) => invocation_source_execution_transfer_entry_v286(source, value, ").map_err(|_| out.error())?;
+                    transfer.emit_site(out)?;
+                    write!(out, ", ").map_err(|_| out.error())?;
+                    transfer.operand.recipe.emit(out)?;
+                    write!(out, "), _ => false }}")
+                }
                 Class::Execution(recipe) => {
                     write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Execution(value) => invocation_source_execution_snapshot_current_v170(source, value, ").map_err(|_| out.error())?;
                     recipe.emit(out)?;
@@ -570,6 +610,18 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         for (i, argument) in self.arguments.iter().enumerate() {
             out.budget.charge_work(1)?;
             let argument = argument.ok_or_else(mismatch)?;
+            if let Class::ExecutionTransfer(transfer) = argument.class {
+                write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::ExecutionTransfer(value) => invocation_source_execution_transfer_install_v286(entered, value, ").map_err(|_| out.error())?;
+                transfer.emit_site(out)?;
+                write!(out, ", ").map_err(|_| out.error())?;
+                transfer.operand.recipe.emit(out)?;
+                write!(
+                    out,
+                    "), _ => invocation_source_byte_refused_v36(entered) }};\n"
+                )
+                .map_err(|_| out.error())?;
+                continue;
+            }
             if let Class::Execution(recipe) = argument.class {
                 write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::Execution(value) => invocation_source_execution_snapshot_install_v170(entered, {}, ", argument.local).map_err(|_| out.error())?;
                 recipe.emit(out)?;
@@ -613,7 +665,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 write!(out, " let entered = invocation_source_byte_put_local_v36(entered, {}, argument_{i});\n", argument.local).map_err(|_| out.error())?;
             }
         }
-        write!(out, " entered\n}}\nspec fn invocation_source_enter_{0}_{1}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n invocation_source_entry_select_v167(source, invocation_source_entry_refuses_{0}_{1}_v167(source, arguments, little_endian), invocation_source_entry_body_{0}_{1}_v167(source, arguments, little_endian))\n}}\n", self.root, self.instance).map_err(|_| out.error())
+        write!(out, " if entered.logical.execution_pending.dom().len() == 0 {{ entered }} else {{ invocation_source_byte_refused_v36(entered) }}\n}}\nspec fn invocation_source_enter_{0}_{1}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n invocation_source_entry_select_v167(source, invocation_source_entry_refuses_{0}_{1}_v167(source, arguments, little_endian), invocation_source_entry_body_{0}_{1}_v167(source, arguments, little_endian))\n}}\n", self.root, self.instance).map_err(|_| out.error())
     }
 }
 
@@ -645,6 +697,7 @@ fn headers() -> usize {
         + h::<Class>()
         + descriptor_helpers::headers()
         + execution_loans::headers()
+        + execution_transfer::headers()
         + h::<super::slots::ObjectActivation>()
         + h::<Option<super::slots::ObjectActivation>>()
         + h::<(

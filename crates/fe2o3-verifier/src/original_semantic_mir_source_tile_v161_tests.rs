@@ -6,6 +6,9 @@ const TILE_MODEL: &str = include_str!("original_semantic_mir_source_tile_v161.vr
 const TILE_LAWS: &str = include_str!("original_semantic_mir_source_tile_v161_tests.vrs");
 const EXECUTION_LAWS: &str =
     include_str!("original_semantic_mir_source_execution_loans_v168_tests.vrs");
+const TRANSFER_MODEL: &str = include_str!("original_semantic_mir_execution_call_transfer_v286.vrs");
+const TRANSFER_LAWS: &str =
+    include_str!("original_semantic_mir_execution_call_transfer_v286_tests.vrs");
 const LIMIT: usize = 512 * 1024 * 1024;
 
 fn run_model(
@@ -27,8 +30,11 @@ fn run_model(
                 EndiannessV2::Little,
                 out,
             )?;
-            write!(out, "\nverus! {{\n{TILE_LAWS}\n{EXECUTION_LAWS}\n}}\n")
-                .map_err(|_| out.error())?;
+            write!(
+                out,
+                "\nverus! {{\n{TILE_LAWS}\n{EXECUTION_LAWS}\n{TRANSFER_LAWS}\n}}\n"
+            )
+            .map_err(|_| out.error())?;
             examine(&out.text);
             Ok(())
         })
@@ -41,6 +47,8 @@ fn original_tile_model_is_in_the_complete_source_step_and_effect_model() {
         assert_eq!(text.matches(TILE_MODEL).count(), 1);
         assert_eq!(text.matches(TILE_LAWS).count(), 1);
         assert_eq!(text.matches(EXECUTION_LAWS).count(), 1);
+        assert_eq!(text.matches(TRANSFER_MODEL).count(), 1);
+        assert_eq!(text.matches(TRANSFER_LAWS).count(), 1);
         for operation in ["ContextIssue", "TileLoad", "TileTransport"] {
             assert_eq!(
                 text.matches(&format!("InvocationSourceByteEventV36::{operation}("))
@@ -52,7 +60,20 @@ fn original_tile_model_is_in_the_complete_source_step_and_effect_model() {
             assert!(!TILE_MODEL.contains(forbidden));
             assert!(!TILE_LAWS.contains(forbidden));
             assert!(!EXECUTION_LAWS.contains(forbidden));
+            assert!(!TRANSFER_MODEL.contains(forbidden));
+            assert!(!TRANSFER_LAWS.contains(forbidden));
         }
+        assert!(TRANSFER_LAWS.contains("execution_call_missing_pending_row_cannot_replay_v286"));
+        assert!(
+            TRANSFER_LAWS.contains(
+                "execution_call_successful_install_consumes_ticket_and_preserves_loan_v286"
+            )
+        );
+        assert!(
+            TRANSFER_LAWS
+                .contains("execution_call_inflight_unique_loan_blocks_unrelated_alias_v286")
+        );
+        assert!(TRANSFER_LAWS.contains("execution_call_single_context_handoff_succeeds_v286"));
         // These shared equations are not evidence of a source tile constructor
         // or source-to-expanded whole-kernel refinement succeeding.
         assert!(!text.contains("let event = InvocationSourceByteEventV36::TileLoad("));
