@@ -1,4 +1,4 @@
-//! Fresh paired signal/kernarg custody. No signal reset or capacity fabrication.
+//! Paired signal/kernarg custody. Fresh by default; private retired reuse is opt-in.
 use super::*;
 use fe2o3_aql::{
     AMD_SIGNAL_BYTES_V1, AMD_SIGNAL_KIND_USER_V1, AqlDispatchOrderingV1, AqlPeerBarrierAndPacketV1,
@@ -14,7 +14,7 @@ type Values = [[i64; PACKETS]; 2];
 
 #[path = "engineering_gfx950_peer_combined_mlp_paired_retired_v1.rs"]
 mod retired;
-pub(super) use retired::Retired;
+pub(super) use retired::{Retired, Reusable};
 
 pub(super) fn signal_value(kind: i64, value: i64) -> Result<i64> {
     if kind != AMD_SIGNAL_KIND_USER_V1 || !matches!(value, 0 | 1) {
@@ -325,6 +325,14 @@ impl Staged {
             allocate(group, 0, &prepared[0])?,
             allocate(group, 1, &prepared[1])?,
         ];
+        Self::from_arenas(group, arenas, prepared)
+    }
+
+    fn from_arenas(
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        arenas: [Arena; 2],
+        prepared: [[PreparedDispatch; 4]; 2],
+    ) -> Result<Self> {
         let signals = arenas.each_ref().map(|a| {
             (0..PACKETS)
                 .map(|i| a.signal(i))

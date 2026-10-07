@@ -231,6 +231,8 @@ fn pair(
         binding: Binding::capture(group, &inputs(kernels)),
         phase: Phase::Ready,
         completed: None,
+        arena_policy: ArenaPolicy::Fresh,
+        reusable: None,
         owners: std::array::from_fn(|rank| CombinedMlpStateV1 {
             buffer: Gfx950EngineeringPeerBufferV1 {
                 group: 7,
@@ -242,6 +244,100 @@ fn pair(
             generation: 1,
         }),
     }
+}
+
+#[test]
+fn retained_arena_policy_preserves_fresh_default_and_requires_rearm_custody() {
+    let group = group();
+    let kernels = kernels();
+    let pair = pair(&group, &kernels);
+    assert_eq!(pair.arena_policy, ArenaPolicy::Fresh);
+    assert!(pair.reusable.is_none());
+    for generation in [0, 1, 2, 1152, u64::MAX] {
+        for proof in [false, true] {
+            assert_eq!(
+                ArenaPolicy::Fresh.require_run(generation, proof).is_ok(),
+                generation != 0 && !proof
+            );
+            assert_eq!(
+                ArenaPolicy::ReuseRetired
+                    .require_run(generation, proof)
+                    .is_ok(),
+                generation != 0 && proof == (generation > 1)
+            );
+        }
+    }
+}
+
+#[test]
+fn retained_reusable_public_bind_consumes_invalid_storage_without_allocating() {
+    let kernels = kernels();
+    for timeout in [0, 10, 10001] {
+        for defect in 0..6 {
+            let mut group = group();
+            let mut owners = pair(&group, &kernels).owners;
+            let mut captured_group = 7;
+            match defect {
+                0 => {}
+                1 => captured_group = 8,
+                2 => owners[0].generation = 2,
+                3 => owners[1].buffer.bytes = 2192,
+                4 => owners[1].activation = Activation::Submitted,
+                _ => owners[0].buffer.id = owners[1].buffer.id,
+            }
+            let roles = inputs(&kernels);
+            let public = Gfx950EngineeringPeerGuardedMlpInputsV1 {
+                ranks: roles.ranks.each_ref().map(|r| {
+                    Gfx950EngineeringPeerGuardedMlpRankInputsV1 {
+                        kernels: r.kernels,
+                        mlp_roots: r.mlp_roots,
+                        residual_input: r.residual_input,
+                        output: r.residual_input,
+                    }
+                }),
+                partials: roles.partials,
+                projection_sha256: roles.projection_sha256,
+                mlp_sha256: roles.mlp_sha256,
+            };
+            let storage = UnboundPair {
+                group: captured_group,
+                owners,
+            };
+            // Context-free fixture cannot authorize a real allocation or GPU.
+            assert!(
+                unsafe {
+                    group.bind_guarded_mlp_pair_exact_own_residual_reusable_unchecked_v1(
+                        storage, &public, timeout,
+                    )
+                }
+                .is_err()
+            );
+            assert!(group.poisoned && group.buffers.is_empty());
+            assert_eq!(group.next_buffer, 5);
+        }
+    }
+}
+
+#[test]
+fn retained_reusable_missing_proof_is_terminal_not_a_fresh_fallback() {
+    let kernels = kernels();
+    let mut group = group();
+    let mut pair = pair(&group, &kernels);
+    pair.arena_policy = ArenaPolicy::ReuseRetired;
+    for owner in &mut pair.owners {
+        owner.generation = 2;
+    }
+    let error = pair
+        .run(&mut group, inputs(&kernels), 10)
+        .err()
+        .expect("missing proof must refuse");
+    assert_eq!(
+        error.to_string(),
+        "retained paired arena policy or generation custody changed"
+    );
+    assert_eq!(pair.phase, Phase::Poisoned);
+    assert!(group.poisoned && group.buffers.is_empty());
+    assert_eq!(group.next_buffer, 5);
 }
 
 #[test]

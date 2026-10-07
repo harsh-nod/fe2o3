@@ -57,7 +57,8 @@ pub type Gfx950EngineeringPeerUnboundGuardedMlpPairV1 = retained::UnboundPair;
 /// ```compile_fail
 /// use fe2o3_kfd::Gfx950EngineeringPeerRetainedGuardedMlpPairV1 as Pair;
 /// fn fabricate() -> Pair {
-///     Pair { owners: todo!(), binding: todo!(), phase: todo!(), completed: None }
+///     Pair { owners: todo!(), binding: todo!(), phase: todo!(), completed: None,
+///         arena_policy: todo!(), reusable: None }
 /// }
 /// ```
 /// Observations cannot be promoted to paired ownership:
@@ -183,6 +184,45 @@ impl Gfx950EngineeringPeerGroupV1 {
     ) -> Result<Gfx950EngineeringPeerRetainedGuardedMlpPairV1> {
         // SAFETY: caller established the entire-lifetime exact-residual contract.
         unsafe { storage.bind_exact_own_residual(self, &inputs.private_inputs(), timeout_ms) }
+    }
+
+    /// Bind exact-own-residual roles with bounded private arena reuse.
+    /// The first dispatch allocates one paired arena per rank. Later dispatches
+    /// reuse those same allocations only after successful whole-bank rearm,
+    /// all ten completion signals, actual consumption of the old queue packets,
+    /// exact next generation, and unchanged identities/currentness are checked.
+    /// A failed check is terminal; no fresh-allocation fallback or pool exists.
+    /// Existing binding methods continue allocating fresh arenas per dispatch.
+    ///
+    /// # Safety
+    /// All obligations of `bind_guarded_mlp_pair_exact_own_residual_unchecked_v1`
+    /// apply. In particular the caller must exclude external references to
+    /// private signal/kernarg storage and keep bank retirement, all payloads,
+    /// kernels and the Group live under exclusive custody. This does not enable
+    /// cached admission, operational currentness, or production authority.
+    ///
+    /// The explicit public signature is usable without exposing private state:
+    /// ```no_run
+    /// use fe2o3_kfd::{Gfx950EngineeringPeerGroupV1 as Group,
+    ///     Gfx950EngineeringPeerUnboundGuardedMlpPairV1 as Unbound,
+    ///     Gfx950EngineeringPeerRetainedGuardedMlpPairV1 as Pair,
+    ///     Gfx950EngineeringPeerGuardedMlpInputsV1 as Inputs};
+    /// unsafe fn bind(group: &mut Group, storage: Unbound, inputs: &Inputs<'_>) {
+    ///     let _: Result<Pair, _> = unsafe {
+    ///         group.bind_guarded_mlp_pair_exact_own_residual_reusable_unchecked_v1(storage, inputs, 10)
+    ///     };
+    /// }
+    /// ```
+    pub unsafe fn bind_guarded_mlp_pair_exact_own_residual_reusable_unchecked_v1(
+        &mut self,
+        storage: Gfx950EngineeringPeerUnboundGuardedMlpPairV1,
+        inputs: &Gfx950EngineeringPeerGuardedMlpInputsV1<'_>,
+        timeout_ms: u32,
+    ) -> Result<Gfx950EngineeringPeerRetainedGuardedMlpPairV1> {
+        // SAFETY: same exact-residual lifetime contract, with private reuse only.
+        unsafe {
+            storage.bind_exact_own_residual_reusable(self, &inputs.private_inputs(), timeout_ms)
+        }
     }
 
     /// Synchronously run the already-bound five-packet-per-rank coordinator.

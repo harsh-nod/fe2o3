@@ -155,6 +155,7 @@ struct Native<'group, 'kernel> {
     timeout_ms: u32,
     generation: u64,
     staged: Option<arena::Staged>,
+    reusable: Option<(arena::Reusable, Instant)>,
     validated_terminal: Option<[CombinedMlpSnapshotV1; 2]>,
 }
 
@@ -186,7 +187,10 @@ impl CoordinatorBackend for Native<'_, '_> {
                 arena::PACKETS,
             )?;
         }
-        self.staged = Some(arena::Staged::prepare(self.group, prepared)?);
+        self.staged = Some(match self.reusable.take() {
+            Some((proof, until)) => proof.prepare(self.group, prepared, self.generation, until)?,
+            None => arena::Staged::prepare(self.group, prepared)?,
+        });
         check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)?;
         Ok(())
     }
@@ -348,6 +352,7 @@ pub(super) unsafe fn dispatch(
             timeout_ms,
             generation: 0,
             staged: None,
+            reusable: None,
             validated_terminal: None,
         },
         timeout_ms,

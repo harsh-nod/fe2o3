@@ -173,6 +173,10 @@ pub(super) struct LinuxCpuMapping {
 #[cfg(feature = "engineering-gfx950")]
 #[path = "memory_linux_combined_mlp_state_v1.rs"]
 mod combined_mlp_state_v1;
+
+#[cfg(feature = "engineering-gfx950")]
+#[path = "memory_linux_paired_arena_reuse_v1.rs"]
+mod paired_arena_reuse_v1;
 #[cfg(feature = "engineering-gfx950")]
 #[path = "memory_linux_wave_mlp_tiles_v2.rs"]
 mod wave_mlp_tiles_v2;
@@ -791,7 +795,11 @@ impl LinuxGfx950MemoryBackend {
             .checked_mul(AQL_KERNEL_DISPATCH_PACKET_BYTES_V1)
             .ok_or_else(|| malformed_aql_mapping("peer packet slot offset"))?;
         let pointer = checked_mapping_pointer(
-            mapping, requested_bytes, offset, 4, core::mem::align_of::<AtomicU32>(),
+            mapping,
+            requested_bytes,
+            offset,
+            4,
+            core::mem::align_of::<AtomicU32>(),
         )?;
         // SAFETY: the retained ring initialized each aligned header AtomicU32.
         let atomic = unsafe { &*pointer.cast::<AtomicU32>() };
@@ -802,7 +810,10 @@ impl LinuxGfx950MemoryBackend {
         {
             return Err(malformed_aql_mapping("peer packet header or setup"));
         }
-        atomic.store(((setup << 16) | u32::from(header)).to_le(), Ordering::Release);
+        atomic.store(
+            ((setup << 16) | u32::from(header)).to_le(),
+            Ordering::Release,
+        );
         Ok(())
     }
 
@@ -1871,31 +1882,77 @@ mod tests {
     fn peer_publication_is_opt_in_and_preserves_unpublished_bodies() {
         for (setup, header, accepted) in [
             (0_u32, 0x1503_u16, true),
-            (1, 0x1502, true), (2, 0x1502, true), (3, 0x1502, true),
-            (0, 0x1502, false), (4, 0x1502, false),
-            (1, 0x1503, false), (2, 0x1503, false), (3, 0x1503, false),
-            (0, 0x1403, false), (1, 0x1402, false), (0, 1, false),
+            (1, 0x1502, true),
+            (2, 0x1502, true),
+            (3, 0x1502, true),
+            (0, 0x1502, false),
+            (4, 0x1502, false),
+            (1, 0x1503, false),
+            (2, 0x1503, false),
+            (3, 0x1503, false),
+            (0, 0x1403, false),
+            (1, 0x1402, false),
+            (0, 1, false),
         ] {
             let mut packet = OnePacket([0x5a; AQL_KERNEL_DISPATCH_PACKET_BYTES_V1]);
             let unpublished = (setup << 16) | u32::from(AQL_INVALID_PACKET_HEADER_V1);
             packet.0[..4].copy_from_slice(&unpublished.to_le_bytes());
             let mut mapping = LinuxCpuMapping {
-                address: NonNull::from(&mut packet).cast(), bytes: 64,
-                active: true, accessible: true,
+                address: NonNull::from(&mut packet).cast(),
+                bytes: 64,
+                active: true,
+                accessible: true,
                 reservation_phase: Arc::new(AtomicU8::new(VA_IDENTITY_MAPPED)),
             };
             if header == 0x1503 {
-                assert!(LinuxMemoryBackend::publish_aql_header(&mut mapping, 64, 0, header).is_err());
+                assert!(
+                    LinuxMemoryBackend::publish_aql_header(&mut mapping, 64, 0, header).is_err()
+                );
             }
-            assert!(LinuxGfx950MemoryBackend::publish_engineering_peer_aql_header(&mut mapping, 64, 1, header).is_err());
-            assert!(LinuxGfx950MemoryBackend::publish_engineering_peer_aql_header(&mut mapping, 3, 0, header).is_err());
-            let result = LinuxGfx950MemoryBackend::publish_engineering_peer_aql_header(&mut mapping, 64, 0, header);
+            assert!(
+                LinuxGfx950MemoryBackend::publish_engineering_peer_aql_header(
+                    &mut mapping,
+                    64,
+                    1,
+                    header
+                )
+                .is_err()
+            );
+            assert!(
+                LinuxGfx950MemoryBackend::publish_engineering_peer_aql_header(
+                    &mut mapping,
+                    3,
+                    0,
+                    header
+                )
+                .is_err()
+            );
+            let result = LinuxGfx950MemoryBackend::publish_engineering_peer_aql_header(
+                &mut mapping,
+                64,
+                0,
+                header,
+            );
             assert_eq!(result.is_ok(), accepted, "setup={setup} header={header:x}");
-            assert_eq!(u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
-                if accepted {(setup << 16) | u32::from(header)} else {unpublished});
+            assert_eq!(
+                u32::from_le_bytes(packet.0[..4].try_into().unwrap()),
+                if accepted {
+                    (setup << 16) | u32::from(header)
+                } else {
+                    unpublished
+                }
+            );
             assert!(packet.0[4..].iter().all(|&byte| byte == 0x5a));
             if accepted {
-                assert!(LinuxGfx950MemoryBackend::publish_engineering_peer_aql_header(&mut mapping, 64, 0, header).is_err());
+                assert!(
+                    LinuxGfx950MemoryBackend::publish_engineering_peer_aql_header(
+                        &mut mapping,
+                        64,
+                        0,
+                        header
+                    )
+                    .is_err()
+                );
             }
         }
     }

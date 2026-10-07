@@ -58,6 +58,25 @@ enum Phase {
     Poisoned,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArenaPolicy {
+    Fresh,
+    ReuseRetired,
+}
+
+impl ArenaPolicy {
+    fn require_run(self, generation: u64, reusable: bool) -> Result<()> {
+        let valid = match self {
+            Self::Fresh => generation != 0 && !reusable,
+            Self::ReuseRetired => generation != 0 && reusable == (generation > 1),
+        };
+        if !valid {
+            return Err("retained paired arena policy or generation custody changed".into());
+        }
+        Ok(())
+    }
+}
+
 struct Completed {
     generation: u64,
     states: [CombinedMlpSnapshotV1; 2],
@@ -70,6 +89,8 @@ pub struct RetainedPair {
     binding: Binding,
     phase: Phase,
     completed: Option<Completed>,
+    arena_policy: ArenaPolicy,
+    reusable: Option<arena::Reusable>,
 }
 
 /// Initialized storage only: it cannot run, rearm, or expose owner pointers.
@@ -146,6 +167,8 @@ impl Allocation<'_> {
             binding,
             phase: Phase::Ready,
             completed: None,
+            arena_policy: ArenaPolicy::Fresh,
+            reusable: None,
         };
         deadline_check(Instant::now(), until)?;
         self.committed = true;
@@ -251,6 +274,21 @@ impl UnboundPair {
                 profiles::OutputPolicy::ExactOwnResidual,
             )
         }
+    }
+
+    /// # Safety
+    /// The exact-own-residual bind contract applies. Arena reuse is immutable
+    /// for this pair and requires the private whole-bank retirement path.
+    pub(in super::super) unsafe fn bind_exact_own_residual_reusable(
+        self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        inputs: &Inputs<'_>,
+        timeout_ms: u32,
+    ) -> Result<RetainedPair> {
+        // SAFETY: same reviewed lifetime contract; no new memory access rights.
+        let mut pair = unsafe { self.bind_exact_own_residual(group, inputs, timeout_ms)? };
+        pair.arena_policy = ArenaPolicy::ReuseRetired;
+        Ok(pair)
     }
 
     unsafe fn bind_with_policy(
@@ -417,6 +455,12 @@ impl RetainedPair {
     ) -> Result<Completion> {
         let mut op = Operation::new(group, std::slice::from_mut(self));
         let until = deadline(Instant::now(), timeout_ms)?;
+        // Reject missing/extra private reuse custody before touching a context
+        // or allowing any fresh allocation. Operation already owns quarantine.
+        op.pairs[0].arena_policy.require_run(
+            op.pairs[0].owners[0].generation,
+            op.pairs[0].reusable.is_some(),
+        )?;
         op.begin(Phase::Ready)?;
         let pair = &mut op.pairs[0];
         if pair.completed.is_some()
@@ -433,6 +477,7 @@ impl RetainedPair {
             timeout_ms,
             generation: 0,
             staged: None,
+            reusable: pair.reusable.take().map(|proof| (proof, until)),
             validated_terminal: None,
         };
         // Keep the unchanged coordinator's strict in-flight reservation checks.
@@ -453,6 +498,25 @@ impl RetainedPair {
         pair.phase = Phase::Completed;
         op.committed = true;
         Ok(result)
+    }
+
+    fn finish_rearm(&mut self, next: u64) -> Result<()> {
+        if self.reusable.is_some() || self.phase != Phase::Busy {
+            return Err("retained paired rearm arena custody changed".into());
+        }
+        let old = self
+            .completed
+            .take()
+            .ok_or("retained paired rearm proof absent")?;
+        if old.generation == 0 || old.generation.checked_add(1) != Some(next) {
+            return Err("retained paired rearm arena generation changed".into());
+        }
+        if self.arena_policy == ArenaPolicy::ReuseRetired {
+            self.reusable = Some(arena::Reusable::new(old.proof, old.generation, next)?);
+        }
+        // Fresh mode deliberately drops only metadata; backing stays in Group.
+        self.phase = Phase::Ready;
+        Ok(())
     }
 }
 
@@ -610,8 +674,7 @@ pub(in super::super) fn rearm_pairs(
     let count = op.pairs.len();
     let next = rearm_all(&mut op, count, timeout_ms, Some(until))?;
     for pair in &mut *op.pairs {
-        pair.completed = None; // Host metadata only; Group retains every arena backing.
-        pair.phase = Phase::Ready;
+        pair.finish_rearm(next)?;
     }
     deadline_check(Instant::now(), until)?;
     op.committed = true;

@@ -1,6 +1,10 @@
 //! Sealed completed batches may be rechecked after other layers use the queues.
-//! This proves owner quiescence, NOT permission to reset or free old arenas.
+//! Reuse additionally requires private generation custody and consumed packets.
 use super::*;
+
+#[path = "engineering_gfx950_peer_combined_mlp_paired_reuse_v1.rs"]
+mod reuse;
+pub(in super::super) use reuse::Reusable;
 
 fn retired_gate(
     values: Values,

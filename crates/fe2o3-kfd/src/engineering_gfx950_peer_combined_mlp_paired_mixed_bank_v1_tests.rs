@@ -483,7 +483,28 @@ fn native_pair(index: usize) -> RetainedPair {
         },
         phase: Phase::Ready,
         completed: None,
+        arena_policy: ArenaPolicy::Fresh,
+        reusable: None,
     }
+}
+
+#[test]
+fn mixed_bank_reuse_custody_is_unavailable_until_all_36_pairs_pass() {
+    // Production commit is the only transfer of a completed pair into its
+    // pending-reuse slot. No signal reset happens in this transaction.
+    for failed_pair in 0..36 {
+        let mut fake = Fake::new(36, Mode::Rearm);
+        fake.proofs_good[failed_pair] = false;
+        assert!(transact(&mut fake, 36, Mode::Rearm, 10, None).is_err());
+        assert!(fake.no_stores());
+        assert!(!fake.events.contains(&Event::Commit));
+        assert_eq!(fake.quarantined, 1);
+    }
+    let mut fake = Fake::new(36, Mode::Rearm);
+    assert_eq!(transact(&mut fake, 36, Mode::Rearm, 10, None).unwrap(), 2);
+    assert!(fake.all_validated());
+    assert_eq!(fake.events.last(), Some(&Event::Commit));
+    assert_eq!(fake.quarantined, 0);
 }
 
 fn native_prefixes(index: usize) -> [Prefix; 2] {

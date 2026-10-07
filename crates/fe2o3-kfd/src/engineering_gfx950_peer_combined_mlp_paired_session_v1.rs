@@ -163,6 +163,7 @@ impl<'group, 'kernel> Session<'group, 'kernel> {
                 timeout_ms: 0,
                 generation: 0,
                 staged: None,
+                reusable: None,
                 validated_terminal: None,
             },
             custody: Custody::Ready,

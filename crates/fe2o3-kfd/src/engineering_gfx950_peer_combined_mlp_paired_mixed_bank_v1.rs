@@ -354,9 +354,13 @@ impl BankBackend for Native<'_, '_, '_> {
         }
         for entry in &mut *self.entries {
             if mode == Mode::Rearm {
-                entry.pair.completed = None;
+                // Every selected Prefix and paired proof passed before any
+                // reset. Only now transfer private arena custody for the next
+                // run; no signal is reset by this bank transaction.
+                entry.pair.finish_rearm(next)?;
+            } else {
+                entry.pair.phase = Phase::Ready;
             }
-            entry.pair.phase = Phase::Ready;
         }
         Ok(())
     }
