@@ -612,12 +612,18 @@ proof fn invocation_source_checked_add_replays_install_v260(
     hide(invocation_source_aggregate_leaf_bits_v42);
     hide(invocation_source_checked_pair_v44);
     hide(invocation_source_checked_v42);
+    let actual_pair = invocation_source_checked_pair_v44(
+        MemoryValueV30::Scalar(left), MemoryValueV30::Scalar(right), 0, 32, false);
+    match actual_pair {
+        Some(pair) => {
+            invocation_source_checked_pair_replays_install_v269(source, destination, source_type,
+                0, 32, false, left_operand, right_operand, left, right,
+                pair.0, pair.1, root, instance, little_endian);
+        },
+        None => {},
+    }
+    // This also excludes None; arithmetic is introduced after abstract dispatch.
     invocation_reconstructed_checked_add_u32_v259(left, right);
-    invocation_source_checked_pair_replays_install_v269(source, destination, source_type,
-        0, 32, false, left_operand, right_operand, left, right,
-        MemoryValueV30::Scalar((left + right) % 4294967296),
-        MemoryValueV30::Scalar(if left + right >= 4294967296 { 1int } else { 0int }),
-        root, instance, little_endian);
 }
 
 // Pure operand evaluation is an input obligation. Read operands, Move effects,
