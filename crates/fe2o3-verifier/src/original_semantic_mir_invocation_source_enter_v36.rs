@@ -301,6 +301,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 root,
                 instance,
                 u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
+                "source-enter-parameter",
                 out,
             )?;
             if slots.has_original_object(

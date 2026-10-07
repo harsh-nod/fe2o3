@@ -331,6 +331,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                 root,
                 instance,
                 u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
+                "aggregate-component-binding",
                 out,
             )?
             .is_some()

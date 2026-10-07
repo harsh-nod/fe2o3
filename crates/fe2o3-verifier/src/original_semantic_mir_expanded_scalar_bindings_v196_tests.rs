@@ -551,7 +551,7 @@ fn expanded_source_relations_keep_address_observable_scalars_in_explicit_memory(
                     bindings.emit(out)?;
                     for root in 0..2 {
                         let row = plan.instance(root, 0, out)?;
-                        let (descriptor, _) = slots.legacy_descriptor_by_source(root, 0, 4, out)?
+                        let (descriptor, _) = slots.legacy_descriptor_by_source(root, 0, 4, "expanded-binding-test", out)?
                             .expect("genuine address-observable scalar allocation");
                         let ssa = archive.plan_for_function(row.function).unwrap().plan();
                         assert!(ssa.entry_definitions().iter().all(|entry| entry.variable().get() != 4));

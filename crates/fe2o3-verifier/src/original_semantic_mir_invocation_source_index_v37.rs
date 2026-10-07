@@ -84,7 +84,13 @@ impl IndexCall {
                 != Some(destination.place().ty())
             || continuation >= row.blocks.len()
             || slots
-                .legacy_descriptor_by_source(root, instance, local as u32, out)?
+                .legacy_descriptor_by_source(
+                    root,
+                    instance,
+                    local as u32,
+                    "source-index-destination",
+                    out,
+                )?
                 .is_some()
         {
             return Err(unsupported());

@@ -166,7 +166,7 @@ fn original_mir_pointer_events_consume_genuine_private_borrow_copy_move_and_load
         let Address::Slot { descriptor, offset: 0 } = access.address else {
             panic!("Borrow must use the retained original private object");
         };
-        assert_eq!(body.slots.legacy_descriptor_by_source(0, 0, 3, out)?.unwrap().0, descriptor);
+        assert_eq!(body.slots.legacy_descriptor_by_source(0, 0, 3, "source-pointer-test", out)?.unwrap().0, descriptor);
         for (statement, destination, input, moved) in [(2, 5, 4, false), (3, 6, 5, true)] {
             let super::super::Event::Pointer(Event::Copy { destination: actual, operand, metadata_bits: 0 }) =
                 body.event_at(0, statement, out)?

@@ -637,7 +637,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                     .map(Event::Descriptor),
                     (other, _) => other,
                 };
-                let object_lifetime = match statement.kind() {
+                let object_lifetime = (|| -> Result<Option<Event>> { Ok(match statement.kind() {
                     Statement::StorageLive(local) | Statement::StorageDead(local)
                         if slots.has_original_object(root, instance, local.index(), out)? =>
                     {
@@ -665,7 +665,7 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
                         })
                     }
                     _ => None,
-                };
+                }) })().map_err(|error| statement_error(error, site, statement.kind(), context.types))?;
                 let event = match (borrowed, object_lifetime) {
                     (Some(_), Some(_)) => return Err(mismatch()),
                     (None, Some(event)) => event,
@@ -1042,7 +1042,13 @@ impl Context<'_, '_, '_> {
     fn descriptor(&self, local: u32, out: &mut Writer<'_, '_>) -> Result<Option<usize>> {
         Ok(self
             .slots
-            .legacy_descriptor_by_source(self.root, self.instance, local, out)?
+            .legacy_descriptor_by_source(
+                self.root,
+                self.instance,
+                local,
+                "source-byte-descriptor",
+                out,
+            )?
             .map(|(ordinal, _)| ordinal))
     }
 
@@ -1092,7 +1098,13 @@ impl Context<'_, '_, '_> {
         } else {
             let (descriptor, frame) = self
                 .slots
-                .legacy_descriptor_by_source(self.root, self.instance, place.local().index(), out)?
+                .legacy_descriptor_by_source(
+                    self.root,
+                    self.instance,
+                    place.local().index(),
+                    "source-byte-access",
+                    out,
+                )?
                 .ok_or(Error::Statement(
                     "original MIR byte access has no retained source allocation",
                 ))?;

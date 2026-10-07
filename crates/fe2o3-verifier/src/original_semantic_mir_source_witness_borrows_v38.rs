@@ -137,6 +137,7 @@ impl Borrow {
                     context.root,
                     context.instance,
                     place.local().index(),
+                    "witness-borrow-input",
                     out,
                 )?
                 .is_some()
@@ -146,6 +147,7 @@ impl Borrow {
                     context.root,
                     context.instance,
                     destination.local().index(),
+                    "witness-borrow-destination",
                     out,
                 )?
                 .is_some()

@@ -729,6 +729,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         root: usize,
         instance: usize,
         local: u32,
+        phase: &'static str,
         out: &mut Writer<'_, '_>,
     ) -> Result<Option<(usize, &Frame)>> {
         self.check_source(self.relation, out)?;
@@ -756,9 +757,18 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
                 .get(lo + 1)
                 .is_some_and(|row| row.0[..3] == key[..3])
         {
-            return Err(Error::Statement(
-                "original object lifetime requires exact statement generation",
-            ));
+            return Err(Error::SourceDescriptor {
+                root,
+                instance,
+                function: self
+                    .frames
+                    .get(*at)
+                    .and_then(Option::as_ref)
+                    .map(|frame| frame.function().index() as usize),
+                local,
+                phase,
+                reason: "original object lifetime requires exact statement generation",
+            });
         }
         Ok(Some((
             *at,
@@ -1269,13 +1279,32 @@ pub(super) mod tests {
                     .frame_by_source(row.root(), row.instance(), row.local(), None, out)
                     .is_err()
             );
-            assert!(matches!(
-                slots.legacy_descriptor_by_source(row.root(), row.instance(), row.local(), out),
-                Err(Error::Statement(
-                    "original object lifetime requires exact statement generation"
-                ))
-            ));
-            assert!(slots.legacy_descriptor_by_source(0, 0, 1, out)?.is_none());
+            let before = out.budget.storage();
+            for phase in ["source-enter-parameter", "source-frame-return-local"] {
+                let error = slots
+                    .legacy_descriptor_by_source(
+                        row.root(),
+                        row.instance(),
+                        row.local(),
+                        phase,
+                        out,
+                    )
+                    .unwrap_err();
+                assert!(matches!(&error, Error::SourceDescriptor {
+                    root, instance, function, local, phase: actual,
+                    reason: "original object lifetime requires exact statement generation",
+                } if *root == row.root() && *instance == row.instance()
+                    && *function == Some(row.function().index() as usize)
+                    && *local == row.local() && *actual == phase));
+                assert!(std::error::Error::source(&error).is_none());
+                assert!(format!("{error}").contains(phase));
+            }
+            assert_eq!(out.budget.storage(), before);
+            assert!(
+                slots
+                    .legacy_descriptor_by_source(0, 0, 1, "allocation-absent-test", out)?
+                    .is_none()
+            );
             let other = slots
                 .frames
                 .iter()
@@ -1287,6 +1316,28 @@ pub(super) mod tests {
         })
         .0
         .unwrap();
+    }
+
+    #[test]
+    fn original_mir_allocation_diagnostic_preserves_query_resource_denial() {
+        let result = run_slots(LIMIT, LIMIT, |slots, out| {
+            let row = *slots.frames.iter().flatten().next().unwrap();
+            let before = out.budget.storage();
+            out.budget.charge_work(LIMIT - out.budget.work())?;
+            let error = slots
+                .legacy_descriptor_by_source(
+                    row.root(),
+                    row.instance(),
+                    row.local(),
+                    "resource-denial-test",
+                    out,
+                )
+                .unwrap_err();
+            assert!(matches!(error, Error::Resource(Resource::Work(_))));
+            assert_eq!(out.budget.storage(), before);
+            Err(error)
+        });
+        assert!(matches!(result.0, Err(Error::Resource(Resource::Work(_)))));
     }
 
     #[test]
