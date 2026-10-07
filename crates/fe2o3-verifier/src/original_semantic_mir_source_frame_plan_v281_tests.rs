@@ -30,6 +30,18 @@ fn inspect(
 ) -> Result<()> {
     let frames = FramePlan::derive(plan, slots, out)?;
     frames.check(plan, slots, out)?;
+    assert_eq!(frames.roots.len(), 2);
+    for (root, range) in frames.roots.iter().enumerate() {
+        assert_eq!(range.len(), 3);
+        let entry = &frames.frames[range.start];
+        assert_eq!((entry.root, entry.instance), (root, 0));
+        let calls = &frames.calls[entry.calls.clone()];
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[2].block, 3);
+        assert!(!calls[2].reachable);
+        assert_eq!(calls[2].child, None);
+        assert!(calls[2].demands.is_empty());
+    }
     let (mut suspended, mut inactive) = (0, 0);
     for (index, frame) in frames.frames.iter().enumerate() {
         let original = plan.instance(frame.root, frame.instance, out)?;
@@ -81,7 +93,9 @@ fn inspect(
         }
     }
     assert_eq!(suspended, 2);
-    assert!(inactive > 0);
+    // This fixture omits the unreachable call's child. Retained inactive
+    // provenance is covered independently by the genuine Abort fixture.
+    assert_eq!(inactive, 0);
     Ok(())
 }
 
