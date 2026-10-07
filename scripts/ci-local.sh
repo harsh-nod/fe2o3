@@ -827,6 +827,10 @@ run_cpu_package_group() {
   if [[ "${group}" == pliron ]]; then
     run_pliron_default_api_tests
   fi
+  if [[ "${group}" == foundation ]]; then
+    # Runtime fail-stop can abort during unwinding, before libtest prints its buffer.
+    cargo_args+=(-- --nocapture)
+  fi
   run_step "cpu-${group}-tests" \
     env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
 }

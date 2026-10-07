@@ -112,6 +112,9 @@ class CpuGroupTests(unittest.TestCase):
     def package_command(self, row):
         self.assertEqual(row[1:6], ("env", "FE2O3_HIP_SYS_DISABLE=1", "cargo", "test", "--locked"))
         arguments = row[6:]
+        if row[0] == "cpu-foundation-tests":
+            self.assertEqual(arguments[-2:], ("--", "--nocapture"))
+            arguments = arguments[:-2]
         self.assertTrue(arguments, "empty -p set would run unrelated workspace targets")
         self.assertEqual(len(arguments) % 2, 0)
         self.assertTrue(all(flag == "-p" for flag in arguments[::2]))
