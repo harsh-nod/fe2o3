@@ -780,16 +780,36 @@ fn original_product_schema_prior_resource_denial_stays_sticky() {
             reached.set(true);
             let floor = out.budget.storage();
             let ledger = out.budget.work_ledger_identity_v1();
-            let denied = if work_denial {
-                out.budget.charge_work(LIMIT)
-            } else {
-                out.budget.reserve_storage(LIMIT)
-            };
+            let row = slots.product_component_v282(r.outer, 1, out)?;
+            let mut denied = None;
+            let error = slots
+                .with_source_query_v42(out, |out| -> Result<()> {
+                    let result = if work_denial {
+                        out.budget.charge_work(LIMIT)
+                    } else {
+                        out.budget.reserve_storage(LIMIT)
+                    };
+                    let resource = result.unwrap_err();
+                    denied = Some(resource);
+                    Err(Error::Resource(resource))
+                })
+                .unwrap_err();
             assert!(matches!(
                 (&denied, work_denial),
-                (Err(Resource::Work(_)), true) | (Err(Resource::Storage(_)), false)
+                (Some(Resource::Work(_)), true) | (Some(Resource::Storage(_)), false)
             ));
-            let error = slots.product_type_supported_v282(r.outer, out).unwrap_err();
+            let denied = denied.unwrap();
+            for refusal in [
+                &error,
+                &slots.product_type_supported_v282(r.outer, out).unwrap_err(),
+                &slots.product_type_copyable_v282(r.outer, out).unwrap_err(),
+                &row.path(out).unwrap_err(),
+            ] {
+                let Error::Source(SourceError::Resource(resource)) = refusal else {
+                    panic!("owner must retain the original resource refusal: {refusal:?}");
+                };
+                assert_eq!(*resource, denied);
+            }
             assert!(matches!(
                 (&error, work_denial),
                 (

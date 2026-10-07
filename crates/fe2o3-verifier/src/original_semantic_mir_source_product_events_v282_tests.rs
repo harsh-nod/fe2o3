@@ -404,7 +404,7 @@ fn original_product_transport_preserves_direct_execution_return_refusal_and_all_
     );
     assert!(values.contains("spec fn invocation_source_product_return_escapes_frame_v282"));
     assert!(values.contains(
-        "matches!(value.components[path], InvocationSourceProductAtomV282::Execution(_))"
+        "match value.components[path] {\n                InvocationSourceProductAtomV282::Execution(_) => true,\n                _ => false,\n            }"
     ));
     assert!(frames.contains("InvocationSourceValueV42::Product(value) => invocation_source_product_return_escapes_frame_v282(value, frame)"));
     assert!(

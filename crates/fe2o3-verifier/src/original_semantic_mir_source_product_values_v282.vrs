@@ -313,7 +313,10 @@ spec fn invocation_source_product_return_escapes_frame_v282(
 ) -> bool {
     invocation_source_product_escapes_frame_v282(value, frame)
         || (exists|path: Seq<int>| value.components.contains_key(path)
-            && matches!(value.components[path], InvocationSourceProductAtomV282::Execution(_)))
+            && match value.components[path] {
+                InvocationSourceProductAtomV282::Execution(_) => true,
+                _ => false,
+            })
 }
 
 spec fn invocation_source_product_install_v282(
@@ -456,7 +459,10 @@ spec fn invocation_source_product_unpack_v282(
             InvocationSourceProductAtomV282::Enum(value) => Some(InvocationSourceValueV42::Enum(value)),
         }
     } else if forall|path: Seq<int>| components.contains_key(path) ==>
-        matches!(components[path], InvocationSourceProductAtomV282::Carrier(_)) {
+        (match components[path] {
+            InvocationSourceProductAtomV282::Carrier(_) => true,
+            _ => false,
+        }) {
         let aggregate = InvocationSourceAggregateV42 { source_type: ty, execution_lease: None,
             leaves: Map::new(components.dom(), |path: Seq<int>| match components[path] {
                 InvocationSourceProductAtomV282::Carrier(value) => value,
