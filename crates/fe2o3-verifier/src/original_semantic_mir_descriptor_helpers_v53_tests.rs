@@ -392,7 +392,7 @@ fn run_helpers(
                                     out
                                 ),
                                 Err(Error::Statement(
-                                    "original MIR typed byte statement identity or layout differs"
+                                    "original MIR byte frame entry differs from its exact invocation"
                                 ))
                             ));
                             assert!(matches!(
