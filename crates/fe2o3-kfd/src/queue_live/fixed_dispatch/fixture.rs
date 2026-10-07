@@ -4,6 +4,56 @@ use super::*;
 
 impl ComputeAqlQueueSessionV1 {
     #[cfg(test)]
+    pub(in crate::queue) fn submit_arena_binding_for_test(
+        &mut self,
+        owner: &mut crate::queue::dispatch_binding::ArenaRecipeV1,
+        native_submit: impl FnOnce(
+            &mut Self,
+            AqlPreparedKernelDispatchBatchV2<1>,
+        ) -> Result<u64, NativeAqlSubmissionFailureV1>,
+    ) -> Result<Gfx942DispatchBatchV1<1>, Gfx942FixedDispatchSubmissionFailureV1> {
+        self.submit_selected_fixed_dispatch_using(
+            FixedDispatchBindingModeV1::Ordinary,
+            &mut recipe::RecipeV1::Arena(owner),
+            native_submit,
+        )
+        .map_err(FixedDispatchSubmissionFailureV1::into_public)
+    }
+
+    #[cfg(test)]
+    pub(in crate::queue) fn complete_arena_binding_for_test(
+        &mut self,
+        owner: &mut crate::queue::dispatch_binding::ArenaRecipeV1,
+        batch: Gfx942DispatchBatchV1<1>,
+    ) -> Result<Gfx942CompletedDispatchBatchV1<1>, Gfx942DispatchBindingErrorV1> {
+        let (completion, identity) = unwrap_published(batch);
+        owner.validate_published(identity, &completion)?;
+        let completed = self
+            .completion_owner
+            .complete_one_without_native_for_test(completion);
+        owner.mark_completed(identity, &completed)?;
+        Ok(wrap_completed(completed, identity))
+    }
+
+    #[cfg(test)]
+    pub(in crate::queue) fn recycle_arena_binding_for_test(
+        &mut self,
+        owner: &mut crate::queue::dispatch_binding::ArenaRecipeV1,
+        completed: Gfx942CompletedDispatchBatchV1<1>,
+    ) -> Result<Gfx942CompletionRecycleObservationV1, Gfx942DispatchBindingErrorV1> {
+        let (completion, identity) = unwrap_completed(completed);
+        owner.validate_completed(identity, &completion)?;
+        let occurrence = completion.occurrence_v1()?;
+        let recycled = self
+            .completion_owner
+            .recycle_one_without_native_for_test(completion);
+        owner.recycle(identity, occurrence)?;
+        Ok(recycled)
+    }
+}
+
+impl ComputeAqlQueueSessionV1 {
+    #[cfg(test)]
     pub(in crate::queue) fn submit_registry_binding_for_test(
         &mut self,
         owner: &mut crate::queue::dispatch_binding::RegistryRecipeV1,

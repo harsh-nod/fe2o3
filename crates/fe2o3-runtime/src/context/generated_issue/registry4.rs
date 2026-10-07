@@ -23,6 +23,15 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         ) {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
+        self.retained_registry_attempt_v1(hold, roster, plan)
+    }
+
+    pub(super) fn retained_registry_attempt_v1(
+        &mut self,
+        hold: &ContextUnpublishedHoldV1,
+        roster: &GeneratedHostRosterV1,
+        plan: GeneratedShellPlanV1,
+    ) -> Result<GeneratedShellPlanV1, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
         if !self.generated_issues.contains_key(&hold.stream()) {
             self.begin_generated_issue_v1(hold, plan, roster)?;
             self.generated_issues
@@ -275,6 +284,6 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
     }
 }
 
-fn invalid<E>(_: E) -> RuntimeErrorV1<KfdRuntimeBackendErrorV1> {
+pub(super) fn invalid<E>(_: E) -> RuntimeErrorV1<KfdRuntimeBackendErrorV1> {
     RuntimeValidationErrorV1::InvalidBackendDescription.into()
 }

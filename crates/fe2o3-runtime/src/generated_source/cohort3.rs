@@ -13,6 +13,7 @@ pub(crate) enum GeneratedProfileV1 {
     NativeFillRegistry4,
     NativeFillRegistry4Repeat2,
     NativeFillRegistry16,
+    NativeFillArena1024,
 }
 
 #[derive(Clone)]
@@ -22,6 +23,7 @@ pub(crate) enum GeneratedSourceIdentityV1 {
     Registry4([Arc<()>; 4]),
     Registry4Repeat2([Arc<()>; 4]),
     Registry16([Arc<()>; 16]),
+    Arena1024(Arc<()>),
 }
 
 impl From<Arc<()>> for GeneratedSourceIdentityV1 {
@@ -38,6 +40,7 @@ impl GeneratedSourceIdentityV1 {
             Self::Registry4(_) => GeneratedProfileV1::NativeFillRegistry4,
             Self::Registry4Repeat2(_) => GeneratedProfileV1::NativeFillRegistry4Repeat2,
             Self::Registry16(_) => GeneratedProfileV1::NativeFillRegistry16,
+            Self::Arena1024(_) => GeneratedProfileV1::NativeFillArena1024,
         }
     }
     #[cfg(test)]
@@ -59,6 +62,7 @@ impl GeneratedSourceIdentityV1 {
             (Self::Registry16(a), Self::Registry16(b)) => {
                 a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))
             }
+            (Self::Arena1024(a), Self::Arena1024(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -77,6 +81,7 @@ pub(crate) enum GeneratedContractsV1 {
     Registry4([[u8; 32]; 4]),
     Registry4Repeat2([[u8; 32]; 4]),
     Registry16([[u8; 32]; 16]),
+    Arena1024([u8; 32]),
 }
 
 impl From<[u8; 32]> for GeneratedContractsV1 {
@@ -129,6 +134,10 @@ impl GeneratedContractsV1 {
                 for value in values {
                     hash.update(value);
                 }
+            }
+            Self::Arena1024(value) => {
+                hash.update(b"fe2o3.generated.native-fill-arena1024.commitment.v1\0");
+                hash.update(value);
             }
         }
     }

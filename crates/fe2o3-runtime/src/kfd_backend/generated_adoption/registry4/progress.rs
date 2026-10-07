@@ -29,56 +29,34 @@ impl KfdRuntimeBackendV1 {
                 .as_mut()
                 .unwrap_or_else(|| std::process::abort());
             let receipt = &mut native.receipts[index];
-            let operation = match receipt {
-                ReceiptV1::Ready | ReceiptV1::RetryReady => receipt.issue(|| session.submit(index)),
-                ReceiptV1::Published(_) => {
-                    let ReceiptV1::Published(batch) = core::mem::replace(
-                        receipt,
-                        ReceiptV1::HandedToLower(receipt::HandoffV1::Poll),
-                    ) else {
-                        std::process::abort();
-                    };
-                    match session.poll(batch) {
-                        Ok(Poll::Pending(batch)) => {
-                            *receipt = ReceiptV1::Published(batch);
-                            Ok(())
-                        }
-                        Ok(Poll::Ready(completed)) => {
-                            *receipt = ReceiptV1::Completed(completed);
-                            Ok(())
-                        }
-                        Err(failure) => {
-                            if let Some(original) = failure.refused {
-                                *receipt = ReceiptV1::Published(original);
-                            }
-                            Err(failure.error)
-                        }
-                    }
-                }
-                #[allow(
-                    clippy::result_large_err,
-                    reason = "retry refusal returns the original completion inline without fallible allocation"
-                )]
-                ReceiptV1::Completed(_) => receipt
-                    .recycle(|completed| {
-                        session
-                            .recycle(completed)
-                            .map(|_| ())
-                            .map_err(|failure| (failure.error, failure.retryable))
-                    })
-                    .map(|_| ()),
-                ReceiptV1::Recycled => Ok(()),
-                // Registry4 issues through the non-classifying receipt path.
-                // Preserve unexpected singleton custody for terminal teardown.
-                ReceiptV1::RejectedUnpublished { .. } | ReceiptV1::RejectedDisposed(_) => {
-                    Err(fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
-                        "registry cannot consume singleton rejected-publication custody",
-                    ))
-                }
-                ReceiptV1::HandedToLower(_) => Err(
-                    fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract("registry unknown receipt"),
-                ),
+            #[allow(
+                clippy::result_large_err,
+                reason = "retry refusal returns the original completion inline without fallible allocation"
+            )]
+            let recycle = |session: &mut Session, completed: session::Completed| {
+                session
+                    .recycle(completed)
+                    .map(|_| ())
+                    .map_err(|failure| (failure.error, failure.retryable))
             };
+            #[allow(
+                clippy::result_large_err,
+                reason = "poll refusal retains the original published batch without fallible allocation"
+            )]
+            let poll = |session: &mut Session, batch| {
+                session
+                    .poll(batch)
+                    .map(|poll| match poll {
+                        Poll::Pending(batch) => selected_step::SelectedPoll::Pending(batch),
+                        Poll::Ready(completed) => selected_step::SelectedPoll::Ready(completed),
+                    })
+                    .map_err(|failure| selected_step::SelectedPollFailure {
+                        error: failure.error,
+                        refused: failure.refused,
+                    })
+            };
+            let operation =
+                selected_step::step(session, receipt, index, Session::submit, poll, recycle);
             operation
                 .map_err(|error| self.generated_native_error_v1("registry progress", error))?;
             self.check_registry4_device_v1(plan)?;

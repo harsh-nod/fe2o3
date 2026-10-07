@@ -14,6 +14,7 @@ use fe2o3_runtime::{
     WorkerV3Gfx942ExecutionAuthorityV1,
 };
 use std::cell::{RefCell, RefMut};
+mod arena1024;
 mod cohort3;
 mod epoch;
 mod registry4;

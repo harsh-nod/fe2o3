@@ -5,12 +5,14 @@ use crate::generated_source::GeneratedHostRosterV1;
 use generated_shells::GeneratedShellPlanV1;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+pub(super) mod arena1024;
 mod cohort3;
 mod detached;
 mod issue;
 mod readback;
 mod receipt;
 pub(super) mod registry4;
+mod selected_step;
 mod typed_receipt;
 mod unpublished;
 pub(crate) use receipt::observe_generated_retirement_v1;
@@ -133,6 +135,10 @@ impl KfdRuntimeBackendV1 {
                 .is_some_and(|native| !native.is_retired())
                 || record
                     .registry
+                    .as_ref()
+                    .is_some_and(|native| !native.is_retired())
+                || record
+                    .arena
                     .as_ref()
                     .is_some_and(|native| !native.is_retired())
         })

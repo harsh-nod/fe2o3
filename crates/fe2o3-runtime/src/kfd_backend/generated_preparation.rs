@@ -105,10 +105,23 @@ impl KfdRuntimeBackendV1 {
                     let mut originals = self
                         .generated_shells
                         .values_mut()
-                        .filter_map(|record| record.registry.as_mut())
-                        .filter(|registry| !registry.is_retired());
+                        .flat_map(|record| {
+                            [
+                                record
+                                    .registry
+                                    .as_mut()
+                                    .filter(|root| !root.is_retired())
+                                    .map(OriginalGeneratedDeviceV1::Registry),
+                                record
+                                    .arena
+                                    .as_mut()
+                                    .filter(|root| !root.is_retired())
+                                    .map(OriginalGeneratedDeviceV1::Arena),
+                            ]
+                        })
+                        .flatten();
                     match (originals.next(), originals.next()) {
-                        (Some(registry), None) => registry
+                        (Some(mut registry), None) => registry
                             .with_device(prepare)
                             .map_err(|error| error.to_string())
                             .and_then(|result| result.map_err(str::to_owned)),
@@ -129,6 +142,23 @@ impl KfdRuntimeBackendV1 {
                 }
                 std::panic::resume_unwind(payload)
             }
+        }
+    }
+}
+
+enum OriginalGeneratedDeviceV1<'a> {
+    Registry(&'a mut super::generated_adoption::registry4::RegistryV1),
+    Arena(&'a mut super::generated_adoption::arena1024::ArenaV1),
+}
+
+impl OriginalGeneratedDeviceV1<'_> {
+    fn with_device<R>(
+        &mut self,
+        observe: impl FnOnce(&CheckedGfx942XnackMinusDevice) -> R,
+    ) -> Result<R, fe2o3_kfd::ComputeAqlQueueSessionErrorV1> {
+        match self {
+            Self::Registry(root) => root.with_device(observe),
+            Self::Arena(root) => root.with_device(observe),
         }
     }
 }

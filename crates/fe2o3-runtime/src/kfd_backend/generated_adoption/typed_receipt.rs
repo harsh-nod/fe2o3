@@ -31,7 +31,8 @@ impl NativeReceiptV1 {
             GeneratedProfileV1::NativeFillCohort3 => Some(Self::Cohort3(ReceiptV1::Ready)),
             GeneratedProfileV1::NativeFillRegistry4
             | GeneratedProfileV1::NativeFillRegistry4Repeat2
-            | GeneratedProfileV1::NativeFillRegistry16 => None,
+            | GeneratedProfileV1::NativeFillRegistry16
+            | GeneratedProfileV1::NativeFillArena1024 => None,
         }
     }
 

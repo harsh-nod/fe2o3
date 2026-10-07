@@ -32,6 +32,7 @@ impl KfdRuntimeBackendV1 {
             || !self.generated_shells.get(&plan.key).is_some_and(|record| {
                 record.native.is_none()
                     && record.registry.is_none()
+                    && record.arena.is_none()
                     && record.control.is_some()
                     && record.source_identity.matches(&roster.source_identity)
             })

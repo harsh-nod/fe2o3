@@ -268,6 +268,8 @@ mod fixed_dispatch;
 mod initial_bind;
 #[path = "queue_live/model_loan.rs"]
 pub(in crate::queue) mod model_loan;
+#[path = "queue_live/native_fill_arena.rs"]
+pub(super) mod native_fill_arena;
 #[path = "queue_live/native_fill_cohort.rs"]
 mod native_fill_cohort;
 #[path = "queue_live/native_fill_registry.rs"]

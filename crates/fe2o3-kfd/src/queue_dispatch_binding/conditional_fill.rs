@@ -12,6 +12,7 @@ pub(super) struct ConditionalFillStorageV1 {
     pub(super) kernarg: Option<[u8; KERNARG_BYTES]>,
     pub(super) premises: Option<PreparedConditionalFillPremisesV1>,
     pub(super) cohort: Option<Box<native_fill_cohort::CohortStorageV1>>,
+    pub(super) arena: Option<Box<native_fill_arena::ArenaPremisesV1>>,
 }
 
 impl ConditionalFillStorageV1 {
@@ -19,6 +20,12 @@ impl ConditionalFillStorageV1 {
         &self,
         owner: &DispatchResourceOwnerV1,
     ) -> Result<(), Gfx942DispatchBindingErrorV1> {
+        if let Some(arena) = &self.arena {
+            if self.kernarg.is_some() || self.premises.is_some() || self.cohort.is_some() {
+                return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+            }
+            return arena.revalidate(owner);
+        }
         if let Some(cohort) = &self.cohort {
             if self.kernarg.is_some() || self.premises.is_some() {
                 return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);

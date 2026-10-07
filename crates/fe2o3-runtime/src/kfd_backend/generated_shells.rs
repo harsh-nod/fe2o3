@@ -66,6 +66,7 @@ pub(super) struct GeneratedShellRecordV1 {
     pub(super) control: GeneratedControlV1,
     pub(super) native: Option<super::generated_adoption::GeneratedNativeAdoptionV1>,
     pub(super) registry: Option<super::generated_adoption::registry4::RegistryV1>,
+    pub(super) arena: Option<super::generated_adoption::arena1024::ArenaV1>,
 }
 
 impl KfdRuntimeBackendV1 {
@@ -288,6 +289,7 @@ impl KfdRuntimeBackendV1 {
                 control: GeneratedControlV1::empty(plan.profile),
                 native: None,
                 registry: None,
+                arena: None,
             },
         );
         self.next_handle = plan.next_handle;
@@ -323,6 +325,14 @@ impl KfdRuntimeBackendV1 {
     pub(crate) fn validate_generated_shell_disposal_v1(&self, plan: &GeneratedShellPlanV1) -> bool {
         self.validate_generated_shell_records_v1(plan)
             && self.generated_shells.get(&plan.key).is_some_and(|record| {
+                if let Some(arena) = &record.arena {
+                    return plan.profile
+                        == crate::generated_source::GeneratedProfileV1::NativeFillArena1024
+                        && record.native.is_none()
+                        && record.registry.is_none()
+                        && arena.is_retired()
+                        && record.control.is_none();
+                }
                 if let Some(registry) = &record.registry {
                     return matches!(plan.profile,
                         crate::generated_source::GeneratedProfileV1::NativeFillRegistry4

@@ -20,9 +20,14 @@ pub use graph::{
     RuntimeGfx942ScopedGraphAdmissionErrorV1, RuntimeGfx942ScopedGraphFutureV1,
     RuntimeGfx942ScopedGraphStagingErrorV1, RuntimeGfx942ScopedGraphTicketV1,
 };
+mod arena1024;
 mod cancellation;
 mod cohort3;
 mod registry4;
+pub use arena1024::{
+    RuntimeGfx942Arena1024ResultFutureV1, RuntimeGfx942Arena1024ScopeV1,
+    RuntimeGfx942Arena1024TicketV1,
+};
 pub use cancellation::RuntimeGfx942ScopedCancelResultV1;
 pub use cohort3::RuntimeGfx942ScopedCohort3TicketV1;
 pub use registry4::{

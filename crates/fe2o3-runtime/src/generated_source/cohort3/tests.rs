@@ -5,6 +5,7 @@ use crate::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
+mod arena1024;
 mod registry16;
 
 const IMAGE: &[u8] = include_bytes!("../../../tests/fixtures/native-fill-worker/kernel.hsaco");

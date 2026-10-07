@@ -853,7 +853,8 @@ fn production_dependency_owner_lane_envelope_and_teardown_shape_is_sealed() {
         concat!(
             "&mutself,queue:&mutComputeAqlQueueSessionV1){matchself{",
             "Self::Ordinary=>{ifletSome(common)=queue.dispatch.as_mut(){common.poison();}}",
-            "Self::Registry(recipe)=>recipe.poison(),}}}"
+            "Self::Registry(recipe)=>recipe.poison(),",
+            "Self::Arena(recipe)=>recipe.poison(),}}}"
         )
     );
     assert!(recycle.contains("Gfx942DispatchBindingErrorV1::StaleDispatchGeneration"));

@@ -1,11 +1,12 @@
 //! Private selection of the original generation owner, never native token substitution.
 
 use super::*;
-use crate::queue::dispatch_binding::RegistryRecipeV1;
+use crate::queue::dispatch_binding::{ArenaRecipeV1, RegistryRecipeV1};
 
 pub(in crate::queue::live) enum RecipeV1<'a> {
     Ordinary,
     Registry(&'a mut RegistryRecipeV1),
+    Arena(&'a mut ArenaRecipeV1),
 }
 
 impl RecipeV1<'_> {
@@ -26,6 +27,7 @@ impl RecipeV1<'_> {
         match self {
             Self::Ordinary => common.bind_templates::<N>(queue.key),
             Self::Registry(recipe) => recipe.bind::<N>(common, queue.key),
+            Self::Arena(recipe) => recipe.bind::<N>(common, queue.key),
         }
     }
 
@@ -42,6 +44,7 @@ impl RecipeV1<'_> {
                 .expect("dispatch owner retained")
                 .mark_published(identity, completion),
             Self::Registry(recipe) => recipe.mark_published(identity, completion),
+            Self::Arena(recipe) => recipe.mark_published(identity, completion),
         }
     }
 
@@ -57,6 +60,7 @@ impl RecipeV1<'_> {
                 .expect("dispatch owner retained")
                 .cancel_binding(identity),
             Self::Registry(recipe) => recipe.cancel(identity),
+            Self::Arena(recipe) => recipe.cancel(identity),
         }
     }
 
@@ -73,6 +77,7 @@ impl RecipeV1<'_> {
                 .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
                 .validate_published(identity, completion),
             Self::Registry(recipe) => recipe.validate_published(identity, completion),
+            Self::Arena(recipe) => recipe.validate_published(identity, completion),
         }
     }
 
@@ -89,6 +94,7 @@ impl RecipeV1<'_> {
                 .expect("dispatch owner retained")
                 .mark_completed(identity, completion),
             Self::Registry(recipe) => recipe.mark_completed(identity, completion),
+            Self::Arena(recipe) => recipe.mark_completed(identity, completion),
         }
     }
 
@@ -105,6 +111,7 @@ impl RecipeV1<'_> {
                 .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
                 .validate_completed(identity, completion),
             Self::Registry(recipe) => recipe.validate_completed(identity, completion),
+            Self::Arena(recipe) => recipe.validate_completed(identity, completion),
         }
     }
 
@@ -121,6 +128,7 @@ impl RecipeV1<'_> {
                 .expect("dispatch owner retained")
                 .mark_recycled_occurrence(identity, completion),
             Self::Registry(recipe) => recipe.recycle(identity, completion),
+            Self::Arena(recipe) => recipe.recycle(identity, completion),
         }
     }
 
@@ -132,6 +140,7 @@ impl RecipeV1<'_> {
                 }
             }
             Self::Registry(recipe) => recipe.poison(),
+            Self::Arena(recipe) => recipe.poison(),
         }
     }
 }

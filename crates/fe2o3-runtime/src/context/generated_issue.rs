@@ -8,6 +8,7 @@ use crate::{
     RuntimeGfx942GeneratedCarrierV1,
 };
 
+mod arena1024;
 mod cohort3;
 mod completion;
 mod registry4;

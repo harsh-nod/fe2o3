@@ -402,7 +402,10 @@ fn inputs(data: &[Gfx942FixedDispatchDataV1]) -> Vec<Input> {
         .collect()
 }
 
-fn assert_inputs<const N: usize>(owner: &FixedDispatchPreparationCustodyV1<N>, expected: &[Input]) {
+fn assert_inputs<const N: usize, P: PreparationPacketsV1<N>>(
+    owner: &FixedDispatchPreparationCustodyV1<N, P>,
+    expected: &[Input],
+) {
     assert_inputs_with_completed(owner, expected, None, owner.completed.as_ref());
 }
 
@@ -428,8 +431,8 @@ fn ordinary_data_effect<const N: usize>(index: usize) -> ExpectedDataEffectV1 {
     }
 }
 
-fn assert_inputs_with_completed<const N: usize>(
-    owner: &FixedDispatchPreparationCustodyV1<N>,
+fn assert_inputs_with_completed<const N: usize, P: PreparationPacketsV1<N>>(
+    owner: &FixedDispatchPreparationCustodyV1<N, P>,
     expected: &[Input],
     expected_effects: Option<&[ExpectedDataEffectV1]>,
     completed: Option<&DispatchResourceOwnerV1>,
@@ -481,7 +484,10 @@ fn assert_inputs_with_completed<const N: usize>(
     }
 }
 
-fn assert_custody<const N: usize>(memory: &Memory, owner: &FixedDispatchPreparationCustodyV1<N>) {
+fn assert_custody<const N: usize, P: PreparationPacketsV1<N>>(
+    memory: &Memory,
+    owner: &FixedDispatchPreparationCustodyV1<N, P>,
+) {
     let mut ids = owner
         .code
         .iter()
@@ -654,7 +660,7 @@ impl PrimaryPreparationSnapshotV1 {
     }
 }
 
-impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
+impl<const N: usize, P: PreparationPacketsV1<N>> FixedDispatchPreparationCustodyV1<N, P> {
     pub(crate) fn primary_collect_owners_v1<'a>(&'a self, out: &mut PreparationOwnerRefsV1<'a>) {
         out.data(&self.original_data);
         if let Some(retained) = &self.retained_data {
@@ -699,7 +705,12 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
                 self.original_data.as_ptr() as usize,
                 self.original_data.capacity(),
             )),
-            packets: self.packets.iter().map(PacketSnapshotV1::capture).collect(),
+            packets: self
+                .packets
+                .as_packets()
+                .iter()
+                .map(PacketSnapshotV1::capture)
+                .collect(),
             expected_effects: None,
         }
     }
@@ -757,6 +768,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
     ) {
         assert_eq!(
             self.packets
+                .as_packets()
                 .iter()
                 .map(PacketSnapshotV1::capture)
                 .collect::<Vec<_>>(),

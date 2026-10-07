@@ -9,6 +9,7 @@ pub(in crate::kfd_backend) enum GeneratedControlV1 {
     Registry4([Option<Gfx942FixedDispatchPacketV1>; 4]),
     Registry4Repeat2([Option<Gfx942FixedDispatchPacketV1>; 4]),
     Registry16([Option<Gfx942FixedDispatchPacketV1>; 16]),
+    Arena1024(Option<fe2o3_kfd::Gfx942NativeFillArenaPacketsV1>),
 }
 
 impl GeneratedControlV1 {
@@ -23,6 +24,7 @@ impl GeneratedControlV1 {
             GeneratedProfileV1::NativeFillRegistry16 => {
                 Self::Registry16(core::array::from_fn(|_| None))
             }
+            GeneratedProfileV1::NativeFillArena1024 => Self::Arena1024(None),
         }
     }
 
@@ -33,6 +35,7 @@ impl GeneratedControlV1 {
             Self::Registry4(_) => GeneratedProfileV1::NativeFillRegistry4,
             Self::Registry4Repeat2(_) => GeneratedProfileV1::NativeFillRegistry4Repeat2,
             Self::Registry16(_) => GeneratedProfileV1::NativeFillRegistry16,
+            Self::Arena1024(_) => GeneratedProfileV1::NativeFillArena1024,
         }
     }
 
@@ -44,6 +47,7 @@ impl GeneratedControlV1 {
                 packets.iter().all(Option::is_some)
             }
             Self::Registry16(packets) => packets.iter().all(Option::is_some),
+            Self::Arena1024(packets) => packets.is_some(),
         }
     }
 
@@ -55,6 +59,7 @@ impl GeneratedControlV1 {
                 packets.iter().all(Option::is_none)
             }
             Self::Registry16(packets) => packets.iter().all(Option::is_none),
+            Self::Arena1024(packets) => packets.is_none(),
         }
     }
 
@@ -64,7 +69,8 @@ impl GeneratedControlV1 {
             Self::Cohort3(_)
             | Self::Registry4(_)
             | Self::Registry4Repeat2(_)
-            | Self::Registry16(_) => None,
+            | Self::Registry16(_)
+            | Self::Arena1024(_) => None,
         }
     }
 }

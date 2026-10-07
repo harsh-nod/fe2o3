@@ -9,6 +9,7 @@ use super::*;
 use crate::{KfdMultiDeviceRuntimeBackendV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1};
 
 mod adoption;
+mod arena1024;
 mod cohort3;
 mod registry4;
 

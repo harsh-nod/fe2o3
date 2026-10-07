@@ -29,10 +29,17 @@ pub(crate) use preparation::FixedDispatchPreparationCustodyV1;
 
 #[path = "queue_dispatch_binding/conditional_fill.rs"]
 mod conditional_fill;
+#[path = "queue_dispatch_binding/native_fill_arena.rs"]
+mod native_fill_arena;
 #[path = "queue_dispatch_binding/native_fill_cohort.rs"]
 mod native_fill_cohort;
 #[path = "queue_dispatch_binding/native_fill_registry.rs"]
 mod native_fill_registry;
+pub(super) use native_fill_arena::ArenaRecipeV1;
+pub use native_fill_arena::{
+    GFX942_NATIVE_FILL_ARENA_SLOTS_V1, Gfx942NativeFillArenaFailureV1,
+    Gfx942NativeFillArenaInputsV1, Gfx942NativeFillArenaPacketsV1, Gfx942NativeFillArenaStorageV1,
+};
 pub use native_fill_cohort::{
     Gfx942NativeFillCohortFailureV1, Gfx942NativeFillCohortMemberV1, Gfx942NativeFillCohortV1,
 };

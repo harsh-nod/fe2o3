@@ -347,6 +347,29 @@ impl_generated_shell_context!(
 );
 
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
+    pub(super) fn install_generated_arena_shells_v1<P: crate::RuntimeGfx942GeneratedCarrierV1>(
+        &mut self,
+        device: RuntimeDeviceIdV1,
+        native_device: fe2o3_runtime_model::ModelDeviceAdmissionV1,
+        hold: &ContextUnpublishedHoldV1,
+        source: &mut crate::RuntimeGfx942GeneratedArena1024V1<P>,
+        roster: &GeneratedHostRosterV1,
+    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        self.install_generated_shells_with_v1(
+            device,
+            native_device,
+            hold,
+            source,
+            roster,
+            |source, expected| {
+                source.packets.is_some() && source.original_roster().matches(expected)
+            },
+            |backend, bound, source, expected| {
+                backend.commit_generated_arena_shells_v1(bound, source, expected)
+            },
+        )
+    }
+
     pub(super) fn install_generated_registry4_shells_v1<E, const N: usize>(
         &mut self,
         device: RuntimeDeviceIdV1,

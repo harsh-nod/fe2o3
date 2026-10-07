@@ -167,8 +167,21 @@ struct ProgramIdentityV1 {
     dispatch_abi: [u8; 32],
 }
 
-pub(crate) struct FixedDispatchPreparationCustodyV1<const N: usize> {
-    packets: [Gfx942FixedDispatchPacketV1; N],
+pub(crate) trait PreparationPacketsV1<const N: usize> {
+    fn as_packets(&self) -> &[Gfx942FixedDispatchPacketV1; N];
+}
+
+impl<const N: usize> PreparationPacketsV1<N> for [Gfx942FixedDispatchPacketV1; N] {
+    fn as_packets(&self) -> &[Gfx942FixedDispatchPacketV1; N] {
+        self
+    }
+}
+
+pub(crate) struct FixedDispatchPreparationCustodyV1<
+    const N: usize,
+    P = [Gfx942FixedDispatchPacketV1; N],
+> {
+    packets: P,
     original_data: Vec<Gfx942FixedDispatchDataV1>,
     retained_data: Option<RetainedDispatchDataRosterV1>,
     generation: Option<DispatchGenerationOwnerV1>,
@@ -181,6 +194,7 @@ pub(crate) struct FixedDispatchPreparationCustodyV1<const N: usize> {
     kernarg: KernargStageV1,
     conditional_fill: Option<Box<conditional_fill::ConditionalFillStorageV1>>,
     native_fill_cohort: bool,
+    native_fill_arena: Option<Box<native_fill_arena::ArenaPremisesV1>>,
     prepared_packets: Vec<PreparedDispatchPacketV1>,
     data_authorities: Vec<DispatchDataAuthorityV1>,
     data_premises: Vec<RetainedDataPremiseV1>,
@@ -198,6 +212,38 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         packets: [Gfx942FixedDispatchPacketV1; N],
         data: Vec<Gfx942FixedDispatchDataV1>,
     ) -> Self {
+        Self::from_packets(packets, data)
+    }
+
+    pub(in crate::queue) fn new_native_fill_cohort(
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        data: Vec<Gfx942FixedDispatchDataV1>,
+    ) -> Self {
+        let mut custody = Self::new(packets, data);
+        custody.native_fill_cohort = true;
+        custody
+    }
+}
+
+impl
+    FixedDispatchPreparationCustodyV1<
+        { native_fill_arena::SLOTS },
+        native_fill_arena::Gfx942NativeFillArenaPacketsV1,
+    >
+{
+    pub(in crate::queue) fn new_native_fill_arena(
+        packets: native_fill_arena::Gfx942NativeFillArenaPacketsV1,
+        data: Vec<Gfx942FixedDispatchDataV1>,
+        premises: Box<native_fill_arena::ArenaPremisesV1>,
+    ) -> Self {
+        let mut custody = Self::from_packets(packets, data);
+        custody.native_fill_arena = Some(premises);
+        custody
+    }
+}
+
+impl<const N: usize, P: PreparationPacketsV1<N>> FixedDispatchPreparationCustodyV1<N, P> {
+    fn from_packets(packets: P, data: Vec<Gfx942FixedDispatchDataV1>) -> Self {
         Self {
             packets,
             original_data: data,
@@ -212,6 +258,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             kernarg: KernargStageV1::Empty,
             conditional_fill: None,
             native_fill_cohort: false,
+            native_fill_arena: None,
             prepared_packets: Vec::new(),
             data_authorities: Vec::new(),
             data_premises: Vec::new(),
@@ -223,15 +270,6 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             #[cfg(test)]
             fault: None,
         }
-    }
-
-    pub(in crate::queue) fn new_native_fill_cohort(
-        packets: [Gfx942FixedDispatchPacketV1; N],
-        data: Vec<Gfx942FixedDispatchDataV1>,
-    ) -> Self {
-        let mut custody = Self::new(packets, data);
-        custody.native_fill_cohort = true;
-        custody
     }
 
     fn step(&mut self, stage: PreparationStageV1) -> Result<(), Gfx942DispatchBindingErrorV1> {
@@ -321,16 +359,31 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             .collect();
         self.plan = Some(plan_public_fixed_dispatch_resources(
             programs,
-            &self.packets,
+            self.packets.as_packets(),
             &layouts,
             &initialized,
         )?);
-        let (fill, cohort_models) = if self.native_fill_cohort {
+        if self.native_fill_cohort && self.native_fill_arena.is_some() {
+            return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+        }
+        let arena_model = if self.native_fill_arena.is_some() {
+            Some(native_fill_arena::check_plan(
+                programs,
+                self.packets.as_packets(),
+                self.plan.as_ref().unwrap(),
+                self.control,
+            )?)
+        } else {
+            None
+        };
+        let (fill, cohort_models) = if arena_model.is_some() {
+            (None, None)
+        } else if self.native_fill_cohort {
             (
                 None,
                 Some(native_fill_cohort::check_plan(
                     programs,
-                    &self.packets,
+                    self.packets.as_packets(),
                     self.plan.as_ref().unwrap(),
                     self.control,
                 )?),
@@ -339,7 +392,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             (
                 conditional_fill::check_plan(
                     programs,
-                    &self.packets,
+                    self.packets.as_packets(),
                     self.plan.as_ref().unwrap(),
                     self.control,
                 )?,
@@ -351,6 +404,12 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         if cohort_models.is_some() {
             self.conditional_fill = Some(Box::new(conditional_fill::ConditionalFillStorageV1 {
                 cohort: Some(Box::new(native_fill_cohort::CohortStorageV1::new(N)?)),
+                ..Default::default()
+            }));
+        }
+        if arena_model.is_some() {
+            self.conditional_fill = Some(Box::new(conditional_fill::ConditionalFillStorageV1 {
+                arena: self.native_fill_arena.take(),
                 ..Default::default()
             }));
         }
@@ -501,7 +560,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         let conditional_storage = &mut self.conditional_fill;
         let conditional_kernarg = memory.write_kernarg(token, |bytes| {
             bytes.fill(0);
-            for (input, packet) in self.packets.iter().zip(&plan.packets) {
+            for (input, packet) in self.packets.as_packets().iter().zip(&plan.packets) {
                 let start = packet.kernarg_offset;
                 let end = start + input.kernarg_bytes.len();
                 let packet_bytes = &mut bytes[start..end];
@@ -535,6 +594,12 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             {
                 cohort.capture(bytes, plan)?;
             }
+            if let Some(arena) = conditional_storage
+                .as_mut()
+                .and_then(|storage| storage.arena.as_mut())
+            {
+                arena.capture(bytes, plan)?;
+            }
             Ok::<_, Gfx942DispatchBindingErrorV1>(
                 fill.as_ref()
                     .map(|_| bytes[..conditional_fill::KERNARG_BYTES].try_into().unwrap()),
@@ -564,7 +629,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
 
         for index in 0..N {
             self.step(PreparationStageV1::PacketResolve(index))?;
-            let input = &self.packets[index];
+            let input = &self.packets.as_packets()[index];
             let packet = &self.plan.as_ref().unwrap().packets[index];
             let KernargStageV1::Retained(kernarg) = &self.kernarg else {
                 unreachable!("retained kernarg")
@@ -607,7 +672,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
                 storage.premises =
                     Some(conditional_fill::PreparedConditionalFillPremisesV1::check(
                         model,
-                        &self.packets[index],
+                        &self.packets.as_packets()[index],
                         self.plan.as_ref().unwrap(),
                         conditional_fill::NativeFillCustodyV1 {
                             code: &self.code[0],
@@ -632,7 +697,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
                     .check_member(
                         index,
                         &models[index],
-                        &self.packets[index],
+                        &self.packets.as_packets()[index],
                         self.plan.as_ref().unwrap(),
                         native_fill_cohort::NativeMemberCustodyV1 {
                             code: &self.code[index],
@@ -644,10 +709,34 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
                         prepared,
                     )?;
             }
+            if let Some(model) = &arena_model {
+                self.step(PreparationStageV1::ConditionalFill)?;
+                let KernargStageV1::Retained(kernarg) = &self.kernarg else {
+                    return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
+                };
+                self.conditional_fill
+                    .as_mut()
+                    .and_then(|storage| storage.arena.as_mut())
+                    .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
+                    .check_member(
+                        index,
+                        model,
+                        &self.packets.as_packets()[index],
+                        self.plan.as_ref().unwrap(),
+                        conditional_fill::NativeFillCustodyV1 {
+                            code: &self.code[0],
+                            code_identity: self.code_identity[0],
+                            kernarg,
+                            output: &self.retained_data.as_ref().unwrap()[0].authority,
+                            generation: self.generation.as_ref().unwrap(),
+                        },
+                        prepared,
+                    )?;
+            }
             self.prepared_packets.push(prepared);
         }
         self.commit()?;
-        if self.native_fill_cohort {
+        if self.native_fill_cohort || arena_model.is_some() {
             let owner = self.completed.as_ref().expect("completed original cohort");
             owner
                 .conditional_fill
