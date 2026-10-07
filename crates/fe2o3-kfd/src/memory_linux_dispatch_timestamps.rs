@@ -8,6 +8,10 @@ const ENABLE_PROFILING: u32 = 1 << 3;
 const START_TICK_OFFSET: usize = 32;
 const END_TICK_OFFSET: usize = 40;
 
+#[cfg(feature = "engineering-native-packet-diagnostics")]
+#[path = "memory_linux_program_timestamps.rs"]
+mod program;
+
 impl LinuxMemoryBackendFor<crate::CheckedGfx950XnackMinusDevice> {
     /// Caller must own an idle engineering queue with no outstanding packets.
     pub(crate) unsafe fn enable_engineering_dispatch_timestamps(

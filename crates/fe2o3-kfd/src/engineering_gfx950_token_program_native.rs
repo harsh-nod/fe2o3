@@ -13,6 +13,10 @@ mod wait_diagnostic;
 #[path = "engineering_native_wait_observation.rs"]
 mod wait_observation;
 
+#[cfg(feature = "engineering-native-packet-diagnostics")]
+#[path = "engineering_gfx950_native_packet_diagnostic.rs"]
+mod packet_diagnostic;
+
 const PROGRAM_KERNARG: usize = 0;
 const PROGRAM_SIGNAL: usize = 1;
 const MAX_PROGRAM_KERNARG_BYTES: usize =
@@ -100,6 +104,8 @@ struct NativeProgram<'a> {
     prepared: Option<Vec<PreparedDispatch>>,
     #[cfg(feature = "engineering-native-wait-diagnostics")]
     wait_diagnostic: wait_diagnostic::Diagnostic,
+    #[cfg(feature = "engineering-native-packet-diagnostics")]
+    packet_diagnostic: packet_diagnostic::Diagnostic,
 }
 
 enum StagedProgram {
@@ -183,6 +189,8 @@ impl OrderedBackend for NativeProgram<'_> {
                 .collect::<Vec<_>>(),
         )?;
         self.retain_storage(&layout)?;
+        #[cfg(feature = "engineering-native-packet-diagnostics")]
+        self.packet_diagnostic.begin(self.context, &layout)?;
         let started = self.context.profile_started();
         let storage = &mut self.context.token_program_storage;
         let mut packets = Vec::with_capacity(prepared.len());
@@ -504,11 +512,15 @@ impl Context {
             return Err("native token program requires its separate diagnostic entry".into());
         }
         let count = prepared.len();
+        #[cfg(feature = "engineering-native-packet-diagnostics")]
+        let packet_diagnostic = packet_diagnostic::Diagnostic::new(self, &prepared)?;
         let mut native = NativeProgram {
             context: self,
             prepared: Some(prepared),
             #[cfg(feature = "engineering-native-wait-diagnostics")]
             wait_diagnostic: wait_diagnostic::Diagnostic::new(),
+            #[cfg(feature = "engineering-native-packet-diagnostics")]
+            packet_diagnostic,
         };
         let result = run_ordered_batch_deadline_bounded(
             &mut native,
@@ -524,6 +536,17 @@ impl Context {
             count,
             result.is_ok(),
         );
+        #[cfg(feature = "engineering-native-packet-diagnostics")]
+        let result = result.and_then(|elapsed| {
+            native
+                .packet_diagnostic
+                .finish(native.context)
+                .map(|()| elapsed)
+        });
+        #[cfg(feature = "engineering-native-packet-diagnostics")]
+        if result.is_err() {
+            native.context.ordered_batch_poisoned = true;
+        }
         result?;
         Ok(())
     }
