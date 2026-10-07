@@ -581,6 +581,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         .split_once("proof fn invocation_source_checked_add_replays_install_v260(")
         .unwrap().0;
     assert!(!pair_body.contains("4294967296"));
+    assert!(!pair_body.split_once("\n{\n").unwrap().1.contains("hide("));
     assert!(pair_body.contains("reveal(invocation_source_checked_v42);"));
     assert!(pair_body.contains("leaves: Map::empty().insert(seq![0int], value).insert(seq![1int], overflow)"));
     let add_replay = source

@@ -555,13 +555,6 @@ proof fn invocation_source_checked_pair_replays_install_v269(
             InvocationSourceAggregateV42 { source_type, execution_lease: None,
                 leaves: Map::empty().insert(seq![0int], value).insert(seq![1int], overflow) }),
 {
-    hide(invocation_source_byte_evaluate_v36);
-    hide(invocation_source_aggregate_install_v42);
-    hide(invocation_source_aggregate_leaf_count_v42);
-    hide(invocation_source_aggregate_leaf_path_v42);
-    hide(invocation_source_aggregate_leaf_bits_v42);
-    hide(invocation_source_checked_pair_v44);
-    hide(invocation_source_checked_v42);
     let lhs = invocation_source_byte_evaluate_v36(
         source, left_operand, bits, root, instance, little_endian);
     assert(lhs.source == source);
