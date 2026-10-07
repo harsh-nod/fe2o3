@@ -1,6 +1,13 @@
 //! One closed warm Prefix/guarded-MLP/readback transaction. No public scope.
 use super::*;
 
+#[path = "engineering_gfx950_peer_scoped_census_layer_v1.rs"]
+mod census;
+pub use census::{
+    Gfx950EngineeringPeerScopedCapacityCensusObservationV1,
+    Gfx950EngineeringPeerScopedCensusWarmLayerObservationV1,
+};
+
 pub struct Gfx950EngineeringPeerScopedPrefixInputsV1<'a> {
     pub kernel: &'a Gfx950EngineeringPeerKernelV1,
     pub object_sha256: [u8; 32],
@@ -349,6 +356,35 @@ pub(in super::super) fn run(
         until: None,
         window: None,
     })
+}
+
+pub(in super::super) fn run_census(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    prefixes: [&mut Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6; 2],
+    pair: &mut RetainedPair,
+    prefix_inputs: [Gfx950EngineeringPeerScopedPrefixInputsV1<'_>; 2],
+    inputs: Inputs<'_>,
+    expected_owner_counts: [usize; 2],
+    timeout_ms: u32,
+) -> Result<Gfx950EngineeringPeerScopedCensusWarmLayerObservationV1> {
+    let outputs = inputs.ranks.each_ref().map(|rank| rank.output);
+    census::run(
+        NativeLayer {
+            op: LayerOperation {
+                group,
+                prefixes,
+                pair,
+                committed: false,
+            },
+            prefix_inputs: Some(prefix_inputs),
+            inputs: Some(inputs),
+            outputs,
+            timeout_ms,
+            until: None,
+            window: None,
+        },
+        expected_owner_counts,
+    )
 }
 
 #[cfg(test)]

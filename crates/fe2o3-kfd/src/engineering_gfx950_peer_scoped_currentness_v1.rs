@@ -2,6 +2,9 @@
 use super::*;
 use crate::device::{ScopedCountsV1, ScopedCurrentnessV1};
 
+#[path = "engineering_gfx950_peer_scoped_capacity_fence_v1.rs"]
+pub(super) mod capacity_fence;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Identity {
     incarnation: u64,
@@ -200,6 +203,17 @@ pub(super) enum Currentness<'call> {
 }
 
 impl Currentness<'_> {
+    // Only the closed zero-add census adapter may select this rank-local fence.
+    pub(super) fn capacity_fence(
+        &mut self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+    ) -> Result<u32> {
+        if !matches!(self, Self::Scoped(_)) {
+            return Err("capacity census requires a live scoped route".into());
+        }
+        capacity_fence::run(group, self)
+    }
+
     pub(super) fn idle_group(&mut self, group: &mut Gfx950EngineeringPeerGroupV1) -> Result<()> {
         match self {
             Self::Full => check_contexts(&mut group.contexts, group.shared_full_currentness),

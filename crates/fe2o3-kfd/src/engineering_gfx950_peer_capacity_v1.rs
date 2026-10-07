@@ -53,8 +53,30 @@ trait CapacityBackend {
     fn finish(&mut self, result: Result<Vec<usize>>) -> Result<Vec<usize>>;
 }
 
-fn preflight(backend: &mut impl CapacityBackend, additional: &[usize]) -> Result<Vec<usize>> {
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct Snapshot {
+    counts: Counts,
+    occupied: Vec<usize>,
+}
+
+impl Snapshot {
+    pub(super) fn owner_counts(&self) -> Result<[u64; 2]> {
+        let [left, right] = self.occupied.as_slice() else {
+            return Err("scoped capacity snapshot requires two retained owners".into());
+        };
+        Ok([
+            u64::try_from(*left).map_err(|_| "scoped owner count conversion")?,
+            u64::try_from(*right).map_err(|_| "scoped owner count conversion")?,
+        ])
+    }
+}
+
+fn preflight_snapshot(
+    backend: &mut impl CapacityBackend,
+    additional: &[usize],
+) -> Result<Snapshot> {
     backend.require_active()?;
+    let mut retained = None;
     let result = (|| {
         backend.currentness_and_idle()?;
         let counts = backend.counts();
@@ -65,9 +87,18 @@ fn preflight(backend: &mut impl CapacityBackend, additional: &[usize]) -> Result
         if backend.counts() != counts {
             return Err("allocation preflight accounting changed".into());
         }
+        retained = Some(counts);
         Ok(occupied)
     })();
-    backend.finish(result)
+    let occupied = backend.finish(result)?;
+    Ok(Snapshot {
+        counts: retained.ok_or("allocation preflight snapshot absent")?,
+        occupied,
+    })
+}
+
+fn preflight(backend: &mut impl CapacityBackend, additional: &[usize]) -> Result<Vec<usize>> {
+    preflight_snapshot(backend, additional).map(|snapshot| snapshot.occupied)
 }
 
 impl CapacityBackend for Gfx950EngineeringPeerGroupV1 {
@@ -116,6 +147,46 @@ impl Gfx950EngineeringPeerGroupV1 {
     ) -> Result<Vec<usize>> {
         preflight(self, additional_per_owner)
     }
+}
+
+struct ScopedCapacity<'group, 'route> {
+    group: &'group mut Gfx950EngineeringPeerGroupV1,
+    currentness: &'group mut scoped_currentness::Currentness<'route>,
+    rank_checkpoints: u32,
+}
+
+impl CapacityBackend for ScopedCapacity<'_, '_> {
+    fn require_active(&self) -> Result<()> {
+        self.group.require_active()
+    }
+    fn currentness_and_idle(&mut self) -> Result<()> {
+        let observed = self.currentness.capacity_fence(self.group)?;
+        self.rank_checkpoints = self
+            .rank_checkpoints
+            .checked_add(observed)
+            .ok_or("scoped capacity checkpoint count overflow")?;
+        Ok(())
+    }
+    fn counts(&self) -> Counts {
+        CapacityBackend::counts(&*self.group)
+    }
+    fn finish(&mut self, result: Result<Vec<usize>>) -> Result<Vec<usize>> {
+        self.group.finish(result)
+    }
+}
+
+/// Private zero-add accounting snapshot. The closed layer owns unwind quarantine.
+pub(super) fn scoped_preflight(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    currentness: &mut scoped_currentness::Currentness<'_>,
+) -> Result<(Snapshot, u32)> {
+    let mut backend = ScopedCapacity {
+        group,
+        currentness,
+        rank_checkpoints: 0,
+    };
+    let snapshot = preflight_snapshot(&mut backend, &[0, 0])?;
+    Ok((snapshot, backend.rank_checkpoints))
 }
 
 #[cfg(test)]

@@ -352,4 +352,41 @@ impl Gfx950EngineeringPeerGroupV1 {
             timeout_ms,
         )
     }
+
+    /// An explicit zero-add census variant of the closed warm-layer policy.
+    /// Preserves both capacity fences before and after layer work, but moves
+    /// the trailing census before full exit and pair commit. This is not
+    /// equivalent to the legacy post-return full-topology timing.
+    ///
+    /// expected_owner_counts is reject-only data from the caller's actual
+    /// ledger. Complete accounting and limits come from this Group itself.
+    /// Census rank counts are already included in layer.currentness.
+    ///
+    /// # Safety
+    /// Every obligation of dispatch_warm_layer_scoped_currentness_unchecked_v1
+    /// applies, including permanent retirement and correct mixed-bank owner,
+    /// kernel, page and generation association. No device/resource allocation,
+    /// mapping, reset, queue recreation, policy change or external access may interleave with
+    /// this exclusive closed call. Host metadata/output Vec allocation remains
+    /// allowed as in the existing path. Counts grant no identity or reuse authority.
+    /// Any refusal or unwind quarantines all owners; no fallback or retry.
+    pub unsafe fn dispatch_warm_layer_scoped_census_unchecked_v1(
+        &mut self,
+        prefixes: [&mut Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6; 2],
+        pair: &mut Gfx950EngineeringPeerRetainedGuardedMlpPairV1,
+        prefix_inputs: [Gfx950EngineeringPeerScopedPrefixInputsV1<'_>; 2],
+        mlp_inputs: &Gfx950EngineeringPeerGuardedMlpInputsV1<'_>,
+        expected_owner_counts: [usize; 2],
+        timeout_ms: u32,
+    ) -> Result<Gfx950EngineeringPeerScopedCensusWarmLayerObservationV1> {
+        retained::scoped_layer::run_census(
+            self,
+            prefixes,
+            pair,
+            prefix_inputs,
+            mlp_inputs.private_inputs(),
+            expected_owner_counts,
+            timeout_ms,
+        )
+    }
 }

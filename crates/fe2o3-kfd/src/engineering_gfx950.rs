@@ -73,6 +73,8 @@ pub use peer::{
     Gfx950EngineeringPeerProjectionResidualMlpTilesRoundV1,
     Gfx950EngineeringPeerRetainedGuardedMlpPairV1,
     Gfx950EngineeringPeerScopedBankRearmObservationV1,
+    Gfx950EngineeringPeerScopedCapacityCensusObservationV1,
+    Gfx950EngineeringPeerScopedCensusWarmLayerObservationV1,
     Gfx950EngineeringPeerScopedCurrentnessCountsV1, Gfx950EngineeringPeerScopedPrefixInputsV1,
     Gfx950EngineeringPeerScopedWarmLayerObservationV1, Gfx950EngineeringPeerStateBankEntryV1,
     Gfx950EngineeringPeerStateBankSnapshotV1, Gfx950EngineeringPeerUnboundGuardedMlpPairV1,

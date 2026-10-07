@@ -51,6 +51,8 @@ pub use combined_mlp_state_v1::paired::{
     Gfx950EngineeringPeerGuardedMlpObservationV1, Gfx950EngineeringPeerGuardedMlpRankInputsV1,
     Gfx950EngineeringPeerRetainedGuardedMlpPairV1,
     Gfx950EngineeringPeerScopedBankRearmObservationV1,
+    Gfx950EngineeringPeerScopedCapacityCensusObservationV1,
+    Gfx950EngineeringPeerScopedCensusWarmLayerObservationV1,
     Gfx950EngineeringPeerScopedCurrentnessCountsV1, Gfx950EngineeringPeerScopedPrefixInputsV1,
     Gfx950EngineeringPeerScopedWarmLayerObservationV1,
     Gfx950EngineeringPeerUnboundGuardedMlpPairV1,

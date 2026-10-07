@@ -26,6 +26,8 @@ pub(super) use retained::{RetainedPair, UnboundPair, rearm_pairs};
 #[path = "engineering_gfx950_peer_combined_mlp_paired_facade_v1.rs"]
 mod facade;
 pub use retained::scoped_layer::{
+    Gfx950EngineeringPeerScopedCapacityCensusObservationV1,
+    Gfx950EngineeringPeerScopedCensusWarmLayerObservationV1,
     Gfx950EngineeringPeerScopedCurrentnessCountsV1, Gfx950EngineeringPeerScopedPrefixInputsV1,
     Gfx950EngineeringPeerScopedWarmLayerObservationV1,
 };
