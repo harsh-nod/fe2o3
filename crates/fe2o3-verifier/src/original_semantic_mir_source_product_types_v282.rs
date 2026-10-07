@@ -15,11 +15,23 @@ const MAX_COMPONENTS: usize = 1 << 20;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in super::super) enum Atom {
     Scalar(ScalarV30),
-    Pointer { mutable: bool },
-    Slice { metadata_bits: u32, mutable: bool },
+    Pointer {
+        mutable: bool,
+        reference: bool,
+    },
+    Slice {
+        metadata_bits: u32,
+        mutable: bool,
+        reference: bool,
+    },
     ExecutionAggregate(ExecutionRole),
-    ExecutionReference { role: ExecutionRole, mutable: bool },
-    DescriptorReference { mutable: bool },
+    ExecutionReference {
+        role: ExecutionRole,
+        mutable: bool,
+    },
+    DescriptorReference {
+        mutable: bool,
+    },
     Enum,
 }
 
@@ -180,13 +192,14 @@ impl SourceProductTypesV282 {
             .map_err(|_| out.error())?;
             match atom {
                 Atom::Scalar(scalar) => write!(out, "Scalar({}int)", scalar.width()),
-                Atom::Pointer { mutable } => write!(out, "Pointer {{ mutable: {mutable} }}"),
+                Atom::Pointer { mutable, reference } => write!(out, "Pointer {{ mutable: {mutable}, reference: {reference} }}"),
                 Atom::Slice {
                     metadata_bits,
                     mutable,
+                    reference,
                 } => write!(
                     out,
-                    "Slice {{ metadata_bits: {metadata_bits}int, mutable: {mutable} }}"
+                    "Slice {{ metadata_bits: {metadata_bits}int, mutable: {mutable}, reference: {reference} }}"
                 ),
                 Atom::ExecutionAggregate(role) => write!(
                     out,
@@ -296,6 +309,7 @@ impl SourceProductTypesV282 {
                             .get(pointer.pointee().index() as usize)
                             .ok_or_else(mismatch)?;
                         let mutable = pointer.mutability() == Mutability::Mutable;
+                        let reference = pointer.kind() == PointerKind::Reference;
                         if let Some(role) = execution_role(referent) {
                             if pointer.kind() == PointerKind::Reference
                                 && pointer.metadata() == PointerMetadata::None
@@ -321,7 +335,7 @@ impl SourceProductTypesV282 {
                                 PointerMetadata::None
                                     if declaration.layout().size_bytes() == Some(8) =>
                                 {
-                                    Kind::Atom(Atom::Pointer { mutable })
+                                    Kind::Atom(Atom::Pointer { mutable, reference })
                                 }
                                 PointerMetadata::SliceLength
                                     if matches!(referent.shape(), Shape::Slice { .. }) =>
@@ -333,6 +347,7 @@ impl SourceProductTypesV282 {
                                                 out,
                                             )?,
                                         mutable,
+                                        reference,
                                     })
                                 }
                                 _ => Kind::Unsupported,
@@ -700,6 +715,22 @@ impl<'a, 'view, 'source> SourceProductComponentV282<'a, 'view, 'source> {
 }
 
 impl<'view, 'source> SourceSlots<'view, 'source> {
+    pub(in super::super) fn product_type_supported_v282(
+        &self,
+        ty: TypeId,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<bool> {
+        self.with_source_query_v42(out, |out| {
+            out.budget.charge_work(2)?;
+            Ok(!self
+                .products
+                .roots
+                .get(ty.index() as usize)
+                .ok_or_else(mismatch)?
+                .is_empty())
+        })
+    }
+
     pub(in super::super) fn product_component_count_v282(
         &self,
         ty: TypeId,
