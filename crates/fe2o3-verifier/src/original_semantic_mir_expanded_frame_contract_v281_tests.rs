@@ -27,6 +27,7 @@ fn expanded_frame_binding_refusals_preserve_coordinates_and_prior_errors() {
         Error::SourceFrameBinding {
             source, value: actual, component: Some(1), domain: "product",
             phase: "source-component", reason: "retained endpoint",
+            reconstruction: None,
         } if source == site && actual == value
     ));
     assert!(matches!(

@@ -116,6 +116,23 @@ impl MixedOptimizerRefinementSubjectV26 {
     }
 }
 
+/// Fixed-size refusal coordinates, never a value equality or proof receipt.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct MixedOptimizerReconstructionRefusalV285 {
+    pub phase: &'static str,
+    pub original: usize,
+    pub coordinate: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
+    pub type_class: &'static str,
+    pub scalar: Option<fe2o3_kernel_ir::ScalarType>,
+    pub descendant_count: Option<usize>,
+    pub first_descendant: Option<fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1>,
+    pub target_function: Option<fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1>,
+    pub target_range: Option<(usize, usize)>,
+    pub target_index: Option<usize>,
+    pub binary: Option<fe2o3_kernel_ir::BinaryOp>,
+}
+
 #[derive(Debug)]
 pub enum MixedOptimizerRefinementErrorV26 {
     Source(SourceError),
@@ -148,6 +165,11 @@ pub enum MixedOptimizerRefinementErrorV26 {
         /// Unchanged diagnostic from the refusing allocation or argument query.
         reason: &'static str,
     },
+    /// Innermost authenticated reconstruction refusal, before source wrapping.
+    SourceReconstruction {
+        facts: MixedOptimizerReconstructionRefusalV285,
+        reason: &'static str,
+    },
     /// Refusal of a necessary original-frame binding, not a proof result.
     SourceFrameBinding {
         /// Original root, instance, semantic function and local ordinals.
@@ -162,6 +184,8 @@ pub enum MixedOptimizerRefinementErrorV26 {
         phase: &'static str,
         /// Unchanged diagnostic from the refusing binding query.
         reason: &'static str,
+        /// First inner mapping refusal, when the endpoint was admitted.
+        reconstruction: Option<MixedOptimizerReconstructionRefusalV285>,
     },
     /// A refused retained call operand, without changing its admission result.
     SourceCallOperand {
@@ -242,6 +266,16 @@ impl Error {
                 domain,
                 phase,
                 reason,
+                reconstruction: None,
+            },
+            Self::SourceReconstruction { facts, reason } => Self::SourceFrameBinding {
+                source,
+                value,
+                component,
+                domain,
+                phase,
+                reason,
+                reconstruction: Some(facts),
             },
             // Resource/custody failures and earlier coordinates keep precedence.
             error => error,
@@ -308,6 +342,7 @@ impl std::error::Error for Error {
             Self::Execution(error) => Some(error),
             Self::Statement(_)
             | Self::Receipt(_)
+            | Self::SourceReconstruction { .. }
             | Self::SourceFrameBinding { .. }
             | Self::SourceStatement { .. }
             | Self::SourceDescriptor { .. }

@@ -13,7 +13,11 @@ const LIMIT: usize = 100_000_000;
 
 fn refusal(result: Result<usize>) -> Result<()> {
     match result {
-        Err(Error::Statement(_) | Error::Source(SourceError::Binding(_))) => Ok(()),
+        Err(
+            Error::Statement(_)
+            | Error::Source(SourceError::Binding(_))
+            | Error::SourceReconstruction { .. },
+        ) => Ok(()),
         Err(error) => Err(error),
         Ok(_) => panic!("unsupported scalar endpoint was admitted"),
     }
@@ -165,6 +169,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     #[allow(dead_code)]
     #[repr(C)]
     struct RefusalFactsFields {
+        phase: &'static str,
         original: usize,
         coordinate: Definition,
         type_class: &'static str,
@@ -177,7 +182,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         binary: Option<fe2o3_kernel_ir::BinaryOp>,
     }
     let refusal_trace_headers = 6 * size_of::<RefusalFactsFields>()
-        + 2048
+        + 2 * size_of::<Error>()
         + 16 * size_of::<usize>()
         + 4 * size_of::<&()>()
         + 2 * size_of::<u8>();
