@@ -379,7 +379,27 @@ fn partial_prefix_unavailable_physical_local_keeps_logical_component_demands() {
                             &fe2o3_mir_model::SsaVariableIdV1::new(5)
                         ));
                         assert!(!slots.has_original_object(frame.root, frame.instance, 4, out)?);
-                        assert!(slots.has_original_object(frame.root, frame.instance, 5, out)?);
+                        // Scalar storage uses LegacyLocal backing, not a V40
+                        // object-lifetime row with an original generation.
+                        assert!(!slots.has_original_object(frame.root, frame.instance, 5, out)?);
+                        let backing = *slots.frame_by_source(
+                            frame.root, frame.instance, 5, None, out,
+                        )?;
+                        assert_eq!((backing.root(), backing.instance()), (frame.root, frame.instance));
+                        assert_eq!(backing.function(), frame.function);
+                        assert_eq!(backing.local(), 5);
+                        assert_eq!(backing.semantic_type(), function.locals()[5].ty());
+                        assert_eq!(backing.semantic_type(), SemanticTypeIdV1::from_index(0));
+                        assert_eq!((backing.bytes(), backing.alignment()), (4, 4));
+                        assert_eq!(backing.source_generation(), None);
+                        assert_eq!(backing.layout(), None);
+                        let inventory = slots.correspondence(out)?.inventory(out.budget)?;
+                        let mut allocations = inventory.operations().iter().filter(|row| {
+                            row.coordinate == backing.allocation()
+                        });
+                        let allocation = allocations.next().unwrap();
+                        assert!(allocations.next().is_none());
+                        assert!(matches!(allocation.operation.kind, fe2o3_kernel_ir::OperationKind::Alloca { .. }));
                         assert_eq!(slots.aggregate_leaf_count(function.locals()[4].ty(), out)?, Some(2));
                         let query = frames.partial_prefix_v296(
                             frame.root,
@@ -394,6 +414,9 @@ fn partial_prefix_unavailable_physical_local_keeps_logical_component_demands() {
                                 assert!(matches!(query.require_complete_local_coverage(out), Err(Error::Statement(
                                     "partial prefix has unavailable all-local liveness; complete frame admission refused"))));
                             }
+                            assert!(!slots.has_original_object(frame.root, frame.instance, 5, out)?);
+                            assert_eq!(*slots.frame_by_source(frame.root, frame.instance, 5, None, out)?, backing);
+                            assert_eq!(*slots.frame_by_allocation(backing.allocation(), out)?, backing);
                             assert_eq!(query.locals[5].scalar, ScalarDemand::Unavailable);
                             assert_eq!(query.locals[5].current, None);
                             assert_eq!(query.locals[5].domain, ComponentDomainV283::None);
