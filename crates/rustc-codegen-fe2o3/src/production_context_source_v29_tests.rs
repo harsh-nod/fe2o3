@@ -17,6 +17,7 @@ use std::fmt::Write as _;
 
 const ARGS: &str = "FE2O3_TEST_CONTEXT_SOURCE_ARGS_V29";
 const RESULT: &str = "FE2O3_TEST_CONTEXT_SOURCE_RESULT_V29";
+const EXPANDED_MODEL_EXPORT_V282: &str = "FE2O3_TEST_EXPANDED_MODEL_EXPORT_V282";
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::context_source_child";
 const REPORT_BYTES: usize = 2 * 1024 * 1024;
 
@@ -810,6 +811,10 @@ fn run_actual_sources<T: Serialize + serde::de::DeserializeOwned + std::fmt::Deb
                     .args(["--exact", child, "--ignored", "--nocapture"])
                     .env(ARGS, &request)
                     .env(RESULT, &response)
+                    .envs(
+                        env::var_os(EXPANDED_MODEL_EXPORT_V282)
+                            .map(|directory| (EXPANDED_MODEL_EXPORT_V282, directory)),
+                    )
                     .env("FE2O3_CONTEXT_PROTOCOL_SOURCE", &source_path)
                     .env("CARGO_MANIFEST_DIR", &package_dir)
                     .env("CARGO_PKG_NAME", package_name)
