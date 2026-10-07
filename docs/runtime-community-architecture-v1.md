@@ -507,18 +507,21 @@ unmet deployment/hardware gates are recorded in
 The remaining milestone requirements include functional work, not just access
 to hardware or a CI runner:
 
-- **A1:** connect the distinct four-recipe native registry to the shared scoped
-  driver without refunding its common DATA debit at per-member readback, then add
-  rolling admission and qualify high-depth resource pressure and
+- **A1:** the scoped registry and ordered 1,024-recipe Arena now retain their
+  common DATA debit through per-member readback until common destruction.
+  Remaining work includes rolling admission and qualification of high-depth
+  resource pressure and
   mixed-duration/out-of-order execution through genuine admitted kernels.
-  The current closed fill and low-level ordered cohort do not establish those
-  workloads. Completion still uses the caller's wake source and busy-poll
+  The closed fill, ordered cohort and Arena CPU controls do not establish those
+  GPU workloads. Completion still uses the caller's wake source and busy-poll
   signals: `AmdBusyCompletionSignalV1` has zero event/mailbox fields, and KFD
   queue-exception events are not ordinary completion wakeups. A hardware-event
   wake path needs its own retained signal/event ownership and lost-wakeup
   checks. CPU executor fairness is not GPU progress or latency evidence.
 - **A2:** bind an actual predecessor-produced version into a successor
-  generated kernel's admitted arguments and effects. Ordinary HostStaging and
+  generated kernel's admitted arguments and effects. Retaining the original
+  detached DATA owner is implemented, but does not admit such a consumer.
+  Ordinary HostStaging and
   copy consumption are only one explicit host-mediated edge. Repeated
   multistage generated dataflow, cross-device DAG scheduling, measured
   compute/copy overlap and complete executable DAG/settlement refinement remain

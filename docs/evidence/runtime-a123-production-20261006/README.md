@@ -13,8 +13,9 @@ scope; reproducing the maintained campaigns remains the public verification
 path. Future CI artifacts have finite retention and must not be described as
 durable public evidence without a separate published archive.
 
-`results.json` indexes every retained CPU command status and its raw log hash,
-including unsuccessful batches. Nested exact-test child summaries are retained,
+`results.json` indexes the earlier CPU command statuses and raw log hashes,
+including unsuccessful batches; later campaign sections retain their separate
+archive and source identities. Nested exact-test child summaries are retained,
 so those counts must not be summed as distinct tests. `artifacts.json` records
 the private archives' byte lengths and digests. These indexes are inert
 provenance records, not authenticated proof or launch authority.
@@ -704,8 +705,9 @@ The current source adds distinct four-operation, two-cycle four-operation and
 sixteen-operation generated registries. Original source carriers and resource
 credits remain owned until the common native owner is closed and every required
 result is decoded. These profiles do not establish independent GPU ordering,
-rolling admission or thousands of published dispatches. The separate developing
-1,024-operation arena and production-runner controller are not in this tree.
+rolling admission or thousands of published dispatches. The later ordered
+1,024-operation arena is recorded below; the production-runner controller remains
+separately staged and unqualified.
 
 Snapshot 74 passed 2,545 runtime tests (34 ignored), 2,082 KFD tests (three
 ignored), and 378 host tests (three ignored). Its strict lint failures remain in
@@ -747,18 +749,77 @@ body, assuming the original graph-access check and native-disposal premise. It
 does not prove whole Context execution or GPU settlement. The maintained
 qualifier requires three whole-root positive proofs and 23 calibrated logical
 negatives, with original source/signature/tool checks. Development results and
-source controls are retained; a new signed-candidate replay is still required.
-The earlier eight-family replay on `727f32888` does not qualify these edits.
+source controls are retained. The signed `9113dc812` replay below subsequently
+passed this ninth family. The earlier eight-family replay on `727f32888` does
+not qualify these edits, and neither replay qualifies later source changes.
+
+## Signed Nine-Family Replay And Ordered Arena
+
+`candidate-nine79-01-evidence.tar.gz` contains the completed replay of signed
+commit `9113dc8124f9e0c55c1d5a8af9b31ce917a804e6` (142,516,895 bytes,
+SHA-256 `6447a6a7ff8995eb9b946ef47b84d24080fee2507d791668272ae170f36b417e`).
+The generic gate passed 64 direct positives, 694 fixed negatives, and all seven
+executable mutation families. Live validation passed six positives and 108
+negatives; planner composition passed two positives and eleven negatives.
+The seven production component families each passed three positive brackets;
+their negative counts were 34/22/12/12/22/11/25 in prepare/preflight/bind/roster/
+producer-preflight/routing/credit order. The graph-version ledger passed three
+13-obligation positives and eighteen mutations. Reservation retirement passed
+three 13-obligation positives and 23 mutations.
+
+Independent archive readback reopened 7,313 raw files and verified all 15,423
+signed source files, the commit signature, and the reachable Git objects. Root
+closure recorded 517 absent original process groups and 2,275 process
+occurrences. The initial raw audit's incidental-tool-directory refusal and its
+narrowly scoped successor are retained; incidental measurements are not solver
+diagnostics. Archive readback is not a second solver run. These results remain
+component-scoped, with the existing identity, standard-library, native-disposal
+and OS/hardware assumptions; they do not prove complete runtime execution.
+
+The ordered Arena source now connects one common native CODE/kernarg/DATA owner
+to 1,024 distinct, single-use scoped member receipts and copied-result observers.
+The common DATA debit and original source loans remain retained until actual
+common destruction and Context settlement. A copied member result is not scalar
+completion or a release of its native partition. The pre-root metadata aggregate
+also disposes result cells before releasing their shared payload debit on
+admission refusal. This profile retains `WaitForPrior`; independent-order and
+rolling-admission successors are not qualified by these results.
+
+`arena86-88-cpu-evidence.tar.gz` (4,784,442 bytes, SHA-256
+`9e6c5d65b9dbc810cfa47813ae9e532e92e3e77889681306c1a1ffd83539394a`)
+retains three failed development stages and all fourteen passing snapshot-88
+stages. Snapshot 88 passed fresh all-target checks, maintained strict runtime/KFD
+Clippy, 2,579 runtime tests (34 ignored), 2,101 KFD tests (three ignored), 379 host
+tests (three ignored), and all three packages' doctests. The focused checks
+include both pre-root ownership controls and the detached-owner controls. All
+seventeen original stage groups are reaped and absent, and source inventories
+match at closing. Its source inventory SHA-256 is
+`3e0345ad76631967ede75ed7b861bb8682c4ff2d54e557ea27fe3a2af1c31a8a`.
+The independent local archive readback is retained separately as
+`arena88-local-readback.tar.gz` (SHA-256
+`40833175c6c7d7318fa6f86146ee24890c528c9a1cae41712f44f1c2d4375694`).
+
+The detached-owner component first passed snapshot 82's full runtime suite and
+docs, retaining the actual returned lower DATA owner before validation or
+disposal. It does not admit a successor generated consumer. The lower cold-device
+component separately passed snapshot 83's 2,094 KFD tests and fifteen focused
+controls: only an original no-VM device with a definite reset observation can
+produce its opaque reset owner. Ambiguous failure retains the refusal owner.
+The runtime recovery join is a later change that requires its own qualification,
+not a result of the lower-only tests. Diagnostic copy classification does not grant
+machine acceptance. These newer components require an integrated replay; the
+signed nine-family source does not qualify them by inheritance.
 
 ## Open Exit Gates
 
 - A1 still needs genuine protected mixed-duration/high-depth GPU qualification
   of the final async path, not only CPU ownership and executor tests. The native
-  registry fixtures include sixteen fill launches; they do not measure thousands of
-  GPU operations, wakeup overhead or aggregate queue/signal/kernarg retention.
+  registry fixtures include sixteen fill launches and the ordered Arena's CPU
+  controls cover 1,024 slots; neither measures thousands of GPU operations,
+  wakeup overhead or aggregate queue/signal/kernarg retention on hardware.
   The owner-array ceiling is not a whole-process memory bound. The generated
-  registry profile has sixteen fixed single-use slots. Thousands of host-retained
-  requests therefore do not establish thousands of GPU-published dispatches;
+  registry and Arena profiles have finite single-use slots. Thousands of
+  host-retained requests do not establish thousands of GPU-published dispatches;
   variable fixture extents also do not establish measured mixed-duration overlap.
 - A2's shared borrowed-carrier DAG is implemented, but its generated arguments
   are frozen before admission and excluded from the ordinary allocation-version

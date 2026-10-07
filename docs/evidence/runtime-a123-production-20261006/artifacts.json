@@ -1,6 +1,48 @@
 {
   "artifacts": [
     {
+      "bytes": 142516895,
+      "name": "candidate-nine79-01-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "6447a6a7ff8995eb9b946ef47b84d24080fee2507d791668272ae170f36b417e"
+    },
+    {
+      "bytes": 941802,
+      "name": "native-snapshot82-detached-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "c2cfb776fea9a5e5303fed78477187bd39c1ea7df6bc86a788bf12f52b7dc738"
+    },
+    {
+      "bytes": 905241,
+      "name": "native-snapshot83-cold-device-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "72f2fe90d993ec2cf3341ab485d68bbe60b5815c99ece6b5fa6130fcde56ee43"
+    },
+    {
+      "bytes": 3928217,
+      "name": "native-copy-classifier-cpu84-evidence-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "c9a305b654ef241bc53d047b250260bd9e9611d22a1d79f96977b6cfb8d73dcc"
+    },
+    {
+      "bytes": 1176958,
+      "name": "native-snapshot85-readiness-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "f3bbd7b06a5161e1c07836b83987aee9b916e6cb863b0d623bf03524f6275b4f"
+    },
+    {
+      "bytes": 4784442,
+      "name": "arena86-88-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "9e6c5d65b9dbc810cfa47813ae9e532e92e3e77889681306c1a1ffd83539394a"
+    },
+    {
       "bytes": 8719658,
       "name": "a2-final-interrupted-before-modularization.tar.gz",
       "publicly_retrievable": false,
