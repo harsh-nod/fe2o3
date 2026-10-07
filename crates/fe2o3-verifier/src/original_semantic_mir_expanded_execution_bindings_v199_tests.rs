@@ -437,13 +437,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         .unwrap().1
         .split_once("proof fn invocation_context_marker_aggregate_well_formed_v260(")
         .unwrap().0;
-    for hidden in [
-        "invocation_source_logical_write_v38",
-        "invocation_source_execution_lease_current_v170",
-        "invocation_source_byte_refused_v36",
-    ] {
-        assert!(install_body.contains(&format!("hide({hidden});")));
-    }
+    assert!(!install_body.split_once("\n{\n").unwrap().1.contains("hide("));
     assert_eq!(install_body.matches(
         "invocation_source_logical_write_aggregates_v268(source.logical, destination);"
     ).count(), 1);
@@ -459,8 +453,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         .split_once("proof fn invocation_source_context_issue_frame_v262(")
         .unwrap().0;
     for body in [marker_body, checked_shape_body] {
-        assert!(body.contains("hide(invocation_source_aggregate_well_formed_v42);"));
-        assert!(body.contains("hide(invocation_source_byte_value_typed_v36);"));
+        assert!(!body.split_once("\n{\n").unwrap().1.contains("hide("));
         assert!(body.contains("reveal(invocation_source_aggregate_well_formed_v42);"));
     }
     assert!(marker_body.contains("reveal(invocation_source_byte_value_typed_v36);"));
@@ -469,7 +462,6 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     ));
     assert!(marker_body.contains("assert(0 <= ordinal < 5 && path == seq![ordinal]);"));
     assert!(marker_body.contains("assert(leaves[path] == MemoryValueV30::Unit);"));
-    assert!(checked_shape_body.contains("hide(memory_value_modulus_v30);"));
     assert!(checked_shape_body.contains("assert(seq![0int] != seq![1int]);"));
     assert_eq!(checked_shape_body.matches(
         "invocation_checked_add_values_typed_v268(left, right);"
@@ -546,7 +538,10 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         inputs("invocation_source_checked_add_local_step_v266"),
         "source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),\n        0 <= left_local < source.machine.values.len(), 0 <= right_local < source.machine.values.len(),\n        source.machine.values[left_local] == MemoryValueV30::Scalar(left),\n        source.machine.values[right_local] == MemoryValueV30::Scalar(right),\n        0 <= left < 4294967296, 0 <= right < 4294967296,\n        invocation_source_aggregate_leaf_count_v42(source_type) == 2,\n        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],\n        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],\n        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,\n        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,\n"
     );
-    let local_step = source.split_once("proof fn invocation_source_checked_add_local_step_v266(").unwrap().1;
+    let local_step = source
+        .split_once("proof fn invocation_source_checked_add_local_step_v266(").unwrap().1
+        .split("\nproof fn ").next().unwrap();
+    assert!(!local_step.split_once("\n{\n").unwrap().1.contains("hide("));
     assert!(local_step.contains("let after = invocation_source_byte_step_v36(source,\n        InvocationSourceByteEventV36::Checked {"));
     assert_eq!(local_step.matches("invocation_source_local_evaluates_v265(source,").count(), 2);
     assert_eq!(local_step.matches("invocation_source_checked_add_reconstruction_step_v259(source,").count(), 1);
