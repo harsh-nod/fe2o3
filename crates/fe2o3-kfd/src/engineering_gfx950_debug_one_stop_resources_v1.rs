@@ -175,3 +175,17 @@ pub(super) fn completion(
         _ => Err(E::Contract("one-stop unexpected completion value")),
     }
 }
+
+/// Polling only: a completed signal and lagging read frontier are incomplete
+/// joint evidence. Slot release need not coincide with task completion. Keep
+/// strict retirement separate; this never creates a new terminal acceptance.
+pub(super) fn completion_poll(
+    counters: (u64, u64),
+    signal: (i64, i64),
+    exception: i64,
+) -> Result<bool, E> {
+    if counters == (1, 0) && signal == (fe2o3_aql::AMD_SIGNAL_KIND_USER_V1, 0) && exception == 0 {
+        return Ok(false);
+    }
+    completion(counters, signal, exception)
+}

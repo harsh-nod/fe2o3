@@ -249,7 +249,7 @@ pub(super) fn execute(
                 let exception =
                     Backend::observe_i64_acquire(&mut c.internal[CONTROL].mapping, PAGE_BYTES, 256)
                         .map_err(|e| E::Native(format!("{e:?}")))?;
-                let done = resources::completion(counters, signal, exception)?;
+                let done = resources::completion_poll(counters, signal, exception)?;
                 // Positive observations after the original deadline still refuse.
                 check_deadline(*deadline)?;
                 if done {

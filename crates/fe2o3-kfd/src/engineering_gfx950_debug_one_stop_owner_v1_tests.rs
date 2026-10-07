@@ -57,3 +57,74 @@ fn checkpoint_is_small_fixed_repr_c_with_distinct_signal_fields() {
     assert_eq!(size_of::<[u8; 64]>(), 64);
     assert_eq!(size_of::<[u8; 264]>(), 264);
 }
+#[test]
+fn completion_poll_retained_signal_frontier_lag_is_pending_not_retired() {
+    let kind = fe2o3_aql::AMD_SIGNAL_KIND_USER_V1;
+    assert!(!resources::completion_poll((1, 0), (kind, 0), 0).unwrap());
+    assert!(matches!(
+        resources::completion((1, 0), (kind, 0), 0),
+        Err(E::Contract(
+            "one-stop completed signal without read frontier one"
+        ))
+    ));
+    assert!(resources::completion_poll((1, 1), (kind, 0), 0).unwrap());
+    assert!(resources::completion((1, 1), (kind, 0), 0).unwrap());
+}
+
+#[test]
+fn completion_poll_both_observation_orders_need_joint_terminal_tuple() {
+    let kind = fe2o3_aql::AMD_SIGNAL_KIND_USER_V1;
+    for observations in [
+        [
+            ((1, 0), (kind, 1)),
+            ((1, 0), (kind, 0)),
+            ((1, 1), (kind, 0)),
+        ],
+        [
+            ((1, 0), (kind, 1)),
+            ((1, 1), (kind, 1)),
+            ((1, 1), (kind, 0)),
+        ],
+    ] {
+        let outcomes = observations
+            .map(|(counters, signal)| resources::completion_poll(counters, signal, 0).unwrap());
+        assert_eq!(outcomes, [false, false, true]);
+    }
+}
+
+#[test]
+fn completion_poll_changes_only_one_tuple_and_never_adds_terminal_acceptance() {
+    let kind = fe2o3_aql::AMD_SIGNAL_KIND_USER_V1;
+    let mut changed = 0;
+    for write in [0, 1, 2, u64::MAX] {
+        for read in [0, 1, 2, u64::MAX] {
+            for signal_kind in [-1, 0, kind, i64::MAX] {
+                for signal_value in [-1, 0, 1, 2, i64::MAX] {
+                    for exception in [-1, 0, 1, i64::MAX] {
+                        let counters = (write, read);
+                        let signal = (signal_kind, signal_value);
+                        let strict = resources::completion(counters, signal, exception);
+                        let polled = resources::completion_poll(counters, signal, exception);
+                        if counters == (1, 0) && signal == (kind, 0) && exception == 0 {
+                            assert!(matches!(
+                                strict,
+                                Err(E::Contract(
+                                    "one-stop completed signal without read frontier one"
+                                ))
+                            ));
+                            assert!(matches!(polled, Ok(false)));
+                            changed += 1;
+                        } else {
+                            match (strict, polled) {
+                                (Ok(a), Ok(b)) => assert_eq!(a, b),
+                                (Err(E::Contract(a)), Err(E::Contract(b))) => assert_eq!(a, b),
+                                other => panic!("unexpected predicate difference: {other:?}"),
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(changed, 1);
+}
