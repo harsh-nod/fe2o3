@@ -546,6 +546,48 @@ fn diagnostic_complete_thread_write_models_export_without_execution_v91() {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
+#[ignore = "compares full nominal generation with a retained pre-extraction binary export; no proof execution"]
+fn nominal_frame_extraction_preserves_complete_generated_bytes_v281() {
+    use std::io::Read;
+    let directory = std::path::PathBuf::from(
+        std::env::var_os("FE2O3_NOMINAL_FRAME_BASELINE_V281")
+            .expect("authenticated pre-extraction export directory"),
+    );
+    assert!(directory.is_absolute());
+    for (disjoint, copied, label) in [
+        (false, false, "plain_move"),
+        (false, true, "plain_copy"),
+        (true, false, "disjoint_move"),
+    ] {
+        let path = directory.join(format!("{label}.rs"));
+        let before = std::fs::symlink_metadata(&path).unwrap();
+        assert!(
+            before.file_type().is_file() && before.len() > 0 && before.len() <= 16 * 1024 * 1024
+        );
+        let mut baseline = Vec::new();
+        std::fs::File::open(&path)
+            .unwrap()
+            .take(16 * 1024 * 1024 + 1)
+            .read_to_end(&mut baseline)
+            .unwrap();
+        assert_eq!(baseline.len() as u64, before.len());
+        let mut observed = false;
+        let result = run_write_model(LIMIT, LIMIT, disjoint, copied, |text| {
+            assert_eq!(
+                text.as_bytes(),
+                baseline.as_slice(),
+                "full nominal model {label}"
+            );
+            observed = true;
+        });
+        result.0.unwrap();
+        assert!(observed);
+        assert_eq!(result.2, 37);
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
 #[ignore = "requires the installed root-owned pinned functional-refinement runtime"]
 fn protected_original_thread_write_preserves_logical_extent_value_and_bool() {
     use crate::{CanonicalGeneratedVerusProofInputV3, FunctionalRefinementVerusRuntimeLeaseV1};
