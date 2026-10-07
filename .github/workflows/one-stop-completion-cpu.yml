@@ -1,0 +1,44 @@
+name: One-stop completion CPU regression
+
+on:
+  merge_group:
+    types: [checks_requested]
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: completion-cpu-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-source-poll:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install repository-pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Check extraction and coverage guards
+        run: python3 scripts/tests/one_stop_completion_cpu.py
+      - name: Run eleven exact-source mocked-loop CPU tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          diagnostics="$(mktemp -d "${RUNNER_TEMP}/fe2o3-completion-cpu.XXXXXXXX")"
+          printf 'COMPLETION_CPU_DIAGNOSTICS=%s\n' "${diagnostics}" >> "${GITHUB_ENV}"
+          python3 scripts/one_stop_completion_cpu.py --output "${diagnostics}"
+      - name: Retain bounded CPU diagnostics on failure
+        if: ${{ failure() && env.COMPLETION_CPU_DIAGNOSTICS != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: completion-cpu-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.COMPLETION_CPU_DIAGNOSTICS }}
+          if-no-files-found: error
+          retention-days: 7
