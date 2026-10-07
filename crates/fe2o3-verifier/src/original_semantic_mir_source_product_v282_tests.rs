@@ -315,6 +315,34 @@ fn original_product_schema_pointer_kind_is_not_inferred_from_mutability_or_layou
 }
 
 #[test]
+fn original_product_copy_query_uses_original_pointer_kind_and_keeps_its_account() {
+    run(LIMIT, LIMIT, |r, slots, out| {
+        let floor = out.budget.storage();
+        let ledger = out.budget.work_ledger_identity_v1();
+        let before = out.budget.work();
+        for (ty, expected) in [
+            (r.word, true),
+            (r.pointer, true),
+            (r.mutable, true),
+            (r.reference, true),
+            (r.mutable_reference, false),
+            (r.outer, true),
+            (r.empty, true),
+            (r.zero_array, true),
+        ] {
+            assert!(slots.product_type_supported_v282(ty, out)?);
+            assert_eq!(slots.product_type_copyable_v282(ty, out)?, expected);
+        }
+        assert!(out.budget.work() > before);
+        assert_eq!(out.budget.storage(), floor);
+        assert!(ledger == out.budget.work_ledger_identity_v1());
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
 fn original_product_schema_nested_ranges_check_indices_and_exact_result_types() {
     run(LIMIT, LIMIT, |r, slots, out| {
         for (offset, from_end, ordinal) in
@@ -482,6 +510,7 @@ fn original_product_schema_nominal_execution_snapshots_are_opaque_not_layout_fie
                 {
                     let id = TypeId::from_index(index as u32);
                     assert!(slots.product_type_supported_v282(id, out)?);
+                    assert!(!slots.product_type_copyable_v282(id, out)?);
                     assert!(slots.aggregate_leaf_count(id, out)?.unwrap() > 1);
                     let atom = slots.product_component_v282(id, 0, out)?;
                     assert_eq!(atom.path(out)?, &[]);
@@ -512,6 +541,7 @@ fn original_product_schema_nominal_execution_snapshots_are_opaque_not_layout_fie
                 ) {
                     let id = TypeId::from_index(index as u32);
                     assert!(!slots.product_type_supported_v282(id, out)?);
+                    assert!(!slots.product_type_copyable_v282(id, out)?);
                     assert_eq!(slots.product_component_count_v282(id, out)?, None);
                     assert!(matches!(
                         slots.product_component_v282(id, 0, out),
@@ -732,6 +762,9 @@ fn original_product_schema_rejects_foreign_accounts_and_refunded_owner_floor() {
             assert!(accounting(
                 &slots.product_type_supported_v282(r.outer, out).unwrap_err()
             ));
+            assert!(accounting(
+                &slots.product_type_copyable_v282(r.outer, out).unwrap_err()
+            ));
             Err(error)
         });
         assert!(reached.get());
@@ -805,6 +838,7 @@ fn original_product_schema_equal_byte_owners_do_not_share_correspondence() {
                 ))
             ));
             assert_eq!(slots.product_component_count_v282(r.outer, out)?, Some(7));
+            assert!(slots.product_type_copyable_v282(r.outer, out)?);
             Ok(())
         })
         .0?;
@@ -821,6 +855,7 @@ fn original_product_schema_queries_preserve_account_and_complete_exact_budget() 
             let floor = out.budget.storage();
             let ledger = out.budget.work_ledger_identity_v1();
             assert_eq!(slots.product_component_count_v282(r.outer, out)?, Some(7));
+            assert!(slots.product_type_copyable_v282(r.outer, out)?);
             for ordinal in 0..7 {
                 let row = slots.product_component_v282(r.outer, ordinal, out)?;
                 row.path(out)?;
