@@ -48,6 +48,8 @@ pub(super) struct Call {
     pub caller: usize,
     pub block: usize,
     pub child: Option<usize>,
+    // Authenticated instance activity, not merely the caller's SSA reachability.
+    pub child_active: bool,
     pub kind: CallKind,
     pub reachable: bool,
     pub continuation: Option<usize>,
@@ -95,7 +97,7 @@ fn parent_link(
     calls: &[Call],
     budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>,
 ) -> Result<(Option<usize>, usize)> {
-    budget.charge_work(4)?;
+    budget.charge_work(5)?;
     if instance >= scope.instances.len() {
         return Err(mismatch());
     }
@@ -106,7 +108,7 @@ fn parent_link(
                 .get(add(scope.instances.start, parent)?)
                 .ok_or_else(mismatch)?;
             budget.charge_work(
-                (usize::BITS - parent_row.calls.len().max(1).leading_zeros()) as usize + 6,
+                (usize::BITS - parent_row.calls.len().max(1).leading_zeros()) as usize + 7,
             )?;
             if parent_row.root != root || parent_row.instance != parent {
                 return Err(mismatch());
@@ -119,6 +121,7 @@ fn parent_link(
             if call.root != root
                 || call.caller != parent
                 || call.child != Some(instance)
+                || call.child_active != row.active
                 || (row.active
                     && (!parent_row.active
                         || !call.reachable
@@ -207,7 +210,12 @@ impl<'plan, 'slots, 'view, 'source> FramePlan<'plan, 'slots, 'view, 'source> {
                     }
                     for call in plan.calls(root, instance, out)? {
                         out.budget.charge_work(1)?;
-                        if call.ssa_reachable && call.child.is_some() {
+                        if call.ssa_reachable
+                            && match call.child {
+                                Some(child) => plan.instance(root, child, out)?.active,
+                                None => false,
+                            }
+                        {
                             // Continuation demands cannot exceed the original local roster.
                             demands = add(demands, row.locals.len())?;
                         }
@@ -308,6 +316,10 @@ impl<'plan, 'slots, 'view, 'source> FramePlan<'plan, 'slots, 'view, 'source> {
                     for site in plan.calls(root, instance, out)? {
                         out.budget.charge_work(2)?;
                         let first = result.demands.len();
+                        let child_active = match site.child {
+                            Some(child) => plan.instance(root, child, out)?.active,
+                            None => false,
+                        };
                         let continuation = match function.blocks()[site.block.index() as usize]
                             .terminator()
                             .kind()
@@ -318,7 +330,7 @@ impl<'plan, 'slots, 'view, 'source> FramePlan<'plan, 'slots, 'view, 'source> {
                             _ => None,
                         };
                         if let Some(boundaries) = &boundaries {
-                            if site.ssa_reachable && site.child.is_some() {
+                            if site.ssa_reachable && child_active {
                                 if site.kind != CallKind::Direct {
                                     return Err(Error::Statement(
                                         "expanded frame demands require an ordinary retained call continuation",
@@ -348,6 +360,7 @@ impl<'plan, 'slots, 'view, 'source> FramePlan<'plan, 'slots, 'view, 'source> {
                             caller: instance,
                             block: site.block.index() as usize,
                             child: site.child,
+                            child_active,
                             kind: site.kind,
                             reachable: site.ssa_reachable,
                             continuation,
