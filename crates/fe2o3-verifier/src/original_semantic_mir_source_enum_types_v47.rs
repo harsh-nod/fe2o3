@@ -96,6 +96,44 @@ fn variant<'a>(
     Ok(Some((row.discriminant(), row.fields().fields())))
 }
 
+// A product transports an existing complete enum snapshot. Its opaque atom
+// must use the same admitted variants and field model as that snapshot.
+pub(super) fn product_atom_v282(
+    types: &[Type],
+    ty: TypeId,
+    out: &mut Writer<'_, '_>,
+) -> Result<Option<bool>> {
+    out.budget.charge_work(2)?;
+    let Shape::Enum { variants, .. } = types.get(ty.index() as usize).ok_or_else(mismatch)?.shape()
+    else {
+        return Ok(None);
+    };
+    if variants.is_empty() {
+        return Ok(None);
+    }
+    let mut copyable = true;
+    for selected in 0..variants.len() {
+        out.budget.charge_work(1)?;
+        let Some((_, fields)) = variant(
+            types,
+            ty,
+            u32::try_from(selected).map_err(|_| Resource::Arithmetic)?,
+            out,
+        )?
+        else {
+            return Ok(None);
+        };
+        for ty in fields {
+            match field(types, *ty, out)? {
+                Some(EnumFieldV47::Reference { mutable: true, .. }) => copyable = false,
+                Some(_) => (),
+                None => return Ok(None),
+            }
+        }
+    }
+    Ok(Some(copyable))
+}
+
 impl SourceSlots<'_, '_> {
     pub(in super::super) fn logical_enum_variant_v47(
         &self,

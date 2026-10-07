@@ -354,7 +354,10 @@ impl SourceProductTypesV282 {
                             }
                         }
                     }
-                    Shape::Enum { .. } => Kind::Atom(Atom::Enum),
+                    Shape::Enum { .. } => match enum_types::product_atom_v282(types, ty, out)? {
+                        Some(_) => Kind::Atom(Atom::Enum),
+                        None => Kind::Unsupported,
+                    },
                     Shape::Unit if declaration.layout().size_bytes() == Some(0) => {
                         Kind::Atom(Atom::Scalar(ScalarV30::Unit))
                     }
@@ -715,6 +718,49 @@ impl<'a, 'view, 'source> SourceProductComponentV282<'a, 'view, 'source> {
 }
 
 impl<'view, 'source> SourceSlots<'view, 'source> {
+    pub(in super::super) fn product_type_copyable_v282(
+        &self,
+        ty: TypeId,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<bool> {
+        self.with_source_query_v42(out, |out| {
+            // SourceSlots retains the enum query headers in its protected floor.
+            let types = self
+                .relation
+                .source(out.budget)?
+                .source_semantic(out.budget)?
+                .types();
+            let range = self
+                .products
+                .roots
+                .get(ty.index() as usize)
+                .ok_or_else(mismatch)?;
+            if range.is_empty() {
+                return Ok(false);
+            }
+            for row in &self.products.components[range.clone()] {
+                out.budget.charge_work(2)?;
+                let copyable = match row.atom {
+                    Atom::Scalar(_) => true,
+                    Atom::Pointer { mutable, reference }
+                    | Atom::Slice {
+                        mutable, reference, ..
+                    } => !reference || !mutable,
+                    Atom::ExecutionReference { mutable, .. }
+                    | Atom::DescriptorReference { mutable } => !mutable,
+                    Atom::ExecutionAggregate(_) => false,
+                    Atom::Enum => {
+                        enum_types::product_atom_v282(types, row.ty, out)?.unwrap_or(false)
+                    }
+                };
+                if !copyable {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
+    }
+
     pub(in super::super) fn product_type_supported_v282(
         &self,
         ty: TypeId,
@@ -799,6 +845,7 @@ pub(super) fn headers() -> usize {
         size_of::<T>() + 2 * size_of::<Result<T>>()
     }
     h::<SourceProductTypesV282>()
+        + enum_types::headers()
         + h::<CountFrame>()
         + h::<WalkFrame>()
         + h::<Component>()
