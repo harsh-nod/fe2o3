@@ -9,6 +9,9 @@ mod aggregate_diagnostic;
 #[path = "production_rustc_driver_expanded_model_export_v282_tests.rs"]
 mod model_export;
 
+#[path = "production_rustc_driver_product_frames_v283_tests.rs"]
+mod product_frames;
+
 const MODEL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_child";
 const REFUSAL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_refusal_child";
 const ACCOUNT_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_account_child";
