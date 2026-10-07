@@ -87,7 +87,11 @@ fn normalize_test_anchor_descriptor(descriptor: OwnedFd) -> OwnedFd {
     normalized
 }
 
+const FIXTURE_PREFIX: &str = "fss-";
+const FIXTURE_RANDOM_BYTES: usize = 8;
+
 pub(super) struct Fixture {
+    _temporary: tempfile::TempDir,
     pub(super) root: PathBuf,
     image: PathBuf,
     bytes: Vec<u8>,
@@ -99,18 +103,26 @@ impl Fixture {
     }
 
     fn with_code(name: &str, code: &[u8]) -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "fe2o3-supervisor-image-{name}-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).unwrap();
+        // Keep the executable TMPDIR mount, but not the unbounded test label.
+        // TempDir owns exactly this freshly created, collision-safe directory.
+        let temporary = tempfile::Builder::new()
+            .prefix(FIXTURE_PREFIX)
+            .rand_bytes(FIXTURE_RANDOM_BYTES)
+            .tempdir_in(std::env::temp_dir())
+            .unwrap_or_else(|error| panic!("create {name} fixture: {error}"));
+        let root = temporary.path().to_path_buf();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let image = root.join("entry");
         let bytes = static_elf_with_code(code);
         fs::write(&image, &bytes).unwrap();
         fs::set_permissions(&image, fs::Permissions::from_mode(0o555)).unwrap();
         sealed_static_application_identity_v1(&bytes).unwrap();
-        Self { root, image, bytes }
+        Self {
+            _temporary: temporary,
+            root,
+            image,
+            bytes,
+        }
     }
 
     pub(super) fn measurement(&self) -> ProvisionedStaticExecutableMeasurementV1 {
@@ -286,10 +298,46 @@ fn write_program(bytes: &mut [u8], index: usize, program: ProgramFixture) {
     bytes[start + 48..start + 56].copy_from_slice(&program.alignment.to_le_bytes());
 }
 
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
+#[test]
+fn fixture_socket_paths_fit_long_private_ci_temporary_roots() {
+    let temporary = Path::new("/home/runner/work/_temp/fe2o3-generic-core.0123456789");
+    let name = format!("{FIXTURE_PREFIX}{}", "x".repeat(FIXTURE_RANDOM_BYTES));
+    let root = temporary.join(&name);
+    assert_eq!(root.parent(), Some(temporary));
+    assert!(rustix::net::SocketAddrUnix::new(&root.join("supervisor.sock")).is_ok());
+    let old = temporary
+        .join("fe2o3-supervisor-image-provisioned-service-inputs-17845")
+        .join("supervisor.sock");
+    assert!(rustix::net::SocketAddrUnix::new(&old).is_err());
+    let oversized = PathBuf::from("/").join("x".repeat(256));
+    let rejected = oversized.join(name);
+    assert_eq!(rejected.parent(), Some(oversized.as_path()));
+    assert!(rustix::net::SocketAddrUnix::new(&rejected.join("supervisor.sock")).is_err());
+}
+
+#[test]
+fn fixture_roots_are_unique_private_and_cleaned_by_their_owner() {
+    let name = "same-long-fixture-label-that-must-not-enter-a-socket-path";
+    let first = Fixture::new(name);
+    let second = Fixture::new(name);
+    assert_ne!(first.root, second.root);
+    for fixture in [&first, &second] {
+        assert_eq!(fixture.root.parent(), Some(std::env::temp_dir().as_path()));
+        assert_eq!(
+            fixture.root.file_name().unwrap().as_encoded_bytes().len(),
+            FIXTURE_PREFIX.len() + FIXTURE_RANDOM_BYTES
+        );
+        assert_eq!(fs::metadata(&fixture.root).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(fs::metadata(&fixture.image).unwrap().mode() & 0o777, 0o555);
+        assert!(rustix::net::SocketAddrUnix::new(&fixture.root.join("supervisor.sock")).is_ok());
     }
+    let first_root = first.root.clone();
+    let second_root = second.root.clone();
+    drop(first);
+    assert!(!first_root.exists());
+    assert!(second_root.is_dir());
+    drop(second);
+    assert!(!second_root.exists());
 }
 
 fn policy(issuer: CompilerExecutionIssuerMeasurementV1) -> CompilerExecutionPolicyCapabilityV1 {
