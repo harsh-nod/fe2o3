@@ -57,6 +57,35 @@ fn mismatch() -> Error {
     Error::Statement("original MIR byte frame entry differs from its exact invocation")
 }
 
+type EntryCoordinates = (usize, usize, Option<u32>, Option<(usize, u32)>, Option<u32>);
+
+fn entry_error(
+    (root, instance, function, argument, local): EntryCoordinates,
+    phase: &'static str,
+    error: Error,
+) -> Error {
+    match error {
+        Error::Statement("generated source limit") => error,
+        Error::Statement(reason) => Error::SourceEntry {
+            root,
+            instance,
+            function,
+            argument,
+            local,
+            phase,
+            reason,
+        },
+        other => other,
+    }
+}
+
+fn entry_diagnostic_headers() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    h::<EntryCoordinates>() + h::<&'static str>() + h::<Error>()
+}
+
 fn unsupported() -> Error {
     Error::Statement("original MIR byte argument lifetime or payload is not modeled")
 }
@@ -192,21 +221,35 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         out.budget.reserve_storage(headers())?;
         let source = slots.correspondence(out)?.source(out.budget)?;
         if !std::ptr::eq(source, plan.source(out)?) {
-            return Err(mismatch());
+            return Err(entry_error(
+                (root, instance, None, None, None),
+                "source-entry-owner",
+                mismatch(),
+            ));
         }
         let row = plan.instance(root, instance, out)?;
         let semantic = source.source_semantic(out.budget)?;
         let function = semantic
             .functions()
             .get(row.function.index() as usize)
-            .ok_or_else(mismatch)?;
+            .ok_or_else(|| {
+                entry_error(
+                    (root, instance, Some(row.function.index()), None, None),
+                    "source-entry-function",
+                    mismatch(),
+                )
+            })?;
         out.budget.charge_work(4)?;
         if !row.active
             || row.locals.len() != function.locals().len()
             || row.blocks.len() != function.blocks().len()
             || function.entry().index() as usize >= row.blocks.len()
         {
-            return Err(mismatch());
+            return Err(entry_error(
+                (root, instance, Some(row.function.index()), None, None),
+                "source-entry-instance-ranges",
+                mismatch(),
+            ));
         }
         let entry = row
             .blocks
@@ -276,7 +319,17 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             };
             out.budget.charge_work(5)?;
             if inputs.get(argument as usize) != Some(&declaration.ty()) {
-                return Err(mismatch());
+                return Err(entry_error(
+                    (
+                        root,
+                        instance,
+                        Some(row.function.index()),
+                        Some((argument as usize, declaration.ty().index())),
+                        Some(u32::try_from(local).map_err(|_| Resource::Arithmetic)?),
+                    ),
+                    "source-entry-argument-type",
+                    mismatch(),
+                ));
             }
             let ty = semantic
                 .types()
@@ -426,12 +479,32 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 })
                 .is_some()
             {
-                return Err(mismatch());
+                return Err(entry_error(
+                    (
+                        root,
+                        instance,
+                        Some(row.function.index()),
+                        Some((argument as usize, declaration.ty().index())),
+                        Some(original_local),
+                    ),
+                    "source-entry-argument-duplicate",
+                    mismatch(),
+                ));
             }
         }
         out.budget.charge_work(arguments.len())?;
-        if arguments.iter().any(Option::is_none) {
-            return Err(mismatch());
+        if let Some(argument) = arguments.iter().position(Option::is_none) {
+            return Err(entry_error(
+                (
+                    root,
+                    instance,
+                    Some(row.function.index()),
+                    Some((argument, inputs[argument].index())),
+                    None,
+                ),
+                "source-entry-argument-completeness",
+                mismatch(),
+            ));
         }
         let mut depth = 0usize;
         let mut current = instance;
@@ -705,6 +778,7 @@ fn headers() -> usize {
             &fe2o3_lower_mir_kernel::ProductionSourceAllocationFrameV32,
         )>()
         + h::<EntryObjectSite>()
+        + entry_diagnostic_headers()
         + 32 * size_of::<usize>()
         + 24 * size_of::<&()>()
 }
@@ -714,6 +788,63 @@ mod tests {
     use super::*;
     use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
     const LIMIT: usize = 100_000_000;
+
+    #[test]
+    fn original_mir_entry_refusal_keeps_argument_coordinates_and_first_typed_error() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+        macro_rules! h {
+            ($ty:ty) => {
+                size_of::<$ty>() + 2 * size_of::<Result<$ty>>()
+            };
+        }
+        assert_eq!(
+            entry_diagnostic_headers(),
+            h!((usize, usize, Option<u32>, Option<(usize, u32)>, Option<u32>))
+                + h!(&'static str)
+                + h!(Error)
+        );
+        let coordinates = (2, 5, Some(7), Some((1, 13)), None);
+        let phase = "source-entry-argument-completeness";
+        assert!(matches!(
+            entry_error(coordinates, phase, mismatch()),
+            Error::SourceEntry {
+                root: 2,
+                instance: 5,
+                function: Some(7),
+                argument: Some((1, 13)),
+                local: None,
+                phase: "source-entry-argument-completeness",
+                reason: "original MIR byte frame entry differs from its exact invocation",
+            }
+        ));
+        for error in [
+            Error::Statement("generated source limit"),
+            Error::GeneratedSourceLimit {
+                section: "earlier-source-section",
+                emitted_bytes: 17,
+                limit_bytes: SOURCE_LIMIT,
+            },
+            Error::Resource(Resource::Accounting),
+            Error::Source(
+                fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                    Resource::Accounting,
+                ),
+            ),
+        ] {
+            let before = format!("{error:?}");
+            assert_eq!(
+                format!("{:?}", entry_error(coordinates, phase, error)),
+                before
+            );
+        }
+        let mut work = Work::new(0);
+        let error = work.charge_work(1).unwrap_err();
+        assert!(matches!(
+            entry_error(coordinates, phase, Error::Resource(Resource::Work(error))),
+            Error::Resource(Resource::Work(found))
+                if found.actual() == 1 && found.limit() == 0
+        ));
+    }
 
     fn run_object_arguments(
         work: usize,
