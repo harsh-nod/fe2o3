@@ -4,17 +4,45 @@ use fe2o3_mir_model::semantic_mir_v1::*;
 const LIMIT: usize = 256 * 1024 * 1024;
 
 fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
+    checked_transition_model_v288(SemanticCheckedBinaryOpV1::Add, |model, count| {
+        assert!(count > 0);
+        inspect(model);
+    });
+}
+
+fn checked_transition_model_v288(
+    operation: SemanticCheckedBinaryOpV1,
+    inspect: impl FnOnce(&str, usize),
+) {
     use super::super::{byte_bindings::SourceByteBindings, slots::SourceTagPairsV40};
     use std::fmt::Write as _;
     super::super::super::invocations::tests::run_source_transform(
         LIMIT,
         LIMIT,
-        |types, functions| checked_transform(types, functions, SemanticCheckedBinaryOpV1::Add, false, false),
+        |types, functions| checked_transform(types, functions, operation, false, false),
         |plan, out| {
             super::super::source_function::tests::with_slots(plan, out, |slots, out| {
                 let relation = slots.correspondence(out)?;
                 let owner = relation.source(out.budget)?;
                 let semantic = owner.source_semantic(out.budget)?;
+                let mut expected = Vec::new();
+                for root in 0..owner.root_count(out.budget)? {
+                    for instance in 0..plan.root(root, out)?.instances.len() {
+                        let row = plan.instance(root, instance, out)?;
+                        if !row.active { continue; }
+                        let function = &semantic.functions()[row.function.index() as usize];
+                        for (block, body) in function.blocks().iter().enumerate() {
+                            for (statement, original) in body.statements().iter().enumerate() {
+                                if let SemanticStatementKindV1::Assign(assignment) = original.kind()
+                                    && let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind()
+                                    && checked.operation() == SemanticCheckedBinaryOpV1::Add
+                                {
+                                    expected.push(format!("checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260("));
+                                }
+                            }
+                        }
+                    }
+                }
                 let inventory = relation.inventory(out.budget)?;
                 let contracts = super::super::TargetContracts::derive(inventory, FormalIndexWidth::Bits64, out)?;
                 let tags = SourceTagPairsV40::derive(slots, &contracts, out)?;
@@ -34,7 +62,6 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
                     out.budget,
                 )?;
                 out.budget.reserve_storage(storage.retained_storage())?;
-                let mut witnesses = 0;
                 for root in 0..owner.root_count(out.budget)? {
                     let (_, function) = owner.root(root, out.budget)?;
                     let target = super::super::super::super::byte_function_v30::ByteFunctionV30::derive(
@@ -46,90 +73,123 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
                     target.emit(root, out)?;
                     writeln!(out, "spec fn invocation_runtime_launch_{root}_v36() -> (int, Seq<int>) {{ (1, seq![64, 1, 1]) }}").map_err(|_| out.error())?;
                     super::super::emit_execution_v37(relation, root, out)?;
-                    for instance in 0..plan.root(root, out)?.instances.len() {
-                        let row = plan.instance(root, instance, out)?;
-                        if !row.active { continue; }
-                        let function = &semantic.functions()[row.function.index() as usize];
-                        for (block, body) in function.blocks().iter().enumerate() {
-                            for (statement, original) in body.statements().iter().enumerate() {
-                                let SemanticStatementKindV1::Assign(assignment) = original.kind() else { continue; };
-                                let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else { continue; };
-                                assert_eq!(checked.operation(), SemanticCheckedBinaryOpV1::Add);
-                                let SemanticOperandV1::Copy(left) = checked.left() else { panic!("pure left copy"); };
-                                let SemanticOperandV1::Copy(right) = checked.right() else { panic!("pure right copy"); };
-                                assert!(left.projections().is_empty() && right.projections().is_empty());
-                                assert_eq!(semantic.types()[left.ty().index() as usize].rust_type_kind(), SemanticRustTypeKindV1::Ordinary);
-                                assert_eq!(semantic.types()[left.ty().index() as usize].shape(), &SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { signed: false, bits: 32 }));
-                                assert_eq!(left.ty(), right.ty());
-                                let destination = assignment.destination();
-                                assert!(destination.projections().is_empty());
-                                let ty = destination.ty().index();
-                                let SemanticTypeShapeV1::Tuple(fields) = semantic.types()[ty as usize].shape() else { panic!("actual checked tuple"); };
-                                assert_eq!(fields.fields().len(), 2);
-                                assert_eq!(fields.fields()[0], left.ty());
-                                assert_eq!(semantic.types()[fields.fields()[1].index() as usize].shape(), &SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool));
-                                let destination = row.locals.start + destination.local().index() as usize;
-                                let left = row.locals.start + left.local().index() as usize;
-                                let right = row.locals.start + right.local().index() as usize;
-                                let event = format!("InvocationSourceByteEventV36::Checked {{ destination: {destination}int, source_type: {ty}int, operation: 0int, bits: 32int, signed: false, left: InvocationSourceByteValueV36::Local {{ local: {left}int, moved: false }}, right: InvocationSourceByteValueV36::Local {{ local: {right}int, moved: false }} }}");
-                                writeln!(out, "proof fn checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260()\n ensures invocation_source_aggregate_leaf_count_v42({ty}) == 2,\n invocation_source_aggregate_leaf_path_v42({ty}, 0) == seq![0int],\n invocation_source_aggregate_leaf_path_v42({ty}, 1) == seq![1int],\n invocation_source_aggregate_leaf_bits_v42({ty}, 0) == 32,\n invocation_source_aggregate_leaf_bits_v42({ty}, 1) == 1,\n invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}) == Some({event}),\n{{ }}").map_err(|_| out.error())?;
-                                writeln!(out, r#"proof fn checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260(
- source: InvocationSourceByteStateV36, left: int, right: int, little_endian: bool,
-)
- requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
- 0 <= {destination} < source.machine.values.len(), !source.objects.contains_key({destination}),
- 0 <= {left} < source.machine.values.len(), 0 <= {right} < source.machine.values.len(),
- source.machine.values[{left}] == MemoryValueV30::Scalar(left),
- source.machine.values[{right}] == MemoryValueV30::Scalar(right),
- 0 <= left < 4294967296, 0 <= right < 4294967296,
- ensures ({{ let after = invocation_source_byte_step_v36(source,
- invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian);
- after.machine.valid && after.machine.memory == source.machine.memory
- && after.machine.frames == source.machine.frames && after.machine.generations == source.machine.generations
- && after.logical.aggregates.contains_key({destination})
- && after.logical.aggregates[{destination}].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)
- && after.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}) }}),
-{{
- hide(invocation_source_byte_state_well_formed_v36);
- hide(invocation_source_aggregate_leaf_count_v42);
- hide(invocation_source_aggregate_leaf_path_v42);
- hide(invocation_source_aggregate_leaf_bits_v42);
- hide(invocation_source_byte_step_v36);
- hide(invocation_source_byte_event_{root}_{instance}_v36);
- assert(invocation_source_aggregate_leaf_count_v42({ty}) == 2
- && invocation_source_aggregate_leaf_path_v42({ty}, 0) == seq![0int]
- && invocation_source_aggregate_leaf_path_v42({ty}, 1) == seq![1int]
- && invocation_source_aggregate_leaf_bits_v42({ty}, 0) == 32
- && invocation_source_aggregate_leaf_bits_v42({ty}, 1) == 1
- && invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}) == Some({event})) by {{
- checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
- }}
- let checked_event = {event};
- assert(invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap() == checked_event);
- assert(invocation_source_byte_step_v36(source,
- invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian)
- == invocation_source_byte_step_v36(source, checked_event, {root}, {instance}, little_endian));
- invocation_source_checked_add_local_step_v266(source, {destination}, {ty},
- {left}, {right}, left, right, {root}, {instance}, little_endian);
-}}
-"#).map_err(|_| out.error())?;
-                                witnesses += 1;
-                            }
-                        }
-                    }
                 }
-                assert!(witnesses > 0);
+                let witnesses = program.emit_checked_local_add_proofs_v288(out)?;
+                assert_eq!(witnesses, expected.len());
+                for name in expected { assert_eq!(out.text.matches(&format!("proof fn {name}")).count(), 1); }
                 super::super::support_closure::retain_referenced(out)?;
                 writeln!(out, "}}").map_err(|_| out.error())?;
                 drop(physical);
                 out.budget.release_storage(storage.retained_storage())?;
                 assert_eq!(out.text.matches("proof fn checked_add_actual_schema_").count(), witnesses);
                 assert_eq!(out.text.matches("proof fn checked_add_actual_step_").count(), witnesses);
-                inspect(&out.text);
+                inspect(&out.text, witnesses);
                 Ok(())
             })
         },
     ).0.unwrap();
+}
+
+#[test]
+fn checked_transition_proofs_do_not_relabel_other_operations_as_addition() {
+    for operation in [
+        SemanticCheckedBinaryOpV1::Subtract,
+        SemanticCheckedBinaryOpV1::Multiply,
+    ] {
+        checked_transition_model_v288(operation, |model, count| {
+            assert_eq!(count, 0);
+            assert!(model.contains("InvocationSourceByteEventV36::Checked {"));
+            assert!(!model.contains("proof fn checked_add_actual_step_"));
+            assert!(!model.contains("proof fn checked_add_actual_schema_"));
+        });
+    }
+}
+
+#[test]
+fn production_checked_transition_generation_has_exact_resource_limits() {
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    let run = |work, storage| {
+        super::super::super::invocations::tests::run_source_transform(
+            work,
+            storage,
+            |types, functions| {
+                checked_transform(
+                    types,
+                    functions,
+                    SemanticCheckedBinaryOpV1::Add,
+                    false,
+                    false,
+                )
+            },
+            |plan, out| {
+                super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                    let program = SourceByteProgram::derive(plan, slots, out)?;
+                    assert!(program.emit_checked_local_add_proofs_v288(out)? > 0);
+                    Ok(())
+                })
+            },
+        )
+    };
+    let measured = run(LIMIT, LIMIT);
+    measured.0.unwrap();
+    let exact = run(measured.1, measured.3);
+    exact.0.unwrap();
+    assert_eq!(
+        (exact.1, exact.2, exact.3),
+        (measured.1, measured.2, measured.3)
+    );
+    let short_work = run(measured.1 - 1, measured.3);
+    assert!(
+        matches!(&short_work.0,
+        Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+        if error.actual() == measured.1 && error.limit() == measured.1 - 1),
+        "{short_work:?}"
+    );
+    let short_storage = run(measured.1, measured.3 - 1);
+    assert!(
+        matches!(&short_storage.0,
+        Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+        if error.actual() == measured.3 && error.limit() == measured.3 - 1),
+        "{short_storage:?}"
+    );
+}
+
+#[test]
+fn expanded_production_support_emits_checked_transition_consumers() {
+    use super::super::expanded_generation::ExpandedGenerationV221;
+    super::super::super::invocations::tests::run_source_transform(
+        LIMIT,
+        LIMIT,
+        |types, functions| {
+            checked_transform(
+                types,
+                functions,
+                SemanticCheckedBinaryOpV1::Add,
+                false,
+                false,
+            )
+        },
+        |plan, out| {
+            super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                let generation = ExpandedGenerationV221::derive(
+                    plan,
+                    slots,
+                    FormalIndexWidth::Bits64,
+                    fe2o3_kernel_ir::EndiannessV2::Little,
+                    out,
+                )?;
+                generation.emit_support(out)?;
+                assert!(out.text.contains("proof fn checked_add_actual_step_"));
+                assert!(
+                    out.text
+                        .contains("invocation_source_checked_add_local_step_v266(source,")
+                );
+                Ok(())
+            })
+        },
+    )
+    .0
+    .unwrap();
 }
 
 #[test]

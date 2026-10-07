@@ -2,6 +2,9 @@
 use super::*;
 use fe2o3_mir_model::semantic_mir_v1::{SemanticAssignmentV1, SemanticCheckedBinaryOpV1};
 
+#[path = "original_semantic_mir_checked_local_add_proofs_v288.rs"]
+mod checked_local_add_proofs;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct AggregatePlace {
     local: usize,

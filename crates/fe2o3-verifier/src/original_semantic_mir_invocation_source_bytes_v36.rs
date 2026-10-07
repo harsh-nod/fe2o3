@@ -290,6 +290,23 @@ pub(super) enum Event {
 }
 
 impl Event {
+    pub(super) fn emit_checked_local_add_proofs_v288(
+        self,
+        root: usize,
+        instance: usize,
+        block: usize,
+        statement: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<bool> {
+        out.budget.charge_work(1)?;
+        match self {
+            Self::Checked(checked) => {
+                checked.emit_local_add_proofs_v288(root, instance, block, statement, out)
+            }
+            _ => Ok(false),
+        }
+    }
+
     pub(super) fn descriptor_wf_shape_v95(self) -> bool {
         matches!(
             self,

@@ -169,6 +169,9 @@ pub(super) struct SourceByteProgram<'slots, 'view, 'source> {
 mod context_issue_sites;
 pub(super) use context_issue_sites::ContextIssueSiteV222;
 
+#[path = "original_semantic_mir_source_checked_proofs_v288.rs"]
+mod checked_proofs;
+
 impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
     pub(super) fn emit_thread_write_normal_proofs_v94(
         &self,
