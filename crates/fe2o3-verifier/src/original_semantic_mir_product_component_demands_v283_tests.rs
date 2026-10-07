@@ -157,21 +157,25 @@ fn inspect(rows: Rows, slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) ->
             assert!(!demands.leaf_required(rows.function, 0, local, leaf, out)?);
         }
     }
-    assert!(matches!(
-        demands.projected_range_v283(
-            slots,
-            rows.function,
-            &field(rows.product_local, 0, rows.word),
-            out,
-        ),
-        Err(Error::Statement(_))
-    ));
     Ok(())
 }
 
 #[test]
 fn product_demand_cache_keeps_distinct_owner_derived_domains_and_exact_projection_types() {
-    let result = fixture(LIMIT, LIMIT, inspect);
+    let result = fixture(LIMIT, LIMIT, |rows, slots, out| {
+        inspect(rows, slots, out)?;
+        let demands = ComponentDemandsV42::derive(slots, rows.function, out)?;
+        assert!(matches!(
+            demands.projected_range_v283(
+                slots,
+                rows.function,
+                &field(rows.product_local, 0, rows.word),
+                out,
+            ),
+            Err(Error::Statement(_))
+        ));
+        Ok(())
+    });
     result.0.unwrap();
     assert_eq!(result.2, FLOOR);
 }
@@ -286,15 +290,27 @@ fn product_demand_synthetic_projected_transfer_keeps_other_atom_and_move_demand(
 
 #[test]
 fn product_demand_cache_rejects_foreign_account_and_restores_original_account() {
+    let original_floor = Cell::new(None);
     let result = fixture(LIMIT, LIMIT, |rows, slots, out| {
         let demands = ComponentDemandsV42::derive(slots, rows.function, out)?;
         let floor = out.budget.storage();
+        original_floor.set(Some(floor));
+        let slot = std::ptr::from_ref(&*out.budget);
+        let ledger = out.budget.work_ledger_identity_v1();
         let mut work = Work::new(LIMIT);
         let mut budget = Budget::new(&mut work, LIMIT);
         budget.reserve_storage(crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT + floor)?;
         let mut foreign = Writer::new(&mut budget)?;
         assert!(matches!(
             demands.local_domain_v283(slots, rows.function, rows.product_local, &mut foreign),
+            Err(Error::Resource(Resource::Accounting))
+                | Err(Error::Source(SourceError::Resource(Resource::Accounting)))
+        ));
+        assert_eq!(std::ptr::from_ref(&*out.budget), slot);
+        assert!(ledger == out.budget.work_ledger_identity_v1());
+        assert_eq!(out.budget.storage(), floor);
+        assert!(matches!(
+            demands.local_domain_v283(slots, rows.function, rows.product_local, out),
             Err(Error::Resource(Resource::Accounting))
                 | Err(Error::Source(SourceError::Resource(Resource::Accounting)))
         ));
@@ -306,7 +322,10 @@ fn product_demand_cache_rejects_foreign_account_and_restores_original_account() 
         Err(Error::Resource(Resource::Accounting))
             | Err(Error::Source(SourceError::Resource(Resource::Accounting)))
     ));
-    assert_eq!(result.2, FLOOR);
+    // The owner latches lost custody; containing source credits must not be
+    // refunded even though the original account itself was never replaced.
+    assert!(result.2 > FLOOR);
+    assert!(result.2 <= original_floor.get().expect("foreign query reached"));
 }
 
 #[test]
