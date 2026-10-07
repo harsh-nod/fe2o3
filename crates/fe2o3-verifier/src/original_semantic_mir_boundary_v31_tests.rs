@@ -141,6 +141,35 @@ fn original_mir_shared_boundary_adapter_frames_have_independent_field_oracles() 
     ));
 }
 
+#[test]
+fn original_mir_boundary_frame_demands_reject_an_equal_byte_foreign_ssa_plan() {
+    let (plan, successors) = diamond();
+    let foreign = plan.clone();
+    assert_eq!(plan, foreign);
+    let mut work = Work::new(1 << 24);
+    let mut budget = Budget::new(&mut work, 1 << 24);
+    budget
+        .reserve_storage(super::super::super::super::SOURCE_LIMIT)
+        .unwrap();
+    let mut out = Writer::new(&mut budget).unwrap();
+    let boundaries = Boundaries::derive(
+        &plan,
+        ControlInput {
+            entry: Block::new(0),
+            successors: &successors,
+        },
+        &mut out,
+    )
+    .unwrap();
+    boundaries.check_plan_v281(&plan, &mut out).unwrap();
+    assert!(matches!(
+        boundaries.check_plan_v281(&foreign, &mut out),
+        Err(Error::Statement(
+            "original MIR SSA boundary has a foreign plan"
+        ))
+    ));
+}
+
 fn diamond() -> (Plan, Vec<Vec<Block>>) {
     let a = Variable::new(0);
     let b = Variable::new(1);
