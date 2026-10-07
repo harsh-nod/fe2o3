@@ -1333,11 +1333,24 @@ pub(super) mod tests {
                     out,
                 )
                 .unwrap_err();
-            assert!(matches!(error, Error::Resource(Resource::Work(_))));
+            let Error::Source(SourceError::Resource(resource @ Resource::Work(_))) = &error else {
+                panic!("source query must latch its original work denial: {error:?}");
+            };
+            let work = out.budget.work();
+            assert!(matches!(
+                slots.legacy_descriptor_by_source(
+                    row.root(), row.instance(), row.local(), "later-denied-query", out,
+                ),
+                Err(Error::Source(SourceError::Resource(actual))) if actual == *resource
+            ));
+            assert_eq!(out.budget.work(), work);
             assert_eq!(out.budget.storage(), before);
             Err(error)
         });
-        assert!(matches!(result.0, Err(Error::Resource(Resource::Work(_)))));
+        assert!(matches!(
+            result.0,
+            Err(Error::Source(SourceError::Resource(Resource::Work(_))))
+        ));
     }
 
     #[test]
