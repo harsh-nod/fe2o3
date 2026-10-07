@@ -52,6 +52,18 @@ fn inspect(
             assert!(call.caller < frame.instance);
             let parent = &frames.frames[frames.roots[frame.root].start + call.caller];
             assert_eq!(frame.depth, parent.depth + 1);
+            if !call.demands.is_empty() {
+                // Only the first call suspends arguments needed by the second;
+                // the second continuation returns Unit without reading locals.
+                assert_eq!((call.caller, call.block), (0, 0));
+                assert_eq!(
+                    frames.demands[call.demands.clone()]
+                        .iter()
+                        .map(|row| row.source.local)
+                        .collect::<Vec<_>>(),
+                    vec![1, 2]
+                );
+            }
             suspended += usize::from(!call.demands.is_empty());
         } else {
             assert_eq!((frame.instance, frame.depth), (0, 0));
@@ -68,7 +80,7 @@ fn inspect(
             }
         }
     }
-    assert!(suspended >= 4);
+    assert_eq!(suspended, 2);
     assert!(inactive > 0);
     Ok(())
 }

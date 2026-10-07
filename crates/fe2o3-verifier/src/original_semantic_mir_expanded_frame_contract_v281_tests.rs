@@ -1,6 +1,8 @@
 use super::super::{
     expanded_generation::ExpandedGenerationV221,
-    source_function::tile_fixture_tests::run_fixture_with_plan,
+    source_function::tile_fixture_tests::{
+        run_fixture_with_plan, run_fixture_with_unreachable_root_v281,
+    },
 };
 use super::*;
 use fe2o3_kernel_ir::{EndiannessV2, ExecutionTileLayoutV1};
@@ -13,7 +15,7 @@ fn expanded_frame_contracts_keep_complete_microstate_prefix_and_shared_caller_de
         ExecutionTileLayoutV1::Blocked,
         ExecutionTileLayoutV1::Striped,
     ] {
-        run_fixture_with_plan(layout, LIMIT, LIMIT, |plan, slots, _, out| {
+        run_fixture_with_unreachable_root_v281(layout, LIMIT, LIMIT, |plan, slots, _, out| {
             let model = ExpandedGenerationV221::derive(plan, slots, FormalIndexWidth::Bits64, EndiannessV2::Little, out)?;
             let cuts = TileMicroCutsV180::derive(model.target(out)?, plan, out)?;
             let frames = FramePlan::derive(plan, slots, out)?;
@@ -41,13 +43,18 @@ fn expanded_frame_contracts_keep_complete_microstate_prefix_and_shared_caller_de
                     }
                 }
                 for cut in &frames.cuts[frame.cuts.clone()] {
-                    zero_candidates += usize::from(rows.cuts[cut.pc].candidates.is_empty());
+                    if rows.cuts[cut.pc].candidates.is_empty() {
+                        zero_candidates += 1;
+                        assert_eq!((cut.root, cut.instance), (0, 0));
+                        assert_eq!(cut.pc + 1, plan.instance(0, 0, out)?.blocks.end);
+                        assert!(!cut.reachable && cut.demands.is_empty());
+                    }
                     assert_eq!(out.text.matches(&format!("spec fn invocation_expanded_current_{}_{}_{}_v281(", cut.root, cut.instance, cut.block)).count(), 1);
                     assert_eq!(out.text.matches(&format!(" {} => source.machine.frames.active.len() ==", cut.pc)).count(), 1);
                 }
             }
             assert!(suspended > 0);
-            assert!(zero_candidates > 0);
+            assert_eq!(zero_candidates, 1);
             Ok(())
         }).0.unwrap();
     }
