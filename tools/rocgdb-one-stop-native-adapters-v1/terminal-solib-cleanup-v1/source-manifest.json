@@ -1,0 +1,120 @@
+{
+  "schema": "disabled-terminal-cleanup-fixture-ancestry-v1",
+  "enabled": false,
+  "native_authority": false,
+  "source_selected_stage": "physical-terminal-solib-cleanup-disabled-v13",
+  "production_source_rows": [
+    {
+      "source": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+      "before": {
+        "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+        "bytes": 26367,
+        "sha256": "edf4ff611cac67f4f16038ea6d1de85873719a8a7d3c190d3e84a026589a8df6"
+      },
+      "after": {
+        "path": "gdb/amd-dbgapi-one-stop-native-events-v1.inc",
+        "bytes": 29380,
+        "sha256": "ca6a385c248b027cd18a56e8b3e4a476992a5ce1a93f5d4d86b4ffb8969ff7bf"
+      },
+      "preimage": "preimages/v12-amd-dbgapi-one-stop-native-events-v1.inc",
+      "postimage": "current/amd-dbgapi-one-stop-native-events-v1.inc",
+      "delta": "transforms/current-amd-dbgapi-one-stop-native-events-v1.inc.json"
+    },
+    {
+      "source": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+      "before": {
+        "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+        "bytes": 12391,
+        "sha256": "23f80946aeeccc75355d24b06b5e6bba4773ce28240709c04c24f20e82a3586a"
+      },
+      "after": {
+        "path": "gdb/amd-dbgapi-one-stop-native-io-v1.inc",
+        "bytes": 13163,
+        "sha256": "a958a9e035a26ab41948b8539a687081c6d238df5f7e366d277a5ee20b561e5e"
+      },
+      "preimage": "src/amd-dbgapi-one-stop-native-io-v1.inc",
+      "postimage": "current/amd-dbgapi-one-stop-native-io-v1.inc",
+      "delta": "transforms/current-amd-dbgapi-one-stop-native-io-v1.inc.json"
+    },
+    {
+      "source": "gdb/amd-dbgapi-one-stop-native-v1.h",
+      "before": {
+        "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+        "bytes": 25611,
+        "sha256": "9097a975bd0494db1964303f2a223398dc849dfcc9a756841eeb53ee6ab7dfd7"
+      },
+      "after": {
+        "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+        "bytes": 26160,
+        "sha256": "cef33b4d6f881ddb00a92ec48150e7419431e7b83cac13c20a261fbe55409ef9"
+      },
+      "preimage": "src/amd-dbgapi-one-stop-native-v1.h",
+      "postimage": "current/amd-dbgapi-one-stop-native-v1.h",
+      "delta": "transforms/current-amd-dbgapi-one-stop-native-v1.h.json"
+    }
+  ],
+  "fixtures": [
+    {
+      "path": "tests/terminal-delete.cc",
+      "bytes": 12859,
+      "sha256": "79f2f18312151d6e9e4e9f47dd6a09b8b360054d6ef477059de23f071f54fe33"
+    },
+    {
+      "path": "tests/amd-dbgapi-owned-one-stop-v1.h",
+      "bytes": 37019,
+      "sha256": "8af25db0a71eafb2d183605bde06a7e2c55cdebe7c3c095384bcb52ad7295c8f"
+    },
+    {
+      "path": "tests/old-delete.inc",
+      "bytes": 1277,
+      "sha256": "b278ecb75032fe9b6b3247bed9679fe163d63ca37c6c82404d4dde3c7d603166"
+    },
+    {
+      "path": "tests/new-delete.inc",
+      "bytes": 5489,
+      "sha256": "76099198e1ae077c4accf3f40f6d78f9c458e7aca750cb288baeca5bf8034ed7"
+    },
+    {
+      "path": "tests/refusal-format.inc",
+      "bytes": 551,
+      "sha256": "e714f830a26629abddefa126ff05d9fedd8a89ab401b6de342e8e0efc8a490c2"
+    },
+    {
+      "path": "README.md",
+      "bytes": 848,
+      "sha256": "428a13fc3f2293268da8a22a23fa027866e15fb92db91213e45c79cabdfc64f7"
+    }
+  ],
+  "source_provenance": [
+    {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-terminal-solib-cleanup-source-r75-r2/MANIFEST.json",
+      "bytes": 22757,
+      "sha256": "939edc6f5c8f4e6207fe7124da487e41151ed3037a92ab46f18fb3556918cdd7"
+    },
+    {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-direct-block-sha-work-source-r75-r1/MANIFEST.json",
+      "bytes": 8214,
+      "sha256": "ae6049e3248b659362b2e717a86e7e937c00828e3b2564d10e0407475c9bc266"
+    },
+    {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-target-refusal-gdb-profile-source-r75-r1/MANIFEST.json",
+      "bytes": 8004,
+      "sha256": "908c9760d2c0c17cfb3ba75259490dd7279b7e12ae5f59b60335d34992417ce1"
+    }
+  ],
+  "reviews": [
+    {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-terminal-solib-cleanup-independent-review-r75-r1/REVIEW.json",
+      "bytes": 6406,
+      "sha256": "3bfc56bfad9a6350c9fc94b20570b0894e2d9506ec2eaaaf4a566f133f396fbc"
+    }
+  ],
+  "cpu_history": {
+    "normal_and_ubsan": {
+      "path": "/home/harmenon/fe2o3-authoring-280-282-mi350.4VZ42zNr/phase28-drafts/debugger-terminal-solib-cpp-controls-actual-root-r75-r1/MANIFEST.json",
+      "bytes": 6223,
+      "sha256": "7c558fc536911173e7edc87944cd8b32a1358757eb9adf567510d3a7859cf11c"
+    },
+    "relocated_package_tested": false
+  }
+}

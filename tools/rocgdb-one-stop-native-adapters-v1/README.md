@@ -118,3 +118,7 @@ The separate [proc-record-work-v1 candidate](proc-record-work-v1/README.md) chan
 ## Complete disabled proc-record selected-source successor
 
 The additive [physical-v12 package](physical-v12/README.md) adopts proc-record-work-v1 into the complete63-leaf selected-source contract over physical-v11. It retains all public false gates and caps, makes the logical accounting change explicit, and supplies exact reversible source/patch and CPU controls. This supersedes only the candidate incomplete packaging status; it does not qualify a native fix or reuse prior startup or one-use authority.
+
+## Separate disabled terminal shared-library cleanup successor
+
+[physical-v13](physical-v13/README.md) preserves the complete63 selected-source roster and all false gates while composing the direct-block SHA, measured diagnostic-target sizing and one-shot post-p11 internal breakpoint cleanup changes. Historical fixtures remain explicitly historical; the sibling [terminal cleanup CPU fixture](terminal-solib-cleanup-v1/README.md) uses exact extracted functions and mocked GDB objects. No native qualification, activation or consumed authority is transferred.

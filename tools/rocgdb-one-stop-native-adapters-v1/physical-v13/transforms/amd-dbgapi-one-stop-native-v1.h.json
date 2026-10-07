@@ -1,0 +1,20 @@
+{
+  "schema": "fe2o3-disabled-physical-v11-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-v1.h",
+  "before": {
+    "bytes": 25115,
+    "sha256": "fe672505fdcf400cd71ea87d41259e1f2b4123d4215d777c8c2ebdfcb36ef3f0"
+  },
+  "after": {
+    "bytes": 25611,
+    "sha256": "9097a975bd0494db1964303f2a223398dc849dfcc9a756841eeb53ee6ab7dfd7"
+  },
+  "changes": [
+    {
+      "beforeOffset": 8238,
+      "afterOffset": 8238,
+      "before": "  std::int32_t status;\n  char fatal_error_payload[224];\n};\n[[gnu::used]] static const native_result_diagnostic_scratch *",
+      "after": "  std::int32_t status;\n  char fatal_error_payload[224];\n  // Separate budget-refusal frame/payload reservation, not reuse of the\n  // native-result frame above. The retained note is in sizeof(native_adapter).\n  struct budget_frames final {\n    const owner *ledger;\n    const budget_failure_note *note;\n    std::uint64_t used, requested, cap;\n    unsigned kind, state;\n    char fatal_error_payload[256];\n  } budget;\n};\nstatic_assert (sizeof (native_result_diagnostic_scratch::budget_frames) <= 320,\n               \"separate bounded budget-refusal frame\");\n[[gnu::used]] static const native_result_diagnostic_scratch *"
+    }
+  ]
+}
