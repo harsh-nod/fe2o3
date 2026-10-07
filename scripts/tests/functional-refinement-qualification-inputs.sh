@@ -23,10 +23,21 @@ reject() {
 }
 
 # Synthetic package bytes exercise only private shell helpers, never runtime admission.
+fixture_umask="$(umask)"
+readonly fixture_umask
 mkdir -p "$scratch/package/DEBIAN" "$scratch/package/usr/lib/x86_64-linux-gnu" "$scratch/inputs"
 printf '%s\n' 'Package: fe2o3-qualification-test' 'Version: 1' 'Architecture: all' \
     'Maintainer: test <test@example.invalid>' 'Description: package stream controls' \
     > "$scratch/package/DEBIAN/control"
+# dpkg requires package metadata modes independently of the caller's private umask.
+# Only these synthetic files change mode; the owned scratch root remains 0700.
+chmod 0755 "$scratch/package/DEBIAN"
+chmod 0644 "$scratch/package/DEBIAN/control"
+[[ $(stat -c %a "$scratch/package/DEBIAN") == 755 ]] || fail 'package control directory mode differs'
+[[ $(stat -c %a "$scratch/package/DEBIAN/control") == 644 ]] || fail 'package control file mode differs'
+[[ $(stat -c %a "$scratch") == 700 ]] || fail 'private scratch root mode differs'
+[[ $(umask) == "$fixture_umask" ]] || fail 'fixture changed the caller umask'
+checks=$((checks + 1))
 readonly TEST_MEMBER=./usr/lib/x86_64-linux-gnu/libc.so.6
 printf 'a\000b\377c\n' > "$scratch/package/${TEST_MEMBER#./}"
 dpkg-deb --build --root-owner-group "$scratch/package" "$scratch/data.deb" > /dev/null
