@@ -570,7 +570,7 @@ assert_source_isa_characteristic_matrix_v2_gate() {
 
 assert_codegen_lib_steps() {
   local step index
-  for step in rustc-codegen-lib-tests rustc-codegen-expanded-source-tests rustc-codegen-tile-census-source-tests rustc-codegen-extractor-bin-tests rustc-codegen-exporter-bin-tests; do
+  for step in rustc-codegen-lib-tests rustc-codegen-expanded-source-tests rustc-codegen-expanded-model-tests rustc-codegen-tile-census-source-tests rustc-codegen-extractor-bin-tests rustc-codegen-exporter-bin-tests; do
     assert_step_count "${step}" 1 "backend unit step ${step} did not run exactly once"
   done
   assert_equals \
@@ -581,6 +581,10 @@ assert_codegen_lib_steps() {
     "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::actual_rustc_source_retains_original_neutral_and_expanded_owners -- --ignored --exact --test-threads=1" \
     "$(step_command rustc-codegen-expanded-source-tests)" \
     'expanded source tests are not explicitly selected with their isolated serial parent'
+  assert_equals \
+    "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_overflow -- --ignored --exact --test-threads=1" \
+    "$(step_command rustc-codegen-expanded-model-tests)" \
+    'expanded model tests are not explicitly selected with their isolated serial parent'
   assert_equals \
     "env CARGO_PROFILE_DEV_DEBUG=1 cargo test --locked -p ${RUSTC_CODEGEN_TEST_PACKAGE} --lib production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::tile_census_tests::actual_rustc_collected_tile_census_preserves_shared_body_counts -- --ignored --exact --test-threads=1" \
     "$(step_command rustc-codegen-tile-census-source-tests)" \
@@ -597,11 +601,13 @@ assert_codegen_lib_steps() {
     if [[ "${STEP_NAMES[index]}" == rustc-codegen-lib-tests ]]; then
       assert_equals rustc-codegen-expanded-source-tests "${STEP_NAMES[index+1]:-}" \
         'expanded source tests did not follow the backend library'
-      assert_equals rustc-codegen-tile-census-source-tests "${STEP_NAMES[index+2]:-}" \
-        'tile census source tests did not follow the expanded source tests'
-      assert_equals rustc-codegen-extractor-bin-tests "${STEP_NAMES[index+3]:-}" \
+      assert_equals rustc-codegen-expanded-model-tests "${STEP_NAMES[index+2]:-}" \
+        'expanded model tests did not follow the expanded source tests'
+      assert_equals rustc-codegen-tile-census-source-tests "${STEP_NAMES[index+3]:-}" \
+        'tile census source tests did not follow the expanded model tests'
+      assert_equals rustc-codegen-extractor-bin-tests "${STEP_NAMES[index+4]:-}" \
         'extractor unit tests did not follow the tile census source tests'
-      assert_equals rustc-codegen-exporter-bin-tests "${STEP_NAMES[index+4]:-}" \
+      assert_equals rustc-codegen-exporter-bin-tests "${STEP_NAMES[index+5]:-}" \
         'exporter unit tests did not follow the extractor'
     fi
   done

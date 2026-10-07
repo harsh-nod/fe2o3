@@ -219,9 +219,11 @@ callback's separately measured payload. The private stage remains nondefault,
 and the new input preparation and regression assertions require their own
 recorded qualification before a passing-run claim.
 
-The backend CI entry explicitly runs both ignored real-rustc parent tests after
+The backend CI entry explicitly runs three ignored real-rustc parent tests after
 its ordinary library suite: the expanded-source parent (including the complete
-multi-root matrix) and the authenticated terminal-census parent. Their target
+multi-root matrix), the expanded support-model parent (including product
+construction, domain refusal and callback-accounting cases), and the
+authenticated terminal-census parent. Their target
 matrix is gfx942/gfx950 with `-Copt-level=0/3` and fixed `-Zmir-opt-level=0`. They establish
 compilation-stage behavior, not GPU execution or protected-runtime qualification.
 Record their exact source and terminal results before claiming a passing run.

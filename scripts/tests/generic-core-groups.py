@@ -158,6 +158,9 @@ if name == "rustc":
 if sys.argv[1:2] == ["fetch"]:
     sys.exit(int(os.environ.get("BOOTSTRAP_FETCH_STATUS", "0")))
 if sys.argv[1:2] == ["test"]:
+    failure = os.environ.get("BOOTSTRAP_TEST_FAILURE_SUFFIX", "")
+    if failure and any(argument.endswith(failure) for argument in sys.argv[2:]):
+        sys.exit(29)
     sys.exit(0)
 sys.exit(97)
 '''
@@ -165,7 +168,8 @@ sys.exit(97)
 
 class RustcSysrootBootstrapTests(unittest.TestCase):
     def invoke(self, *, rustc_status: int = 0, fetch_status: int = 0,
-               missing: str = "", malformed: str | None = None):
+               missing: str = "", malformed: str | None = None,
+               test_failure: str = ""):
         with tempfile.TemporaryDirectory(prefix="fe2o3-sysroot-bootstrap-") as directory:
             root = Path(directory)
             selected = root / "selected toolchain"
@@ -190,6 +194,7 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
                 "BOOTSTRAP_SYSROOT": str(selected) if malformed is None else malformed,
                 "BOOTSTRAP_RUSTC_STATUS": str(rustc_status),
                 "BOOTSTRAP_FETCH_STATUS": str(fetch_status),
+                "BOOTSTRAP_TEST_FAILURE_SUFFIX": test_failure,
             }
             result = subprocess.run(
                 ["bash", "-c", BOOTSTRAP_HARNESS, "bash", str(CI_LOCAL)],
@@ -206,6 +211,7 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
             "stage:rustc-codegen-sysroot-dependencies",
             "stage:rustc-codegen-lib-tests",
             "stage:rustc-codegen-expanded-source-tests",
+            "stage:rustc-codegen-expanded-model-tests",
             "stage:rustc-codegen-tile-census-source-tests",
             "stage:rustc-codegen-extractor-bin-tests",
             "stage:rustc-codegen-exporter-bin-tests",
@@ -229,6 +235,13 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
                 "test", "--locked", "-p", "rustc-codegen-fe2o3", "--lib",
                 "production_rustc_driver_v1::checked_output_source_v1_tests::"
                 "context_source_v29_tests::pending_source_tests::expanded_source_tests::"
+                "expanded_model_tests::actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_overflow",
+                "--", "--ignored", "--exact", "--test-threads=1",
+            ]},
+            {"command": "cargo", "arguments": [
+                "test", "--locked", "-p", "rustc-codegen-fe2o3", "--lib",
+                "production_rustc_driver_v1::checked_output_source_v1_tests::"
+                "context_source_v29_tests::pending_source_tests::expanded_source_tests::"
                 "tile_census_tests::actual_rustc_collected_tile_census_preserves_shared_body_counts",
                 "--", "--ignored", "--exact", "--test-threads=1",
             ]},
@@ -241,6 +254,20 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
                 "--bin", "fe2o3-export-sim",
             ]},
         ])
+
+    def test_expanded_model_failure_stops_before_later_backend_stages(self) -> None:
+        suffix = "actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_overflow"
+        result, calls, _ = self.invoke(test_failure=suffix)
+        self.assertEqual(result.returncode, 29, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [
+            "stage:rustc-codegen-sysroot-dependencies",
+            "stage:rustc-codegen-lib-tests",
+            "stage:rustc-codegen-expanded-source-tests",
+            "stage:rustc-codegen-expanded-model-tests",
+        ])
+        self.assertEqual(len(calls), 5)
+        self.assertEqual(calls[-1]["command"], "cargo")
+        self.assertTrue(calls[-1]["arguments"][5].endswith("::" + suffix))
 
     def test_sysroot_resolution_failure_stops_before_fetch_and_tests(self) -> None:
         result, calls, _ = self.invoke(rustc_status=23)
