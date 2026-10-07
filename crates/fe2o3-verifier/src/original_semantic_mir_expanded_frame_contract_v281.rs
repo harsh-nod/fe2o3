@@ -125,6 +125,29 @@ fn demands(
         {
             return Err(mismatch());
         }
+        if slots.is_product_v282(ty, out)? {
+            let count = slots
+                .product_component_count_v282(ty, out)?
+                .ok_or_else(mismatch)?;
+            if count == 0 || !slots.product_type_supported_v282(ty, out)? {
+                return Err(mismatch());
+            }
+            for atom in 0..count {
+                out.budget.charge_work(1)?;
+                if frames.leaf_required(frame, index, atom, out)? {
+                    scalar.emit_source_product_conjunct_v283(
+                        plan,
+                        owner.root,
+                        owner.instance,
+                        demand.value,
+                        atom,
+                        width,
+                        out,
+                    )?;
+                }
+            }
+            continue;
+        }
         let nominal = semantic
             .types()
             .get(ty.index() as usize)

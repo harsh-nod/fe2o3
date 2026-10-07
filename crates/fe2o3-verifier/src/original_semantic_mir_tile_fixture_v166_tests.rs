@@ -29,6 +29,9 @@ use fe2o3_pliron::{
 #[path = "original_semantic_mir_expanded_component_models_v210_tests.rs"]
 mod component_models;
 
+#[path = "original_semantic_mir_expanded_source_product_v283_tests.rs"]
+mod product_frames;
+
 fn owner() -> ProductionSemanticSsaOwnerV1 {
     let bytes = include_bytes!("fixtures/original-tile-descriptor-v163.bin");
     let semantic = AdmittedInertSemanticMirV1::decode_exact_v29_canonical(

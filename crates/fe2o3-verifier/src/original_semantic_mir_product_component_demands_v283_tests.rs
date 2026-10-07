@@ -335,6 +335,9 @@ fn product_demand_cache_unwind_releases_owned_domain_storage() {
 }
 
 fn live_transform(types: &mut Vec<SemanticTypeDeclV1>, functions: &mut [Function]) -> Rows {
+    // This re-admitted semantic-MIR fixture is not rustc-generated source.
+    // Only scalar local 4 is address-observed; Product local 6 is constructed
+    // and used whole, so the production storage classifier leaves it promotable.
     let rows = extend(types, functions);
     for function in &mut functions[..2] {
         assert_eq!(function.locals().len(), 4);
@@ -438,7 +441,7 @@ fn live_transform(types: &mut Vec<SemanticTypeDeclV1>, functions: &mut [Function
 }
 
 #[test]
-fn product_demand_real_original_ssa_keeps_both_atoms_across_an_actual_call() {
+fn product_demand_readmitted_source_ssa_keeps_both_atoms_across_an_actual_call() {
     use super::super::slots::ProductAtomV282;
     use fe2o3_mir_model::SsaVariableIdV1 as Variable;
     let rows = Cell::new(None);
