@@ -457,13 +457,13 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         .split_once("proof fn invocation_context_marker_aggregate_well_formed_v260(")
         .unwrap()
         .0;
-    for hidden in [
-        "invocation_source_logical_write_v38",
-        "invocation_source_execution_lease_current_v170",
-        "invocation_source_byte_refused_v36",
-    ] {
-        assert!(install_body.contains(&format!("hide({hidden});")));
-    }
+    assert!(
+        !install_body
+            .split_once("\n{\n")
+            .unwrap()
+            .1
+            .contains("hide(")
+    );
     assert_eq!(
         install_body
             .matches(
@@ -488,8 +488,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         .unwrap()
         .0;
     for body in [marker_body, checked_shape_body] {
-        assert!(body.contains("hide(invocation_source_aggregate_well_formed_v42);"));
-        assert!(body.contains("hide(invocation_source_byte_value_typed_v36);"));
+        assert!(!body.split_once("\n{\n").unwrap().1.contains("hide("));
         assert!(body.contains("reveal(invocation_source_aggregate_well_formed_v42);"));
     }
     assert!(marker_body.contains("reveal(invocation_source_byte_value_typed_v36);"));
@@ -500,7 +499,6 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     );
     assert!(marker_body.contains("assert(0 <= ordinal < 5 && path == seq![ordinal]);"));
     assert!(marker_body.contains("assert(leaves[path] == MemoryValueV30::Unit);"));
-    assert!(checked_shape_body.contains("hide(memory_value_modulus_v30);"));
     assert!(checked_shape_body.contains("assert(seq![0int] != seq![1int]);"));
     assert_eq!(
         checked_shape_body
@@ -606,7 +604,11 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let local_step = source
         .split_once("proof fn invocation_source_checked_add_local_step_v266(")
         .unwrap()
-        .1;
+        .1
+        .split("\nproof fn ")
+        .next()
+        .unwrap();
+    assert!(!local_step.split_once("\n{\n").unwrap().1.contains("hide("));
     assert!(local_step.contains("let after = invocation_source_byte_step_v36(source,\n        InvocationSourceByteEventV36::Checked {"));
     assert_eq!(
         local_step

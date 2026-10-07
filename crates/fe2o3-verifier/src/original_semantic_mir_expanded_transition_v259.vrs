@@ -34,13 +34,6 @@ proof fn invocation_source_plain_aggregate_install_frame_v260(
                 aggregates: source.logical.aggregates.insert(destination, aggregate),
                 ..invocation_source_logical_write_v38(source.logical, destination) }, ..source }),
 {
-    hide(invocation_source_byte_state_well_formed_v36);
-    hide(invocation_source_aggregate_well_formed_v42);
-    hide(invocation_source_aggregate_install_v42);
-    hide(invocation_source_byte_put_local_v36);
-    hide(invocation_source_logical_write_v38);
-    hide(invocation_source_execution_lease_current_v170);
-    hide(invocation_source_byte_refused_v36);
     assert(invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Undefined)
         == (InvocationSourceByteStateV36 {
             machine: MemoryStateV30 { values: source.machine.values.update(
@@ -64,11 +57,6 @@ proof fn invocation_context_marker_aggregate_well_formed_v260(source_type: int)
             .insert(seq![3int], MemoryValueV30::Unit)
             .insert(seq![4int], MemoryValueV30::Unit) }),
 {
-    hide(invocation_source_aggregate_leaf_count_v42);
-    hide(invocation_source_aggregate_leaf_path_v42);
-    hide(invocation_source_aggregate_leaf_bits_v42);
-    hide(invocation_source_aggregate_well_formed_v42);
-    hide(invocation_source_byte_value_typed_v36);
     assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Unit, 0)) by {
         reveal(invocation_source_byte_value_typed_v36);
     }
@@ -110,13 +98,6 @@ proof fn invocation_checked_add_aggregate_complete_v260(source_type: int, left: 
         invocation_source_aggregate_well_formed_v42(aggregate)
             && invocation_source_aggregate_complete_v42(aggregate) }),
 {
-    hide(invocation_source_aggregate_leaf_count_v42);
-    hide(invocation_source_aggregate_leaf_path_v42);
-    hide(invocation_source_aggregate_leaf_bits_v42);
-    hide(invocation_source_aggregate_well_formed_v42);
-    hide(invocation_source_aggregate_complete_v42);
-    hide(invocation_source_byte_value_typed_v36);
-    hide(memory_value_modulus_v30);
     invocation_checked_add_values_typed_v268(left, right);
     assert((seq![0int])[0] == 0 && (seq![1int])[0] == 1);
     assert(seq![0int] != seq![1int]);
@@ -769,16 +750,6 @@ proof fn invocation_source_checked_add_local_step_v266(
             && after.logical.aggregates[destination].leaves[seq![1int]]
                 == MemoryValueV30::Scalar(if left + right >= 4294967296 { 1int } else { 0int }) }),
 {
-    hide(invocation_source_byte_state_well_formed_v36);
-    hide(invocation_source_aggregate_well_formed_v42);
-    hide(invocation_source_aggregate_complete_v42);
-    hide(invocation_source_aggregate_leaf_count_v42);
-    hide(invocation_source_aggregate_leaf_path_v42);
-    hide(invocation_source_aggregate_leaf_bits_v42);
-    hide(invocation_source_checked_v42);
-    hide(invocation_source_byte_step_v36);
-    hide(invocation_source_logical_write_v38);
-    hide(invocation_source_byte_evaluate_v36);
     assert(invocation_source_byte_evaluate_v36(source,
         InvocationSourceByteValueV36::Local { local: left_local, moved: false },
         32, root, instance, little_endian)
