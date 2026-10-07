@@ -20,6 +20,17 @@ pub enum SourceSsaBoundaryErrorV31 {
 type Error = SourceSsaBoundaryErrorV31;
 type Result<T> = std::result::Result<T, Error>;
 type Meter<'a, 'w> = resources::Meter<'a, 'w, Error>;
+
+/// Complete event count and nonreturning failure-tail boundary for one source
+/// block. Like the topology, these rows must be rederived from the same source
+/// as the borrowed plan; they grant no semantic or execution authority.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SourceSsaBlockEventsV299 {
+    /// All original events, including unpromoted events absent from SSA rows.
+    pub events: usize,
+    /// Events from this ordinal are evaluated only on a nonreturning failure.
+    pub terminal_failure_start: Option<usize>,
+}
 impl From<Resource> for Error {
     fn from(error: Resource) -> Self {
         Self::Resource(error)
@@ -136,6 +147,19 @@ fn boundary_owner_headers_v31() -> Result<usize> {
         .ok_or_else(|| Resource::Arithmetic.into())
 }
 
+type FailureCaptureV299<'a, 'b> = (&'a Plan, ControlInput<'a>, &'b [SourceSsaBlockEventsV299]);
+
+fn boundary_failure_owner_headers_v299() -> Result<usize> {
+    // Retain the legacy frame envelope and additionally fund the larger
+    // borrowed-roster callback; the roster payload remains caller-owned.
+    boundary_owner_headers_v31()?
+        .checked_add(boundary_scope_headers_v31::<
+            (SourceSsaBoundariesV31<'_>, SourceSsaBoundaryStorageV31),
+            FailureCaptureV299<'_, '_>,
+        >()?)
+        .ok_or_else(|| Resource::Arithmetic.into())
+}
+
 fn boundary_query_headers_v31() -> Result<usize> {
     type Frame<'a> = (
         &'a SourceSsaBoundariesV31<'a>,
@@ -171,7 +195,7 @@ impl<'source> SourceSsaBoundariesV31<'source> {
             meter.reserve(boundary_owner_headers_v31()?)?;
             let entry = input.entry;
             let successors = input.successors;
-            let checked = Boundaries::derive(plan, input, meter)?;
+            let checked = Boundaries::derive(plan, input, None, meter)?;
             let retained = checked
                 .rows
                 .capacity()
@@ -192,6 +216,51 @@ impl<'source> SourceSsaBoundariesV31<'source> {
         assert_eq!(
             std::mem::align_of_val(&run),
             std::mem::align_of::<DeriveCapture<'_>>()
+        );
+        resources::scoped(budget, run)
+    }
+
+    /// Checks the same equations while separating an authenticated nonreturning
+    /// failure suffix from each successful outgoing edge. All suffix uses and
+    /// kills are checked; only its final state is excluded from success edges.
+    /// The caller must join the complete roster to the same owned source/SSA.
+    pub fn derive_with_terminal_failures_v299(
+        plan: &'source Plan,
+        entry: Block,
+        successors: &'source [Vec<Block>],
+        blocks: &[SourceSsaBlockEventsV299],
+        budget: &mut Budget<'_>,
+    ) -> Result<(Self, SourceSsaBoundaryStorageV31)> {
+        let capture = (plan, ControlInput { entry, successors }, blocks);
+        let run = move |meter: &mut Meter<'_, '_>| {
+            let (plan, input, blocks) = capture;
+            meter.reserve(boundary_failure_owner_headers_v299()?)?;
+            let entry = input.entry;
+            let successors = input.successors;
+            let checked = Boundaries::derive(plan, input, Some(blocks), meter)?;
+            let retained = checked
+                .rows
+                .capacity()
+                .checked_mul(size_of::<Row>())
+                .and_then(|bytes| bytes.checked_add(size_of::<Self>()))
+                .ok_or(Resource::Arithmetic)?;
+            Ok((
+                Self {
+                    plan,
+                    entry,
+                    successors,
+                    checked,
+                },
+                SourceSsaBoundaryStorageV31 { retained },
+            ))
+        };
+        assert_eq!(
+            std::mem::size_of_val(&run),
+            size_of::<FailureCaptureV299<'_, '_>>()
+        );
+        assert_eq!(
+            std::mem::align_of_val(&run),
+            std::mem::align_of::<FailureCaptureV299<'_, '_>>()
         );
         resources::scoped(budget, run)
     }

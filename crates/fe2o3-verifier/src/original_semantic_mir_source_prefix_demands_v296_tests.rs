@@ -152,6 +152,7 @@ fn partial_prefix_no_phi_successor_retains_dominating_live_through_locals() {
             let old = functions.last_mut().unwrap();
             assert_eq!(old.blocks().len(), 1);
             let source = old.source();
+            // Inserting a predecessor must preserve canonical block identity order.
             let blocks = vec![
                 SemanticBasicBlockV1::new(
                     SemanticBlockIdentityV1::from_sha256([253; 32]),
@@ -169,8 +170,15 @@ fn partial_prefix_no_phi_successor_retains_dominating_live_through_locals() {
                     ),
                 )
                 .unwrap(),
-                old.blocks()[0].clone(),
+                SemanticBasicBlockV1::new(
+                    SemanticBlockIdentityV1::from_sha256([254; 32]),
+                    old.blocks()[0].source(),
+                    old.blocks()[0].statements().to_vec(),
+                    old.blocks()[0].terminator().clone(),
+                )
+                .unwrap(),
             ];
+            assert!(blocks[0].identity().as_bytes() < blocks[1].identity().as_bytes());
             *old = SemanticFunctionDeclV1::new(
                 old.identity(),
                 old.role(),
@@ -245,12 +253,19 @@ fn partial_prefix_unavailable_scalar_liveness_retains_component_demands() {
                 let row = &query.locals[4];
                 assert_eq!(row.scalar, ScalarDemand::Unavailable);
                 assert_eq!(row.current, None);
-                assert_eq!(row.domain, ComponentDomainV283::ScalarV42);
-                assert!(query.component_required(4, 0, out)?);
+                assert!(slots.has_original_object(root, 0, 4, out)?);
+                assert_eq!(slots.aggregate_leaf_count(row.ty, out)?, None);
+                assert_eq!(row.domain, ComponentDomainV283::None);
+                assert!(row.components.is_empty());
+                assert!(matches!(query.component_required(4, 0, out), Err(Error::Statement(
+                    "partial source prefix differs from its retained statement or SSA owner"))));
                 assert!(matches!(query.require_complete_local_coverage(out), Err(Error::Statement(
                     "partial prefix has unavailable all-local liveness; complete frame admission refused"))));
                 // A refusal cannot mutate the retained unavailable state.
                 assert_eq!(query.locals[4].scalar, ScalarDemand::Unavailable);
+                assert_eq!(query.locals[4].current, None);
+                assert_eq!(query.locals[4].domain, ComponentDomainV283::None);
+                assert!(query.locals[4].components.is_empty());
                 query.discard(out)?;
                 witnesses += 1;
             }
@@ -258,6 +273,147 @@ fn partial_prefix_unavailable_scalar_liveness_retains_component_demands() {
             Ok(())
         })
     }).0.unwrap();
+}
+
+#[test]
+fn partial_prefix_unavailable_physical_local_keeps_logical_component_demands() {
+    use fe2o3_mir_model::semantic_mir_v1::*;
+    invocations::tests::run_source_transform(
+        LIMIT,
+        LIMIT,
+        |types, functions| {
+            super::super::super::paired::aggregate_tests::checked_transform(
+                types,
+                functions,
+                SemanticCheckedBinaryOpV1::Add,
+                false,
+                false,
+            );
+            let old = functions.last_mut().unwrap();
+            let source = old.source();
+            let word = SemanticTypeIdV1::from_index(0);
+            let mut locals = old.locals().to_vec();
+            assert_eq!(locals.len(), 5);
+            locals.push(SemanticLocalDeclV1::new(
+                SemanticLocalIdentityV1::from_sha256([251; 32]),
+                word,
+                SemanticLocalRoleV1::Temporary,
+                source,
+            ));
+            let place = |local| {
+                SemanticPlaceV1::new(SemanticLocalIdV1::from_index(local), vec![], word)
+                    .unwrap()
+            };
+            let mut blocks = old.blocks().to_vec();
+            let mut statements = blocks[0].statements().to_vec();
+            // A separate physical scalar makes whole-local coverage unavailable
+            // without changing the checked tuple's logical value representation.
+            statements.extend([
+                SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::Store(SemanticMemoryStoreV1::new(
+                        place(5),
+                        SemanticOperandV1::Copy(place(1)),
+                        SemanticVolatilityV1::NonVolatile,
+                        None,
+                    )),
+                ),
+                SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                        place(3),
+                        SemanticRvalueV1::new(
+                            word,
+                            SemanticRvalueKindV1::Load(SemanticMemoryLoadV1::new(
+                                place(5),
+                                SemanticVolatilityV1::NonVolatile,
+                                None,
+                            )),
+                        ),
+                    )),
+                ),
+            ]);
+            blocks[0] = SemanticBasicBlockV1::new(
+                blocks[0].identity(),
+                source,
+                statements,
+                blocks[0].terminator().clone(),
+            )
+            .unwrap();
+            *old = SemanticFunctionDeclV1::new(
+                old.identity(),
+                old.role(),
+                old.item_definition_identity(),
+                old.monomorphization_identity(),
+                old.generic_type_arguments_identity(),
+                old.const_generic_arguments_identity(),
+                source,
+                old.abi().clone(),
+                locals,
+                old.entry(),
+                blocks,
+            )
+            .unwrap();
+        },
+        |plan, out| {
+            super::super::super::source_function::tests::with_slots(plan, out, |slots, out| {
+                let frames = FramePlan::derive(plan, slots, out)?;
+                let owner = plan.source(out)?;
+                let semantic = owner.source_semantic(out.budget)?;
+                let archive = owner.source_ssa(out.budget)?;
+                let mut witnesses = 0;
+                for frame in &frames.frames {
+                    if !frame.active {
+                        continue;
+                    }
+                    let function = &semantic.functions()[frame.function.index() as usize];
+                    for (block, body) in function.blocks().iter().enumerate() {
+                        if !matches!(body.terminator().kind(), Terminator::Assert { .. }) {
+                            continue;
+                        }
+                        let ssa = archive.plan_for_function(frame.function).unwrap().plan();
+                        assert!(ssa.promoted_variables().contains(
+                            &fe2o3_mir_model::SsaVariableIdV1::new(4)
+                        ));
+                        assert!(!ssa.promoted_variables().contains(
+                            &fe2o3_mir_model::SsaVariableIdV1::new(5)
+                        ));
+                        assert!(!slots.has_original_object(frame.root, frame.instance, 4, out)?);
+                        assert!(slots.has_original_object(frame.root, frame.instance, 5, out)?);
+                        assert_eq!(slots.aggregate_leaf_count(function.locals()[4].ty(), out)?, Some(2));
+                        let query = frames.partial_prefix_v296(
+                            frame.root,
+                            frame.instance,
+                            block,
+                            body.statements().len(),
+                            out,
+                        )?;
+                        assert!(std::ptr::eq(query.owner, &frames));
+                        for after_refusal in [false, true] {
+                            if after_refusal {
+                                assert!(matches!(query.require_complete_local_coverage(out), Err(Error::Statement(
+                                    "partial prefix has unavailable all-local liveness; complete frame admission refused"))));
+                            }
+                            assert_eq!(query.locals[5].scalar, ScalarDemand::Unavailable);
+                            assert_eq!(query.locals[5].current, None);
+                            assert_eq!(query.locals[5].domain, ComponentDomainV283::None);
+                            assert!(query.locals[5].components.is_empty());
+                            assert_eq!(query.locals[4].domain, ComponentDomainV283::ScalarV42);
+                            assert_eq!(query.locals[4].components.len(), 2);
+                            assert!(query.component_required(4, 0, out)?);
+                            assert!(query.component_required(4, 1, out)?);
+                        }
+                        query.discard(out)?;
+                        witnesses += 1;
+                    }
+                }
+                assert_eq!(witnesses, 4);
+                Ok(())
+            })
+        },
+    )
+    .0
+    .unwrap();
 }
 
 #[test]

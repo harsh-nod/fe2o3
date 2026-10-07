@@ -414,6 +414,19 @@ impl ProductionSemanticSsaFunctionOccurrencesV1<'_> {
     pub fn events(&self) -> &[ProductionSemanticSsaEventOccurrenceV1] {
         &self.rows.events
     }
+    /// Complete source block roster, including unreachable blocks.
+    pub fn block_count_v299(&self) -> usize {
+        self.rows.blocks.len()
+    }
+    /// Exact block-event slice, including unpromoted and failure-only events.
+    pub fn block_events_v299(
+        &self,
+        block: SsaBlockIdV1,
+    ) -> Option<&[ProductionSemanticSsaEventOccurrenceV1]> {
+        let row = self.rows.blocks.get(block.get() as usize)?;
+        (row.block == block).then_some(())?;
+        self.rows.events.get(row.events.clone())
+    }
     /// Boundary rederived from this owner's exact source and joined planner input.
     pub fn terminal_failure_start(&self, block: SsaBlockIdV1) -> Option<usize> {
         self.rows
