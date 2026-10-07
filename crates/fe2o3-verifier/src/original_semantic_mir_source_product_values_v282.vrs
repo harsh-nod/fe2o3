@@ -730,10 +730,12 @@ spec fn invocation_source_product_replace_path_v282(
     let selects = |ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(root_type)
         && invocation_source_path_prefix_v42(path, invocation_source_product_component_path_v282(root_type, ordinal));
     if invocation_source_product_type_at_v282(root_type, path) != Some(result_type)
-        || !(exists|ordinal: int| selects(ordinal)) {
+        || !(exists|ordinal: int| #![trigger invocation_source_product_component_path_v282(root_type, ordinal)]
+            selects(ordinal)) {
         invocation_source_byte_refused_v36(source)
     } else {
-        let first = choose|ordinal: int| selects(ordinal);
+        let first = choose|ordinal: int| #![trigger invocation_source_product_component_path_v282(root_type, ordinal)]
+            selects(ordinal);
         invocation_source_product_replace_components_v282(source, InvocationSourceProductPlaceV282 {
             local, root_type, result_type, first_component: first, depth: path.len() as int,
         }, components, little_endian)
