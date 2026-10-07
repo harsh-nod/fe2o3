@@ -1,7 +1,7 @@
 //! Necessary scalar equations over retained snapshots, not transition authority.
 use super::*;
+use crate::mixed_optimizer_refinement_v26::semantics::operation_index;
 use crate::mixed_optimizer_refinement_v26::semantics::original_scalar_v30::vector;
-use crate::mixed_optimizer_refinement_v26::semantics::{block_index, operation_index};
 use fe2o3_kernel_analysis::CanonicalKirInventoryV18 as Inventory;
 use fe2o3_kernel_ir::{
     BinaryOp, CanonicalKirBlockCoordinateV1 as Block, CanonicalKirFunctionCoordinateV1 as Function,
@@ -54,7 +54,6 @@ pub(super) fn headers() -> usize {
     // Simultaneous wrapper, iterative traversal, and recipe-query frames.
     let wrapper_refs = 6 * size_of::<&()>();
     let recipe_refs = 10 * size_of::<&()>();
-    let phi_refs = 9 * size_of::<&()>();
     let operand_refs = 4 * size_of::<&()>();
     let traversal_borrows =
         size_of::<&mut Vec<Option<Recipe>>>() + size_of::<&mut Vec<u8>>() + 4 * size_of::<&()>();
@@ -73,11 +72,8 @@ pub(super) fn headers() -> usize {
         + size_of::<Option<usize>>()
         + 2 * size_of::<Result<Recipe>>()
         + 2 * size_of::<Result<usize>>();
-    let arm_iterator = size_of::<std::array::IntoIter<Block, 2>>();
     let snapshot_path = size_of::<[u32; 2]>() + size_of::<&[u32]>();
-    let borrowed_rosters = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>()
-        + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1]>()
-        + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>]>();
+    let borrowed_descendants = size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>();
     let frame_indices = (14 + 8 + 8 + 2) * size_of::<usize>();
     let diagnostic_results = 2 * size_of::<Result<Recipe>>() + 2 * size_of::<Result<()>>();
     let control_install = size_of::<control_reconstruction::Plan<'_, '_>>()
@@ -122,22 +118,17 @@ pub(super) fn headers() -> usize {
         + 4 * size_of::<Recipe>()
         + 4 * size_of::<Result<Recipe>>()
         + 4 * size_of::<Option<usize>>()
-        + 4 * size_of::<Option<Block>>()
-        + 4 * size_of::<Block>()
         + 3 * size_of::<Function>()
         + 3 * size_of::<Definition>()
         + 3 * size_of::<std::ops::Range<usize>>()
-        + size_of::<[Option<(Block, usize)>; 2]>()
         + wrapper_refs
         + recipe_refs
-        + phi_refs
         + operand_refs
         + traversal_borrows
         + loader_frame
         + pure_result_frame
-        + arm_iterator
         + snapshot_path
-        + borrowed_rosters
+        + borrowed_descendants
         + frame_indices
         + diagnostic_results
         + control_install
@@ -147,13 +138,10 @@ pub(super) fn headers() -> usize {
         + 2 * size_of::<ScalarType>()
         + 2 * size_of::<ValueId>()
         + size_of::<FormalIndexWidth>()
-        + size_of::<[bool; 2]>()
         + 2 * size_of::<bool>()
         + size_of::<u8>()
         + size_of::<u64>()
         + 3 * size_of::<Result<()>>()
-        + 3 * size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>>>()
-        + size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1>>()
         + size_of::<std::slice::Iter<'_, usize>>()
 }
 
@@ -253,7 +241,8 @@ mod tests {
     }
 
     #[test]
-    fn reconstruction_rejects_nonclosed_and_extra_predecessor_diamonds() {
+    fn reconstruction_control_regions_reject_side_exits_and_preserve_nested_conditions() {
+        use control_reconstruction::{Term, derive};
         for (nonclosed, extra) in [(false, false), (true, false), (false, true)] {
             let module = diamond(nonclosed, extra);
             let mut work = Work::new(LIMIT);
@@ -269,38 +258,54 @@ mod tests {
                 .iter()
                 .position(|row| row.value == Some(ValueId(4)))
                 .unwrap();
-            let Definition::BlockArgument { block, .. } = input.definitions()[original].coordinate
-            else {
-                panic!("fixture merge argument must retain its original coordinate");
-            };
+            budget
+                .reserve_storage(crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT)
+                .unwrap();
             let mut out = Writer::new(&mut budget).unwrap();
-            let result = phi(&input, original, block, &mut out);
-            if nonclosed || extra {
-                let Error::SourceReconstruction { facts, .. } = result.unwrap_err() else {
-                    panic!("the exact diamond guard must retain its original coordinates");
+            let result = derive(&input, original, &mut out);
+            if nonclosed {
+                let error = match result {
+                    Ok(plan) => {
+                        plan.discard(&mut out).unwrap();
+                        panic!("side exit cannot form a complete region");
+                    }
+                    Err(error) => error,
+                };
+                let Error::SourceReconstruction { facts, .. } = error else {
+                    panic!("control refusal must retain original coordinates");
                 };
                 assert_eq!(facts.original, original);
                 assert_eq!(facts.coordinate, input.definitions()[original].coordinate);
-                assert_eq!(
-                    facts.phase,
-                    if nonclosed {
-                        "phi-arm-exit"
-                    } else {
-                        "phi-common-duplicate"
-                    }
-                );
+                assert_eq!(facts.phase, "cfg-region");
             } else {
-                let Recipe::Select {
-                    condition,
-                    on_true,
-                    on_false,
-                } = result.unwrap()
-                else {
-                    panic!("closed fixture must use both distinct original values");
+                let plan = result.unwrap();
+                let index = |value| {
+                    input
+                        .definitions()
+                        .iter()
+                        .position(|row| row.value == Some(ValueId(value)))
+                        .unwrap()
                 };
-                assert_eq!(input.definitions()[condition].value, Some(ValueId(2)));
-                assert_eq!(input.definitions()[on_true].value, Some(ValueId(0)));
-                assert_eq!(input.definitions()[on_false].value, Some(ValueId(1)));
+                let Term::Control(root) = plan.root else {
+                    panic!("distinct values require selection");
+                };
+                let selected = plan.controls[root];
+                let inner = if extra {
+                    assert_eq!(plan.controls.len(), 2);
+                    assert_eq!(selected.condition, index(3));
+                    assert_eq!(selected.on_false, Term::Original(index(0)));
+                    let Term::Control(inner) = selected.on_true else {
+                        panic!("outer true branch must select original inner condition");
+                    };
+                    plan.controls[inner]
+                } else {
+                    assert_eq!(plan.controls.len(), 1);
+                    selected
+                };
+                assert_eq!(inner.condition, index(2));
+                assert_eq!(inner.on_true, Term::Original(index(0)));
+                assert_eq!(inner.on_false, Term::Original(index(1)));
+                plan.discard(&mut out).unwrap();
             }
             assert!(out.finish().unwrap().is_empty());
         }
@@ -838,158 +843,6 @@ fn operand(
         return Err(mismatch());
     }
     Ok(index)
-}
-
-// Only an exact two-arm diamond is accepted. Each arm has one incoming edge,
-// and its sole outgoing edge carries the selected original phi argument.
-#[cfg(test)]
-fn phi(
-    input: &Inventory<'_>,
-    original: usize,
-    block: Block,
-    out: &mut Writer<'_, '_>,
-) -> Result<Recipe> {
-    out.budget.charge_work(16)?;
-    let owner = input
-        .functions()
-        .get(block.function.0 as usize)
-        .ok_or_else(mismatch)?;
-    let row = input.definitions().get(original).ok_or_else(mismatch)?;
-    let facts = RefusalFacts::new(original, row.coordinate, row.ty);
-    let mut phase = RefusalPhase::PhiIncoming;
-    let result = (|| {
-        if owner.coordinate != block.function || !owner.definitions.contains(&original) {
-            return Err(mismatch());
-        }
-        let mut arms = [None; 2];
-        let mut count = 0usize;
-        let mut distinct = false;
-        for edge in input
-            .edge_arguments()
-            .get(owner.edge_arguments.clone())
-            .ok_or_else(mismatch)?
-        {
-            out.budget.charge_work(1)?;
-            if edge.target_definition != original {
-                continue;
-            }
-            out.budget.charge_work(5)?;
-            if edge.coordinate.edge.source.function != block.function
-                || !owner.definitions.contains(&edge.incoming_definition)
-            {
-                return Err(mismatch());
-            }
-            let incoming = input
-                .definitions()
-                .get(edge.incoming_definition)
-                .ok_or_else(mismatch)?;
-            if incoming.value != Some(edge.value) || incoming.ty != row.ty {
-                return Err(mismatch());
-            }
-            if let Some((_, first)) = arms[0] {
-                distinct |= first != edge.incoming_definition;
-            }
-            if count >= arms.len() {
-                if distinct {
-                    return Err(mismatch());
-                }
-            } else {
-                arms[count] = Some((edge.coordinate.edge.source, edge.incoming_definition));
-            }
-            count += 1;
-        }
-        out.budget.charge_work(3)?;
-        let (first, first_value) = arms[0].ok_or_else(mismatch)?;
-        if !distinct {
-            return Ok(Recipe::Forward(first_value));
-        }
-        let (second, second_value) = arms[1].ok_or_else(mismatch)?;
-        if first_value == second_value {
-            return Ok(Recipe::Forward(first_value));
-        }
-        if first == second || first == block || second == block {
-            return Err(mismatch());
-        }
-        for arm in [first, second] {
-            phase = RefusalPhase::PhiArmExit;
-            out.budget.charge_work(6)?;
-            let arm = &input.blocks()[block_index(input, arm)?];
-            let [edge] = input.edges().get(arm.edges.clone()).ok_or_else(mismatch)? else {
-                return Err(mismatch());
-            };
-            if !arm.parameters.is_empty() {
-                phase = RefusalPhase::PhiArmParameters;
-                return Err(mismatch());
-            }
-            if !matches!(arm.terminator, Terminator::Branch { .. }) || edge.target != block {
-                return Err(mismatch());
-            }
-        }
-        let mut common = None;
-        let mut seen = [false; 2];
-        let mut on_true = None;
-        let mut on_false = None;
-        phase = RefusalPhase::PhiCommonSource;
-        for edge in input
-            .edges()
-            .get(owner.edges.clone())
-            .ok_or_else(mismatch)?
-        {
-            out.budget.charge_work(2)?;
-            let arm = if edge.target == first {
-                0
-            } else if edge.target == second {
-                1
-            } else {
-                continue;
-            };
-            out.budget.charge_work(5)?;
-            if seen[arm] {
-                phase = RefusalPhase::PhiCommonDuplicate;
-                return Err(mismatch());
-            }
-            if !edge.arguments.is_empty() {
-                phase = RefusalPhase::PhiCommonArguments;
-                return Err(mismatch());
-            }
-            if common.is_some_and(|prior| prior != edge.coordinate.source) {
-                return Err(mismatch());
-            }
-            seen[arm] = true;
-            common = Some(edge.coordinate.source);
-            let value = if arm == 0 { first_value } else { second_value };
-            match edge.coordinate.successor {
-                0 if on_true.is_none() => on_true = Some(value),
-                1 if on_false.is_none() => on_false = Some(value),
-                _ => return Err(mismatch()),
-            }
-        }
-        phase = RefusalPhase::PhiBranch;
-        out.budget.charge_work(6)?;
-        let common = common.ok_or_else(mismatch)?;
-        if !seen[0] || !seen[1] || common == block || common == first || common == second {
-            return Err(mismatch());
-        }
-        let branch = &input.blocks()[block_index(input, common)?];
-        let Terminator::ConditionalBranch { condition, .. } = branch.terminator else {
-            return Err(mismatch());
-        };
-        if branch.edges.len() != 2 {
-            return Err(mismatch());
-        }
-        Ok(Recipe::Select {
-            condition: operand(
-                input,
-                block.function,
-                *condition,
-                &Type::Scalar(ScalarType::Bool),
-                out,
-            )?,
-            on_true: on_true.ok_or_else(mismatch)?,
-            on_false: on_false.ok_or_else(mismatch)?,
-        })
-    })();
-    result.map_err(|error| trace_refusal(error, phase, facts))
 }
 
 // This selects an equation from the original inventory only. The caller still

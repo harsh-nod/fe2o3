@@ -122,10 +122,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + 8 * size_of::<&()>()
         + 3 * size_of::<Result<()>>()
         + size_of::<std::collections::TryReserveError>();
-    use fe2o3_kernel_ir::{
-        CanonicalKirBlockCoordinateV1 as RebuildBlock,
-        CanonicalKirFunctionCoordinateV1 as RebuildFunction,
-    };
+    use fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1 as RebuildFunction;
     use reconstruction::Recipe;
     let reconstruction_vectors = size_of::<Vec<Option<Recipe>>>()
         + size_of::<Vec<u8>>()
@@ -138,15 +135,11 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     let reconstruction_query_frames = 4 * size_of::<Recipe>()
         + 4 * size_of::<Result<Recipe>>()
         + 4 * size_of::<Option<usize>>()
-        + 4 * size_of::<Option<RebuildBlock>>()
-        + 4 * size_of::<RebuildBlock>()
         + 3 * size_of::<RebuildFunction>()
         + 3 * size_of::<Definition>()
-        + 3 * size_of::<std::ops::Range<usize>>()
-        + size_of::<[Option<(RebuildBlock, usize)>; 2]>();
+        + 3 * size_of::<std::ops::Range<usize>>();
     let reconstruction_wrapper_borrows = 6 * size_of::<&()>();
     let reconstruction_recipe_borrows = 10 * size_of::<&()>();
-    let reconstruction_phi_borrows = 9 * size_of::<&()>();
     let reconstruction_operand_borrows = 4 * size_of::<&()>();
     let reconstruction_traversal_borrows =
         size_of::<&mut Vec<Option<Recipe>>>() + size_of::<&mut Vec<u8>>() + 4 * size_of::<&()>();
@@ -163,27 +156,19 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + size_of::<Option<usize>>()
         + 2 * size_of::<Result<Recipe>>()
         + 2 * size_of::<Result<usize>>();
-    let reconstruction_arm_iteration = size_of::<std::array::IntoIter<RebuildBlock, 2>>();
     let reconstruction_snapshot_path = size_of::<[u32; 2]>() + size_of::<&[u32]>();
     let reconstruction_slice_borrows =
-        size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>()
-            + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1]>()
-            + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>]>();
+        size_of::<&[fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1]>();
     let reconstruction_indices = (14 + 8 + 8 + 2) * size_of::<usize>();
     let reconstruction_values = 2 * size_of::<Type>()
         + 2 * size_of::<fe2o3_kernel_ir::ScalarType>()
         + 2 * size_of::<fe2o3_kernel_ir::ValueId>()
         + size_of::<FormalIndexWidth>()
-        + size_of::<[bool; 2]>()
         + 2 * size_of::<bool>()
         + size_of::<u8>()
         + size_of::<u64>()
         + 3 * size_of::<Result<()>>();
-    let reconstruction_iterators = 3 * size_of::<
-        std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>>,
-    >() + size_of::<
-        std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1>,
-    >() + size_of::<std::slice::Iter<'_, usize>>();
+    let reconstruction_iterators = size_of::<std::slice::Iter<'_, usize>>();
     #[allow(dead_code)]
     #[repr(C)]
     struct RefusalFactsFields {
@@ -293,12 +278,10 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + reconstruction_query_frames
         + reconstruction_wrapper_borrows
         + reconstruction_recipe_borrows
-        + reconstruction_phi_borrows
         + reconstruction_operand_borrows
         + reconstruction_traversal_borrows
         + reconstruction_loader_frame
         + reconstruction_pure_result_frame
-        + reconstruction_arm_iteration
         + reconstruction_snapshot_path
         + reconstruction_slice_borrows
         + reconstruction_indices

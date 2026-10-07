@@ -22,12 +22,6 @@ pub(super) enum Phase {
     TraversalBounds,
     TraversalCycle,
     PhiIncoming,
-    PhiArmParameters,
-    PhiArmExit,
-    PhiCommonDuplicate,
-    PhiCommonArguments,
-    PhiCommonSource,
-    PhiBranch,
     ControlRegion,
 }
 
@@ -49,12 +43,6 @@ impl Phase {
             Self::TraversalBounds => "traversal-bounds",
             Self::TraversalCycle => "traversal-cycle",
             Self::PhiIncoming => "phi-incoming",
-            Self::PhiArmParameters => "phi-arm-parameters",
-            Self::PhiArmExit => "phi-arm-exit",
-            Self::PhiCommonDuplicate => "phi-common-duplicate",
-            Self::PhiCommonArguments => "phi-common-arguments",
-            Self::PhiCommonSource => "phi-common-source",
-            Self::PhiBranch => "phi-branch",
             Self::ControlRegion => "cfg-region",
         }
     }
@@ -256,12 +244,7 @@ mod tests {
             Phase::TraversalBounds,
             Phase::TraversalCycle,
             Phase::PhiIncoming,
-            Phase::PhiArmParameters,
-            Phase::PhiArmExit,
-            Phase::PhiCommonDuplicate,
-            Phase::PhiCommonArguments,
-            Phase::PhiCommonSource,
-            Phase::PhiBranch,
+            Phase::ControlRegion,
         ] {
             let mut line = Line {
                 bytes: [0; LINE_BYTES],

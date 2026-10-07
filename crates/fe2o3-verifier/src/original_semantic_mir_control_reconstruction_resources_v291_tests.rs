@@ -301,13 +301,25 @@ fn control_reconstruction_preserves_diamond_emission_and_original_dependency_cyc
                 let mut order = vector(count, &mut out).unwrap();
                 recipes.resize(count, None);
                 marks.resize(count, 0);
-                let Definition::BlockArgument { block, .. } =
-                    input.definitions()[original].coordinate
-                else {
-                    panic!("original phi");
-                };
                 recipes[original] = Some(if old {
-                    super::super::phi(input, original, block, &mut out).unwrap()
+                    // Independent expected recipe for this exact canonical fixture,
+                    // not a retained copy of the superseded reconstruction algorithm.
+                    let index = |value| {
+                        input
+                            .definitions()
+                            .iter()
+                            .position(|row| row.value == Some(ValueId(value)))
+                            .unwrap()
+                    };
+                    if equal {
+                        Recipe::Forward(index(0))
+                    } else {
+                        Recipe::Select {
+                            condition: index(2),
+                            on_true: index(0),
+                            on_false: index(1),
+                        }
+                    }
                 } else {
                     Recipe::Region(original)
                 });
