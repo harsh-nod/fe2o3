@@ -10,6 +10,8 @@ use fe2o3_resource_accounting::{HostMetadataTableV1, ResourceCreditAccountV1};
 
 mod construction;
 mod progress;
+mod session;
+use session::SessionV1;
 pub(crate) const SLOTS: usize = fe2o3_kfd::GFX942_NATIVE_FILL_ARENA_SLOTS_V1;
 
 struct Cell {
@@ -47,13 +49,18 @@ impl ArenaPreallocationV1 {
 }
 
 pub(in crate::kfd_backend) struct ArenaV1 {
+    profile: GeneratedProfileV1,
     phase: PhaseV1,
     data: Option<Gfx942FixedDispatchDataV1>,
     storage: ArenaPreallocationV1,
-    session: Option<Gfx942NativeFillArenaSessionV1>,
+    session: Option<SessionV1>,
 }
 
 impl ArenaV1 {
+    pub(in crate::kfd_backend) fn profile(&self) -> GeneratedProfileV1 {
+        self.profile
+    }
+
     pub(in crate::kfd_backend) fn is_retired(&self) -> bool {
         self.phase == PhaseV1::Retired
             && self.data.is_none()
@@ -104,8 +111,10 @@ impl KfdRuntimeBackendV1 {
         roster: &GeneratedHostRosterV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
-        if plan.profile != GeneratedProfileV1::NativeFillArena1024
-            || plan.count != 1
+        if !matches!(
+            plan.profile,
+            GeneratedProfileV1::NativeFillArena1024 | GeneratedProfileV1::IndependentFillArena1024
+        ) || plan.count != 1
             || !self.validate_generated_shell_records_v1(plan)
             || !readback::roster_matches_plan_v1(plan, roster)
             || !self.generated_shells.get(&plan.key).is_some_and(|record| {
@@ -114,7 +123,12 @@ impl KfdRuntimeBackendV1 {
                     && record.control.is_none()
                     && record.source_identity.matches(&roster.source_identity)
                     && record.arena.as_ref().is_some_and(|arena| {
-                        arena.phase == PhaseV1::Adopted
+                        arena.profile == plan.profile
+                            && arena.phase == PhaseV1::Adopted
+                            && arena
+                                .session
+                                .as_ref()
+                                .is_some_and(|session| session.profile() == plan.profile)
                             && arena.session.is_some()
                             && arena.storage.cells.len() == SLOTS
                     })
@@ -138,8 +152,16 @@ impl KfdRuntimeBackendV1 {
             std::process::abort();
         }
         self.commit_generated_controls_v1(authenticated, roster, |control| {
-            let generated_shells::GeneratedControlV1::Arena1024(packets) = control else {
-                std::process::abort();
+            let packets = match (roster.source_identity.profile(), control) {
+                (
+                    GeneratedProfileV1::NativeFillArena1024,
+                    generated_shells::GeneratedControlV1::Arena1024(packets),
+                )
+                | (
+                    GeneratedProfileV1::IndependentFillArena1024,
+                    generated_shells::GeneratedControlV1::IndependentArena1024(packets),
+                ) => packets,
+                _ => std::process::abort(),
             };
             *packets = source.packets.take();
             packets.is_some()

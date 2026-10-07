@@ -10,7 +10,10 @@ pub(crate) use cohort3::RuntimeGfx942Cohort3SourceMutV1;
 pub use cohort3::RuntimeGfx942GeneratedCohort3V1;
 pub(crate) mod arena1024;
 mod registry4;
-pub use arena1024::{RuntimeGfx942ArenaPreparationErrorV1, RuntimeGfx942GeneratedArena1024V1};
+pub use arena1024::{
+    RuntimeGfx942ArenaPreparationErrorV1, RuntimeGfx942GeneratedArena1024V1,
+    RuntimeGfx942GeneratedIndependentArena1024V1,
+};
 pub(crate) use cohort3::combine_original_rosters;
 pub(crate) use cohort3::{GeneratedContractsV1, GeneratedProfileV1, GeneratedSourceIdentityV1};
 pub(crate) use registry4::RuntimeGfx942Registry4SourceMutV1;
@@ -364,6 +367,16 @@ impl GeneratedHostRosterV1 {
             fixup_count: projection.pointer_fixups().len(),
             dispatch_contract_sha256: projection.dispatch_contract_sha256().into(),
         };
+        if matches!(
+            projection.invocation_binding(),
+            crate::Gfx942RuntimeInvocationBindingV1::NativeIndependentFill64V1 { .. }
+        ) {
+            roster.source_identity = GeneratedSourceIdentityV1::IndependentArenaMember(
+                std::sync::Arc::clone(projection.source_identity()),
+            );
+            roster.dispatch_contract_sha256 =
+                GeneratedContractsV1::IndependentArenaMember(projection.dispatch_contract_sha256());
+        }
         for (ordinal, buffer) in projection.buffers().iter().enumerate() {
             let bytes = u64::try_from(buffer.bytes().len()).map_err(|_| Error::InvalidRoster)?;
             let access = projection

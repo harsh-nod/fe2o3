@@ -12,6 +12,107 @@ fn account(bytes: u64) -> ResourceCreditAccountV1 {
 }
 
 #[test]
+fn independent_arena1024_keeps_order_contract_and_original_member_domains_distinct() {
+    let funded = account(16 << 20);
+    let ordered = carrier_with_order(1, false);
+    let independent = carrier_with_order(1, true);
+    let left = ordered.source().validate(42).unwrap();
+    let right = independent.source().validate(42).unwrap();
+    assert_eq!(
+        right.source_identity.profile(),
+        GeneratedProfileV1::IndependentArenaMember
+    );
+    assert!(!left.matches(&right));
+    assert_ne!(
+        left.dispatch_contract_sha256,
+        right.dispatch_contract_sha256
+    );
+    assert_eq!(
+        independent.storage.data().invocation_binding(),
+        independent.authority.binding
+    );
+    assert!(matches!(
+        RuntimeGfx942GeneratedArena1024V1::try_new(&funded, 42, |index| Ok::<_, ()>(
+            carrier_with_order(index % 3, true)
+        )),
+        Err(RuntimeGfx942ArenaPreparationErrorV1::Source(
+            RuntimeGfx942GeneratedReservationErrorV1::AuthorityMismatch
+        ))
+    ));
+    assert_eq!(funded.usage().used, ResourceVectorV1::ZERO);
+    assert!(matches!(
+        RuntimeGfx942GeneratedIndependentArena1024V1::try_new(&funded, 42, |index| Ok::<_, ()>(
+            carrier_with_order(index % 3, index != 731)
+        )),
+        Err(RuntimeGfx942ArenaPreparationErrorV1::Source(
+            RuntimeGfx942GeneratedReservationErrorV1::AuthorityMismatch
+        ))
+    ));
+    assert_eq!(funded.usage().used, ResourceVectorV1::ZERO);
+    let arena = RuntimeGfx942GeneratedIndependentArena1024V1::try_new(&funded, 42, |index| {
+        Ok::<_, ()>(carrier_with_order(index % 3, true))
+    })
+    .unwrap();
+    let roster = arena.0.validate_sources(42).unwrap();
+    assert_eq!(
+        roster.source_identity.profile(),
+        GeneratedProfileV1::IndependentFillArena1024
+    );
+    let packets = arena.0.packets.as_ref().unwrap().packets();
+    assert_eq!(packets.len(), 1024);
+    assert!(
+        packets
+            .iter()
+            .all(|packet| packet.ordering() == fe2o3_aql::AqlDispatchOrderingV1::Independent)
+    );
+    for index in [0, 1, 2, 1023] {
+        let actual = arena.0.members[index]
+            .as_ref()
+            .unwrap()
+            .source()
+            .validate(42)
+            .unwrap();
+        assert_eq!(actual.readback_bytes, 4 * (1 + (index % 3) as u64 * 64));
+        assert!(arena.0.member_original(index).unwrap().matches(&actual));
+    }
+    let common = match &roster.source_identity {
+        GeneratedSourceIdentityV1::IndependentArena1024(original) => Arc::clone(original),
+        _ => unreachable!(),
+    };
+    assert!(
+        !roster
+            .source_identity
+            .matches(&GeneratedSourceIdentityV1::Arena1024(common))
+    );
+    arena
+        .0
+        .with_native_inputs_v1(42, &roster, |_, bytes| {
+            assert_eq!(bytes, roster.readback_bytes);
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+    let last = arena.0.members[1023]
+        .as_ref()
+        .unwrap()
+        .authority
+        .stale
+        .clone();
+    assert!(
+        arena
+            .0
+            .with_native_inputs_v1(42, &roster, |_, _| {
+                last.set(true);
+                Ok(())
+            })
+            .is_err()
+    );
+    last.set(false);
+    drop(arena);
+    assert_eq!(funded.usage().used, ResourceVectorV1::ZERO);
+}
+
+#[test]
 fn arena1024_source_headers_precede_callbacks_and_member_refusal_restores_credit() {
     let short = account(0);
     let result = RuntimeGfx942GeneratedArena1024V1::<Carrier>::try_new(

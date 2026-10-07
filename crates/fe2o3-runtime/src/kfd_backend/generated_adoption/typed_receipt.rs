@@ -32,7 +32,9 @@ impl NativeReceiptV1 {
             GeneratedProfileV1::NativeFillRegistry4
             | GeneratedProfileV1::NativeFillRegistry4Repeat2
             | GeneratedProfileV1::NativeFillRegistry16
-            | GeneratedProfileV1::NativeFillArena1024 => None,
+            | GeneratedProfileV1::NativeFillArena1024
+            | GeneratedProfileV1::IndependentFillArena1024
+            | GeneratedProfileV1::IndependentArenaMember => None,
         }
     }
 
@@ -225,6 +227,8 @@ mod tests {
                 .profile(),
             GeneratedProfileV1::NativeFillCohort3
         );
+        assert!(NativeReceiptV1::ready(GeneratedProfileV1::IndependentArenaMember).is_none());
+        assert!(NativeReceiptV1::ready(GeneratedProfileV1::IndependentFillArena1024).is_none());
         // Published/Completed require actual linear native owners, not fixture tokens.
     }
 }

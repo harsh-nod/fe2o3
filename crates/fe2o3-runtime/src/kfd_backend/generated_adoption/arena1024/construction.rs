@@ -1,5 +1,10 @@
 use super::*;
-use fe2o3_kfd::Gfx942NativeFillArenaInputsV1;
+use fe2o3_kfd::{Gfx942IndependentFillArenaInputsV1, Gfx942NativeFillArenaInputsV1};
+
+enum InputsV1<'a> {
+    Ordered(Gfx942NativeFillArenaInputsV1<'a>),
+    Independent(Gfx942IndependentFillArenaInputsV1<'a>),
+}
 
 impl KfdRuntimeBackendV1 {
     pub(crate) fn adopt_generated_arena_v1(
@@ -22,8 +27,10 @@ impl KfdRuntimeBackendV1 {
                 "arena original request unavailable",
             ));
         }
-        if plan.profile != GeneratedProfileV1::NativeFillArena1024
-            || plan.count != 1
+        if !matches!(
+            plan.profile,
+            GeneratedProfileV1::NativeFillArena1024 | GeneratedProfileV1::IndependentFillArena1024
+        ) || plan.count != 1
             || roster.count != 1
             || bytes != roster.readback_bytes
             || storage.lower.is_none()
@@ -55,6 +62,7 @@ impl KfdRuntimeBackendV1 {
             .get_mut(&plan.key)
             .unwrap_or_else(|| std::process::abort())
             .arena = Some(ArenaV1 {
+            profile: plan.profile,
             phase: PhaseV1::Entering,
             data: None,
             storage,
@@ -112,8 +120,16 @@ impl KfdRuntimeBackendV1 {
             .generated_shells
             .get_mut(&key)
             .unwrap_or_else(|| std::process::abort());
-        let generated_shells::GeneratedControlV1::Arena1024(packets) = &mut record.control else {
-            std::process::abort();
+        let packets = match (record.plan.profile, &mut record.control) {
+            (
+                GeneratedProfileV1::NativeFillArena1024,
+                generated_shells::GeneratedControlV1::Arena1024(packets),
+            )
+            | (
+                GeneratedProfileV1::IndependentFillArena1024,
+                generated_shells::GeneratedControlV1::IndependentArena1024(packets),
+            ) => packets,
+            _ => std::process::abort(),
         };
         let arena = record
             .arena
@@ -121,11 +137,22 @@ impl KfdRuntimeBackendV1 {
             .unwrap_or_else(|| std::process::abort());
         let packets_original = packets.take().unwrap_or_else(|| std::process::abort());
         let data = arena.data.take().unwrap_or_else(|| std::process::abort());
-        let inputs = match Gfx942NativeFillArenaInputsV1::admit_local_outputs(
-            program,
-            packets_original,
-            data,
-        ) {
+        let admitted = match record.plan.profile {
+            GeneratedProfileV1::NativeFillArena1024 => {
+                Gfx942NativeFillArenaInputsV1::admit_local_outputs(program, packets_original, data)
+                    .map(InputsV1::Ordered)
+            }
+            GeneratedProfileV1::IndependentFillArena1024 => {
+                Gfx942IndependentFillArenaInputsV1::admit_local_outputs(
+                    program,
+                    packets_original,
+                    data,
+                )
+                .map(InputsV1::Independent)
+            }
+            _ => std::process::abort(),
+        };
+        let inputs = match admitted {
             Ok(inputs) => inputs,
             Err(failure) => {
                 let (_, original, data, error) = failure.into_parts();
@@ -143,13 +170,23 @@ impl KfdRuntimeBackendV1 {
             .terminal_memory
             .take()
             .unwrap_or_else(|| std::process::abort());
-        let session = memory
-            .create_compute_aql_queue_with_native_fill_arena_v1(
-                KFD_RUNTIME_RING_BYTES_V1,
-                inputs,
-                storage,
-            )
-            .map_err(|error| self.generated_native_error_v1("arena primary construction", error))?;
+        let session = match inputs {
+            InputsV1::Ordered(inputs) => memory
+                .create_compute_aql_queue_with_native_fill_arena_v1(
+                    KFD_RUNTIME_RING_BYTES_V1,
+                    inputs,
+                    storage,
+                )
+                .map(SessionV1::Ordered),
+            InputsV1::Independent(inputs) => memory
+                .create_compute_aql_queue_with_independent_fill_arena_v1(
+                    KFD_RUNTIME_RING_BYTES_V1,
+                    inputs,
+                    storage,
+                )
+                .map(SessionV1::Independent),
+        }
+        .map_err(|error| self.generated_native_error_v1("arena primary construction", error))?;
         self.generated_shells
             .get_mut(&key)
             .and_then(|record| record.arena.as_mut())

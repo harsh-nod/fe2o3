@@ -1,12 +1,17 @@
 //! Private original common allocation and queue, with separately returned slots.
 
 use super::*;
+use crate::queue::dispatch_binding::{ArenaOrderV1, Gfx942IndependentFillArenaInputsV1};
 use crate::queue::dispatch_binding::{
     GFX942_NATIVE_FILL_ARENA_SLOTS_V1, Gfx942NativeFillArenaInputsV1,
     Gfx942NativeFillArenaPacketsV1, Gfx942NativeFillArenaStorageV1,
 };
 use fixed_dispatch::recipe::RecipeV1;
 const SLOTS: usize = GFX942_NATIVE_FILL_ARENA_SLOTS_V1;
+
+#[path = "native_fill_arena/independent.rs"]
+mod independent;
+pub use independent::Gfx942IndependentFillArenaSessionV1;
 
 #[derive(Debug)]
 #[must_use = "retain the original registry publication through completion"]
@@ -72,21 +77,43 @@ impl SharedGttMemorySessionV1 {
         self,
         ring_bytes: u32,
         inputs: Gfx942NativeFillArenaInputsV1<'_>,
+        storage: Gfx942NativeFillArenaStorageV1,
+    ) -> Result<Gfx942NativeFillArenaSessionV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_native_fill_arena_with_order_v1(
+            ring_bytes,
+            inputs,
+            storage,
+            ArenaOrderV1::Ordered,
+        )
+    }
+
+    fn create_native_fill_arena_with_order_v1(
+        self,
+        ring_bytes: u32,
+        inputs: Gfx942NativeFillArenaInputsV1<'_>,
         mut storage: Gfx942NativeFillArenaStorageV1,
+        expected_order: ArenaOrderV1,
     ) -> Result<Gfx942NativeFillArenaSessionV1, ComputeAqlQueueSessionErrorV1> {
         let Gfx942NativeFillArenaInputsV1 {
             programs,
             packets,
             data,
+            order,
         } = inputs;
-        let premises = match storage.premises.take() {
+        let mut premises = match storage.premises.take() {
             Some(premises) => premises,
             None => std::process::abort(),
         };
+        premises.order = order;
         let custody =
             FixedDispatchPreparationCustodyV1::new_native_fill_arena(packets, data, premises);
         let mut root = PrimaryQueueConstructionV1::new(self, (programs, custody, storage));
-        root = root.run(|root, entry| root.construct_native_fill_arena(entry, ring_bytes))?;
+        root = root.run(|root, entry| {
+            if order != expected_order {
+                return Err(Gfx942DispatchBindingErrorV1::ResourcePhase.into());
+            }
+            root.construct_native_fill_arena(entry, ring_bytes)
+        })?;
         let Some(completed) = root.completed.take() else {
             std::process::abort();
         };

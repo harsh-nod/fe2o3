@@ -12,7 +12,11 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         roster: &GeneratedHostRosterV1,
     ) -> Result<GeneratedShellPlanV1, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
         let plan = self.generated_plan_for_hold_v1(hold)?;
-        if plan.profile != GeneratedProfileV1::NativeFillArena1024 || plan.count != 1 {
+        if !matches!(
+            plan.profile,
+            GeneratedProfileV1::NativeFillArena1024 | GeneratedProfileV1::IndependentFillArena1024
+        ) || plan.count != 1
+        {
             return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
         }
         self.retained_registry_attempt_v1(hold, roster, plan)

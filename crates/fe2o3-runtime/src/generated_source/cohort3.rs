@@ -9,21 +9,25 @@ mod tests;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GeneratedProfileV1 {
     Singleton,
+    IndependentArenaMember,
     NativeFillCohort3,
     NativeFillRegistry4,
     NativeFillRegistry4Repeat2,
     NativeFillRegistry16,
     NativeFillArena1024,
+    IndependentFillArena1024,
 }
 
 #[derive(Clone)]
 pub(crate) enum GeneratedSourceIdentityV1 {
     Singleton(Arc<()>),
+    IndependentArenaMember(Arc<()>),
     Cohort3([Arc<()>; 3]),
     Registry4([Arc<()>; 4]),
     Registry4Repeat2([Arc<()>; 4]),
     Registry16([Arc<()>; 16]),
     Arena1024(Arc<()>),
+    IndependentArena1024(Arc<()>),
 }
 
 impl From<Arc<()>> for GeneratedSourceIdentityV1 {
@@ -36,11 +40,13 @@ impl GeneratedSourceIdentityV1 {
     pub(crate) fn profile(&self) -> GeneratedProfileV1 {
         match self {
             Self::Singleton(_) => GeneratedProfileV1::Singleton,
+            Self::IndependentArenaMember(_) => GeneratedProfileV1::IndependentArenaMember,
             Self::Cohort3(_) => GeneratedProfileV1::NativeFillCohort3,
             Self::Registry4(_) => GeneratedProfileV1::NativeFillRegistry4,
             Self::Registry4Repeat2(_) => GeneratedProfileV1::NativeFillRegistry4Repeat2,
             Self::Registry16(_) => GeneratedProfileV1::NativeFillRegistry16,
             Self::Arena1024(_) => GeneratedProfileV1::NativeFillArena1024,
+            Self::IndependentArena1024(_) => GeneratedProfileV1::IndependentFillArena1024,
         }
     }
     #[cfg(test)]
@@ -54,6 +60,7 @@ impl GeneratedSourceIdentityV1 {
     pub(crate) fn matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Singleton(a), Self::Singleton(b)) => Arc::ptr_eq(a, b),
+            (Self::IndependentArenaMember(a), Self::IndependentArenaMember(b)) => Arc::ptr_eq(a, b),
             (Self::Cohort3(a), Self::Cohort3(b)) => a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b)),
             (Self::Registry4(a), Self::Registry4(b))
             | (Self::Registry4Repeat2(a), Self::Registry4Repeat2(b)) => {
@@ -63,6 +70,7 @@ impl GeneratedSourceIdentityV1 {
                 a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))
             }
             (Self::Arena1024(a), Self::Arena1024(b)) => Arc::ptr_eq(a, b),
+            (Self::IndependentArena1024(a), Self::IndependentArena1024(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -77,11 +85,13 @@ impl GeneratedSourceIdentityV1 {
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum GeneratedContractsV1 {
     Singleton([u8; 32]),
+    IndependentArenaMember([u8; 32]),
     Cohort3([[u8; 32]; 3]),
     Registry4([[u8; 32]; 4]),
     Registry4Repeat2([[u8; 32]; 4]),
     Registry16([[u8; 32]; 16]),
     Arena1024([u8; 32]),
+    IndependentArena1024([u8; 32]),
 }
 
 impl From<[u8; 32]> for GeneratedContractsV1 {
@@ -111,6 +121,10 @@ impl GeneratedContractsV1 {
     pub(crate) fn update_qualification_hash(self, hash: &mut Sha256) {
         match self {
             Self::Singleton(value) => hash.update(value),
+            Self::IndependentArenaMember(value) => {
+                hash.update(b"fe2o3.generated.independent-fill-arena.member.v1\0");
+                hash.update(value);
+            }
             Self::Cohort3(values) => {
                 hash.update(b"fe2o3.generated.native-fill-cohort3.contracts.v1\0");
                 for value in values {
@@ -137,6 +151,10 @@ impl GeneratedContractsV1 {
             }
             Self::Arena1024(value) => {
                 hash.update(b"fe2o3.generated.native-fill-arena1024.commitment.v1\0");
+                hash.update(value);
+            }
+            Self::IndependentArena1024(value) => {
+                hash.update(b"fe2o3.generated.independent-fill-arena1024.commitment.v1\0");
                 hash.update(value);
             }
         }

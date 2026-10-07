@@ -53,26 +53,67 @@ TRUSTED = {
 BODY_SHA = "40242c2cd87fb8afcbe24ea3a327a7fd72e549e57a5f00bba939ec0feb0043b1"
 ROSTER_BODY_SHA = "dab4466fd7d4f5944facb9221d81891ffc2b5c54090568ab0b58fb1fc5c41433"
 CONDITIONAL_SOURCE = BODY.with_name("conditional_fill.rs")
-CONDITIONAL_SOURCE_SHA = "d3fe97f4011705f11f858326f660c9b3f269de4d4daaa0184c1a0c8d862212de"
+CONDITIONAL_SOURCE_SHA = "67461e0f16cb8d118727332455e1641ec5174d80d71fda2abd3c6160e97737d6"
 COHORT_SOURCE = BODY.with_name("native_fill_cohort.rs")
 COHORT_PREMISES = BODY.parent / "native_fill_cohort/premises.rs"
+ARENA_SOURCE = BODY.with_name("native_fill_arena.rs")
+ARENA_PREMISES = BODY.parent / "native_fill_arena/premises.rs"
+PRISTINE_SOURCE = BODY.with_name("pristine_abort.rs")
+ACCOUNT_SOURCE = Path("crates/fe2o3-resource-accounting/src/lib.rs")
+TABLE_SOURCE = ACCOUNT_SOURCE.with_name("host_table.rs")
 # Independent source-review premises for the concrete immutable owner accessors,
 # not additional Verus inputs or trusted executable theorem contracts.
 CONDITIONAL_READONLY_SOURCES = {
-    BODY.parent.parent / "queue_dispatch_binding.rs": "28c28520962696818392a71a0899d50e879604f77643aa9debedadb0c14579b3",
+    BODY.parent.parent / "queue_dispatch_binding.rs": "72a52454c108d6f32f8a3d8fe7769b1670ede5e52f0e87889adbfa1484c14e46",
     BODY.parent.parent / "shared_memory.rs": "47e5b54f9a16bb4d726ffb08a995ddafbb217209bb8764bcd9be3fb8905a0400",
     CONDITIONAL_SOURCE: CONDITIONAL_SOURCE_SHA,
     COHORT_SOURCE: "7afca3f847b67cf2ebfb5c61b21f815af40d84b99ea1b95ab868ee144dfaaec0",
     COHORT_PREMISES: "8ac8f7d769fb439369ac90aa45342b6d83d3b87557060b9bb71ba19efe555473",
+    ARENA_SOURCE: "b9c733c9906821a16ae172346098458345deb30fb7e480437c2ea3910f37018b",
+    ARENA_PREMISES: "7113b7b575031022f7a95f260a2d98a177b8ba90b4e6c63d19bc0b948bca0d70",
+    PRISTINE_SOURCE: "207da422c563e2a3426bf5f990173f120d301d9d3d2a76159f065a04b6a78ed1",
+    ACCOUNT_SOURCE: "1230f8e658aa54f7b629129172f2924c430adfa68dd9a1074b290cc5d782a777",
+    TABLE_SOURCE: "a712150724fa106875d40acd77b8e639a7675e50cd7a7b03e1f7d14e9847d8b9",
 }
-# These exact edges bind the additional read-only cohort branch, not a theorem
-# about cohort preparation, per-member spatial composition or publication.
+# These exact edges bind the reached cohort/Arena readonly guards, including the
+# original pristine-slot check and table accessor. They do not prove preparation,
+# disjoint composition, independent ordering, publication or native execution.
 CONDITIONAL_MODULE_EDGES = (
     (BODY.parent.parent / "queue_dispatch_binding.rs", COHORT_SOURCE,
      '#[path = "queue_dispatch_binding/native_fill_cohort.rs"]\nmod native_fill_cohort;',
      "native_fill_cohort"),
     (COHORT_SOURCE, COHORT_PREMISES,
      '#[path = "native_fill_cohort/premises.rs"]\nmod premises;', "premises"),
+    (BODY.parent.parent / "queue_dispatch_binding.rs", ARENA_SOURCE,
+     '#[path = "queue_dispatch_binding/native_fill_arena.rs"]\nmod native_fill_arena;',
+     "native_fill_arena"),
+    (ARENA_SOURCE, ARENA_PREMISES,
+     '#[path = "native_fill_arena/premises.rs"]\nmod premises;', "premises"),
+    (BODY.parent.parent / "queue_dispatch_binding.rs", PRISTINE_SOURCE,
+     '#[path = "queue_dispatch_binding/pristine_abort.rs"]\npub(crate) mod pristine_abort;',
+     "pristine_abort"),
+    (ACCOUNT_SOURCE, TABLE_SOURCE, 'mod host_table;', "host_table"),
+)
+# Narrow, separately reviewed correspondence inside the full source capture.
+# No checksum here establishes semantic or disposal authority. In particular,
+# std slice access and the retained opaque owners remain review premises.
+ARENA_READONLY_METHODS = (
+    (CONDITIONAL_SOURCE, "impl ConditionalFillStorageV1 {",
+     "pub(super) fn revalidate(&self, owner: &DispatchResourceOwnerV1) -> Result<(), Gfx942DispatchBindingErrorV1> {", "13a27a85166769a6664f1bfa6735f54b22b00dfbf7145c1c91533fbf9cf78110"),
+    (ARENA_PREMISES, "impl ArenaPremisesV1 {",
+     "fn require_root(&self, owner: &DispatchResourceOwnerV1) -> Result<Root, Gfx942DispatchBindingErrorV1> {", "45df9ebb78cc0438a5560a485f890a1fcd4963d3230100ec073ecbe1ca1b21dd"),
+    (ARENA_PREMISES, "impl ArenaPremisesV1 {",
+     "pub(in crate::queue::dispatch_binding) fn selected(&self, owner: &DispatchResourceOwnerV1, index: usize, queue: Option<QueueKeyV1>) -> Result<CompletedWritableRangeV1, Gfx942DispatchBindingErrorV1> {", "76257fac25545a5f9f1868f5255b6ca1615615a34c835709dd31cfe1324d4684"),
+    (ARENA_PREMISES, "impl ArenaPremisesV1 {",
+     "pub(in crate::queue::dispatch_binding) fn revalidate(&self, owner: &DispatchResourceOwnerV1) -> Result<(), Gfx942DispatchBindingErrorV1> {", "d994286203ca7d6b872c9d83da408f7ceb970f6dd91b6441e6f44520a0a7a09d"),
+    (ARENA_PREMISES, "impl Root {",
+     "fn check_native(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {", "430db9f36d9a3958557dfb55866e6d4f59eca6447c1ff215b877119c13e28e79"),
+    (PRISTINE_SOURCE, "impl DispatchGenerationOwnerV1 {",
+     "pub(super) fn ensure_pristine(&self) -> Result<(), Gfx942DispatchBindingErrorV1> {", "3baea45f86e90ff2d9904d34f054aa3506e5050785a155a5474fecb245c2fc95"),
+    (TABLE_SOURCE, "impl<T> Deref for HostMetadataTableV1<T> {",
+     "fn deref(&self) -> &Self::Target {", "bdbe6dc814ea8f74f7e4a0cd6b58de69bdc6ee3b20fbfdb2cae0ebd24194e3f3"),
+    (ARENA_SOURCE, "impl ArenaOrderV1 {",
+     "pub(in crate::queue) const fn packet_order(self) -> AqlDispatchOrderingV1 {", "c82e9c09bad13263c8265ca4ebe92397fe96f9b30a459fb356c7d4d14b2248c5"),
 )
 # Filled only from the complete positive solver result, never guessed.
 EXPECTED_VERIFIED = 64
@@ -187,6 +228,52 @@ def conditional_readonly_sources(sources):
         need(hashlib.sha256(sources[path].encode()).hexdigest() == expected,
              "reviewed immutable conditional accessor source: " + str(path))
     conditional_cohort_wiring(sources)
+    conditional_arena_accessors(sources)
+
+
+def readonly_method(source, owner, method):
+    code, owner, method = compact(source), compact(owner), compact(method)
+    candidates = []
+    for match in re.finditer(re.escape(owner), code):
+        contents = block(code, match.end())
+        if method in contents:
+            direct_item(code, match.start())
+            candidates.append(contents)
+    need(len(candidates) == 1, "unique actual immutable method owner")
+    contents = candidates[0]
+    name = re.search(r"fn([a-zA-Z0-9_]+)\(", method).group(1)
+    need(contents.count(method) == 1
+         and len(re.findall(r"fn" + name + r"[<(]", contents)) == 1,
+         "unique immutable method in actual owner")
+    start = contents.index(method)
+    direct_item(contents, start)
+    return method + block(contents, start + len(method)) + "}"
+
+
+def conditional_arena_accessors(sources):
+    need(set(sources) == set(CONDITIONAL_READONLY_SOURCES), "complete readonly accessor source roster")
+    for path, owner, method, expected in ARENA_READONLY_METHODS:
+        actual = readonly_method(sources[path], owner, method)
+        need(hashlib.sha256(actual.encode()).hexdigest() == expected,
+             "reviewed exact immutable guard body: " + method)
+    for path, statement, name in (
+        (BODY.parent.parent / "queue_dispatch_binding.rs",
+         "use fe2o3_resource_accounting::{HostMetadataTableV1, ResourceCreditAccountV1};", "HostMetadataTableV1"),
+        (ACCOUNT_SOURCE,
+         "pub use host_table::{HostMetadataTableV1, host_metadata_table_payload_bytes_v1};", "HostMetadataTableV1"),
+        (ARENA_SOURCE, "pub(super) use premises::ArenaPremisesV1;", "ArenaPremisesV1"),
+        (TABLE_SOURCE, "use core::ops::{Deref, DerefMut};", "Deref"),
+    ):
+        source = sources[path]
+        sentinel = "__readonly_accessor_import__"
+        need(sentinel not in source and source.count(statement) == 1,
+             "one exact readonly accessor import")
+        active = compact(source.replace(statement, sentinel))
+        need(active.count(sentinel) == 1, "active readonly accessor import")
+        direct_item(active, active.index(sentinel))
+        need(not re.search(r"\b(?:mod|as|type|struct|enum)\s+" + name + r"\b",
+                           lexer()(source.replace(statement, ""))),
+             "no readonly accessor shadow: " + name)
 
 
 def conditional_cohort_wiring(sources):
@@ -206,7 +293,7 @@ def conditional_cohort_wiring(sources):
 
 
 def conditional_guard_wiring(binding, source):
-    # Both revalidate methods borrow their exact owners; the pinned implementation
+    # Every revalidate branch borrows its exact owners; the pinned implementation
     # only compares retained fields and numeric ranges. No owner is moved/dropped
     # by this guard. This source review is not a theorem about opaque F's Drop.
     need(hashlib.sha256(source.encode()).hexdigest() == CONDITIONAL_SOURCE_SHA,

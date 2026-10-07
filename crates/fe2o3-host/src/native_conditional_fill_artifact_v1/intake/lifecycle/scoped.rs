@@ -21,6 +21,12 @@ mod registry4;
 pub(super) use epoch::EpochAnchor;
 use epoch::{CarrierRetention, Epoch};
 
+#[derive(Clone, Copy)]
+enum FillOrderV1 {
+    Ordered,
+    IndependentDisjointWriteOnly,
+}
+
 struct Current<'scope, 'work> {
     proof: &'scope mut Proof<'work>,
     budget: &'scope mut Budget<'work>,
@@ -266,6 +272,32 @@ impl<'scope, 'work> NativeConditionalFillInvocationScopeV1<'scope, 'work> {
         K: CompilerGeneratedKernelExpectationV1,
         A: CompilerGeneratedRuntimeArguments<K>,
     {
+        self.prepare_carrier_with_order::<K, A>(
+            arguments,
+            device,
+            geometry,
+            timeout_milliseconds,
+            limits,
+            result_budget,
+            FillOrderV1::Ordered,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_carrier_with_order<'a, K, A>(
+        &'a self,
+        arguments: A,
+        device: &CheckedGfx942XnackMinusDevice,
+        geometry: AqlDispatchGeometryV1,
+        timeout_milliseconds: u32,
+        limits: GeneratedRuntimeArgumentLimitsV1,
+        result_budget: &GeneratedRuntimeResultBudgetV1,
+        order: FillOrderV1,
+    ) -> Result<GeneratedRuntimeCarrierV1<Authority<'a, 'scope, 'work>>>
+    where
+        K: CompilerGeneratedKernelExpectationV1,
+        A: CompilerGeneratedRuntimeArguments<K>,
+    {
         self.revalidate()?;
         let prepared: Result<_> = (|| {
             let mut current = self.current()?;
@@ -314,9 +346,17 @@ impl<'scope, 'work> NativeConditionalFillInvocationScopeV1<'scope, 'work> {
                         count.checked_mul(4).ok_or(Resource::Arithmetic)?,
                     )
                     .map_err(|_| failure("native full64 invocation geometry"))?;
-                let invocation = Invocation::NativeConditionalFill64V1 {
-                    contract_identity: *premises.contract_identity(),
-                    premise_identity: *premises.identity(),
+                let invocation = match order {
+                    FillOrderV1::Ordered => Invocation::NativeConditionalFill64V1 {
+                        contract_identity: *premises.contract_identity(),
+                        premise_identity: *premises.identity(),
+                    },
+                    FillOrderV1::IndependentDisjointWriteOnly => {
+                        Invocation::NativeIndependentFill64V1 {
+                            contract_identity: *premises.contract_identity(),
+                            premise_identity: *premises.identity(),
+                        }
+                    }
                 };
                 let parts = packed.into_runtime_inputs(geometry, 0, timeout_milliseconds);
                 let hsaco = self.files.publication.exact_artifact_bytes();
@@ -348,9 +388,15 @@ impl<'scope, 'work> NativeConditionalFillInvocationScopeV1<'scope, 'work> {
                                 .checked_sub(kernel.envelope().plan().image_start()),
                     "native actual finalized entry differs",
                 )?;
-                let storage = storage
-                    .project_native_conditional_fill64(hsaco, premises)
-                    .map_err(failure)?;
+                let storage = match order {
+                    FillOrderV1::Ordered => {
+                        storage.project_native_conditional_fill64(hsaco, premises)
+                    }
+                    FillOrderV1::IndependentDisjointWriteOnly => {
+                        storage.project_native_independent_fill64(hsaco, premises)
+                    }
+                }
+                .map_err(failure)?;
                 require(
                     storage.prepared().invocation_binding() == invocation,
                     "native projection family differs",

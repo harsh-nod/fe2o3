@@ -31,7 +31,7 @@ impl KfdRuntimeBackendV1 {
                 clippy::result_large_err,
                 reason = "original completion is retained without post-publication allocation"
             )]
-            let recycle = |session: &mut Gfx942NativeFillArenaSessionV1, completed| {
+            let recycle = |session: &mut SessionV1, completed| {
                 session
                     .recycle(completed)
                     .map(|_| ())
@@ -41,7 +41,7 @@ impl KfdRuntimeBackendV1 {
                 clippy::result_large_err,
                 reason = "poll refusal retains the original published batch without fallible allocation"
             )]
-            let poll = |session: &mut Gfx942NativeFillArenaSessionV1, batch| {
+            let poll = |session: &mut SessionV1, batch| {
                 session
                     .poll(batch)
                     .map(|poll| match poll {
@@ -61,7 +61,7 @@ impl KfdRuntimeBackendV1 {
                 session,
                 &mut cell.receipt,
                 index,
-                Gfx942NativeFillArenaSessionV1::submit,
+                SessionV1::submit,
                 poll,
                 recycle,
             )

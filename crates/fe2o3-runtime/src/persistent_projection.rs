@@ -44,11 +44,12 @@ pub(crate) struct PersistentDispatchDataV1 {
     buffer_policies: Vec<Gfx942RuntimePreparedBufferPolicyV1>,
     timeout_milliseconds: u32,
     native_fill: Option<fe2o3_kfd::NativeConditionalFill64PremisesV1>,
+    native_order: native_fill::NativeFillOrderV1,
 }
 
 impl PersistentDispatchDataV1 {
     pub(crate) fn invocation_binding(&self) -> Gfx942RuntimeInvocationBindingV1 {
-        native_fill::binding(self.native_fill.as_ref())
+        native_fill::binding(self.native_fill.as_ref(), self.native_order)
     }
 
     pub(crate) fn source_identity(&self) -> &std::sync::Arc<()> {
@@ -332,16 +333,17 @@ impl PreparedGfx942RuntimeDispatchV1 {
                 "persistent projection requires ordinary invocation",
             ));
         }
-        self.project_persistent_v1(hsaco, None)
+        self.project_persistent_v1(hsaco, None, native_fill::NativeFillOrderV1::Ordered)
     }
 
     fn project_persistent_v1(
         mut self,
         hsaco: &[u8],
         native_fill: Option<fe2o3_kfd::NativeConditionalFill64PremisesV1>,
+        native_order: native_fill::NativeFillOrderV1,
     ) -> Result<PreparedGfx942PersistentDispatchV1, Gfx942RuntimeProjectionErrorV1> {
         use Gfx942RuntimeProjectionErrorV1 as Error;
-        let invocation = native_fill::binding(native_fill.as_ref());
+        let invocation = native_fill::binding(native_fill.as_ref(), native_order);
         self.description.dispatch_contract_sha256 = conditional_transport_v1::dispatch_identity(
             self.description.dispatch_contract_sha256,
             invocation,
@@ -377,9 +379,17 @@ impl PreparedGfx942RuntimeDispatchV1 {
             .iter()
             .map(|buffer| buffer.bytes().len())
             .collect::<Vec<_>>();
-        let packet = Gfx942FixedDispatchPacketV1::new(
+        let packet = Gfx942FixedDispatchPacketV1::new_with_ordering(
             0,
             request.geometry,
+            match native_order {
+                native_fill::NativeFillOrderV1::Ordered => {
+                    fe2o3_aql::AqlDispatchOrderingV1::WaitForPrior
+                }
+                native_fill::NativeFillOrderV1::Independent => {
+                    fe2o3_aql::AqlDispatchOrderingV1::Independent
+                }
+            },
             description.dynamic_group_segment_bytes,
             request.kernarg_template.into_boxed_slice(),
             bindings.into_boxed_slice(),
@@ -389,8 +399,15 @@ impl PreparedGfx942RuntimeDispatchV1 {
         } else {
             packet
         };
-        let packet = project_gfx942_fixed_host_packet_v1(&kernel, packet, &lengths)
-            .map_err(Error::FixedDispatch)?;
+        let packet = match native_order {
+            native_fill::NativeFillOrderV1::Ordered => {
+                project_gfx942_fixed_host_packet_v1(&kernel, packet, &lengths)
+            }
+            native_fill::NativeFillOrderV1::Independent => {
+                fe2o3_kfd::project_gfx942_independent_fill_host_packet_v1(&kernel, packet, &lengths)
+            }
+        }
+        .map_err(Error::FixedDispatch)?;
         Ok(PreparedGfx942PersistentDispatchV1 {
             packet,
             data: PersistentDispatchDataV1 {
@@ -403,6 +420,7 @@ impl PreparedGfx942RuntimeDispatchV1 {
                 buffer_policies,
                 timeout_milliseconds: request.timeout_milliseconds,
                 native_fill,
+                native_order,
             },
         })
     }

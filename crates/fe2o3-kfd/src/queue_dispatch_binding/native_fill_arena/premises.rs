@@ -14,6 +14,7 @@ struct Slot {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Root {
+    order: ArenaOrderV1,
     code: ResolvedCodeIdentityV1,
     code_facts: SharedGttMappedResourceFactsV1,
     code_storage: SharedGttAllocationIdentityV1,
@@ -27,6 +28,7 @@ struct Root {
 }
 
 pub(in crate::queue) struct ArenaPremisesV1 {
+    pub(in crate::queue) order: ArenaOrderV1,
     slots: HostMetadataTableV1<Slot>,
     root: Option<Root>,
     checked: usize,
@@ -47,6 +49,7 @@ impl ArenaPremisesV1 {
         })
         .map_err(|_| rejected(0, "arena retained slot capacity"))?;
         Ok(Self {
+            order: ArenaOrderV1::Ordered,
             slots,
             root: None,
             checked: 0,
@@ -122,6 +125,7 @@ impl ArenaPremisesV1 {
             )
             .ok_or_else(|| rejected(index, "arena native kernarg subrange"))?;
         let root = Root {
+            order: self.order,
             code: code_identity,
             code_facts: *code.facts(),
             code_storage: code.storage_identity(),
@@ -135,6 +139,8 @@ impl ArenaPremisesV1 {
         };
         root.check_native()?;
         if root.output_bytes != output.layout().requested_bytes() as u64
+            || input.ordering != self.order.packet_order()
+            || packet.ordering != self.order.packet_order()
             || kernarg.layout().requested_bytes() != plan.kernarg_arena_bytes
             || plan.data[0].writable_ranges[index] != range
             || packet.code_index != 0
@@ -188,6 +194,7 @@ impl ArenaPremisesV1 {
             .root
             .ok_or_else(|| rejected(0, "arena absent original root"))?;
         if !self.captured
+            || root.order != self.order
             || self.checked != SLOTS
             || self.slots.len() != SLOTS
             || owner.code.len() != 1
@@ -243,6 +250,9 @@ impl ArenaPremisesV1 {
             .ok_or_else(|| rejected(index, "arena slot ordinal"))?;
         if slot.packet != owner.packets.get(index).copied()
             || slot.packet.is_none()
+            || slot
+                .packet
+                .is_some_and(|packet| packet.ordering != self.order.packet_order())
             || owner.data_premises[0].writable_ranges[index] != slot.range
             || queue.is_some_and(|q| q.vm != root.code.mapping.allocation.vm)
             || owner.data[0].checked_gpu_subrange(slot.range.offset, slot.range.byte_len, 4)

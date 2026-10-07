@@ -1,6 +1,7 @@
 //! Copied results do not discharge the original common arena owner.
 
 use super::*;
+use crate::generated_source::GeneratedProfileV1;
 use crate::generated_source::arena1024::SLOTS;
 use crate::kfd_backend::ArenaPreallocationV1;
 use crate::{RuntimeGfx942GeneratedArena1024V1 as Arena, RuntimeGfx942RegistryCompletionCarrierV1};
@@ -70,11 +71,12 @@ impl Future for RuntimeGfx942Arena1024ResultFutureV1<'_> {
     }
 }
 
-/// Single-use, ordered 1024-original arena over one Context writer/debit/hold.
+/// Single-use 1024-original arena over one Context writer/debit/hold. The scope
+/// retains the explicit ordered or independent-disjoint-WO entry profile.
 /// Each member keeps its original source, result account and decoder. All remain
 /// rooted until actual common queue destruction and Context settlement.
-/// This is not independent-order admission, an interrupt wake, or a hardware
-/// throughput, duration, overlap or high-depth qualification.
+/// This is not an interrupt wake or hardware throughput, duration, overlap,
+/// out-of-order execution or high-depth qualification.
 pub struct RuntimeGfx942Arena1024ScopeV1<'scope, 'env, P> {
     epoch: scope_epoch::Owner,
     context: &'env mut RuntimeContextV1<KfdRuntimeBackendV1>,
@@ -82,6 +84,7 @@ pub struct RuntimeGfx942Arena1024ScopeV1<'scope, 'env, P> {
     metadata: ResourceCreditAccountV1,
     identity: Rc<()>,
     deadline: Instant,
+    profile: GeneratedProfileV1,
     invariant: PhantomData<fn(&'scope ()) -> &'scope ()>,
 }
 
@@ -133,6 +136,59 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         W: FnMut(Instant) -> F,
         F: Future<Output = ()>,
     {
+        self.with_arena_profile_async_v1(
+            metadata,
+            deadline,
+            wait,
+            GeneratedProfileV1::NativeFillArena1024,
+            use_scope,
+        )
+        .await
+    }
+
+    /// Borrows a separately admitted disjoint-WO arena. Only the distinct
+    /// independent source factory can populate this scope. Per-member outputs
+    /// remain protected by their actual completion; no completion order is
+    /// inferred from packet ordering or this API.
+    pub async fn with_generated_gfx942_independent_arena1024_scope_async_v1<'env, P, R, W, F>(
+        &'env mut self,
+        metadata: ResourceCreditAccountV1,
+        deadline: Instant,
+        wait: W,
+        use_scope: impl for<'scope> AsyncFnOnce(
+            &mut RuntimeGfx942Arena1024ScopeV1<'scope, 'env, P>,
+        ) -> R,
+    ) -> Result<R, RuntimeGfx942ScopeErrorV1>
+    where
+        P: RuntimeGfx942RegistryCompletionCarrierV1 + 'env,
+        W: FnMut(Instant) -> F,
+        F: Future<Output = ()>,
+    {
+        self.with_arena_profile_async_v1(
+            metadata,
+            deadline,
+            wait,
+            GeneratedProfileV1::IndependentFillArena1024,
+            use_scope,
+        )
+        .await
+    }
+
+    async fn with_arena_profile_async_v1<'env, P, R, W, F>(
+        &'env mut self,
+        metadata: ResourceCreditAccountV1,
+        deadline: Instant,
+        wait: W,
+        profile: GeneratedProfileV1,
+        use_scope: impl for<'scope> AsyncFnOnce(
+            &mut RuntimeGfx942Arena1024ScopeV1<'scope, 'env, P>,
+        ) -> R,
+    ) -> Result<R, RuntimeGfx942ScopeErrorV1>
+    where
+        P: RuntimeGfx942RegistryCompletionCarrierV1 + 'env,
+        W: FnMut(Instant) -> F,
+        F: Future<Output = ()>,
+    {
         if Instant::now() >= deadline {
             return Err(RuntimeGfx942ScopeErrorV1::Deadline);
         }
@@ -153,6 +209,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
             metadata,
             identity,
             deadline,
+            profile,
             invariant: PhantomData,
         };
         let result = use_scope(&mut scope).await;
@@ -171,7 +228,45 @@ impl<'scope, P: RuntimeGfx942RegistryCompletionCarrierV1>
         stream: RuntimeStreamIdV1,
         prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<Arena<P>, E>,
     ) -> Result<(), RuntimeGfx942ScopedSubmissionErrorV1<E>> {
+        self.try_submit_profile_v1(
+            device,
+            stream,
+            GeneratedProfileV1::NativeFillArena1024,
+            prepare,
+        )
+    }
+
+    /// Accepts only the separate independent owner into an independent scope.
+    pub fn try_submit_independent_v1<E>(
+        &mut self,
+        device: RuntimeDeviceIdV1,
+        stream: RuntimeStreamIdV1,
+        prepare: impl FnOnce(
+            &fe2o3_kfd::CheckedGfx942XnackMinusDevice,
+        )
+            -> Result<crate::RuntimeGfx942GeneratedIndependentArena1024V1<P>, E>,
+    ) -> Result<(), RuntimeGfx942ScopedSubmissionErrorV1<E>> {
+        self.try_submit_profile_v1(
+            device,
+            stream,
+            GeneratedProfileV1::IndependentFillArena1024,
+            |checked| prepare(checked).map(|source| source.0),
+        )
+    }
+
+    fn try_submit_profile_v1<E>(
+        &mut self,
+        device: RuntimeDeviceIdV1,
+        stream: RuntimeStreamIdV1,
+        profile: GeneratedProfileV1,
+        prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<Arena<P>, E>,
+    ) -> Result<(), RuntimeGfx942ScopedSubmissionErrorV1<E>> {
         use RuntimeGfx942ScopedSubmissionErrorV1 as Error;
+        if self.profile != profile {
+            return Err(Error::Scope(RuntimeGfx942ScopeErrorV1::Readback(
+                RuntimeGfx942ReadbackErrorV1::InvalidStorage,
+            )));
+        }
         if self.root.is_some() {
             return Err(Error::Scope(RuntimeGfx942ScopeErrorV1::Capacity));
         }
@@ -199,9 +294,10 @@ impl<'scope, P: RuntimeGfx942RegistryCompletionCarrierV1>
         prepared: &mut RuntimeGfx942PreparedV1<Arena<P>>,
         stream: RuntimeStreamIdV1,
     ) -> Result<(), RuntimeGfx942ScopeErrorV1> {
-        if !self
-            .metadata
-            .shares_ledger_with(prepared.value().metadata())
+        if prepared.value().original_roster().source_identity.profile() != self.profile
+            || !self
+                .metadata
+                .shares_ledger_with(prepared.value().metadata())
         {
             return Err(RuntimeGfx942ScopeErrorV1::Readback(
                 RuntimeGfx942ReadbackErrorV1::InvalidStorage,

@@ -89,6 +89,10 @@ impl RuntimeGfx942GeneratedCarrierV1 for Borrowed<'_> {
 }
 
 fn carrier(index: usize) -> Carrier {
+    carrier_with_order(index, false)
+}
+
+fn carrier_with_order(index: usize, independent: bool) -> Carrier {
     let count = 1 + index as u64 * 64;
     let grid = (index as u32 + 1) * 64;
     let mut explicit = vec![0; 16];
@@ -112,17 +116,15 @@ fn carrier(index: usize) -> Carrier {
         ),
     )
     .unwrap();
-    let projection = prepared
-        .into_native_conditional_fill64_projection_v1(
-            IMAGE,
-            fe2o3_kfd::NativeConditionalFill64PremisesV1::new(
-                [0x70 + index as u8; 32],
-                count,
-                grid,
-            )
-            .unwrap(),
-        )
-        .unwrap();
+    let premises =
+        fe2o3_kfd::NativeConditionalFill64PremisesV1::new([0x70 + index as u8; 32], count, grid)
+            .unwrap();
+    let projection = if independent {
+        prepared.into_native_independent_fill64_projection_v1(IMAGE, premises)
+    } else {
+        prepared.into_native_conditional_fill64_projection_v1(IMAGE, premises)
+    }
+    .unwrap();
     let authority = Authority {
         object: projection.identity().object_sha256(),
         length: projection.finalized_hsaco_length(),

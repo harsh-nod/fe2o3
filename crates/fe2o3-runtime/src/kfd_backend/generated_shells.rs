@@ -76,6 +76,14 @@ impl KfdRuntimeBackendV1 {
         roster: &GeneratedHostRosterV1,
         logical: &[RuntimeAllocationIdV1],
     ) -> Result<GeneratedShellPlanV1, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if roster.source_identity.profile()
+            == crate::generated_source::GeneratedProfileV1::IndependentArenaMember
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "independent member requires its complete disjoint arena",
+            ));
+        }
         self.require_live()?;
         self.require_device(binding.backend_device)?;
         self.require_default_dispatch_capacity_v1()?;
@@ -326,10 +334,13 @@ impl KfdRuntimeBackendV1 {
         self.validate_generated_shell_records_v1(plan)
             && self.generated_shells.get(&plan.key).is_some_and(|record| {
                 if let Some(arena) = &record.arena {
-                    return plan.profile
-                        == crate::generated_source::GeneratedProfileV1::NativeFillArena1024
-                        && record.native.is_none()
+                    return matches!(
+                        plan.profile,
+                        crate::generated_source::GeneratedProfileV1::NativeFillArena1024
+                            | crate::generated_source::GeneratedProfileV1::IndependentFillArena1024
+                    ) && record.native.is_none()
                         && record.registry.is_none()
+                        && arena.profile() == plan.profile
                         && arena.is_retired()
                         && record.control.is_none();
                 }

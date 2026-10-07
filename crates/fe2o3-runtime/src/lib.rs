@@ -60,10 +60,11 @@ pub use fe2o3_profiler_protocol as profiler;
 pub use generated_source::{
     RuntimeGfx942ArenaPreparationErrorV1, RuntimeGfx942GeneratedArena1024V1,
     RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedCohort3V1,
-    RuntimeGfx942GeneratedRegistry4Repeat2V1, RuntimeGfx942GeneratedRegistry4V1,
-    RuntimeGfx942GeneratedRegistry16V1, RuntimeGfx942GeneratedReservationErrorV1,
-    RuntimeGfx942GeneratedResidentRegistryV1, RuntimeGfx942GeneratedSourceMutV1,
-    RuntimeGfx942GeneratedSourceV1, RuntimeGfx942ReadbackErrorV1,
+    RuntimeGfx942GeneratedIndependentArena1024V1, RuntimeGfx942GeneratedRegistry4Repeat2V1,
+    RuntimeGfx942GeneratedRegistry4V1, RuntimeGfx942GeneratedRegistry16V1,
+    RuntimeGfx942GeneratedReservationErrorV1, RuntimeGfx942GeneratedResidentRegistryV1,
+    RuntimeGfx942GeneratedSourceMutV1, RuntimeGfx942GeneratedSourceV1,
+    RuntimeGfx942ReadbackErrorV1,
 };
 pub use kfd_backend::*;
 pub use kfd_profile::*;

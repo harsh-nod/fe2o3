@@ -937,6 +937,25 @@ impl GeneratedRuntimeStorageV1<PreparedGfx942RuntimeDispatchV1> {
         })
     }
 
+    pub(crate) fn project_native_independent_fill64(
+        self,
+        hsaco: &[u8],
+        premises: fe2o3_kfd::NativeConditionalFill64PremisesV1,
+    ) -> Result<
+        GeneratedRuntimeStorageV1<GeneratedGfx942PersistentStorageV1>,
+        Gfx942RuntimeProjectionErrorV1,
+    > {
+        let payload = self
+            .payload
+            .into_native_independent_fill64_projection_v1(hsaco, premises)?
+            .into_generated_storage_v1();
+        Ok(GeneratedRuntimeStorageV1 {
+            payload,
+            readback: self.readback,
+            decoder: self.decoder,
+        })
+    }
+
     pub(crate) fn project_persistent(
         self,
         hsaco: &[u8],

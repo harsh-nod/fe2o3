@@ -357,21 +357,29 @@ impl<const N: usize, P: PreparationPacketsV1<N>> FixedDispatchPreparationCustody
             .iter()
             .map(Gfx942FixedDispatchDataV1::is_fully_initialized)
             .collect();
-        self.plan = Some(plan_public_fixed_dispatch_resources(
+        let ordering = self
+            .native_fill_arena
+            .as_ref()
+            .map_or(AqlDispatchOrderingV1::WaitForPrior, |arena| {
+                arena.order.packet_order()
+            });
+        self.plan = Some(plan_fixed_dispatch_resources_with_order(
             programs,
             self.packets.as_packets(),
             &layouts,
             &initialized,
+            ordering,
         )?);
         if self.native_fill_cohort && self.native_fill_arena.is_some() {
             return Err(Gfx942DispatchBindingErrorV1::ResourcePhase);
         }
-        let arena_model = if self.native_fill_arena.is_some() {
+        let arena_model = if let Some(arena) = &self.native_fill_arena {
             Some(native_fill_arena::check_plan(
                 programs,
                 self.packets.as_packets(),
                 self.plan.as_ref().unwrap(),
                 self.control,
+                arena.order,
             )?)
         } else {
             None

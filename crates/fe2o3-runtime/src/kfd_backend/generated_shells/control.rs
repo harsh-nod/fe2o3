@@ -10,6 +10,8 @@ pub(in crate::kfd_backend) enum GeneratedControlV1 {
     Registry4Repeat2([Option<Gfx942FixedDispatchPacketV1>; 4]),
     Registry16([Option<Gfx942FixedDispatchPacketV1>; 16]),
     Arena1024(Option<fe2o3_kfd::Gfx942NativeFillArenaPacketsV1>),
+    IndependentArena1024(Option<fe2o3_kfd::Gfx942NativeFillArenaPacketsV1>),
+    IndependentArenaMember,
 }
 
 impl GeneratedControlV1 {
@@ -25,6 +27,8 @@ impl GeneratedControlV1 {
                 Self::Registry16(core::array::from_fn(|_| None))
             }
             GeneratedProfileV1::NativeFillArena1024 => Self::Arena1024(None),
+            GeneratedProfileV1::IndependentFillArena1024 => Self::IndependentArena1024(None),
+            GeneratedProfileV1::IndependentArenaMember => Self::IndependentArenaMember,
         }
     }
 
@@ -36,6 +40,8 @@ impl GeneratedControlV1 {
             Self::Registry4Repeat2(_) => GeneratedProfileV1::NativeFillRegistry4Repeat2,
             Self::Registry16(_) => GeneratedProfileV1::NativeFillRegistry16,
             Self::Arena1024(_) => GeneratedProfileV1::NativeFillArena1024,
+            Self::IndependentArena1024(_) => GeneratedProfileV1::IndependentFillArena1024,
+            Self::IndependentArenaMember => GeneratedProfileV1::IndependentArenaMember,
         }
     }
 
@@ -47,7 +53,8 @@ impl GeneratedControlV1 {
                 packets.iter().all(Option::is_some)
             }
             Self::Registry16(packets) => packets.iter().all(Option::is_some),
-            Self::Arena1024(packets) => packets.is_some(),
+            Self::Arena1024(packets) | Self::IndependentArena1024(packets) => packets.is_some(),
+            Self::IndependentArenaMember => false,
         }
     }
 
@@ -59,7 +66,8 @@ impl GeneratedControlV1 {
                 packets.iter().all(Option::is_none)
             }
             Self::Registry16(packets) => packets.iter().all(Option::is_none),
-            Self::Arena1024(packets) => packets.is_none(),
+            Self::Arena1024(packets) | Self::IndependentArena1024(packets) => packets.is_none(),
+            Self::IndependentArenaMember => true,
         }
     }
 
@@ -70,7 +78,9 @@ impl GeneratedControlV1 {
             | Self::Registry4(_)
             | Self::Registry4Repeat2(_)
             | Self::Registry16(_)
-            | Self::Arena1024(_) => None,
+            | Self::Arena1024(_)
+            | Self::IndependentArena1024(_)
+            | Self::IndependentArenaMember => None,
         }
     }
 }

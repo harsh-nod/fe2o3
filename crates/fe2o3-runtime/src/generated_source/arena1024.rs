@@ -39,18 +39,63 @@ pub struct RuntimeGfx942GeneratedArena1024V1<P> {
     metadata: ResourceCreditAccountV1,
 }
 
+/// Separately branded independent-disjoint-WO roster. It cannot be submitted
+/// through a scalar or the ordered arena API and carries no native authority.
+///
+/// ```compile_fail
+/// use fe2o3_runtime::{RuntimeGfx942GeneratedArena1024V1 as Ordered,
+///                    RuntimeGfx942GeneratedIndependentArena1024V1 as Independent};
+/// fn refuse<P>(source: Independent<P>) -> Ordered<P> { source }
+/// ```
+/// ```compile_fail
+/// use fe2o3_runtime::{RuntimeGfx942GeneratedCarrierV1,
+///                    RuntimeGfx942GeneratedIndependentArena1024V1 as Independent};
+/// fn scalar<P: RuntimeGfx942GeneratedCarrierV1>(_: P) {}
+/// fn refuse<P>(source: Independent<P>) { scalar(source); }
+/// ```
+pub struct RuntimeGfx942GeneratedIndependentArena1024V1<P>(
+    pub(crate) RuntimeGfx942GeneratedArena1024V1<P>,
+);
+
+impl<P: RuntimeGfx942GeneratedCarrierV1> RuntimeGfx942GeneratedIndependentArena1024V1<P> {
+    pub fn try_new<E>(
+        metadata: &ResourceCreditAccountV1,
+        device_unique_id: u64,
+        prepare: impl FnMut(usize) -> Result<P, E>,
+    ) -> Result<Self, RuntimeGfx942ArenaPreparationErrorV1<E>> {
+        RuntimeGfx942GeneratedArena1024V1::try_new_with_order(
+            metadata,
+            device_unique_id,
+            prepare,
+            true,
+        )
+        .map(Self)
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct Original {
     source: Arc<()>,
     contract: [u8; 32],
     offset: u64,
     bytes: u64,
+    independent: bool,
 }
 
 impl Original {
     pub(crate) fn matches(&self, roster: &GeneratedHostRosterV1) -> bool {
-        roster.source_identity.matches_single(&self.source)
-            && roster.dispatch_contract_sha256 == GeneratedContractsV1::Singleton(self.contract)
+        (match (&roster.source_identity, self.independent) {
+            (GeneratedSourceIdentityV1::Singleton(actual), false)
+            | (GeneratedSourceIdentityV1::IndependentArenaMember(actual), true) => {
+                Arc::ptr_eq(actual, &self.source)
+            }
+            _ => false,
+        }) && roster.dispatch_contract_sha256
+            == if self.independent {
+                GeneratedContractsV1::IndependentArenaMember(self.contract)
+            } else {
+                GeneratedContractsV1::Singleton(self.contract)
+            }
             && roster.count == 1
             && roster.fixup_count == 1
             && roster.readback_bytes == self.bytes
@@ -70,7 +115,16 @@ impl<P: RuntimeGfx942GeneratedCarrierV1> RuntimeGfx942GeneratedArena1024V1<P> {
     pub fn try_new<E>(
         metadata: &ResourceCreditAccountV1,
         device_unique_id: u64,
+        prepare: impl FnMut(usize) -> Result<P, E>,
+    ) -> Result<Self, RuntimeGfx942ArenaPreparationErrorV1<E>> {
+        Self::try_new_with_order(metadata, device_unique_id, prepare, false)
+    }
+
+    fn try_new_with_order<E>(
+        metadata: &ResourceCreditAccountV1,
+        device_unique_id: u64,
         mut prepare: impl FnMut(usize) -> Result<P, E>,
+        independent: bool,
     ) -> Result<Self, RuntimeGfx942ArenaPreparationErrorV1<E>> {
         use RuntimeGfx942ArenaPreparationErrorV1 as Error;
         let mut failure = None;
@@ -99,36 +153,55 @@ impl<P: RuntimeGfx942GeneratedCarrierV1> RuntimeGfx942GeneratedArena1024V1<P> {
             .map_err(|_| Error::Capacity)?;
         let mut offset = 0u64;
         let mut hash = Sha256::new();
-        hash.update(b"fe2o3.generated.native-fill-arena1024.contracts.v1\0");
+        hash.update(if independent {
+            b"fe2o3.generated.independent-fill-arena1024.contracts.v1\0".as_slice()
+        } else {
+            b"fe2o3.generated.native-fill-arena1024.contracts.v1\0".as_slice()
+        });
         for index in 0..SLOTS {
             let member = members[index]
                 .as_ref()
                 .unwrap_or_else(|| std::process::abort());
             let source = member.source();
             if !matches!(
-                source.projection.invocation_binding(),
-                crate::Gfx942RuntimeInvocationBindingV1::NativeConditionalFill64V1 { .. }
+                (source.projection.invocation_binding(), independent),
+                (
+                    crate::Gfx942RuntimeInvocationBindingV1::NativeConditionalFill64V1 { .. },
+                    false
+                ) | (
+                    crate::Gfx942RuntimeInvocationBindingV1::NativeIndependentFill64V1 { .. },
+                    true
+                )
             ) {
                 return Err(Error::Source(
                     RuntimeGfx942GeneratedReservationErrorV1::AuthorityMismatch,
                 ));
             }
             let actual = source.validate(device_unique_id).map_err(Error::Source)?;
-            let GeneratedSourceIdentityV1::Singleton(identity) = &actual.source_identity else {
-                return Err(Error::Source(
-                    RuntimeGfx942GeneratedReservationErrorV1::InvalidRoster,
-                ));
+            let identity = match (&actual.source_identity, independent) {
+                (GeneratedSourceIdentityV1::Singleton(identity), false)
+                | (GeneratedSourceIdentityV1::IndependentArenaMember(identity), true) => identity,
+                _ => {
+                    return Err(Error::Source(
+                        RuntimeGfx942GeneratedReservationErrorV1::InvalidRoster,
+                    ));
+                }
             };
-            let GeneratedContractsV1::Singleton(contract) = actual.dispatch_contract_sha256 else {
-                return Err(Error::Source(
-                    RuntimeGfx942GeneratedReservationErrorV1::InvalidRoster,
-                ));
+            let contract = match (actual.dispatch_contract_sha256, independent) {
+                (GeneratedContractsV1::Singleton(contract), false)
+                | (GeneratedContractsV1::IndependentArenaMember(contract), true) => contract,
+                _ => {
+                    return Err(Error::Source(
+                        RuntimeGfx942GeneratedReservationErrorV1::InvalidRoster,
+                    ));
+                }
             };
             let entry = Original {
                 source: Arc::clone(identity),
                 contract,
                 offset,
                 bytes: actual.readback_bytes,
+                independent,
             };
             if entry.bytes == 0
                 || !entry.matches(&actual)
@@ -211,12 +284,20 @@ impl<P: RuntimeGfx942GeneratedCarrierV1> RuntimeGfx942GeneratedArena1024V1<P> {
             packets: Some(packets),
             metadata: metadata.clone(),
             roster: GeneratedHostRosterV1 {
-                source_identity: GeneratedSourceIdentityV1::Arena1024(Arc::new(())),
+                source_identity: if independent {
+                    GeneratedSourceIdentityV1::IndependentArena1024(Arc::new(()))
+                } else {
+                    GeneratedSourceIdentityV1::Arena1024(Arc::new(()))
+                },
                 buffers,
                 count: 1,
                 readback_bytes: offset,
                 fixup_count: 1,
-                dispatch_contract_sha256: GeneratedContractsV1::Arena1024(hash.finalize().into()),
+                dispatch_contract_sha256: if independent {
+                    GeneratedContractsV1::IndependentArena1024(hash.finalize().into())
+                } else {
+                    GeneratedContractsV1::Arena1024(hash.finalize().into())
+                },
             },
         };
         result

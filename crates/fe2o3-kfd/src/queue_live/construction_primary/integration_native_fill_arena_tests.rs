@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::queue::dispatch_binding::{
-    GFX942_NATIVE_FILL_ARENA_SLOTS_V1 as SLOTS, Gfx942NativeFillArenaInputsV1,
-    Gfx942NativeFillArenaPacketsV1, Gfx942NativeFillArenaStorageV1,
+    ArenaOrderV1, GFX942_NATIVE_FILL_ARENA_SLOTS_V1 as SLOTS, Gfx942IndependentFillArenaInputsV1,
+    Gfx942NativeFillArenaInputsV1, Gfx942NativeFillArenaPacketsV1, Gfx942NativeFillArenaStorageV1,
 };
 use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceKindV1, ResourceVectorV1};
 
@@ -14,12 +14,22 @@ type ArenaRoot<'a> = Root<(
 )>;
 
 fn packet(index: usize, offset: u64, conditional: bool) -> Gfx942FixedDispatchPacketV1 {
+    packet_with_order(index, offset, conditional, ArenaOrderV1::Ordered)
+}
+
+fn packet_with_order(
+    index: usize,
+    offset: u64,
+    conditional: bool,
+    order: ArenaOrderV1,
+) -> Gfx942FixedDispatchPacketV1 {
     let count = 1 + (index % 3) as u64;
     let mut bytes = vec![0; 272];
     bytes[8..16].copy_from_slice(&count.to_le_bytes());
-    let packet = Gfx942FixedDispatchPacketV1::new(
+    let packet = Gfx942FixedDispatchPacketV1::new_with_ordering(
         0,
         AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+        order.packet_order(),
         0,
         bytes.into_boxed_slice(),
         Box::new([Gfx942DispatchBufferBindingV1::new(0, 0, offset, count * 4)]),
@@ -66,28 +76,55 @@ fn setup(
     ResourceCreditAccountV1,
     usize,
 ) {
+    setup_with_order(bytes, ArenaOrderV1::Ordered)
+}
+
+fn setup_with_order(
+    bytes: &[u8],
+    order: ArenaOrderV1,
+) -> (
+    Box<ArenaRoot<'_>>,
+    Rc<RefCell<Trace>>,
+    ResourceCreditAccountV1,
+    usize,
+) {
     let (mut memory, trace) = setup_memory();
     let account = account(SLOTS + 4);
-    let (packets, total) = packets(&account, None);
+    let (packets, total) = if order == ArenaOrderV1::Ordered {
+        packets(&account, None)
+    } else {
+        let mut total = 0usize;
+        let packets = Gfx942NativeFillArenaPacketsV1::try_new(&account, |index| {
+            total += (1 + index % 3) * 4;
+            packet_with_order(index, 0, true, order)
+        })
+        .unwrap();
+        (packets, total)
+    };
     let token = memory.allocate::<HostVisibleCoherentGttV1>(total).unwrap();
     let output = Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory.map(token).unwrap());
-    let inputs = Gfx942NativeFillArenaInputsV1::admit(
-        native_fill_cohort_cases::program(bytes),
-        packets,
-        output,
-    )
-    .unwrap();
+    let program = native_fill_cohort_cases::program(bytes);
+    let inputs = match order {
+        ArenaOrderV1::Ordered => {
+            Gfx942NativeFillArenaInputsV1::admit(program, packets, output).unwrap()
+        }
+        ArenaOrderV1::IndependentDisjointWriteOnly => {
+            Gfx942IndependentFillArenaInputsV1::admit_local_outputs(program, packets, output)
+                .unwrap()
+                .0
+        }
+    };
     let Gfx942NativeFillArenaInputsV1 {
         programs,
         packets,
         data,
+        order: admitted_order,
     } = inputs;
+    assert_eq!(admitted_order, order);
     let mut storage = Gfx942NativeFillArenaStorageV1::preallocate(account.clone()).unwrap();
-    let custody = FixedDispatchPreparationCustodyV1::new_native_fill_arena(
-        packets,
-        data,
-        storage.premises.take().unwrap(),
-    );
+    let mut premises = storage.premises.take().unwrap();
+    premises.order = admitted_order;
+    let custody = FixedDispatchPreparationCustodyV1::new_native_fill_arena(packets, data, premises);
     trace.borrow_mut().initial_data = Some(memory.observation());
     let root = Root::new_with(memory, (programs, custody, storage));
     let pointer = &*root as *const ArenaRoot<'_> as usize;
@@ -214,8 +251,46 @@ fn native_fill_arena_partial_error_and_panic_retain_original_root_and_all_debits
 
 #[test]
 fn native_fill_arena_1024_original_receipts_use_shared_cpu_publication_and_recycle() {
+    shared_cpu_publication_and_recycle(ArenaOrderV1::Ordered);
+}
+
+#[test]
+fn independent_arena_1024_original_receipts_use_same_cpu_kernels_without_common_release() {
+    shared_cpu_publication_and_recycle(ArenaOrderV1::IndependentDisjointWriteOnly);
+}
+
+struct HeaderObservation {
+    expected: u16,
+    body: bool,
+    header: bool,
+}
+
+impl fe2o3_aql::AqlPacketBatchPublicationTargetV1 for HeaderObservation {
+    type Error = core::convert::Infallible;
+
+    fn write_unpublished(
+        &mut self,
+        index: u32,
+        _: &fe2o3_aql::AqlKernelDispatchPacketV1,
+    ) -> Result<(), Self::Error> {
+        assert_eq!(index, 0);
+        assert!(!self.body && !self.header);
+        self.body = true;
+        Ok(())
+    }
+
+    fn publish_release_header(&mut self, index: u32, header: u16) -> Result<(), Self::Error> {
+        assert_eq!(index, 0);
+        assert!(self.body && !self.header);
+        assert_eq!(header, self.expected);
+        self.header = true;
+        Ok(())
+    }
+}
+
+fn shared_cpu_publication_and_recycle(order: ArenaOrderV1) {
     let captured = native_fill_cohort_cases::payload();
-    let (root, trace, account, pointer) = setup(captured.exact_payload_bytes());
+    let (root, trace, account, pointer) = setup_with_order(captured.exact_payload_bytes(), order);
     let (mut root, result) = run_work(root, |root, entry| {
         root.construct_native_fill_arena(entry, 65536)
     });
@@ -237,9 +312,21 @@ fn native_fill_arena_1024_original_receipts_use_shared_cpu_publication_and_recyc
             for index in 0..SLOTS {
                 receipts.push(Some(
                     session
-                        .submit_arena_binding_for_test(registry.recipe(index).unwrap(), |_, _| {
-                            Ok(index as u64)
-                        })
+                        .submit_arena_binding_for_test(
+                            registry.recipe(index).unwrap(),
+                            |_, batch| {
+                                // Observe the actual prepared batch through its normal
+                                // serializer; this target performs no native writes.
+                                let mut target = HeaderObservation {
+                                    expected: order.packet_order().header(),
+                                    body: false,
+                                    header: false,
+                                };
+                                batch.publish_with(&mut target).unwrap();
+                                assert!(target.body && target.header);
+                                Ok(index as u64)
+                            },
+                        )
                         .unwrap(),
                 ));
             }

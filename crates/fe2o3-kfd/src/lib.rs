@@ -251,6 +251,7 @@ pub use queue::{
     Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1,
     Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchPreallocationV1,
     Gfx942FixedDispatchRecycleFailureV1, Gfx942FixedDispatchSubmissionFailureV1,
+    Gfx942IndependentFillArenaInputsV1, Gfx942IndependentFillArenaSessionV1,
     Gfx942KfdDebugTargetDispatchErrorV2, Gfx942KfdDebugTargetDispatchResultV2,
     Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchInspectionV1,
     Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1,
@@ -293,7 +294,7 @@ pub use queue::{
     QuarantinedGfx942BarrierProbeV1, execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1, preflight_gfx942_fixed_dispatch_replacement,
-    project_gfx942_fixed_host_packet_v1,
+    project_gfx942_fixed_host_packet_v1, project_gfx942_independent_fill_host_packet_v1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
