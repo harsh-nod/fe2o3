@@ -381,7 +381,7 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 19);
+    assert_eq!(source.matches("proof fn ").count(), 20);
     let logical_projection = source
         .split_once("proof fn invocation_source_logical_write_aggregates_v268(")
         .unwrap().1
@@ -572,6 +572,25 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
             1,
         )
     );
+    let pair_inputs = inputs("invocation_source_checked_pair_replays_install_v269");
+    assert_eq!(pair_inputs,
+        "source.machine.valid,\n        bits == 8 || bits == 16 || bits == 32 || bits == 64, 0 <= operation < 3,\n        invocation_source_aggregate_leaf_count_v42(source_type) == 2,\n        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],\n        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],\n        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == bits,\n        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,\n        !matches!(left_operand, InvocationSourceByteValueV36::Read { .. }),\n        !matches!(right_operand, InvocationSourceByteValueV36::Read { .. }),\n        invocation_source_byte_evaluate_v36(source, left_operand, bits, root, instance, little_endian)\n            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(left) }),\n        invocation_source_byte_evaluate_v36(source, right_operand, bits, root, instance, little_endian)\n            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(right) }),\n        invocation_source_checked_pair_v44(MemoryValueV30::Scalar(left),\n            MemoryValueV30::Scalar(right), operation, bits, signed) == Some((value, overflow)),\n");
+    let pair_body = source
+        .split_once("proof fn invocation_source_checked_pair_replays_install_v269(")
+        .unwrap().1
+        .split_once("proof fn invocation_source_checked_add_replays_install_v260(")
+        .unwrap().0;
+    assert!(!pair_body.contains("4294967296"));
+    assert!(pair_body.contains("reveal(invocation_source_checked_v42);"));
+    assert!(pair_body.contains("leaves: Map::empty().insert(seq![0int], value).insert(seq![1int], overflow)"));
+    let add_replay = source
+        .split_once("proof fn invocation_source_checked_add_replays_install_v260(")
+        .unwrap().1
+        .split_once("proof fn invocation_source_checked_add_reconstruction_step_v259(")
+        .unwrap().0;
+    assert_eq!(add_replay.matches("invocation_reconstructed_checked_add_u32_v259(left, right);").count(), 1);
+    assert_eq!(add_replay.matches("invocation_source_checked_pair_replays_install_v269(source, destination, source_type,").count(), 1);
+    assert!(!add_replay.contains("reveal(invocation_source_checked_v42);"));
     for exact in [
         "values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined)",
         "values: target.values.update(destination, next.target.values[destination])",
@@ -621,7 +640,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "assert(installed.machine.valid);",
         "assert(invocation_source_aggregate_complete_v42(aggregate)\n        && installed == (InvocationSourceByteStateV36 {",
         "..source })) by {\n        invocation_source_checked_add_install_frame_v262(source, destination, source_type, left, right);",
-        "invocation_source_checked_pair_v44(lhs.value, rhs.value, 0, 32, false)",
+        "invocation_source_checked_pair_v44(lhs.value, rhs.value, operation, bits, signed)",
         "invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);",
         "invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);",
         "invocation_context_marker_aggregate_well_formed_v260(issue.source_type);",
