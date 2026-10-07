@@ -4,6 +4,8 @@ use super::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
+mod lineage;
+
 // An ordinary drop-counted object tests the same private custody container. It
 // is not a native DATA owner, device observation, or completion receipt.
 struct Original {
@@ -301,6 +303,9 @@ fn native_detached_slot_is_inline_and_bounded() {
     type Owner = fe2o3_kfd::Gfx942DetachedFixedDispatchV1;
     assert!(
         core::mem::size_of::<RetainedDetachedV1<Owner>>()
-            <= core::mem::size_of::<Option<Owner>>() + 2 * core::mem::size_of::<usize>()
+            <= core::mem::size_of::<Option<Owner>>()
+                + core::mem::size_of::<Option<ProducerLineageV1>>()
+                + 2 * core::mem::size_of::<usize>()
     );
+    assert!(core::mem::size_of::<RetainedDetachedV1<Owner>>() <= 16 * 1024);
 }

@@ -5,6 +5,9 @@
 
 use super::*;
 
+mod lineage;
+use lineage::ProducerLineageV1;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DetachedPhaseV1 {
     Empty,
@@ -16,6 +19,7 @@ enum DetachedPhaseV1 {
 pub(super) struct RetainedDetachedV1<T> {
     phase: DetachedPhaseV1,
     owner: Option<T>,
+    producer: Option<ProducerLineageV1>,
 }
 
 impl<T> RetainedDetachedV1<T> {
@@ -23,6 +27,7 @@ impl<T> RetainedDetachedV1<T> {
         Self {
             phase: DetachedPhaseV1::Empty,
             owner: None,
+            producer: None,
         }
     }
 
@@ -31,6 +36,7 @@ impl<T> RetainedDetachedV1<T> {
             self.phase,
             DetachedPhaseV1::Empty | DetachedPhaseV1::Consumed
         ) && self.owner.is_none()
+            && self.producer.is_none()
     }
 
     pub(super) fn is_held(&self) -> bool {
@@ -69,6 +75,7 @@ impl<T> RetainedDetachedV1<T> {
 #[derive(Debug, Eq, PartialEq)]
 enum CaptureErrorV1<E> {
     Occupied,
+    Lineage,
     Lower(E),
 }
 
@@ -77,7 +84,8 @@ impl GeneratedNativeAdoptionV1 {
     /// source, submission, lane and all graph holds remain rooted by its caller.
     pub(super) fn retain_recycled_data_v1(
         &mut self,
-        count: usize,
+        plan: &GeneratedShellPlanV1,
+        generation: u64,
         detach: impl FnOnce() -> Result<
             fe2o3_kfd::Gfx942DetachedFixedDispatchV1,
             fe2o3_kfd::ComputeAqlQueueSessionErrorV1,
@@ -89,9 +97,20 @@ impl GeneratedNativeAdoptionV1 {
                 "generated detach requires original retirement envelope",
             ));
         }
-        match self.detached.capture(detach) {
+        let submission = self.submission.as_ref().ok_or(Error::Contract(
+            "generated detach requires original producer submission",
+        ))?;
+        match self
+            .detached
+            .capture_producer(plan, submission, generation, detach)
+        {
             Ok(()) => {}
             Err(CaptureErrorV1::Lower(error)) => return Err(error),
+            Err(CaptureErrorV1::Lineage) => {
+                return Err(Error::Contract(
+                    "generated detached producer lineage mismatch",
+                ));
+            }
             Err(CaptureErrorV1::Occupied) => {
                 return Err(Error::Contract(
                     "generated original detached DATA already retained",
@@ -99,10 +118,9 @@ impl GeneratedNativeAdoptionV1 {
             }
         }
         self.phase = PhaseV1::Detached;
-        if !self
-            .detached
-            .matches(|owner| owner.dispatch_generation() != 0 && owner.data_lease_count() == count)
-        {
+        if !self.detached.matches_producer(plan, submission, |owner| {
+            (owner.dispatch_generation(), owner.data_lease_count())
+        }) {
             return Err(Error::Contract(
                 "generated original detached DATA shape mismatch",
             ));
@@ -112,7 +130,7 @@ impl GeneratedNativeAdoptionV1 {
 
     pub(super) fn take_retained_data_for_disposal_v1(
         &mut self,
-        count: usize,
+        plan: &GeneratedShellPlanV1,
     ) -> Result<Vec<Gfx942FixedDispatchDataV1>, fe2o3_kfd::ComputeAqlQueueSessionErrorV1> {
         use fe2o3_kfd::ComputeAqlQueueSessionErrorV1 as Error;
         if !matches!(self.phase, PhaseV1::Detached | PhaseV1::Retiring) {
@@ -120,10 +138,13 @@ impl GeneratedNativeAdoptionV1 {
                 "generated detached DATA disposal phase mismatch",
             ));
         }
+        let submission = self.submission.as_ref().ok_or(Error::Contract(
+            "generated disposal requires original producer submission",
+        ))?;
         let owner = self
             .detached
-            .take_checked(|owner| {
-                owner.dispatch_generation() != 0 && owner.data_lease_count() == count
+            .take_producer_checked(plan, submission, |owner| {
+                (owner.dispatch_generation(), owner.data_lease_count())
             })
             .ok_or(Error::Contract(
                 "generated original detached DATA shape mismatch",
@@ -186,7 +207,8 @@ impl KfdRuntimeBackendV1 {
                 .as_mut()
                 .expect("retained generated queue")
                 .with_compute_lane_v1(handle, |lane| {
-                    native.retain_recycled_data_v1(plan.count, || {
+                    let generation = lane.recycled_fixed_dispatch_generation()?;
+                    native.retain_recycled_data_v1(plan, generation, || {
                         lane.detach_recycled_fixed_dispatch()
                     })
                 })

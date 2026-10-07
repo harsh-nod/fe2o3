@@ -527,6 +527,16 @@ impl KfdRuntimeBackendV1 {
             && retirement == Some(RetirementV1::Recycled)
             && rejected.is_none()
             && native.detached.is_held();
+        if retirement == Some(RetirementV1::Recycled)
+            && !native.submission.as_ref().is_some_and(|submission| {
+                self.generated_submission_owner_matches_v1(submission.id, plan)
+            })
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "generated retirement producer identity mismatch",
+            ));
+        }
         if !(native.phase == PhaseV1::Adopted || retained_completed)
             || retirement.is_none()
             || !self.generated_lease_matches_v1(plan)
@@ -571,11 +581,12 @@ impl KfdRuntimeBackendV1 {
                         RetirementV1::CancelledOnly => lane.abort_cancelled_fixed_dispatch_v1()?,
                         RetirementV1::Recycled => {
                             if !native.detached.is_held() {
-                                native.retain_recycled_data_v1(plan.count, || {
+                                let generation = lane.recycled_fixed_dispatch_generation()?;
+                                native.retain_recycled_data_v1(plan, generation, || {
                                     lane.detach_recycled_fixed_dispatch()
                                 })?;
                             }
-                            native.take_retained_data_for_disposal_v1(plan.count)?
+                            native.take_retained_data_for_disposal_v1(plan)?
                         }
                     };
                     native.returned.install(data);
