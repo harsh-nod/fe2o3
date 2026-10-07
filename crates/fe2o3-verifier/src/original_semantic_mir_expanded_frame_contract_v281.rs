@@ -5,6 +5,7 @@ use super::super::invocations::InvocationPlan;
 use super::{
     Error, Resource, Result, Writer,
     expanded_execution::ExpandedExecutionBindingsV199,
+    forwarding_observation::Observer,
     paired::ExpandedScalarBindingsV196,
     slots::SourceSlots,
     source_frame_plan::FramePlan,
@@ -36,6 +37,7 @@ fn mismatch() -> Error {
 
 fn headers() -> usize {
     Error::frame_binding_headers_v284()
+        + super::forwarding_observation::headers()
         + 4 * size_of::<Range<usize>>()
         + 36 * size_of::<usize>()
         + 24 * size_of::<&()>()
@@ -98,6 +100,7 @@ fn demands(
     range: Range<usize>,
     width: FormalIndexWidth,
     out: &mut Writer<'_, '_>,
+    observe: &mut Observer<'_>,
 ) -> Result<()> {
     let owner = frames.frames.get(frame).ok_or_else(mismatch)?;
     let relation = slots.correspondence(out)?;
@@ -143,7 +146,7 @@ fn demands(
                 out.budget.charge_work(1)?;
                 if frames.leaf_required(frame, index, atom, out)? {
                     scalar
-                        .emit_source_product_conjunct_v283(
+                        .emit_source_product_conjunct_observed_v288(
                             plan,
                             owner.root,
                             owner.instance,
@@ -151,6 +154,7 @@ fn demands(
                             atom,
                             width,
                             out,
+                            observe,
                         )
                         .map_err(|error| {
                             error.at_frame_binding_v284(
@@ -268,6 +272,7 @@ pub(super) fn emit(
     cuts: &TileMicroCutsV180<'_, '_, '_, '_>,
     width: FormalIndexWidth,
     out: &mut Writer<'_, '_>,
+    observe: &mut Observer<'_>,
 ) -> Result<()> {
     let emit = |out: &mut Writer<'_, '_>| {
         frames.check(plan, slots, out)?;
@@ -296,6 +301,7 @@ pub(super) fn emit(
                         call.demands.clone(),
                         width,
                         out,
+                        observe,
                     )
                 })?;
             }
@@ -359,6 +365,7 @@ pub(super) fn emit(
                         cut.demands.clone(),
                         width,
                         out,
+                        observe,
                     )?;
                 } else {
                     emit!(out, "false");

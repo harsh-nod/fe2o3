@@ -1,6 +1,7 @@
 //! Scoped support text and static coordinates from the retained expanded owners.
 //! Neither the text nor the observations are a refinement or execution receipt.
 use super::super::invocations::{CallKind, InvocationPlan};
+pub use super::forwarding_observation::ExpandedSupportForwardingV288;
 use super::{
     Error, Resource, Result, Writer, expanded_generation::ExpandedGenerationV221,
     slots::SourceSlots, source_frame_plan::FramePlan, tile_target::TileMicroCutsV180, vector,
@@ -213,6 +214,8 @@ pub struct ExpandedSupportCensusV280<'a> {
     pub zero_edges: &'a [(usize, usize)],
     /// Current and shared suspended-caller requirements, not temporal evidence.
     pub frame_demands_v281: &'a [ExpandedSupportFrameDemandV281],
+    /// Whole-Slice paths observed during actual frame binding emission.
+    pub forwarding_v288: &'a [ExpandedSupportForwardingV288],
 }
 
 struct Census {
@@ -223,6 +226,7 @@ struct Census {
     candidates: Vec<ExpandedSupportCursorV280>,
     zero_edges: Vec<(usize, usize)>,
     frame_demands: Vec<ExpandedSupportFrameDemandV281>,
+    forwarding: Vec<ExpandedSupportForwardingV288>,
 }
 
 impl Census {
@@ -262,6 +266,7 @@ impl Census {
             candidates: vector(rows.candidates.len(), out)?,
             zero_edges: vector(rows.zero_edges.len(), out)?,
             frame_demands: vector(frames.demands.len(), out)?,
+            forwarding: Vec::new(),
         };
         for (root, range) in rows.roots.iter().enumerate() {
             let scope = plan.root(root, out)?;
@@ -407,6 +412,7 @@ impl Census {
             candidates: &self.candidates,
             zero_edges: &self.zero_edges,
             frame_demands_v281: &self.frame_demands,
+            forwarding_v288: &self.forwarding,
         }
     }
 }
@@ -613,9 +619,16 @@ where
         let model = ExpandedGenerationV221::derive(&plan, &slots, width, endian, &mut out)?;
         let cuts = TileMicroCutsV180::derive(model.target(&mut out)?, &plan, &mut out)?;
         let frames = FramePlan::derive(&plan, &slots, &mut out)?;
-        let census = Census::derive(&plan, &model, &cuts, &frames, &mut out)?;
+        let mut census = Census::derive(&plan, &model, &cuts, &frames, &mut out)?;
         model.emit_support_with_cuts_v280(&cuts, Some(runtime), &mut out)?;
-        model.emit_frame_contracts_v281(&frames, &cuts, &mut out)?;
+        let mut observe = |event, out: &mut Writer<'_, '_>| {
+            super::forwarding_observation::append(&mut census.forwarding, event, out)
+        };
+        let observer_headers = (2 * size_of_val(&observe))
+            .checked_add(align_of_val(&observe))
+            .ok_or(Resource::Arithmetic)?;
+        out.budget.reserve_storage(observer_headers)?;
+        model.emit_frame_contracts_observed_v288(&frames, &cuts, &mut out, &mut observe)?;
         model.finish(&mut out)?;
         check_owners(source, original, tile, out.budget)?;
         let view = ExpandedSupportModelV280 {
@@ -654,6 +667,7 @@ where
         align_of_val(&produce),
         size_of::<Writer<'_, '_>>(),
         size_of::<Census>(),
+        super::forwarding_observation::headers(),
         size_of::<ExpandedSupportModelV280<'_, '_>>(),
         size_of::<ExpandedSupportCensusV280<'_>>(),
         size_of::<Pending<F>>(),

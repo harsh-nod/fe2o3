@@ -1,6 +1,9 @@
 //! Necessary bindings for demanded, owner-bound Product carrier atoms.
 //! Opaque execution/descriptor atoms need their own snapshot relation; they are
 //! not reinterpreted as scalar leaves or assigned the Product holder's origin.
+use super::super::super::forwarding_observation::{
+    ExpandedSupportForwardingV288 as Event, Observer,
+};
 use super::super::super::slots::{ProductAtomV282 as Atom, SourceProductComponentV282};
 use super::super::{InvocationPlan, ScalarV30, Value, aggregate_bindings::scalar_matches};
 use super::*;
@@ -47,6 +50,30 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
         ordinal: usize,
         width: FormalIndexWidth,
         out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.emit_source_product_conjunct_observed_v288(
+            plan,
+            root,
+            instance,
+            value,
+            ordinal,
+            width,
+            out,
+            &mut |_, _| Ok(()),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in super::super::super) fn emit_source_product_conjunct_observed_v288(
+        &self,
+        plan: &InvocationPlan<'_, '_>,
+        root: usize,
+        instance: usize,
+        value: Value,
+        ordinal: usize,
+        width: FormalIndexWidth,
+        out: &mut Writer<'_, '_>,
+        observe: &mut Observer<'_>,
     ) -> Result<()> {
         self.slots.with_source_query_v42(out, |out| {
             self.check(out)?;
@@ -133,7 +160,16 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                 emit!(out, "{field}int,");
             }
             emit!(out, "]; let product = source.logical.products[{local}]; product.components.contains_key(path) && invocation_source_product_atom_current_v282(source, {}, product.components[path], invocation_runtime_little_endian_v36()) && (match product.components[path] {{ InvocationSourceProductAtomV282::Carrier(original) => {{ ", atom_type.index());
-            self.emit_source_original_relation(root, original, width, out)
+            let observer = if matches!(kind, Atom::Slice { .. }) {
+                let original = original.ok_or_else(mismatch)?;
+                let inventory = relation.inventory(out.budget)?;
+                out.budget.charge_work(1)?;
+                let coordinate = inventory.definitions().get(original).ok_or_else(mismatch)?.coordinate;
+                observe(Event::Begin { root, instance, value, atom: ordinal,
+                    source_type: atom_type.index(), original, coordinate }, out)?;
+                Some(&mut *observe)
+            } else { None };
+            self.emit_source_original_relation_observed(root, original, width, out, observer)
                 .map_err(|error| error.at_frame_binding_v284(
                     [root, instance, owner as usize, local - row.locals.start],
                     value, Some(ordinal), "product", "original-target-reconstruction",

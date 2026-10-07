@@ -107,7 +107,18 @@ fn expanded_frame_contracts_keep_complete_microstate_prefix_and_shared_caller_de
             let cuts = TileMicroCutsV180::derive(model.target(out)?, plan, out)?;
             let frames = FramePlan::derive(plan, slots, out)?;
             model.emit_support_with_cuts_v280(&cuts, None, out)?;
+            let frame_start = out.text.len();
             model.emit_frame_contracts_v281(&frames, &cuts, out)?;
+            let frame_end = out.text.len();
+            let mut observed = Vec::new();
+            model.emit_frame_contracts_observed_v288(&frames, &cuts, out, &mut |event, out|
+                super::super::forwarding_observation::append(&mut observed, event, out))?;
+            let repeated_end = out.text.len();
+            assert_eq!(&out.text.as_bytes()[frame_start..frame_end], &out.text.as_bytes()[frame_end..repeated_end]);
+            out.text.truncate(frame_end);
+            let retained = observed.capacity() * size_of::<crate::ExpandedSupportForwardingV288>();
+            drop(observed);
+            out.budget.release_storage(retained)?;
             model.finish(out)?;
             assert!(out.text.contains("micro: MemoryMicroStateV30"));
             assert!(out.text.contains("micro.observations == target_prefix"));

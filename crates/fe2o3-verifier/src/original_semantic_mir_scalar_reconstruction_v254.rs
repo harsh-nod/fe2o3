@@ -795,6 +795,17 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
         width: FormalIndexWidth,
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
+        self.emit_source_original_relation_observed(root, original, width, out, None)
+    }
+
+    pub(super) fn emit_source_original_relation_observed(
+        &self,
+        root: usize,
+        original: Option<usize>,
+        width: FormalIndexWidth,
+        out: &mut Writer<'_, '_>,
+        observe: Option<&mut super::super::super::forwarding_observation::Observer<'_>>,
+    ) -> Result<()> {
         self.check(out)?;
         out.budget.charge_work(2)?;
         if width == FormalIndexWidth::Unknown {
@@ -819,14 +830,23 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
             actual_function.definitions.end,
         ));
         if !matches!(source.ty, Type::Scalar(ScalarType::U32 | ScalarType::Bool)) {
+            let mut ignore =
+                |_: super::super::super::forwarding_observation::ExpandedSupportForwardingV288,
+                 _: &mut Writer<'_, '_>|
+                 -> Result<()> { Ok(()) };
+            let observer = observe.unwrap_or(&mut ignore);
             let index = self
-                .source_transport_definition(original, out)
+                .source_transport_definition_observed(original, out, observer)
                 .map_err(|error| trace_refusal(error, RefusalPhase::TargetLookup, facts))?;
             facts.target_index = Some(index);
             out.budget.charge_work(1)?;
             if !actual_function.definitions.contains(&index) {
                 return Err(trace_refusal(mismatch(), RefusalPhase::TargetOwner, facts));
             }
+            observer(super::super::super::forwarding_observation::ExpandedSupportForwardingV288::Target {
+                actual: index, coordinate: actual.definitions().get(index).ok_or_else(mismatch)?.coordinate,
+                function: actual_owner,
+            }, out)?;
             return self.emit_actual_relation(Some(index), width, out);
         }
         let first = self
