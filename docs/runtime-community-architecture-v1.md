@@ -385,6 +385,40 @@ These are Checked ownership/data-movement boundaries with CPU controls, not
 proof of native overlap or general generated producer-to-kernel-consumer
 dataflow. Generated arguments and effects remain unchanged.
 
+The actual `VersionLedger::begin` and `commit` now expand the same executable
+transition bodies used by the conditional Verus refinement in
+[`runtime-graph-version-ledger-refinement-v1`](runtime-graph-version-ledger-refinement-v1.md).
+The proof retains all nine fields and the ordered behavior of duplicate segment
+aliases. Index bounds remain an explicit premise; `prepare`, Context/native
+settlement and completion-authority composition are not proved by this slice.
+
+### Bounded Peer Gather
+
+`RuntimeGraphRequestV1::bind_peer_gather_v1` binds one explicit gather of one
+through eight shards to the existing graph core. The original Context resolves
+each source allocation on another device, one destination allocation and one
+destination stream. Destination ranges must be disjoint; sources remain read-only
+throughout the graph and use their initial admitted versions. Other graph actions
+may consume the gathered versions but may not write the destination. Cross-device
+producer claims and caller-supplied replica equivalence are not accepted.
+
+The graph's original reservation token lends the existing scalar peer-copy
+preparation, reader/writer custody, publication and retirement path. It introduces
+no separate progress engine. One-stream ordering preserves the whole-allocation
+writer journal and is deliberately serial. Definite rejection produces no
+successful version; indeterminate failure retains original custody and global
+quarantine. This is bounded cross-device copy placement, not generated cross-device
+producer scheduling or physical-overlap evidence.
+
+`select_peer_gather_destination_v1` additionally compares up to eight original
+destination allocation/stream pairs against the same fixed sources. It admits a
+candidate only when every shard has valid original regions and a bounded transport
+observation. Least host-staged bytes wins, with stable original-roster ties.
+Native XGMI eligibility reuses the actual retained route/window checks; it is not
+a promise of eventual native transport or measured bandwidth. The private selected
+plan rechecks exact graph actions and current observations before graph reservation.
+Neither an observation nor a plan creates a version or replica capability.
+
 ### Lower-Level Native Cohorts
 
 `Gfx942NativeFillCohortV1::admit` in
@@ -413,13 +447,42 @@ release precedes whole-cohort settlement. This Checked composition preserves
 the separate singleton contract, but has no new batch-refinement theorem or
 genuine native qualification. It creates no compiler or launch authority.
 
-There is no host/generated-runtime cohort bridge yet. The generated backend
-still retains `Gfx942DispatchBatchV1<1>` and one stream lease per active lane,
-with two compute lanes. The scope's 4,096 logical-slot bound and its owner-array
-ceiling therefore do not establish high native queue depth. The lower-level
-cohort does not provide rolling admission or memberwise cancellation. Different
-logical output sizes do not establish measured mixed-duration execution,
-out-of-order completion or physical overlap.
+The host/generated-runtime bridge now has a separate exact-three profile.
+`prepare_generated_cohort3` retains three original charged carriers and result
+gates. Nested native-input callbacks keep every original source borrowed through
+actual preparation. The fresh-primary runtime path retains the actual
+`Gfx942DispatchBatchV1<3>` receipt, not three synthetic scalar receipts. Its
+readback borrows three separately charged output rosters and validates the entire
+roster before copying. Native retirement, Context settlement, original decoder
+completion and hold release remain ordered under the existing lexical engine.
+
+The distinct cohort scope/ticket cannot enter singleton graph or copy APIs.
+It admits one ordered cohort on an unused primary queue, with no lane reuse,
+per-member cancellation or independent completion. The ordinary singleton backend
+still has two active compute lanes. Neither this exact-three profile nor the
+scope's 4,096 logical-slot bound establishes thousands of GPU-published operations.
+Rolling admission, measured mixed-duration execution, out-of-order completion and
+physical overlap remain open.
+
+### Native Recipe Registry
+
+`Gfx942NativeFillRegistrySessionV1` owns one original queue and four distinct
+original recipes. Six metadata tables are prepaid against the supplied original
+account before native preparation. Each recipe publishes its own real one-packet
+receipt and can be polled, recycled and copied into host readback independently.
+The shared ordinary submission and completion bodies select either the original
+scalar owner or the exact registry recipe; the registry never exports its queue
+or aliases a cohort receipt into scalar completion.
+
+All CODE, kernarg and native DATA backing remains in the common root until actual
+registry destruction. A copied result does not release its native partition or
+establish ordinary Context settlement. Destruction requires every accepted recipe
+to be settled; lost receipts, ambiguous publication and failed teardown cannot
+authorize disposal. Recipes are single-use and retain `WaitForPrior` ordering.
+This lower interface is not yet the scoped runtime registry bridge, rolling
+admission, independent device scheduling or thousands of concurrent operations.
+Its selector/readback composition also remains outside the existing narrow
+dispatch-template executable proofs.
 
 ### Production And Acceptance
 
@@ -444,8 +507,9 @@ unmet deployment/hardware gates are recorded in
 The remaining milestone requirements include functional work, not just access
 to hardware or a CI runner:
 
-- **A1:** integrate actual aggregate native submission custody to exceed the
-  two-singleton-lane depth, then qualify high-depth resource pressure and
+- **A1:** connect the distinct four-recipe native registry to the shared scoped
+  driver without refunding its common DATA debit at per-member readback, then add
+  rolling admission and qualify high-depth resource pressure and
   mixed-duration/out-of-order execution through genuine admitted kernels.
   The current closed fill and low-level ordered cohort do not establish those
   workloads. Completion still uses the caller's wake source and busy-poll
@@ -459,8 +523,9 @@ to hardware or a CI runner:
   multistage generated dataflow, cross-device DAG scheduling, measured
   compute/copy overlap and complete executable DAG/settlement refinement remain
   open. Existing source-bound validation/planner proofs do not imply them.
-- **A3:** implement general versioned shard/replica placement, cross-device DAG
-  integration and per-device failure isolation with partial-run reporting.
+- **A3:** extend bounded serial peer gather to general versioned shard/replica
+  placement, cross-device producer DAGs and per-device failure isolation with
+  partial-run reporting.
   Successful unpublished cancellation is not recovery from device loss: an
   uncertain or terminal child still seals the multi-device router. Selected
   roster compute followed by serial directed copies does not qualify physical

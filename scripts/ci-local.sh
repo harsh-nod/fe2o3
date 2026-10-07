@@ -172,7 +172,7 @@ Usage: scripts/ci-local.sh <command>
 Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
   generic-core [group]  Run all core validation or policy, cpu, auxiliary, or cpu-<group>
-                         CPU groups: foundation, analysis, lowering, pliron, finalize, integration
+                         CPU groups: foundation, analysis, lowering, pliron, finalize, finalize-0..3, integration
   workspace-policy  Validate workspace ownership and dependency directions
   hygiene-delta <base> <head>  Validate changed production source hygiene
   standalone-locks  Validate every tracked standalone Cargo lockfile
@@ -831,6 +831,26 @@ run_cpu_package_group() {
     env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
 }
 
+run_cpu_finalizer_shard() {
+  if (($# != 1)) || [[ ! "$1" =~ ^[0-3]$ ]]; then
+    printf 'finalizer shard requires exactly one id from 0 through 3\n' >&2
+    return 2
+  fi
+  local shard="$1"
+  local -a packages
+  load_cpu_package_group finalize packages
+  if [[ "${packages[*]}" != fe2o3-hsaco-finalize ]]; then
+    printf 'finalizer shards require the exact original package group\n' >&2
+    return 2
+  fi
+  run_workspace_dependency_bootstrap "cpu-finalize-${shard}"
+  run_standalone_lockfiles
+  ensure_production_cargo_fe2o3_driver "cpu-finalize-${shard}" create-private
+  run_step "cpu-finalize-${shard}-tests" \
+    env FE2O3_HIP_SYS_DISABLE=1 python3 -I -B "${REPO_ROOT}/scripts/finalizer-test-shards.py" \
+      --shard "${shard}" --output "${LOG_DIR}/finalizer-shard-${shard}"
+}
+
 run_cpu_tests() {
   if (($# > 1)); then
     printf 'CPU tests accept at most one mode\n' >&2
@@ -1477,6 +1497,10 @@ run_generic_core() {
       run_cpu_package_group "${group#cpu-}"
       return
       ;;
+    cpu-finalize-[0-3])
+      run_cpu_finalizer_shard "${group##*-}"
+      return
+      ;;
     cpu-integration)
       run_cpu_tests integration
       return
@@ -1535,6 +1559,8 @@ run_generic_core() {
     python3 -I -B scripts/tests/generic-core-groups.py
   run_step generic-cpu-group-tests \
     python3 -I -B scripts/tests/generic-cpu-groups.py
+  run_step finalizer-test-shard-tests \
+    python3 -I -B scripts/tests/finalizer-test-shards.py
   run_step runtime-production-proof-pipeline-tests \
     python3 -I -B scripts/tests/runtime-production-proof-pipeline.py
   if [[ "${group}" == all ]]; then

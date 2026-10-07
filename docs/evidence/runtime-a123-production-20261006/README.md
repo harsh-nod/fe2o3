@@ -440,6 +440,222 @@ remain single-attempt; production completion/cleanup behavior was not relaxed.
 The spawn test's expected cleanup cost was corrected to include all original
 retirement cells; no accounting limit was increased to hide the discrepancy.
 
+## Signed Candidate CPU Replay
+
+The signed candidate `2653a4ead0ac1c659b82c5d49b56230a1c096b1f` is published
+to `runtime/a123-qualification-2653a4e` in both repositories. This is a
+qualification branch, not a completed milestone or a `main` landing.
+
+An independent comparison against all 15,302 signed Git blobs and their modes
+finds that snapshot 42 differs only in five evidence/architecture documentation
+files. All captured crates, tests, scripts and configuration match the signed
+candidate. Snapshot 41 additionally differs in two KFD test observers, the
+compiler-client test fixture and three proof-controller source-tree pins. These
+comparisons establish source correspondence, not test execution or native
+authority.
+
+Fresh snapshot 41 rebuilds the affected KFD, runtime, host and Cargo packages.
+Its full runtime suite passes 2,465 tests with 34 ignored, and its full host suite
+passes 370 with three ignored. The 24 production-build configuration tests and
+six production-plan tests pass. Runtime/KFD Clippy passes with
+`--no-deps -D clippy::all`. Five new cohort-construction tests fail because the
+shared test observer still expects a singleton read/write binding instead of
+each original cohort member's write-only binding. The full KFD result remains
+2,063 passed, five failed and three ignored; this failed attempt is retained.
+
+Snapshot 42 corrects that test oracle without changing the constructor. It
+independently specifies all three original write-only ranges and retains the
+existing backing/content/ownership checks. After cleaning KFD and the compiler
+client, all seven focused cohort-construction tests and the full KFD suite pass:
+2,068 passed, zero failed, three ignored, 645.64 seconds. Strict KFD Clippy also
+passes. The client passes both new short/overlong temporary-path fixtures,
+all-target checking, and its full parallel suite: 111 passed and five ignored.
+Strict client Clippy fails on pre-existing duplicate-module/non-Drop lifetime
+markers and two newly added needless borrows. The two new test-only borrows are
+corrected in snapshot 45; its focused new-lint replay and full client tests pass.
+No full client Clippy pass is inferred.
+
+The exact source deltas, cleanup/build logs, successful and failed commands,
+closing source inventories and observed remaining executable digests are in
+`native-snapshots41-42-candidate-cpu-evidence.tar.gz`, SHA-256
+`f72ec4f60a77f428fef21f85496d3eb99c5964f965882dfde1b33ed41a5c7333`.
+Its 53 archive members match the retained remote files byte-for-byte. Historical
+KFD binaries removed by the next clean are not reconstructed from later ones.
+
+All 22 snapshot-42 source/diagnostic/construction controls pass in 614.945
+seconds, with identical before/after source byte-and-mode manifests and all 22
+recorded process groups absent. The archive
+`a2-source42-constructor-controls-20261007.tar.gz` has SHA-256
+`7119517d189a1359a652dafb4a68700ef2f40993008a780b87f08c66fda6d0b2`.
+This is source-control qualification, not a new solver campaign.
+
+## Ledger And Cohort Foundation Replay
+
+Snapshot 43's first clean compile refused a stale test-only raw-contract
+expectation after introducing the closed singleton/cohort contract enum. Snapshot
+44 added the shared ledger bodies but was never run because it inherited that
+error. Snapshot 45 corrects the exact singleton expectation and the two new client
+test borrows. After cleaning the runtime and client packages, it passes:
+
+- All 2,473 runtime tests, with 34 explicitly ignored, in 345.08 seconds.
+- Five cohort-foundation and five ledger tests, including the 2,304-case
+  predecessor-equivalence test and explicit alias/empty-use cases.
+- Runtime/host all-target checking, six graph-module tests, 53 scope tests and
+  strict runtime Clippy.
+- All 111 client tests with 16 test threads and five explicitly ignored, plus
+  the focused newly introduced client-lint check.
+
+The 45-member `native-snapshots43-45-ledger-foundation-cpu-evidence.tar.gz` has
+SHA-256 `cc56872c927f3f72a06919df9412cd01a8750425562401ba2e92d90bda07ff7d`.
+Closing inventories match all 15,305 files for snapshot 43 and all 15,307 for
+snapshots 44 and 45, including modes and absence of extra files. Failed discovery
+and the unrun snapshot are retained explicitly. These results predate the actual
+three-original native receipt bridge and peer-gather graph integration; they do
+not qualify those later changes or any GPU execution.
+
+## Signed Candidate Component Replay
+
+The complete maintained component pipeline finished on signed candidate
+`2653a4ead0ac1c659b82c5d49b56230a1c096b1f`, fetched independently from both
+qualification refs. The root supervisor closed all original groups and observed
+its retained private mount namespace empty twice. An independent readback then
+reclassified original raw diagnostics with their maintained family/selector/span
+policies and recomputed the signed source and Git inventories:
+
+- Generic gate: 64 direct positives, 694 expected-negative files, and seven
+  executable-mutation families with 14 positive brackets and 117 mutations.
+- Producer/live: six whole-root positives and 108 logical negative controls.
+- Planner: two whole-root positives and 11 controls. Its maintained
+  `signed_qualification: false` field is preserved, not promoted by the wrapper.
+- Seven production families: 21 positive brackets and 138 logical negatives.
+- All 15,302 source blobs and modes, nine Git metadata files and 6,861 reopened
+  diagnostic/source/classifier inputs agree with the original archived bytes.
+- Root closure covers 460 original groups and 2,496 recorded process occurrences;
+  inaccessible observations were not counted as absent.
+
+The primary private archive `candidate-2653a4ead-01-evidence.tar.gz` is
+136,509,897 bytes with SHA-256
+`6579fd14e5502b1946208a82c6e56479695dfbb1cf1ebfcfee2bc1a7298a5eae`.
+The independent readback archive has SHA-256
+`52eb3e959ace28fb622bead61b1999f76e1a60f1b45c5890329fe73b4afd0c94`.
+The sole member exceeding the ordinary 16 MiB hygiene limit is the exact public
+Git pack, independently checked for signature/tree/index agreement and complete
+reachability from this shallow signed commit. It is a candidate-specific audited
+exception, not a general relaxation. Failed audit-adapter attempts are retained.
+
+The raw archive hygiene scan also reports eleven findings: seven committed
+HSACO fixtures and four committed test-only private-key fixtures. Independent
+byte comparison against this signed commit identifies every finding as the
+existing public fixture. The failed raw scan and this separate findings review
+are both retained; the scan itself is not described as passing. No user signing
+key was copied into the evidence.
+
+This is source-bound component qualification, not a whole-runtime theorem,
+hosted production-workflow success, protected GPU execution or A1/A2/A3 closure.
+In particular, it predates the new graph-ledger executable campaign and the
+actual generated cohort/peer-gather changes. Those require successor qualification.
+
+## Registry And Placement CPU Qualification
+
+The later CPU snapshots retain both failures and successful replays. Their
+results are not qualification of a subsequent signed commit or native hardware:
+
+- `native-snapshots47-49-combined-cpu-evidence.tar.gz`, SHA-256
+  `4387cefbea73b8f4064106015522ba87b499387bae3fb2989cc44777007dcf65`,
+  records the three-original native receipt bridge and explicit peer gather.
+  Snapshot 47 was captured only; 48 failed a private test-fixture access.
+  Corrected 49 passed all-target checking, all 2,491 runtime tests (34 ignored),
+  fourteen cohort tests and runtime doctests. Its combined lint command failed,
+  and incorrectly specified focused invocations were not run successfully.
+- `native-snapshots50-52-ci-fixture-cpu-evidence.tar.gz`, SHA-256
+  `fc3c84d0badcb0d8828278c5f66b6d916cb63d1ef7392616b6d9c6caa1701514`,
+  retains those corrections and subsequent CI fixture discovery. Snapshot 51
+  passed strict runtime Clippy, full host tests (370 passed, three ignored),
+  host doctests and the focused ownership/graph/verifier controls, but had
+  broker fixture compilation and Cargo target-selection failures. Snapshot 52
+  passed all 450 broker tests (35 ignored), while four Cargo tests failed from
+  contention on the real bounded global reaper. Neither batch was accepted as
+  a whole success.
+- `native-snapshots53-55-registry-topology-cpu-evidence.tar.gz`, SHA-256
+  `e1f9db59a285d69f6a1ce50a171d2d4aaa75e199ffcc15de1577e49fb752f9cb`,
+  retains 56 members with exact closing source inventories. Snapshot 53 adds a
+  test-only mutex around fifteen real global-reaper fixture callers, preserving
+  the production eight-slot capacity and deadlines. Three full Cargo runs each
+  passed 570 tests (seven ignored), and three full broker runs each passed 450
+  tests (35 ignored), all with sixteen test threads. Expected failing nested
+  children remain in the raw logs and are not additional aggregate failures.
+
+Snapshot 54 adds the lower four-original native recipe registry; it was
+materialized but not executed independently. Snapshot 55 adds bounded
+topology-aware peer placement and explicitly cleans KFD, runtime and host
+artifacts before compilation. It passed all-target checking, eleven registry
+tests, six actual four-recipe adapter tests, thirty-six peer-gather tests,
+115 compute/XGMI tests, sixty graph tests and fourteen cohort tests. The full
+runtime passed 2,498 tests (34 ignored); KFD and runtime doctests passed.
+The full KFD run had 2,078 passes, one stale source-structure assertion failure
+and three ignored tests. Strict Clippy separately rejected the new registry
+admission's large original-owner error return. Those failures keep the batch
+failed; its passing prefixes do not close KFD qualification.
+
+The source-structure correction checks the ordinary delegation and both
+selector branches' ownership/poisoning order. A function-local lint allowance
+preserves allocation-free return of all four original owners on refusal.
+Snapshots 56 and 57 capture these narrow corrections. The fresh snapshot-57
+replay passed all 2,079 KFD tests (three ignored) in 632.86 seconds, the focused
+selector guard, four ordinary and sixty compile-fail doctests, and strict
+all-target runtime/KFD Clippy. Source 56 was materialized but not separately run.
+The twenty-member `native-snapshots56-57-kfd-selector-cpu-evidence.tar.gz`, SHA-256
+`d4a475e93454f7b6540449fcee9aedc98ceaa3f0292e3da6e334f48b817a741d`,
+retains exact closing inventories for both 15,329-file snapshots.
+
+The broker fixture helper was extracted in source 61 to preserve the maintained
+module-size limit. Two full broker repetitions passed, but the third exposed a
+test startup race: the original process descriptor arrived before exec, and the
+strict procfs observer could see the transient empty environment. That failed
+batch remains recorded in `native-snapshot61-broker-helper-cpu-evidence.tar.gz`,
+SHA-256 `a23ab6b8ba174f758d86447467805a7723e7cf887ba520f3c7fc5f7803149d4e`.
+Source 62 adds a distinct post-exec readiness byte and establishes fixture
+ownership immediately after spawn. It does not retry or relax production
+observation. The focused run passed 21 tests (five ignored), followed by three
+full sixteen-thread runs of 450 tests each (35 ignored), in 13.50, 13.47 and
+13.60 seconds. `native-snapshot62-broker-readiness-cpu-evidence.tar.gz`, SHA-256
+`67f77c580f76fed3b3cc51168f6dc72174ce7293329c1096a7e13ff96c3d5cb4`,
+retains the exact closing source inventory and all command results.
+
+The isolated future-feature snapshots 58 through 60 are not integrated into
+this candidate. Their discovery archive
+`native-snapshots58-60-independent-discovery-cpu-evidence.tar.gz`, SHA-256
+`a900cd1f1f7ccdb131757f6af903c30a5a5621bc5cf1cc801edab3b17acb5580`,
+retains a Registry4 runtime bridge compilation failure and a replica checkpoint
+with fifteen passing focused tests but three strict Clippy failures. Neither
+failed experiment is successor acceptance or native qualification.
+
+The separately retained source-only archive
+`a2-integration-source-controls-20261007.tar.gz`, SHA-256
+`14f02f80654c5afb63043c2737f2f1494e0e3824fb1e760e2088b5a7c1fca338`,
+contains 23 passing controls and exact before/after source inventories. It
+predates Registry4 and topology placement. It is not solver execution and does
+not qualify their later source-inventory changes.
+
+The replacement source-57 controls passed all 23 maintained source-only stages
+in 494.668 seconds, with all recorded groups absent and all 3,344 source/mode
+records unchanged. The archive `a2-source57-controls-20261007.tar.gz`, SHA-256
+`945f78dbff00ed495fded11f7708fc083fe4d8210e207131ed5cc1281ded4283`,
+records the reviewed Registry4/topology inventory refresh and explicit theorem
+exclusions. These controls do not execute the signed successor proof campaign.
+
+The generic finalizer job's previous 3,000-second step expired while tests were
+still passing. Its replacement partitions the complete default Cargo/libtest
+inventory across four jobs and requires their exact disjoint union, original
+ignored semantics, and doctests once. Stable per-shard artifacts within the same
+workflow run preserve successful receipts during partial reruns; successful
+replacement uploads overwrite only their own shard. Eleven inert controller
+tests and all 23 generic-CPU wiring controls pass. The archive
+`finalizer-ci-shards-20261007.tar.gz`, SHA-256
+`5ab9ef5faacf3865fb7299d462ced7252b7e02c737e25f581ed927cd7c4c98bb`,
+preserves the initial control timeout and pre/post rerun-fix sources. Real Cargo
+discovery, four-shard execution and aggregate coverage remain separate gates.
+
 ## Static Native Deployment
 
 Snapshot 8 built and checked all five musl images: proof manager, native
@@ -459,17 +675,21 @@ refuse a zero-test success.
 These tests cover installed-image/profile/account and replacement contracts.
 The manager case uses an inert installed image and refuses live-manager admission.
 They do not show a successful genuine manager/application exchange or protected
-GPU execution. The new hosted `native-static-cpu` CI job is source-integrated;
-an actual GitHub execution remains to be observed after landing. The generic
+GPU execution. The hosted `native-static-cpu` job passes on signed candidate
+`2653a4ead` in [GitHub CI run 37580588847](https://github.com/harsh-nod/fe2o3/actions/runs/37580588847/job/112659080753).
+This qualification-branch result is not a successful `main` workflow. The generic
 validation aggregate now requires this job, including rejecting a failed,
 cancelled, skipped or absent result. Its wiring controls cover all three required
 jobs; source integration alone is not branch protection or a successful run.
 
 The reviewed-host proof job also runs the five signed-source dispatch/producer
-campaigns and the retained-routing/credit campaigns. Every added evidence
+campaigns, retained-routing/credit campaigns and the new shared graph-ledger
+campaign. Every added evidence
 directory participates in the existing always-upload and owned cleanup steps.
 Local parsed-workflow tests exercise the exact command arguments and fail-fast
-shell sequencing; these stubbed invocations do not run a solver. This job still
+shell sequencing; five controls pass, including the commit-specific runner label
+and unchanged repository, main-ref and non-pull-request conditions. The label is
+routing, not authorization. These stubbed invocations do not run a solver. This job still
 needs a properly isolated reviewed runner, with the pinned Git/SSH tools and
 unchanged proof resource limits. No shared host was registered as a runner.
 

@@ -94,6 +94,7 @@ pub(crate) use multi_generated::GeneratedAdoptionScopeV1;
 mod multi_open;
 #[cfg(feature = "hardware-qualification")]
 mod multi_qualification;
+mod peer_placement;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_launch_payload;
@@ -178,7 +179,10 @@ pub use generated_adoption::qualification::{
 };
 mod generated_preparation;
 mod generated_shells;
-pub(crate) use generated_shells::{GeneratedShellBindingV1, GeneratedShellPlanV1};
+pub(crate) use generated_shells::{
+    GeneratedShellBindingV1, GeneratedShellCommitPlanV1, GeneratedShellPlanV1,
+};
+pub(crate) use multi_generated::MultiGeneratedShellCommitV1;
 mod compute_dependencies;
 mod native_budget;
 mod producer_peers;
@@ -10943,6 +10947,15 @@ impl KfdNativeXgmiRuntimeBackendV1 {
 impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
     type Error = KfdRuntimeBackendErrorV1;
 
+    fn observe_peer_copy_placement_v1(
+        &self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+    ) -> Option<crate::BackendPeerCopyPlacementV1> {
+        self.observe_native_peer_placement_v1(stream, source, destination)
+    }
+
     fn allocation_admission_profile_v1(
         &self,
     ) -> Result<crate::RuntimeAllocationAdmissionProfileV1, RuntimeBackendFailureV1<Self::Error>>
@@ -12001,6 +12014,15 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
 
 impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     type Error = KfdRuntimeBackendErrorV1;
+
+    fn observe_peer_copy_placement_v1(
+        &self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+    ) -> Option<crate::BackendPeerCopyPlacementV1> {
+        self.observe_multi_peer_placement_v1(stream, source, destination)
+    }
 
     fn capture_coherent_host_range_v1(
         &mut self,

@@ -20,14 +20,14 @@ struct Original {
     length: usize,
 }
 
-fn payload() -> PhysicalMachineEffectRequestV1 {
+pub(super) fn payload() -> PhysicalMachineEffectRequestV1 {
     PhysicalMachineEffectRequestV1::decode_canonical(include_bytes!(
         "../../../../fe2o3-kernel-analysis/src/gfx942_fill_analysis_v1/fill.request"
     ))
     .unwrap()
 }
 
-fn program(bytes: &[u8]) -> ValidatedKernelEnvelope<'_> {
+pub(super) fn program(bytes: &[u8]) -> ValidatedKernelEnvelope<'_> {
     let kernel = validate(bytes, AdmittedProfile::Gfx942XnackOffCov6)
         .unwrap()
         .bind_kernel("fill_write_only")
@@ -50,7 +50,7 @@ fn program(bytes: &[u8]) -> ValidatedKernelEnvelope<'_> {
         .unwrap()
 }
 
-fn packet(
+pub(super) fn packet(
     count: u64,
     grid: u32,
     program_index: usize,

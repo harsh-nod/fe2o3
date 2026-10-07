@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/ci-local.sh"
 PACKAGE_GROUPS = ("foundation", "analysis", "lowering", "pliron", "finalize")
 CPU_GROUPS = (*PACKAGE_GROUPS, "integration")
+HOSTED_CPU_GROUPS = ("foundation", "analysis", "lowering", "pliron", "finalize-0", "finalize-1",
+                     "finalize-2", "finalize-3", "integration")
 RAW = ("fe2o3-raw-a", "fe2o3-raw-b")
 MANAGED = ("fe2o3-managed-a", "fe2o3-managed-b")
 HEAVY = {
@@ -117,14 +119,20 @@ class CpuGroupTests(unittest.TestCase):
 
     def semantics(self, rows):
         result = []
+        finalizer_shards = []
         for row in rows:
             if (row[0].endswith("-workspace-dependencies") or row[0].startswith("driver-")
                     or row[0] == "standalone-lockfiles"):
                 continue
-            if row[0] == "cpu-tests" or row[0] in {f"cpu-{group}-tests" for group in CPU_GROUPS}:
+            if re.fullmatch(r"cpu-finalize-[0-3]-tests", row[0]):
+                finalizer_shards.append(int(row[0].split("-")[2]))
+            elif row[0] == "cpu-tests" or row[0] in {f"cpu-{group}-tests" for group in CPU_GROUPS}:
                 result.extend(("default-package", package) for package in self.package_command(row))
             else:
                 result.append(row)
+        if finalizer_shards:
+            self.assertCountEqual(finalizer_shards, [0, 1, 2, 3])
+            result.append(("default-package", "fe2o3-hsaco-finalize"))
         return Counter(result)
 
     def test_hosted_union_preserves_every_legacy_package_and_nonpackage_command(self):
@@ -132,7 +140,7 @@ class CpuGroupTests(unittest.TestCase):
         self.assertEqual(legacy, self.successful("run_cpu_tests", "all"))
         self.assertEqual(legacy, self.successful("main", "generic-core", "cpu"))
         hosted = []
-        for group in CPU_GROUPS:
+        for group in HOSTED_CPU_GROUPS:
             hosted.extend(self.successful("main", "generic-core", f"cpu-{group}"))
         self.assertEqual(self.semantics(hosted), self.semantics(legacy))
         packages = [
@@ -238,11 +246,30 @@ class CpuGroupTests(unittest.TestCase):
             ("run_cpu_tests", "integration", "extra"),
             ("main", "generic-core", "cpu-unknown"),
             ("main", "generic-core", "cpu-finalize", "extra"),
+            ("run_cpu_finalizer_shard",), ("run_cpu_finalizer_shard", "4"),
+            ("run_cpu_finalizer_shard", "-1"), ("run_cpu_finalizer_shard", "00"),
+            ("run_cpu_finalizer_shard", "0", "extra"),
+            ("main", "generic-core", "cpu-finalize-4"),
         ]:
             with self.subTest(arguments=arguments):
                 result, rows = self.invoke(*arguments)
                 self.assertEqual(result.returncode, 2, result.stderr.decode())
                 self.assertEqual(rows, [])
+
+    def test_finalizer_shards_keep_cold_prerequisites_and_one_original_outer_bound(self):
+        for shard in range(4):
+            group = f"cpu-finalize-{shard}"
+            rows = self.successful("main", "generic-core", group)
+            self.assertEqual([row[0] for row in rows], [f"{group}-workspace-dependencies",
+                "standalone-lockfiles", "driver-bootstrap", f"{group}-tests"])
+            self.assertEqual(rows[2], ("driver-bootstrap", group, "create-private"))
+            self.assertEqual(rows[-1], (f"{group}-tests", "env", "FE2O3_HIP_SYS_DISABLE=1", "python3",
+                "-I", "-B", str(ROOT / "scripts/finalizer-test-shards.py"), "--shard", str(shard),
+                "--output", f"<private-root>/logs/finalizer-shard-{shard}"))
+            for row in rows:
+                result, stopped = self.invoke("main", "generic-core", group, failure=row[0])
+                self.assertEqual(result.returncode, 29)
+                self.assertEqual(stopped, rows[:rows.index(row) + 1])
 
     def test_empty_raw_examples_do_not_fall_back_to_workspace_tests(self):
         rows = self.successful("run_cpu_tests", "integration", EMPTY_RAW="1")
@@ -267,7 +294,7 @@ class CpuGroupTests(unittest.TestCase):
         core = workflow.split("\n  generic-core:\n", 1)[1].split("\n  rustc-codegen-shards:\n", 1)[0]
         matrix = core.split("        group:\n", 1)[1].split("    env:\n", 1)[0]
         self.assertEqual(re.findall(r"^          - (.+)$", matrix, re.MULTILINE), [
-            "policy", *(f"cpu-{group}" for group in CPU_GROUPS), "auxiliary",
+            "policy", *(f"cpu-{group}" for group in HOSTED_CPU_GROUPS), "auxiliary",
         ])
         self.assertIn("    timeout-minutes: 90\n", core)
         self.assertIn("      fail-fast: false\n", core)
@@ -290,6 +317,21 @@ class CpuGroupTests(unittest.TestCase):
         self.assertIn('"${RUSTC_CODEGEN_SHARDS_RESULT}"', aggregate)
         self.assertIn("NATIVE_STATIC_CPU_RESULT: ${{ needs.native-static-cpu.result }}", aggregate)
         self.assertIn('"${NATIVE_STATIC_CPU_RESULT}"', aggregate)
+        self.assertIn("--aggregate target/finalizer-shard-receipts", aggregate)
+        self.assertIn('--expected-commit "${{ github.sha }}"', aggregate)
+        self.assertIn("pattern: finalizer-shard-*-receipt", aggregate)
+        self.assertIn("name: Upload complete finalizer shard receipts", core)
+        self.assertIn("if-no-files-found: error", core)
+        receipt_upload = core.split("      - name: Upload complete finalizer shard receipts\n", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("name: finalizer-shard-${{ matrix.group }}-receipt\n", receipt_upload)
+        self.assertIn("overwrite: true", receipt_upload)
+        self.assertIn("success() && startsWith(matrix.group, 'cpu-finalize-')", receipt_upload)
+        self.assertNotIn("github.run_attempt", receipt_upload)
+        receipt_download = aggregate.split("      - name: Download all four finalizer shard receipts\n", 1)[1].split("      - name:", 1)[0]
+        for override in ("github.run_attempt", "run-id:", "repository:", "github-token:"):
+            self.assertNotIn(override, receipt_download)
+        self.assertLess(aggregate.index("scripts/require-ci-success.sh"),
+                        aggregate.index("Download all four finalizer shard receipts"))
         script = SCRIPT.read_text()
         self.assertIn('CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"', script)
         self.assertIn('CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"', script)

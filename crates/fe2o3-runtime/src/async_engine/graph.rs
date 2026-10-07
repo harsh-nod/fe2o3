@@ -15,11 +15,13 @@ use std::collections::VecDeque;
 mod admitted;
 mod generated;
 mod host_staging;
+mod peer_placement;
 mod versions;
 pub(crate) use admitted::*;
 use generated::GraphReplyV1;
 pub use generated::*;
 pub(crate) use host_staging::HostStagingV1;
+pub use peer_placement::{MAX_RUNTIME_GRAPH_PEER_SHARDS_V1, RuntimeGraphPeerShardV1};
 pub use versions::{
     MAX_RUNTIME_GRAPH_VERSION_REFERENCES_V1, MAX_RUNTIME_GRAPH_VERSIONS_V1,
     RuntimeGraphDataVersionV1, RuntimeGraphInputVersionV1, RuntimeGraphVersionRecordV1,
@@ -46,6 +48,7 @@ pub enum RuntimeGraphValidationErrorV1 {
     InvalidVersionInput,
     VersionNotAvailable,
     InvalidHostStaging,
+    InvalidPeerGather,
     HostStagingRequiresScope,
     UnorderedMemoryConflict {
         first: CompletionNodeIdV1,
@@ -189,6 +192,7 @@ impl<B: RuntimeBackendV1, A: RuntimeArgumentsV1> FrozenLaunch<B> for Launch<A> {
 enum Action<B: RuntimeBackendV1> {
     Launch(Box<dyn FrozenLaunch<B>>),
     Copy(RuntimeMemoryRegionV1, RuntimeMemoryRegionV1),
+    PeerCopy(RuntimeMemoryRegionV1, RuntimeMemoryRegionV1),
     HostStaging(HostStagingV1),
 }
 
@@ -205,6 +209,7 @@ pub struct RuntimeGraphRequestV1<B: RuntimeBackendV1> {
     kernarg_bytes: usize,
     effects: usize,
     version_inputs: BTreeMap<versions::InputKey, RuntimeGraphVersionSourceV1>,
+    peer_placement: Option<crate::RuntimePeerGatherPlacementV1>,
 }
 impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
     pub fn new(
@@ -235,6 +240,7 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
             kernarg_bytes: 0,
             effects: 0,
             version_inputs: BTreeMap::new(),
+            peer_placement: None,
         })
     }
 
@@ -344,7 +350,7 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
                         add(binding.region);
                     }
                 }
-                Action::Copy(source, destination) => {
+                Action::Copy(source, destination) | Action::PeerCopy(source, destination) => {
                     add(*source);
                     add(*destination);
                 }

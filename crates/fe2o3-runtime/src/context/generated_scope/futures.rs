@@ -60,7 +60,6 @@ impl Future for RuntimeGfx942ScopedCompletionFutureV1<'_> {
 impl<'scope, B, P> RuntimeGfx942GeneratedScopeV1<'scope, '_, B, P>
 where
     B: RuntimeBackendV1<Error = KfdRuntimeBackendErrorV1>,
-    P: RuntimeGfx942GeneratedCompletionCarrierV1,
 {
     /// Takes the sole future for this ticket, before or after exact settlement.
     /// The ticket remains available for the original typed result-owner gate.

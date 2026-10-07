@@ -64,28 +64,24 @@ fn unpublished_gate_rejects_unreturned_receipt_or_changed_source_binding_without
             attempt.phase = PhaseV1::Active;
             match mode {
                 2 => attempt.submission.as_mut().unwrap().backend_submission = 901,
-                3 => attempt.roster.source_identity = std::sync::Arc::new(()),
+                3 => attempt.roster.source_identity = std::sync::Arc::new(()).into(),
                 4 => attempt.phase = PhaseV1::PhysicallyComplete,
                 _ => {}
             }
         }
         let before = snapshot(&context, &plan);
         let phase = context.generated_issues[&hold.stream()].phase;
-        let source = std::sync::Arc::clone(
-            &context.generated_issues[&hold.stream()]
-                .roster
-                .source_identity,
-        );
+        let source = context.generated_issues[&hold.stream()]
+            .roster
+            .source_identity
+            .clone();
         let admitted = context.gfx942_adoption_unpublished_v1(&hold);
         assert!(!matches!(admitted, Ok(true)));
         assert!(context.retire_gfx942_unpublished_v1(&hold).is_err());
         assert_eq!(snapshot(&context, &plan), before);
         let attempt = &context.generated_issues[&hold.stream()];
         assert_eq!(attempt.phase, phase);
-        assert!(std::sync::Arc::ptr_eq(
-            &attempt.roster.source_identity,
-            &source
-        ));
+        assert!(attempt.roster.source_identity.matches(&source));
         assert!(context.validate_unpublished_hold_v1(&hold).is_ok());
         assert!(!context.is_terminal());
     }

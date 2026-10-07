@@ -2136,6 +2136,15 @@ mod tests {
         );
     }
 
+    pub(super) fn serial_reaper_fixture() -> std::sync::MutexGuard<'static, ()> {
+        // These fixtures share the real process-wide eight-slot reaper. Independent
+        // parallel test cases must not consume one another's production quota.
+        static FIXTURES: Mutex<()> = Mutex::new(());
+        FIXTURES
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn test_cleanup() -> ApplicationCleanup {
         ApplicationCleanup {
             reaper: application_reaper().reserve().unwrap(),
@@ -2307,6 +2316,7 @@ mod tests {
 
     #[test]
     fn unrelated_same_session_process_cannot_join_or_be_killed() {
+        let _fixture = serial_reaper_fixture();
         let mut application = fresh_session_command("/bin/sleep");
         application.arg("30");
         let application = crate::process_execution::spawn(&mut application).unwrap();
@@ -2450,6 +2460,7 @@ mod tests {
             return;
         }
 
+        let _fixture = serial_reaper_fixture();
         ensure_child_subreaper().unwrap();
         let pid_file = std::env::temp_dir().join(format!(
             "cargo-fe2o3-invalid-ack-descendant-{}",
@@ -2539,6 +2550,7 @@ mod tests {
 
     #[test]
     fn ack_exit_observation_retries_eintr_and_echild_fails_closed() {
+        let _fixture = serial_reaper_fixture();
         let mut command = fresh_session_command("/bin/true");
         let child = crate::process_execution::spawn(&mut command).unwrap();
         let leader = child.id() as libc::pid_t;
@@ -2708,6 +2720,7 @@ mod tests {
 
     #[test]
     fn early_exit_without_ack_remains_waitable_until_cleanup() {
+        let _fixture = serial_reaper_fixture();
         let (mut ack_read, ack_write) = cloexec_pipe().unwrap();
         let mut command = fresh_session_command("/bin/true");
         let child = crate::process_execution::spawn(&mut command).unwrap();
@@ -2734,6 +2747,7 @@ mod tests {
 
     #[test]
     fn successful_wait_contains_before_reaping_leader() {
+        let _fixture = serial_reaper_fixture();
         for _ in 0..100 {
             let mut command = fresh_session_command("/bin/true");
             let child = crate::process_execution::spawn(&mut command).unwrap();
@@ -2747,6 +2761,7 @@ mod tests {
 
     #[test]
     fn successful_wait_observation_error_still_transfers_and_reaps() {
+        let _fixture = serial_reaper_fixture();
         let mut command = fresh_session_command("/bin/true");
         let mut child = crate::process_execution::spawn(&mut command).unwrap();
         assert!(child.wait().unwrap().success());
@@ -2757,6 +2772,7 @@ mod tests {
 
     #[test]
     fn successful_leader_exit_still_contains_session_descendants() {
+        let _fixture = serial_reaper_fixture();
         ensure_child_subreaper().unwrap();
         let pid_file = std::env::temp_dir().join(format!(
             "cargo-fe2o3-session-descendant-{}",

@@ -14,6 +14,7 @@ use fe2o3_runtime::{
     WorkerV3Gfx942ExecutionAuthorityV1,
 };
 use std::cell::{RefCell, RefMut};
+mod cohort3;
 mod epoch;
 pub(super) use epoch::EpochAnchor;
 use epoch::{CarrierRetention, Epoch};

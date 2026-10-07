@@ -1232,7 +1232,9 @@ pub(crate) mod tests {
         assert_eq!(roster.readback_bytes, 60);
         assert_eq!(
             roster.dispatch_contract_sha256,
-            projection.dispatch_contract_sha256()
+            crate::generated_source::GeneratedContractsV1::Singleton(
+                projection.dispatch_contract_sha256()
+            )
         );
         assert_eq!(projection.timeout_milliseconds(), 4321);
         for (ordinal, buffer) in projection.buffers().iter().enumerate() {

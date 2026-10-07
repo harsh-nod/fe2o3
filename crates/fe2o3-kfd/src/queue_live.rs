@@ -270,6 +270,8 @@ mod initial_bind;
 pub(in crate::queue) mod model_loan;
 #[path = "queue_live/native_fill_cohort.rs"]
 mod native_fill_cohort;
+#[path = "queue_live/native_fill_registry.rs"]
+pub(super) mod native_fill_registry;
 use model_loan::execute_live_model_custody_v1;
 #[path = "queue_live/compute_xgmi.rs"]
 mod compute_xgmi;

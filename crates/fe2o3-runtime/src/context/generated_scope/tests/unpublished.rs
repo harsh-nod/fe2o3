@@ -328,7 +328,12 @@ fn unpublished_disposal_failure_preserves_global_unknown_and_scope_fail_stop() {
     }
 }
 
-pub(super) fn abort_child(test: &str, variable: &str, mode: &str, marker: &str) {
+pub(in crate::context::generated_scope) fn abort_child(
+    test: &str,
+    variable: &str,
+    mode: &str,
+    marker: &str,
+) {
     use std::{
         io::Read,
         os::unix::process::ExitStatusExt,

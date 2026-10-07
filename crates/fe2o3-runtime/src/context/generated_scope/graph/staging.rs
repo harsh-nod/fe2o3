@@ -105,10 +105,10 @@ where
         {
             return Err(invalid());
         }
-        if encode(&self.slots[slot].domain, scratch)
-            .map_err(Encoding)?
-            .is_none()
-        {
+        let CompletionDomainsV1::Singleton(domain) = &self.slots[slot].domain else {
+            return Err(invalid());
+        };
+        if encode(domain, scratch).map_err(Encoding)?.is_none() {
             return Ok(None);
         }
         if !core.begin(index) {

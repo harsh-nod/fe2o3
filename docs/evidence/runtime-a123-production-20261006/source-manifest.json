@@ -15,15 +15,15 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "3e2af8e9eaf7f7300fca94466a9844634cf274a1ba9079ed2252d68c315d7b8f"
+      "sha256": "77ce673a4d54cedb103c99b1460b6c9bbea1761304fbd51a99b48d11d103c550"
     },
     {
       "path": ".github/workflows/runtime-model-verus.yml",
-      "sha256": "8d5837b03a8a49716c01313fe9114f00b07982a862a008dc44d5e48ee9eb8148"
+      "sha256": "b0b0a43b1624691d190af1a661a70742cd0734c67c1b5cce905c703d4cd43006"
     },
     {
       "path": "scripts/ci-local.sh",
-      "sha256": "520ad063eb02ba02fd007080d8ffcb5360d2751941dda14ef5b326230840fbe6"
+      "sha256": "74a22a2dfaed1d0e5f237af5358e9f9bfa2ceeeaad5edb847139c5fd49769bd1"
     },
     {
       "path": "scripts/tests/ci-local-test-gate.sh",
@@ -43,11 +43,11 @@
     },
     {
       "path": "crates/fe2o3-runtime-model/verus/pins/PRODUCER_LIVE_CAMPAIGN_INPUTS.json",
-      "sha256": "0e22daf6c6f46b5647d3abd79628e27a3057e16a2e6408ad81f8bb17660486a7"
+      "sha256": "94f6743d4d3d11122603589e7f4135da1a30b8e43418d823fb5624746cb0f522"
     },
     {
       "path": "crates/fe2o3-runtime-model/verus/pins/PRODUCER_PLANNER_INPUT_CAMPAIGN_V1.json",
-      "sha256": "cd63d5c6be433ccdbbeb42c4b4d39b66ce338174bb5008964365fab10ce33382"
+      "sha256": "282bc144700b683a454ed70111c7e0a0045fb34d1ecfb03708a2622ad49d8745"
     }
   ],
   "group_hash_algorithm": "SHA-256 of records sorted by repository-relative path: lowercase file SHA-256, two ASCII spaces, POSIX repository-relative path, newline. UTF-8; no domain prefix.",
@@ -56,12 +56,12 @@
     {
       "files": 92,
       "package": "cargo-fe2o3",
-      "records_sha256": "893408d8c1b467cc7f5b550f24d051b49cecbbf87325de5261bb65d54f2da7a9"
+      "records_sha256": "05674d24a5b7306e70c438beff573609146427437b14febbbbbaa6845ffd4cba"
     },
     {
-      "files": 516,
+      "files": 536,
       "package": "fe2o3-runtime",
-      "records_sha256": "45778a11e14d91a5896dc09f9e395407fce74bc50a9b8239c778f36301a1f447"
+      "records_sha256": "c5cb31ef1ecb74571f3c5ee845b4889ecc8d60a70a8c3210c5dcdb5abfe1474a"
     },
     {
       "files": 314,
@@ -69,14 +69,14 @@
       "records_sha256": "1832db1d93e336c7e55a4645f421727df9c9fe1df1ff52156a31776ed1a57d31"
     },
     {
-      "files": 489,
+      "files": 494,
       "package": "fe2o3-kfd",
-      "records_sha256": "b11a21ee5dc91c1049754a026f82239162f0a2fa0061af22db2ccf963ec91ace"
+      "records_sha256": "14935311a21c3e7eb483b928af0fdd9f2fb57ede245309953d0b5f63f598b030"
     },
     {
-      "files": 125,
+      "files": 127,
       "package": "fe2o3-host",
-      "records_sha256": "15fd6c6b73015d83ba1ef32ae629f81607faa08230795db6c46d5cc267c6916e"
+      "records_sha256": "cd38de52a3002ddb0d441a3cb7ed48f2312278fae0eee584ddcc295d2da4eeef"
     },
     {
       "files": 395,
@@ -106,7 +106,7 @@
     {
       "files": 35,
       "package": "fe2o3-compiler-execution-client",
-      "records_sha256": "6ff9eb9998aed46535a127a7924c0e98f26b0a1a96838011f40ba542002b1904"
+      "records_sha256": "67829310fc22c9d7e9686724047aa9a0e1b919180092db3e212838b6997ee21b"
     },
     {
       "files": 108,
@@ -119,9 +119,9 @@
       "records_sha256": "31581fcf11af2c22466b8d58b6f4821a8b81aaa01f806b090b4fcc2a9fc9393e"
     },
     {
-      "files": 112,
+      "files": 113,
       "package": "fe2o3-broker-authority-service",
-      "records_sha256": "af87db3c7276ba8e6a135c1585f000a0d146623914b977e41f78646c604f5292"
+      "records_sha256": "fa0881595edc2583a13d631239482f308ba77dc0a3f9bdd3a896a3dcb3701e41"
     },
     {
       "files": 94,
@@ -139,7 +139,7 @@
       "records_sha256": "e364bca79400a60613a4f734c2026b44f04d2c370b3b98ea0f16ca244503f936"
     }
   ],
-  "integration_base_commit": "eccdc0b6ee383655bba9f818981ae61d56549385",
+  "integration_base_commit": "2653a4ead0ac1c659b82c5d49b56230a1c096b1f",
   "reproduction": [
     "cargo fmt --all -- --check",
     "bash scripts/tests/ci-local-test-gate.sh",

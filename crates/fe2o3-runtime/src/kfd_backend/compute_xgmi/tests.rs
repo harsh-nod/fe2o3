@@ -15,6 +15,7 @@ mod no_effect;
 mod packetized;
 #[path = "../peer_readback/tests.rs"]
 mod peer_readback;
+mod placement;
 #[path = "../progress_quantum_tests.rs"]
 mod progress_quantum;
 mod queued_consumer;

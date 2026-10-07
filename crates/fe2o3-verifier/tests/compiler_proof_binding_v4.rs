@@ -262,7 +262,11 @@ fn actual_guarded_store_lowering_reaches_exact_v9_singleton_admission() {
                 .try_into()
                 .unwrap()
         ),
-        2
+        fe2o3_kernel_ir::FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V3
+    );
+    assert_eq!(
+        validated.formal_memory().validation_policy(),
+        fe2o3_lower_mir_kernel::FormalMemoryAdmissionValidationPolicyV4::GuardedV2
     );
     assert!(validated.has_lossless_mir_to_kir_correspondence());
     assert!(validated.authenticates_signed_verus_receipt_under_embedded_key());
@@ -350,20 +354,27 @@ fn malformed_truncated_and_trailing_v9_bytes_are_not_repaired() {
 
 #[test]
 fn write_only_formal_obligation_receipt_cannot_be_downgraded_or_retagged() {
-    for version in [1_u16, 3] {
+    for version in [1_u16, 2, 4] {
         let mut receipts = receipts_from(guarded_v9_proof_inputs::inputs(0));
         let mut bytes = receipts.formal_memory.canonical_preimage().to_vec();
-        // V4's 120-byte header is followed by the exact V2 obligation receipt.
+        // V4's 120-byte header is followed by the actual guarded V3 receipt.
+        assert_eq!(
+            u16::from_le_bytes(bytes[128..130].try_into().unwrap()),
+            fe2o3_kernel_ir::FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V3
+        );
         bytes[128..130].copy_from_slice(&version.to_le_bytes());
         replace_formal_memory(&mut receipts, bytes);
         let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
         let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
-        assert!(matches!(
-            validate(&binding, &receipts),
-            Err(CompilerProofInputValidationErrorV4::Stage(error)) if matches!(*error, CompilerProofInputValidationErrorV3::FormalMemoryV4Decode(
-                    fe2o3_lower_mir_kernel::ProductionFormalMemoryEvidenceErrorV4::FormalReceipt(_)
-                ))
-        ));
+        assert!(
+            matches!(
+                validate(&binding, &receipts),
+                Err(CompilerProofInputValidationErrorV4::Stage(error)) if matches!(*error, CompilerProofInputValidationErrorV3::FormalMemoryV4Decode(
+                        fe2o3_lower_mir_kernel::ProductionFormalMemoryEvidenceErrorV4::FormalReceipt(_)
+                    ))
+            ),
+            "retagged guarded receipt as version {version}"
+        );
     }
 }
 

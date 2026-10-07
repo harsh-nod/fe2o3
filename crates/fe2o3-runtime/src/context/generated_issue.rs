@@ -8,6 +8,7 @@ use crate::{
     RuntimeGfx942GeneratedCarrierV1,
 };
 
+mod cohort3;
 mod completion;
 mod unpublished;
 
@@ -254,6 +255,39 @@ macro_rules! impl_generated_issue_context {
                 roster: &GeneratedHostRosterV1,
                 hold: &ContextUnpublishedHoldV1,
             ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                self.progress_generated_issue_with_v1(
+                    prepared,
+                    hold,
+                    |context, value, uid, plan| {
+                        let mut complete = false;
+                        value
+                            .source()
+                            .with_current_source_v1(uid, roster, || {
+                                complete = context
+                                    .advance_generated_issue_attempt_v1(plan, roster, hold)?;
+                                Ok::<_, RuntimeErrorV1<KfdRuntimeBackendErrorV1>>(())
+                            })
+                            .map_err(|_| {
+                                RuntimeErrorV1::Validation(
+                                    RuntimeValidationErrorV1::InvalidBackendDescription,
+                                )
+                            })??;
+                        Ok(complete)
+                    },
+                )
+            }
+
+            fn progress_generated_issue_with_v1<T>(
+                &mut self,
+                prepared: &RuntimeGfx942PreparedV1<T>,
+                hold: &ContextUnpublishedHoldV1,
+                current: impl FnOnce(
+                    &mut Self,
+                    &T,
+                    u64,
+                    GeneratedShellPlanV1,
+                ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>>,
+            ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
                 self.validate_unpublished_hold_v1(hold)?;
                 let scope = self.generated_adoption_scope_for_hold_v1(hold)?;
                 let mut complete = false;
@@ -264,64 +298,7 @@ macro_rules! impl_generated_issue_context {
                         return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
                     }
                     let uid = self.generated_issue_device_uid_v1(plan.binding.backend_device)?;
-                    prepared
-                        .value()
-                        .source()
-                        .with_current_source_v1(
-                            uid,
-                            roster,
-                            || -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
-                                if let Some(attempt) = self.generated_issues.get(&hold.stream()) {
-                                    if attempt.plan != plan
-                                        || !attempt.roster.matches(roster)
-                                        || !matches!(
-                                            attempt.phase,
-                                            PhaseV1::Active | PhaseV1::PhysicallyComplete
-                                        )
-                                    {
-                                        return Err(
-                                            RuntimeValidationErrorV1::InvalidBackendDescription
-                                                .into(),
-                                        );
-                                    }
-                                    self.generated_issue_token_v1(hold, &plan)?;
-                                    if attempt.phase == PhaseV1::PhysicallyComplete {
-                                        complete = true;
-                                        return Ok(());
-                                    }
-                                } else {
-                                    self.begin_generated_issue_v1(hold, plan, roster)?;
-                                    let handle = self
-                                        .backend
-                                        .prepare_generated_issue_v1(&plan, roster)
-                                        .map_err(map_backend_error)?;
-                                    self.install_generated_submission_v1(hold, handle)?;
-                                }
-                                let attempt = self
-                                    .generated_issues
-                                    .get_mut(&hold.stream())
-                                    .expect("retained attempt");
-                                // This is the first non-reusing mutation hook. It remains Unknown
-                                // until closing authority checks succeed; physical completion
-                                // alone never settles a successful output version.
-                                attempt.phase = PhaseV1::Unknown;
-                                let handle = attempt
-                                    .submission
-                                    .as_ref()
-                                    .expect("rooted token")
-                                    .backend_submission;
-                                complete = self
-                                    .backend
-                                    .advance_generated_issue_v1(&plan, handle)
-                                    .map_err(map_backend_error)?;
-                                Ok(())
-                            },
-                        )
-                        .map_err(|_| {
-                            RuntimeErrorV1::Validation(
-                                RuntimeValidationErrorV1::InvalidBackendDescription,
-                            )
-                        })??;
+                    complete = current(self, prepared.value(), uid, plan)?;
                     self.generated_issues
                         .get_mut(&hold.stream())
                         .expect("retained attempt")
@@ -334,6 +311,49 @@ macro_rules! impl_generated_issue_context {
                 }));
                 self.finish_generated_issue_scoped_v1(hold, scope, result)?;
                 Ok(complete)
+            }
+
+            fn advance_generated_issue_attempt_v1(
+                &mut self,
+                plan: GeneratedShellPlanV1,
+                roster: &GeneratedHostRosterV1,
+                hold: &ContextUnpublishedHoldV1,
+            ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                if let Some(attempt) = self.generated_issues.get(&hold.stream()) {
+                    if attempt.plan != plan
+                        || !attempt.roster.matches(roster)
+                        || !matches!(attempt.phase, PhaseV1::Active | PhaseV1::PhysicallyComplete)
+                    {
+                        return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+                    }
+                    self.generated_issue_token_v1(hold, &plan)?;
+                    if attempt.phase == PhaseV1::PhysicallyComplete {
+                        return Ok(true);
+                    }
+                } else {
+                    self.begin_generated_issue_v1(hold, plan, roster)?;
+                    let handle = self
+                        .backend
+                        .prepare_generated_issue_v1(&plan, roster)
+                        .map_err(map_backend_error)?;
+                    self.install_generated_submission_v1(hold, handle)?;
+                }
+                let attempt = self
+                    .generated_issues
+                    .get_mut(&hold.stream())
+                    .expect("retained attempt");
+                // This is the first non-reusing mutation hook. It remains Unknown
+                // until closing authority checks succeed; physical completion
+                // alone never settles a successful output version.
+                attempt.phase = PhaseV1::Unknown;
+                let handle = attempt
+                    .submission
+                    .as_ref()
+                    .expect("rooted token")
+                    .backend_submission;
+                self.backend
+                    .advance_generated_issue_v1(&plan, handle)
+                    .map_err(map_backend_error)
             }
 
             // Called only after the async engine stops observers. It never retries ISSUE.

@@ -76,7 +76,14 @@ jobs:
     # The unchanged proof admission requires 16 GiB available, not total RAM.
     # Never run unreviewed pull-request code on a protected/shared host.
     if: ${{ github.repository == 'harsh-nod/fe2o3' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
-    runs-on: [self-hosted, linux, x64, fe2o3-verus-reviewed-host-v1]
+    # The commit label is routing, not an authorization boundary. Signed-source
+    # admission and independent runner/result validation remain required.
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
+      - fe2o3-verus-reviewed-host-v1
+      - "fe2o3-verus-commit-${{ github.sha }}"
     timeout-minutes: 300
     steps:
       - name: Create private campaign directory
@@ -151,6 +158,7 @@ jobs:
             ${{ env.A2_CAMPAIGN_ROOT }}/producer-preflight
             ${{ env.A2_CAMPAIGN_ROOT }}/retained-routing
             ${{ env.A2_CAMPAIGN_ROOT }}/retained-credit
+            ${{ env.A2_CAMPAIGN_ROOT }}/graph-version-ledger
           if-no-files-found: warn
           retention-days: 7
 

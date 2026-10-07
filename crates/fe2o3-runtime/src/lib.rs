@@ -57,9 +57,9 @@ pub use fe2o3_completion as completion;
 pub use fe2o3_host_api as contract;
 pub use fe2o3_profiler_protocol as profiler;
 pub use generated_source::{
-    RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedReservationErrorV1,
-    RuntimeGfx942GeneratedSourceMutV1, RuntimeGfx942GeneratedSourceV1,
-    RuntimeGfx942ReadbackErrorV1,
+    RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedCohort3V1,
+    RuntimeGfx942GeneratedReservationErrorV1, RuntimeGfx942GeneratedSourceMutV1,
+    RuntimeGfx942GeneratedSourceV1, RuntimeGfx942ReadbackErrorV1,
 };
 pub use kfd_backend::*;
 pub use kfd_profile::*;

@@ -18,6 +18,7 @@ COMMANDS = (
     ("check-producer-input-preflight.py", "producer-preflight", ()),
     ("check-retained-pair-routing.py", "retained-routing", ()),
     ("check-retained-credit-dispatch.py", "retained-credit", ("--campaign",)),
+    ("qualify-graph-version-ledger-v1.py", "graph-version-ledger", ()),
 )
 RECORDER = r'''#!/bin/bash
 set -Eeuo pipefail
@@ -29,6 +30,30 @@ count=$(wc -l < "$LOG")
 
 
 class ProductionProofPipelineTests(unittest.TestCase):
+    def test_reviewed_host_routes_only_the_commit_without_relaxing_event_gates(self):
+        workflow = (ROOT / ".github/workflows/runtime-model-verus.yml").read_text()
+        job_marker = "  producer-live-composition:\n"
+        self.assertEqual(workflow.count(job_marker), 1)
+        header = workflow.partition(job_marker)[2].partition("    steps:\n")[0]
+        self.assertIn(
+            "    runs-on:\n"
+            "      - self-hosted\n"
+            "      - linux\n"
+            "      - x64\n"
+            "      - fe2o3-verus-reviewed-host-v1\n"
+            '      - "fe2o3-verus-commit-${{ github.sha }}"\n',
+            header,
+        )
+        self.assertEqual(header.count("    runs-on:"), 1)
+        self.assertEqual(header.count("    if:"), 1)
+        self.assertIn(
+            "    if: ${{ github.repository == 'harsh-nod/fe2o3' && "
+            "github.ref == 'refs/heads/main' && "
+            "github.event_name != 'pull_request' }}\n",
+            header,
+        )
+        self.assertIn("commit label is routing, not an authorization boundary", header)
+
     def test_workflow_and_local_policy_run_the_maintained_entrypoints(self):
         workflow = (ROOT / ".github/workflows/runtime-model-verus.yml").read_text()
         self.assertEqual(workflow.count(

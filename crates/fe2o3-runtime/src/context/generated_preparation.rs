@@ -9,6 +9,7 @@ use super::*;
 use crate::{KfdMultiDeviceRuntimeBackendV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1};
 
 mod adoption;
+mod cohort3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PreparationBindingV1 {

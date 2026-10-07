@@ -84,7 +84,7 @@ fn read_full_roster(
         .map(|(_, bytes)| (bytes.as_ptr(), bytes.capacity()))
         .collect();
     let mut foreign = roster.clone();
-    foreign.source_identity = Arc::new(());
+    foreign.source_identity = Arc::new(()).into();
     let before = destinations.clone();
     assert!(matches!(
         backend.read_generated_submission_v1(plan, id, &foreign, &mut destinations),

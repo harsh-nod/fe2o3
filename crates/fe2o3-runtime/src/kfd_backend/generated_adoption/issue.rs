@@ -1,12 +1,11 @@
 //! Private first-run publication and physical settlement, without output delivery.
 
 use super::*;
-use fe2o3_kfd::Gfx942CompletedDispatchBatchV1;
 
 pub(super) struct GeneratedSubmissionV1 {
     pub(super) id: u64,
     pub(super) roster: GeneratedHostRosterV1,
-    pub(super) receipt: ReceiptV1<Gfx942DispatchBatchV1<1>, Gfx942CompletedDispatchBatchV1<1>>,
+    pub(super) receipt: NativeReceiptV1,
 }
 
 impl KfdRuntimeBackendV1 {
@@ -42,7 +41,10 @@ impl KfdRuntimeBackendV1 {
                     .and_then(|native| native.submission.as_ref())
                     .is_some_and(|owner| {
                         owner.id == submission
-                            && Arc::ptr_eq(&record.source_identity, &owner.roster.source_identity)
+                            && owner.receipt.profile() == plan.profile
+                            && record
+                                .source_identity
+                                .matches(&owner.roster.source_identity)
                             && readback::roster_matches_plan_v1(plan, &owner.roster)
                     })
             })
@@ -58,7 +60,7 @@ impl KfdRuntimeBackendV1 {
             || !readback::roster_matches_plan_v1(plan, roster)
             || !self.generated_lease_matches_v1(plan)
             || !self.generated_shells.get(&plan.key).is_some_and(|record| {
-                Arc::ptr_eq(&record.source_identity, &roster.source_identity)
+                record.source_identity.matches(&roster.source_identity)
                     && record.native.as_ref().is_some_and(|native| {
                         native.phase == PhaseV1::Adopted && native.submission.is_none()
                     })
@@ -89,7 +91,7 @@ impl KfdRuntimeBackendV1 {
         native.submission = Some(GeneratedSubmissionV1 {
             id,
             roster: roster.clone(),
-            receipt: ReceiptV1::Ready,
+            receipt: NativeReceiptV1::ready(plan.profile),
         });
         assert!(self.generated_submissions.insert(id, plan.key).is_none());
         Ok(id)
@@ -107,10 +109,9 @@ impl KfdRuntimeBackendV1 {
             .filter(|record| {
                 record.native.as_ref().is_some_and(|native| {
                     native.phase == PhaseV1::Adopted
-                        && native
-                            .submission
-                            .as_ref()
-                            .is_some_and(|owner| owner.id == submission)
+                        && native.submission.as_ref().is_some_and(|owner| {
+                            owner.id == submission && owner.receipt.profile() == record.plan.profile
+                        })
                 })
             })
             .map(|record| record.plan)
@@ -171,26 +172,23 @@ impl KfdRuntimeBackendV1 {
                 .queue
                 .as_mut()
                 .expect("retained queue")
-                .with_compute_lane_v1(handle, |lane| {
-                    receipt.issue(|| lane.submit_fixed_dispatch_classified_v1::<1>())
-                })
+                .with_compute_lane_v1(handle, |lane| receipt.issue(lane))
                 .and_then(core::convert::identity);
             result.map_err(|error| self.generated_native_error_v1("issue", error))?;
             self.check_generated_device_v1(plan)
         }));
         self.finish_generated_native_call_v1(result)?;
         #[cfg(feature = "hardware-qualification")]
-        if matches!(
-            self.generated_shells[&plan.key]
-                .native
-                .as_ref()
-                .unwrap()
-                .submission
-                .as_ref()
-                .unwrap()
-                .receipt,
-            ReceiptV1::Published(_)
-        ) {
+        if self.generated_shells[&plan.key]
+            .native
+            .as_ref()
+            .unwrap()
+            .submission
+            .as_ref()
+            .unwrap()
+            .receipt
+            .published()
+        {
             self.record_generated_copy_publication_v1(
                 qualification::KfdGeneratedCopyPublicationKindV1::GeneratedCompute,
                 submission,
@@ -223,57 +221,39 @@ impl KfdRuntimeBackendV1 {
                 .queue
                 .as_mut()
                 .expect("retained queue")
-                .with_compute_lane_v1(handle, |lane| match receipt {
-                    ReceiptV1::Ready | ReceiptV1::RetryReady | ReceiptV1::Recycled => Ok(()),
-                    ReceiptV1::Published(_) => receipt.poll(|batch| {
-                        lane.poll_fixed_dispatch(batch).map(|poll| match poll {
-                            Gfx942DispatchPollV1::Pending(batch) => receipt::PollV1::Pending(batch),
-                            Gfx942DispatchPollV1::Ready(completed) => {
-                                receipt::PollV1::Completed(completed)
-                            }
-                        })
-                    }),
-                    ReceiptV1::Completed(_) => receipt
-                        .recycle(|completed| {
-                            lane.recycle_fixed_dispatch(completed)
-                                .map(|_| ())
-                                .map_err(|failure| failure.into_parts())
-                        })
-                        .map(|_| ()),
-                    ReceiptV1::HandedToLower(stage) => {
-                        let _ = stage;
-                        Err(fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
-                            "generated consuming handoff cannot retry",
-                        ))
-                    }
-                })
+                .with_compute_lane_v1(handle, |lane| receipt.progress(lane))
                 .and_then(core::convert::identity);
             result.map_err(|error| self.generated_native_error_v1("completion", error))?;
             self.check_generated_device_v1(&plan)
         }));
         self.finish_generated_native_call_v1(result)?;
-        Ok(matches!(
-            self.generated_shells[&plan.key]
-                .native
-                .as_ref()
-                .expect("native owner")
-                .submission
-                .as_ref()
-                .expect("submission")
-                .receipt,
-            ReceiptV1::Recycled
-        ))
+        Ok(self.generated_shells[&plan.key]
+            .native
+            .as_ref()
+            .expect("native owner")
+            .submission
+            .as_ref()
+            .expect("submission")
+            .receipt
+            .recycled())
     }
 
     pub(crate) fn generated_submission_can_retire_v1(&self, submission: u64) -> bool {
         self.generated_submissions
             .get(&submission)
             .and_then(|key| self.generated_shells.get(key))
-            .and_then(|record| record.native.as_ref())
-            .is_some_and(|native| {
+            .and_then(|record| {
+                record
+                    .native
+                    .as_ref()
+                    .map(|native| (native, record.plan.profile))
+            })
+            .is_some_and(|(native, profile)| {
                 native.phase == PhaseV1::Adopted
                     && native.submission.as_ref().is_some_and(|owner| {
-                        owner.id == submission && owner.receipt.retirement().is_some()
+                        owner.id == submission
+                            && owner.receipt.profile() == profile
+                            && owner.receipt.retirement().is_some()
                     })
             })
     }
@@ -299,16 +279,18 @@ impl KfdRuntimeBackendV1 {
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
         let key = self.generated_submissions[&submission];
+        let profile = self.generated_shells[&key].plan.profile;
         let native = self
             .generated_shells
             .get_mut(&key)
             .and_then(|record| record.native.as_mut())
             .expect("indexed native owner");
         if !native.is_retired()
-            || !native
-                .submission
-                .as_ref()
-                .is_some_and(|owner| owner.id == submission && owner.receipt.retirement().is_some())
+            || !native.submission.as_ref().is_some_and(|owner| {
+                owner.id == submission
+                    && owner.receipt.profile() == profile
+                    && owner.receipt.retirement().is_some()
+            })
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,

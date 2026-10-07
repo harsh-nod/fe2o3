@@ -5,6 +5,9 @@ use crate::generated_source::{GeneratedHostRosterV1, RuntimeGfx942GeneratedSourc
 use crate::{RuntimeAllocationIdV1, RuntimeDeviceIdV1, RuntimeStreamIdV1};
 use allocation_table::GeneratedAllocationV1;
 
+mod control;
+pub(in crate::kfd_backend) use control::GeneratedControlV1;
+
 #[cfg(test)]
 mod tests;
 
@@ -29,6 +32,7 @@ pub(crate) struct GeneratedShellMemberV1 {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GeneratedShellPlanV1 {
     pub binding: GeneratedShellBindingV1,
+    pub profile: crate::generated_source::GeneratedProfileV1,
     pub key: u64,
     pub count: usize,
     pub members: [Option<GeneratedShellMemberV1>; GFX942_MAX_FIXED_DISPATCH_DATA_V1],
@@ -56,10 +60,10 @@ impl GeneratedShellCommitPlanV1 {
 pub(super) struct GeneratedShellRecordV1 {
     pub(super) plan: GeneratedShellPlanV1,
     request_bound: bool,
-    pub(super) source_identity: Arc<()>,
+    pub(super) source_identity: crate::generated_source::GeneratedSourceIdentityV1,
     // This state owns only inert control. Native construction requires a distinct
     // rooted phase and must disable metadata-only disposal before its first effect.
-    pub(super) control: Option<Gfx942FixedDispatchPacketV1>,
+    pub(super) control: GeneratedControlV1,
     pub(super) native: Option<super::generated_adoption::GeneratedNativeAdoptionV1>,
 }
 
@@ -103,6 +107,7 @@ impl KfdRuntimeBackendV1 {
             .ok_or_else(|| Self::capacity("generated shell handle exhaustion"))?;
         let mut plan = GeneratedShellPlanV1 {
             binding,
+            profile: roster.source_identity.profile(),
             key: self.next_handle,
             count: roster.count,
             members: [None; GFX942_MAX_FIXED_DISPATCH_DATA_V1],
@@ -232,6 +237,38 @@ impl KfdRuntimeBackendV1 {
         roster: &GeneratedHostRosterV1,
         transfer: impl FnOnce(&mut Option<Gfx942FixedDispatchPacketV1>) -> bool,
     ) {
+        self.commit_generated_controls_v1(authenticated, roster, |control| {
+            let GeneratedControlV1::Singleton(control) = control else {
+                std::process::abort();
+            };
+            transfer(control)
+        });
+    }
+
+    pub(crate) fn commit_generated_cohort3_shells_v1<E>(
+        &mut self,
+        authenticated: GeneratedShellCommitPlanV1,
+        source: &mut crate::generated_source::RuntimeGfx942Cohort3SourceMutV1<'_, E>,
+        roster: &GeneratedHostRosterV1,
+    ) {
+        assert!(
+            source.matches_roster(roster),
+            "same three original controls"
+        );
+        self.commit_generated_controls_v1(authenticated, roster, |control| {
+            let GeneratedControlV1::Cohort3(controls) = control else {
+                std::process::abort();
+            };
+            source.transfer_controls_into(controls)
+        });
+    }
+
+    fn commit_generated_controls_v1(
+        &mut self,
+        authenticated: GeneratedShellCommitPlanV1,
+        roster: &GeneratedHostRosterV1,
+        transfer: impl FnOnce(&mut GeneratedControlV1) -> bool,
+    ) {
         let GeneratedShellCommitPlanV1 {
             plan,
             request_bound,
@@ -246,8 +283,8 @@ impl KfdRuntimeBackendV1 {
             GeneratedShellRecordV1 {
                 plan,
                 request_bound,
-                source_identity: Arc::clone(&roster.source_identity),
-                control: None,
+                source_identity: roster.source_identity.clone(),
+                control: GeneratedControlV1::empty(plan.profile),
                 native: None,
             },
         );
@@ -260,10 +297,7 @@ impl KfdRuntimeBackendV1 {
             .generated_shells
             .get_mut(&plan.key)
             .expect("rooted shell owner");
-        assert!(Arc::ptr_eq(
-            &record.source_identity,
-            &roster.source_identity
-        ));
+        assert!(record.source_identity.matches(&roster.source_identity));
         assert!(transfer(&mut record.control), "one closed control transfer");
     }
 
@@ -303,7 +337,10 @@ impl KfdRuntimeBackendV1 {
             && plan.key.checked_add(1 + plan.count as u64) == Some(plan.next_handle)
             && plan.members[plan.count..].iter().all(Option::is_none)
             && self.generated_shells.get(&plan.key).is_some_and(|record| {
-                record.plan == *plan && record.request_bound == self.requires_request_witness_v1()
+                record.plan == *plan
+                    && record.request_bound == self.requires_request_witness_v1()
+                    && record.source_identity.profile() == plan.profile
+                    && record.control.profile() == plan.profile
             })
             && self.allocations.generated_count_for_adoption(plan.key) == plan.count
             && plan.members[..plan.count]

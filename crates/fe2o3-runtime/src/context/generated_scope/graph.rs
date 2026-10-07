@@ -678,7 +678,7 @@ where
         lifecycle: Lifecycle::new(owner.prepared),
         roster: owner.roster,
         hold,
-        domain: owner.domain,
+        domain: CompletionDomainsV1::Singleton(owner.domain),
         reply: owner.reply,
         future: Some(owner.future),
     });

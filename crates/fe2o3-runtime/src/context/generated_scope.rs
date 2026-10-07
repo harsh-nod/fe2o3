@@ -21,7 +21,9 @@ pub use graph::{
     RuntimeGfx942ScopedGraphStagingErrorV1, RuntimeGfx942ScopedGraphTicketV1,
 };
 mod cancellation;
+mod cohort3;
 pub use cancellation::RuntimeGfx942ScopedCancelResultV1;
+pub use cohort3::RuntimeGfx942ScopedCohort3TicketV1;
 
 /// Finite owner-local metadata bound; native admission still uses Context credits.
 pub const MAX_RUNTIME_GFX942_SCOPED_SUBMISSIONS_V1: usize = 4096;
@@ -82,9 +84,20 @@ struct Slot<P> {
     lifecycle: Lifecycle<RuntimeGfx942PreparedV1<P>, Outcome>,
     roster: GeneratedHostRosterV1,
     hold: ContextUnpublishedHoldV1,
-    domain: crate::RuntimeGeneratedResultDomainV1,
+    domain: CompletionDomainsV1,
     reply: crate::async_engine::RuntimeAsyncReplyV1<Outcome>,
     future: Option<crate::RuntimeAsyncCommandFutureV1<Outcome>>,
+}
+
+enum CompletionDomainsV1 {
+    Singleton(crate::RuntimeGeneratedResultDomainV1),
+    Cohort3([crate::RuntimeGeneratedResultDomainV1; 3]),
+}
+
+impl CompletionDomainsV1 {
+    fn matches_single<T: Send + Sync + 'static>(&self, owner: &std::sync::Arc<T>) -> bool {
+        matches!(self, Self::Singleton(domain) if domain.matches_owner(owner))
+    }
 }
 
 fn roster_bytes<P>(slots: usize, copies: usize) -> Result<usize, RuntimeGfx942ScopeErrorV1> {
@@ -157,6 +170,14 @@ type GraphProgress<B> = fn(
 ) -> Result<(), NativeError>;
 
 struct Hooks<B: RuntimeBackendV1, P> {
+    domains: fn(&P) -> Result<CompletionDomainsV1, RuntimeGfx942ReadbackErrorV1>,
+    decode: fn(RuntimeGfx942PreparedV1<P>) -> Outcome,
+    progress_graph: for<'s, 'e> fn(
+        &mut RuntimeGfx942GeneratedScopeV1<'s, 'e, B, P>,
+    ) -> Result<usize, RuntimeGfx942ScopeErrorV1>,
+    progress_copies: for<'s, 'e> fn(
+        &mut RuntimeGfx942GeneratedScopeV1<'s, 'e, B, P>,
+    ) -> Result<usize, RuntimeGfx942ScopeErrorV1>,
     reserve: Reserved<B, P>,
     preflight: Preflight<B, P>,
     ready: fn(&RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
@@ -208,7 +229,6 @@ impl<B: RuntimeBackendV1, P> Drop for RuntimeGfx942GeneratedScopeV1<'_, '_, B, P
 impl<'scope, B, P> RuntimeGfx942GeneratedScopeV1<'scope, '_, B, P>
 where
     B: RuntimeBackendV1<Error = KfdRuntimeBackendErrorV1>,
-    P: RuntimeGfx942GeneratedCompletionCarrierV1,
 {
     /// Exact element-capacity bytes of the two preallocated owner arrays.
     /// Does not include indirect allocations, Context/backend resources or RSS.
@@ -250,10 +270,8 @@ where
             .epoch
             .enter()
             .map_err(|error| RuntimeGfx942ScopeErrorV1::Context(error.into()))?;
-        let domain = prepared
-            .value()
-            .completion_domain_v1()
-            .map_err(RuntimeGfx942ScopeErrorV1::Readback)?;
+        let domain =
+            (self.hooks.domains)(prepared.value()).map_err(RuntimeGfx942ScopeErrorV1::Readback)?;
         let roster = (self.hooks.reserve)(self.context, &mut prepared)
             .map_err(RuntimeGfx942ScopeErrorV1::Reservation)?;
         (self.hooks.preflight)(self.context, &prepared, &roster, stream, None)
@@ -326,7 +344,7 @@ where
             return Err(RuntimeGfx942ScopeErrorV1::Deadline);
         }
         let mut transitions = 0;
-        transitions += self.progress_graph_v1()?;
+        transitions += (self.hooks.progress_graph)(self)?;
         for slot in &mut self.slots {
             let context = &mut *self.context;
             let hooks = &self.hooks;
@@ -350,7 +368,7 @@ where
                         }
                         _ => unreachable!("lifecycle rejects terminal transitions"),
                     },
-                    RuntimeGfx942PreparedV1::complete_readback_v1,
+                    hooks.decode,
                 )
                 .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
             if let Some(outcome) = &slot.lifecycle.outcome {
@@ -361,7 +379,7 @@ where
                 return Err(RuntimeGfx942ScopeErrorV1::Unknown);
             }
         }
-        transitions += self.progress_copies_v1()?;
+        transitions += (self.hooks.progress_copies)(self)?;
         Ok(transitions)
     }
 
@@ -404,7 +422,7 @@ where
         owner: &std::sync::Arc<T>,
     ) -> Result<bool, RuntimeGfx942ScopeErrorV1> {
         let complete = matches!(self.completion_v1(ticket)?, Some(Ok(())));
-        Ok(complete && self.slots[ticket.index].domain.matches_owner(owner))
+        Ok(complete && self.slots[ticket.index].domain.matches_single(owner))
     }
 
     pub fn drain_v1(&mut self) -> Result<(), RuntimeGfx942ScopeErrorV1> {
@@ -568,6 +586,10 @@ macro_rules! impl_scoped_generated {
                     epoch, context: self, slots, copies, graph: None, capacity, deadline, identity,
                     invariant: PhantomData,
                     hooks: Hooks {
+                        domains: |value| value.completion_domain_v1().map(CompletionDomainsV1::Singleton),
+                        decode: RuntimeGfx942PreparedV1::complete_readback_v1,
+                        progress_graph: Self::progress_generated_scope_graph_v1::<P>,
+                        progress_copies: Self::progress_generated_scope_copies_v1::<P>,
                         reserve: Self::reserve_gfx942_prepared_v1::<P>,
                         preflight: Self::preflight_gfx942_adoption_v1::<P>,
                         ready: Self::gfx942_adoption_ready_v1,
@@ -582,6 +604,18 @@ macro_rules! impl_scoped_generated {
                             stream, access, <$backend as RuntimeFlushBackendV1>::progress_stream_v1),
                     },
                 })
+            }
+
+            fn progress_generated_scope_graph_v1<P: RuntimeGfx942GeneratedCompletionCarrierV1>(
+                scope: &mut RuntimeGfx942GeneratedScopeV1<'_, '_, $backend, P>,
+            ) -> Result<usize, RuntimeGfx942ScopeErrorV1> {
+                scope.progress_graph_v1()
+            }
+
+            fn progress_generated_scope_copies_v1<P: RuntimeGfx942GeneratedCompletionCarrierV1>(
+                scope: &mut RuntimeGfx942GeneratedScopeV1<'_, '_, $backend, P>,
+            ) -> Result<usize, RuntimeGfx942ScopeErrorV1> {
+                scope.progress_copies_v1()
             }
         }
 

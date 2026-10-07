@@ -31,8 +31,14 @@ pub(crate) use preparation::FixedDispatchPreparationCustodyV1;
 mod conditional_fill;
 #[path = "queue_dispatch_binding/native_fill_cohort.rs"]
 mod native_fill_cohort;
+#[path = "queue_dispatch_binding/native_fill_registry.rs"]
+mod native_fill_registry;
 pub use native_fill_cohort::{
     Gfx942NativeFillCohortFailureV1, Gfx942NativeFillCohortMemberV1, Gfx942NativeFillCohortV1,
+};
+pub(super) use native_fill_registry::RegistryRecipeV1;
+pub use native_fill_registry::{
+    Gfx942NativeFillRegistryInputsV1, Gfx942NativeFillRegistryStorageV1,
 };
 
 #[path = "queue_dispatch_binding/generation_preflight.rs"]

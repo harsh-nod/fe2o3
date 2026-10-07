@@ -119,6 +119,10 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
         allow_host_staging: bool,
     ) -> Result<Self, E> {
         let original = request.as_ref().expect("unadmitted graph request");
+        original
+            .validate_peer_gather_v1()
+            .map_err(RuntimeGraphErrorV1::Invalid)?;
+        original.revalidate_peer_placement_v1(context)?;
         if !allow_host_staging
             && original
                 .actions
@@ -162,6 +166,14 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
                                 .map_err(RuntimeGraphErrorV1::Context)?,
                         )
                     }
+                    (
+                        CompletionNodeKindV1::Future(_),
+                        Some(Action::PeerCopy(source, destination)),
+                    ) => Some(
+                        context
+                            .prepare_graph_peer_copy_v1(stream, *source, *destination)
+                            .map_err(RuntimeGraphErrorV1::Context)?,
+                    ),
                     (CompletionNodeKindV1::Future(_), Some(Action::HostStaging(staging))) => {
                         context
                             .prepare_graph_host_staging_v1(stream, staging.destination)

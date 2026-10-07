@@ -6,7 +6,7 @@ use crate::kfd_backend::GeneratedShellBindingV1;
 use crate::{KfdMultiDeviceRuntimeBackendV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1};
 
 macro_rules! impl_generated_shell_context {
-    ($backend:ty) => {
+    ($backend:ty, $commit:ty) => {
         impl RuntimeContextV1<$backend> {
             pub(super) fn install_generated_shells_v1<E>(
                 &mut self,
@@ -16,11 +16,33 @@ macro_rules! impl_generated_shell_context {
                 source: &mut RuntimeGfx942GeneratedSourceMutV1<'_, E>,
                 roster: &GeneratedHostRosterV1,
             ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                self.install_generated_shells_with_v1(
+                    device,
+                    native_device,
+                    hold,
+                    source,
+                    roster,
+                    RuntimeGfx942GeneratedSourceMutV1::matches_roster,
+                    |backend, bound, source, roster| {
+                        backend.commit_generated_shells_v1(bound, source, roster)
+                    },
+                )
+            }
+
+            #[allow(clippy::too_many_arguments, reason = "same exact enrollment coordinates and nonallocating closed control transfer")]
+            fn install_generated_shells_with_v1<S>(
+                &mut self,
+                device: RuntimeDeviceIdV1,
+                native_device: fe2o3_runtime_model::ModelDeviceAdmissionV1,
+                hold: &ContextUnpublishedHoldV1,
+                source: &mut S,
+                roster: &GeneratedHostRosterV1,
+                matches: fn(&S, &GeneratedHostRosterV1) -> bool,
+                commit: impl FnOnce(&mut $backend, $commit, &mut S, &GeneratedHostRosterV1),
+            ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
                 self.validate_unpublished_hold_v1(hold)?;
                 let stream = *self.streams.get(&hold.stream()).expect("exact held stream");
-                if stream.device != device
-                    || stream.generated.is_some()
-                    || !source.matches_roster(roster)
+                if stream.device != device || stream.generated.is_some() || !matches(source, roster)
                 {
                     return Err(RuntimeValidationErrorV1::ContextReserved.into());
                 }
@@ -200,9 +222,7 @@ macro_rules! impl_generated_shell_context {
                         .get_mut(&hold.stream())
                         .expect("held stream")
                         .generated = Some(plan.key);
-                    context
-                        .backend
-                        .commit_generated_shells_v1(bound, source, roster);
+                    commit(&mut context.backend, bound, source, roster);
                 });
                 Ok(())
             }
@@ -317,5 +337,34 @@ macro_rules! impl_generated_shell_context {
     };
 }
 
-impl_generated_shell_context!(KfdRuntimeBackendV1);
-impl_generated_shell_context!(KfdMultiDeviceRuntimeBackendV1);
+impl_generated_shell_context!(
+    KfdRuntimeBackendV1,
+    crate::kfd_backend::GeneratedShellCommitPlanV1
+);
+impl_generated_shell_context!(
+    KfdMultiDeviceRuntimeBackendV1,
+    crate::kfd_backend::MultiGeneratedShellCommitV1
+);
+
+impl RuntimeContextV1<KfdRuntimeBackendV1> {
+    pub(super) fn install_generated_cohort3_shells_v1<E>(
+        &mut self,
+        device: RuntimeDeviceIdV1,
+        native_device: fe2o3_runtime_model::ModelDeviceAdmissionV1,
+        hold: &ContextUnpublishedHoldV1,
+        source: &mut crate::generated_source::RuntimeGfx942Cohort3SourceMutV1<'_, E>,
+        roster: &GeneratedHostRosterV1,
+    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        self.install_generated_shells_with_v1(
+            device,
+            native_device,
+            hold,
+            source,
+            roster,
+            crate::generated_source::RuntimeGfx942Cohort3SourceMutV1::matches_roster,
+            |backend, bound, source, roster| {
+                backend.commit_generated_cohort3_shells_v1(bound, source, roster)
+            },
+        )
+    }
+}

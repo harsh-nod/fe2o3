@@ -49,7 +49,7 @@ impl KfdRuntimeBackendV1 {
         native.submission = Some(issue::GeneratedSubmissionV1 {
             id,
             roster: roster.clone(),
-            receipt: ReceiptV1::Ready,
+            receipt: ReceiptV1::Ready.into(),
         });
         self.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
         assert!(self.generated_submissions.insert(id, plan.key).is_none());
@@ -178,7 +178,7 @@ fn generated_submission_release_cannot_discard_unretired_custody() {
     native.submission = Some(issue::GeneratedSubmissionV1 {
         id: 100,
         roster: GeneratedHostRosterV1::from_projection(&projection).unwrap(),
-        receipt: ReceiptV1::Ready,
+        receipt: ReceiptV1::Ready.into(),
     });
     backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
     backend.generated_submissions.insert(100, plan.key);
@@ -193,7 +193,7 @@ fn generated_submission_release_cannot_discard_unretired_custody() {
             .submission
             .as_mut()
             .unwrap()
-            .receipt = receipt;
+            .receipt = receipt.into();
         assert!(backend.generated_submission_can_retire_v1(100));
         // Descriptive receipt metadata without an original native lane cannot
         // establish the new cancellation boundary, even for Ready/RetryReady.
@@ -211,6 +211,43 @@ fn generated_submission_release_cannot_discard_unretired_custody() {
     backend.generated_shells.get_mut(&plan.key).unwrap().native = None;
     backend.generated_submissions.clear();
     backend.dispose_generated_shells_v1(&plan);
+}
+
+#[test]
+fn cohort3_receipt_substitution_cannot_retire_or_release_a_singleton_original() {
+    for phase in [PhaseV1::Adopted, PhaseV1::Retired] {
+        let (mut backend, plan) = shells();
+        let (_, projection) = source_projection();
+        let mut native = native_state(phase, 0);
+        native.returned.install(Vec::new());
+        native.returned.completed = plan.count;
+        native.submission = Some(issue::GeneratedSubmissionV1 {
+            id: 100,
+            roster: GeneratedHostRosterV1::from_projection(&projection).unwrap(),
+            receipt: NativeReceiptV1::Cohort3(ReceiptV1::Recycled),
+        });
+        backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
+        backend.generated_submissions.insert(100, plan.key);
+        assert!(!backend.generated_submission_can_retire_v1(100));
+        assert!(matches!(
+            backend.release_submission_v1(100),
+            Err(RuntimeBackendFailureV1::Rejected(_))
+        ));
+        assert_eq!(backend.generated_submissions.get(&100), Some(&plan.key));
+        assert_eq!(
+            backend.generated_shells[&plan.key]
+                .native
+                .as_ref()
+                .unwrap()
+                .phase,
+            phase
+        );
+        assert!(!backend.terminal);
+        // Only descriptive, handle-free metadata was substituted; no native receipt exists.
+        backend.generated_shells.get_mut(&plan.key).unwrap().native = None;
+        backend.generated_submissions.clear();
+        backend.dispose_generated_shells_v1(&plan);
+    }
 }
 impl Drop for Item {
     fn drop(&mut self) {
@@ -238,7 +275,7 @@ fn generated_retry_ready_submission_releases_only_after_recorded_native_retireme
     native.submission = Some(issue::GeneratedSubmissionV1 {
         id: 100,
         roster: GeneratedHostRosterV1::from_projection(&projection).unwrap(),
-        receipt: ReceiptV1::RetryReady,
+        receipt: ReceiptV1::RetryReady.into(),
     });
     backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
     backend.generated_submissions.insert(100, plan.key);
@@ -410,7 +447,14 @@ fn generated_retired_disposal_requires_complete_returned_roster_and_no_control()
     native.returned.install(Vec::new());
     native.returned.completed = plan.count - 1;
     backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
-    backend.generated_shells.get_mut(&plan.key).unwrap().control = None;
+    drop(
+        backend
+            .generated_shells
+            .get_mut(&plan.key)
+            .unwrap()
+            .control
+            .take(),
+    );
     assert!(!backend.validate_generated_shell_disposal_v1(&plan));
     backend
         .generated_shells

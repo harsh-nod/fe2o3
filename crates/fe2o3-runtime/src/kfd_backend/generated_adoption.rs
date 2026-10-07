@@ -5,12 +5,15 @@ use crate::generated_source::GeneratedHostRosterV1;
 use generated_shells::GeneratedShellPlanV1;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+mod cohort3;
 mod issue;
 mod readback;
 mod receipt;
+mod typed_receipt;
 mod unpublished;
 pub(crate) use receipt::observe_generated_retirement_v1;
 use receipt::{ReceiptV1, RetirementV1};
+use typed_receipt::NativeReceiptV1;
 #[cfg(feature = "hardware-qualification")]
 pub(super) mod qualification;
 
@@ -168,11 +171,12 @@ impl KfdRuntimeBackendV1 {
             ));
         }
         self.preflight_generated_lane_v1()?;
-        if !self.validate_generated_shell_records_v1(plan)
+        if plan.profile != crate::generated_source::GeneratedProfileV1::Singleton
+            || !self.validate_generated_shell_records_v1(plan)
             || !self.generated_shells.get(&plan.key).is_some_and(|record| {
                 record.native.is_none()
                     && record.control.is_some()
-                    && Arc::ptr_eq(&record.source_identity, &roster.source_identity)
+                    && record.source_identity.matches(&roster.source_identity)
             })
             || buffers.len() != plan.count
             || roster.count != plan.count
@@ -272,29 +276,7 @@ impl KfdRuntimeBackendV1 {
         let created = native.native_lane.is_none();
         let Some(queue) = self.queue.as_mut() else {
             assert!(self.terminal_memory.is_none());
-            let admission = self.take_rooted_backing_v1()?;
-            let device = self
-                .admitted_device
-                .take()
-                .expect("validated retained device");
-            let memory = match admission {
-                Some(native_budget::BackingAdmissionV1::Host(admission)) => device
-                    .acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(
-                        self.device_backing_budget,
-                        admission,
-                    ),
-                Some(native_budget::BackingAdmissionV1::Native(admission)) => device
-                    .acquire_shared_gtt_memory_session_with_rooted_native_backing_v1(admission),
-                Some(native_budget::BackingAdmissionV1::Composed(admission)) => {
-                    device.acquire_shared_gtt_memory_session_with_composed_backing_v1(admission)
-                }
-                None => device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
-                    self.device_backing_budget,
-                    self.host_visible_backing_budget,
-                ),
-            }
-            .map_err(|error| self.generated_native_error_v1("VM acquisition", error))?;
-            self.terminal_memory = Some(memory);
+            self.acquire_generated_vm_v1()?;
             let native = self
                 .generated_shells
                 .get_mut(&key)
@@ -408,6 +390,36 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
+    fn acquire_generated_vm_v1(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let admission = self.take_rooted_backing_v1()?;
+        let device = self
+            .admitted_device
+            .take()
+            .expect("validated retained device");
+        let memory = match admission {
+            Some(native_budget::BackingAdmissionV1::Host(admission)) => device
+                .acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(
+                    self.device_backing_budget,
+                    admission,
+                ),
+            Some(native_budget::BackingAdmissionV1::Native(admission)) => {
+                device.acquire_shared_gtt_memory_session_with_rooted_native_backing_v1(admission)
+            }
+            Some(native_budget::BackingAdmissionV1::Composed(admission)) => {
+                device.acquire_shared_gtt_memory_session_with_composed_backing_v1(admission)
+            }
+            None => device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
+                self.device_backing_budget,
+                self.host_visible_backing_budget,
+            ),
+        }
+        .map_err(|error| self.generated_native_error_v1("VM acquisition", error))?;
+        self.terminal_memory = Some(memory);
+        Ok(())
+    }
+
     fn observe_generated_queue_creation_v1(&mut self, lane: usize) {
         let queue = self.profile_resource_v1(
             KfdProfileResourceKindV1::NativeQueue,
@@ -464,7 +476,10 @@ impl KfdRuntimeBackendV1 {
             };
         };
         let retirement = match native.submission.as_ref() {
-            Some(submission) => submission.receipt.retirement(),
+            Some(submission) if submission.receipt.profile() == plan.profile => {
+                submission.receipt.retirement()
+            }
+            Some(_) => None,
             None => Some(RetirementV1::Pristine),
         };
         if native.phase != PhaseV1::Adopted

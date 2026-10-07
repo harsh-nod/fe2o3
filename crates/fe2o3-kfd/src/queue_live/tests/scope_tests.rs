@@ -803,16 +803,59 @@ fn production_dependency_owner_lane_envelope_and_teardown_shape_is_sealed() {
         .split("pub(in super::super) fn recycle_fixed_dispatch_inner<const N: usize>")
         .nth(1)
         .unwrap()
+        .split("#[allow(clippy::result_large_err)]")
+        .next()
+        .unwrap()
         .split_whitespace()
         .collect::<String>();
-    assert!(recycle_inner.contains(concat!(
+    assert_eq!(
+        recycle_inner,
+        concat!(
+            "(&mutself,completed:Gfx942CompletedDispatchBatchV1<N>,)",
+            "->Result<Gfx942CompletionRecycleObservationV1,Gfx942FixedDispatchRecycleFailureV1<N>>{",
+            "self.recycle_selected_fixed_dispatch(completed,&mutrecipe::RecipeV1::Ordinary)}"
+        )
+    );
+    let selected_recycle = recycle
+        .split("pub(in super::super) fn recycle_selected_fixed_dispatch<const N: usize>")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .collect::<String>();
+    assert!(selected_recycle.contains(concat!(
         "Err((error,completion))=>{",
         "letfailure=Gfx942FixedDispatchRecycleFailureV1::",
         "from_completion_failure(error,completion,identity,);",
-        "iffailure.retryable_completed.is_none()",
-        "&&letSome(dispatch)=self.dispatch.as_mut(){dispatch.poison();}",
+        "iffailure.retryable_completed.is_none(){recipe.poison(self);}",
         "returnErr(failure);"
     )));
+    let validate = selected_recycle
+        .find("recipe.validate_completed(self,identity,&completion)")
+        .unwrap();
+    let recycle_completion = selected_recycle
+        .find("self.recycle_completion_batch_retaining(completion)")
+        .unwrap();
+    let poison = selected_recycle.find("recipe.poison(self)").unwrap();
+    let mark_recycled = selected_recycle
+        .find("recipe.recycle(self,identity,completion_occurrence)")
+        .unwrap();
+    assert!(validate < recycle_completion && recycle_completion < poison && poison < mark_recycled);
+    assert_eq!(selected_recycle.matches("recipe.poison(self)").count(), 1);
+    let selector = include_str!("../fixed_dispatch/recipe.rs");
+    let selector_poison = selector
+        .split("pub(super) fn poison(")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .collect::<String>();
+    assert_eq!(
+        selector_poison,
+        concat!(
+            "&mutself,queue:&mutComputeAqlQueueSessionV1){matchself{",
+            "Self::Ordinary=>{ifletSome(common)=queue.dispatch.as_mut(){common.poison();}}",
+            "Self::Registry(recipe)=>recipe.poison(),}}}"
+        )
+    );
     assert!(recycle.contains("Gfx942DispatchBindingErrorV1::StaleDispatchGeneration"));
     assert!(recycle.contains("retryable_completed: None"));
 }

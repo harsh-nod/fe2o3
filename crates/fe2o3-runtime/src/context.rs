@@ -49,7 +49,9 @@ pub use producer_launch::{
     BackendLaunchProducerV1, BackendProducerAwareLaunchV1, RuntimeProducerAwareLaunchBackendV1,
 };
 use producer_launch::{PreparedSubmissionCustodyV1, ProducerLaunchRootV1};
+mod peer_placement;
 mod peer_segments;
+pub use peer_placement::*;
 #[cfg(feature = "hardware-qualification")]
 mod qualification_generated_copy;
 #[cfg(feature = "hardware-qualification")]
@@ -854,6 +856,18 @@ pub trait RuntimeBackendV1 {
     /// of the original initialized frame; writable aliases gain no extra authority.
     fn supports_ordered_compute_peer_copy_v1(&self) -> bool {
         false
+    }
+
+    /// Optional read-only placement estimate for these exact original regions.
+    /// `None` refuses selection. An estimate reserves nothing and grants no
+    /// route, currentness, residency or future submission authority.
+    fn observe_peer_copy_placement_v1(
+        &self,
+        _stream: u64,
+        _source: BackendMemoryRegionV1,
+        _destination: BackendMemoryRegionV1,
+    ) -> Option<BackendPeerCopyPlacementV1> {
+        None
     }
 
     fn peer_copy_v1(
@@ -4265,6 +4279,7 @@ mod tests {
     mod peer_batch_tests;
     mod peer_custody_tests;
     mod peer_directed_tests;
+    mod peer_gather_tests;
     mod peer_segments_tests;
     mod producer_launch_tests;
     mod progress_stream_tests;
@@ -4384,6 +4399,7 @@ mod tests {
         allocation_failure: MockMemoryFailure,
         release_allocation_failure: MockMemoryFailure,
         memory: HashMap<u64, Vec<u8>>,
+        peer_placement: HashMap<(u64, u64), Option<BackendPeerCopyPlacementV1>>,
         polls: HashMap<u64, u8>,
         terminal_on_submit: bool,
         last_dependency_count: usize,
@@ -4918,6 +4934,20 @@ mod tests {
 
         fn supports_ordered_compute_peer_copy_v1(&self) -> bool {
             self.ordered_compute_peer
+        }
+
+        fn observe_peer_copy_placement_v1(
+            &self,
+            _stream: u64,
+            source: BackendMemoryRegionV1,
+            destination: BackendMemoryRegionV1,
+        ) -> Option<BackendPeerCopyPlacementV1> {
+            self.peer_placement
+                .get(&(source.allocation, destination.allocation))
+                .copied()
+                .unwrap_or(Some(BackendPeerCopyPlacementV1::HostStaged {
+                    peak_bytes: source.byte_len,
+                }))
         }
 
         fn peer_copy_v1(

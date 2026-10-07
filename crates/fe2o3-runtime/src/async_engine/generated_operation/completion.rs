@@ -17,6 +17,10 @@ impl RuntimeGeneratedResultDomainV1 {
     pub fn matches_owner<T: Send + Sync + 'static>(&self, owner: &Arc<T>) -> bool {
         Arc::as_ptr(&self.0).cast::<()>() == Arc::as_ptr(owner).cast::<()>()
     }
+
+    pub(crate) fn same_original_v1(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl fmt::Debug for RuntimeGeneratedResultDomainV1 {

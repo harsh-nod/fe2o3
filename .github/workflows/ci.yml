@@ -113,7 +113,10 @@ jobs:
           - cpu-analysis
           - cpu-lowering
           - cpu-pliron
-          - cpu-finalize
+          - cpu-finalize-0
+          - cpu-finalize-1
+          - cpu-finalize-2
+          - cpu-finalize-3
           - cpu-integration
           - auxiliary
     env:
@@ -185,6 +188,18 @@ jobs:
 
       - name: Run generic core validation
         run: scripts/ci-local.sh generic-core "${{ matrix.group }}"
+
+      - name: Upload complete finalizer shard receipts
+        if: ${{ success() && startsWith(matrix.group, 'cpu-finalize-') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finalizer-shard-${{ matrix.group }}-receipt
+          overwrite: true
+          path: |
+            ${{ env.CI_LOG_DIR }}/finalizer-shard-*/inventory.json
+            ${{ env.CI_LOG_DIR }}/finalizer-shard-*/result.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload failure logs
         if: ${{ failure() || cancelled() }}
@@ -339,3 +354,15 @@ jobs:
           "${GENERIC_CORE_RESULT}"
           "${RUSTC_CODEGEN_SHARDS_RESULT}"
           "${NATIVE_STATIC_CPU_RESULT}"
+
+      - name: Download all four finalizer shard receipts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          pattern: finalizer-shard-*-receipt
+          path: target/finalizer-shard-receipts
+
+      - name: Require complete disjoint finalizer coverage
+        run: >-
+          python3 -I -B scripts/finalizer-test-shards.py
+          --aggregate target/finalizer-shard-receipts
+          --expected-commit "${{ github.sha }}"

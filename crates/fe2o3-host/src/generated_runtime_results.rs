@@ -16,6 +16,8 @@ use crate::generated_argument_plan::GeneratedDeviceScalarV1;
 use crate::generated_runtime_arguments::GeneratedRuntimeArgumentErrorV1 as Error;
 
 mod bundle_completion;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod cohort3;
 #[cfg(test)]
 mod completion_tests;
 mod staging;

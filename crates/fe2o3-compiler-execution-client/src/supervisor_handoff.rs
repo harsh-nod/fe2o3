@@ -838,7 +838,7 @@ mod tests {
                 LISTENER_SEQUENCE.fetch_add(1, Ordering::Relaxed)
             );
             let preferred_root = preferred.join(&component);
-            let root = match SocketAddrUnix::new(&preferred_root.join("s")) {
+            let root = match SocketAddrUnix::new(preferred_root.join("s")) {
                 Ok(_) => preferred_root,
                 Err(error) if error.raw_os_error() == libc::ENAMETOOLONG => {
                     Path::new("/tmp").join(component)
@@ -889,7 +889,7 @@ mod tests {
     fn named_listener_handles_overlong_temp_paths_without_global_env_changes() {
         let preferred = Path::new("/tmp").join("x".repeat(160));
         assert_eq!(
-            SocketAddrUnix::new(&preferred.join("s"))
+            SocketAddrUnix::new(preferred.join("s"))
                 .unwrap_err()
                 .raw_os_error(),
             libc::ENAMETOOLONG

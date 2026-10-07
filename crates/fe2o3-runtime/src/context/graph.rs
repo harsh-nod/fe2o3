@@ -3,6 +3,8 @@
 use super::*;
 use fe2o3_completion::{ContextIdentityV1, DeviceIdentityV1, StreamIdentityV1};
 
+mod peer_copy;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ContextGraphReservationV1 {
     context_generation: u64,
@@ -28,6 +30,7 @@ pub(crate) struct PreparedContextCopyV1 {
 pub(crate) enum PreparedContextGraphActionV1 {
     Launch(PreparedContextLaunchV1),
     Copy(PreparedContextCopyV1),
+    PeerCopy(peer_copy::PreparedGraphPeerCopyV1),
 }
 
 fn identity_bytes(domain: &[u8; 16], generation: u64, local: u64) -> [u8; 32] {
@@ -224,6 +227,9 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             }
             PreparedContextGraphActionV1::Copy(copy) => {
                 self.submit_prepared_copy_v1(copy, Some(token))
+            }
+            PreparedContextGraphActionV1::PeerCopy(copy) => {
+                self.submit_graph_peer_copy_v1(token, copy)
             }
         }
     }

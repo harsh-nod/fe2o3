@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 readonly repo
 source "$repo/scripts/functional-refinement-verus-runtime-v1.sh"
@@ -27,6 +28,10 @@ mkdir -p "$scratch/package/DEBIAN" "$scratch/package/usr/lib/x86_64-linux-gnu" "
 printf '%s\n' 'Package: fe2o3-qualification-test' 'Version: 1' 'Architecture: all' \
     'Maintainer: test <test@example.invalid>' 'Description: package stream controls' \
     > "$scratch/package/DEBIAN/control"
+# Debian metadata has fixed package-format modes; its parent scratch stays private.
+chmod 0755 "$scratch/package/DEBIAN"
+chmod 0644 "$scratch/package/DEBIAN/control"
+[[ $(stat -c %a "$scratch") == 700 ]] || fail 'package fixture scratch is not private'
 readonly TEST_MEMBER=./usr/lib/x86_64-linux-gnu/libc.so.6
 printf 'a\000b\377c\n' > "$scratch/package/${TEST_MEMBER#./}"
 dpkg-deb --build --root-owner-group "$scratch/package" "$scratch/data.deb" > /dev/null

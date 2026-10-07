@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1};
+mod cohort3;
 
 pub(super) struct NativeSettlementV1 {
     submission: RuntimeSubmissionIdV1,

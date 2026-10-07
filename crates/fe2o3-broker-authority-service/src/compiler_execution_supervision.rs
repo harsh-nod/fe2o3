@@ -1233,10 +1233,14 @@ mod tests {
         let executable = directory.path().join("waiting-rustc");
         fs::write(
             &source,
-            r#"use std::io::Read;
+            r#"use std::io::{Read, Write};
+use std::os::fd::FromRawFd;
 fn main() {
+    // The parent owns the other end of this inherited fixture socket.
+    let mut control = unsafe { std::fs::File::from_raw_fd(0) };
+    control.write_all(b"R").unwrap();
     let mut byte = [0_u8; 1];
-    let _ = std::io::stdin().read(&mut byte);
+    let _ = control.read(&mut byte);
 }
 "#,
         )
@@ -1377,7 +1381,7 @@ fn main() {
         } else {
             argv.extend([
                 "-c".into(),
-                "IFS= read -r _ || :".into(),
+                "printf R >&0; IFS= read -r _ || :".into(),
                 "fe2o3-remote-rustc-observation".into(),
             ]);
         }
@@ -1561,23 +1565,40 @@ fn main() {
                 Ok(())
             });
         }
+        let (service_root, root) = protected_root();
         let child = crate::test_process_execution::spawn(&mut command).unwrap();
+        let child_pid = child.id();
+        let mut fixture = RemoteRustcFixture {
+            descriptor,
+            control: Some(control),
+            child: Some(child),
+            admission: None,
+            client: None,
+            producer,
+            attempt,
+            _service_root: service_root,
+            _rustc_executable_directory: rustc_executable_directory,
+            _artifact_directory: artifact_directory,
+        };
         drop(child_control);
+        let control = fixture.control.as_ref().unwrap();
         let retained_peer = receive_descriptor(control.as_raw_fd()).unwrap();
+        // The descriptor arrives before exec. Only the executed fixture can
+        // announce that argv/environ are ready for the strict procfs observation.
+        crate::linux::observer_channel::registry::tests::await_test_control(control, b'R');
         let expected = crate::ExpectedClientProcessIdentityV1::new(
-            child.id(),
+            child_pid,
             client_ids.map_or_else(|| rustix::process::geteuid().as_raw(), |ids| ids.0),
             client_ids.map_or_else(|| rustix::process::getegid().as_raw(), |ids| ids.1),
         )
         .unwrap();
         let live_client =
-            crate::LiveClientPidfdIdentityV1::admit(pidfd_for(child.id()), expected).unwrap();
+            crate::LiveClientPidfdIdentityV1::admit(pidfd_for(child_pid), expected).unwrap();
         let client = RetainedCompilerClientSessionV1::admit(
             rustix::io::fcntl_dupfd_cloexec(&retained_peer, 0).unwrap(),
-            crate::LiveClientPidfdIdentityV1::admit(pidfd_for(child.id()), expected).unwrap(),
+            crate::LiveClientPidfdIdentityV1::admit(pidfd_for(child_pid), expected).unwrap(),
         )
         .unwrap();
-        let (service_root, root) = protected_root();
         let admission = ProtectedServiceAdmissionV1::admit_non_authoritative_same_uid_session_test(
             root,
             retained_peer,
@@ -1585,18 +1606,9 @@ fn main() {
         )
         .unwrap();
 
-        RemoteRustcFixture {
-            descriptor,
-            control: Some(control),
-            child: Some(child),
-            admission: Some(admission),
-            client: Some(client),
-            producer,
-            attempt,
-            _service_root: service_root,
-            _rustc_executable_directory: rustc_executable_directory,
-            _artifact_directory: artifact_directory,
-        }
+        fixture.admission = Some(admission);
+        fixture.client = Some(client);
+        fixture
     }
 
     mod observer;
