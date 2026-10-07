@@ -3,6 +3,9 @@ use super::*;
 use fe2o3_verifier::{ExpandedSupportCensusV280, MixedOptimizerRefinementErrorV26};
 use sha2::{Digest, Sha256};
 
+#[path = "production_rustc_driver_expanded_aggregate_diagnostic_v280_tests.rs"]
+mod aggregate_diagnostic;
+
 const MODEL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_child";
 const REFUSAL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_refusal_child";
 const ACCOUNT_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_account_child";
