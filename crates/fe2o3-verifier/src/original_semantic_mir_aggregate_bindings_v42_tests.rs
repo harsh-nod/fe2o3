@@ -165,13 +165,7 @@ fn expanded_production_support_emits_checked_transition_consumers() {
             LIMIT,
             LIMIT,
             |types, functions| {
-                checked_transform(
-                    types,
-                    functions,
-                    SemanticCheckedBinaryOpV1::Add,
-                    false,
-                    false,
-                )
+                checked_leaf_transform(types, functions, SemanticCheckedBinaryOpV1::Add)
             },
             |plan, out| {
                 with_tile_slots(plan, layout, out, |slots, out| {
@@ -194,6 +188,45 @@ fn expanded_production_support_emits_checked_transition_consumers() {
         )
         .0
         .unwrap();
+    }
+}
+
+#[test]
+fn expanded_checked_assert_refuses_before_support_generation() {
+    use super::super::slots::tests::with_tile_slots;
+    use fe2o3_kernel_ir::ExecutionTileLayoutV1 as Layout;
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    for layout in [Layout::Blocked, Layout::Striped] {
+        let mut reached = false;
+        let result = super::super::super::invocations::tests::run_source_transform(
+            LIMIT,
+            LIMIT,
+            |types, functions| {
+                checked_transform(
+                    types,
+                    functions,
+                    SemanticCheckedBinaryOpV1::Add,
+                    false,
+                    false,
+                )
+            },
+            |plan, out| {
+                with_tile_slots(plan, layout, out, |_, _| {
+                    reached = true;
+                    Ok(())
+                })
+            },
+        );
+        assert!(!reached);
+        assert!(
+            matches!(
+                &result.0,
+                Err(Error::Source(SourceError::Binding(
+                    "source tile input uniformity or workgroup arrival refused"
+                )))
+            ),
+            "{result:?}"
+        );
     }
 }
 
