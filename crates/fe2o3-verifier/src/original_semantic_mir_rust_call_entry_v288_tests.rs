@@ -57,30 +57,25 @@ fn argument_operand(
     statements: &mut Vec<SemanticStatementV1>,
     source: SemanticSourceProvenanceV1,
 ) -> SemanticOperandV1 {
-    let operands = match types[ty.index() as usize].shape() {
+    let (kind, operands) = match types[ty.index() as usize].shape() {
         Shape::Unit => {
             return SemanticOperandV1::Constant(SemanticConstantV1::new(
                 ty,
                 SemanticConstantValueV1::ZeroSized,
             ));
         }
-        Shape::Tuple(tuple) | Shape::Aggregate(tuple) if tuple.fields().is_empty() => {
-            return SemanticOperandV1::Constant(SemanticConstantV1::new(
-                ty,
-                SemanticConstantValueV1::ZeroSized,
-            ));
+        Shape::Tuple(tuple) => (
+            SemanticAggregateKindV1::Tuple,
+            tuple
+                .fields()
+                .iter()
+                .map(|&field| argument_operand(field, types, locals, statements, source))
+                .collect(),
+        ),
+        Shape::Aggregate(fields) if fields.fields().is_empty() => {
+            (SemanticAggregateKindV1::Aggregate, vec![])
         }
-        Shape::Array { length: 0, .. } => {
-            return SemanticOperandV1::Constant(SemanticConstantV1::new(
-                ty,
-                SemanticConstantValueV1::ZeroSized,
-            ));
-        }
-        Shape::Tuple(tuple) => tuple
-            .fields()
-            .iter()
-            .map(|&field| argument_operand(field, types, locals, statements, source))
-            .collect(),
+        Shape::Array { length: 0, .. } => (SemanticAggregateKindV1::Array, vec![]),
         _ => {
             assert_eq!(ty.index(), 0);
             return SemanticOperandV1::Constant(SemanticConstantV1::new(
@@ -106,8 +101,7 @@ fn argument_operand(
             SemanticRvalueV1::new(
                 ty,
                 SemanticRvalueKindV1::Aggregate(
-                    SemanticAggregateRvalueV1::new(SemanticAggregateKindV1::Tuple, operands)
-                        .unwrap(),
+                    SemanticAggregateRvalueV1::new(kind, operands).unwrap(),
                 ),
             ),
         )),
@@ -679,6 +673,67 @@ fn original_rust_call_empty_composite_fields_retain_types_distinct_from_unit() {
             for (ordinal, &ty) in exact_types.iter().enumerate() {
                 assert!(!exact_types[..ordinal].contains(&ty));
             }
+            // Even zero-sized composites need real typed constructors before
+            // their children can be transferred into the outer argument tuple.
+            let mut calls = 0;
+            for caller in source.functions() {
+                for block in caller.blocks() {
+                    let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
+                        continue;
+                    };
+                    if call.callee() != row.function {
+                        continue;
+                    }
+                    calls += 1;
+                    let SemanticOperandV1::Move(outer_place) = &call.arguments()[2] else {
+                        panic!("constructed outer tuple argument");
+                    };
+                    assert_eq!(outer_place.ty(), outer);
+                    let constructor = |place: &SemanticPlaceV1| {
+                        block
+                            .statements()
+                            .iter()
+                            .find_map(|statement| match statement.kind() {
+                                SemanticStatementKindV1::Assign(assignment)
+                                    if assignment.destination() == place =>
+                                {
+                                    match assignment.value().kind() {
+                                        SemanticRvalueKindV1::Aggregate(value) => Some(value),
+                                        _ => None,
+                                    }
+                                }
+                                _ => None,
+                            })
+                            .expect("original typed aggregate constructor")
+                    };
+                    let tuple = constructor(outer_place);
+                    assert_eq!(tuple.kind(), &SemanticAggregateKindV1::Tuple);
+                    assert_eq!(tuple.operands().len(), 4);
+                    assert!(
+                        matches!(&tuple.operands()[0], SemanticOperandV1::Constant(value)
+                        if value.ty() == exact_types[0]
+                            && matches!(value.value(), SemanticConstantValueV1::ZeroSized))
+                    );
+                    for (field, kind) in [
+                        SemanticAggregateKindV1::Tuple,
+                        SemanticAggregateKindV1::Array,
+                        SemanticAggregateKindV1::Aggregate,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
+                        let SemanticOperandV1::Move(place) = &tuple.operands()[field + 1] else {
+                            panic!("constructed empty composite field");
+                        };
+                        assert_eq!(place.ty(), exact_types[field + 1]);
+                        let value = constructor(place);
+                        assert_eq!(value.kind(), &kind);
+                        assert!(value.operands().is_empty());
+                    }
+                }
+            }
+            // Two live call sites and one retained unreachable site per root.
+            assert_eq!(calls, 6);
             for (ty, fields) in [(outer, &locals[..3]), (exact_types[0], locals)] {
                 assert!(matches!(
                     expanded_field_binding(
