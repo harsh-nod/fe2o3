@@ -913,6 +913,7 @@ proof fn invocation_source_micro_run_history_{r}_{i}_v293(c: InvocationSourceMic
     }},
     decreases f,
 {{
+    hide(invocation_source_micro_step_{r}_{i}_v36);
     reveal_with_fuel(invocation_source_micro_run_{r}_{i}_v36, 2);
     let out = invocation_source_micro_run_{r}_{i}_v36(c, f, e);
     let l = c.observations.len() as int;

@@ -25,7 +25,7 @@ fn check_history(text: &str, root: usize, instance: usize) {
         &format!("invocation_source_micro_run_history_{root}_{instance}_v293"),
     );
     let step_header = step.split_once("\n{\n").unwrap().0;
-    let run_header = run.split_once("\n{\n").unwrap().0;
+    let (run_header, run_body) = run.split_once("\n{\n").unwrap();
     assert_eq!(
         step_header,
         format!(
@@ -87,6 +87,24 @@ fn check_history(text: &str, root: usize, instance: usize) {
     )));
     assert!(step.contains("reveal(invocation_source_micro_record_v36);"));
     assert!(step.contains("if n.observations.len() == l + 1 {"));
+    let opaque_step = format!("hide(invocation_source_micro_step_{root}_{instance}_v36);");
+    assert!(run_body.starts_with(&format!(
+        "    {opaque_step}\n    reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, 2);"
+    )));
+    assert_eq!(run_body.matches(opaque_step.as_str()).count(), 1);
+    for reveal in ["reveal", "reveal_with_fuel"] {
+        assert!(!run_body.contains(&format!(
+            "{reveal}(invocation_source_micro_step_{root}_{instance}_v36"
+        )));
+    }
+    assert!(!step.contains(opaque_step.as_str()));
+    assert!(
+        !declaration(
+            text,
+            &format!("invocation_source_micro_run_composes_{root}_{instance}_v292"),
+        )
+        .contains(opaque_step.as_str())
+    );
     assert!(run.contains("if f == 0 || !c.source.machine.valid {"));
     assert!(run.contains("if n == invocation_source_micro_refused_v36(c) {"));
     assert!(run.contains("assert(!n.source.machine.valid);"));

@@ -569,6 +569,15 @@ fn original_mir_paired_source_readiness_is_an_independent_native_input_obligatio
                 "invocation_native_initial_memory_invariants_v77(entered_memory, arguments, byte_root_frame_with_execution_v37({}, execution));",
                 paired.roots[root].owner
             )));
+            for (operation, arguments, binders) in [
+                ("clear", "logical, begin, end", "begin: int, end: int"),
+                ("write", "logical, local", "local: int"),
+            ] {
+                assert!(readiness.contains(&format!(
+                    "assert forall|logical: InvocationSourceLogicalV38, {binders}|\n logical.execution_pending == Map::empty() implies\n #[trigger] invocation_source_logical_{operation}_v38({arguments}).execution_pending == Map::empty() by {{\n assert(invocation_source_logical_{operation}_v38({arguments}).execution_pending =~= Map::empty());\n }}"
+                )));
+            }
+            assert_eq!(readiness.matches("assert forall|").count(), 2);
             for forbidden in ["assume(", "admit(", "external_body", "valid: true"] {
                 assert!(!readiness.contains(forbidden));
             }

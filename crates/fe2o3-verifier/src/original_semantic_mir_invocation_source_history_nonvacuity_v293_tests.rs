@@ -206,7 +206,9 @@ fn render(row: &Witness) -> String {
         )
         .unwrap();
     }
-    let mut steps = String::new();
+    let mut steps = String::from(
+        "    assert((0u32 ^ 0u32) == 0u32) by (bit_vector);\n    assert((0u32 | 0u32) == 0u32) by (bit_vector);\n",
+    );
     for (statement, [left, right]) in row.inputs.iter().copied().enumerate() {
         let next = statement + 1;
         let destination = row.destinations[statement];
@@ -236,12 +238,12 @@ fn render(row: &Witness) -> String {
             row.pc
         )
         .unwrap();
-        writeln!(steps, "    assert(c{next}.source.machine.values =~= Seq::new({n}, |local: int| MemoryValueV30::Scalar(0)));").unwrap();
         writeln!(
             steps,
             "    assert(c{next}.source.machine.values[{destination}] == MemoryValueV30::Scalar(0));"
         )
         .unwrap();
+        writeln!(steps, "    assert(c{next}.source.machine.values.len() == {n});\n    assert forall|local: int| 0 <= local < {n} implies\n        c{next}.source.machine.values[local] == MemoryValueV30::Scalar(0) by {{\n        if local != {destination} {{\n            assert(c{next}.source.machine.values[local] == c{statement}.source.machine.values[local]);\n        }}\n    }}\n    assert(c{next}.source.machine.values =~= Seq::new({n}, |local: int| MemoryValueV30::Scalar(0)));").unwrap();
         writeln!(
             steps,
             "    assert(invocation_source_byte_state_well_formed_v36(c{next}.source));"
@@ -372,6 +374,25 @@ fn source_micro_history_witnesses_use_authenticated_scalar_coordinates_and_owner
             assert!(combined.contains(&format!(
                 "proof fn history_witness_initial_active_{r}_{i}_{b}_v293("
             )));
+            let witness = render(row);
+            assert!(witness.contains("assert((0u32 ^ 0u32) == 0u32) by (bit_vector);"));
+            assert!(witness.contains("assert((0u32 | 0u32) == 0u32) by (bit_vector);"));
+            assert_eq!(
+                witness.matches("assert forall|local: int|").count(),
+                row.destinations.len()
+            );
+            for (statement, destination) in row.destinations.iter().enumerate() {
+                let next = statement + 1;
+                assert!(witness.contains(&format!("if local != {destination} {{")));
+                let value = format!(
+                    "assert(c{next}.source.machine.values[{destination}] == MemoryValueV30::Scalar(0));"
+                );
+                let extensional = format!("assert(c{next}.source.machine.values =~=");
+                assert!(witness.find(&value).unwrap() < witness.find(&extensional).unwrap());
+                assert!(witness.contains(&format!(
+                    "assert(c{next}.source.machine.values[local] == c{statement}.source.machine.values[local]);"
+                )));
+            }
         }
     });
 }

@@ -576,9 +576,27 @@ fn initial(
     }
     emit!(
         out,
-        " }}\nspec fn invocation_paired_native_inputs_{root}_v38(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> bool {{\n invocation_runtime_execution_{root}_v37(execution) && invocation_paired_arguments_{root}_v36(arguments) && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && invocation_native_provenance_v39(external, arguments)\n}}\nproof fn invocation_paired_source_ready_{root}_v38(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37)\n requires invocation_paired_native_inputs_{root}_v38(arguments, external, execution),\n ensures invocation_source_initial_runtime_{root}_v36(arguments, external, execution).machine.valid,\n{{\n let entered_memory = ByteMemoryV30 {{ view_contracts: invocation_source_view_contracts_0_v39(invocation_runtime_little_endian_v36()), ..external }};\n invocation_native_initial_memory_invariants_v77(entered_memory, arguments, byte_root_frame_with_execution_v37({}, execution));\n}}\nspec fn invocation_paired_raw_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> MemoryStateV30 {{\n let values = Seq::new({}nat, |i: int| MemoryValueV30::Undefined)",
+        " }}\nspec fn invocation_paired_native_inputs_{root}_v38(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> bool {{\n invocation_runtime_execution_{root}_v37(execution) && invocation_paired_arguments_{root}_v36(arguments) && byte_memory_well_formed_v30(external) && byte_native_view_inputs_v38(external, arguments) && invocation_native_provenance_v39(external, arguments)\n}}\nproof fn invocation_paired_source_ready_{root}_v38(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37)\n requires invocation_paired_native_inputs_{root}_v38(arguments, external, execution),\n ensures invocation_source_initial_runtime_{root}_v36(arguments, external, execution).machine.valid,\n{{\n let entered_memory = ByteMemoryV30 {{ view_contracts: invocation_source_view_contracts_0_v39(invocation_runtime_little_endian_v36()), ..external }};\n invocation_native_initial_memory_invariants_v77(entered_memory, arguments, byte_root_frame_with_execution_v37({}, execution));\n",
         row.owner,
-        model.definitions
+    );
+    // Root entry starts without transfer tickets; expose extensional emptiness
+    // through clearing and argument writes before the finite-domain entry guard.
+    emit!(
+        out,
+        r#" assert forall|logical: InvocationSourceLogicalV38, begin: int, end: int|
+ logical.execution_pending == Map::empty() implies
+ #[trigger] invocation_source_logical_clear_v38(logical, begin, end).execution_pending == Map::empty() by {{
+ assert(invocation_source_logical_clear_v38(logical, begin, end).execution_pending =~= Map::empty());
+ }}
+ assert forall|logical: InvocationSourceLogicalV38, local: int|
+ logical.execution_pending == Map::empty() implies
+ #[trigger] invocation_source_logical_write_v38(logical, local).execution_pending == Map::empty() by {{
+ assert(invocation_source_logical_write_v38(logical, local).execution_pending =~= Map::empty());
+ }}
+}}
+spec fn invocation_paired_raw_initial_{root}_v36(arguments: Seq<MemoryValueV30>, external: ByteMemoryV30, execution: MemoryExecutionContextV37) -> MemoryStateV30 {{
+ let values = Seq::new({}nat, |i: int| MemoryValueV30::Undefined)"#,
+        model.definitions,
     );
     for parameter in &row.parameters {
         out.budget.charge_work(1)?;
