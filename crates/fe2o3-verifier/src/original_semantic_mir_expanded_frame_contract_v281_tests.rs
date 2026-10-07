@@ -117,6 +117,17 @@ fn expanded_frame_contracts_keep_complete_microstate_prefix_and_shared_caller_de
             assert!(!out.text.contains("proof fn invocation_expanded_frame_contract"));
             let rows = cuts.static_rows_v280(out)?;
             assert_eq!(rows.cuts.len(), frames.cuts.len());
+            for root in 0..frames.roots.len() {
+                let name = format!("spec fn invocation_expanded_frame_contract_{root}_v281(");
+                let contract = out.text.split(&name).nth(1).unwrap().split("\nspec fn ").next().unwrap();
+                // Verus int admits equality guards, not Rust integer patterns.
+                assert!(!contract.contains("match source.machine.pc"));
+                assert!(contract.contains(" false }) }\n"));
+                let expected: usize = frames.frames[frames.roots[root].clone()].iter()
+                    .map(|frame| frame.cuts.len()).sum();
+                assert!(expected > 0);
+                assert_eq!(contract.matches(" if source.machine.pc == ").count(), expected);
+            }
             let mut suspended = 0;
             let mut zero_candidates = 0;
             for frame in &frames.frames {
@@ -137,7 +148,7 @@ fn expanded_frame_contracts_keep_complete_microstate_prefix_and_shared_caller_de
                         assert!(!cut.reachable && cut.demands.is_empty());
                     }
                     assert_eq!(out.text.matches(&format!("spec fn invocation_expanded_current_{}_{}_{}_v281(", cut.root, cut.instance, cut.block)).count(), 1);
-                    assert_eq!(out.text.matches(&format!(" {} => source.machine.frames.active.len() ==", cut.pc)).count(), 1);
+                    assert_eq!(out.text.matches(&format!(" if source.machine.pc == {} {{ source.machine.frames.active.len() ==", cut.pc)).count(), 1);
                 }
             }
             assert!(suspended > 0);
