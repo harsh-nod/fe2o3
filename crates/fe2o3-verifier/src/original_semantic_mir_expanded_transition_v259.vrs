@@ -138,6 +138,7 @@ proof fn invocation_source_context_issue_frame_v262(
     hide(invocation_source_aggregate_install_v42);
     hide(invocation_source_context_issue_v161);
     hide(invocation_source_tile_installed_v161);
+    hide(invocation_source_observe_effects_v39);
     hide(invocation_source_logical_write_v38);
     hide(byte_execution_well_formed_v37);
     let aggregate = InvocationSourceAggregateV42 {

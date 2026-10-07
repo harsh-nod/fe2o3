@@ -533,6 +533,9 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
             .next()
             .unwrap();
         assert!(!body.contains("let leaves ="));
+        if name == "invocation_source_context_issue_frame_v262" {
+            assert!(body.contains("hide(invocation_source_observe_effects_v39);"));
+        }
         for hidden in [
             "invocation_source_aggregate_leaf_count_v42",
             "invocation_source_aggregate_leaf_path_v42",
