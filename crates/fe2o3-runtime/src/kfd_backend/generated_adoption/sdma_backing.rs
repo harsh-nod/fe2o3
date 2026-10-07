@@ -18,6 +18,8 @@ pub(super) enum Custody<B, D, R> {
     Disposed,
 }
 
+type PromotionResult<D, R, E, B> = Result<(D, R), (E, Option<B>)>;
+
 trait Operations {
     type Buffer;
     type Data;
@@ -29,7 +31,7 @@ trait Operations {
     fn promote(
         &mut self,
         buffer: Self::Buffer,
-    ) -> Result<(Self::Data, Self::Bridge), (Self::Error, Option<Self::Buffer>)>;
+    ) -> PromotionResult<Self::Data, Self::Bridge, Self::Error, Self::Buffer>;
 }
 
 impl<B, D, R> Custody<B, D, R> {

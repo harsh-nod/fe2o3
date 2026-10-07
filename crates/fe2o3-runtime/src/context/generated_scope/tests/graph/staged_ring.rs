@@ -5,6 +5,8 @@ use crate::completion::CompletionNodeStateV1;
 use crate::{RuntimeGraphDeviceCoverageV1, RuntimeReplicaStorageV1};
 use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceKindV1, ResourceVectorV1};
 
+mod transfer_faults;
+
 fn nodes(index: usize) -> [CompletionNodeIdV1; 5] {
     core::array::from_fn(|offset| id((index * 5 + offset + 1) as u32))
 }

@@ -138,3 +138,36 @@ admitted original native fixture and its exact receipt observations.
 Maintain the existing strict diagnostic classifiers, resource limits and exact
 mutation rosters. A fresh clean signed candidate and actual successful maintained
 execution are required before describing the successor campaigns as qualified.
+
+## SDMA Backing And Settled Scopes
+
+The opt-in generated SDMA backing path admits one DATA extent on the original
+primary queue. Its sidecar retains the original allocation and promotion bridge
+through preparation and binding. Ordinary retirement still requires physical
+DATA disposal before bridge metadata retirement. This does not admit a generated
+input-consuming kernel, transfer the DATA owner to a copy, or establish a copy
+destination version. The allocation, write, promotion, unwind and disposal joins
+are adapter boundaries, not conclusions of the unchanged retained-credit proof.
+
+Settled scope adapters return a caller value only after original generated slots,
+copies, graph reservations, holds and the scope epoch have retired. Definite
+pre-publication failures remain distinct from unknown publication or progress
+errors. Ordinary graph-copy failures remain in the graph report; scope retirement
+does not turn those failures into successful transfers. Unknown custody still
+requires retention and isolated teardown, not a timeout-based release. The new
+adapter and its CPU controls do not establish native fault-domain isolation or a
+whole-scope executable-refinement theorem.
+
+## Multi-Device Caller Boundaries
+
+The sharded and staged-ring callers consume original generated application
+admission and all-admitted device rosters. Staging reads completed producer output
+on the CPU, writes a distinct host allocation, then submits an ordinary tracked
+replica copy through the existing Context and backend. This is host staging, not
+direct generated-DATA transfer or XGMI. Report and version checks do not themselves
+demonstrate device execution, compute/copy overlap or performance parity.
+
+The source capture includes these callers and runtime adapters without importing
+historical CPU, hardware or solver results. Compiler/provider admission, actual
+multi-device execution, failure injection and fresh maintained proof campaigns
+remain independent qualification requirements.

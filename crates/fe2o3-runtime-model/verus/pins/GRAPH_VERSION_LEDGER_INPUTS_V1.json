@@ -12,7 +12,7 @@
     "crates/fe2o3-runtime/src/async_engine/graph/versions/transition_bodies.rs": "c8325bca1a037c1455282c4e31148db9f441db9fa544e3260cb3db92f8eb7808",
     "crates/fe2o3-runtime/src/async_engine/graph/versions/transition_tests.rs": "c7b038667778fab0927791433f7f3846c94e5795b27f5e0ff48e540066241bf9",
     "crates/fe2o3-runtime/src/context/generated_scope/graph/staging.rs": "83e875ec37c28547a7c6d2f5e99188fc7518967396e1d5521aee98fb36251ddb",
-    "crates/fe2o3-runtime/src/lib.rs": "033d6456204d29ff172e7f2a6232ff8e6643dddf60bd44dc65a6350eab3c8faa"
+    "crates/fe2o3-runtime/src/lib.rs": "54aada5ceb23c3470d1e6c6a2f8ef030f3f0af1641e9466f341a4f2797b61edc"
   },
   "predecessor": "2653a4ead0ac1c659b82c5d49b56230a1c096b1f",
   "scope": "conditional shared begin/commit only; no native settlement"

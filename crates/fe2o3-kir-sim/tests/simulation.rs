@@ -32,6 +32,9 @@ use fe2o3_kir_sim::{
     UnsupportedFeatureV1,
 };
 
+#[path = "simulation/atomic_scope_v1.rs"]
+mod atomic_scope_v1;
+
 #[path = "simulation/guarded_index_composition.rs"]
 mod guarded_index_composition;
 
