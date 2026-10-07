@@ -213,3 +213,35 @@ The [earlier developer qualification](generated-bf16-source-and-bindings-qualifi
 records a different four-session CPU campaign and the separate imported-bindings
 storage checkpoint. None of these results establishes physical register control,
 hardware execution, whole-action memory bounds or broad milestone completion.
+
+## Internal consuming engineering continuation — October 7
+
+A non-test, crate-private consuming continuation now retains the same live source,
+ranked-projection owner, descriptor and accounting state through the fixed
+engineering Worker loan. `observe_engineering_and_drop_v1` returns only unit
+success or a typed failure; it exports no owner, artifact or reusable capability.
+It replays source/descriptor joins before the engine, preserves prior resource
+denials, and drops the owner on success, refusal and unwind.
+
+The separately supervised Identity and Swap01 frontend sessions completed four
+Worker invocations in total. Two additional paired campaigns rejected an invalid
+return profile and invalid owner-entry conditions before any Worker invocation.
+All three campaigns passed independent raw receipt/cleanup joins and point-in-time
+checks that their recorded processes and exact scopes were absent. These checks
+are not a complete Worker PID roster, hostile-process isolation, or numerical/GPU
+qualification.
+
+The actual campaigns used source census
+`39da40e5eca87c12e7d104b03b429f84769139a2304bf4ebc066c39c6830db8f`
+and test ELF SHA256
+`405d943ff3217a539d1d522e76ab5df823337900347c3319bdbdd51bb7bf278b`.
+The source changes are commit `2cd6180a892274bba787283261ef5710dfefdb34`;
+these historical actuals are not relabeled as executions of later merged trees.
+The three-case independent review is SHA256
+`aed86860d4b62073cf0bc5b00bb78f08a7c008c4a15e9f6e9aa8f9a4fc508837`.
+
+This is an internal engineering checkpoint, not a new user command. The public
+source/Cargo workflow above is unchanged. Ordinary ranked attachment and canonical
+call consumption, complete formal admission, protected artifact publication and
+target-qualified GPU execution remain separate requirements. No M4 or U4
+completion follows from this continuation.

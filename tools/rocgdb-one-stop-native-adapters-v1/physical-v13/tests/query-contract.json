@@ -1,0 +1,13 @@
+{
+  "schema": "fe2o3-owned-legacy-query-separation-source-contract-v1",
+  "source_changes": 1,
+  "owned_health_pairs": 5,
+  "legacy_health_pairs_selected": 0,
+  "legacy_health_pairs_unselected_unchanged": true,
+  "provider_query_limit": 10,
+  "provider_ledger_bytes": 5,
+  "legacy_rejection": "unsupported_profile",
+  "paired_completion_edges": 11,
+  "activation_available": false,
+  "native_qualified": false
+}
