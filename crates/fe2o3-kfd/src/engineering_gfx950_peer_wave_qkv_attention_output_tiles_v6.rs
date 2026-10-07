@@ -371,3 +371,44 @@ mod tests;
 #[cfg(test)]
 #[path = "engineering_gfx950_peer_wave_qkv_attention_output_tiles_timestamp_tests.rs"]
 mod timestamp_tests;
+
+struct RoutedResident<'group, 'route, 'window> {
+    group: &'group mut Gfx950EngineeringPeerGroupV1,
+    currentness: &'route mut scoped_currentness::Currentness<'window>,
+}
+impl ResidentBackend for RoutedResident<'_, '_, '_> {
+    fn check(&mut self) -> Result<()> {
+        self.currentness.idle_group(self.group)
+    }
+    fn validate(
+        &mut self,
+        rank: usize,
+        command: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesDispatchV6<'_>,
+    ) -> Result<[profile::OwnedRegion; 15]> {
+        NativeResident(&mut *self.group, None).validate(rank, command)
+    }
+    fn observe(
+        &mut self,
+        state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+    ) -> Result<[u32; 284]> {
+        // SAFETY: closed LayerOperation owns Group/Prefix/pair through full exit.
+        unsafe {
+            super::wave_qkv_attention_output_tiles_state_v6::observe_within_scoped_layer(
+                self.group, state,
+            )
+        }
+    }
+    fn submit_and_complete(
+        &mut self,
+        commands: Vec<Gfx950EngineeringPeerDispatchV1<'_>>,
+    ) -> Result<Vec<u64>> {
+        round::dispatch_routed(self.group, commands, self.currentness)
+    }
+}
+pub(super) fn run_scoped(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    commands: [Gfx950EngineeringPeerWaveQkvAttentionOutputTilesDispatchV6<'_>; 2],
+    currentness: &mut scoped_currentness::Currentness<'_>,
+) -> Result<Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6> {
+    run_resident(&mut RoutedResident { group, currentness }, commands)
+}

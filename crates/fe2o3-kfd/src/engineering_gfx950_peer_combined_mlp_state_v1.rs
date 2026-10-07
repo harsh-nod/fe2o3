@@ -226,9 +226,17 @@ impl CombinedMlpStateV1 {
     /// queue publication. The coordinator must poison both owners on any later
     /// failure, including a failure to submit the other rank.
     pub(super) fn submit(&mut self, group: &mut Gfx950EngineeringPeerGroupV1) -> Result<()> {
+        self.submit_currentness(group, &mut scoped_currentness::Currentness::Full)
+    }
+
+    pub(super) fn submit_currentness(
+        &mut self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        currentness: &mut scoped_currentness::Currentness<'_>,
+    ) -> Result<()> {
         let result = (|| {
             require_activation(self.activation, Activation::Ready)?;
-            check_contexts(&mut group.contexts, group.shared_full_currentness)?;
+            currentness.idle_group(group)?;
             let observed = self.observe(group)?;
             require_initial(&observed, self.generation)?;
             self.activation = Activation::Submitted;
@@ -246,12 +254,23 @@ impl CombinedMlpStateV1 {
         &mut self,
         group: &mut Gfx950EngineeringPeerGroupV1,
     ) -> Result<CombinedMlpSnapshotV1> {
+        // SAFETY: unchanged legacy currentness and quiescence contract.
+        unsafe {
+            self.complete_quiescent_currentness(group, &mut scoped_currentness::Currentness::Full)
+        }
+    }
+
+    pub(super) unsafe fn complete_quiescent_currentness(
+        &mut self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        currentness: &mut scoped_currentness::Currentness<'_>,
+    ) -> Result<CombinedMlpSnapshotV1> {
         let result = (|| {
             require_activation(self.activation, Activation::Submitted)?;
-            check_contexts(&mut group.contexts, group.shared_full_currentness)?;
+            currentness.idle_group(group)?;
             let observed = self.observe(group)?;
             require_terminal(&observed, self.generation)?;
-            check_contexts(&mut group.contexts, group.shared_full_currentness)?;
+            currentness.idle_group(group)?;
             self.activation = Activation::Completed;
             Ok(observed)
         })();

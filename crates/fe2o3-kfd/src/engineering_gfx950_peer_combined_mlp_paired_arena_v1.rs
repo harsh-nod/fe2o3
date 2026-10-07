@@ -468,6 +468,21 @@ impl Staged {
         rank: usize,
         deadline: Instant,
     ) -> Result<()> {
+        self.publish_currentness(
+            group,
+            rank,
+            deadline,
+            &mut scoped_currentness::Currentness::Full,
+        )
+    }
+
+    pub(super) fn publish_currentness(
+        &mut self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        rank: usize,
+        deadline: Instant,
+        currentness: &mut scoped_currentness::Currentness<'_>,
+    ) -> Result<()> {
         let (values, _) = self.observe(group, deadline)?;
         before_publication(values, self.published, rank)?;
         let batch = self.batches[rank]
@@ -492,7 +507,7 @@ impl Staged {
             deadline,
         })?;
         self.published[rank] = true;
-        round::fresh_publication_fence(group)?;
+        currentness.publication(group)?;
         self.observe(group, deadline)?;
         group.contexts[rank]
             .doorbell

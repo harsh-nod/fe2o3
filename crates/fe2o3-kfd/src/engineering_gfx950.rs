@@ -71,11 +71,12 @@ pub use peer::{
     Gfx950EngineeringPeerHostParticipantV1, Gfx950EngineeringPeerKernelV1,
     Gfx950EngineeringPeerPointerV1, Gfx950EngineeringPeerProjectionResidualMlpTilesDispatchV1,
     Gfx950EngineeringPeerProjectionResidualMlpTilesRoundV1,
-    Gfx950EngineeringPeerRetainedGuardedMlpPairV1, Gfx950EngineeringPeerStateBankEntryV1,
-    Gfx950EngineeringPeerStateBankSnapshotV1, Gfx950EngineeringPeerUnboundGuardedMlpPairV1,
-    Gfx950EngineeringPeerWaveMlpStateV1, Gfx950EngineeringPeerWaveMlpTilesDispatchV2,
-    Gfx950EngineeringPeerWaveMlpTilesRoundV2, Gfx950EngineeringPeerWaveMlpTilesStateV2,
-    Gfx950EngineeringPeerWaveOutputStateV5,
+    Gfx950EngineeringPeerRetainedGuardedMlpPairV1, Gfx950EngineeringPeerScopedCurrentnessCountsV1,
+    Gfx950EngineeringPeerScopedPrefixInputsV1, Gfx950EngineeringPeerScopedWarmLayerObservationV1,
+    Gfx950EngineeringPeerStateBankEntryV1, Gfx950EngineeringPeerStateBankSnapshotV1,
+    Gfx950EngineeringPeerUnboundGuardedMlpPairV1, Gfx950EngineeringPeerWaveMlpStateV1,
+    Gfx950EngineeringPeerWaveMlpTilesDispatchV2, Gfx950EngineeringPeerWaveMlpTilesRoundV2,
+    Gfx950EngineeringPeerWaveMlpTilesStateV2, Gfx950EngineeringPeerWaveOutputStateV5,
     Gfx950EngineeringPeerWaveQkvAttentionOutputTilesDispatchV6,
     Gfx950EngineeringPeerWaveQkvAttentionOutputTilesRoundV6,
     Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6, Gfx950EngineeringSharedHostCountersV1,
@@ -627,6 +628,11 @@ impl Context {
     // Only the ordinary wrapper or an immediately preceding fresh group fence
     // may use this queue check. No currentness observation is retained for reuse.
     fn check_idle_after_currentness(&mut self) -> Result<()> {
+        self.check_idle_queue_predicates()
+    }
+
+    // Queue facts only. Caller separately establishes its explicit policy fence.
+    fn check_idle_queue_predicates(&mut self) -> Result<()> {
         if self.ordered_batch_poisoned {
             return Err("ordered batch context is terminally poisoned".into());
         }
@@ -687,15 +693,30 @@ impl Context {
     }
 
     fn read(&mut self, id: u64, offset: u64, bytes: u32) -> Result<Vec<u8>> {
+        self.read_currentness(
+            id,
+            offset,
+            bytes,
+            &mut peer::scoped_currentness::RankCurrentness::Full,
+        )
+    }
+
+    fn read_currentness(
+        &mut self,
+        id: u64,
+        offset: u64,
+        bytes: u32,
+        currentness: &mut peer::scoped_currentness::RankCurrentness<'_>,
+    ) -> Result<Vec<u8>> {
         let started = self.profile_started();
-        self.check_idle()?;
+        currentness.idle(self)?;
         let allocation = self.buffers.get(&id).ok_or("unknown buffer")?;
         let range = checked_range(allocation.requested as u64, offset, u64::from(bytes))
             .map_err(str::to_owned)?;
         let result = Backend::with_bytes(&allocation.mapping, allocation.requested, |mapped| {
             mapped[range].to_vec()
         });
-        self.check_currentness(false)?;
+        currentness.check(self, false)?;
         if started.is_some() {
             add_counter(&mut self.counters.reads, 1)?;
             add_counter(&mut self.counters.read_bytes, u64::from(bytes))?;
@@ -795,8 +816,29 @@ impl Context {
         pointers: &[PointerFixupV1],
         peer_bindings: Option<&BTreeMap<u64, (u64, u64)>>,
     ) -> Result<PreparedDispatch> {
+        self.prepare_dispatch_with_peer_bindings_currentness(
+            id,
+            bytes,
+            workgroup,
+            grid,
+            pointers,
+            peer_bindings,
+            &mut peer::scoped_currentness::RankCurrentness::Full,
+        )
+    }
+
+    fn prepare_dispatch_with_peer_bindings_currentness(
+        &mut self,
+        id: u64,
+        mut bytes: Vec<u8>,
+        workgroup: [u16; 3],
+        grid: [u32; 3],
+        pointers: &[PointerFixupV1],
+        peer_bindings: Option<&BTreeMap<u64, (u64, u64)>>,
+        currentness: &mut peer::scoped_currentness::RankCurrentness<'_>,
+    ) -> Result<PreparedDispatch> {
         let prepare_started = self.profile_started();
-        self.check_idle()?;
+        currentness.idle(self)?;
         let geometry =
             AqlDispatchGeometryV1::new(grid, workgroup.map(u32::from)).map_err(explain)?;
         let admission_started = self.profile_started();
@@ -924,6 +966,24 @@ impl Context {
         timeout_ms: u32,
         capture: bool,
     ) -> Result<PendingDispatch> {
+        // SAFETY: unchanged legacy full-currentness dispatch contract.
+        unsafe {
+            self.publish_prepared_dispatch_with_currentness(
+                prepared,
+                timeout_ms,
+                capture,
+                &mut peer::scoped_currentness::RankCurrentness::Full,
+            )
+        }
+    }
+
+    unsafe fn publish_prepared_dispatch_with_currentness(
+        &mut self,
+        prepared: PreparedDispatch,
+        timeout_ms: u32,
+        capture: bool,
+        currentness: &mut peer::scoped_currentness::RankCurrentness<'_>,
+    ) -> Result<PendingDispatch> {
         raw_timestamps::require_capture_mode(self.raw_timestamps_enabled, capture)?;
         require_completed_frontier(self.completed_write, self.ring.write())?;
         if timeout_ms == 0 || timeout_ms > 600_000 {
@@ -983,7 +1043,7 @@ impl Context {
             ObservedGpuAddressV1::new(self.internal[SIGNAL].va).map_err(explain)?,
         )
         .map_err(explain)?;
-        self.check_currentness(false)?;
+        currentness.check(self, false)?;
         let prior =
             Backend::fetch_add_aql_write(&mut self.internal[CONTROL].mapping, PAGE_BYTES, 1)
                 .map_err(explain)?;
@@ -1015,6 +1075,17 @@ impl Context {
     }
 
     fn poll_pending_dispatch(&mut self, pending: &mut PendingDispatch) -> Result<Option<u64>> {
+        self.poll_pending_dispatch_with_currentness(
+            pending,
+            &mut peer::scoped_currentness::RankCurrentness::Full,
+        )
+    }
+
+    fn poll_pending_dispatch_with_currentness(
+        &mut self,
+        pending: &mut PendingDispatch,
+        currentness: &mut peer::scoped_currentness::RankCurrentness<'_>,
+    ) -> Result<Option<u64>> {
         require_pending_dispatch_identity(
             [self.unique_id, self.queue_epoch, self.ring.write()],
             [pending.unique_id, pending.queue_epoch, pending.next],
@@ -1052,14 +1123,14 @@ impl Context {
                 ));
             }
             if now >= pending.next_currentness {
-                self.check_currentness(false)?;
+                currentness.check(self, false)?;
                 pending.next_currentness = now + Duration::from_millis(100);
             }
             return Ok(None);
         }
         self.completed_write = pending.next;
         record_elapsed(&mut self.counters.dispatch_wait_ns, pending.wait_started)?;
-        self.check_idle()?;
+        currentness.idle(self)?;
         if self.raw_timestamps_enabled {
             // SAFETY: genuine completion, counter/exception/frontier and idle
             // checks succeeded. The sole queue signal cannot be reused while

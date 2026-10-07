@@ -28,6 +28,12 @@ mod group_currentness;
 #[cfg(feature = "engineering-gfx950")]
 pub(crate) use group_currentness::check_engineering_group_currentness;
 
+#[cfg(feature = "engineering-gfx950")]
+#[path = "device_gfx950_scoped_currentness_v1.rs"]
+mod scoped_currentness;
+#[cfg(feature = "engineering-gfx950")]
+pub(crate) use scoped_currentness::{ScopedCountsV1, ScopedCurrentnessV1};
+
 pub const GFX950_ADMITTED_KERNEL_RELEASE_V1: &str = "6.8.0-124-generic";
 pub const GFX950_ADMITTED_AMDGPU_MODULE_VERSION_V1: &str = "6.16.13";
 pub const GFX950_ADMITTED_AMDGPU_MODULE_SRCVERSION_V1: &str = "703B1127E578BC5D4BD6615";

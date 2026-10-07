@@ -364,6 +364,24 @@ pub(super) unsafe fn observe_within_resident_fence(
     group: &mut Gfx950EngineeringPeerGroupV1,
     state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
 ) -> Result<[u32; STATE_WORDS]> {
+    observe_resident_state(group, state)
+}
+
+/// # Safety
+/// Only the closed scoped LayerOperation may call this under its exclusive
+/// Group/Prefix/pair custody, bracketed scoped checks and mandatory full exit.
+/// This does not satisfy the legacy immediate-full-fence premise.
+pub(super) unsafe fn observe_within_scoped_layer(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+) -> Result<[u32; STATE_WORDS]> {
+    observe_resident_state(group, state)
+}
+
+fn observe_resident_state(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    state: &Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6,
+) -> Result<[u32; STATE_WORDS]> {
     group.require_active()?;
     let result = (|| {
         if !matches!(state.activation, Activation::Ready | Activation::Submitted) {

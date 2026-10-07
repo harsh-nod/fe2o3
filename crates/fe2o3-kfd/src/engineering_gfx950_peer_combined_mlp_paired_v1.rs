@@ -24,6 +24,11 @@ pub(super) use retained::{RetainedPair, UnboundPair, rearm_pairs};
 
 #[path = "engineering_gfx950_peer_combined_mlp_paired_facade_v1.rs"]
 mod facade;
+pub use retained::scoped_layer::{
+    Gfx950EngineeringPeerScopedCurrentnessCountsV1, Gfx950EngineeringPeerScopedPrefixInputsV1,
+    Gfx950EngineeringPeerScopedWarmLayerObservationV1,
+};
+
 pub use facade::{
     Gfx950EngineeringPeerGuardedMlpBankEntryV1, Gfx950EngineeringPeerGuardedMlpInputsV1,
     Gfx950EngineeringPeerGuardedMlpObservationV1, Gfx950EngineeringPeerGuardedMlpRankInputsV1,
@@ -192,6 +197,7 @@ struct Native<'group, 'kernel> {
     staged: Option<arena::Staged>,
     reusable: Option<(arena::Reusable, Instant)>,
     validated_terminal: Option<[CombinedMlpSnapshotV1; 2]>,
+    currentness: scoped_currentness::Currentness<'group>,
 }
 
 impl CoordinatorBackend for Native<'_, '_> {
@@ -202,19 +208,16 @@ impl CoordinatorBackend for Native<'_, '_> {
     fn preflight(&mut self) -> Result<()> {
         self.group.require_active()?;
         profiles::validate_policy(self.group)?;
-        check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)?;
+        self.currentness.idle_group(self.group)?;
         self.generation = profiles::validate_owners(self.group, self.owners)?;
-        let prepared = match self.output_policy {
-            profiles::OutputPolicy::Strict => {
-                profiles::prepare(self.group, self.owners, &self.inputs, self.timeout_ms)?
-            }
-            profiles::OutputPolicy::ExactOwnResidual => profiles::prepare_exact_own_residual(
-                self.group,
-                self.owners,
-                &self.inputs,
-                self.timeout_ms,
-            )?,
-        };
+        let prepared = profiles::prepare_with_currentness(
+            self.group,
+            self.owners,
+            &self.inputs,
+            self.timeout_ms,
+            self.output_policy,
+            &mut self.currentness,
+        )?;
         for context in &self.group.contexts {
             require_sequence_capacity(
                 context.ring.write(),
@@ -223,15 +226,28 @@ impl CoordinatorBackend for Native<'_, '_> {
             )?;
         }
         self.staged = Some(match self.reusable.take() {
-            Some((proof, until)) => proof.prepare(self.group, prepared, self.generation, until)?,
-            None => arena::Staged::prepare(self.group, prepared)?,
+            Some((proof, until)) => proof.prepare_currentness(
+                self.group,
+                prepared,
+                self.generation,
+                until,
+                &mut self.currentness,
+            )?,
+            None => match &self.currentness {
+                scoped_currentness::Currentness::Full => {
+                    arena::Staged::prepare(self.group, prepared)?
+                }
+                scoped_currentness::Currentness::Scoped(_) => {
+                    return Err("scoped warm layer cannot allocate a fresh arena".into());
+                }
+            },
         });
-        check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)?;
+        self.currentness.idle_group(self.group)?;
         Ok(())
     }
 
     fn consume(&mut self, rank: usize) -> Result<()> {
-        self.owners[rank].submit(self.group)
+        self.owners[rank].submit_currentness(self.group, &mut self.currentness)
     }
 
     fn reserve(&mut self, rank: usize) -> Result<()> {
@@ -246,14 +262,14 @@ impl CoordinatorBackend for Native<'_, '_> {
             .as_ref()
             .ok_or("paired guarded MLP staging missing")?
             .check(self.group)?;
-        round::fresh_publication_fence(self.group)
+        self.currentness.publication(self.group)
     }
 
     fn publish(&mut self, rank: usize, deadline: Instant) -> Result<()> {
         self.staged
             .as_mut()
             .ok_or("paired guarded MLP staging missing")?
-            .publish(self.group, rank, deadline)
+            .publish_currentness(self.group, rank, deadline, &mut self.currentness)
     }
 
     fn poll(&mut self, deadline: Instant) -> Result<bool> {
@@ -276,7 +292,7 @@ impl CoordinatorBackend for Native<'_, '_> {
             .as_ref()
             .ok_or("paired guarded MLP staging missing")?;
         staged.require_retired()?;
-        check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)?;
+        self.currentness.idle_group(self.group)?;
         for owner in &*self.owners {
             require_activation(owner.activation, Activation::Submitted)?;
             if owner.generation != self.generation {
@@ -290,7 +306,7 @@ impl CoordinatorBackend for Native<'_, '_> {
         for state in &states {
             require_terminal(state, self.generation)?;
         }
-        check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)?;
+        self.currentness.idle_group(self.group)?;
         self.validated_terminal = Some(states);
         Ok(())
     }
@@ -307,10 +323,13 @@ impl CoordinatorBackend for Native<'_, '_> {
             .ok_or("paired guarded MLP terminal pair not validated")?[rank];
         // SAFETY: both batches were published and every actual completion signal
         // acquired as zero, with current queue/fault checks. Both terminal guards
-        // were validated under full fences before either owner completed. The
+        // were validated under the selected private route before completion.
+        // A Scoped caller retains all owners until its mandatory full exit. The
         // exclusive group borrow prevents intervening publication. Both logical
         // work frontiers retired without invented ring credit; arenas are retained.
-        let observed = unsafe { self.owners[rank].complete_quiescent(self.group)? };
+        let observed = unsafe {
+            self.owners[rank].complete_quiescent_currentness(self.group, &mut self.currentness)?
+        };
         if &observed != expected {
             return Err("paired guarded MLP terminal snapshot changed".into());
         }
@@ -327,7 +346,7 @@ impl CoordinatorBackend for Native<'_, '_> {
             .as_mut()
             .ok_or("paired guarded MLP staging missing")?;
         staged.require_retired()?;
-        check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)?;
+        self.currentness.idle_group(self.group)?;
         if !staged.complete(self.group, deadline)? {
             return Err("paired guarded MLP completion changed".into());
         }
@@ -340,7 +359,7 @@ impl CoordinatorBackend for Native<'_, '_> {
             }
             require_terminal(&states[rank], self.generation)?;
         }
-        check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)?;
+        self.currentness.idle_group(self.group)?;
         Ok(staged
             .last
             .ok_or("paired guarded MLP final observation missing")?
@@ -355,6 +374,12 @@ impl CoordinatorBackend for Native<'_, '_> {
         &mut self,
         deadline: Instant,
     ) -> Result<([CombinedMlpSnapshotV1; 2], [(u64, u64); 2])> {
+        if matches!(
+            &self.currentness,
+            scoped_currentness::Currentness::Scoped(_)
+        ) {
+            return Err("scoped layer preserves legacy terminal cadence".into());
+        }
         terminal_pair::complete(self, deadline)
     }
 
@@ -396,6 +421,7 @@ pub(super) unsafe fn dispatch(
             staged: None,
             reusable: None,
             validated_terminal: None,
+            currentness: scoped_currentness::Currentness::Full,
         },
         timeout_ms,
     )

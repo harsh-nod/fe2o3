@@ -293,3 +293,37 @@ impl Gfx950EngineeringPeerGroupV1 {
 #[cfg(test)]
 #[path = "engineering_gfx950_peer_combined_mlp_paired_facade_v1_tests.rs"]
 mod tests;
+
+impl Gfx950EngineeringPeerGroupV1 {
+    /// A separately named temporal policy: full entry/exit, participant-local
+    /// checks and fresh root/generation brackets inside one warm layer. Changes
+    /// that revert without generation advancement can escape; not equivalent to
+    /// full topology rediscovery at every internal boundary. No policy persists.
+    ///
+    /// # Safety
+    /// All retained exact-own-residual/reusable-bind and mixed-bank rearm
+    /// obligations apply. The caller must associate these two genuine PrefixV6
+    /// owners, retained pair, kernel roles, model/cache pages and current bank.
+    /// No generation-binding capability is fabricated by this method. All code
+    /// and mappings remain owned by this exclusive disposable-process Group.
+    /// This call submits Prefix then guarded MLP and reads both hidden outputs;
+    /// no other producer/consumer or host access may interleave. Initial Fresh
+    /// uses are refused, and any error/unwind permanently quarantines all owners.
+    pub unsafe fn dispatch_warm_layer_scoped_currentness_unchecked_v1(
+        &mut self,
+        prefixes: [&mut Gfx950EngineeringPeerWaveQkvAttentionOutputTilesStateV6; 2],
+        pair: &mut Gfx950EngineeringPeerRetainedGuardedMlpPairV1,
+        prefix_inputs: [Gfx950EngineeringPeerScopedPrefixInputsV1<'_>; 2],
+        mlp_inputs: &Gfx950EngineeringPeerGuardedMlpInputsV1<'_>,
+        timeout_ms: u32,
+    ) -> Result<Gfx950EngineeringPeerScopedWarmLayerObservationV1> {
+        retained::scoped_layer::run(
+            self,
+            prefixes,
+            pair,
+            prefix_inputs,
+            mlp_inputs.private_inputs(),
+            timeout_ms,
+        )
+    }
+}

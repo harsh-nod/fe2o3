@@ -264,6 +264,24 @@ fn prepare_with_policy(
     timeout_ms: u32,
     policy: OutputPolicy,
 ) -> Result<[[PreparedDispatch; 4]; 2]> {
+    prepare_with_currentness(
+        group,
+        owners,
+        inputs,
+        timeout_ms,
+        policy,
+        &mut scoped_currentness::Currentness::Full,
+    )
+}
+
+pub(super) fn prepare_with_currentness(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    owners: &[CombinedMlpStateV1; 2],
+    inputs: &Inputs<'_>,
+    timeout_ms: u32,
+    policy: OutputPolicy,
+    currentness: &mut scoped_currentness::Currentness<'_>,
+) -> Result<[[PreparedDispatch; 4]; 2]> {
     if inputs.projection_sha256 == [0; 32] || inputs.mlp_sha256 == [0; 32] {
         return Err("paired guarded MLP missing R1/MLP image binding".into());
     }
@@ -376,13 +394,14 @@ fn prepare_with_policy(
             .zip([r1, mlp_pointers, guard, r2])
             .enumerate()
         {
-            prepared.push(group.prepare_peer_dispatch(
+            prepared.push(group.prepare_peer_dispatch_currentness(
                 input.kernels[stage],
                 bytes,
                 [64, 1, 1],
                 [if stage == 2 { 64 } else { 4096 }, 1, 1],
                 &pointers,
                 timeout_ms,
+                currentness,
             )?);
         }
         result.push(

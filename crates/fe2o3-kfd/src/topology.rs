@@ -980,6 +980,16 @@ pub(crate) fn recheck_default_topology_generation(
     )
 }
 
+/// A scoped engineering observation, not a full-topology equivalence proof.
+/// The caller retains entry/exit full observations and exclusive owner custody.
+/// A fact that changes and reverts without advancing generation can escape.
+#[cfg(feature = "engineering-gfx950")]
+pub(crate) fn check_scoped_topology_root_generation(
+    entry: &HostTopologySnapshot,
+) -> Result<(), TopologyError> {
+    recheck_topology_generation_at(Path::new(DEFAULT_TOPOLOGY_ROOT), &entry.topology.provenance)
+}
+
 #[cfg(feature = "engineering-gfx950")]
 fn recheck_topology_generation_at(
     root: &Path,

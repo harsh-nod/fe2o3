@@ -165,6 +165,7 @@ impl<'group, 'kernel> Session<'group, 'kernel> {
                 staged: None,
                 reusable: None,
                 validated_terminal: None,
+                currentness: scoped_currentness::Currentness::Full,
             },
             custody: Custody::Ready,
         }

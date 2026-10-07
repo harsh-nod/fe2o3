@@ -49,10 +49,19 @@ impl Staged {
         group: &mut Gfx950EngineeringPeerGroupV1,
         deadline: Instant,
     ) -> Result<Retired> {
+        self.seal_retired_currentness(group, deadline, &mut scoped_currentness::Currentness::Full)
+    }
+
+    pub(in super::super) fn seal_retired_currentness(
+        mut self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        deadline: Instant,
+        currentness: &mut scoped_currentness::Currentness<'_>,
+    ) -> Result<Retired> {
         group.require_active()?;
         profiles::validate_policy(group)?;
         self.require_retired()?;
-        check_contexts(&mut group.contexts, group.shared_full_currentness)?;
+        currentness.idle_group(group)?;
         // Sealing still requires the exact original reservation. Only the sealed
         // recheck below can accept intervening, independently retired work.
         if !self.complete(group, deadline)? {
@@ -66,7 +75,7 @@ impl Staged {
             sealed,
             previous: sealed,
         };
-        proof.recheck(group, deadline)?;
+        proof.recheck_currentness(group, deadline, currentness)?;
         Ok(proof)
     }
 }
@@ -84,12 +93,21 @@ impl Retired {
         group: &mut Gfx950EngineeringPeerGroupV1,
         deadline: Instant,
     ) -> Result<()> {
+        self.recheck_currentness(group, deadline, &mut scoped_currentness::Currentness::Full)
+    }
+
+    pub(in super::super) fn recheck_currentness(
+        &mut self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        deadline: Instant,
+        currentness: &mut scoped_currentness::Currentness<'_>,
+    ) -> Result<()> {
         deadline_check(Instant::now(), deadline)?;
         group.require_active()?;
         profiles::validate_policy(group)?;
         self.staged.require_retired()?;
         self.staged.check(group)?;
-        check_contexts(&mut group.contexts, group.shared_full_currentness)?;
+        currentness.idle_group(group)?;
         let writes = std::array::from_fn(|rank| group.contexts[rank].ring.write());
         let completed = std::array::from_fn(|rank| group.contexts[rank].completed_write);
         let previous_reads = std::array::from_fn(|rank| group.contexts[rank].last_observed_read);
@@ -121,7 +139,7 @@ impl Retired {
             // Keep only actual observations. Completed signals never create read credit.
             group.contexts[rank].last_observed_read = observed[rank].1;
         }
-        check_contexts(&mut group.contexts, group.shared_full_currentness)?;
+        currentness.idle_group(group)?;
         self.staged.check(group)?;
         deadline_check(Instant::now(), deadline)?;
         self.previous = observed;

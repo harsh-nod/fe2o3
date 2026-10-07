@@ -87,14 +87,15 @@ fn recycle(
     Ok(())
 }
 
-struct NativeReuse<'a> {
+struct NativeReuse<'a, 'window> {
     group: &'a mut Gfx950EngineeringPeerGroupV1,
     proof: &'a mut Retired,
     prepared: &'a [[PreparedDispatch; 4]; 2],
     until: Instant,
+    currentness: &'a mut scoped_currentness::Currentness<'window>,
 }
 
-impl ReuseBackend for NativeReuse<'_> {
+impl ReuseBackend for NativeReuse<'_, '_> {
     fn now(&mut self) -> Instant {
         Instant::now()
     }
@@ -108,7 +109,8 @@ impl ReuseBackend for NativeReuse<'_> {
         {
             return Err("paired arena reuse kernarg shape".into());
         }
-        self.proof.recheck(self.group, self.until)?;
+        self.proof
+            .recheck_currentness(self.group, self.until, self.currentness)?;
         consumed_gate(self.proof.sealed, self.proof.previous)
     }
 
@@ -147,7 +149,7 @@ impl ReuseBackend for NativeReuse<'_> {
     fn validate_new(&mut self) -> Result<()> {
         self.group.require_active()?;
         self.proof.staged.check(self.group)?;
-        check_contexts(&mut self.group.contexts, self.group.shared_full_currentness)?;
+        self.currentness.idle_group(self.group)?;
         if self.proof.staged.read_signals(self.group)? != [[1; PACKETS]; 2] {
             return Err("paired arena reuse pending readback".into());
         }
@@ -164,6 +166,11 @@ impl ReuseBackend for NativeReuse<'_> {
 }
 
 impl Reusable {
+    pub(in super::super::super) fn require_generation(&self, current: u64) -> Result<()> {
+        generation_gate(self.old, self.next, current)?;
+        self.retired.staged.require_retired()
+    }
+
     pub(in super::super::super) fn new(retired: Retired, old: u64, next: u64) -> Result<Self> {
         generation_gate(old, next, next)?;
         retired.staged.require_retired()?;
@@ -177,12 +184,30 @@ impl Reusable {
         generation: u64,
         until: Instant,
     ) -> Result<Staged> {
+        self.prepare_currentness(
+            group,
+            prepared,
+            generation,
+            until,
+            &mut scoped_currentness::Currentness::Full,
+        )
+    }
+
+    pub(in super::super::super) fn prepare_currentness(
+        mut self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        prepared: [[PreparedDispatch; 4]; 2],
+        generation: u64,
+        until: Instant,
+        currentness: &mut scoped_currentness::Currentness<'_>,
+    ) -> Result<Staged> {
         recycle(
             &mut NativeReuse {
                 group,
                 proof: &mut self.retired,
                 prepared: &prepared,
                 until,
+                currentness,
             },
             self.old,
             self.next,

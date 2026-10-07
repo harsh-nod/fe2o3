@@ -1,6 +1,9 @@
 //! Borrow-free paired owners, with short exclusive group custody per operation.
 use super::*;
 
+#[path = "engineering_gfx950_peer_scoped_layer_v1.rs"]
+pub(super) mod scoped_layer;
+
 #[path = "engineering_gfx950_peer_combined_mlp_paired_mixed_bank_v1.rs"]
 mod mixed_bank;
 pub use mixed_bank::Entry as GuardedBankEntry;
@@ -503,6 +506,7 @@ impl RetainedPair {
             staged: None,
             reusable: pair.reusable.take().map(|proof| (proof, until)),
             validated_terminal: None,
+            currentness: scoped_currentness::Currentness::Full,
         };
         // Keep the unchanged coordinator's strict in-flight reservation checks.
         let result =

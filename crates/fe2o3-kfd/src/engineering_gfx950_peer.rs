@@ -35,6 +35,9 @@ mod capacity_v1;
 #[path = "engineering_gfx950_peer_read_pair_v1.rs"]
 mod read_pair_v1;
 
+#[path = "engineering_gfx950_peer_scoped_currentness_v1.rs"]
+pub(super) mod scoped_currentness;
+
 #[path = "engineering_gfx950_peer_wave_output_state_v5.rs"]
 mod wave_output_state_v5;
 pub use wave_output_state_v5::Gfx950EngineeringPeerWaveOutputStateV5;
@@ -46,7 +49,9 @@ mod combined_mlp_state_v1;
 pub use combined_mlp_state_v1::paired::{
     Gfx950EngineeringPeerGuardedMlpBankEntryV1, Gfx950EngineeringPeerGuardedMlpInputsV1,
     Gfx950EngineeringPeerGuardedMlpObservationV1, Gfx950EngineeringPeerGuardedMlpRankInputsV1,
-    Gfx950EngineeringPeerRetainedGuardedMlpPairV1, Gfx950EngineeringPeerUnboundGuardedMlpPairV1,
+    Gfx950EngineeringPeerRetainedGuardedMlpPairV1, Gfx950EngineeringPeerScopedCurrentnessCountsV1,
+    Gfx950EngineeringPeerScopedPrefixInputsV1, Gfx950EngineeringPeerScopedWarmLayerObservationV1,
+    Gfx950EngineeringPeerUnboundGuardedMlpPairV1,
 };
 #[path = "engineering_gfx950_peer_wave_mlp_tiles_state_v2.rs"]
 mod wave_mlp_tiles_state_v2;
@@ -776,6 +781,31 @@ impl Gfx950EngineeringPeerGroupV1 {
         self.finish(result)
     }
 
+    fn read_currentness(
+        &mut self,
+        buffer: Gfx950EngineeringPeerBufferV1,
+        offset: u64,
+        bytes: u32,
+        currentness: &mut scoped_currentness::Currentness<'_>,
+    ) -> Result<Vec<u8>> {
+        self.require_active()?;
+        let result = (|| {
+            if bytes > MAX_TRANSFER_BYTES_V1 {
+                return Err("peer host read limit".into());
+            }
+            let record = self.validate_token(buffer)?;
+            require_public_vram(record)?;
+            let local = record.local_id;
+            currentness.idle_group(self)?;
+            let mut route = currentness.rank(self, buffer.owner)?;
+            let result =
+                self.contexts[buffer.owner].read_currentness(local, offset, bytes, &mut route)?;
+            currentness.idle_group(self)?;
+            Ok(result)
+        })();
+        self.finish(result)
+    }
+
     pub fn load_kernel(
         &mut self,
         rank: usize,
@@ -847,6 +877,27 @@ impl Gfx950EngineeringPeerGroupV1 {
         pointers: &[Gfx950EngineeringPeerPointerV1],
         timeout_ms: u32,
     ) -> Result<PreparedDispatch> {
+        self.prepare_peer_dispatch_currentness(
+            kernel,
+            bytes,
+            workgroup,
+            grid,
+            pointers,
+            timeout_ms,
+            &mut scoped_currentness::Currentness::Full,
+        )
+    }
+
+    fn prepare_peer_dispatch_currentness(
+        &mut self,
+        kernel: &Gfx950EngineeringPeerKernelV1,
+        bytes: Vec<u8>,
+        workgroup: [u16; 3],
+        grid: [u32; 3],
+        pointers: &[Gfx950EngineeringPeerPointerV1],
+        timeout_ms: u32,
+        currentness: &mut scoped_currentness::Currentness<'_>,
+    ) -> Result<PreparedDispatch> {
         if kernel.group != self.incarnation
             || kernel.rank >= self.contexts.len()
             || timeout_ms == 0
@@ -881,13 +932,15 @@ impl Gfx950EngineeringPeerGroupV1 {
                 access: pointer.access,
             });
         }
-        self.contexts[kernel.rank].prepare_dispatch_with_peer_bindings(
+        let mut rank_currentness = currentness.rank(self, kernel.rank)?;
+        self.contexts[kernel.rank].prepare_dispatch_with_peer_bindings_currentness(
             kernel.id,
             bytes,
             workgroup,
             grid,
             &fixups,
             Some(&bindings),
+            &mut rank_currentness,
         )
     }
 

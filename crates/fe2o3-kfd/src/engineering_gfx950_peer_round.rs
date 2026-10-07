@@ -78,7 +78,9 @@ fn require_round_timeout(timeouts: impl Iterator<Item = u32>) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn require_round_independence(arguments: &[&[Gfx950EngineeringPeerPointerV1]]) -> Result<()> {
+pub(super) fn require_round_independence(
+    arguments: &[&[Gfx950EngineeringPeerPointerV1]],
+) -> Result<()> {
     if arguments.is_empty()
         || arguments.len() > 8
         || arguments
@@ -432,4 +434,120 @@ pub(super) fn fresh_publication_fence(group: &mut Gfx950EngineeringPeerGroupV1) 
         capture: false,
         observations: [None; 8],
     })
+}
+
+struct RoutedRound<'group, 'kernel, 'route, 'window> {
+    group: &'group mut Gfx950EngineeringPeerGroupV1,
+    commands: Vec<Option<Gfx950EngineeringPeerDispatchV1<'kernel>>>,
+    next_currentness: Instant,
+    currentness: &'route mut scoped_currentness::Currentness<'window>,
+}
+impl ConcurrentRoundBackend for RoutedRound<'_, '_, '_, '_> {
+    type Prepared = (usize, PreparedDispatch, u32);
+    type Pending = (usize, PendingDispatch);
+    fn full_fence(&mut self) -> Result<()> {
+        self.currentness.idle_group(self.group)
+    }
+    fn prepare(&mut self, index: usize) -> Result<Self::Prepared> {
+        let command = self
+            .commands
+            .get_mut(index)
+            .and_then(Option::take)
+            .ok_or("peer round command unavailable")?;
+        let rank = command.kernel.rank;
+        let prepared = self.group.prepare_peer_dispatch_currentness(
+            command.kernel,
+            command.bytes,
+            command.workgroup,
+            command.grid,
+            &command.pointers,
+            command.timeout_ms,
+            self.currentness,
+        )?;
+        let context = &self.group.contexts[rank];
+        require_sequence_capacity(context.ring.write(), context.last_observed_read, 1)?;
+        Ok((rank, prepared, command.timeout_ms))
+    }
+    fn publication_fence(&mut self, pending: &[Self::Pending]) -> Result<()> {
+        self.currentness.publication(self.group)?;
+        let now = Instant::now();
+        for (_, dispatch) in pending {
+            require_round_deadline(now, dispatch.deadline)?;
+        }
+        Ok(())
+    }
+    fn publish(&mut self, (rank, prepared, timeout): Self::Prepared) -> Result<Self::Pending> {
+        let mut route = self.currentness.rank(self.group, rank)?;
+        // SAFETY: the closed outer layer retains exact reviewed code/roles and owners.
+        let pending = unsafe {
+            self.group.contexts[rank]
+                .publish_prepared_dispatch_with_currentness(prepared, timeout, false, &mut route)
+        }?;
+        Ok((rank, pending))
+    }
+    fn poll(&mut self, (rank, pending): &mut Self::Pending) -> Result<Option<u64>> {
+        require_round_deadline(Instant::now(), pending.deadline)?;
+        let mut route = self.currentness.rank(self.group, *rank)?;
+        self.group.contexts[*rank].poll_pending_dispatch_with_currentness(pending, &mut route)
+    }
+    fn wait_checkpoint(&mut self) -> Result<()> {
+        if Instant::now() >= self.next_currentness {
+            // Preserve the ordinary periodic one-rank cadence, not a group replacement.
+            for rank in 0..self.group.contexts.len() {
+                let mut route = self.currentness.rank(self.group, rank)?;
+                let context = &mut self.group.contexts[rank];
+                route.check(context, false)?;
+                if Backend::observe_i64_acquire(
+                    &mut context.internal[CONTROL].mapping,
+                    PAGE_BYTES,
+                    256,
+                )
+                .map_err(explain)?
+                    != 0
+                {
+                    return Err("peer round participant queue exception".into());
+                }
+            }
+            self.next_currentness = Instant::now()
+                .checked_add(Duration::from_millis(100))
+                .ok_or("peer round currentness deadline")?;
+        }
+        std::thread::sleep(Duration::from_micros(50));
+        Ok(())
+    }
+}
+pub(super) fn dispatch_routed(
+    group: &mut Gfx950EngineeringPeerGroupV1,
+    commands: Vec<Gfx950EngineeringPeerDispatchV1<'_>>,
+    currentness: &mut scoped_currentness::Currentness<'_>,
+) -> Result<Vec<u64>> {
+    group.require_active()?;
+    for context in &group.contexts {
+        raw_timestamps::require_capture_mode(context.raw_timestamps_enabled, false)?;
+    }
+    if commands.len() > group.contexts.len() {
+        return Err("peer round count exceeds retained ranks".into());
+    }
+    let ranks = commands
+        .iter()
+        .map(|command| command.kernel.rank)
+        .collect::<Vec<_>>();
+    require_round_ranks(group.contexts.len(), &ranks)?;
+    require_round_timeout(commands.iter().map(|command| command.timeout_ms))?;
+    require_round_independence(
+        &commands
+            .iter()
+            .map(|command| command.pointers.as_slice())
+            .collect::<Vec<_>>(),
+    )?;
+    let count = commands.len();
+    run_round(
+        &mut RoutedRound {
+            group,
+            commands: commands.into_iter().map(Some).collect(),
+            next_currentness: Instant::now(),
+            currentness,
+        },
+        count,
+    )
 }
