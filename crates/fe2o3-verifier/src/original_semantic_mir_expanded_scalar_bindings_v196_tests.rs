@@ -162,8 +162,28 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     >() + size_of::<
         std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1>,
     >() + size_of::<std::slice::Iter<'_, usize>>();
+    #[allow(dead_code)]
+    #[repr(C)]
+    struct RefusalFactsFields {
+        original: usize,
+        coordinate: Definition,
+        type_class: &'static str,
+        scalar: Option<fe2o3_kernel_ir::ScalarType>,
+        descendant_count: Option<usize>,
+        first_descendant: Option<fe2o3_kernel_ir::CanonicalKirDefinitionDescendantV1>,
+        target_function: Option<fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1>,
+        target_range: Option<(usize, usize)>,
+        target_index: Option<usize>,
+        binary: Option<fe2o3_kernel_ir::BinaryOp>,
+    }
+    let refusal_trace_headers = 6 * size_of::<RefusalFactsFields>()
+        + 2048
+        + 16 * size_of::<usize>()
+        + 4 * size_of::<&()>()
+        + 2 * size_of::<u8>();
     let header = retained
         + refusal_coordinates
+        + refusal_trace_headers
         + construction_and_query_results
         + input_predecessor_and_actual_coordinates
         + expansion_span
