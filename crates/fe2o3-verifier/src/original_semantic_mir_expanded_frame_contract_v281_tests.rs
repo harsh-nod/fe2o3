@@ -133,11 +133,36 @@ fn expanded_frame_contracts_keep_complete_microstate_prefix_and_shared_caller_de
                 let contract = out.text.split(&name).nth(1).unwrap().split("\nspec fn ").next().unwrap();
                 // Verus int admits equality guards, not Rust integer patterns.
                 assert!(!contract.contains("match source.machine.pc"));
-                assert!(contract.contains(" false }) }\n"));
+                assert!(contract.contains(" else\n { false } }) }\n"));
+                assert!(!contract.contains(" else\n false"));
                 let expected: usize = frames.frames[frames.roots[root].clone()].iter()
                     .map(|frame| frame.cuts.len()).sum();
                 assert!(expected > 0);
                 assert_eq!(contract.matches(" if source.machine.pc == ").count(), expected);
+                let start = contract.find("({ let target = micro.state;\n").unwrap() + 1;
+                let end = start + contract[start..].find("}) }\n").unwrap() + 1;
+                let dispatch: syn::Block = syn::parse_str(&contract[start..end])
+                    .expect("frame dispatch must have valid Rust expression syntax");
+                let unbraced = contract[start..end].replace("else\n { false }", "else\n false");
+                assert_ne!(unbraced, contract[start..end]);
+                assert!(syn::parse_str::<syn::Block>(&unbraced).is_err());
+                let mut branch = match dispatch.stmts.last() {
+                    Some(syn::Stmt::Expr(expression, None)) => expression,
+                    _ => panic!("frame dispatch must end in an expression"),
+                };
+                let mut arms = 0;
+                while let syn::Expr::If(conditional) = branch {
+                    arms += 1;
+                    branch = &conditional.else_branch.as_ref().unwrap().1;
+                }
+                assert_eq!(arms, expected);
+                let syn::Expr::Block(fallback) = branch else {
+                    panic!("frame dispatch must end in a braced fallback");
+                };
+                assert!(matches!(fallback.block.stmts.as_slice(),
+                    [syn::Stmt::Expr(syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Bool(value), ..
+                    }), None)] if !value.value));
             }
             let mut suspended = 0;
             let mut zero_candidates = 0;

@@ -394,7 +394,7 @@ pub(super) fn emit(
                     );
                 }
             }
-            emit!(out, " false }}) }}\n");
+            emit!(out, " {{ false }} }}) }}\n");
         }
         scalar.check_owner(slots, target, out)?;
         execution.check_owner(plan, slots, target, out)?;
