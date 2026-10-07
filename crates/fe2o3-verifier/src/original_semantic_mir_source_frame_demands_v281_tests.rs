@@ -294,9 +294,8 @@ fn source_frame_projected_return_keeps_only_unwritten_continuation_leaves() {
         ))))
     ));
 
-    // The retained tuple argument is not admitted by the KIR importer. Exercise
-    // only the unchanged selection on its genuine original SSA, not a fabricated
-    // SourceSlots owner or an assertion of admitted projected-return support.
+    // The original SSA owner retains the projected tuple as storage. Verify that
+    // boundary without fabricating scalar SSA or admitted SourceSlots custody.
     let owner =
         super::super::super::invocations::tests::try_source_ssa_transform(transform).unwrap();
     let semantic = owner.source_semantic();
@@ -309,7 +308,14 @@ fn source_frame_projected_return_keeps_only_unwritten_continuation_leaves() {
     let mut projected = 0;
     for &root in semantic.roots() {
         let function = &semantic.functions()[root.index() as usize];
-        let ssa = owner.plan_for_function(root).unwrap().plan();
+        let original = owner.plan_for_function(root).unwrap();
+        let ssa = original.plan();
+        assert!(
+            original
+                .retained_cross_edge_variables()
+                .contains(&Variable::new(4))
+        );
+        assert!(!ssa.promoted_variables().contains(&Variable::new(4)));
         let successors: Vec<Vec<_>> = function
             .blocks()
             .iter()
@@ -370,64 +376,66 @@ fn source_frame_projected_return_keeps_only_unwritten_continuation_leaves() {
             let next = destination.edge().target().index() as usize;
             assert_eq!(next, site + 1);
             let mut values = vec![None; function.locals().len()];
-            let mut original = BTreeMap::new();
             for &variable in ssa.live_in(block(site).unwrap()).unwrap() {
                 let value = boundaries
                     .value(block(site).unwrap(), variable, &mut out)
                     .unwrap();
                 values[variable.get() as usize] = Some(value);
-                original.insert(variable.get(), value);
             }
             let events = ssa.resolved_events(block(site).unwrap()).unwrap();
             replay_events(&mut values, events, out.budget).unwrap();
             for &(_, event) in events {
-                match event {
-                    Event::Define { variable, value } => {
-                        original.insert(variable.get(), value);
-                    }
-                    Event::Kill { variable, .. } => {
-                        original.remove(&variable.get());
-                    }
-                    Event::Use { .. } => (),
-                }
+                let variable = match event {
+                    Event::Define { variable, .. }
+                    | Event::Kill { variable, .. }
+                    | Event::Use { variable, .. } => variable,
+                };
+                assert_ne!(variable, Variable::new(4));
             }
             assert!(
-                ssa.live_in(block(next).unwrap())
+                !ssa.live_in(block(next).unwrap())
                     .unwrap()
                     .contains(&Variable::new(4))
             );
+            assert_eq!(values[4], None);
             let cut = ComponentCut {
                 block: next,
                 overwritten: Some((0, 1)),
             };
-            // Every path to the real bool use crosses only the second field-0
-            // return; leaf 1 is untouched while leaf 0 is overwritten.
-            let needed = boolean.projections()[0].kind() == Projection::Field(1);
-            let selected = select_demand(&values, Variable::new(4), cut, true, needed)
-                .unwrap()
-                .unwrap();
-            assert_eq!(selected.value, original[&4]);
-            assert_eq!(selected.components, cut);
-            assert!(
-                select_demand(&values, Variable::new(4), cut, true, false)
-                    .unwrap()
-                    .is_none()
-            );
-            assert!(
-                select_demand(
-                    &values,
-                    Variable::new(4),
-                    ComponentCut::at(next),
-                    true,
-                    true
-                )
-                .unwrap()
-                .is_none()
-            );
+            assert!(matches!(
+                select_demand(&values, Variable::new(4), cut, true, true),
+                Err(Error::Statement(
+                    "original frame demand differs from its retained caller SSA"
+                ))
+            ));
             projected += 1;
         }
     }
     assert_eq!(projected, 4);
+
+    // Synthetic selection-only inputs cover the pure branch; these values do
+    // not represent the unsupported retained tuple above or an admitted owner.
+    let values = [Some(value(0))];
+    let variable = Variable::new(0);
+    let cut = ComponentCut {
+        block: 1,
+        overwritten: Some((0, 1)),
+    };
+    let selected = select_demand(&values, variable, cut, true, true)
+        .unwrap()
+        .unwrap();
+    assert_eq!(selected.value, value(0));
+    assert_eq!(selected.components, cut);
+    assert!(
+        select_demand(&values, variable, cut, true, false)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        select_demand(&values, variable, ComponentCut::at(1), true, true)
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
