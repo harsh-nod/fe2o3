@@ -18,12 +18,19 @@ proof fn invocation_source_plain_aggregate_install_frame_v260(
     hide(invocation_source_aggregate_well_formed_v42);
     hide(invocation_source_aggregate_install_v42);
     hide(invocation_source_byte_put_local_v36);
+    hide(invocation_source_logical_write_v38);
+    hide(invocation_source_execution_lease_current_v170);
+    hide(invocation_source_byte_refused_v36);
     assert(invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Undefined)
         == (InvocationSourceByteStateV36 {
             machine: MemoryStateV30 { values: source.machine.values.update(
                 destination, MemoryValueV30::Undefined), ..source.machine },
             logical: invocation_source_logical_write_v38(source.logical, destination), ..source })) by {
         reveal(invocation_source_byte_put_local_v36);
+    }
+    assert(invocation_source_logical_write_v38(source.logical, destination).aggregates
+        == source.logical.aggregates.remove(destination)) by {
+        reveal(invocation_source_logical_write_v38);
     }
     assert(source.logical.aggregates.remove(destination).insert(destination, aggregate)
         =~= source.logical.aggregates.insert(destination, aggregate));
@@ -43,6 +50,11 @@ proof fn invocation_context_marker_aggregate_well_formed_v260(source_type: int)
     hide(invocation_source_aggregate_leaf_count_v42);
     hide(invocation_source_aggregate_leaf_path_v42);
     hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_byte_value_typed_v36);
+    assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Unit, 0)) by {
+        reveal(invocation_source_byte_value_typed_v36);
+    }
     let leaves = Map::empty()
         .insert(seq![0int], MemoryValueV30::Unit)
         .insert(seq![1int], MemoryValueV30::Unit)
@@ -54,12 +66,16 @@ proof fn invocation_context_marker_aggregate_well_formed_v260(source_type: int)
             && path == invocation_source_aggregate_leaf_path_v42(source_type, ordinal)
             && invocation_source_byte_value_typed_v36(leaves[path],
                 invocation_source_aggregate_leaf_bits_v42(source_type, ordinal)) by {
-        if path == seq![0int] { assert(invocation_source_aggregate_leaf_path_v42(source_type, 0) == path); }
-        else if path == seq![1int] { assert(invocation_source_aggregate_leaf_path_v42(source_type, 1) == path); }
-        else if path == seq![2int] { assert(invocation_source_aggregate_leaf_path_v42(source_type, 2) == path); }
-        else if path == seq![3int] { assert(invocation_source_aggregate_leaf_path_v42(source_type, 3) == path); }
-        else { assert(path == seq![4int]); assert(invocation_source_aggregate_leaf_path_v42(source_type, 4) == path); }
+        let ordinal = if path == seq![0int] { 0int }
+            else if path == seq![1int] { 1int }
+            else if path == seq![2int] { 2int }
+            else if path == seq![3int] { 3int } else { 4int };
+        assert(0 <= ordinal < 5 && path == seq![ordinal]);
+        assert(invocation_source_aggregate_leaf_path_v42(source_type, ordinal) == path);
+        assert(invocation_source_aggregate_leaf_bits_v42(source_type, ordinal) == 0);
+        assert(leaves[path] == MemoryValueV30::Unit);
     }
+    reveal(invocation_source_aggregate_well_formed_v42);
 }
 
 proof fn invocation_checked_add_aggregate_complete_v260(source_type: int, left: int, right: int)
@@ -80,6 +96,19 @@ proof fn invocation_checked_add_aggregate_complete_v260(source_type: int, left: 
     hide(invocation_source_aggregate_leaf_count_v42);
     hide(invocation_source_aggregate_leaf_path_v42);
     hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_complete_v42);
+    hide(invocation_source_byte_value_typed_v36);
+    hide(memory_value_modulus_v30);
+    assert(invocation_source_byte_value_typed_v36(
+        MemoryValueV30::Scalar((left + right) % 4294967296), 32)
+        && invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(
+            if left + right >= 4294967296 { 1int } else { 0int }), 1)) by {
+        reveal(invocation_source_byte_value_typed_v36);
+        reveal(memory_value_modulus_v30);
+    }
+    assert((seq![0int])[0] == 0 && (seq![1int])[0] == 1);
+    assert(seq![0int] != seq![1int]);
     let leaves = Map::empty()
         .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
         .insert(seq![1int], MemoryValueV30::Scalar(
@@ -91,15 +120,20 @@ proof fn invocation_checked_add_aggregate_complete_v260(source_type: int, left: 
                 invocation_source_aggregate_leaf_bits_v42(source_type, ordinal)) by {
         if path == seq![0int] {
             assert(invocation_source_aggregate_leaf_path_v42(source_type, 0) == path);
+            assert(leaves[path] == MemoryValueV30::Scalar((left + right) % 4294967296));
         } else {
             assert(path == seq![1int]);
             assert(invocation_source_aggregate_leaf_path_v42(source_type, 1) == path);
+            assert(leaves[path] == MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int }));
         }
     }
     assert forall|ordinal: int| 0 <= ordinal < 2 implies
         leaves.contains_key(invocation_source_aggregate_leaf_path_v42(source_type, ordinal)) by {
         if ordinal != 0 { assert(ordinal == 1); }
     }
+    reveal(invocation_source_aggregate_well_formed_v42);
+    reveal(invocation_source_aggregate_complete_v42);
 }
 
 proof fn invocation_source_context_issue_frame_v262(

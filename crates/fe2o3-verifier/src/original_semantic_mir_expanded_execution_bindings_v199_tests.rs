@@ -418,6 +418,47 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         install.split_once("    requires ").unwrap().1.split_once("    ensures ").unwrap().0,
         "source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),\n        invocation_source_aggregate_well_formed_v42(aggregate), aggregate.execution_lease.is_none(),\n"
     );
+    let install_body = source
+        .split_once("proof fn invocation_source_plain_aggregate_install_frame_v260(")
+        .unwrap().1
+        .split_once("proof fn invocation_context_marker_aggregate_well_formed_v260(")
+        .unwrap().0;
+    for hidden in [
+        "invocation_source_logical_write_v38",
+        "invocation_source_execution_lease_current_v170",
+        "invocation_source_byte_refused_v36",
+    ] {
+        assert!(install_body.contains(&format!("hide({hidden});")));
+    }
+    assert!(install_body.contains(
+        "assert(invocation_source_logical_write_v38(source.logical, destination).aggregates\n        == source.logical.aggregates.remove(destination)) by {\n        reveal(invocation_source_logical_write_v38);"
+    ));
+    let marker_body = source
+        .split_once("proof fn invocation_context_marker_aggregate_well_formed_v260(")
+        .unwrap().1
+        .split_once("proof fn invocation_checked_add_aggregate_complete_v260(")
+        .unwrap().0;
+    let checked_shape_body = source
+        .split_once("proof fn invocation_checked_add_aggregate_complete_v260(")
+        .unwrap().1
+        .split_once("proof fn invocation_source_context_issue_frame_v262(")
+        .unwrap().0;
+    for body in [marker_body, checked_shape_body] {
+        assert!(body.contains("hide(invocation_source_aggregate_well_formed_v42);"));
+        assert!(body.contains("hide(invocation_source_byte_value_typed_v36);"));
+        assert!(body.contains("reveal(invocation_source_aggregate_well_formed_v42);"));
+        assert!(body.contains("reveal(invocation_source_byte_value_typed_v36);"));
+    }
+    assert!(marker_body.contains(
+        "assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Unit, 0)) by {"
+    ));
+    assert!(marker_body.contains("assert(0 <= ordinal < 5 && path == seq![ordinal]);"));
+    assert!(marker_body.contains("assert(leaves[path] == MemoryValueV30::Unit);"));
+    assert!(checked_shape_body.contains("hide(memory_value_modulus_v30);"));
+    assert!(checked_shape_body.contains("assert(seq![0int] != seq![1int]);"));
+    assert!(checked_shape_body.contains(
+        "if left + right >= 4294967296 { 1int } else { 0int }), 1)) by {\n        reveal(invocation_source_byte_value_typed_v36);\n        reveal(memory_value_modulus_v30);"
+    ));
     let frame = source
         .split_once("proof fn invocation_context_issue_fresh_preserves_frame_v259(")
         .unwrap()
