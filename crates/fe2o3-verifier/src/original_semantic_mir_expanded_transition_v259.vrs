@@ -1,5 +1,25 @@
 // Actual transition footprints for the expanded paired caller. A footprint is
 // not permission to preserve a live reference whose origin is overwritten.
+proof fn invocation_source_logical_write_aggregates_v268(
+    logical: InvocationSourceLogicalV38, local: int,
+)
+    ensures invocation_source_logical_write_v38(logical, local).aggregates
+        == logical.aggregates.remove(local),
+{
+    reveal(invocation_source_logical_write_v38);
+}
+
+proof fn invocation_checked_add_values_typed_v268(left: int, right: int)
+    requires 0 <= left < 4294967296, 0 <= right < 4294967296,
+    ensures invocation_source_byte_value_typed_v36(
+        MemoryValueV30::Scalar((left + right) % 4294967296), 32)
+        && invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(
+            if left + right >= 4294967296 { 1int } else { 0int }), 1),
+{
+    reveal(invocation_source_byte_value_typed_v36);
+    reveal(memory_value_modulus_v30);
+}
+
 proof fn invocation_source_plain_aggregate_install_frame_v260(
     source: InvocationSourceByteStateV36, destination: int, aggregate: InvocationSourceAggregateV42,
 )
@@ -28,10 +48,7 @@ proof fn invocation_source_plain_aggregate_install_frame_v260(
             logical: invocation_source_logical_write_v38(source.logical, destination), ..source })) by {
         reveal(invocation_source_byte_put_local_v36);
     }
-    assert(invocation_source_logical_write_v38(source.logical, destination).aggregates
-        == source.logical.aggregates.remove(destination)) by {
-        reveal(invocation_source_logical_write_v38);
-    }
+    invocation_source_logical_write_aggregates_v268(source.logical, destination);
     assert(source.logical.aggregates.remove(destination).insert(destination, aggregate)
         =~= source.logical.aggregates.insert(destination, aggregate));
     reveal(invocation_source_aggregate_install_v42);
@@ -100,13 +117,7 @@ proof fn invocation_checked_add_aggregate_complete_v260(source_type: int, left: 
     hide(invocation_source_aggregate_complete_v42);
     hide(invocation_source_byte_value_typed_v36);
     hide(memory_value_modulus_v30);
-    assert(invocation_source_byte_value_typed_v36(
-        MemoryValueV30::Scalar((left + right) % 4294967296), 32)
-        && invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(
-            if left + right >= 4294967296 { 1int } else { 0int }), 1)) by {
-        reveal(invocation_source_byte_value_typed_v36);
-        reveal(memory_value_modulus_v30);
-    }
+    invocation_checked_add_values_typed_v268(left, right);
     assert((seq![0int])[0] == 0 && (seq![1int])[0] == 1);
     assert(seq![0int] != seq![1int]);
     let leaves = Map::empty()

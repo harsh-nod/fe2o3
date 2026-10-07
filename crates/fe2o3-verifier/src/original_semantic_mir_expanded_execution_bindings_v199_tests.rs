@@ -381,7 +381,21 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 17);
+    assert_eq!(source.matches("proof fn ").count(), 19);
+    let logical_projection = source
+        .split_once("proof fn invocation_source_logical_write_aggregates_v268(")
+        .unwrap().1
+        .split_once("\n{\n")
+        .unwrap().0;
+    assert_eq!(logical_projection,
+        "\n    logical: InvocationSourceLogicalV38, local: int,\n)\n    ensures invocation_source_logical_write_v38(logical, local).aggregates\n        == logical.aggregates.remove(local),");
+    let checked_values = source
+        .split_once("proof fn invocation_checked_add_values_typed_v268(")
+        .unwrap().1
+        .split_once("\n{\n")
+        .unwrap().0;
+    assert_eq!(checked_values,
+        "left: int, right: int)\n    requires 0 <= left < 4294967296, 0 <= right < 4294967296,\n    ensures invocation_source_byte_value_typed_v36(\n        MemoryValueV30::Scalar((left + right) % 4294967296), 32)\n        && invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(\n            if left + right >= 4294967296 { 1int } else { 0int }), 1),");
     let replay = source
         .split_once("proof fn invocation_source_checked_event_replays_v264(")
         .unwrap()
@@ -430,9 +444,10 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     ] {
         assert!(install_body.contains(&format!("hide({hidden});")));
     }
-    assert!(install_body.contains(
-        "assert(invocation_source_logical_write_v38(source.logical, destination).aggregates\n        == source.logical.aggregates.remove(destination)) by {\n        reveal(invocation_source_logical_write_v38);"
-    ));
+    assert_eq!(install_body.matches(
+        "invocation_source_logical_write_aggregates_v268(source.logical, destination);"
+    ).count(), 1);
+    assert!(!install_body.contains("reveal(invocation_source_logical_write_v38);"));
     let marker_body = source
         .split_once("proof fn invocation_context_marker_aggregate_well_formed_v260(")
         .unwrap().1
@@ -447,8 +462,8 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         assert!(body.contains("hide(invocation_source_aggregate_well_formed_v42);"));
         assert!(body.contains("hide(invocation_source_byte_value_typed_v36);"));
         assert!(body.contains("reveal(invocation_source_aggregate_well_formed_v42);"));
-        assert!(body.contains("reveal(invocation_source_byte_value_typed_v36);"));
     }
+    assert!(marker_body.contains("reveal(invocation_source_byte_value_typed_v36);"));
     assert!(marker_body.contains(
         "assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Unit, 0)) by {"
     ));
@@ -456,9 +471,11 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     assert!(marker_body.contains("assert(leaves[path] == MemoryValueV30::Unit);"));
     assert!(checked_shape_body.contains("hide(memory_value_modulus_v30);"));
     assert!(checked_shape_body.contains("assert(seq![0int] != seq![1int]);"));
-    assert!(checked_shape_body.contains(
-        "if left + right >= 4294967296 { 1int } else { 0int }), 1)) by {\n        reveal(invocation_source_byte_value_typed_v36);\n        reveal(memory_value_modulus_v30);"
-    ));
+    assert_eq!(checked_shape_body.matches(
+        "invocation_checked_add_values_typed_v268(left, right);"
+    ).count(), 1);
+    assert!(!checked_shape_body.contains("reveal(invocation_source_byte_value_typed_v36);"));
+    assert!(!checked_shape_body.contains("reveal(memory_value_modulus_v30);"));
     let frame = source
         .split_once("proof fn invocation_context_issue_fresh_preserves_frame_v259(")
         .unwrap()
