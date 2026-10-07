@@ -875,6 +875,43 @@ fn production_worker_v3_verifier_is_sealed_and_synthetic_authority_is_test_only(
     assert!(!default_dependencies.contains("fe2o3-host/worker-v3-verifier-test-support"));
 }
 
+fn require_fixed_production_plan_fields(source: &str) -> Result<(), String> {
+    let file = syn::parse_file(source).map_err(|error| error.to_string())?;
+    let plans: Vec<_> = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Struct(plan) if plan.ident == "ProductionCargoPlan" => Some(plan),
+            _ => None,
+        })
+        .collect();
+    let [plan] = plans.as_slice() else {
+        return Err("expected one fixed ProductionCargoPlan struct".into());
+    };
+    if !plan.generics.params.is_empty() || plan.generics.where_clause.is_some() {
+        return Err("production plan must not have generic route parameters".into());
+    }
+    let syn::Fields::Named(fields) = &plan.fields else {
+        return Err("production plan must have named device and host fields".into());
+    };
+    if fields.named.len() != 2 {
+        return Err("production plan must contain only device and host".into());
+    }
+    for (field, expected) in fields.named.iter().zip(["device", "host"]) {
+        let syn::Type::Path(path) = &field.ty else {
+            return Err("production phases must use the fixed CargoPhase type".into());
+        };
+        if field.ident.as_ref().is_none_or(|name| name != expected)
+            || !matches!(&field.vis, syn::Visibility::Inherited)
+            || path.qself.is_some()
+            || !wrapper_path_is(&path.path, "CargoPhase")
+        {
+            return Err("production phases must be private device/host CargoPhase fields".into());
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn production_build_has_one_fixed_device_then_host_plan() {
     let source = include_str!("../src/main.rs");
@@ -886,7 +923,35 @@ fn production_build_has_one_fixed_device_then_host_plan() {
     assert!(plan.contains("PRODUCTION_GFX942_RUSTC_TARGET_V1"));
     assert!(plan.contains("reject_caller_target"));
     assert!(!plan.contains("enum Pipeline"));
-    assert!(!plan.contains("selector"));
+    require_fixed_production_plan_fields(plan).expect("fixed device/host production plan");
+}
+
+#[test]
+fn production_plan_shape_rejects_route_fields_without_banning_host_selector_checks() {
+    let fixed = "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }";
+    require_fixed_production_plan_fields(fixed).unwrap();
+    require_fixed_production_plan_fields(
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }
+         fn reject_host_selector(selector: &str) { assert_ne!(selector, \"--all-targets\"); }",
+    )
+    .unwrap();
+    for changed in [
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase, selector: bool }",
+        "struct ProductionCargoPlan { device: CargoPhase }",
+        "struct ProductionCargoPlan { host: CargoPhase, device: CargoPhase }",
+        "struct ProductionCargoPlan { device: Option<CargoPhase>, host: CargoPhase }",
+        "struct ProductionCargoPlan { pub device: CargoPhase, host: CargoPhase }",
+        "struct ProductionCargoPlan(CargoPhase, CargoPhase);",
+        "enum ProductionCargoPlan { Device, Host }",
+        "struct ProductionCargoPlan<T> { device: CargoPhase, host: CargoPhase }",
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }
+         struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }",
+    ] {
+        assert!(
+            require_fixed_production_plan_fields(changed).is_err(),
+            "{changed}"
+        );
+    }
 }
 
 #[test]
