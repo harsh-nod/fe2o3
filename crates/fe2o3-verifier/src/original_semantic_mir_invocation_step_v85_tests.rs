@@ -251,7 +251,28 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                     assert!(!record.contains("forall|"));
                                     assert!(record.contains(&format!("hide(invocation_source_enter_{root}_{}_v36);", call.child)));
                                     assert!(record.contains("hide(invocation_source_value_evaluate_v42);"));
-                                    assert!(!record.contains("reveal(invocation_source_enter_"));
+                                    assert_eq!(record.matches("reveal(invocation_source_enter_").count(), 1);
+                                    let record_body = record.split_once("\n{\n").unwrap().1;
+                                    assert!(record_body.contains(&format!("assert(invocation_source_active_{root}_{}_v36(source));", hint.instance)));
+                                    assert!(record_body.contains("let guarded_0 = if source.logical.execution_pending.dom().len() == 0 { source } else { invocation_source_byte_refused_v36(source) };"));
+                                    assert!(record_body.contains(&format!("hide(invocation_source_entry_refuses_{root}_{}_v167);", call.child)));
+                                    assert!(record_body.contains(&format!("hide(invocation_source_entry_body_{root}_{}_v167);", call.child)));
+                                    assert!(record_body.contains(&format!("assert(guarded_{}.machine.valid) by {{\n  reveal(invocation_source_enter_{root}_{}_v36);", call.arguments.len(), call.child)));
+                                    assert_eq!(record_body.matches("invocation_source_entry_select_success_v167(").count(), 1);
+                                    let mut preceding = record_body.find("invocation_source_entry_select_success_v167(").unwrap();
+                                    for (ordinal, &(local, moved, bits)) in call.arguments.iter().enumerate().rev() {
+                                        assert!(!moved);
+                                        assert!(record_body.contains(&format!("let evaluated_{ordinal} = invocation_source_value_evaluate_v42(guarded_{ordinal}, InvocationSourceOperandV36::Scalar {{ value: InvocationSourceByteValueV36::Local {{ local: {local}int, moved: false }}, bits: {bits}int }}, {root}, {}, invocation_runtime_little_endian_v36());", hint.instance)));
+                                        let bridge = format!("invocation_source_scalar_copy_valid_identity_v164(guarded_{ordinal}, {local}, {bits}, {root}, {}, invocation_runtime_little_endian_v36());\n assert(guarded_{ordinal}.machine.valid);", hint.instance);
+                                        assert_eq!(record_body.matches(&bridge).count(), 1);
+                                        let at = record_body.find(&bridge).unwrap();
+                                        assert!(preceding < at);
+                                        preceding = at;
+                                    }
+                                    assert_eq!(record_body.matches("invocation_source_scalar_copy_valid_identity_v164(").count(), call.arguments.len());
+                                    let pending = record_body.find("assert(source.logical.execution_pending.dom().len() == 0);").unwrap();
+                                    assert!(preceding < pending);
+                                    assert!(record_body[pending..].contains("assert(guarded_0 == source);"));
                                     assert!(!record.contains("invocation_source_entry_initialize_v166"));
                                     assert!(record_conclusions.contains(&format!("result.source == invocation_source_enter_{root}_{}_v36(copied_{}, entered_arguments, invocation_runtime_little_endian_v36())", call.child, call.arguments.len())));
                                     assert!(record_conclusions.contains(&format!("result.returned.is_none() && result.observations.len() == 0 && result.operands.len() == {}", call.arguments.len())));
