@@ -98,6 +98,12 @@ fn original_execution_exclusive_call_context_laws_use_complete_admitted_schema()
         assert!(model.contains("spec fn byte_micro_step_0_v30("));
         assert_eq!(LAWS.matches("proof fn ").count(), 30);
         assert_eq!(FIELD_LAWS.matches("proof fn ").count(), 11);
+        assert_eq!(
+            model
+                .matches("== (InvocationSourceProductAtomV282::Descriptor { recipe, snapshot })")
+                .count(),
+            2
+        );
         for forbidden in ["assume(", "admit(", "external_body", "uninterpreted"] {
             assert!(!LAWS.contains(forbidden));
             assert!(!WITNESS.contains(forbidden));

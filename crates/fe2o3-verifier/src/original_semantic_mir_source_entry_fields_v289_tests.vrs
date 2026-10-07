@@ -150,7 +150,7 @@ proof fn entry_field_descriptor_recipe_preserved_v289(
         invocation_source_entry_field_v289(source, InvocationSourceValueV42::Product(value),
             parent, field, child, little_endian) == Some(projected),
         value.components.contains_key(seq![field]),
-        value.components[seq![field]] == InvocationSourceProductAtomV282::Descriptor { recipe, snapshot },
+        value.components[seq![field]] == (InvocationSourceProductAtomV282::Descriptor { recipe, snapshot }),
         !invocation_source_product_type_v282(child),
         !invocation_source_product_composite_v282(child),
     ensures projected.value == InvocationSourceValueV42::Descriptor(snapshot),
@@ -167,7 +167,7 @@ proof fn entry_field_descriptor_recipe_preserved_v289(
         .map(|path: Seq<int>| path.drop_first()),
         |path: Seq<int>| value.components[prefix + path]);
     assert(components.contains_key(seq![]));
-    assert(components[seq![]] == InvocationSourceProductAtomV282::Descriptor { recipe, snapshot });
+    assert(components[seq![]] == (InvocationSourceProductAtomV282::Descriptor { recipe, snapshot }));
     assert(invocation_source_product_unpack_v282(child, components)
         == Some(InvocationSourceValueV42::Descriptor(snapshot)));
 }
