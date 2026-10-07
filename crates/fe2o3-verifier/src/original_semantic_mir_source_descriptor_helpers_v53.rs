@@ -171,13 +171,9 @@ pub(in super::super) fn entry_recipe(
         return Ok(None);
     }
     out.budget.charge_work(5)?;
-    let LocalRole::Argument(argument) = declaration.role() else {
-        return Err(mismatch());
-    };
-    if instance == 0
-        || row.incoming.is_none()
-        || function.abi().source_input_types().get(argument as usize) != Some(&declaration.ty())
-    {
+    let expected_origin =
+        super::super::source_enter::argument_origin(owner.source_semantic(), function, local, out)?;
+    if instance == 0 || row.incoming.is_none() {
         return Err(unsupported());
     }
     let occurrences = owner
@@ -188,9 +184,7 @@ pub(in super::super) fn entry_recipe(
     for entry in occurrences.entry_definitions() {
         out.budget.charge_work(3)?;
         if entry.variable().get() == local.index() {
-            if entry.origin()
-                != fe2o3_pliron::ProductionSemanticSsaEntryOriginV1::Argument(argument)
-            {
+            if entry.origin() != expected_origin {
                 return Err(mismatch());
             }
             if found.replace(entry.value().ok_or_else(mismatch)?).is_some() {
@@ -290,6 +284,7 @@ pub(in super::super) fn headers() -> usize {
         + h::<Option<Recipe>>()
         + h::<fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>>()
         + h::<Option<fe2o3_mir_model::SsaValueV1>>()
+        + super::super::source_enter::argument_origin_headers()
         + 24 * size_of::<usize>()
         + 24 * size_of::<&()>()
 }
@@ -334,6 +329,7 @@ pub(in super::super) fn header_oracle() -> usize {
         + h::<Option<RecipeFields>>()
         + h::<fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>>()
         + h::<Option<fe2o3_mir_model::SsaValueV1>>()
+        + super::super::source_enter::argument_origin_header_oracle()
         + 24 * size_of::<usize>()
         + 24 * size_of::<&()>()
 }

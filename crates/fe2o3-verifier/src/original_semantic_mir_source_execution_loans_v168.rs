@@ -271,16 +271,9 @@ pub(in super::super) fn entry_recipe_exact(
     if nominal_reference(owner.source_semantic().types(), declaration.ty())?.is_none() {
         return Ok(None);
     }
-    let fe2o3_mir_model::semantic_mir_v1::SemanticLocalRoleV1::Argument(argument) =
-        declaration.role()
-    else {
-        return Err(mismatch());
-    };
-    if instance == 0
-        || !row.active
-        || row.incoming.is_none()
-        || function.abi().source_input_types().get(argument as usize) != Some(&declaration.ty())
-    {
+    let expected_origin =
+        super::super::source_enter::argument_origin(owner.source_semantic(), function, local, out)?;
+    if instance == 0 || !row.active || row.incoming.is_none() {
         return Err(unsupported());
     }
     let occurrences = owner
@@ -291,8 +284,7 @@ pub(in super::super) fn entry_recipe_exact(
     for entry in occurrences.entry_definitions() {
         out.budget.charge_work(3)?;
         if entry.variable().get() == local.index() {
-            if entry.origin()
-                != fe2o3_pliron::ProductionSemanticSsaEntryOriginV1::Argument(argument)
+            if entry.origin() != expected_origin
                 || found.replace(entry.value().ok_or_else(mismatch)?).is_some()
             {
                 return Err(mismatch());
@@ -533,6 +525,7 @@ pub(in super::super) fn headers() -> usize {
         + h::<Option<ExecutionOperand>>()
         + h::<Endpoint<'_, '_>>()
         + h::<fe2o3_mir_model::SsaValueV1>()
+        + super::super::source_enter::argument_origin_headers()
         + 32 * size_of::<usize>()
         + 24 * size_of::<&()>()
 }

@@ -5,11 +5,107 @@ use fe2o3_mir_model::semantic_mir_v1::*;
 const LIMIT: usize = 100_000_000;
 const FLOOR: usize = super::super::super::invocations::tests::FLOOR;
 
+pub(super) fn argument_origin_header_oracle() -> usize {
+    #[allow(dead_code)]
+    enum OriginFields {
+        Argument(u32),
+        RustCallTupleField { argument: u32, field: u32 },
+        ImplicitCapability,
+    }
+    fn h<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    assert_eq!(
+        size_of::<OriginFields>(),
+        size_of::<fe2o3_pliron::ProductionSemanticSsaEntryOriginV1>()
+    );
+    assert_eq!(
+        std::mem::align_of::<OriginFields>(),
+        std::mem::align_of::<fe2o3_pliron::ProductionSemanticSsaEntryOriginV1>()
+    );
+    h::<&AdmittedInertSemanticMirV1>()
+        + h::<&Function>()
+        + h::<&mut Writer<'_, '_>>()
+        + h::<SemanticLocalIdV1>()
+        + h::<&SemanticLocalDeclV1>()
+        + h::<LocalRole>()
+        + h::<SemanticExternAbiV1>()
+        + h::<SemanticTypeIdV1>()
+        + h::<&SemanticTypeDeclV1>()
+        + h::<&Shape>()
+        + h::<&SemanticAggregateTypeV1>()
+        + h::<Option<&SemanticTypeIdV1>>()
+        + h::<OriginFields>()
+        + 3 * h::<u32>()
+        + 3 * h::<usize>()
+}
+
 #[derive(Clone, Copy)]
 enum Form {
     Unit,
     EmptyTuple,
     NonemptyTuple,
+    ScalarTuple,
+    NestedTuple,
+}
+
+fn argument_operand(
+    ty: SemanticTypeIdV1,
+    types: &[SemanticTypeDeclV1],
+    locals: &mut Vec<SemanticLocalDeclV1>,
+    statements: &mut Vec<SemanticStatementV1>,
+    source: SemanticSourceProvenanceV1,
+) -> SemanticOperandV1 {
+    let operands = match types[ty.index() as usize].shape() {
+        Shape::Unit => {
+            return SemanticOperandV1::Constant(SemanticConstantV1::new(
+                ty,
+                SemanticConstantValueV1::ZeroSized,
+            ));
+        }
+        Shape::Tuple(tuple) if tuple.fields().is_empty() => {
+            return SemanticOperandV1::Constant(SemanticConstantV1::new(
+                ty,
+                SemanticConstantValueV1::ZeroSized,
+            ));
+        }
+        Shape::Tuple(tuple) => tuple
+            .fields()
+            .iter()
+            .map(|&field| argument_operand(field, types, locals, statements, source))
+            .collect(),
+        _ => {
+            assert_eq!(ty.index(), 0);
+            return SemanticOperandV1::Constant(SemanticConstantV1::new(
+                ty,
+                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(17, 4).unwrap()),
+            ));
+        }
+    };
+    let local = SemanticLocalIdV1::from_index(u32::try_from(locals.len()).unwrap());
+    let mut identity = [250; 32];
+    identity[28..].copy_from_slice(&local.index().to_be_bytes());
+    locals.push(SemanticLocalDeclV1::new(
+        SemanticLocalIdentityV1::from_sha256(identity),
+        ty,
+        LocalRole::Temporary,
+        source,
+    ));
+    let place = SemanticPlaceV1::new(local, vec![], ty).unwrap();
+    statements.push(SemanticStatementV1::new(
+        source,
+        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+            place.clone(),
+            SemanticRvalueV1::new(
+                ty,
+                SemanticRvalueKindV1::Aggregate(
+                    SemanticAggregateRvalueV1::new(SemanticAggregateKindV1::Tuple, operands)
+                        .unwrap(),
+                ),
+            ),
+        )),
+    ));
+    SemanticOperandV1::Move(place)
 }
 
 fn transform(form: Form, types: &mut Vec<SemanticTypeDeclV1>, functions: &mut Vec<Function>) {
@@ -19,28 +115,63 @@ fn transform(form: Form, types: &mut Vec<SemanticTypeDeclV1>, functions: &mut Ve
             .position(|ty| matches!(ty.shape(), Shape::Unit))
             .unwrap() as u32,
     );
+    let nested = if matches!(form, Form::NestedTuple) {
+        let ty = SemanticTypeIdV1::from_index(types.len() as u32);
+        let scalar = SemanticBackendScalarV1::initialized(
+            SemanticBackendPrimitiveV1::integer(false, 32, 4),
+            SemanticScalarValidityRangeV1::new(0, u32::MAX.into()),
+        );
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256([245; 32]),
+            SemanticLayoutIdentityV1::from_sha256([246; 32]),
+            SemanticTypeLayoutV1::aggregate_with_backend_repr(
+                Some(8),
+                4,
+                SemanticBackendReprV1::scalar_pair(scalar, scalar),
+                false,
+                SemanticAggregateLayoutV1::new(vec![0, 4], vec![]).unwrap(),
+            )
+            .unwrap(),
+            Shape::Tuple(
+                SemanticAggregateTypeV1::new(vec![SemanticTypeIdV1::from_index(0); 2]).unwrap(),
+            ),
+        ));
+        Some(ty)
+    } else {
+        None
+    };
     let argument = match form {
         Form::Unit => unit,
-        Form::EmptyTuple | Form::NonemptyTuple => {
-            let fields = if matches!(form, Form::NonemptyTuple) {
-                vec![unit]
-            } else {
-                vec![]
+        Form::EmptyTuple | Form::NonemptyTuple | Form::ScalarTuple | Form::NestedTuple => {
+            let fields = match form {
+                Form::NonemptyTuple => vec![unit],
+                Form::ScalarTuple => vec![SemanticTypeIdV1::from_index(0); 2],
+                Form::NestedTuple => vec![unit, nested.unwrap(), SemanticTypeIdV1::from_index(0)],
+                _ => vec![],
+            };
+            let (bytes, alignment, offsets) = match form {
+                Form::ScalarTuple => (8, 4, vec![0, 4]),
+                Form::NestedTuple => (12, 4, vec![0, 0, 8]),
+                _ => (0, 1, vec![0; fields.len()]),
             };
             let ty = SemanticTypeIdV1::from_index(types.len() as u32);
             types.push(SemanticTypeDeclV1::new(
                 SemanticTypeIdentityV1::from_sha256([247; 32]),
                 SemanticLayoutIdentityV1::from_sha256([248; 32]),
                 SemanticTypeLayoutV1::aggregate(
-                    Some(0),
-                    1,
-                    SemanticAggregateLayoutV1::new(vec![0; fields.len()], vec![]).unwrap(),
+                    Some(bytes),
+                    alignment,
+                    SemanticAggregateLayoutV1::new(offsets, vec![]).unwrap(),
                 )
                 .unwrap(),
                 Shape::Tuple(SemanticAggregateTypeV1::new(fields).unwrap()),
             ));
             ty
         }
+    };
+    let field_types = match types[argument.index() as usize].shape() {
+        Shape::Tuple(tuple) => tuple.fields().to_vec(),
+        _ => vec![],
     };
     let helper = functions.len() - 1;
     for (index, function) in functions.iter_mut().enumerate() {
@@ -53,17 +184,32 @@ fn transform(form: Form, types: &mut Vec<SemanticTypeDeclV1>, functions: &mut Ve
             let mut inputs = prior.abi().source_input_types().to_vec();
             inputs.push(argument);
             let mut adjusted = prior.abi().adjusted_arguments().to_vec();
-            if matches!(form, Form::NonemptyTuple) {
+            for (field, &ty) in field_types.iter().enumerate() {
+                let mode = if ty == unit {
+                    SemanticAbiPassModeV1::Ignore
+                } else if Some(ty) == nested {
+                    let SemanticAbiPassModeV1::Direct(attributes) =
+                        prior.abi().adjusted_arguments()[0].mode()
+                    else {
+                        panic!("scalar fixture ABI");
+                    };
+                    SemanticAbiPassModeV1::Pair {
+                        first: *attributes,
+                        second: *attributes,
+                    }
+                } else {
+                    prior.abi().adjusted_arguments()[0].mode().clone()
+                };
                 adjusted.push(SemanticAbiArgumentV1::rust_call_tuple_field(
-                    0,
-                    SemanticAbiValueV1::new(unit, SemanticAbiPassModeV1::Ignore),
+                    field as u32,
+                    SemanticAbiValueV1::new(ty, mode),
                 ));
                 locals.push(SemanticLocalDeclV1::new(
-                    SemanticLocalIdentityV1::from_sha256([249; 32]),
-                    unit,
+                    SemanticLocalIdentityV1::from_sha256([249 + field as u8; 32]),
+                    ty,
                     LocalRole::RustCallTupleField {
                         argument: 2,
-                        field: 0,
+                        field: field as u32,
                     },
                     prior.source(),
                 ));
@@ -87,50 +233,18 @@ fn transform(form: Form, types: &mut Vec<SemanticTypeDeclV1>, functions: &mut Ve
             .with_source_argument_ownership(ownership)
             .unwrap();
         } else {
-            for (block_index, block) in blocks.iter_mut().enumerate() {
+            for block in &mut blocks {
                 if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() {
                     assert_eq!(call.callee().index() as usize, helper);
                     let mut arguments = call.arguments().to_vec();
                     let mut statements = block.statements().to_vec();
-                    let operand = if matches!(form, Form::NonemptyTuple) {
-                        let local = SemanticLocalIdV1::from_index(locals.len() as u32);
-                        locals.push(SemanticLocalDeclV1::new(
-                            SemanticLocalIdentityV1::from_sha256(
-                                [u8::try_from(250 + block_index).unwrap(); 32],
-                            ),
-                            argument,
-                            LocalRole::Temporary,
-                            prior.source(),
-                        ));
-                        let place = SemanticPlaceV1::new(local, vec![], argument).unwrap();
-                        statements.push(SemanticStatementV1::new(
-                            prior.source(),
-                            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
-                                place.clone(),
-                                SemanticRvalueV1::new(
-                                    argument,
-                                    SemanticRvalueKindV1::Aggregate(
-                                        SemanticAggregateRvalueV1::new(
-                                            SemanticAggregateKindV1::Tuple,
-                                            vec![SemanticOperandV1::Constant(
-                                                SemanticConstantV1::new(
-                                                    unit,
-                                                    SemanticConstantValueV1::ZeroSized,
-                                                ),
-                                            )],
-                                        )
-                                        .unwrap(),
-                                    ),
-                                ),
-                            )),
-                        ));
-                        SemanticOperandV1::Move(place)
-                    } else {
-                        SemanticOperandV1::Constant(SemanticConstantV1::new(
-                            argument,
-                            SemanticConstantValueV1::ZeroSized,
-                        ))
-                    };
+                    let operand = argument_operand(
+                        argument,
+                        types,
+                        &mut locals,
+                        &mut statements,
+                        prior.source(),
+                    );
                     arguments.push(operand);
                     *block = SemanticBasicBlockV1::new(
                         block.identity(),
@@ -231,11 +345,25 @@ fn original_rust_call_zero_field_entry_keeps_unit_and_tuple_arguments_without_fa
                         Form::EmptyTuple => {
                             EmptyExpanded::Tuple(function.abi().source_input_types()[2].index())
                         }
-                        Form::NonemptyTuple => unreachable!(),
+                        Form::NonemptyTuple | Form::ScalarTuple | Form::NestedTuple => {
+                            unreachable!()
+                        }
                     };
                     assert!(
                         matches!(entry.arguments[2], Some(EntryArgument::ExpandedEmpty(actual)) if actual == expected)
                     );
+                    assert_eq!(entry.fields.len(), 2);
+                    for ordinal in 0..2 {
+                        let local = function
+                            .locals()
+                            .iter()
+                            .position(|local| local.role() == LocalRole::Argument(ordinal as u32))
+                            .unwrap();
+                        assert!(
+                            matches!(entry.arguments[ordinal], Some(EntryArgument::Whole(index)) if index == ordinal)
+                        );
+                        assert_eq!(entry.fields[ordinal].local, row.locals.start + local);
+                    }
                     let before = out.text.len();
                     entry.emit(out)?;
                     let text = &out.text[before..];
@@ -246,6 +374,8 @@ fn original_rust_call_zero_field_entry_keeps_unit_and_tuple_arguments_without_fa
                         .nth(1)
                         .unwrap();
                     assert!(!body.contains("arguments[2]") && !body.contains("argument_2"));
+                    assert_eq!(body.matches("match arguments[0]").count(), 1);
+                    assert_eq!(body.matches("match arguments[1]").count(), 1);
                     match expected {
                         EmptyExpanded::Unit => assert!(text.contains("InvocationSourceValueV42::Carrier(MemoryValueV30::Unit) => true")),
                         EmptyExpanded::Tuple(ty) => assert!(text.contains(&format!("value.source_type == {ty} && value.execution_lease.is_none() && invocation_source_aggregate_complete_v42(value)"))),
@@ -347,15 +477,305 @@ fn original_rust_call_empty_binding_rejects_wrong_type_ordinal_shape_and_nonempt
 }
 
 #[test]
-fn original_rust_call_nonempty_expansion_remains_an_explicit_typed_refusal() {
-    run(Form::NonemptyTuple, LIMIT, LIMIT, |plan, slots, out| {
+fn original_rust_call_nonempty_expansion_keeps_typed_field_order_and_original_locals() {
+    for form in [Form::NonemptyTuple, Form::ScalarTuple, Form::NestedTuple] {
+        let result = run(form, LIMIT, LIMIT, |plan, slots, out| {
+            for root in 0..2 {
+                for instance in 1..3 {
+                    let row = plan.instance(root, instance, out)?;
+                    let source = plan.source(out)?.source_semantic(out.budget)?;
+                    let function = &source.functions()[row.function.index() as usize];
+                    let ty = function.abi().source_input_types()[2];
+                    let logical = source.logical_arguments_v1(row.function).unwrap();
+                    let argument = logical.source_arguments().nth(2).unwrap();
+                    let ArgumentBinding::ExpandedTuple(locals) = argument.binding() else {
+                        panic!("expanded source argument");
+                    };
+                    let entry = SourceFrameEnter::derive(plan, slots, root, instance, out)?;
+                    assert_eq!(entry.arguments.len(), 3);
+                    assert_eq!(entry.locals.len(), function.locals().len());
+                    assert!(
+                        matches!(entry.arguments[2], Some(EntryArgument::Expanded {ty: found, first: 2, count}) if found == ty.index() && count == locals.len())
+                    );
+                    assert_eq!(entry.fields.len(), 2 + locals.len());
+                    for (field, local) in locals.iter().enumerate() {
+                        let installed = entry.fields[field + 2];
+                        assert_eq!(installed.local, row.locals.start + local.index() as usize);
+                        assert_eq!(
+                            installed.ty,
+                            function.locals()[local.index() as usize].ty().index()
+                        );
+                        assert_eq!(
+                            argument_origin(source, function, *local, out)?,
+                            fe2o3_pliron::ProductionSemanticSsaEntryOriginV1::RustCallTupleField {
+                                argument: 2,
+                                field: field as u32
+                            }
+                        );
+                        if matches!(form, Form::NestedTuple) && field == 1 {
+                            assert!(
+                                matches!(installed.class, Class::Aggregate(ty) if ty == installed.ty)
+                            );
+                            assert_eq!(
+                                slots.aggregate_leaf_count(
+                                    SemanticTypeIdV1::from_index(installed.ty),
+                                    out
+                                )?,
+                                Some(2)
+                            );
+                        }
+                    }
+                    let before = out.text.len();
+                    entry.emit(out)?;
+                    let text = &out.text[before..];
+                    assert!(text.contains("if arguments.len() != 3 { None }"));
+                    assert_eq!(
+                        text.matches(" = invocation_source_entry_field_v289(source, arguments[2],")
+                            .count(),
+                        locals.len()
+                    );
+                    let wrapper = text
+                        .split(&format!(
+                            "spec fn invocation_source_enter_{root}_{instance}_v36("
+                        ))
+                        .nth(1)
+                        .unwrap();
+                    assert_eq!(
+                        wrapper
+                            .matches("invocation_source_entry_arguments_")
+                            .count(),
+                        1
+                    );
+                    assert!(
+                        wrapper.contains("Some(fields) => invocation_source_entry_select_v167")
+                    );
+                    assert!(!text.contains("invocation_source_value_evaluate_v42("));
+                }
+            }
+            Ok(())
+        });
+        result.0.unwrap();
+        assert_eq!(result.2, FLOOR);
+        assert!(result.3 > FLOOR);
+    }
+}
+
+#[test]
+fn original_rust_call_field_bindings_reject_wrong_arity_order_types_and_roles() {
+    run(Form::ScalarTuple, LIMIT, LIMIT, |plan, _, out| {
         let row = plan.instance(0, 1, out)?;
-        assert!(matches!(SourceFrameEnter::derive(plan, slots, 0, 1, out), Err(Error::SourceEntry {
-            root: 0, instance: 1, function: Some(function), argument: Some((2, _)), local: None,
-            phase: "source-entry-expanded-argument", reason: "original MIR byte argument lifetime or payload is not modeled",
-        }) if function == row.function.index()));
+        let source = plan.source(out)?.source_semantic(out.budget)?;
+        let function = &source.functions()[row.function.index() as usize];
+        let ty = function.abi().source_input_types()[2];
+        let logical = source.logical_arguments_v1(row.function).unwrap();
+        let argument = logical.source_arguments().nth(2).unwrap();
+        let ArgumentBinding::ExpandedTuple(fields) = argument.binding() else {
+            panic!("expanded argument");
+        };
+        let shape = source.types()[ty.index() as usize].shape();
+        expanded_field_binding(
+            function,
+            2,
+            ty,
+            shape,
+            fields,
+            argument.source_ownership(),
+            out,
+        )?;
+        let unit = SemanticTypeIdV1::from_index(
+            source
+                .types()
+                .iter()
+                .position(|ty| matches!(ty.shape(), Shape::Unit))
+                .unwrap() as u32,
+        );
+        let wrong_type_shape = Shape::Tuple(SemanticAggregateTypeV1::new(vec![unit; 2]).unwrap());
+        let swapped = [fields[1], fields[0]];
+        let duplicate = [fields[0], fields[0]];
+        let extra = [fields[0], fields[1], fields[1]];
+        let wrong_role = [SemanticLocalIdV1::from_index(0), fields[1]];
+        for (ordinal, input, shape, fields, ownership) in [
+            (1, ty, shape, fields, argument.source_ownership()),
+            (2, unit, shape, fields, argument.source_ownership()),
+            (
+                2,
+                ty,
+                &wrong_type_shape,
+                fields,
+                argument.source_ownership(),
+            ),
+            (2, ty, shape, &fields[..1], argument.source_ownership()),
+            (2, ty, shape, &swapped, argument.source_ownership()),
+            (2, ty, shape, &duplicate, argument.source_ownership()),
+            (2, ty, shape, &extra, argument.source_ownership()),
+            (2, ty, shape, &wrong_role, argument.source_ownership()),
+            (
+                2,
+                ty,
+                shape,
+                fields,
+                SemanticSourceArgumentOwnershipV1::Unspecified,
+            ),
+        ] {
+            assert!(matches!(
+                expanded_field_binding(function, ordinal, input, shape, fields, ownership, out),
+                Err(Error::Statement(
+                    "original MIR byte frame entry differs from its exact invocation"
+                ))
+            ));
+        }
+        assert!(matches!(
+            expanded_field_binding(
+                function,
+                2,
+                ty,
+                &Shape::Unit,
+                fields,
+                argument.source_ownership(),
+                out
+            ),
+            Err(Error::Statement(
+                "original MIR byte argument lifetime or payload is not modeled"
+            ))
+        ));
+        assert!(matches!(
+            argument_origin(source, function, SemanticLocalIdV1::from_index(0), out),
+            Err(Error::Statement(
+                "original MIR byte frame entry differs from its exact invocation"
+            ))
+        ));
         Ok(())
-    }).0.unwrap();
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
+fn original_rust_call_projection_preserves_complete_current_atoms_and_recipe_identity() {
+    let source = include_str!("original_semantic_mir_source_entry_fields_v289.vrs");
+    for required in [
+        "invocation_source_product_child_v282(source_type, field) != Some(result_type)",
+        "InvocationSourceValueV42::Product(value) => value.source_type == source_type",
+        "&& invocation_source_product_complete_v282(value)",
+        "&& invocation_source_product_current_v282(source, value, little_endian)",
+        "value.execution_lease.is_none() && invocation_source_aggregate_complete_v42(value)",
+        "let prefix = seq![field];",
+        "invocation_source_path_prefix_v42(prefix, path)",
+        ".map(|path: Seq<int>| path.drop_first())",
+        "|path: Seq<int>| original[prefix + path]",
+        "!invocation_source_product_components_complete_v282(result_type, components)",
+        "!invocation_source_product_components_current_v282(source, result_type, components, little_endian)",
+        "InvocationSourceProductAtomV282::Descriptor { recipe, .. } => Some(recipe)",
+    ] {
+        assert!(source.contains(required), "{required}");
+    }
+    for forbidden in [
+        "value_evaluate",
+        "put_local",
+        "logical_write",
+        "loan_identity:",
+        "origin_version:",
+        "execution_transfer_install",
+        "assume(",
+        "admit(",
+        "external_body",
+        "uninterpreted",
+    ] {
+        assert!(!source.contains(forbidden), "{forbidden}");
+    }
+    let laws = include_str!("original_semantic_mir_source_entry_fields_v289_tests.vrs");
+    assert_eq!(laws.matches("proof fn entry_field_").count(), 11);
+    for required in [
+        "entry_field_wrong_product_parent_refused_v289",
+        "entry_field_stale_nested_lease_refused_v289",
+        "entry_field_exact_prefix_domain_v289",
+        "entry_field_descriptor_recipe_preserved_v289",
+    ] {
+        assert!(laws.contains(required));
+    }
+    macro_rules! h {
+        ($ty:ty) => {
+            size_of::<$ty>() + 2 * size_of::<Result<$ty>>()
+        };
+    }
+    #[allow(dead_code)]
+    struct ArgumentFields {
+        local: usize,
+        ty: u32,
+        class: Class,
+        descriptor: Option<usize>,
+        bytes: u64,
+        alignment: u32,
+        object: bool,
+    }
+    #[allow(dead_code)]
+    struct BindingFields {
+        argument: usize,
+        field: Option<usize>,
+        local: usize,
+    }
+    #[allow(dead_code)]
+    enum OriginFields {
+        Argument(u32),
+        RustCallTupleField { argument: u32, field: u32 },
+        ImplicitCapability,
+    }
+    #[allow(dead_code)]
+    enum EntryFields {
+        Whole(usize),
+        ExpandedEmpty(EmptyExpanded),
+        Expanded { ty: u32, first: usize, count: usize },
+    }
+    macro_rules! same_layout {
+        ($actual:ty, $mirror:ty) => {
+            assert_eq!(size_of::<$actual>(), size_of::<$mirror>());
+            assert_eq!(
+                std::mem::align_of::<$actual>(),
+                std::mem::align_of::<$mirror>()
+            );
+        };
+    }
+    same_layout!(Argument, ArgumentFields);
+    same_layout!(FieldBinding, BindingFields);
+    same_layout!(EntryArgument, EntryFields);
+    same_layout!(
+        fe2o3_pliron::ProductionSemanticSsaEntryOriginV1,
+        OriginFields
+    );
+    assert_eq!(
+        field_plan_headers(),
+        h!(Vec<ArgumentFields>)
+            + h!(Vec<BindingFields>)
+            + h!(BindingFields)
+            + h!(OriginFields)
+            + h!(std::slice::Iter<'_, BindingFields>)
+            + h!(std::iter::Enumerate<std::slice::Iter<'_, SemanticLocalIdV1>>)
+            + h!((usize, &SemanticLocalIdV1))
+            + h!(
+                std::iter::Enumerate<
+                    std::iter::Zip<
+                        std::slice::Iter<'_, SemanticLocalIdV1>,
+                        std::slice::Iter<'_, SemanticTypeIdV1>,
+                    >,
+                >
+            )
+            + h!((usize, (&SemanticLocalIdV1, &SemanticTypeIdV1)))
+    );
+    assert_eq!(
+        projection_headers(),
+        h!(&ArgumentFields)
+            + h!(&EntryFields)
+            + h!(EntryFields)
+            + h!(&str)
+            + h!(std::slice::Iter<'_, Option<EntryFields>>)
+            + h!(std::iter::Enumerate<std::slice::Iter<'_, Option<EntryFields>>>)
+            + h!((usize, &Option<EntryFields>))
+            + h!(Range<usize>)
+            + h!(Class)
+            + 8 * h!(usize)
+            + 8 * size_of::<&()>()
+    );
+    assert_eq!(argument_origin_headers(), argument_origin_header_oracle());
 }
 
 #[test]
@@ -461,23 +881,30 @@ fn original_rust_call_argument_plan_has_checked_capacity_and_exact_resource_boun
         |plan: &InvocationPlan<'_, '_>, slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>| {
             SourceFrameEnter::derive(plan, slots, 0, 1, out)?.emit(out)
         };
-    let measured = run(Form::EmptyTuple, LIMIT, LIMIT, emit);
-    measured.0.unwrap();
-    let exact = run(Form::EmptyTuple, measured.1, measured.3, emit);
-    exact.0.unwrap();
-    assert_eq!((exact.1, exact.2, exact.3), (measured.1, FLOOR, measured.3));
-    let short_work = run(Form::EmptyTuple, measured.1 - 1, measured.3, emit);
-    assert!(
-        matches!(&short_work.0,
+    for form in [
+        Form::EmptyTuple,
+        Form::NonemptyTuple,
+        Form::ScalarTuple,
+        Form::NestedTuple,
+    ] {
+        let measured = run(form, LIMIT, LIMIT, emit);
+        measured.0.unwrap();
+        let exact = run(form, measured.1, measured.3, emit);
+        exact.0.unwrap();
+        assert_eq!((exact.1, exact.2, exact.3), (measured.1, FLOOR, measured.3));
+        let short_work = run(form, measured.1 - 1, measured.3, emit);
+        assert!(
+            matches!(&short_work.0,
         Err(Error::Source(SourceError::Resource(Resource::Work(error))))
             if error.actual() == measured.1 && error.limit() == measured.1 - 1),
-        "{short_work:?}"
-    );
-    let short_storage = run(Form::EmptyTuple, measured.1, measured.3 - 1, emit);
-    assert!(
-        matches!(&short_storage.0,
+            "{short_work:?}"
+        );
+        let short_storage = run(form, measured.1, measured.3 - 1, emit);
+        assert!(
+            matches!(&short_storage.0,
         Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
             if error.actual() == measured.3 && error.limit() == measured.3 - 1),
-        "{short_storage:?}"
-    );
+            "{short_storage:?}"
+        );
+    }
 }

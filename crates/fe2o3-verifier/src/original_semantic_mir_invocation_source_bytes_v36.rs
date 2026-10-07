@@ -2061,6 +2061,7 @@ pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_source_memory_laws_v51.vrs"),
     include_str!("original_semantic_mir_source_aggregate_values_v42.vrs"),
     include_str!("original_semantic_mir_source_product_values_v282.vrs"),
+    include_str!("original_semantic_mir_source_entry_fields_v289.vrs"),
     include_str!("original_semantic_mir_source_checked_objects_v44.vrs"),
     include_str!("original_semantic_mir_source_aggregate_laws_v42.vrs"),
     include_str!("original_semantic_mir_source_integer_casts_v43.vrs"),

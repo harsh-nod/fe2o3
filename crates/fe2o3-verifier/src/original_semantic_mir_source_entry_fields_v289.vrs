@@ -1,0 +1,52 @@
+// Entry projection reads an already evaluated source argument. It neither
+// evaluates an operand nor creates a loan, lease, descriptor recipe or local.
+struct InvocationSourceEntryFieldV289 {
+    value: InvocationSourceValueV42,
+    descriptor: Option<InvocationSourceDescriptorRecipeV51>,
+}
+
+spec fn invocation_source_entry_field_v289(
+    source: InvocationSourceByteStateV36, argument: InvocationSourceValueV42,
+    source_type: int, field: int, result_type: int, little_endian: bool,
+) -> Option<InvocationSourceEntryFieldV289> {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !invocation_source_product_composite_v282(source_type)
+        || invocation_source_product_child_v282(source_type, field) != Some(result_type) {
+        None
+    } else {
+        let current = match argument {
+            InvocationSourceValueV42::Product(value) => value.source_type == source_type
+                && invocation_source_product_complete_v282(value)
+                && invocation_source_product_current_v282(source, value, little_endian),
+            InvocationSourceValueV42::Aggregate(value) => value.source_type == source_type
+                && value.execution_lease.is_none() && invocation_source_aggregate_complete_v42(value),
+            _ => false,
+        };
+        if !current { None }
+        else { match invocation_source_product_pack_v282(source_type, argument, None) {
+            None => None,
+            Some(original) => {
+                let prefix = seq![field];
+                let components = Map::new(original.dom().filter(|path: Seq<int>|
+                    invocation_source_path_prefix_v42(prefix, path))
+                    .map(|path: Seq<int>| path.drop_first()),
+                    |path: Seq<int>| original[prefix + path]);
+                if !invocation_source_product_components_complete_v282(result_type, components)
+                    || !invocation_source_product_components_current_v282(source, result_type, components, little_endian) {
+                    None
+                } else { match invocation_source_product_unpack_v282(result_type, components) {
+                    None => None,
+                    Some(value) => Some(InvocationSourceEntryFieldV289 {
+                        value,
+                        descriptor: if components.contains_key(seq![]) {
+                            match components[seq![]] {
+                                InvocationSourceProductAtomV282::Descriptor { recipe, .. } => Some(recipe),
+                                _ => None,
+                            }
+                        } else { None },
+                    }),
+                } }
+            },
+        } }
+    }
+}

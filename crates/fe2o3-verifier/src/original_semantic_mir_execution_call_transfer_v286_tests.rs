@@ -8,6 +8,7 @@ const LAWS: &str = include_str!("original_semantic_mir_execution_call_transfer_v
 const WITNESS: &str =
     include_str!("original_semantic_mir_execution_call_transfer_witness_v286_tests.vrs");
 const ENTRY_LAWS: &str = include_str!("original_semantic_mir_source_enter_laws_v85.vrs");
+const FIELD_LAWS: &str = include_str!("original_semantic_mir_source_entry_fields_v289_tests.vrs");
 
 fn generate_law_model(
     plan: &InvocationPlan<'_, '_>,
@@ -59,7 +60,7 @@ fn generate_law_model(
         out,
     )?;
     model.emit_support(out)?;
-    writeln!(out, "{ENTRY_LAWS}\n{LAWS}\n{WITNESS}").map_err(|_| out.error())?;
+    writeln!(out, "{ENTRY_LAWS}\n{LAWS}\n{WITNESS}\n{FIELD_LAWS}").map_err(|_| out.error())?;
     writeln!(out, "proof fn execution_call_actual_context_schema_v286()\n ensures execution_call_witness_installed_v286({}, {}).machine.valid,\n{{\n assert(invocation_source_context_shape_v161({}));\n execution_call_constructed_context_witness_v286({}, {});\n}}",
         context.index(), reference, context.index(), context.index(), reference).map_err(|_| out.error())?;
     model.finish(out)
@@ -85,6 +86,7 @@ fn original_execution_exclusive_call_context_laws_use_complete_admitted_schema()
         assert_eq!(model.matches(LAWS).count(), 1);
         assert_eq!(model.matches(WITNESS).count(), 1);
         assert_eq!(model.matches(ENTRY_LAWS).count(), 1);
+        assert_eq!(model.matches(FIELD_LAWS).count(), 1);
         assert_eq!(
             model
                 .matches("proof fn execution_call_actual_context_schema_v286()")
@@ -95,10 +97,12 @@ fn original_execution_exclusive_call_context_laws_use_complete_admitted_schema()
         assert!(model.contains("spec fn invocation_source_byte_block_0_v36("));
         assert!(model.contains("spec fn byte_micro_step_0_v30("));
         assert_eq!(LAWS.matches("proof fn ").count(), 30);
+        assert_eq!(FIELD_LAWS.matches("proof fn ").count(), 11);
         for forbidden in ["assume(", "admit(", "external_body", "uninterpreted"] {
             assert!(!LAWS.contains(forbidden));
             assert!(!WITNESS.contains(forbidden));
             assert!(!ENTRY_LAWS.contains(forbidden));
+            assert!(!FIELD_LAWS.contains(forbidden));
         }
     });
     result.0.unwrap();

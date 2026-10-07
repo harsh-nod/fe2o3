@@ -58,7 +58,7 @@ fn finite_domain_compatibility_program_retains_equations_and_private_parent_impo
 }
 
 #[test]
-fn finite_domain_compatibility_source_keeps_all_twenty_five_finite_maps() {
+fn finite_domain_compatibility_source_keeps_all_twenty_six_finite_maps() {
     let sources = [
         (super::super::byte_memory_v30::BYTE_MEMORY_V30, 3),
         (
@@ -89,6 +89,10 @@ fn finite_domain_compatibility_source_keeps_all_twenty_five_finite_maps() {
             include_str!("original_semantic_mir_execution_call_transfer_v286.vrs"),
             1,
         ),
+        (
+            include_str!("original_semantic_mir_source_entry_fields_v289.vrs"),
+            1,
+        ),
     ];
     let mut count = 0;
     for (source, expected) in sources {
@@ -100,7 +104,7 @@ fn finite_domain_compatibility_source_keeps_all_twenty_five_finite_maps() {
         assert!(!source.contains("new_assuming_finite"));
         count += expected;
     }
-    assert_eq!(count, 25);
+    assert_eq!(count, 26);
     let logical = include_str!("original_semantic_mir_source_logical_locals_v38.vrs");
     assert!(logical.contains("execution_references: Map::new(logical.execution_references.dom().filter(|i: int| !(begin <= i < end)),\n            |i: int| logical.execution_references[i])"));
     assert!(logical.contains("products: Map::new(logical.products.dom().filter(|i: int| !(begin <= i < end)),\n            |i: int| logical.products[i])"));
