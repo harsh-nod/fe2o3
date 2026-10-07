@@ -546,22 +546,30 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
         let tile = self.slots.tile_owner_v176(out)?;
         let neutral = tile.neutral_source_v162(out.budget)?;
         let descendants = neutral.definition_descendants(row.coordinate, out.budget)?;
-        out.budget.charge_work(1)?;
+        out.budget.charge_work(5)?;
+        let mut facts =
+            RefusalFacts::new(original, row.coordinate, row.ty).descendants(descendants);
         if !descendants.is_empty() {
-            return Ok(Recipe::Actual(self.source_definition(original, out)?));
+            return self
+                .source_definition(original, out)
+                .map(Recipe::Actual)
+                .map_err(|error| trace_refusal(error, RefusalPhase::RecipeDescendants, facts));
         }
         match row.coordinate {
             Definition::BlockArgument { block, .. } => phi(input, original, block, out),
             Definition::Result { operation, result } => {
                 out.budget.charge_work(10)?;
                 let op = &input.operations()[operation_index(input, operation)?];
+                if let OperationKind::Binary { op, .. } = &op.operation.kind {
+                    facts.binary = Some(*op);
+                }
                 let OperationKind::Binary {
                     op: BinaryOp::Checked(CheckedBinaryOperator::Add),
                     lhs,
                     rhs,
                 } = &op.operation.kind
                 else {
-                    return Err(mismatch());
+                    return Err(trace_refusal(mismatch(), RefusalPhase::ErasedRecipe, facts));
                 };
                 if result > 1
                     || op.results.len() != 2
@@ -591,7 +599,7 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                     overflow: result == 1,
                 })
             }
-            _ => Err(mismatch()),
+            _ => Err(trace_refusal(mismatch(), RefusalPhase::ErasedRecipe, facts)),
         }
     }
 
@@ -618,22 +626,34 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
             .functions()
             .get(actual_owner.0 as usize)
             .ok_or_else(mismatch)?;
-        out.budget.charge_work(3)?;
+        out.budget.charge_work(7)?;
+        let mut facts = RefusalFacts::new(original, source.coordinate, source.ty);
+        facts.target_function = Some(actual_owner);
+        facts.target_range = Some((
+            actual_function.definitions.start,
+            actual_function.definitions.end,
+        ));
         if !matches!(source.ty, Type::Scalar(ScalarType::U32 | ScalarType::Bool)) {
-            let index = self.source_transport_definition(original, out)?;
+            let index = self
+                .source_transport_definition(original, out)
+                .map_err(|error| trace_refusal(error, RefusalPhase::TargetLookup, facts))?;
+            facts.target_index = Some(index);
             out.budget.charge_work(1)?;
             if !actual_function.definitions.contains(&index) {
-                return Err(mismatch());
+                return Err(trace_refusal(mismatch(), RefusalPhase::TargetOwner, facts));
             }
             return self.emit_actual_relation(Some(index), width, out);
         }
-        let first = self.reconstruction_recipe(input, original, out)?;
+        let first = self
+            .reconstruction_recipe(input, original, out)
+            .map_err(|error| trace_refusal(error, RefusalPhase::TargetLookup, facts))?;
         if let Recipe::Actual(index) = first {
+            facts.target_index = Some(index);
             out.budget.charge_work(2)?;
             if !actual_function.definitions.contains(&index)
                 || actual.definitions()[index].ty != source.ty
             {
-                return Err(mismatch());
+                return Err(trace_refusal(mismatch(), RefusalPhase::TargetOwner, facts));
             }
             return self.emit_actual_relation(Some(index), width, out);
         }

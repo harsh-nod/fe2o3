@@ -49,16 +49,28 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                 out.budget.charge_work(2)?;
                 let row = input.definitions().get(current).ok_or_else(mismatch)?;
                 let descendants = neutral.definition_descendants(row.coordinate, out.budget)?;
-                out.budget.charge_work(1)?;
+                out.budget.charge_work(5)?;
+                let facts =
+                    RefusalFacts::new(current, row.coordinate, row.ty).descendants(descendants);
                 if !descendants.is_empty() {
-                    return self.source_definition(current, out);
+                    return self.source_definition(current, out).map_err(|error| {
+                        trace_refusal(error, RefusalPhase::TransportDescendants, facts)
+                    });
                 }
                 out.budget.charge_work(2)?;
                 if !matches!(source.ty, Type::Scalar(_)) {
-                    return Err(mismatch());
+                    return Err(trace_refusal(
+                        mismatch(),
+                        RefusalPhase::TransportNonScalar,
+                        facts,
+                    ));
                 }
                 let Definition::BlockArgument { block, .. } = row.coordinate else {
-                    return Err(mismatch());
+                    return Err(trace_refusal(
+                        mismatch(),
+                        RefusalPhase::TransportNotBlockArgument,
+                        facts,
+                    ));
                 };
                 out.budget.charge_work(4)?;
                 let function = input
@@ -99,7 +111,9 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                     incoming = Some(edge.incoming_definition);
                 }
                 out.budget.charge_work(1)?;
-                current = incoming.ok_or_else(mismatch)?;
+                current = incoming.ok_or_else(|| {
+                    trace_refusal(mismatch(), RefusalPhase::TransportIncoming, facts)
+                })?;
             }
             Err(mismatch())
         })

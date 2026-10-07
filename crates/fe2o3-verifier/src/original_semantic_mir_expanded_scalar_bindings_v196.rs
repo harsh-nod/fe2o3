@@ -30,6 +30,10 @@ mod forwarding;
 #[path = "original_semantic_mir_scalar_reconstruction_v254.rs"]
 mod reconstruction;
 
+#[path = "original_semantic_mir_reconstruction_refusal_v285.rs"]
+mod refusal_trace;
+use refusal_trace::{Facts as RefusalFacts, Phase as RefusalPhase, annotate as trace_refusal};
+
 pub(in super::super) struct ExpandedScalarBindingsV196<'target, 'slots, 'view, 'source> {
     slots: &'slots SourceSlots<'view, 'source>,
     target: &'target TileTargetV176<'slots, 'view, 'source>,
@@ -46,6 +50,7 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
     fn headers() -> usize {
         size_of::<Self>()
             + Error::frame_binding_headers_v284()
+            + refusal_trace::headers()
             + 2 * size_of::<Result<Self>>()
             + 3 * size_of::<Definition>()
             + size_of::<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>()
@@ -152,9 +157,15 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             let tile = self.slots.tile_owner_v176(out)?;
             let neutral = tile.neutral_source_v162(out.budget)?;
             let descendants = neutral.definition_descendants(source.coordinate, out.budget)?;
-            out.budget.charge_work(2)?;
+            out.budget.charge_work(6)?;
+            let mut facts =
+                RefusalFacts::new(original, source.coordinate, source.ty).descendants(descendants);
             let [descendant] = descendants else {
-                return Err(mismatch());
+                return Err(trace_refusal(
+                    mismatch(),
+                    RefusalPhase::RetainedCoordinate,
+                    facts,
+                ));
             };
             if descendant.kind != Descendant::Retained {
                 return Err(mismatch());
@@ -206,12 +217,18 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             // Only the checked coordinate locates a value in the actual census.
             let actual = self.target.inventory(out)?;
             out.budget.charge_work(7)?;
-            let index = definition_index(actual, coordinate)?;
+            let index = definition_index(actual, coordinate)
+                .map_err(|error| trace_refusal(error, RefusalPhase::RetainedCoordinate, facts))?;
+            facts.target_index = Some(index);
             let actual = &actual.definitions()[index];
             if actual.value != predecessor.value
                 || compare_type(predecessor.ty, actual.ty, out)? != Ordering::Equal
             {
-                return Err(mismatch());
+                return Err(trace_refusal(
+                    mismatch(),
+                    RefusalPhase::RetainedCoordinate,
+                    facts,
+                ));
             }
             Ok(index)
         })
@@ -240,12 +257,20 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             let tile = self.slots.tile_owner_v176(out)?;
             let neutral = tile.neutral_source_v162(out.budget)?;
             let descendants = neutral.definition_descendants(source.coordinate, out.budget)?;
-            out.budget.charge_work(2)?;
+            out.budget.charge_work(6)?;
+            let facts =
+                RefusalFacts::new(original, source.coordinate, source.ty).descendants(descendants);
             let [descendant] = descendants else {
-                return Err(mismatch());
+                return Err(trace_refusal(
+                    mismatch(),
+                    RefusalPhase::ReplacementLocator,
+                    facts,
+                ));
             };
             if descendant.kind == Descendant::Retained {
-                return self.definition(original, out);
+                return self.definition(original, out).map_err(|error| {
+                    trace_refusal(error, RefusalPhase::ReplacementLocator, facts)
+                });
             }
             let predecessor = neutral.output_inventory(out.budget)?;
             out.budget.charge_work(3)?;
