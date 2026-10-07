@@ -150,6 +150,22 @@ pub enum MixedOptimizerRefinementErrorV26 {
     Execution(crate::FunctionalRefinementVerusExecutionErrorV2),
     Receipt(&'static str),
     Statement(&'static str),
+    /// A refused original frame-entry argument join, without changing admission.
+    SourceEntry {
+        /// Source root and original static call-instance ordinals.
+        root: usize,
+        instance: usize,
+        /// Original semantic function, when its owner lookup succeeded.
+        function: Option<u32>,
+        /// Original ABI argument ordinal and TypeId, when identified.
+        argument: Option<(usize, u32)>,
+        /// Original local ordinal, not a flattened storage coordinate.
+        local: Option<u32>,
+        /// Static join operation, never a source or workload name.
+        phase: &'static str,
+        /// Unchanged diagnostic from the refusing entry interpreter.
+        reason: &'static str,
+    },
     /// An original allocation or argument binding refused its source coordinates.
     SourceDescriptor {
         /// Source root ordinal.
@@ -344,6 +360,7 @@ impl std::error::Error for Error {
             | Self::Receipt(_)
             | Self::SourceReconstruction { .. }
             | Self::SourceFrameBinding { .. }
+            | Self::SourceEntry { .. }
             | Self::SourceStatement { .. }
             | Self::SourceDescriptor { .. }
             | Self::SourceCallOperand { .. }
