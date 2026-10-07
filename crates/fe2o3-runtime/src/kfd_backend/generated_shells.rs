@@ -65,6 +65,7 @@ pub(super) struct GeneratedShellRecordV1 {
     // rooted phase and must disable metadata-only disposal before its first effect.
     pub(super) control: GeneratedControlV1,
     pub(super) native: Option<super::generated_adoption::GeneratedNativeAdoptionV1>,
+    pub(super) registry: Option<super::generated_adoption::registry4::RegistryV1>,
 }
 
 impl KfdRuntimeBackendV1 {
@@ -263,7 +264,7 @@ impl KfdRuntimeBackendV1 {
         });
     }
 
-    fn commit_generated_controls_v1(
+    pub(in crate::kfd_backend) fn commit_generated_controls_v1(
         &mut self,
         authenticated: GeneratedShellCommitPlanV1,
         roster: &GeneratedHostRosterV1,
@@ -286,6 +287,7 @@ impl KfdRuntimeBackendV1 {
                 source_identity: roster.source_identity.clone(),
                 control: GeneratedControlV1::empty(plan.profile),
                 native: None,
+                registry: None,
             },
         );
         self.next_handle = plan.next_handle;
@@ -321,6 +323,16 @@ impl KfdRuntimeBackendV1 {
     pub(crate) fn validate_generated_shell_disposal_v1(&self, plan: &GeneratedShellPlanV1) -> bool {
         self.validate_generated_shell_records_v1(plan)
             && self.generated_shells.get(&plan.key).is_some_and(|record| {
+                if let Some(registry) = &record.registry {
+                    return matches!(plan.profile,
+                        crate::generated_source::GeneratedProfileV1::NativeFillRegistry4
+                        | crate::generated_source::GeneratedProfileV1::NativeFillRegistry4Repeat2
+                        | crate::generated_source::GeneratedProfileV1::NativeFillRegistry16)
+                        && registry.profile() == plan.profile
+                        && record.native.is_none()
+                        && registry.is_retired()
+                        && record.control.is_none();
+                }
                 record.native.as_ref().map_or_else(
                     || record.control.is_some(),
                     |native| {

@@ -5,6 +5,8 @@ use fe2o3_completion::{
 };
 use std::{future::Future, pin::Pin, task::Poll};
 
+mod rejected;
+mod replicas;
 mod staging;
 
 type Backend = KfdMultiDeviceRuntimeBackendV1;

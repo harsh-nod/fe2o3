@@ -22,8 +22,14 @@ pub use graph::{
 };
 mod cancellation;
 mod cohort3;
+mod registry4;
 pub use cancellation::RuntimeGfx942ScopedCancelResultV1;
 pub use cohort3::RuntimeGfx942ScopedCohort3TicketV1;
+pub use registry4::{
+    RuntimeGfx942Registry4ResultFutureV1, RuntimeGfx942Registry4ScopeV1,
+    RuntimeGfx942Registry4TicketV1, RuntimeGfx942Registry16ResultFutureV1,
+    RuntimeGfx942Registry16ScopeV1, RuntimeGfx942Registry16TicketV1,
+};
 
 /// Finite owner-local metadata bound; native admission still uses Context credits.
 pub const MAX_RUNTIME_GFX942_SCOPED_SUBMISSIONS_V1: usize = 4096;
@@ -43,9 +49,14 @@ pub enum RuntimeGfx942ScopeErrorV1 {
     CompletionObserverTaken,
     CancelledBeforeSubmission,
     CancelledBeforePublication,
+    /// Actual classified rejection followed by complete original-owner disposal.
+    /// Native DATA may have existed; this does not certify a no-effect writer.
+    RejectedBeforePublication,
     Deadline,
     Unknown,
-    CopyFailed { code: i64 },
+    CopyFailed {
+        code: i64,
+    },
     Reservation(RuntimeGfx942GeneratedReservationErrorV1),
     Context(NativeError),
     Readback(RuntimeGfx942ReadbackErrorV1),
@@ -162,7 +173,7 @@ type GraphSubmit<B> = fn(
     &mut RuntimeContextV1<B>,
     ContextGraphReservationV1,
     PreparedContextGraphActionV1,
-) -> Result<RuntimeSubmissionV1<()>, NativeError>;
+) -> Result<ContextGraphSubmissionV1, NativeError>;
 type GraphProgress<B> = fn(
     &mut RuntimeContextV1<B>,
     RuntimeStreamIdV1,
@@ -183,6 +194,8 @@ struct Hooks<B: RuntimeBackendV1, P> {
     ready: fn(&RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
     adopt: Step<B, P>,
     progress: Progress<B, P>,
+    rejected: fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
+    retire_rejected: Step<B, P>,
     complete: Step<B, P>,
     unpublished:
         fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
@@ -348,7 +361,8 @@ where
         for slot in &mut self.slots {
             let context = &mut *self.context;
             let hooks = &self.hooks;
-            let changed = slot
+            let before = slot.lifecycle.phase;
+            let mut changed = slot
                 .lifecycle
                 .advance(
                     |phase, prepared| match phase {
@@ -371,6 +385,29 @@ where
                     hooks.decode,
                 )
                 .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
+            if before == Phase::Issuing
+                && !changed
+                && (hooks.rejected)(context, &slot.hold)
+                    .map_err(RuntimeGfx942ScopeErrorV1::Context)?
+            {
+                changed = slot
+                    .lifecycle
+                    .settle_rejected(
+                        context,
+                        |context, prepared| {
+                            (hooks.retire_rejected)(context, prepared, &slot.roster, &slot.hold)
+                        },
+                        |context| {
+                            context
+                                .release_unpublished_hold_v1(&slot.hold)
+                                .map_err(Into::into)
+                        },
+                    )
+                    .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
+                slot.reply.complete(Err(
+                    crate::RuntimeAsyncEngineCallErrorV1::RejectedBeforePublication,
+                ));
+            }
             if let Some(outcome) = &slot.lifecycle.outcome {
                 slot.reply.complete(Ok(outcome.clone()));
             }
@@ -412,6 +449,9 @@ where
         if slot.lifecycle.phase == Phase::CancelledUnpublished {
             return Err(RuntimeGfx942ScopeErrorV1::CancelledBeforePublication);
         }
+        if slot.lifecycle.phase == Phase::FailedUnpublished {
+            return Err(RuntimeGfx942ScopeErrorV1::RejectedBeforePublication);
+        }
         Ok(slot.lifecycle.outcome.as_ref())
     }
 
@@ -436,6 +476,9 @@ where
 
     fn settled_result_v1(&self) -> Result<(), RuntimeGfx942ScopeErrorV1> {
         for slot in &self.slots {
+            if slot.lifecycle.phase == Phase::FailedUnpublished {
+                return Err(RuntimeGfx942ScopeErrorV1::RejectedBeforePublication);
+            }
             if let Some(Err(error)) = &slot.lifecycle.outcome {
                 return Err(RuntimeGfx942ScopeErrorV1::Readback(error.clone()));
             }
@@ -457,6 +500,11 @@ macro_rules! impl_scoped_generated {
             /// Settled ticket slots are not reused; start another fully settled
             /// scope to reuse Context capacity. Both owner arrays are bounded
             /// independently of any storage retained by their pointees.
+            /// A singleton's definite publication rejection fails locally only
+            /// after original native abort, currentness, Context and source-owner
+            /// settlement. It never produces decoded output or a successful DATA
+            /// version. Unknown state and device/currentness failures still stop
+            /// the whole Context; this is not device-reset fault isolation.
             ///
             /// ```compile_fail
             /// use fe2o3_runtime::*;
@@ -594,7 +642,9 @@ macro_rules! impl_scoped_generated {
                         preflight: Self::preflight_gfx942_adoption_v1::<P>,
                         ready: Self::gfx942_adoption_ready_v1,
                         adopt: Self::adopt_gfx942_prepared_v1::<P>,
-                        progress: Self::progress_gfx942_issue_v1::<P>,
+                        progress: Self::progress_gfx942_issue_preserving_rejection_v1::<P>,
+                        rejected: Self::gfx942_issue_rejected_v1,
+                        retire_rejected: Self::settle_gfx942_rejected_v1::<P>,
                         complete: Self::complete_gfx942_issue_v1::<P>,
                         unpublished: Self::gfx942_adoption_unpublished_v1,
                         retire_unpublished: Self::retire_gfx942_unpublished_v1,

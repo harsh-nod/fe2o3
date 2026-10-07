@@ -101,6 +101,20 @@ impl KfdRuntimeBackendV1 {
                     .with_retained_device_v1(prepare)
                     .map_err(|error| error.to_string())
                     .and_then(|result| result.map_err(str::to_owned)),
+                (None, None) => {
+                    let mut originals = self
+                        .generated_shells
+                        .values_mut()
+                        .filter_map(|record| record.registry.as_mut())
+                        .filter(|registry| !registry.is_retired());
+                    match (originals.next(), originals.next()) {
+                        (Some(registry), None) => registry
+                            .with_device(prepare)
+                            .map_err(|error| error.to_string())
+                            .and_then(|result| result.map_err(str::to_owned)),
+                        _ => Err("missing or duplicated registry device owner".to_owned()),
+                    }
+                }
                 _ => Err("missing or duplicated retained-device owner".to_owned()),
             }
         }));

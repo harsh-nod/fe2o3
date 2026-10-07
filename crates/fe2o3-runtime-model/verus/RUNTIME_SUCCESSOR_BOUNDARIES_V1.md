@@ -1,8 +1,8 @@
 # Runtime Successor Source Boundaries
 
 The source inventory includes scoped unpublished cancellation, ordinary graph
-HostStaging, checked native fill cohorts, the four-recipe native registry, and
-peer-gather topology selection. Capturing their bytes does not prove those
+HostStaging, checked native fill cohorts, bounded resident native registries,
+peer-gather topology selection, settled replicas and graph groups. Capturing their bytes does not prove those
 adapters or enlarge an existing theorem. Source controls and logical mutation
 construction are also distinct from executing the maintained campaigns.
 
@@ -19,8 +19,12 @@ Producer preflight retains its complete eleven-source native/schema roster and
 unchanged two-file executable proof closure. The changed `context.rs` pin includes
 the behavior-preserving factoring of public None-access host writes and a private
 graph-token path. These host-write functions are not in that executable theorem.
-No fields are omitted from the existing closed schema checks to accept the new
-source. Whole Context behavior, opaque owners, allocation, unwind, callbacks,
+The source frame explicitly includes the new `replicas` field as exactly
+`Option<RuntimeReplicaStorageV1>` inside the existing arbitrary owned custody
+payload. Deletion and retyping are rejected even after a hostile outer hash
+refresh. The two observed fields and all 29 opaque fields remain in the closed
+31-field roster; this does not introduce a replica-validity premise or prove its
+destructor. Whole Context behavior, opaque owners, allocation, unwind, callbacks,
 currentness, native completion and hardware remain outside the projected claim.
 
 ## Checked Adapters
@@ -42,13 +46,15 @@ The native cohort path checks bounded original member owners and per-member
 spatial premises before entering the existing shared binder. That is checked
 composition, not a theorem for aggregate preparation, publication or execution.
 
-The four-recipe registry retains separate original recipe generations over one
+The bounded resident registry retains separate original recipe generations over one
 native backing. Its selector, per-recipe preflight, template preparation, reserve,
 publication and completion joins are a distinct checked composition. In
 particular, `RegistryRecipeV1::bind` is not an invocation of the shared
 `DispatchResourceOwnerV1::bind_templates` body. Reusing its constituent helpers
 does not establish a theorem for the registry's ordering, single-use behavior,
 cross-recipe isolation, native custody or hardware execution.
+The repeated invocation and N16 host/runtime adapters remain outside these
+theorems; a larger captured roster is not proof of their effect composition.
 
 Peer-gather placement compares bounded, read-only estimates for actual source and
 destination allocations. An estimate grants no route, residency, currentness or
@@ -63,6 +69,18 @@ proves graph admission nor supplies native settlement evidence. Its source-only
 closure also records the opaque optional placement field and the rejecting
 pre-reservation revalidation call; these additions do not widen the transition
 theorem or prove `VersionLedger::prepare`, HostStaging or peer-gather composition.
+Graph groups now admit an additional `ReplicaCopy` preparation arm and retain an
+original Context submission wrapper. Whole-allocation hazards, `ProducedBy`
+lineage, replica invalidation, pending-copy cleanup and release-before-success
+composition are not proved by the ledger's unchanged shared begin/commit bodies.
+Their added module/export and raw-source bindings are captured separately.
+
+The graph-reservation retirement root is a separate executable refinement of the
+shared reached guard and reservation-clear suffix, including pending-replica
+refusal. It retains its explicit access/native-disposal premises and full field
+frame; it is not a proof of successful device disposal, whole graph scheduling or
+the replica-copy adapter. Its development controls do not qualify a later signed
+source inventory without executing the maintained campaign on that inventory.
 
 ## Conditional Binder Guard
 

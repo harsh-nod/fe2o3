@@ -1,10 +1,15 @@
-//! One private queue root with four independently settled original recipes.
+//! One private queue root with a closed roster of independently settled originals.
 
 use super::*;
 use crate::queue::dispatch_binding::{
     Gfx942NativeFillRegistryInputsV1, Gfx942NativeFillRegistryStorageV1,
+    Gfx942NativeFillResidentRegistryInputsV1, Gfx942NativeFillResidentRegistryStorageV1,
 };
 use fixed_dispatch::recipe::RecipeV1;
+
+#[path = "native_fill_registry/repeat2.rs"]
+mod repeat2;
+pub use repeat2::Gfx942NativeFillRegistryRepeat2SessionV1;
 
 /// Actual published single-recipe custody. No conversion to a scalar or cohort
 /// receipt is exposed, and no receipt is copied from an aggregate completion.
@@ -21,7 +26,7 @@ use fixed_dispatch::recipe::RecipeV1;
 /// ```
 #[derive(Debug)]
 #[must_use = "retain the original registry publication through completion"]
-pub struct Gfx942NativeFillRegistryBatchV1 {
+pub struct Gfx942NativeFillResidentRegistryBatchV1<const N: usize> {
     registry: u64,
     recipe: usize,
     batch: Gfx942DispatchBatchV1<1>,
@@ -30,33 +35,33 @@ pub struct Gfx942NativeFillRegistryBatchV1 {
 /// Actual completion of exactly one original registry recipe before recycle.
 #[derive(Debug)]
 #[must_use = "the original registry completion must be recycled"]
-pub struct Gfx942NativeFillRegistryCompletedV1 {
+pub struct Gfx942NativeFillResidentRegistryCompletedV1<const N: usize> {
     registry: u64,
     recipe: usize,
     completed: Gfx942CompletedDispatchBatchV1<1>,
 }
 
 #[derive(Debug)]
-pub enum Gfx942NativeFillRegistryPollV1 {
-    Pending(Gfx942NativeFillRegistryBatchV1),
-    Ready(Gfx942NativeFillRegistryCompletedV1),
+pub enum Gfx942NativeFillResidentRegistryPollV1<const N: usize> {
+    Pending(Gfx942NativeFillResidentRegistryBatchV1<N>),
+    Ready(Gfx942NativeFillResidentRegistryCompletedV1<N>),
 }
 
 /// Pre-entry refusal returns the exact original publication. A terminal native
 /// failure does not grant disposal or replacement authority.
 #[derive(Debug)]
-pub struct Gfx942NativeFillRegistryPollFailureV1 {
+pub struct Gfx942NativeFillResidentRegistryPollFailureV1<const N: usize> {
     pub error: ComputeAqlQueueSessionErrorV1,
-    pub refused: Option<Gfx942NativeFillRegistryBatchV1>,
+    pub refused: Option<Gfx942NativeFillResidentRegistryBatchV1<N>>,
 }
 
 #[derive(Debug)]
-pub struct Gfx942NativeFillRegistryRecycleFailureV1 {
+pub struct Gfx942NativeFillResidentRegistryRecycleFailureV1<const N: usize> {
     pub error: ComputeAqlQueueSessionErrorV1,
-    pub retryable: Option<Gfx942NativeFillRegistryCompletedV1>,
+    pub retryable: Option<Gfx942NativeFillResidentRegistryCompletedV1<N>>,
 }
 
-/// Closed registry of four original, disjoint fill recipes on one actual queue.
+/// Closed registry of 2..16 original, disjoint fill recipes on one actual queue.
 /// Each can be submitted once, polled and recycled independently. `WaitForPrior`
 /// remains mandatory: this does not establish physical overlap, out-of-order
 /// execution, rolling admission, a runtime bridge or thousand-operation depth.
@@ -72,11 +77,28 @@ pub struct Gfx942NativeFillRegistryRecycleFailureV1 {
 /// fn ordinary(_: ComputeAqlQueueSessionV1) {}
 /// fn reject(registry: Gfx942NativeFillRegistrySessionV1) { ordinary(registry); }
 /// ```
-pub struct Gfx942NativeFillRegistrySessionV1 {
+/// ```compile_fail
+/// use fe2o3_kfd::{Gfx942NativeFillResidentRegistryBatchV1,
+///     Gfx942NativeFillResidentRegistrySessionV1};
+/// fn wrong_count(s: &mut Gfx942NativeFillResidentRegistrySessionV1<16>,
+///     original: Gfx942NativeFillResidentRegistryBatchV1<4>) {
+///     let _ = s.poll(original);
+/// }
+/// ```
+pub struct Gfx942NativeFillResidentRegistrySessionV1<const N: usize> {
     queue: Option<ComputeAqlQueueSessionV1>,
-    storage: Gfx942NativeFillRegistryStorageV1,
+    storage: Gfx942NativeFillResidentRegistryStorageV1<N>,
     destroyed: bool,
 }
+
+/// Existing exact four-original session and receipt family.
+pub type Gfx942NativeFillRegistrySessionV1 = Gfx942NativeFillResidentRegistrySessionV1<4>;
+pub type Gfx942NativeFillRegistryBatchV1 = Gfx942NativeFillResidentRegistryBatchV1<4>;
+pub type Gfx942NativeFillRegistryCompletedV1 = Gfx942NativeFillResidentRegistryCompletedV1<4>;
+pub type Gfx942NativeFillRegistryPollV1 = Gfx942NativeFillResidentRegistryPollV1<4>;
+pub type Gfx942NativeFillRegistryPollFailureV1 = Gfx942NativeFillResidentRegistryPollFailureV1<4>;
+pub type Gfx942NativeFillRegistryRecycleFailureV1 =
+    Gfx942NativeFillResidentRegistryRecycleFailureV1<4>;
 
 impl SharedGttMemorySessionV1 {
     /// Consumes this original VM and all four original inputs through the same
@@ -88,6 +110,28 @@ impl SharedGttMemorySessionV1 {
         inputs: Gfx942NativeFillRegistryInputsV1<'_>,
         storage: Gfx942NativeFillRegistryStorageV1,
     ) -> Result<Gfx942NativeFillRegistrySessionV1, ComputeAqlQueueSessionErrorV1> {
+        self.create_native_fill_registry_profile(ring_bytes, inputs, storage, false)
+    }
+
+    /// Closed 2..16 resident originals on one queue. Every packet retains its
+    /// original disjoint DATA and completion, with unchanged WaitForPrior order.
+    /// This is not independent scheduling, a new machine effect, or depth above16.
+    pub fn create_compute_aql_queue_with_native_fill_resident_registry_v1<const N: usize>(
+        self,
+        ring_bytes: u32,
+        inputs: Gfx942NativeFillResidentRegistryInputsV1<'_, N>,
+        storage: Gfx942NativeFillResidentRegistryStorageV1<N>,
+    ) -> Result<Gfx942NativeFillResidentRegistrySessionV1<N>, ComputeAqlQueueSessionErrorV1> {
+        self.create_native_fill_registry_profile(ring_bytes, inputs, storage, false)
+    }
+
+    fn create_native_fill_registry_profile<const N: usize>(
+        self,
+        ring_bytes: u32,
+        inputs: Gfx942NativeFillResidentRegistryInputsV1<'_, N>,
+        storage: Gfx942NativeFillResidentRegistryStorageV1<N>,
+        repeat2: bool,
+    ) -> Result<Gfx942NativeFillResidentRegistrySessionV1<N>, ComputeAqlQueueSessionErrorV1> {
         let crate::queue::dispatch_binding::Gfx942NativeFillCohortV1 {
             programs,
             packets,
@@ -101,14 +145,20 @@ impl SharedGttMemorySessionV1 {
                 storage,
             ),
         );
-        root = root.run(|root, entry| root.construct_native_fill_registry(entry, ring_bytes))?;
+        root = root.run(|root, entry| {
+            if repeat2 {
+                root.construct_native_fill_registry_profile(entry, ring_bytes, true)
+            } else {
+                root.construct_native_fill_registry(entry, ring_bytes)
+            }
+        })?;
         let Some(completed) = root.completed.take() else {
             std::process::abort();
         };
         let queue = completed.into_session();
         let (_, _, storage) = root.preparation;
         // No allocation, validation or user callback separates these owner moves.
-        Ok(Gfx942NativeFillRegistrySessionV1 {
+        Ok(Gfx942NativeFillResidentRegistrySessionV1 {
             queue: Some(queue),
             storage,
             destroyed: false,
@@ -116,14 +166,14 @@ impl SharedGttMemorySessionV1 {
     }
 }
 
-type RegistryPreparationV1<'a> = (
+type RegistryPreparationV1<'a, const N: usize = 4> = (
     Vec<fe2o3_amdhsa_loader::ValidatedKernelEnvelope<'a>>,
-    FixedDispatchPreparationCustodyV1<4>,
-    Gfx942NativeFillRegistryStorageV1,
+    FixedDispatchPreparationCustodyV1<N>,
+    Gfx942NativeFillResidentRegistryStorageV1<N>,
 );
 
-impl<E: construction_primary::PrimaryEnvironmentV1>
-    PrimaryQueueConstructionV1<RegistryPreparationV1<'_>, E>
+impl<E: construction_primary::PrimaryEnvironmentV1, const N: usize>
+    PrimaryQueueConstructionV1<RegistryPreparationV1<'_, N>, E>
 where
     E::Memory: crate::queue::dispatch_binding::preparation::PreparationMemoryV1,
 {
@@ -132,7 +182,17 @@ where
         entry: &mut construction_primary::UserptrConstructionEntryV1<'_>,
         ring_bytes: u32,
     ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
-        validate_fixed_batch_ring::<4>(ring_bytes)?;
+        self.construct_native_fill_registry_profile(entry, ring_bytes, false)
+    }
+
+    fn construct_native_fill_registry_profile(
+        &mut self,
+        entry: &mut construction_primary::UserptrConstructionEntryV1<'_>,
+        ring_bytes: u32,
+        repeat2: bool,
+    ) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        self.preparation.2.require_profile(repeat2)?;
+        validate_fixed_batch_ring::<N>(ring_bytes)?;
         let memory = self
             .memory
             .as_mut()
@@ -154,7 +214,16 @@ where
     }
 }
 
-impl Gfx942NativeFillRegistrySessionV1 {
+impl<const N: usize> Gfx942NativeFillResidentRegistrySessionV1<N> {
+    /// Borrows only the original device under the existing retained queue
+    /// currentness scope. No queue, common DATA or recipe receipt is exposed.
+    pub fn with_retained_device_v1<R>(
+        &mut self,
+        observe: impl FnOnce(&CheckedGfx942XnackMinusDevice) -> R,
+    ) -> Result<R, ComputeAqlQueueSessionErrorV1> {
+        self.queue()?.with_retained_device_v1(observe)
+    }
+
     fn queue(&mut self) -> Result<&mut ComputeAqlQueueSessionV1, ComputeAqlQueueSessionErrorV1> {
         self.queue
             .as_mut()
@@ -173,7 +242,8 @@ impl Gfx942NativeFillRegistrySessionV1 {
     pub fn submit(
         &mut self,
         recipe: usize,
-    ) -> Result<Gfx942NativeFillRegistryBatchV1, Gfx942FixedDispatchSubmissionFailureV1> {
+    ) -> Result<Gfx942NativeFillResidentRegistryBatchV1<N>, Gfx942FixedDispatchSubmissionFailureV1>
+    {
         let registry = self.storage.identity();
         if recipe >= self.storage.recipes.len() {
             return Err(
@@ -197,7 +267,7 @@ impl Gfx942NativeFillRegistrySessionV1 {
         }));
         match operation {
             Ok(result) => result
-                .map(|batch| Gfx942NativeFillRegistryBatchV1 {
+                .map(|batch| Gfx942NativeFillResidentRegistryBatchV1 {
                     registry,
                     recipe,
                     batch,
@@ -214,13 +284,16 @@ impl Gfx942NativeFillRegistrySessionV1 {
     #[allow(clippy::result_large_err)]
     pub fn poll(
         &mut self,
-        batch: Gfx942NativeFillRegistryBatchV1,
-    ) -> Result<Gfx942NativeFillRegistryPollV1, Gfx942NativeFillRegistryPollFailureV1> {
+        batch: Gfx942NativeFillResidentRegistryBatchV1<N>,
+    ) -> Result<
+        Gfx942NativeFillResidentRegistryPollV1<N>,
+        Gfx942NativeFillResidentRegistryPollFailureV1<N>,
+    > {
         if batch.registry != self.storage.identity()
             || batch.recipe >= self.storage.recipes.len()
             || self.queue.is_none()
         {
-            return Err(Gfx942NativeFillRegistryPollFailureV1 {
+            return Err(Gfx942NativeFillResidentRegistryPollFailureV1 {
                 error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
                 refused: Some(batch),
             });
@@ -232,7 +305,7 @@ impl Gfx942NativeFillRegistrySessionV1 {
             None => std::process::abort(),
         };
         if queue.terminal_poisoned {
-            return Err(Gfx942NativeFillRegistryPollFailureV1 {
+            return Err(Gfx942NativeFillResidentRegistryPollFailureV1 {
                 error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
                 refused: Some(batch),
             });
@@ -245,21 +318,25 @@ impl Gfx942NativeFillRegistrySessionV1 {
             queue.terminalize_fixed_dispatch_observation_result_v1(result)
         }));
         match operation {
-            Ok(Ok(Gfx942DispatchPollWithProgressV1::Pending { batch, .. })) => Ok(
-                Gfx942NativeFillRegistryPollV1::Pending(Gfx942NativeFillRegistryBatchV1 {
-                    registry,
-                    recipe,
-                    batch,
-                }),
-            ),
-            Ok(Ok(Gfx942DispatchPollWithProgressV1::Ready { completed, .. })) => Ok(
-                Gfx942NativeFillRegistryPollV1::Ready(Gfx942NativeFillRegistryCompletedV1 {
-                    registry,
-                    recipe,
-                    completed,
-                }),
-            ),
-            Ok(Err(error)) => Err(Gfx942NativeFillRegistryPollFailureV1 {
+            Ok(Ok(Gfx942DispatchPollWithProgressV1::Pending { batch, .. })) => {
+                Ok(Gfx942NativeFillResidentRegistryPollV1::Pending(
+                    Gfx942NativeFillResidentRegistryBatchV1 {
+                        registry,
+                        recipe,
+                        batch,
+                    },
+                ))
+            }
+            Ok(Ok(Gfx942DispatchPollWithProgressV1::Ready { completed, .. })) => {
+                Ok(Gfx942NativeFillResidentRegistryPollV1::Ready(
+                    Gfx942NativeFillResidentRegistryCompletedV1 {
+                        registry,
+                        recipe,
+                        completed,
+                    },
+                ))
+            }
+            Ok(Err(error)) => Err(Gfx942NativeFillResidentRegistryPollFailureV1 {
                 error,
                 refused: None,
             }),
@@ -274,14 +351,16 @@ impl Gfx942NativeFillRegistrySessionV1 {
     #[allow(clippy::result_large_err)]
     pub fn recycle(
         &mut self,
-        completed: Gfx942NativeFillRegistryCompletedV1,
-    ) -> Result<Gfx942CompletionRecycleObservationV1, Gfx942NativeFillRegistryRecycleFailureV1>
-    {
+        completed: Gfx942NativeFillResidentRegistryCompletedV1<N>,
+    ) -> Result<
+        Gfx942CompletionRecycleObservationV1,
+        Gfx942NativeFillResidentRegistryRecycleFailureV1<N>,
+    > {
         if completed.registry != self.storage.identity()
             || completed.recipe >= self.storage.recipes.len()
             || self.queue.is_none()
         {
-            return Err(Gfx942NativeFillRegistryRecycleFailureV1 {
+            return Err(Gfx942NativeFillResidentRegistryRecycleFailureV1 {
                 error: Gfx942DispatchBindingErrorV1::ResourcePhase.into(),
                 retryable: Some(completed),
             });
@@ -293,7 +372,7 @@ impl Gfx942NativeFillRegistrySessionV1 {
             None => std::process::abort(),
         };
         if queue.terminal_poisoned {
-            return Err(Gfx942NativeFillRegistryRecycleFailureV1 {
+            return Err(Gfx942NativeFillResidentRegistryRecycleFailureV1 {
                 error: Gfx942DispatchBindingErrorV1::Poisoned.into(),
                 retryable: Some(completed),
             });
@@ -306,16 +385,18 @@ impl Gfx942NativeFillRegistrySessionV1 {
             queue.terminalize_fixed_dispatch_recycle_result_v1(result)
         }));
         match operation {
-            Ok(result) => result.map_err(|failure| Gfx942NativeFillRegistryRecycleFailureV1 {
-                error: failure.error,
-                retryable: failure.retryable_completed.map(|completed| {
-                    Gfx942NativeFillRegistryCompletedV1 {
-                        registry,
-                        recipe,
-                        completed,
-                    }
-                }),
-            }),
+            Ok(result) => {
+                result.map_err(|failure| Gfx942NativeFillResidentRegistryRecycleFailureV1 {
+                    error: failure.error,
+                    retryable: failure.retryable_completed.map(|completed| {
+                        Gfx942NativeFillResidentRegistryCompletedV1 {
+                            registry,
+                            recipe,
+                            completed,
+                        }
+                    }),
+                })
+            }
             Err(payload) => {
                 self.poison();
                 std::panic::resume_unwind(payload)
@@ -341,7 +422,7 @@ impl Gfx942NativeFillRegistrySessionV1 {
         let owner = self
             .storage
             .recipes
-            .get(recipe)
+            .get_mut(recipe)
             .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
         let dispatch = queue
             .dispatch
@@ -382,7 +463,7 @@ impl Gfx942NativeFillRegistrySessionV1 {
     }
 }
 
-impl Drop for Gfx942NativeFillRegistrySessionV1 {
+impl<const N: usize> Drop for Gfx942NativeFillResidentRegistrySessionV1<N> {
     fn drop(&mut self) {
         if !self.destroyed {
             std::process::abort();

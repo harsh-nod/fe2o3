@@ -171,28 +171,30 @@ fn settle(
         let mut submission = context
             .submit_graph_action_v1(token, *actions[index].take().unwrap())
             .unwrap();
-        let is_peer = context.scalar_peer_copies.contains_key(&submission.id());
+        let is_peer = context
+            .scalar_peer_copies
+            .contains_key(&submission.original.id());
         if is_peer {
             context
-                .validate_scalar_peer_custody_v1(submission.id())
+                .validate_scalar_peer_custody_v1(submission.original.id())
                 .unwrap();
             assert_eq!(context.scalar_peer_copies.len(), 1);
         }
         assert!(matches!(
-            context.poll(&mut submission),
+            context.poll(&mut submission.original),
             Err(RuntimeErrorV1::Validation(
                 RuntimeValidationErrorV1::ContextReserved
             ))
         ));
         assert_eq!(
             context
-                .poll_with_graph_access_v1(&mut submission, Some(token))
+                .poll_with_graph_access_v1(&mut submission.original, Some(token))
                 .unwrap(),
             RuntimePollV1::Pending
         );
         assert_eq!(
             context
-                .poll_with_graph_access_v1(&mut submission, Some(token))
+                .poll_with_graph_access_v1(&mut submission.original, Some(token))
                 .unwrap(),
             RuntimePollV1::Succeeded
         );

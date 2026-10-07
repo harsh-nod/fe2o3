@@ -8,8 +8,14 @@ use std::{error::Error, fmt};
 mod cohort3;
 pub(crate) use cohort3::RuntimeGfx942Cohort3SourceMutV1;
 pub use cohort3::RuntimeGfx942GeneratedCohort3V1;
+mod registry4;
 pub(crate) use cohort3::combine_original_rosters;
 pub(crate) use cohort3::{GeneratedContractsV1, GeneratedProfileV1, GeneratedSourceIdentityV1};
+pub(crate) use registry4::RuntimeGfx942Registry4SourceMutV1;
+pub use registry4::{
+    RuntimeGfx942GeneratedRegistry4Repeat2V1, RuntimeGfx942GeneratedRegistry4V1,
+    RuntimeGfx942GeneratedRegistry16V1, RuntimeGfx942GeneratedResidentRegistryV1,
+};
 
 use crate::{
     GeneratedGfx942PersistentStorageV1, Gfx942RuntimeBufferAccessV1, KfdRuntimeBackendErrorV1,

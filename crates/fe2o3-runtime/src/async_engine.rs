@@ -459,6 +459,8 @@ pub enum RuntimeAsyncEngineCallErrorV1 {
     CancelledBeforeSubmission,
     /// Adopted DATA was retired before packet publication. Not successful output.
     CancelledBeforePublication,
+    /// No successful result: classified rejection and original-owner settlement.
+    RejectedBeforePublication,
     EngineStopped,
     ReentrantCall,
     CommandPanicked,

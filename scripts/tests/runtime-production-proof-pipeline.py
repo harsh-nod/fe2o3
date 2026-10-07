@@ -19,6 +19,7 @@ COMMANDS = (
     ("check-retained-pair-routing.py", "retained-routing", ()),
     ("check-retained-credit-dispatch.py", "retained-credit", ("--campaign",)),
     ("qualify-graph-version-ledger-v1.py", "graph-version-ledger", ()),
+    ("qualify-graph-reservation-retirement-v1.py", "graph-reservation-retirement", ()),
 )
 RECORDER = r'''#!/bin/bash
 set -Eeuo pipefail

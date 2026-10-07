@@ -33,7 +33,9 @@ mod charged_decode;
 #[cfg(test)]
 mod charged_tests;
 mod readback;
+mod registry;
 pub(crate) use readback::GeneratedRuntimeReadbackOwnerV1;
+pub(crate) use registry::{GeneratedRegistryRepeatFrameV1, GeneratedRegistryStorageV1};
 
 /// Compiler-generated owned counterpart of the borrowed KFD argument bridge.
 ///

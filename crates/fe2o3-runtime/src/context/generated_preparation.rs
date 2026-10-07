@@ -10,6 +10,7 @@ use crate::{KfdMultiDeviceRuntimeBackendV1, KfdRuntimeBackendErrorV1, KfdRuntime
 
 mod adoption;
 mod cohort3;
+mod registry4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PreparationBindingV1 {

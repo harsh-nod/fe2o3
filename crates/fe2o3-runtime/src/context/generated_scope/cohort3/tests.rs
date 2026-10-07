@@ -59,6 +59,8 @@ fn cpu_scope<'scope, 'env, 'owners>(
                     .map_err(Into::into)
             },
             unpublished: |_, _| panic!("aggregate cancellation not exposed"),
+            rejected: |_, _| Ok(false),
+            retire_rejected: |_, _, _, _| panic!("aggregate rejection settlement not exposed"),
             retire_unpublished: |_, _| panic!("no fake native retirement"),
             copy_progress: |_, _| panic!("aggregate copy not exposed"),
             graph_submit: |_, _, _| panic!("aggregate graph not exposed"),

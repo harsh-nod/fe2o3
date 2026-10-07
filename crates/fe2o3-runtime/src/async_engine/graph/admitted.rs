@@ -123,6 +123,7 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
             .validate_peer_gather_v1()
             .map_err(RuntimeGraphErrorV1::Invalid)?;
         original.revalidate_peer_placement_v1(context)?;
+        original.validate_group_v1(context)?;
         if !allow_host_staging
             && original
                 .actions
@@ -136,8 +137,13 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
         }
         let mut prepare = || {
             for (&identity, &stream) in &original.streams {
-                let actual = context
-                    .completion_stream_identity_v1(stream)
+                let actual = original
+                    .group
+                    .as_ref()
+                    .map_or_else(
+                        || context.completion_stream_identity_v1(stream),
+                        |group| group.stream_identity(stream),
+                    )
                     .map_err(|e| RuntimeGraphErrorV1::Context(e.into()))?;
                 if actual != identity {
                     return Err(RuntimeGraphErrorV1::Invalid(
@@ -180,6 +186,14 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
                             .map_err(RuntimeGraphErrorV1::Context)?;
                         None
                     }
+                    (
+                        CompletionNodeKindV1::Future(_),
+                        Some(Action::ReplicaCopy(source, destination)),
+                    ) => Some(
+                        context
+                            .prepare_graph_replica_copy_v1(stream, *source, *destination)
+                            .map_err(RuntimeGraphErrorV1::Context)?,
+                    ),
                     (CompletionNodeKindV1::Future(_), None) => {
                         validate_generated(context, node.id(), stream)?;
                         None
@@ -243,6 +257,12 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
     // Refusal returns the original request without a new fallible heap allocation.
     #[allow(clippy::result_large_err)]
     pub(crate) fn commit(self, context: &mut RuntimeContextV1<B>) -> GraphAdmissionResultV1<B> {
+        if let Err(error) = self.request.validate_group_v1(context) {
+            return Err(GraphAdmissionFailureV1 {
+                request: self.request,
+                error,
+            });
+        }
         let token = match context.reserve_graph_v1(self.ids.len()) {
             Ok(token) => token,
             Err(error) => {
@@ -268,6 +288,7 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
                 issued: self.issued,
                 streams: self.streams,
                 host_staging: self.host_staging,
+                _group: self.request.group,
             },
             self.actions,
         ))
@@ -286,6 +307,7 @@ pub(crate) struct AdmittedGraphV1 {
     issued: Vec<bool>,
     streams: Vec<RuntimeStreamIdV1>,
     host_staging: Vec<Option<HostStagingV1>>,
+    _group: Option<crate::RuntimeGraphGroupV1>,
 }
 
 /// Descriptive terminal data, produced only after exact Context release.

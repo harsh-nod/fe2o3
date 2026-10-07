@@ -38,7 +38,9 @@ pub use native_fill_cohort::{
 };
 pub(super) use native_fill_registry::RegistryRecipeV1;
 pub use native_fill_registry::{
-    Gfx942NativeFillRegistryInputsV1, Gfx942NativeFillRegistryStorageV1,
+    Gfx942NativeFillRegistryInputsV1, Gfx942NativeFillRegistryRepeat2StorageV1,
+    Gfx942NativeFillRegistryStorageV1, Gfx942NativeFillResidentRegistryInputsV1,
+    Gfx942NativeFillResidentRegistryStorageV1,
 };
 
 #[path = "queue_dispatch_binding/generation_preflight.rs"]

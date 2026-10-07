@@ -32,6 +32,7 @@ use super::*;
 mod application;
 #[path = "program_v2_tests.rs"]
 mod native_program;
+mod socket_fixture;
 
 static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
 static TEST_ANCHOR_SERVICE_PEERS: Mutex<Vec<OwnedFd>> = Mutex::new(Vec::new());
@@ -91,6 +92,7 @@ pub(super) struct Fixture {
     pub(super) root: PathBuf,
     image: PathBuf,
     bytes: Vec<u8>,
+    _directory: tempfile::TempDir,
 }
 
 impl Fixture {
@@ -99,18 +101,28 @@ impl Fixture {
     }
 
     fn with_code(name: &str, code: &[u8]) -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "fe2o3-supervisor-image-{name}-{}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&root).unwrap();
+        Self::with_code_in(name, code, &std::env::temp_dir())
+    }
+
+    fn with_code_in(name: &str, code: &[u8], parent: &Path) -> Self {
+        // Socket paths include the CI-owned parent, so keep this component short.
+        let directory = tempfile::Builder::new()
+            .prefix("f3s.")
+            .tempdir_in(parent)
+            .unwrap_or_else(|error| panic!("fixture {name}: {error}"));
+        let root = directory.path().to_path_buf();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let image = root.join("entry");
         let bytes = static_elf_with_code(code);
         fs::write(&image, &bytes).unwrap();
         fs::set_permissions(&image, fs::Permissions::from_mode(0o555)).unwrap();
         sealed_static_application_identity_v1(&bytes).unwrap();
-        Self { root, image, bytes }
+        Self {
+            root,
+            image,
+            bytes,
+            _directory: directory,
+        }
     }
 
     pub(super) fn measurement(&self) -> ProvisionedStaticExecutableMeasurementV1 {
@@ -284,12 +296,6 @@ fn write_program(bytes: &mut [u8], index: usize, program: ProgramFixture) {
     bytes[start + 32..start + 40].copy_from_slice(&program.file_size.to_le_bytes());
     bytes[start + 40..start + 48].copy_from_slice(&program.memory_size.to_le_bytes());
     bytes[start + 48..start + 56].copy_from_slice(&program.alignment.to_le_bytes());
-}
-
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
-    }
 }
 
 fn policy(issuer: CompilerExecutionIssuerMeasurementV1) -> CompilerExecutionPolicyCapabilityV1 {

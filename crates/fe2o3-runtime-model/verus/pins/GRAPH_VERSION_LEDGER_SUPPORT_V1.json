@@ -3,8 +3,8 @@
   "crates/fe2o3-runtime-model/verus/graph-version-ledger-diagnostics-v1.py": "f9883e79a5f2eb866986e15d216df0700578702b78e4a895f8ef9a542506d831",
   "crates/fe2o3-runtime-model/verus/graph-version-ledger-mutations-v1.py": "3ec6a49bf8ed83f7b7ad9aae9f413fdb037b633cf69d7e5a70b50ad56d64ab28",
   "crates/fe2o3-runtime-model/verus/pins/GRAPH_VERSION_LEDGER_DIAGNOSTICS_V1.json": "99da7d3e7b9c4afe5a639379ea27b9088948ff99c494e34cbc9144705fc3c596",
-  "crates/fe2o3-runtime-model/verus/pins/GRAPH_VERSION_LEDGER_INPUTS_V1.json": "4379f3f7c96fb4db0845fdfdd9a765f73cbcf49714c7e9355f7c1b70e4f76e05",
-  "crates/fe2o3-runtime-model/verus/pins/GRAPH_VERSION_LEDGER_INPUTS_V1_SHA256": "253a4779d8beb30753be0063a126050515c65ab70c07fc629ebabea3f8728f2f",
+  "crates/fe2o3-runtime-model/verus/pins/GRAPH_VERSION_LEDGER_INPUTS_V1.json": "e86df1e98feb04ba5b9dfa0569cd8836895f8f97d45d30fa1cacdd519e7e25c8",
+  "crates/fe2o3-runtime-model/verus/pins/GRAPH_VERSION_LEDGER_INPUTS_V1_SHA256": "49dfecb7307b40552837deaf69dae4c9a89a96b1bcc0db3b8d320826878d3c5e",
   "crates/fe2o3-runtime-model/verus/qualify-graph-version-ledger-v1.py": "71981792ad91cc871ca04adb5dc58c91eadce188b721164d1a07db2d4d60cde4",
   "crates/fe2o3-runtime-model/verus/test-graph-version-ledger-v1.py": "8d51002fae54320028b3baf1eb8556262f40fdd6c7074dd4c1c7d3c5156d893b"
 }

@@ -20,6 +20,7 @@ mod bundle_completion;
 mod cohort3;
 #[cfg(test)]
 mod completion_tests;
+mod registry4;
 mod staging;
 mod typed_completion;
 pub use bundle_completion::*;

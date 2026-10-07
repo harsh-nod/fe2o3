@@ -100,14 +100,19 @@ pub use dispatch_binding::{
     Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1,
     Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchPreallocationV1,
     Gfx942NativeFillCohortFailureV1, Gfx942NativeFillCohortMemberV1, Gfx942NativeFillCohortV1,
-    Gfx942NativeFillRegistryInputsV1, Gfx942NativeFillRegistryStorageV1,
-    Gfx942RecycledDispatchWriteRequestV1, preflight_gfx942_fixed_dispatch_replacement,
-    project_gfx942_fixed_host_packet_v1,
+    Gfx942NativeFillRegistryInputsV1, Gfx942NativeFillRegistryRepeat2StorageV1,
+    Gfx942NativeFillRegistryStorageV1, Gfx942NativeFillResidentRegistryInputsV1,
+    Gfx942NativeFillResidentRegistryStorageV1, Gfx942RecycledDispatchWriteRequestV1,
+    preflight_gfx942_fixed_dispatch_replacement, project_gfx942_fixed_host_packet_v1,
 };
 pub use live::native_fill_registry::{
     Gfx942NativeFillRegistryBatchV1, Gfx942NativeFillRegistryCompletedV1,
     Gfx942NativeFillRegistryPollFailureV1, Gfx942NativeFillRegistryPollV1,
-    Gfx942NativeFillRegistryRecycleFailureV1, Gfx942NativeFillRegistrySessionV1,
+    Gfx942NativeFillRegistryRecycleFailureV1, Gfx942NativeFillRegistryRepeat2SessionV1,
+    Gfx942NativeFillRegistrySessionV1, Gfx942NativeFillResidentRegistryBatchV1,
+    Gfx942NativeFillResidentRegistryCompletedV1, Gfx942NativeFillResidentRegistryPollFailureV1,
+    Gfx942NativeFillResidentRegistryPollV1, Gfx942NativeFillResidentRegistryRecycleFailureV1,
+    Gfx942NativeFillResidentRegistrySessionV1,
 };
 
 pub use device_content::{

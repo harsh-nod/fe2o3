@@ -24,7 +24,7 @@ mod platform {
     use std::ffi::OsString;
     use std::fs::{self, File};
     use std::io::{self, Write};
-    use std::os::fd::{AsRawFd, FromRawFd as _};
+    use std::os::fd::{AsFd, AsRawFd, FromRawFd as _};
     use std::os::unix::ffi::OsStringExt;
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::net::UnixDatagram;
@@ -377,17 +377,16 @@ mod platform {
         trampoline: Option<ExecutableIdentityV1>,
         authorization: InvocationAuthorizationRegistryV1,
     ) -> Result<(), String> {
-        let (listener, cargo_pid) =
-            match wait_for_listener(socket.as_raw_fd(), shutdown.as_raw_fd()) {
-                Ok(Some(received)) => received,
-                Ok(None) => {
-                    return report_ready_error(
-                        &ready,
-                        "Cargo exec boundary stopped before listener delivery",
-                    );
-                }
-                Err(error) => return report_ready_error(&ready, &error),
-            };
+        let (listener, cargo_pid) = match wait_for_listener(socket.as_fd(), shutdown.as_raw_fd()) {
+            Ok(Some(received)) => received,
+            Ok(None) => {
+                return report_ready_error(
+                    &ready,
+                    "Cargo exec boundary stopped before listener delivery",
+                );
+            }
+            Err(error) => return report_ready_error(&ready, &error),
+        };
         let initial = match wait_for_notification(listener.as_raw_fd(), shutdown.as_raw_fd()) {
             Ok(Some(notification)) => notification,
             Ok(None) => {

@@ -19,6 +19,7 @@ include!("context/completion_settlement_body.rs");
 
 mod graph;
 pub(crate) use graph::*;
+pub use graph::{RuntimeGraphDeviceCoverageV1, RuntimeGraphGroupV1};
 mod allocation_admission;
 mod allocation_witness;
 pub use allocation_witness::*;
@@ -58,11 +59,13 @@ mod qualification_generated_copy;
 mod qualification_xgmi;
 use peer_segments::SegmentedPeerCopyRootV1;
 pub use peer_segments::*;
+mod replicas;
 mod unpublished;
 mod versions;
 use allocation_admission::ContextAllocationAdmissionV1;
 pub use drain_capture::*;
 pub use generated_preparation::*;
+pub use replicas::*;
 pub(crate) use unpublished::ContextUnpublishedHoldV1;
 use versions::{
     ContextReadSourceV1, ContextVersionsV1, SubmissionReaderMarkerV1, SubmissionWriterDomainV1,
@@ -1204,6 +1207,7 @@ pub struct RuntimeCleanupReportV1<E> {
     graph_reserved: bool,
     native_pair_reserved: bool,
     scope_reserved: bool,
+    replica_pending: usize,
     allocation_credit_records: usize,
     // Journal capacity is bounded by CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1.
     allocation_journal_records: u32,
@@ -1234,6 +1238,7 @@ impl<E> RuntimeCleanupReportV1<E> {
             && !self.graph_reserved
             && !self.native_pair_reserved
             && !self.scope_reserved
+            && self.replica_pending == 0
             && self.retained.is_empty()
             && self.allocation_credit_records == 0
             && self.allocation_journal_records == 0
@@ -1257,6 +1262,11 @@ impl<E> RuntimeCleanupReportV1<E> {
     /// A lexical generated scope still retains this Context, even if empty or forgotten.
     pub const fn is_generated_scope_reserved_v1(&self) -> bool {
         self.scope_reserved
+    }
+
+    /// Tracked copies still requiring original retirement; not replica availability.
+    pub const fn pending_replica_copies_v1(&self) -> usize {
+        self.replica_pending
     }
 
     /// Remaining opt-in allocation credit records, including unidentified
@@ -1394,6 +1404,8 @@ fn completion_callback_panicked_v1(
 pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     // Fail stop before backend/resource destruction after a forgotten scope.
     scope_epoch: scope_epoch::Anchor,
+    // A forgotten tracked copy must fail stop before backend destruction.
+    replicas: Option<RuntimeReplicaStorageV1>,
     backend: B,
     context_generation: u64,
     devices: Vec<RuntimeDeviceV1>,
@@ -1600,6 +1612,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         Ok(Self {
             scope_epoch: scope_epoch::Anchor::default(),
+            replicas: None,
             context_generation,
             devices,
             streams: HashMap::new(),
@@ -1726,6 +1739,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || self.graph_reservation.is_some()
             || self.native_pair_reservation.is_some()
             || self.has_unpublished_holds_v1()
+            || self.pending_replicas_v1() != 0
         {
             return self.cleanup_report(failures);
         }
@@ -1911,6 +1925,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// Failure returns the still-owning context so quiescent or rejected
     /// operations may be inspected and retried. Terminal contexts retain their
     /// symbolic handle custody but will never call the lost backend again.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the original cleanup report stays inline in the existing owner-return contract"
+    )]
     pub fn shutdown(mut self) -> Result<B, RuntimeContextShutdownFailureV1<B>> {
         let report = self.cleanup();
         if report.is_complete() {
@@ -1940,6 +1958,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             graph_reserved: self.graph_reservation.is_some(),
             native_pair_reserved: self.native_pair_reservation.is_some(),
             scope_reserved: self.scope_epoch.active(),
+            replica_pending: self.pending_replicas_v1(),
             allocation_credit_records: self.allocation_admission.retained_records(),
             allocation_journal_records: u32::try_from(
                 self.versions
@@ -4284,6 +4303,7 @@ mod tests {
     mod producer_launch_tests;
     mod progress_stream_tests;
     mod quiescence_order_tests;
+    mod replica_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
 
@@ -4428,6 +4448,7 @@ mod tests {
         observed_kernel_reads: Vec<MockObservedKernelRead>,
         launch_failure: MockMemoryFailure,
         copy_failure: MockMemoryFailure,
+        release_submission_failure: MockMemoryFailure,
         copy_call_count: usize,
         write_call_count: usize,
         cancel_failure: MockMemoryFailure,
@@ -4865,6 +4886,7 @@ mod tests {
             submission: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
             self.accounted_fault.enter("release-submission");
+            mock_memory_failure_v1(core::mem::take(&mut self.release_submission_failure))?;
             assert!(!self.pending_copies.contains_key(&submission));
             assert!(!self.pending_peer_segments.contains_key(&submission));
             assert!(!self.pending_kernel_reads.contains_key(&submission));

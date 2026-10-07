@@ -26,7 +26,7 @@ PROOF = V / "retained_pair_owned_storage_v1.rs"
 FILES = [PROOF, DECLARATIONS, BODY]
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = 'ee494070452a4831584654dcd296bceb742baaacef7b8f5f4432bf4321911520'
+SOURCE_TREE_SHA = 'e4da5d7b462069c10cf07afd0c27ea4f7a3c247ee55d2da3daed965653f11b3d'
 PROOF_SHA = "bc6aa63e6cc401ea68d2ef8bcadb127922ec4f64ba6ffdc48bab25b58830856a"
 # Measured by the root's full, unfiltered owned-storage proof discovery.
 EXPECTED_VERIFIED = 8

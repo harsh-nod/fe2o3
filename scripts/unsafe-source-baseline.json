@@ -6,8 +6,14 @@
     "block": 53,
     "function": 1
   },
+  "crates/cargo-fe2o3/src/application_handoff/native.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/src/application_handoff/startup_tests.rs": {
+    "block": 4
+  },
   "crates/cargo-fe2o3/src/application_sandbox.rs": {
-    "block": 21
+    "block": 17
   },
   "crates/cargo-fe2o3/src/application_supervisor.rs": {
     "block": 28
@@ -29,7 +35,10 @@
     "block": 3
   },
   "crates/cargo-fe2o3/src/cargo_invocation_boundary.rs": {
-    "block": 7
+    "block": 5
+  },
+  "crates/cargo-fe2o3/src/cargo_invocation_boundary/platform/tests.rs": {
+    "block": 2
   },
   "crates/cargo-fe2o3/src/compiler_execution_boundary.rs": {
     "block": 2
@@ -47,6 +56,9 @@
     "block": 6
   },
   "crates/cargo-fe2o3/src/process_execution.rs": {
+    "block": 1
+  },
+  "crates/cargo-fe2o3/src/production_host_binding/tests.rs": {
     "block": 1
   },
   "crates/cargo-fe2o3/src/profile_command.rs": {
@@ -71,11 +83,20 @@
   "crates/cargo-fe2o3/tests/binding_host_test_cli.rs": {
     "block": 1
   },
+  "crates/cargo-fe2o3/tests/fixtures/auditor_syscall_probe.rs": {
+    "block": 8
+  },
   "crates/cargo-fe2o3/tests/fixtures/build_script_fixture.rs": {
     "block": 3,
     "extern_block": 1
   },
   "crates/cargo-fe2o3/tests/fixtures/cargo_fixture.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/tests/fixtures/conditional-custodian-application/src/main.rs": {
+    "block": 2
+  },
+  "crates/cargo-fe2o3/tests/fixtures/conditional-custodian-application/src/native_bootstrap.rs": {
     "block": 2
   },
   "crates/cargo-fe2o3/tests/fixtures/g8_b_tool_fixture.rs": {
@@ -89,7 +110,7 @@
     "block": 6
   },
   "crates/cargo-fe2o3/tests/fixtures/runner_app_fixture.rs": {
-    "block": 20
+    "block": 21
   },
   "crates/cargo-fe2o3/tests/fixtures/runner_chain_fixture.rs": {
     "block": 1
@@ -98,7 +119,7 @@
     "block": 1
   },
   "crates/cargo-fe2o3/tests/fixtures/worker_v3_host_consumer_app_fixture.rs": {
-    "block": 3
+    "block": 4
   },
   "crates/cargo-fe2o3/tests/inspect_cli.rs": {
     "block": 1
@@ -125,8 +146,17 @@
   "crates/fe2o3-artifact-transaction/src/compiler_module_handoff.rs": {
     "block": 6
   },
+  "crates/fe2o3-artifact-transaction/src/compiler_module_handoff/semantic_v3/tests/lock_retention.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-artifact-transaction/src/compiler_module_handoff/semantic_v3/tests/observation.rs": {
+    "block": 1
+  },
   "crates/fe2o3-artifact-transaction/src/lib.rs": {
     "block": 16
+  },
+  "crates/fe2o3-artifact-transaction/src/native_current_publication.rs": {
+    "block": 3
   },
   "crates/fe2o3-artifact-transaction/src/publication_object_inventory_v1.rs": {
     "block": 10
@@ -187,11 +217,17 @@
   "crates/fe2o3-broker-authority-service/src/compiler_execution_supervision.rs": {
     "block": 12
   },
+  "crates/fe2o3-broker-authority-service/src/compiler_execution_supervision/tests/observer.rs": {
+    "block": 3
+  },
   "crates/fe2o3-broker-authority-service/src/durable_session_consume/tests.rs": {
     "block": 4
   },
   "crates/fe2o3-broker-authority-service/src/linux.rs": {
     "block": 19
+  },
+  "crates/fe2o3-broker-authority-service/src/linux/application_observation/tests.rs": {
+    "block": 5
   },
   "crates/fe2o3-broker-authority-service/src/linux/checks.rs": {
     "block": 2
@@ -202,7 +238,37 @@
   "crates/fe2o3-broker-authority-service/src/linux/native_io.rs": {
     "block": 1
   },
+  "crates/fe2o3-broker-authority-service/src/linux/observer_channel.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-broker-authority-service/src/linux/observer_channel/application.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-broker-authority-service/src/linux/observer_channel/issuer.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-broker-authority-service/src/linux/observer_channel/native_application.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-broker-authority-service/src/linux/observer_channel/proof_manager/wire.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-broker-authority-service/src/linux/observer_channel/registry/tests.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-broker-authority-service/src/linux/observer_channel/tests.rs": {
+    "block": 2
+  },
   "crates/fe2o3-compiler-closure-capability/src/compiler_execution_policy.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-compiler-closure-capability/src/compiler_execution_production_deployment.rs": {
+    "block": 5
+  },
+  "crates/fe2o3-compiler-closure-capability/src/compiler_execution_production_deployment/root_native_v3.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-compiler-closure-capability/src/compiler_execution_production_deployment/tests.rs": {
     "block": 1
   },
   "crates/fe2o3-compiler-closure-capability/src/compiler_execution_signing_key_service_transfer_v3_tests.rs": {
@@ -220,12 +286,48 @@
   "crates/fe2o3-compiler-closure-capability/src/sealed_image/native.rs": {
     "block": 3
   },
+  "crates/fe2o3-compiler-execution-client/src/application_channel.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-client/src/application_channel/native_registration.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-compiler-execution-client/src/application_channel/native_registration/currentness.rs": {
+    "block": 2,
+    "function": 2
+  },
+  "crates/fe2o3-compiler-execution-client/src/application_channel/native_registration/custodian.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-client/src/application_channel/registration.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-compiler-execution-client/src/application_channel/registration/tests.rs": {
+    "block": 10
+  },
+  "crates/fe2o3-compiler-execution-client/src/application_channel/registration/tests/custodian.rs": {
+    "block": 6
+  },
+  "crates/fe2o3-compiler-execution-client/src/application_channel/tests.rs": {
+    "block": 6
+  },
+  "crates/fe2o3-compiler-execution-client/src/application_channel/transport.rs": {
+    "block": 1
+  },
   "crates/fe2o3-compiler-execution-client/src/bin/compiler-execution-client-check.rs": {
     "block": 4,
     "function": 1
   },
   "crates/fe2o3-compiler-execution-client/src/child_channel.rs": {
     "block": 20
+  },
+  "crates/fe2o3-compiler-execution-client/src/child_channel/retained_child.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-compiler-execution-client/src/child_channel/retained_child/tests.rs": {
+    "block": 2
   },
   "crates/fe2o3-compiler-execution-client/src/child_channel_transfer_tests.rs": {
     "block": 1
@@ -247,6 +349,9 @@
   },
   "crates/fe2o3-compiler-execution-client/src/supervisor_handoff.rs": {
     "block": 3
+  },
+  "crates/fe2o3-compiler-execution-client/src/supervisor_handoff/application/tests.rs": {
+    "block": 1
   },
   "crates/fe2o3-compiler-execution-client/tests/child_channel.rs": {
     "block": 5
@@ -274,6 +379,9 @@
   "crates/fe2o3-compiler-execution-coordinator/src/compiler_output_directory_tests.rs": {
     "block": 1
   },
+  "crates/fe2o3-compiler-execution-coordinator/src/composed_startup.rs": {
+    "block": 4
+  },
   "crates/fe2o3-compiler-execution-coordinator/src/entrypoint.rs": {
     "block": 3
   },
@@ -291,6 +399,14 @@
   "crates/fe2o3-compiler-execution-coordinator/src/native_activation_tests.rs": {
     "block": 4
   },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_application_currentness.rs": {
+    "block": 3,
+    "function": 2
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_application_supervisor.rs": {
+    "block": 3,
+    "function": 2
+  },
   "crates/fe2o3-compiler-execution-coordinator/src/native_compiler_attempt.rs": {
     "block": 2,
     "function": 1
@@ -300,6 +416,10 @@
     "function": 3
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_compiler_attempt_tests.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-compiler-execution-coordinator/src/native_compiler_phase.rs": {
+    "block": 2,
     "function": 1
   },
   "crates/fe2o3-compiler-execution-coordinator/src/native_entrypoint.rs": {
@@ -413,6 +533,10 @@
   "crates/fe2o3-compiler-execution-supervisor/src/main_native.rs": {
     "block": 1
   },
+  "crates/fe2o3-compiler-execution-supervisor/src/native_application_mode.rs": {
+    "block": 5,
+    "function": 2
+  },
   "crates/fe2o3-compiler-execution-supervisor/src/native_consuming_test_process.rs": {
     "block": 7
   },
@@ -421,15 +545,15 @@
     "function": 2
   },
   "crates/fe2o3-compiler-execution-supervisor/src/native_deployment_io_tests.rs": {
-    "block": 14
+    "block": 15
   },
   "crates/fe2o3-compiler-execution-supervisor/src/native_entrypoint.rs": {
     "block": 1,
     "function": 1
   },
   "crates/fe2o3-compiler-execution-supervisor/src/native_startup_body.rs": {
-    "block": 2,
-    "function": 1
+    "block": 3,
+    "function": 2
   },
   "crates/fe2o3-compiler-execution-supervisor/src/process.rs": {
     "block": 28,
@@ -461,7 +585,7 @@
     "function": 13
   },
   "crates/fe2o3-completion/tests/completion_graph.rs": {
-    "block": 14
+    "block": 16
   },
   "crates/fe2o3-completion/tests/lifecycle.rs": {
     "block": 26
@@ -805,19 +929,25 @@
     "function": 1
   },
   "crates/fe2o3-host/src/application_descriptor_handoff.rs": {
-    "block": 15,
-    "function": 5
+    "block": 18,
+    "function": 8
+  },
+  "crates/fe2o3-host/src/application_descriptor_handoff/tests.rs": {
+    "block": 2
   },
   "crates/fe2o3-host/src/argument_alias.rs": {
     "block": 19,
     "function": 2
   },
   "crates/fe2o3-host/src/compiler_execution_current_record_audit.rs": {
-    "block": 1,
-    "function": 1
+    "block": 3,
+    "function": 3
   },
   "crates/fe2o3-host/src/compiler_execution_current_record_audit/tests.rs": {
     "block": 4
+  },
+  "crates/fe2o3-host/src/compiler_execution_current_record_audit/tests/production.rs": {
+    "block": 6
   },
   "crates/fe2o3-host/src/compiler_generated_contract.rs": {
     "block": 2,
@@ -840,6 +970,21 @@
   "crates/fe2o3-host/src/generated_kfd_mixed_preparation_v53_tests.rs": {
     "impl": 3
   },
+  "crates/fe2o3-host/src/generated_runtime_arguments.rs": {
+    "trait": 1
+  },
+  "crates/fe2o3-host/src/generated_runtime_arguments/charged_tests/invocation_tests/carrier_tests.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-host/src/generated_runtime_carrier.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-host/src/generated_runtime_carrier/registry.rs": {
+    "impl": 2
+  },
+  "crates/fe2o3-host/src/generated_runtime_results/staging/tests/native.rs": {
+    "impl": 1
+  },
   "crates/fe2o3-host/src/generated_worker_v3_dispatch.rs": {
     "block": 5,
     "trait": 1
@@ -858,13 +1003,28 @@
     "impl": 1,
     "trait": 1
   },
+  "crates/fe2o3-host/src/native_conditional_fill_artifact_v1/intake/inherited.rs": {
+    "block": 5,
+    "function": 3
+  },
+  "crates/fe2o3-host/src/native_conditional_fill_artifact_v1/intake/lifecycle.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-host/src/native_conditional_fill_artifact_v1/intake/lifecycle/scoped.rs": {
+    "impl": 1
+  },
   "crates/fe2o3-host/src/prepared_launch.rs": {
     "block": 7,
     "function": 1
   },
   "crates/fe2o3-host/src/production_application.rs": {
-    "block": 2,
-    "function": 2
+    "block": 3,
+    "function": 3
+  },
+  "crates/fe2o3-host/src/production_application/current_thread.rs": {
+    "block": 3,
+    "function": 3
   },
   "crates/fe2o3-host/src/production_mixed_application_family.rs": {
     "block": 1,
@@ -879,6 +1039,13 @@
     "function": 14,
     "impl": 3,
     "trait": 5
+  },
+  "crates/fe2o3-host/src/worker_v3_verification_admission/conditional_fill/remote.rs": {
+    "block": 1,
+    "function": 1
+  },
+  "crates/fe2o3-host/src/worker_v3_verification_admission/conditional_fill/remote/invocation.rs": {
+    "impl": 1
   },
   "crates/fe2o3-host/tests/gfx942_tile_interop_hardware.rs": {
     "block": 1
@@ -1045,11 +1212,29 @@
     "function": 3
   },
   "crates/fe2o3-kfd/src/queue_linux.rs": {
-    "block": 47,
+    "block": 45,
     "extern_block": 1
   },
+  "crates/fe2o3-kfd/src/queue_linux/doorbell_release_tests.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-kfd/src/queue_linux/primary_fixture.rs": {
+    "block": 5
+  },
+  "crates/fe2o3-kfd/src/queue_linux/teardown.rs": {
+    "block": 8
+  },
+  "crates/fe2o3-kfd/src/queue_linux/teardown/tests.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-kfd/src/queue_linux/tests.rs": {
+    "block": 2
+  },
   "crates/fe2o3-kfd/src/queue_submit.rs": {
-    "block": 7
+    "block": 5
+  },
+  "crates/fe2o3-kfd/src/queue_submit/tests.rs": {
+    "block": 2
   },
   "crates/fe2o3-kfd/src/runtime_debug_empty_transport_v1.rs": {
     "block": 2
@@ -1063,11 +1248,19 @@
   "crates/fe2o3-kfd/src/runtime_debug_noqueue_transaction_v1_tests.rs": {
     "block": 1
   },
+  "crates/fe2o3-kfd/src/sdma/multi_queue/tail_wait_cpu.rs": {
+    "block": 2
+  },
   "crates/fe2o3-kfd/src/stopped_state_v1.rs": {
     "block": 2
   },
   "crates/fe2o3-kfd/src/target_debug_telemetry_v1.rs": {
     "block": 4
+  },
+  "crates/fe2o3-kfd/src/topology/tests/directory_entries/allocation_counter.rs": {
+    "block": 4,
+    "function": 4,
+    "impl": 1
   },
   "crates/fe2o3-kfd/tests/kfd_debug_trap_live.rs": {
     "block": 7
@@ -1085,7 +1278,11 @@
     "block": 4,
     "extern_block": 1,
     "function": 13,
-    "impl": 6
+    "impl": 7
+  },
+  "crates/fe2o3-macros/src/runtime_adapter_tests.rs": {
+    "block": 1,
+    "impl": 2
   },
   "crates/fe2o3-macros/src/zero_argument_typed_v1_tests.rs": {
     "function": 1
@@ -1095,7 +1292,7 @@
   },
   "crates/fe2o3-macros/tests/fixtures/renamed-typed-host/host-stub/src/lib.rs": {
     "function": 1,
-    "trait": 2
+    "trait": 3
   },
   "crates/fe2o3-macros/tests/fixtures/typed-invalid/src/bin/invalid_control_flow.rs": {
     "function": 1
@@ -1120,6 +1317,18 @@
   "crates/fe2o3-process-identity/src/native_capture.rs": {
     "block": 3
   },
+  "crates/fe2o3-process-identity/src/pidfd.rs": {
+    "block": 5
+  },
+  "crates/fe2o3-process-identity/src/pidfd/native.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-process-identity/src/pidfd/native/tests.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-process-identity/src/pidfd/owner_tests.rs": {
+    "block": 11
+  },
   "crates/fe2o3-process-identity/src/sealed_memfd.rs": {
     "block": 2
   },
@@ -1131,6 +1340,53 @@
   },
   "crates/fe2o3-process-identity/tests/receiver_exec.rs": {
     "block": 2
+  },
+  "crates/fe2o3-proof-custodian/src/application/tests.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-proof-custodian/src/application/worker.rs": {
+    "block": 3,
+    "function": 1
+  },
+  "crates/fe2o3-proof-custodian/src/bin/application-controller.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-proof-custodian/src/bin/controller.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-proof-custodian/src/bin/native-application-controller.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-proof-custodian/src/bin/native_application_manager.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-proof-custodian/src/deployment/native_manager/bootstrap.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/fe2o3-proof-custodian/src/launch/application/qualification.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-proof-custodian/src/launch/native_application.rs": {
+    "block": 3
+  },
+  "crates/fe2o3-proof-custodian/src/launch/native_application_startup.rs": {
+    "function": 1
+  },
+  "crates/fe2o3-proof-custodian/src/native_application/worker.rs": {
+    "block": 3,
+    "function": 1
+  },
+  "crates/fe2o3-proof-custodian/src/native_manager_entrypoint.rs": {
+    "block": 6,
+    "function": 1
+  },
+  "crates/fe2o3-proof-custodian/src/provisioning/tests/genuine_application.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-proof-custodian/src/worker.rs": {
+    "block": 3,
+    "function": 1
   },
   "crates/fe2o3-protected-publisher/src/enrollment.rs": {
     "block": 16
@@ -1161,6 +1417,9 @@
   },
   "crates/fe2o3-protected-service-profile/tests/process_profile.rs": {
     "block": 15
+  },
+  "crates/fe2o3-protected-service-spawn/src/bin/proof_controller_profile_fixture.rs": {
+    "block": 3
   },
   "crates/fe2o3-protected-service-spawn/src/cleanup_bridge.rs": {
     "function": 7,
@@ -1202,9 +1461,6 @@
   "crates/fe2o3-protected-service-spawn/src/native_child_tests.rs": {
     "block": 5
   },
-  "crates/fe2o3-protected-service-spawn/src/native_device_filter.rs": {
-    "block": 3
-  },
   "crates/fe2o3-protected-service-spawn/src/native_compiler_channel_syscall.rs": {
     "block": 1,
     "function": 1
@@ -1240,6 +1496,9 @@
     "block": 1,
     "function": 1
   },
+  "crates/fe2o3-protected-service-spawn/src/native_device_filter.rs": {
+    "block": 3
+  },
   "crates/fe2o3-protected-service-spawn/src/native_domain_spawn.rs": {
     "function": 1
   },
@@ -1252,6 +1511,10 @@
   },
   "crates/fe2o3-protected-service-spawn/src/native_namespace_spawn.rs": {
     "function": 1
+  },
+  "crates/fe2o3-protected-service-spawn/src/native_proof_controller.rs": {
+    "block": 2,
+    "function": 3
   },
   "crates/fe2o3-protected-service-spawn/src/native_retained_child.rs": {
     "block": 6,
@@ -1309,7 +1572,7 @@
     "block": 5
   },
   "crates/fe2o3-protected-service-spawn/src/syscall.rs": {
-    "block": 43,
+    "block": 44,
     "function": 9
   },
   "crates/fe2o3-protected-service-spawn/tests/fixtures/runtime-checkpoint-v1.rs": {
@@ -1327,7 +1590,53 @@
   "crates/fe2o3-runtime/examples/gfx942-lds-diagnostic.rs": {
     "impl": 1
   },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-d2d-window-benchmark.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-destination-segments-smoke.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-directed-peer-copy-smoke.rs": {
+    "impl": 1
+  },
   "crates/fe2o3-runtime/examples/gfx942-runtime-directional-window-benchmark.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-multi-preparation-smoke.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-peer-copy-smoke.rs": {
+    "impl": 2
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-pending-peer-capture-smoke.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-r63-async-graph.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-r65-drain-versions.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-sharded-peer-copy-smoke.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/gfx942-runtime-xgmi-recovery-smoke.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/examples/support/async_owner_copy.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/src/async_engine/graph.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-runtime/src/async_engine/graph/admitted.rs": {
+    "block": 5,
+    "function": 5
+  },
+  "crates/fe2o3-runtime/src/async_engine/tests/owned_tests/graph_tests/admitted_tests.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-runtime/src/async_engine/tests/owned_tests/preparation_tests.rs": {
     "impl": 1
   },
   "crates/fe2o3-runtime/src/authorized_execution.rs": {
@@ -1335,12 +1644,63 @@
     "impl": 1,
     "trait": 1
   },
+  "crates/fe2o3-runtime/src/authorized_execution/generated_completion.rs": {
+    "trait": 1
+  },
+  "crates/fe2o3-runtime/src/authorized_execution/registry_completion.rs": {
+    "trait": 2
+  },
+  "crates/fe2o3-runtime/src/authorized_execution/tests/generated_native_inputs.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/src/bin/fe2o3-runtime-kfd-worker-v5-qualification.rs": {
+    "impl": 1
+  },
   "crates/fe2o3-runtime/src/conditional_authority_tests.rs": {
     "impl": 1
   },
+  "crates/fe2o3-runtime/src/context/generated_issue/tests/completion_tests.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/src/context/generated_scope/graph.rs": {
+    "block": 8
+  },
+  "crates/fe2o3-runtime/src/context/generated_scope/graph/staging.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-runtime/src/context/generated_scope/registry4/tests.rs": {
+    "impl": 2
+  },
+  "crates/fe2o3-runtime/src/context/generated_scope/tests.rs": {
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/src/context/tests/peer_gather_tests.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-runtime/src/context/tests/peer_gather_tests/refusals.rs": {
+    "block": 2
+  },
+  "crates/fe2o3-runtime/src/context/tests/replica_tests/graph.rs": {
+    "block": 4
+  },
+  "crates/fe2o3-runtime/src/generated_source/cohort3/tests.rs": {
+    "impl": 1
+  },
   "crates/fe2o3-runtime/src/kfd_backend.rs": {
+    "block": 2,
     "impl": 8,
     "trait": 2
+  },
+  "crates/fe2o3-runtime/src/kfd_backend/drain_capture.rs": {
+    "block": 4,
+    "function": 4,
+    "impl": 1
+  },
+  "crates/fe2o3-runtime/src/kfd_backend/multi_open/tests.rs": {
+    "impl": 2
+  },
+  "crates/fe2o3-runtime/src/persistent_projection/native_fill.rs": {
+    "impl": 1
   },
   "crates/fe2o3-runtime/tests/kfd_opaque_checkpoint_live.rs": {
     "block": 9,
@@ -1356,6 +1716,16 @@
   },
   "crates/fe2o3-verifier/src/bin/proof_executor_helper.rs": {
     "block": 1
+  },
+  "crates/fe2o3-verifier/src/compiler_proof_broker_v1.rs": {
+    "block": 2,
+    "function": 1
+  },
+  "crates/fe2o3-verifier/src/compiler_proof_broker_v1/process/tests.rs": {
+    "block": 1
+  },
+  "crates/fe2o3-verifier/src/compiler_proof_broker_v1/tests.rs": {
+    "block": 2
   },
   "crates/fe2o3-verifier/src/functional_refinement_executor_socket_v1_tests.rs": {
     "block": 3,
@@ -1436,7 +1806,7 @@
     "block": 9
   },
   "crates/rustc-codegen-fe2o3/src/protected_rustc_invocation.rs": {
-    "block": 1
+    "block": 2
   },
   "crates/rustc-codegen-fe2o3/src/protected_rustc_invocation/tests.rs": {
     "block": 9
@@ -1618,6 +1988,10 @@
   },
   "examples/tiled_gemm_general_v1/tests/kernel_source.rs": {
     "block": 1
+  },
+  "scripts/qualification-host-link-proxy.rs": {
+    "block": 1,
+    "extern_block": 1
   },
   "tests/fixtures/device-link/rust-device/src/lib.rs": {
     "block": 1,

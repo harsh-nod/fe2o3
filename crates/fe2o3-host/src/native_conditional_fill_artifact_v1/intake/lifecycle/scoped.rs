@@ -16,6 +16,7 @@ use fe2o3_runtime::{
 use std::cell::{RefCell, RefMut};
 mod cohort3;
 mod epoch;
+mod registry4;
 pub(super) use epoch::EpochAnchor;
 use epoch::{CarrierRetention, Epoch};
 
@@ -240,98 +241,137 @@ impl<'scope, 'work> NativeConditionalFillInvocationScopeV1<'scope, 'work> {
         K: CompilerGeneratedKernelExpectationV1,
         A: CompilerGeneratedRuntimeArguments<K>,
     {
+        self.prepare_carrier::<K, A>(
+            arguments,
+            device,
+            geometry,
+            timeout_milliseconds,
+            limits,
+            result_budget,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_carrier<'a, K, A>(
+        &'a self,
+        arguments: A,
+        device: &CheckedGfx942XnackMinusDevice,
+        geometry: AqlDispatchGeometryV1,
+        timeout_milliseconds: u32,
+        limits: GeneratedRuntimeArgumentLimitsV1,
+        result_budget: &GeneratedRuntimeResultBudgetV1,
+    ) -> Result<GeneratedRuntimeCarrierV1<Authority<'a, 'scope, 'work>>>
+    where
+        K: CompilerGeneratedKernelExpectationV1,
+        A: CompilerGeneratedRuntimeArguments<K>,
+    {
         self.revalidate()?;
         let prepared: Result<_> = (|| {
             let mut current = self.current()?;
             let budget = &mut *current.budget;
-            let owner = self.files.finalized.source().recovered_handoff();
-            let (abi, abi_storage) =
-                check_native_conditional_fill_abi_v1(owner, budget).map_err(failure)?;
-            budget.reserve_storage(abi_storage)?;
-            require(
-                K::KERNEL_BINDING_ID_V1 == *abi.kernel_id() && K::EXPORT_NAME == abi.entry_name(),
-                "native generated marker differs from actual V5 source",
-            )?;
-            let generated = A::generated_argument_layout().map_err(failure)?;
-            let (plan, plan_storage) = abi
-                .prepare_argument_packing(&generated, budget)
-                .map_err(failure)?;
-            budget.reserve_storage(plan_storage)?;
-            let contract = abi.native_contract_identity(budget).map_err(failure)?;
-            let packed = prepare_charged_with_plan(
-                arguments,
-                &plan,
-                limits,
-                result_budget,
-                A::account_runtime_arguments,
-                |arguments, budget| arguments.bind_runtime_arguments(&plan, budget),
-            )
-            .map_err(failure)?;
-            let count = packed_count(&packed.packed_view_v1(), *abi.kernel_id())?;
-            let premises =
-                NativeConditionalFill64PremisesV1::new(contract, count, abi.max_grid_x())
-                    .map_err(|_| failure("native packed output or source grid bound"))?;
-            premises
-                .validate_shape_v1(
-                    geometry.grid(),
-                    geometry.workgroup(),
-                    count.checked_mul(4).ok_or(Resource::Arithmetic)?,
+            let (
+                storage,
+                footprint,
+                object,
+                dispatch_contract,
+                invocation,
+                plan_storage,
+                abi_storage,
+            ) = {
+                let owner = self.files.finalized.source().recovered_handoff();
+                let (abi, abi_storage) =
+                    check_native_conditional_fill_abi_v1(owner, budget).map_err(failure)?;
+                budget.reserve_storage(abi_storage)?;
+                require(
+                    K::KERNEL_BINDING_ID_V1 == *abi.kernel_id()
+                        && K::EXPORT_NAME == abi.entry_name(),
+                    "native generated marker differs from actual V5 source",
+                )?;
+                let generated = A::generated_argument_layout().map_err(failure)?;
+                let (plan, plan_storage) = abi
+                    .prepare_argument_packing(&generated, budget)
+                    .map_err(failure)?;
+                budget.reserve_storage(plan_storage)?;
+                let contract = abi.native_contract_identity(budget).map_err(failure)?;
+                let packed = prepare_charged_with_plan(
+                    arguments,
+                    &plan,
+                    limits,
+                    result_budget,
+                    A::account_runtime_arguments,
+                    |arguments, budget| arguments.bind_runtime_arguments(&plan, budget),
                 )
-                .map_err(|_| failure("native full64 invocation geometry"))?;
-            let invocation = Invocation::NativeConditionalFill64V1 {
-                contract_identity: *premises.contract_identity(),
-                premise_identity: *premises.identity(),
+                .map_err(failure)?;
+                let count = packed_count(&packed.packed_view_v1(), *abi.kernel_id())?;
+                let premises =
+                    NativeConditionalFill64PremisesV1::new(contract, count, abi.max_grid_x())
+                        .map_err(|_| failure("native packed output or source grid bound"))?;
+                premises
+                    .validate_shape_v1(
+                        geometry.grid(),
+                        geometry.workgroup(),
+                        count.checked_mul(4).ok_or(Resource::Arithmetic)?,
+                    )
+                    .map_err(|_| failure("native full64 invocation geometry"))?;
+                let invocation = Invocation::NativeConditionalFill64V1 {
+                    contract_identity: *premises.contract_identity(),
+                    premise_identity: *premises.identity(),
+                };
+                let parts = packed.into_runtime_inputs(geometry, 0, timeout_milliseconds);
+                let hsaco = self.files.publication.exact_artifact_bytes();
+                budget.charge_work(hsaco.len().checked_add(4096).ok_or(Resource::Arithmetic)?)?;
+                let object: [u8; 32] = Sha256::digest(hsaco).into();
+                let storage = parts
+                    .storage
+                    .prepare(hsaco, abi.entry_name())
+                    .map_err(failure)?;
+                let kernel = fe2o3_amdhsa_loader::validate(
+                    hsaco,
+                    fe2o3_amdhsa_loader::AdmittedProfile::Gfx942XnackOffCov6,
+                )
+                .map_err(|error| failure(format_args!("native loader plan: {error:?}")))?
+                .bind_kernel(abi.entry_name())
+                .map_err(|error| {
+                    failure(format_args!("native selected kernel closure: {error:?}"))
+                })?;
+                let prepared = storage.prepared();
+                require(
+                    prepared.kernel_name() == abi.entry_name()
+                        && prepared.identity() == kernel.identity_inputs()
+                        && prepared.identity().object_sha256() == object
+                        && prepared.finalized_hsaco_length() == hsaco.len() as u64
+                        && Some(prepared.descriptor_offset())
+                            == kernel
+                                .selected_binding()
+                                .descriptor_address()
+                                .checked_sub(kernel.envelope().plan().image_start()),
+                    "native actual finalized entry differs",
+                )?;
+                let storage = storage
+                    .project_native_conditional_fill64(hsaco, premises)
+                    .map_err(failure)?;
+                require(
+                    storage.prepared().invocation_binding() == invocation,
+                    "native projection family differs",
+                )?;
+                let dispatch_contract = storage.prepared().dispatch_contract_sha256();
+                drop(plan);
+                (
+                    storage,
+                    parts.footprint,
+                    object,
+                    dispatch_contract,
+                    invocation,
+                    plan_storage,
+                    abi_storage,
+                )
             };
-            let parts = packed.into_runtime_inputs(geometry, 0, timeout_milliseconds);
-            let hsaco = self.files.publication.exact_artifact_bytes();
-            budget.charge_work(hsaco.len().checked_add(4096).ok_or(Resource::Arithmetic)?)?;
-            let object: [u8; 32] = Sha256::digest(hsaco).into();
-            let storage = parts
-                .storage
-                .prepare(hsaco, abi.entry_name())
-                .map_err(failure)?;
-            let kernel = fe2o3_amdhsa_loader::validate(
-                hsaco,
-                fe2o3_amdhsa_loader::AdmittedProfile::Gfx942XnackOffCov6,
-            )
-            .map_err(|error| failure(format_args!("native loader plan: {error:?}")))?
-            .bind_kernel(abi.entry_name())
-            .map_err(|error| failure(format_args!("native selected kernel closure: {error:?}")))?;
-            let prepared = storage.prepared();
-            require(
-                prepared.kernel_name() == abi.entry_name()
-                    && prepared.identity() == kernel.identity_inputs()
-                    && prepared.identity().object_sha256() == object
-                    && prepared.finalized_hsaco_length() == hsaco.len() as u64
-                    && Some(prepared.descriptor_offset())
-                        == kernel
-                            .selected_binding()
-                            .descriptor_address()
-                            .checked_sub(kernel.envelope().plan().image_start()),
-                "native actual finalized entry differs",
-            )?;
-            let storage = storage
-                .project_native_conditional_fill64(hsaco, premises)
-                .map_err(failure)?;
-            require(
-                storage.prepared().invocation_binding() == invocation,
-                "native projection family differs",
-            )?;
-            let dispatch_contract = storage.prepared().dispatch_contract_sha256();
-            drop(plan);
-            drop(abi);
             budget.release_storage(
                 plan_storage
                     .checked_add(abi_storage)
                     .ok_or(Resource::Arithmetic)?,
             )?;
-            Ok((
-                storage,
-                parts.footprint,
-                object,
-                dispatch_contract,
-                invocation,
-            ))
+            Ok((storage, footprint, object, dispatch_contract, invocation))
         })();
         // Close the original custody even when argument callbacks or packing fail.
         self.revalidate()?;

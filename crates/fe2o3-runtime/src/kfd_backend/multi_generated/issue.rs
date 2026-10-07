@@ -204,6 +204,56 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         })
     }
 
+    pub(crate) fn advance_generated_issue_preserving_rejection_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        id: u64,
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let route = self.checked_generated_submission_v1(id, Some(plan))?;
+        let Some(local) = route.local else {
+            return Err(self.generated_submission_corruption_v1(route.shell.scope));
+        };
+        self.with_generated_issue_child_v1(route.shell.scope, |child| {
+            child.advance_generated_issue_preserving_rejection_v1(&route.shell.local, local)
+        })
+    }
+
+    pub(crate) fn generated_rejected_publication_v1(
+        &self,
+        plan: &GeneratedShellPlanV1,
+        id: u64,
+    ) -> bool {
+        !self.terminal
+            && self.generated_submissions.get(&id).is_some_and(|route| {
+                route.shell.global == *plan
+                    && self.generated_submission_matches_v1(id, *route)
+                    && route
+                        .shell
+                        .scope
+                        .child
+                        .zip(route.local)
+                        .is_some_and(|(child, local)| {
+                            self.children.get(child).is_some_and(|owner| {
+                                owner.generated_rejected_publication_v1(&route.shell.local, local)
+                            })
+                        })
+            })
+    }
+
+    pub(crate) fn retire_generated_rejected_data_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        id: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let route = self.checked_generated_submission_v1(id, Some(plan))?;
+        let Some(local) = route.local else {
+            return Err(self.generated_submission_corruption_v1(route.shell.scope));
+        };
+        self.with_generated_issue_child_v1(route.shell.scope, |child| {
+            child.retire_generated_rejected_data_v1(&route.shell.local, local)
+        })
+    }
+
     pub(crate) fn progress_generated_submission_v1(
         &mut self,
         id: u64,

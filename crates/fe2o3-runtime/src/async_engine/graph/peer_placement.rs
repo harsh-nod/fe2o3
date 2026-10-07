@@ -206,7 +206,7 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
                     .bindings()
                     .iter()
                     .any(|b| forbidden_write(b.region, false)),
-                Action::Copy(source, destination) => {
+                Action::Copy(source, destination) | Action::ReplicaCopy(source, destination) => {
                     forbidden_write(*source, false) || forbidden_write(*destination, false)
                 }
                 Action::PeerCopy(source, destination) => {

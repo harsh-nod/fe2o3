@@ -1,0 +1,10 @@
+{
+  "crates/fe2o3-runtime-model/verus/check-graph-reservation-retirement-v1.py": "1b27cfa71fbdc9739bb1843206d6b5c98f3305c2634d5f97a528457e34f63b94",
+  "crates/fe2o3-runtime-model/verus/graph-reservation-retirement-diagnostics-v1.py": "0b0e49a07aefc8cca11a9b109e07bb6cdb3892b00fd3b03d66c77d08d2c42d69",
+  "crates/fe2o3-runtime-model/verus/graph-reservation-retirement-mutations-v1.py": "eb157fdeb94470425b00a26c200763fd7d40208a0086180ee54233bb5fdecbd3",
+  "crates/fe2o3-runtime-model/verus/pins/GRAPH_RESERVATION_RETIREMENT_DIAGNOSTICS_V1.json": "d73094c03ad444f664fc40b93db754eb4e943604f44f6f1e3fd09e3cba6a0c95",
+  "crates/fe2o3-runtime-model/verus/pins/GRAPH_RESERVATION_RETIREMENT_INPUTS_V1.json": "2335b85553e98dacdb29df660157b3df16d329dfd011b29073c12bf4fae3b659",
+  "crates/fe2o3-runtime-model/verus/pins/GRAPH_RESERVATION_RETIREMENT_INPUTS_V1_SHA256": "4e2c02bd5822ebd01a0f1b2cd310c38d4413c97a694e37393138b6979df659f6",
+  "crates/fe2o3-runtime-model/verus/qualify-graph-reservation-retirement-v1.py": "085a8792f863a17de53fd1f667d7afba42eefb680db710aaaf596c7d7c8f789d",
+  "crates/fe2o3-runtime-model/verus/test-graph-reservation-retirement-v1.py": "389aed50ff391e723e7d9f3ff2345c290fb14025d052f48ebeaf6c07e8b6ed8c"
+}

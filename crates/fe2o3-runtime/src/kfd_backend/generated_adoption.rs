@@ -9,6 +9,7 @@ mod cohort3;
 mod issue;
 mod readback;
 mod receipt;
+pub(super) mod registry4;
 mod typed_receipt;
 mod unpublished;
 pub(crate) use receipt::observe_generated_retirement_v1;
@@ -126,6 +127,10 @@ impl KfdRuntimeBackendV1 {
                 .native
                 .as_ref()
                 .is_some_and(|native| !native.is_retired())
+                || record
+                    .registry
+                    .as_ref()
+                    .is_some_and(|native| !native.is_retired())
         })
     }
 
@@ -454,6 +459,28 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         plan: &GeneratedShellPlanV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.retire_generated_data_with_rejection_v1(plan, None)
+    }
+
+    pub(crate) fn retire_generated_rejected_data_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        submission: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if !self.generated_rejected_publication_v1(plan, submission) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "missing original rejected publication",
+            ));
+        }
+        self.retire_generated_data_with_rejection_v1(plan, Some(submission))
+    }
+
+    fn retire_generated_data_with_rejection_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        rejected: Option<u64>,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
         if !self.validate_generated_shell_records_v1(plan) {
             return Err(Self::rejected(
@@ -476,11 +503,14 @@ impl KfdRuntimeBackendV1 {
             };
         };
         let retirement = match native.submission.as_ref() {
-            Some(submission) if submission.receipt.profile() == plan.profile => {
-                submission.receipt.retirement()
-            }
+            Some(submission) if submission.receipt.profile() == plan.profile => match rejected {
+                Some(id) if id == submission.id => submission.receipt.rejected_retirement(),
+                Some(_) => None,
+                None => submission.receipt.retirement(),
+            },
             Some(_) => None,
-            None => Some(RetirementV1::Pristine),
+            None if rejected.is_none() => Some(RetirementV1::Pristine),
+            None => None,
         };
         if native.phase != PhaseV1::Adopted
             || retirement.is_none()
@@ -555,6 +585,14 @@ impl KfdRuntimeBackendV1 {
                 .expect("native entry");
             if native.returned.completed != plan.count || !native.data.is_empty() {
                 return Err(self.terminal_error("generated retirement DATA count mismatch"));
+            }
+            if rejected.is_some() {
+                // A missing original occurrence after DATA disposal is not
+                // recoverable and must not unwind through native owner roots.
+                let Some(submission) = native.submission.as_mut() else {
+                    std::process::abort()
+                };
+                submission.receipt.mark_rejected_disposed();
             }
             native.phase = PhaseV1::Retired;
             self.release_compute_lane_lease_v1(plan.binding.backend_stream, lane_index);

@@ -77,6 +77,7 @@ fn unpublished_gate_rejects_unreturned_receipt_or_changed_source_binding_without
             .clone();
         let admitted = context.gfx942_adoption_unpublished_v1(&hold);
         assert!(!matches!(admitted, Ok(true)));
+        assert!(!matches!(context.gfx942_issue_rejected_v1(&hold), Ok(true)));
         assert!(context.retire_gfx942_unpublished_v1(&hold).is_err());
         assert_eq!(snapshot(&context, &plan), before);
         let attempt = &context.generated_issues[&hold.stream()];
@@ -89,7 +90,7 @@ fn unpublished_gate_rejects_unreturned_receipt_or_changed_source_binding_without
 
 #[test]
 fn unpublished_gate_preserves_original_journal_corruption_quarantine_without_disposal() {
-    for retire in [false, true] {
+    for operation in 0..3 {
         for index in 0..3 {
             let mut context = std::mem::ManuallyDrop::new(
                 RuntimeContextV1::open_with_version_journal_v1(KfdRuntimeBackendV1::mock(), 6, 3)
@@ -119,10 +120,10 @@ fn unpublished_gate_preserves_original_journal_corruption_quarantine_without_dis
             usage.retained_records = 0;
             usage.quarantined_records = 3;
 
-            let result = if retire {
-                context.retire_gfx942_unpublished_v1(&hold).map(|()| true)
-            } else {
-                context.gfx942_adoption_unpublished_v1(&hold)
+            let result = match operation {
+                0 => context.retire_gfx942_unpublished_v1(&hold).map(|()| true),
+                1 => context.gfx942_adoption_unpublished_v1(&hold),
+                _ => context.gfx942_issue_rejected_v1(&hold),
             };
             assert!(matches!(
                 result,

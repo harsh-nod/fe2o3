@@ -168,6 +168,90 @@ fn rejected_or_terminal_issue_never_permits_retry_or_retirement() {
 }
 
 #[test]
+fn preserved_rejection_is_neither_retry_custody_nor_generic_retirement() {
+    for (mut receipt, expected) in [
+        (ReceiptV1::<(), ()>::Ready, RetirementV1::Pristine),
+        (ReceiptV1::RetryReady, RetirementV1::CancelledOnly),
+    ] {
+        receipt
+            .issue_with_rejection(true, || {
+                Err(Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(lower_error()))
+            })
+            .unwrap();
+        let (prior, error) = receipt.rejected().unwrap();
+        assert_eq!(prior, expected);
+        assert!(matches!(
+            error,
+            fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract("injected receipt failure")
+        ));
+        assert!(!receipt.issue_ready());
+        assert_eq!(receipt.retirement(), None);
+        assert!(receipt.rejected_disposed_error().is_none());
+        // Synthetic state-transition test only: production calls this private
+        // transition after real control/DATA disposal and closing currentness.
+        receipt.mark_rejected_disposed();
+        assert!(receipt.rejected().is_none());
+        assert!(matches!(
+            receipt.rejected_disposed_error(),
+            Some(fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract(
+                "injected receipt failure"
+            ))
+        ));
+        assert!(!receipt.issue_ready());
+        assert_eq!(receipt.retirement(), None);
+    }
+}
+
+#[test]
+fn rejection_preservation_does_not_absorb_terminal_or_unwinding_issue() {
+    for panic in [false, true] {
+        let mut receipt = ReceiptV1::<(), ()>::Ready;
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            receipt.issue_with_rejection(true, || {
+                assert!(!panic, "injected publication ambiguity");
+                Err(Gfx942FixedDispatchSubmissionFailureV1::Terminal(
+                    lower_error(),
+                ))
+            })
+        }));
+        if panic {
+            assert!(result.is_err());
+        } else {
+            assert!(result.unwrap().is_err());
+        }
+        assert!(matches!(
+            receipt,
+            ReceiptV1::HandedToLower(HandoffV1::Issue)
+        ));
+        assert!(receipt.rejected().is_none());
+        assert!(receipt.rejected_disposed_error().is_none());
+        assert!(!receipt.issue_ready());
+        assert_eq!(receipt.retirement(), None);
+    }
+}
+
+#[test]
+fn aggregate_descriptive_rejection_cannot_use_singleton_disposal_boundary() {
+    // Pure metadata substitution, with no queue, DATA or native receipt.
+    let aggregate = NativeReceiptV1::Cohort3(ReceiptV1::RejectedUnpublished {
+        prior: RetirementV1::Pristine,
+        error: lower_error(),
+    });
+    assert_eq!(
+        aggregate.profile(),
+        crate::generated_source::GeneratedProfileV1::NativeFillCohort3
+    );
+    assert_eq!(aggregate.rejected_retirement(), None);
+    assert!(!aggregate.rejected_disposed());
+    assert_eq!(aggregate.retirement(), None);
+    assert!(!aggregate.issue_ready());
+    let disposed = NativeReceiptV1::Cohort3(ReceiptV1::RejectedDisposed(lower_error()));
+    assert!(!disposed.rejected_disposed());
+    assert_eq!(disposed.rejected_retirement(), None);
+    assert_eq!(disposed.retirement(), None);
+}
+
+#[test]
 fn publication_panic_retains_unknown_handoff_not_a_retry_permit() {
     for mut receipt in [ReceiptV1::<(), ()>::Ready, ReceiptV1::RetryReady] {
         assert!(

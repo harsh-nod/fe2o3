@@ -249,6 +249,57 @@ fn cohort3_receipt_substitution_cannot_retire_or_release_a_singleton_original() 
         backend.dispose_generated_shells_v1(&plan);
     }
 }
+
+#[test]
+fn classified_rejection_metadata_without_original_lane_cannot_settle_or_release() {
+    let (mut backend, plan) = shells();
+    let (_, projection) = source_projection();
+    let roster = GeneratedHostRosterV1::from_projection(&projection).unwrap();
+    let id = backend.install_generated_receipt_metadata_for_test_v1(&plan, &roster);
+    let native = backend
+        .generated_shells
+        .get_mut(&plan.key)
+        .unwrap()
+        .native
+        .as_mut()
+        .unwrap();
+    let NativeReceiptV1::Singleton(receipt) = &mut native.submission.as_mut().unwrap().receipt
+    else {
+        panic!("singleton fixture");
+    };
+    receipt
+        .issue_with_rejection(true, || {
+            Err(
+                Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                    fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract("injected metadata only"),
+                ),
+            )
+        })
+        .unwrap();
+    assert!(!backend.generated_rejected_publication_v1(&plan, id));
+    assert!(!backend.generated_submission_can_retire_v1(id));
+    assert!(matches!(
+        backend.retire_generated_rejected_data_v1(&plan, id),
+        Err(RuntimeBackendFailureV1::Rejected(_))
+    ));
+    assert!(matches!(
+        backend.release_submission_v1(id),
+        Err(RuntimeBackendFailureV1::Rejected(_))
+    ));
+    assert!(!backend.terminal);
+    assert_eq!(backend.generated_submissions.get(&id), Some(&plan.key));
+    assert_eq!(
+        backend.generated_shells[&plan.key]
+            .native
+            .as_ref()
+            .unwrap()
+            .phase,
+        PhaseV1::Adopted
+    );
+    backend.generated_shells.get_mut(&plan.key).unwrap().native = None;
+    backend.generated_submissions.clear();
+    backend.dispose_generated_shells_v1(&plan);
+}
 impl Drop for Item {
     fn drop(&mut self) {
         self.1.borrow_mut().push(self.0);

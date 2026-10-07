@@ -347,6 +347,27 @@ impl_generated_shell_context!(
 );
 
 impl RuntimeContextV1<KfdRuntimeBackendV1> {
+    pub(super) fn install_generated_registry4_shells_v1<E, const N: usize>(
+        &mut self,
+        device: RuntimeDeviceIdV1,
+        native_device: fe2o3_runtime_model::ModelDeviceAdmissionV1,
+        hold: &ContextUnpublishedHoldV1,
+        source: &mut crate::generated_source::RuntimeGfx942Registry4SourceMutV1<'_, E, N>,
+        roster: &GeneratedHostRosterV1,
+    ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+        self.install_generated_shells_with_v1(
+            device,
+            native_device,
+            hold,
+            source,
+            roster,
+            crate::generated_source::RuntimeGfx942Registry4SourceMutV1::matches_roster,
+            |backend, bound, source, roster| {
+                backend.commit_generated_registry4_shells_v1(bound, source, roster)
+            },
+        )
+    }
+
     pub(super) fn install_generated_cohort3_shells_v1<E>(
         &mut self,
         device: RuntimeDeviceIdV1,

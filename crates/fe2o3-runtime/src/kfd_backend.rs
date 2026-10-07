@@ -177,6 +177,7 @@ pub use generated_adoption::qualification::{
     KfdGeneratedCopyCoexistenceFailureV1, KfdGeneratedCopyCoexistenceWitnessV1,
     KfdGeneratedCopyPublicationKindV1,
 };
+pub(crate) use generated_adoption::registry4::RegistryStorageV1;
 mod generated_preparation;
 mod generated_shells;
 pub(crate) use generated_shells::{

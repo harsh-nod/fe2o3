@@ -19,7 +19,7 @@
     },
     {
       "path": ".github/workflows/runtime-model-verus.yml",
-      "sha256": "b0b0a43b1624691d190af1a661a70742cd0734c67c1b5cce905c703d4cd43006"
+      "sha256": "a7062f979fe49bcfb0c9c798ba75cbd71955cd97d267d66c32f78f95161aa560"
     },
     {
       "path": "scripts/ci-local.sh",
@@ -43,25 +43,25 @@
     },
     {
       "path": "crates/fe2o3-runtime-model/verus/pins/PRODUCER_LIVE_CAMPAIGN_INPUTS.json",
-      "sha256": "94f6743d4d3d11122603589e7f4135da1a30b8e43418d823fb5624746cb0f522"
+      "sha256": "4ace9e06ee8f78a99332470da4678cd903ceb0707ef9d476436e21fe0a2a3a05"
     },
     {
       "path": "crates/fe2o3-runtime-model/verus/pins/PRODUCER_PLANNER_INPUT_CAMPAIGN_V1.json",
-      "sha256": "282bc144700b683a454ed70111c7e0a0045fb34d1ecfb03708a2622ad49d8745"
+      "sha256": "f9771369a5a9226b25979a09c55dbd7a318fae914a535bff485a017f04dcfc68"
     }
   ],
   "group_hash_algorithm": "SHA-256 of records sorted by repository-relative path: lowercase file SHA-256, two ASCII spaces, POSIX repository-relative path, newline. UTF-8; no domain prefix.",
   "group_scope": "All regular files recursively beneath each package src plus its Cargo.toml and build.rs when present. No implicit claim about other package files.",
   "groups": [
     {
-      "files": 92,
+      "files": 94,
       "package": "cargo-fe2o3",
-      "records_sha256": "05674d24a5b7306e70c438beff573609146427437b14febbbbbaa6845ffd4cba"
+      "records_sha256": "ecd8700ae10677fc42685b70d5d93ac2a2337bd6809863b703ce1e2c22c26d82"
     },
     {
-      "files": 536,
+      "files": 569,
       "package": "fe2o3-runtime",
-      "records_sha256": "c5cb31ef1ecb74571f3c5ee845b4889ecc8d60a70a8c3210c5dcdb5abfe1474a"
+      "records_sha256": "8ded2f19086282db123cd3fa4c24e49e730b67700b3b6c2fdfcefd7858c159de"
     },
     {
       "files": 314,
@@ -69,14 +69,14 @@
       "records_sha256": "1832db1d93e336c7e55a4645f421727df9c9fe1df1ff52156a31776ed1a57d31"
     },
     {
-      "files": 494,
+      "files": 499,
       "package": "fe2o3-kfd",
-      "records_sha256": "14935311a21c3e7eb483b928af0fdd9f2fb57ede245309953d0b5f63f598b030"
+      "records_sha256": "143ecb09f4cb1e6ffd4eefbe42973244510be2d633b9f60aa7c0ac6f2a548fd0"
     },
     {
-      "files": 127,
+      "files": 133,
       "package": "fe2o3-host",
-      "records_sha256": "cd38de52a3002ddb0d441a3cb7ed48f2312278fae0eee584ddcc295d2da4eeef"
+      "records_sha256": "3281d70c1630d1abc402378edd6951660387e18a9550978bdc3b546b7c986661"
     },
     {
       "files": 395,
@@ -114,9 +114,9 @@
       "records_sha256": "8aff2c38dd814aca9c0359c61cf41ff3984960f12d80e5296ec4c049380cba71"
     },
     {
-      "files": 118,
+      "files": 119,
       "package": "fe2o3-compiler-execution-supervisor",
-      "records_sha256": "31581fcf11af2c22466b8d58b6f4821a8b81aaa01f806b090b4fcc2a9fc9393e"
+      "records_sha256": "eb6fc677d57e1ddd67e1c356ab22b39fe0cd0ed27e66f6ebb595e8cd50430862"
     },
     {
       "files": 113,
@@ -129,9 +129,9 @@
       "records_sha256": "289ae7ef8973a464de94b37a87b79d4e742ba5c4fa1608dd7c31e08f5a1dd312"
     },
     {
-      "files": 557,
+      "files": 558,
       "package": "fe2o3-verifier",
-      "records_sha256": "3968aa2605a85be61c965154b7577b60f87cadacddaba05e14a7876c56d177e9"
+      "records_sha256": "951522dd6ddea357fe911b18c4b27722e89aa13f37d963397fb8706ed5a87e82"
     },
     {
       "files": 11,
@@ -139,7 +139,7 @@
       "records_sha256": "e364bca79400a60613a4f734c2026b44f04d2c370b3b98ea0f16ca244503f936"
     }
   ],
-  "integration_base_commit": "2653a4ead0ac1c659b82c5d49b56230a1c096b1f",
+  "integration_base_commit": "727f32888ff27391223e0c2b2546d867fdc0e453",
   "reproduction": [
     "cargo fmt --all -- --check",
     "bash scripts/tests/ci-local-test-gate.sh",

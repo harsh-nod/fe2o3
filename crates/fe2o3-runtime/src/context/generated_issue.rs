@@ -10,6 +10,8 @@ use crate::{
 
 mod cohort3;
 mod completion;
+mod registry4;
+mod rejected;
 mod unpublished;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -19,6 +21,7 @@ enum PhaseV1 {
     PhysicallyComplete,
     DisposedWithoutResult,
     Unknown,
+    RegistryActive,
 }
 
 pub(super) struct GeneratedIssueV1 {
@@ -319,6 +322,16 @@ macro_rules! impl_generated_issue_context {
                 roster: &GeneratedHostRosterV1,
                 hold: &ContextUnpublishedHoldV1,
             ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                self.advance_generated_issue_attempt_with_rejection_v1(plan, roster, hold, false)
+            }
+
+            fn advance_generated_issue_attempt_with_rejection_v1(
+                &mut self,
+                plan: GeneratedShellPlanV1,
+                roster: &GeneratedHostRosterV1,
+                hold: &ContextUnpublishedHoldV1,
+                preserve_rejection: bool,
+            ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
                 if let Some(attempt) = self.generated_issues.get(&hold.stream()) {
                     if attempt.plan != plan
                         || !attempt.roster.matches(roster)
@@ -351,9 +364,13 @@ macro_rules! impl_generated_issue_context {
                     .as_ref()
                     .expect("rooted token")
                     .backend_submission;
-                self.backend
-                    .advance_generated_issue_v1(&plan, handle)
-                    .map_err(map_backend_error)
+                if preserve_rejection {
+                    self.backend
+                        .advance_generated_issue_preserving_rejection_v1(&plan, handle)
+                } else {
+                    self.backend.advance_generated_issue_v1(&plan, handle)
+                }
+                .map_err(map_backend_error)
             }
 
             // Called only after the async engine stops observers. It never retries ISSUE.

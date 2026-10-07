@@ -5,6 +5,8 @@ use crate::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
+mod registry16;
+
 const IMAGE: &[u8] = include_bytes!("../../../tests/fixtures/native-fill-worker/kernel.hsaco");
 
 struct Authority {
@@ -134,6 +136,118 @@ fn carrier(index: usize) -> Carrier {
 
 fn cohort() -> RuntimeGfx942GeneratedCohort3V1<Carrier> {
     RuntimeGfx942GeneratedCohort3V1::new(std::array::from_fn(carrier))
+}
+
+#[test]
+fn registry4_original_roster_rejects_scalar_cohort_duplicate_and_reordered_identities() {
+    let registry = RuntimeGfx942GeneratedRegistry4V1::new(std::array::from_fn(carrier));
+    let roster = registry.validate_sources(42).unwrap();
+    assert_eq!(
+        roster.source_identity.profile(),
+        GeneratedProfileV1::NativeFillRegistry4
+    );
+    assert_eq!(
+        (roster.count, roster.readback_bytes, roster.fixup_count),
+        (4, 1552, 4)
+    );
+    assert!(!roster.matches(&cohort().validate_sources(42).unwrap()));
+    for member in &registry.members {
+        assert!(!roster.matches(&member.source().validate(42).unwrap()));
+    }
+    let [a, b, c, d] = registry.members.each_ref();
+    let reordered = RuntimeGfx942GeneratedRegistry4V1::new([
+        Borrowed(d),
+        Borrowed(b),
+        Borrowed(c),
+        Borrowed(a),
+    ]);
+    assert!(!reordered.validate_sources(42).unwrap().matches(&roster));
+    let duplicated = RuntimeGfx942GeneratedRegistry4V1::new([
+        Borrowed(a),
+        Borrowed(b),
+        Borrowed(c),
+        Borrowed(a),
+    ]);
+    assert!(duplicated.validate_sources(42).is_err());
+}
+
+#[test]
+fn registry_repeat2_profile_never_matches_the_same_single_use_originals() {
+    let mut original = RuntimeGfx942GeneratedRegistry4V1::new(std::array::from_fn(carrier));
+    let once = original.validate_sources(42).unwrap();
+    // This changes an inert private fixture tag, not execution or completion authority.
+    original.repeat2 = true;
+    let repeated = original.validate_sources(42).unwrap();
+    assert_eq!(
+        repeated.source_identity.profile(),
+        GeneratedProfileV1::NativeFillRegistry4Repeat2
+    );
+    assert!(!repeated.matches(&once));
+    assert!(!once.matches(&repeated));
+    assert_ne!(
+        once.dispatch_contract_sha256,
+        repeated.dispatch_contract_sha256
+    );
+    assert!(original.source_mut_v1().unwrap().matches_roster(&repeated));
+    assert!(!original.source_mut_v1().unwrap().matches_roster(&once));
+    assert_eq!(
+        (once.count, once.readback_bytes),
+        (repeated.count, repeated.readback_bytes)
+    );
+}
+
+#[test]
+fn registry4_nested_native_inputs_preserve_all_four_original_borrows_and_closing_checks() {
+    let registry = RuntimeGfx942GeneratedRegistry4V1::new(std::array::from_fn(carrier));
+    let roster = registry.validate_sources(42).unwrap();
+    let pointers = registry
+        .members
+        .each_ref()
+        .map(|member| member.storage.buffers()[0].bytes().as_ptr());
+    let called = Cell::new(0);
+    registry
+        .with_native_inputs_v1(42, &roster, |programs, buffers| {
+            assert_eq!(programs.len(), 4);
+            for (index, buffer) in buffers.iter().enumerate() {
+                assert_eq!(buffer[0].bytes().as_ptr(), pointers[index]);
+            }
+            called.set(called.get() + 1);
+            Ok(())
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(called.get(), 1);
+    let stale = registry.members[3].authority.stale.clone();
+    assert!(
+        registry
+            .with_native_inputs_v1(42, &roster, |_, _| {
+                stale.set(true);
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(
+        registry
+            .with_native_inputs_v1(42, &roster, |_, _| panic!("stale callback"))
+            .is_err()
+    );
+}
+
+#[test]
+fn registry4_control_transfer_requires_the_exact_ordered_roster() {
+    let mut registry = RuntimeGfx942GeneratedRegistry4V1::new(std::array::from_fn(carrier));
+    let expected = registry.validate_sources(42).unwrap();
+    let foreign = RuntimeGfx942GeneratedRegistry4V1::new(std::array::from_fn(carrier))
+        .validate_sources(42)
+        .unwrap();
+    let mut source = registry.source_mut_v1().unwrap();
+    assert!(!source.matches_roster(&foreign));
+    assert!(source.matches_roster(&expected));
+    let mut controls = [None, None, None, None];
+    assert!(source.transfer_controls_into(&mut controls));
+    assert!(controls.iter().all(Option::is_some));
+    assert!(!source.matches_roster(&expected));
+    assert!(!source.transfer_controls_into(&mut controls));
 }
 
 #[test]

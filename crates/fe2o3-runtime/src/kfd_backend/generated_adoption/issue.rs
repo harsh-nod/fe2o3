@@ -71,6 +71,12 @@ impl KfdRuntimeBackendV1 {
                 "generated issue identity or phase mismatch",
             ));
         }
+        let receipt = NativeReceiptV1::ready(plan.profile).ok_or_else(|| {
+            Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "registry members require the original registry receipt owner",
+            )
+        })?;
         self.require_submission_capacity_v1()?;
         self.generated_submissions
             .try_reserve(1)
@@ -91,7 +97,7 @@ impl KfdRuntimeBackendV1 {
         native.submission = Some(GeneratedSubmissionV1 {
             id,
             roster: roster.clone(),
-            receipt: NativeReceiptV1::ready(plan.profile),
+            receipt,
         });
         assert!(self.generated_submissions.insert(id, plan.key).is_none());
         Ok(id)
@@ -139,11 +145,42 @@ impl KfdRuntimeBackendV1 {
         plan: &GeneratedShellPlanV1,
         submission: u64,
     ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.advance_generated_issue_with_rejection_v1(plan, submission, false)
+    }
+
+    pub(crate) fn advance_generated_issue_preserving_rejection_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        submission: u64,
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.advance_generated_issue_with_rejection_v1(plan, submission, true)
+    }
+
+    fn advance_generated_issue_with_rejection_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        submission: u64,
+        preserve_rejection: bool,
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if preserve_rejection
+            && plan.profile != crate::generated_source::GeneratedProfileV1::Singleton
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "local rejected publication is singleton-only",
+            ));
+        }
         if self.generated_submission_plan_v1(submission)? != *plan {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
                 "generated issue plan mismatch",
             ));
+        }
+        if preserve_rejection && self.generated_rejected_publication_v1(plan, submission) {
+            // Observe retained classification only; never retry its packet.
+            let result = catch_unwind(AssertUnwindSafe(|| self.check_generated_device_v1(plan)));
+            self.finish_generated_native_call_v1(result)?;
+            return Ok(false);
         }
         let ready = self.generated_shells[&plan.key]
             .native
@@ -172,7 +209,13 @@ impl KfdRuntimeBackendV1 {
                 .queue
                 .as_mut()
                 .expect("retained queue")
-                .with_compute_lane_v1(handle, |lane| receipt.issue(lane))
+                .with_compute_lane_v1(handle, |lane| {
+                    if preserve_rejection {
+                        receipt.issue_preserving_rejection(lane)
+                    } else {
+                        receipt.issue(lane)
+                    }
+                })
                 .and_then(core::convert::identity);
             result.map_err(|error| self.generated_native_error_v1("issue", error))?;
             self.check_generated_device_v1(plan)
@@ -289,7 +332,7 @@ impl KfdRuntimeBackendV1 {
             || !native.submission.as_ref().is_some_and(|owner| {
                 owner.id == submission
                     && owner.receipt.profile() == profile
-                    && owner.receipt.retirement().is_some()
+                    && (owner.receipt.retirement().is_some() || owner.receipt.rejected_disposed())
             })
         {
             return Err(Self::rejected(
@@ -300,6 +343,27 @@ impl KfdRuntimeBackendV1 {
         native.submission = None;
         self.generated_submissions.remove(&submission);
         Ok(())
+    }
+
+    pub(crate) fn generated_rejected_publication_v1(
+        &self,
+        plan: &GeneratedShellPlanV1,
+        submission: u64,
+    ) -> bool {
+        self.require_live().is_ok()
+            && plan.profile == crate::generated_source::GeneratedProfileV1::Singleton
+            && self.generated_lease_matches_v1(plan)
+            && self.generated_submission_owner_matches_v1(submission, plan)
+            && self.generated_shells[&plan.key]
+                .native
+                .as_ref()
+                .is_some_and(|native| {
+                    native.phase == PhaseV1::Adopted
+                        && native
+                            .submission
+                            .as_ref()
+                            .is_some_and(|owner| owner.receipt.rejected_retirement().is_some())
+                })
     }
 
     pub(super) fn check_generated_device_v1(

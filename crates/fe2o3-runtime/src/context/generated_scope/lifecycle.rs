@@ -8,6 +8,7 @@ pub(super) enum Phase {
     Settled,
     Cancelled,
     CancelledUnpublished,
+    FailedUnpublished,
     Unknown,
 }
 
@@ -29,7 +30,10 @@ impl<T, O> Lifecycle<T, O> {
     pub fn unsettled(&self) -> bool {
         !matches!(
             self.phase,
-            Phase::Settled | Phase::Cancelled | Phase::CancelledUnpublished
+            Phase::Settled
+                | Phase::Cancelled
+                | Phase::CancelledUnpublished
+                | Phase::FailedUnpublished
         )
     }
 
@@ -57,7 +61,11 @@ impl<T, O> Lifecycle<T, O> {
         let phase = self.phase;
         if matches!(
             phase,
-            Phase::Settled | Phase::Cancelled | Phase::CancelledUnpublished | Phase::Unknown
+            Phase::Settled
+                | Phase::Cancelled
+                | Phase::CancelledUnpublished
+                | Phase::FailedUnpublished
+                | Phase::Unknown
         ) {
             return Ok(false);
         }
@@ -95,6 +103,32 @@ impl<T, O> Lifecycle<T, O> {
         drop(self.value.take().expect("original unpublished carrier"));
         release_hold(context)?;
         self.phase = Phase::CancelledUnpublished;
+        Ok(true)
+    }
+
+    pub fn settle_rejected<C, E>(
+        &mut self,
+        context: &mut C,
+        settle_native_and_context: impl FnOnce(&mut C, &mut T) -> Result<(), E>,
+        release_hold: impl FnOnce(&mut C) -> Result<(), E>,
+    ) -> Result<bool, E> {
+        if self.phase != Phase::Issuing {
+            return Ok(false);
+        }
+        // Classification alone is not settlement. Keep ambiguity until the
+        // original native abort, source bracket, owner disposal and hold release
+        // all return; no decoder or successful writer version is produced.
+        self.phase = Phase::Unknown;
+        let Some(value) = self.value.as_mut() else {
+            std::process::abort()
+        };
+        settle_native_and_context(context, value)?;
+        let Some(value) = self.value.take() else {
+            std::process::abort()
+        };
+        drop(value);
+        release_hold(context)?;
+        self.phase = Phase::FailedUnpublished;
         Ok(true)
     }
 }
@@ -211,6 +245,73 @@ mod tests {
         assert_eq!(settled, [1, 2, 0]);
         assert_eq!(decoded.get(), 3);
         assert!(slots.iter().all(|s| s.value.is_none()));
+    }
+
+    #[test]
+    fn rejected_failure_observation_follows_original_settlement_and_drop() {
+        let dropped = Cell::new(0);
+        let mut slot = Lifecycle::<_, ()>::new(Disposal {
+            dropped: &dropped,
+            panic: false,
+        });
+        slot.phase = Phase::Issuing;
+        let mut settled = false;
+        assert_eq!(
+            slot.settle_rejected(
+                &mut settled,
+                |settled, _| {
+                    assert_eq!(dropped.get(), 0);
+                    *settled = true;
+                    Ok::<_, ()>(())
+                },
+                |settled| {
+                    assert!(*settled);
+                    assert_eq!(dropped.get(), 1);
+                    Ok(())
+                }
+            ),
+            Ok(true)
+        );
+        assert_eq!(slot.phase, Phase::FailedUnpublished);
+        assert!(!slot.unsettled());
+        assert!(slot.value.is_none() && slot.outcome.is_none());
+        assert_eq!(
+            slot.advance::<()>(
+                |_, _| panic!("failed owner cannot issue"),
+                |_| panic!("failed owner cannot decode")
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn rejected_settlement_failure_retains_unknown_without_local_result() {
+        for stage in 0..3 {
+            let dropped = Cell::new(0);
+            let mut slot = Lifecycle::<_, ()>::new(Disposal {
+                dropped: &dropped,
+                panic: stage == 1,
+            });
+            slot.phase = Phase::Issuing;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                slot.settle_rejected(
+                    &mut (),
+                    |_, _| {
+                        if stage == 0 { Err(7) } else { Ok(()) }
+                    },
+                    |_| Err(8),
+                )
+            }));
+            match stage {
+                0 => assert_eq!(result.unwrap(), Err(7)),
+                1 => assert!(result.is_err()),
+                _ => assert_eq!(result.unwrap(), Err(8)),
+            }
+            assert_eq!(slot.phase, Phase::Unknown);
+            assert!(slot.unsettled() && slot.outcome.is_none());
+            assert_eq!(slot.value.is_some(), stage == 0);
+            assert_eq!(dropped.get(), usize::from(stage != 0));
+        }
     }
 
     #[test]

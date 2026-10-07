@@ -18,8 +18,12 @@ use fe2o3_kfd::{
 use sha2::{Digest, Sha256};
 
 mod generated_completion;
+mod registry_completion;
 pub use generated_completion::{
     RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1,
+};
+pub use registry_completion::{
+    RuntimeGfx942RegistryCompletionCarrierV1, RuntimeGfx942RegistryRepeat2CarrierV1,
 };
 
 use crate::{

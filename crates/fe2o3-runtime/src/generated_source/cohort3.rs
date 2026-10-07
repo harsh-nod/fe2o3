@@ -10,12 +10,18 @@ mod tests;
 pub(crate) enum GeneratedProfileV1 {
     Singleton,
     NativeFillCohort3,
+    NativeFillRegistry4,
+    NativeFillRegistry4Repeat2,
+    NativeFillRegistry16,
 }
 
 #[derive(Clone)]
 pub(crate) enum GeneratedSourceIdentityV1 {
     Singleton(Arc<()>),
     Cohort3([Arc<()>; 3]),
+    Registry4([Arc<()>; 4]),
+    Registry4Repeat2([Arc<()>; 4]),
+    Registry16([Arc<()>; 16]),
 }
 
 impl From<Arc<()>> for GeneratedSourceIdentityV1 {
@@ -29,6 +35,9 @@ impl GeneratedSourceIdentityV1 {
         match self {
             Self::Singleton(_) => GeneratedProfileV1::Singleton,
             Self::Cohort3(_) => GeneratedProfileV1::NativeFillCohort3,
+            Self::Registry4(_) => GeneratedProfileV1::NativeFillRegistry4,
+            Self::Registry4Repeat2(_) => GeneratedProfileV1::NativeFillRegistry4Repeat2,
+            Self::Registry16(_) => GeneratedProfileV1::NativeFillRegistry16,
         }
     }
     #[cfg(test)]
@@ -43,6 +52,13 @@ impl GeneratedSourceIdentityV1 {
         match (self, other) {
             (Self::Singleton(a), Self::Singleton(b)) => Arc::ptr_eq(a, b),
             (Self::Cohort3(a), Self::Cohort3(b)) => a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b)),
+            (Self::Registry4(a), Self::Registry4(b))
+            | (Self::Registry4Repeat2(a), Self::Registry4Repeat2(b)) => {
+                a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))
+            }
+            (Self::Registry16(a), Self::Registry16(b)) => {
+                a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))
+            }
             _ => false,
         }
     }
@@ -53,9 +69,14 @@ impl GeneratedSourceIdentityV1 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+// Keep the bounded contract roster Copy; a boxed variant adds fallible storage.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum GeneratedContractsV1 {
     Singleton([u8; 32]),
     Cohort3([[u8; 32]; 3]),
+    Registry4([[u8; 32]; 4]),
+    Registry4Repeat2([[u8; 32]; 4]),
+    Registry16([[u8; 32]; 16]),
 }
 
 impl From<[u8; 32]> for GeneratedContractsV1 {
@@ -87,6 +108,24 @@ impl GeneratedContractsV1 {
             Self::Singleton(value) => hash.update(value),
             Self::Cohort3(values) => {
                 hash.update(b"fe2o3.generated.native-fill-cohort3.contracts.v1\0");
+                for value in values {
+                    hash.update(value);
+                }
+            }
+            Self::Registry4(values) => {
+                hash.update(b"fe2o3.generated.native-fill-registry4.contracts.v1\0");
+                for value in values {
+                    hash.update(value);
+                }
+            }
+            Self::Registry4Repeat2(values) => {
+                hash.update(b"fe2o3.generated.native-fill-registry4-repeat2.contracts.v1\0");
+                for value in values {
+                    hash.update(value);
+                }
+            }
+            Self::Registry16(values) => {
+                hash.update(b"fe2o3.generated.native-fill-registry16.contracts.v1\0");
                 for value in values {
                     hash.update(value);
                 }

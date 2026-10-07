@@ -698,25 +698,77 @@ account and host async changes. Its archive includes fresh five-image digests,
 the release ELF contract, and both private-root tests (one test each). The same
 restrictions above still apply; neither test starts a genuine native application.
 
+## Registry And Retirement Successor
+
+The current source adds distinct four-operation, two-cycle four-operation and
+sixteen-operation generated registries. Original source carriers and resource
+credits remain owned until the common native owner is closed and every required
+result is decoded. These profiles do not establish independent GPU ordering,
+rolling admission or thousands of published dispatches. The separate developing
+1,024-operation arena and production-runner controller are not in this tree.
+
+Snapshot 74 passed 2,545 runtime tests (34 ignored), 2,082 KFD tests (three
+ignored), and 378 host tests (three ignored). Its strict lint failures remain in
+the raw archive. Snapshot 75 passed 2,086 KFD tests but failed one new test whose
+zero-record account was invalid before the intended admission check. The test
+now uses a valid account and requires the precise resource-phase refusal. The
+copy fixture's plain Cargo invocation also failed its intentional typed-driver
+guard; the new qualification invokes it through `cargo-fe2o3`, without weakening
+the guard. Snapshot 77 then exposed a missing host dependency in that fixture
+and hard-coded child-test paths when the listener module is included by the
+compiler client. The host dependency and target-specific lockfile are corrected;
+the test child now derives its exact selector from the actual module path and
+still requires its unique completion marker. Snapshot 77's full suites passed:
+2,552 runtime tests (34 ignored), 2,087 KFD tests (three ignored), 379 host tests
+(three ignored), and all 91 runtime and 82 host doctests. Its four unsuccessful
+stages remain recorded, including the new inline-enum lint findings and existing
+host `drop_non_drop` findings. No failed batch is promoted to a pass.
+
+Snapshot 78's fresh-target frontend replay passed all six stages: dependency
+lock generation, all-target frontend checks, two typed-copy tests invoked through
+the actual driver, two cross-included listener tests, eleven direct listener
+tests, and 29 authority-release tests. Archive SHA-256:
+`e3cb9c1cd2abd9a45f26f29d6eb51d4a248892d42fe2168b5ae56e29c746de47`.
+The bounded inline roster keeps its existing allocation-free ownership contract;
+snapshot 79 adds narrow lint annotations and explicit size/Copy regression
+checks. Its nine-stage batch passed strict runtime/KFD Clippy, all-target checks,
+all 2,554 runtime tests (34 ignored), 91 doctests, and the retirement/pipeline
+source controls after explicit runtime package cleanup. Both new size tests ran.
+Archive SHA-256:
+`7da4104ca1ade5ed91ce955b83c1c8eacf9f5d4ea26e5ba907236b0a8ed428fc`.
+The source/mode inventory remained identical at closing. This does not change
+the separately recorded older host lint failures into successes.
+The refreshed source-binding chain passed 20 affected source/control entrypoints;
+this is not a solver replay or a native launch result.
+
+The production proof sequence now requires a ninth family: shared graph
+reservation retirement. Its scope is the post-access reservation-retirement
+body, assuming the original graph-access check and native-disposal premise. It
+does not prove whole Context execution or GPU settlement. The maintained
+qualifier requires three whole-root positive proofs and 23 calibrated logical
+negatives, with original source/signature/tool checks. Development results and
+source controls are retained; a new signed-candidate replay is still required.
+The earlier eight-family replay on `727f32888` does not qualify these edits.
+
 ## Open Exit Gates
 
 - A1 still needs genuine protected mixed-duration/high-depth GPU qualification
   of the final async path, not only CPU ownership and executor tests. The native
-  single-device fixture has two fill launches; it does not measure thousands of
+  registry fixtures include sixteen fill launches; they do not measure thousands of
   GPU operations, wakeup overhead or aggregate queue/signal/kernarg retention.
   The owner-array ceiling is not a whole-process memory bound. The generated
-  production path currently leases one dispatch per native compute lane, with
-  two lanes. Thousands of host-retained requests therefore do not establish
-  thousands of GPU-published dispatches; the fixed one-wave fill source also
-  does not establish meaningful mixed-duration execution.
+  registry profile has sixteen fixed single-use slots. Thousands of host-retained
+  requests therefore do not establish thousands of GPU-published dispatches;
+  variable fixture extents also do not establish measured mixed-duration overlap.
 - A2's shared borrowed-carrier DAG is implemented, but its generated arguments
   are frozen before admission and excluded from the ordinary allocation-version
   ledger. Producer-output to successor generated-input binding remains missing.
   General repeated multistage dataflow, measured compute/copy overlap and
   complete executable DAG/settlement refinement are not established by the
   scoped producer/live-validation and planner-input proof campaigns.
-- A3 still needs general versioned shard/replica placement, cross-device DAG
-  integration and per-device failure isolation with partial-run reporting. A
+- A3 now has checked versioned replica/group bookkeeping and CPU controls, but
+  still needs complete native cross-device DAG integration and per-device
+  failure isolation with partial-run reporting. A
   terminal child failure currently makes the entire multi-device router terminal;
   safe global fail-stop is not unrelated-device continuation. Protected
   all-admitted-GPU execution with measured overlap remains unqualified. Ordered

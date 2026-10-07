@@ -7418,6 +7418,4098 @@
       ]
     },
     {
+      "archive": "native-snapshot63-replica-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-52.sh",
+          "sha256": "cd5480fdc2cb9f8a7dfe9876b5866d7271ebbc3761df8738935d3e25075aebbc"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-52.log",
+          "log_sha256": "7ca3f943c6779aaf4697423c1698f1e6424ca8a12a79e63972fd508a1af7bd71",
+          "name": "changed-package-clean-52",
+          "script_member": "run-native-qualified-batch-52.sh",
+          "source_snapshot": "snapshot63",
+          "status_member": "logs/changed-package-clean-52.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "name": "native-qualified-batch-52",
+          "status_member": "logs/native-qualified-batch-52.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/replica-clippy-52.log",
+          "log_sha256": "ead152cb2635f594a846c8ee0dc6b439ed2dd091d2086af4d3609902951bc10a",
+          "name": "replica-clippy-52",
+          "script_member": "run-native-qualified-batch-52.sh",
+          "source_snapshot": "snapshot63",
+          "status_member": "logs/replica-clippy-52.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--doc",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 12
+            },
+            {
+              "elapsed_seconds": 2.15,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 85
+            }
+          ],
+          "log_member": "logs/replica-docs-52.log",
+          "log_sha256": "ef70e4c3457fa5e986cd39215fd31f458e557fedd337578ef5076c4db96d8e3d",
+          "name": "replica-docs-52",
+          "script_member": "run-native-qualified-batch-52.sh",
+          "source_snapshot": "snapshot63",
+          "status_member": "logs/replica-docs-52.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "context::tests::replica_tests",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.04,
+              "failed": 0,
+              "filtered": 2532,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 15
+            }
+          ],
+          "log_member": "logs/replica-focused-52.log",
+          "log_sha256": "b90339825512dbda48a8b80ed6cd5d595cd7cced06c0804b0e42a928b2a7a2b1",
+          "name": "replica-focused-52",
+          "script_member": "run-native-qualified-batch-52.sh",
+          "source_snapshot": "snapshot63",
+          "status_member": "logs/replica-focused-52.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 349.65,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 34,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2513
+            }
+          ],
+          "log_member": "logs/replica-full-runtime-52.log",
+          "log_sha256": "e9fa638afb983e1b0cbe24ff2c664ed6cf9fd38426327c824fcd4eb6915777d2",
+          "name": "replica-full-runtime-52",
+          "script_member": "run-native-qualified-batch-52.sh",
+          "source_snapshot": "snapshot63",
+          "status_member": "logs/replica-full-runtime-52.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/replica-integration-check-52.log",
+          "log_sha256": "720743b073c01eb3facce1f3f6ff37aea93b037d2f4f847dfc61d47652232878",
+          "name": "replica-integration-check-52",
+          "status_member": "logs/replica-integration-check-52.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot64-registry-bridge-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-53.sh",
+          "sha256": "61ee4118604b5ed7a521f89839e9e7828cb0707d54e43d855bd50a1ab497b03b"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host",
+            "--package",
+            "fe2o3-kfd"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-53.log",
+          "log_sha256": "ef7b233265e20b7bf3bf17941175b9810aa9cbb2b352487c3a86f02ccc6dc3ca",
+          "name": "changed-package-clean-53",
+          "script_member": "run-native-qualified-batch-53.sh",
+          "source_snapshot": "snapshot64",
+          "status_member": "logs/changed-package-clean-53.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "registry",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 373,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 5
+            }
+          ],
+          "log_member": "logs/host-registry-53.log",
+          "log_sha256": "3c6ac1943db3563e93db7f2d015395392eb82d6bf2d4bfddce42b380a75a16df",
+          "name": "host-registry-53",
+          "script_member": "run-native-qualified-batch-53.sh",
+          "source_snapshot": "snapshot64",
+          "status_member": "logs/host-registry-53.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-53",
+          "status_member": "logs/native-qualified-batch-53.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/registry-runtime-clippy-53.log",
+          "log_sha256": "6f0dad2540cf5fa9efc8c003d1de0a6385f0f2902eb306cf5b810717235c5c9f",
+          "name": "registry-runtime-clippy-53",
+          "script_member": "run-native-qualified-batch-53.sh",
+          "source_snapshot": "snapshot64",
+          "status_member": "logs/registry-runtime-clippy-53.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/registry-runtime-integration-check-53.log",
+          "log_sha256": "4bde9b2c69b9b56be30f75cd9663e08dbfd1e810a2489b1b18204d33ae7850eb",
+          "name": "registry-runtime-integration-check-53",
+          "status_member": "logs/registry-runtime-integration-check-53.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.11,
+              "failed": 0,
+              "filtered": 2522,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 17
+            }
+          ],
+          "log_member": "logs/runtime-cohort3-53.log",
+          "log_sha256": "2ad389a197d0e5d1bb7aa78bba119fdef95dfd11a68a7ced93eda5111fe9be97",
+          "name": "runtime-cohort3-53",
+          "status_member": "logs/runtime-cohort3-53.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.05,
+              "failed": 0,
+              "filtered": 2532,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 7
+            }
+          ],
+          "log_member": "logs/runtime-registry4-53.log",
+          "log_sha256": "76844543d0347a757c962b54b6ff933442f584402f363380aa09f1e6bd7e9333",
+          "name": "runtime-registry4-53",
+          "status_member": "logs/runtime-registry4-53.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot65-replica-group-discovery-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-54.sh",
+          "sha256": "b81976e80eb9a271421a7802a9b7d3e73b641942969c6e5bd0d23802e5001db0"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host",
+            "--package",
+            "fe2o3-kfd"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-54.log",
+          "log_sha256": "43757ea04595bc124462b2369534b80cbb18e80cffa995e2e06b16b04773145b",
+          "name": "changed-package-clean-54",
+          "script_member": "run-native-qualified-batch-54.sh",
+          "source_snapshot": "snapshot65",
+          "status_member": "logs/changed-package-clean-54.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-54",
+          "status_member": "logs/native-qualified-batch-54.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/replica-group-integration-check-54.log",
+          "log_sha256": "b28b0d044f6f1d2e3a50294389514d46132ae3b1820c732488d35235c7cd2dc8",
+          "name": "replica-group-integration-check-54",
+          "status_member": "logs/replica-group-integration-check-54.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot67-registry-fixture-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-55.sh",
+          "sha256": "f9ad60236df28a49c815c9168bf7be83f28b0fa588cf32da585e0bd307efa901"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host",
+            "--package",
+            "fe2o3-kfd",
+            "--package",
+            "cargo-fe2o3"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-55.log",
+          "log_sha256": "fd071f4696e13b8cfa3e1c485c32e00b68707f038ca413246c4c03a0102d49f5",
+          "name": "changed-package-clean-55",
+          "script_member": "run-native-qualified-batch-55.sh",
+          "source_snapshot": "snapshot67",
+          "status_member": "logs/changed-package-clean-55.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-55",
+          "status_member": "logs/native-qualified-batch-55.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "argv": [
+            "cargo",
+            "run",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "check",
+            "--manifest-path",
+            "crates/cargo-fe2o3/tests/fixtures/conditional-custodian-application/Cargo.toml",
+            "--bins",
+            "--offline",
+            "--locked"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/registry-fixture-binding-55.log",
+          "log_sha256": "0b804de4ad4f2df554c116fd30a94b4570254b5b08b7dfdc472434dc59082050",
+          "name": "registry-fixture-binding-55",
+          "script_member": "run-native-qualified-batch-55.sh",
+          "source_snapshot": "snapshot67",
+          "status_member": "logs/registry-fixture-binding-55.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--test",
+            "native_registry4_case",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/registry-fixture-controls-55.log",
+          "log_sha256": "75a3fe18430a1c7ce7ad7ded7805424d107ffdbe06a678c8bc67f3db2e05fa13",
+          "name": "registry-fixture-controls-55",
+          "script_member": "run-native-qualified-batch-55.sh",
+          "source_snapshot": "snapshot67",
+          "status_member": "logs/registry-fixture-controls-55.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/registry-fixture-integration-check-55.log",
+          "log_sha256": "5f2858a17a1fee4fc75731616ae40d50d38a0775c13a0218d9bfb6dbaa23f8b9",
+          "name": "registry-fixture-integration-check-55",
+          "status_member": "logs/registry-fixture-integration-check-55.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "--features",
+            "cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 657.17,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2079
+            }
+          ],
+          "log_member": "logs/registry-full-kfd-55.log",
+          "log_sha256": "1669eadc2f09282985f3073281a9016065f105d539922dce0a4957501d3fcd50",
+          "name": "registry-full-kfd-55",
+          "script_member": "run-native-qualified-batch-55.sh",
+          "source_snapshot": "snapshot67",
+          "status_member": "logs/registry-full-kfd-55.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 346.28,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 34,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2505
+            }
+          ],
+          "log_member": "logs/registry-full-runtime-55.log",
+          "log_sha256": "805de4beafa69cfa76434c4cad8ad2a4f627583822749a2114dddb6c07cd6b2f",
+          "name": "registry-full-runtime-55",
+          "script_member": "run-native-qualified-batch-55.sh",
+          "source_snapshot": "snapshot67",
+          "status_member": "logs/registry-full-runtime-55.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/registry-runtime-clippy-55.log",
+          "log_sha256": "025929e4f1b8ee42d67cad863c34a79864509293de39daa98100e3a0bd14fc3a",
+          "name": "registry-runtime-clippy-55",
+          "script_member": "run-native-qualified-batch-55.sh",
+          "source_snapshot": "snapshot67",
+          "status_member": "logs/registry-runtime-clippy-55.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.11,
+              "failed": 0,
+              "filtered": 2522,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 17
+            }
+          ],
+          "log_member": "logs/runtime-cohort3-55.log",
+          "log_sha256": "d29ac5a6d55b2023e6eb46e453df0746daf24796467ae9bdcd798df51173323b",
+          "name": "runtime-cohort3-55",
+          "status_member": "logs/runtime-cohort3-55.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.05,
+              "failed": 0,
+              "filtered": 2532,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 7
+            }
+          ],
+          "log_member": "logs/runtime-registry4-55.log",
+          "log_sha256": "0525018f482075ff2c3d46f2b7c7fa606f30e57d9dae9a23628375d7b4ee9371",
+          "name": "runtime-registry4-55",
+          "status_member": "logs/runtime-registry4-55.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot68-replica-group-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-56.sh",
+          "sha256": "55da19daefd24409312ae7184c19a1521258a30bc4575df4b1b83492a7ffd0eb"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host",
+            "--package",
+            "fe2o3-kfd"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-56.log",
+          "log_sha256": "9983928306b1e5cde6acc3f95cb42deba116f313c98473450017ad4865d31ec6",
+          "name": "changed-package-clean-56",
+          "script_member": "run-native-qualified-batch-56.sh",
+          "source_snapshot": "snapshot68",
+          "status_member": "logs/changed-package-clean-56.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 101,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.09,
+              "failed": 1,
+              "filtered": 2544,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "FAILED",
+              "passed": 12
+            }
+          ],
+          "log_member": "logs/generated-graph-56.log",
+          "log_sha256": "9f877fa083021ee1c16cd6c2e080d1cfb14b23cbca6672a62518a3fd4bade406",
+          "name": "generated-graph-56",
+          "status_member": "logs/generated-graph-56.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-56",
+          "status_member": "logs/native-qualified-batch-56.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 2542,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 15
+            }
+          ],
+          "log_member": "logs/peer-gather-56.log",
+          "log_sha256": "36303fa2178443b2467325b3a6931658f3c73238d1c2a7e2406fb8a28cb22923",
+          "name": "peer-gather-56",
+          "status_member": "logs/peer-gather-56.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 2537,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 20
+            }
+          ],
+          "log_member": "logs/reader-lease-56.log",
+          "log_sha256": "478bb74de2bc8ed3c5a43e179458b90cf2785242c35f0c2387850e3346bd0e9f",
+          "name": "reader-lease-56",
+          "status_member": "logs/reader-lease-56.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/replica-group-clippy-56.log",
+          "log_sha256": "e9beea2247eb7d23851bb9adeee9aa74990c22f5c8f56e4387207910cd4de481",
+          "name": "replica-group-clippy-56",
+          "script_member": "run-native-qualified-batch-56.sh",
+          "source_snapshot": "snapshot68",
+          "status_member": "logs/replica-group-clippy-56.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--doc",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 12
+            },
+            {
+              "elapsed_seconds": 2.21,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 86
+            }
+          ],
+          "log_member": "logs/replica-group-docs-56.log",
+          "log_sha256": "952980892130aaacf30e60ce322df306e374352afbd1cf3c4c8c32ab10f63c77",
+          "name": "replica-group-docs-56",
+          "script_member": "run-native-qualified-batch-56.sh",
+          "source_snapshot": "snapshot68",
+          "status_member": "logs/replica-group-docs-56.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 346.43,
+              "failed": 1,
+              "filtered": 0,
+              "ignored": 34,
+              "measured": 0,
+              "outcome": "FAILED",
+              "passed": 2522
+            }
+          ],
+          "log_member": "logs/replica-group-full-runtime-56.log",
+          "log_sha256": "1200bcce0e36434dd093cc7a478610dbad899e8990beaccf3fd2d47aa37270e5",
+          "name": "replica-group-full-runtime-56",
+          "script_member": "run-native-qualified-batch-56.sh",
+          "source_snapshot": "snapshot68",
+          "status_member": "logs/replica-group-full-runtime-56.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/replica-group-integration-check-56.log",
+          "log_sha256": "e575af58b85a20f098c4030e0caa0ddaac72f99b271ad0c1bb6edd88f8e1e6af",
+          "name": "replica-group-integration-check-56",
+          "status_member": "logs/replica-group-integration-check-56.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.05,
+              "failed": 0,
+              "filtered": 2533,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 24
+            }
+          ],
+          "log_member": "logs/replicas-56.log",
+          "log_sha256": "ac491a196fe3b8f6c2d93e64cb429d7eed97a7e492597312f1e5fd1aed397409",
+          "name": "replicas-56",
+          "status_member": "logs/replicas-56.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot70-rejection-retirement-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-57.sh",
+          "sha256": "c8473518594b286d37af04b510a5c29aa01759eb1a81025b44feb798fd526813"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host",
+            "--package",
+            "fe2o3-kfd"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-57.log",
+          "log_sha256": "3e0203cb37283659ef12efe75c73d9bc3e16846f9e7aaa2d12380bbce4babc27",
+          "name": "changed-package-clean-57",
+          "script_member": "run-native-qualified-batch-57.sh",
+          "source_snapshot": "snapshot70",
+          "status_member": "logs/changed-package-clean-57.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-57",
+          "status_member": "logs/native-qualified-batch-57.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 2568,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            }
+          ],
+          "log_member": "logs/rejection-classification-57.log",
+          "log_sha256": "f351b56dfb6e8aaf935b9fef3ee47e2f8d0ec25550adfb8518b78fc4c7221431",
+          "name": "rejection-classification-57",
+          "status_member": "logs/rejection-classification-57.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/rejection-clippy-57.log",
+          "log_sha256": "a416a299b01b61f16b12b51cfbb6f24e2c69f0c4798613cb487c67fb9335daa5",
+          "name": "rejection-clippy-57",
+          "script_member": "run-native-qualified-batch-57.sh",
+          "source_snapshot": "snapshot70",
+          "status_member": "logs/rejection-clippy-57.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--doc",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 12
+            },
+            {
+              "elapsed_seconds": 2.11,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 86
+            }
+          ],
+          "log_member": "logs/rejection-docs-57.log",
+          "log_sha256": "873a30dc09f28c9c2b1e03f52aa579213bc136bff3fe4938ac764789b2d6c9de",
+          "name": "rejection-docs-57",
+          "script_member": "run-native-qualified-batch-57.sh",
+          "source_snapshot": "snapshot70",
+          "status_member": "logs/rejection-docs-57.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 348.63,
+              "failed": 1,
+              "filtered": 0,
+              "ignored": 34,
+              "measured": 0,
+              "outcome": "FAILED",
+              "passed": 2534
+            }
+          ],
+          "log_member": "logs/rejection-full-runtime-57.log",
+          "log_sha256": "3f49b4020b4a9c5d373adea361bc7c67ceec06210d1ec9517dbaaee7f32a0ba2",
+          "name": "rejection-full-runtime-57",
+          "script_member": "run-native-qualified-batch-57.sh",
+          "source_snapshot": "snapshot70",
+          "status_member": "logs/rejection-full-runtime-57.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/rejection-integration-check-57.log",
+          "log_sha256": "9c2ebc2b913ea778cc2f0e0184b180fbbc568148999c1a0e9041efa658dd45b2",
+          "name": "rejection-integration-check-57",
+          "status_member": "logs/rejection-integration-check-57.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 2555,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 14
+            }
+          ],
+          "log_member": "logs/rejection-receipts-57.log",
+          "log_sha256": "b2971636baeebbf301994de7b9b2943cbff9bd0d2d2f31de91040fe663150547",
+          "name": "rejection-receipts-57",
+          "status_member": "logs/rejection-receipts-57.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 2566,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 3
+            }
+          ],
+          "log_member": "logs/rejection-retirement-57.log",
+          "log_sha256": "53c928f83796ccc97eec364bf80b9bc381c6598b76eca43da9d237f11e99f789",
+          "name": "rejection-retirement-57",
+          "status_member": "logs/rejection-retirement-57.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 101,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 36.97,
+              "failed": 1,
+              "filtered": 2505,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "FAILED",
+              "passed": 63
+            }
+          ],
+          "log_member": "logs/rejection-scope-57.log",
+          "log_sha256": "a35c21a5303c357edef73346799c7082ee8a9afdc6fb2bd4caebbb5aa172fd85",
+          "name": "rejection-scope-57",
+          "status_member": "logs/rejection-scope-57.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.03,
+              "failed": 0,
+              "filtered": 2566,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 3
+            }
+          ],
+          "log_member": "logs/rejection-settlement-57.log",
+          "log_sha256": "f283fde1dee61419e8614ee82b1f426f2b9ede7052154055fb40737f167bfb5f",
+          "name": "rejection-settlement-57",
+          "status_member": "logs/rejection-settlement-57.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot71-combined-diagnostic-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-58.sh",
+          "sha256": "24a26c11eb38d9c76147f441fcdca82e09c5c6b8827c1adbdf524049a629be81"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host",
+            "--package",
+            "fe2o3-kfd",
+            "--package",
+            "cargo-fe2o3",
+            "--package",
+            "fe2o3-compiler-execution-supervisor"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-58.log",
+          "log_sha256": "0bdaeb2aa6a92a0fdfec2d2cc4d0ab71946de5d0654e08c526e4629130ae0f28",
+          "name": "changed-package-clean-58",
+          "script_member": "run-native-qualified-batch-58.sh",
+          "source_snapshot": "snapshot71",
+          "status_member": "logs/changed-package-clean-58.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "-p",
+            "cargo-fe2o3",
+            "-p",
+            "fe2o3-compiler-execution-supervisor",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/combined-clippy-58.log",
+          "log_sha256": "6dfc439fed753d933bdea5bf4d777d095587af7ecd250248071a1de465740ada",
+          "name": "combined-clippy-58",
+          "script_member": "run-native-qualified-batch-58.sh",
+          "source_snapshot": "snapshot71",
+          "status_member": "logs/combined-clippy-58.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-host",
+            "-p",
+            "fe2o3-kfd",
+            "-p",
+            "cargo-fe2o3",
+            "-p",
+            "fe2o3-compiler-execution-supervisor",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/combined-integration-check-58.log",
+          "log_sha256": "90f400c4e789dac892fa7b669156868fafaa95410eb0c2cfc206bbca94627596",
+          "name": "combined-integration-check-58",
+          "script_member": "run-native-qualified-batch-58.sh",
+          "source_snapshot": "snapshot71",
+          "status_member": "logs/combined-integration-check-58.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "lexical_original_decoder_stages_actual_version_then_replica_fanout_and_consumers",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--exact",
+            "context::generated_scope::tests::graph::replicas::lexical_original_decoder_stages_actual_version_then_replica_fanout_and_consumers",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/graph-fanout-diagnostic-58.log",
+          "log_sha256": "f1dd6a067010b8beb2bd224099e1526e211c423ef582a65eb1664fc5ce434f9c",
+          "name": "graph-fanout-diagnostic-58",
+          "script_member": "run-native-qualified-batch-58.sh",
+          "source_snapshot": "snapshot71",
+          "status_member": "logs/graph-fanout-diagnostic-58.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--lib",
+            "cargo_invocation_boundary",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/invocation-boundary-58.log",
+          "log_sha256": "1116de80998c3e28559f9a95eb51d911c640d350ae58eafd75032af117956df3",
+          "name": "invocation-boundary-58",
+          "script_member": "run-native-qualified-batch-58.sh",
+          "source_snapshot": "snapshot71",
+          "status_member": "logs/invocation-boundary-58.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--lib",
+            "application_sandbox",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/listener-refusal-custody-58.log",
+          "log_sha256": "1116de80998c3e28559f9a95eb51d911c640d350ae58eafd75032af117956df3",
+          "name": "listener-refusal-custody-58",
+          "script_member": "run-native-qualified-batch-58.sh",
+          "source_snapshot": "snapshot71",
+          "status_member": "logs/listener-refusal-custody-58.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-58",
+          "status_member": "logs/native-qualified-batch-58.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--test",
+            "native_registry4_case",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/registry-fixture-controls-58.log",
+          "log_sha256": "cff8cf4335dd8075600dc75691da93ede2932f2f6d46062bdb0dac84f1b1ea44",
+          "name": "registry-fixture-controls-58",
+          "script_member": "run-native-qualified-batch-58.sh",
+          "source_snapshot": "snapshot71",
+          "status_member": "logs/registry-fixture-controls-58.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-compiler-execution-supervisor",
+            "--lib",
+            "--",
+            "--test-threads=4"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 2.4,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 42,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 301
+            }
+          ],
+          "log_member": "logs/supervisor-fixtures-58.log",
+          "log_sha256": "2b8cfec9e94ce6b707119c94bdaafd35f684cafaeca4b8683a60a17f2e683f42",
+          "name": "supervisor-fixtures-58",
+          "script_member": "run-native-qualified-batch-58.sh",
+          "source_snapshot": "snapshot71",
+          "status_member": "logs/supervisor-fixtures-58.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot72-integrated-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-59.sh",
+          "sha256": "1dc98266a17933cc7b640a46824fad017ba99747881a5206dae18bc5c396be50"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host",
+            "--package",
+            "fe2o3-kfd",
+            "--package",
+            "cargo-fe2o3",
+            "--package",
+            "fe2o3-compiler-execution-supervisor",
+            "--package",
+            "fe2o3-verifier"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-59.log",
+          "log_sha256": "0bdaeb2aa6a92a0fdfec2d2cc4d0ab71946de5d0654e08c526e4629130ae0f28",
+          "name": "changed-package-clean-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/changed-package-clean-59.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "-p",
+            "cargo-fe2o3",
+            "-p",
+            "fe2o3-compiler-execution-supervisor",
+            "-p",
+            "fe2o3-verifier",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/combined-clippy-59.log",
+          "log_sha256": "4a72147461e9da3e7b958a9ea44810802651029ba2f4671918daca899870a0e5",
+          "name": "combined-clippy-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/combined-clippy-59.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-host",
+            "-p",
+            "fe2o3-kfd",
+            "-p",
+            "cargo-fe2o3",
+            "-p",
+            "fe2o3-compiler-execution-supervisor",
+            "-p",
+            "fe2o3-verifier",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/combined-integration-check-59.log",
+          "log_sha256": "28c9231889fa90babe113431883ed790e417a86de61d81b663a8bdd8ef447b25",
+          "name": "combined-integration-check-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/combined-integration-check-59.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--exact",
+            "context::generated_scope::tests::graph::replicas::lexical_original_decoder_stages_actual_version_then_replica_fanout_and_consumers",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 1,
+              "filtered": 2575,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "FAILED",
+              "passed": 0
+            }
+          ],
+          "log_member": "logs/graph-fanout-diagnostic-59.log",
+          "log_sha256": "a7011f5726e12f6b595234fb98ca5ec9d13f37948b54679135781e200e94807d",
+          "name": "graph-fanout-diagnostic-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/graph-fanout-diagnostic-59.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "git",
+            "init",
+            "--bare",
+            "$root/snapshot72-inventory.git"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/inventory-git-59.log",
+          "log_sha256": "12ffcb69d9aa16c7e2eeacb7d8ccd0640884b2c43605fc8cf18d63f710546ac6",
+          "name": "inventory-git-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/inventory-git-59.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--bin",
+            "cargo-fe2o3",
+            "cargo_invocation_boundary",
+            "--",
+            "--test-threads=4"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 568,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 11
+            }
+          ],
+          "log_member": "logs/invocation-boundary-59.log",
+          "log_sha256": "77ae4c0588a00072c01b181e607d344d9bdeea0b50396acdb72e465ba012ffdd",
+          "name": "invocation-boundary-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/invocation-boundary-59.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--bin",
+            "cargo-fe2o3",
+            "application_sandbox",
+            "--",
+            "--test-threads=4"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 2,
+              "filtered": 568,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "FAILED",
+              "passed": 9
+            }
+          ],
+          "log_member": "logs/listener-refusal-custody-59.log",
+          "log_sha256": "c4b95d0848e6574fe3460534085b006ede4db6876beae3d7662c863e74ac8dbc",
+          "name": "listener-refusal-custody-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/listener-refusal-custody-59.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-59",
+          "status_member": "logs/native-qualified-batch-59.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-verifier",
+            "--lib",
+            "compiler_proof_broker_v1",
+            "--",
+            "--test-threads=16"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.04,
+              "failed": 0,
+              "filtered": 1514,
+              "ignored": 1,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 25
+            }
+          ],
+          "log_member": "logs/proof-inherited-custody-59.log",
+          "log_sha256": "ff6ca7cc63609f095c79aa8dab947c4c38584e607dab50395b556c27c2d59931",
+          "name": "proof-inherited-custody-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/proof-inherited-custody-59.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--test",
+            "native_registry4_case",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 5
+            }
+          ],
+          "log_member": "logs/registry-fixture-controls-59.log",
+          "log_sha256": "0fa624b5eed33b17c42f42cc287f0b2c68c18ffa4d552afd4cd54af492c9a74c",
+          "name": "registry-fixture-controls-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/registry-fixture-controls-59.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-compiler-execution-supervisor",
+            "--lib",
+            "--",
+            "--test-threads=4"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 2.41,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 42,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 301
+            }
+          ],
+          "log_member": "logs/supervisor-fixtures-59.log",
+          "log_sha256": "f0fdae1df82474f7d28fab53e841eb3d26c05ff3d086e9e2618b7154fd5b1a23",
+          "name": "supervisor-fixtures-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/supervisor-fixtures-59.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "env",
+            "GIT_DIR=$root/snapshot72-inventory.git",
+            "GIT_WORK_TREE=$root/snapshot72",
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--test",
+            "unsafe_source_policy",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 12.29,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 1,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 5
+            }
+          ],
+          "log_member": "logs/unsafe-inventory-59.log",
+          "log_sha256": "1d97322de998869ec7340df87bda87e824dcb80467d13287b28331e0c0c91386",
+          "name": "unsafe-inventory-59",
+          "script_member": "run-native-qualified-batch-59.sh",
+          "source_snapshot": "snapshot72",
+          "status_member": "logs/unsafe-inventory-59.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot73-repeat2-compile-refusal-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-60.sh",
+          "sha256": "ce816a5e2cc79e258b559356a320a057964a8d2486412630d9f692f6d8a42805"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host",
+            "--package",
+            "fe2o3-kfd",
+            "--package",
+            "cargo-fe2o3"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-60.log",
+          "log_sha256": "43b71c16bb9fae1e23ffa4f29f90d896e90d3227ab3d77390bc949ef35a41fd4",
+          "name": "changed-package-clean-60",
+          "script_member": "run-native-qualified-batch-60.sh",
+          "source_snapshot": "snapshot73",
+          "status_member": "logs/changed-package-clean-60.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-60",
+          "status_member": "logs/native-qualified-batch-60.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/repeat2-integration-check-60.log",
+          "log_sha256": "386ab5b3a231661a6c0a9efee1a91d0683bdee20de70974ad1acc9b9b7ca3132",
+          "name": "repeat2-integration-check-60",
+          "status_member": "logs/repeat2-integration-check-60.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot74-repeat2-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-61.sh",
+          "sha256": "369dfb67b28738f9aa33c4bf01ff5643395f4251f045c91a12db9b7f83b30d37"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host",
+            "--package",
+            "fe2o3-kfd",
+            "--package",
+            "cargo-fe2o3"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-61.log",
+          "log_sha256": "0bdaeb2aa6a92a0fdfec2d2cc4d0ab71946de5d0654e08c526e4629130ae0f28",
+          "name": "changed-package-clean-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/changed-package-clean-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 380,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 380,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 380,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 380,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 380,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 380,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 9.42,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 378
+            }
+          ],
+          "log_member": "logs/full-host-61.log",
+          "log_sha256": "a55940d075871c603fd8191e41e73c69b6a02d0cb5f0fcf50d32f9b63b5567dc",
+          "name": "full-host-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/full-host-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "--features",
+            "cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 653.71,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2082
+            }
+          ],
+          "log_member": "logs/full-kfd-61.log",
+          "log_sha256": "c54c29873b1f1ecdfe2ad0fc800938da282c0f876883a209fe4f60d54ca69a54",
+          "name": "full-kfd-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/full-kfd-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 346.5,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 34,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2545
+            }
+          ],
+          "log_member": "logs/full-runtime-61.log",
+          "log_sha256": "862582a09ad932fa3e9a7c568cc36eb9de437c96283169e08361a55b380103d5",
+          "name": "full-runtime-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/full-runtime-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-host",
+            "--all-targets",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/host-clippy-61.log",
+          "log_sha256": "082e0fc936a2791e8a9c23345abfb3289d6e97dcf2df73c09664696743c8db13",
+          "name": "host-clippy-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/host-clippy-61.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--doc",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 18
+            },
+            {
+              "elapsed_seconds": 2.95,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 82
+            }
+          ],
+          "log_member": "logs/host-docs-61.log",
+          "log_sha256": "42c1f84b08a8b3fabaa10ab3de38ec62a6320d1c923995bdd4d1d69438d79ab6",
+          "name": "host-docs-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/host-docs-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "registry",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.02,
+              "failed": 0,
+              "filtered": 373,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 8
+            }
+          ],
+          "log_member": "logs/host-registry-controls-61.log",
+          "log_sha256": "9d5875c6bc316d40d7c5f626bcce13ba194a61352ed1bc7473cc0ad2af0cf0ab",
+          "name": "host-registry-controls-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/host-registry-controls-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "git",
+            "init",
+            "--bare",
+            "$root/snapshot74-inventory.git"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/inventory-git-61.log",
+          "log_sha256": "7fdb6b1a62cdac2c6e6539702d736133696456ce1b40e1c9dcd6dac39dbfb9a6",
+          "name": "inventory-git-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/inventory-git-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--doc",
+            "--features",
+            "cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 4
+            },
+            {
+              "elapsed_seconds": 1.49,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 61
+            }
+          ],
+          "log_member": "logs/kfd-docs-61.log",
+          "log_sha256": "4c68d3b9f98dc7b0a73884ec3e91111ad0b7b4e1dfe9c827d3652fa47cb3bcde",
+          "name": "kfd-docs-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/kfd-docs-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "repeat2",
+            "--features",
+            "cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 2082,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 3
+            }
+          ],
+          "log_member": "logs/kfd-repeat2-controls-61.log",
+          "log_sha256": "c7dfa01a36339435c2dacff86ce4a68225fbb095fdd6ea2424c6d87bf12d7ba5",
+          "name": "kfd-repeat2-controls-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/kfd-repeat2-controls-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--bin",
+            "cargo-fe2o3",
+            "application_sandbox",
+            "--",
+            "--test-threads=16"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 568,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 11
+            }
+          ],
+          "log_member": "logs/listener-refusal-custody-61.log",
+          "log_sha256": "438677de9db702e4b7e0c6ac8361941607ce9f7f537d6166ceef7b1c22883e3d",
+          "name": "listener-refusal-custody-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/listener-refusal-custody-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-61",
+          "status_member": "logs/native-qualified-batch-61.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--exact",
+            "context::generated_scope::tests::graph::replicas::lexical_original_decoder_stages_actual_version_then_ordered_replica_fanout_and_consumers",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 2578,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            }
+          ],
+          "log_member": "logs/ordered-graph-fanout-61.log",
+          "log_sha256": "1f3ad0be0dbf89ad59b7c6d28220c004864aea04c284b2375f9dda489ac5049e",
+          "name": "ordered-graph-fanout-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/ordered-graph-fanout-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "run",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "check",
+            "--manifest-path",
+            "crates/cargo-fe2o3/tests/fixtures/conditional-custodian-application/Cargo.toml",
+            "--bins",
+            "--offline",
+            "--locked"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/registry-fixture-binding-61.log",
+          "log_sha256": "40b7fc14232c29d63c69664de76321fd68b0d2e0f479a4408117fbeb2b34cd6e",
+          "name": "registry-fixture-binding-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/registry-fixture-binding-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--test",
+            "native_registry4_case",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 6
+            }
+          ],
+          "log_member": "logs/registry-fixture-controls-61.log",
+          "log_sha256": "ea84020f9f2fdbbf2c405f1e8bd25153846e357b16424af714a3639f15765b18",
+          "name": "registry-fixture-controls-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/registry-fixture-controls-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/repeat2-integration-check-61.log",
+          "log_sha256": "119224f6ebd0863eb69cae52ea210cd8077802fafc9561d5ae2832e285b25421",
+          "name": "repeat2-integration-check-61",
+          "status_member": "logs/repeat2-integration-check-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--doc",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 12
+            },
+            {
+              "elapsed_seconds": 2.24,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 90
+            }
+          ],
+          "log_member": "logs/runtime-docs-61.log",
+          "log_sha256": "417c6e5f83da51b4137b4705846992a1cafbe5c1b51ebe198edbd0557e9c6359",
+          "name": "runtime-docs-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/runtime-docs-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/runtime-kfd-clippy-61.log",
+          "log_sha256": "75e8a625554add0fd9830bf94e99b7c1fdd843c4405128c3157856b245025e3d",
+          "name": "runtime-kfd-clippy-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/runtime-kfd-clippy-61.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "registry4",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.07,
+              "failed": 0,
+              "filtered": 2570,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 9
+            }
+          ],
+          "log_member": "logs/runtime-registry-controls-61.log",
+          "log_sha256": "9111d8c8a0cb12c4314589a42bcb4980536fced321df9af302b4d22df0b089e3",
+          "name": "runtime-registry-controls-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/runtime-registry-controls-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "env",
+            "GIT_DIR=$root/snapshot74-inventory.git",
+            "GIT_WORK_TREE=$root/snapshot74",
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--test",
+            "unsafe_source_policy",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 12.62,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 1,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 5
+            }
+          ],
+          "log_member": "logs/unsafe-inventory-61.log",
+          "log_sha256": "b0ec96010ceccec7f008d2ca76245d5aad3629b4e89b834f07917ffbfe9bc8ef",
+          "name": "unsafe-inventory-61",
+          "script_member": "run-native-qualified-batch-61.sh",
+          "source_snapshot": "snapshot74",
+          "status_member": "logs/unsafe-inventory-61.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot75-resident-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-62.sh",
+          "sha256": "f3d3a4b0c1b72ee539821f5550780f91b54f210449cdf9ef1c477d26b28156d8"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-kfd",
+            "--package",
+            "cargo-fe2o3"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-62.log",
+          "log_sha256": "0bdaeb2aa6a92a0fdfec2d2cc4d0ab71946de5d0654e08c526e4629130ae0f28",
+          "name": "changed-package-clean-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/changed-package-clean-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--manifest-path",
+            "$root/native-copy-lock-fixture/Cargo.toml",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/copy-fixture-controls-62.log",
+          "log_sha256": "dc6e09bb0fe3c855fc6b749e415e5832380783fcd5df57faf406e428989ead7c",
+          "name": "copy-fixture-controls-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/copy-fixture-controls-62.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "generate-lockfile",
+            "--offline",
+            "--manifest-path",
+            "$root/native-copy-lock-fixture/Cargo.toml"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/copy-fixture-lock-62.log",
+          "log_sha256": "06145a4d7c0e6cfb2a239410ab8c3eef6bdd9f957e8ae641d9afb19ae3283dc2",
+          "name": "copy-fixture-lock-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/copy-fixture-lock-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "--features",
+            "cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 663.93,
+              "failed": 1,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "FAILED",
+              "passed": 2086
+            }
+          ],
+          "log_member": "logs/full-kfd-62.log",
+          "log_sha256": "a0ccca5eb75b2ab1e4645ed6f4685c5e0c2308eb148ccc1f5663dae623611955",
+          "name": "full-kfd-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/full-kfd-62.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--doc",
+            "--features",
+            "cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 4
+            },
+            {
+              "elapsed_seconds": 1.66,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 62
+            }
+          ],
+          "log_member": "logs/kfd-docs-62.log",
+          "log_sha256": "f7216fc6d0d9f18721992bde89e2ae01a1eecc8656d03bdacd94b49721d978a3",
+          "name": "kfd-docs-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/kfd-docs-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "repeat2",
+            "--features",
+            "cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 2087,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 3
+            }
+          ],
+          "log_member": "logs/kfd-repeat2-controls-62.log",
+          "log_sha256": "fc8907d603b5a859441f1b99ee3dd977c23419b3020d6a766e2ebbac8f5b9fdf",
+          "name": "kfd-repeat2-controls-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/kfd-repeat2-controls-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "resident_registry",
+            "--features",
+            "cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.57,
+              "failed": 1,
+              "filtered": 2085,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "FAILED",
+              "passed": 4
+            }
+          ],
+          "log_member": "logs/kfd-resident-controls-62.log",
+          "log_sha256": "8b2a54008c06aaef24d8fd475ead34152e7c80f698c2e7e5cef1493f352bcec9",
+          "name": "kfd-resident-controls-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/kfd-resident-controls-62.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "scripts/tests/qualify_native_conditional_application_test.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/native-application-command-62.log",
+          "log_sha256": "3cab2fcf2d072652f17982a5774f74101ad4afcfb27baeea68d5a9c9d3fdf57b",
+          "name": "native-application-command-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/native-application-command-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "scripts/tests/qualify_native_conditional_cpu_chain_test.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/native-cpu-chain-command-62.log",
+          "log_sha256": "65378dcad145da2497120819bebfc3c46534dce9714ce064b3d809a56654aca2",
+          "name": "native-cpu-chain-command-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/native-cpu-chain-command-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-62",
+          "status_member": "logs/native-qualified-batch-62.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--bin",
+            "cargo-fe2o3",
+            "authority_release::",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.03,
+              "failed": 0,
+              "filtered": 553,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 29
+            }
+          ],
+          "log_member": "logs/native-release-controls-62.log",
+          "log_sha256": "b5eb2184315c463bf5c5cb55d931508fbfc4159c5b343cbba975ebcaa82c3021",
+          "name": "native-release-controls-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/native-release-controls-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "scripts/tests/runtime-production-proof-pipeline.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/production-proof-sequencing-62.log",
+          "log_sha256": "1f66a21d4ea249595993aa25eff9bf6462c5d18af4a558dc390cede3d96a5fb3",
+          "name": "production-proof-sequencing-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/production-proof-sequencing-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/resident-integration-check-62.log",
+          "log_sha256": "c79d86a7c336a43d7daa6ca738167cbabd8f6d09124265d44ca2c8eda920cdbd",
+          "name": "resident-integration-check-62",
+          "status_member": "logs/resident-integration-check-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "replica_tests::retirement",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 2576,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 3
+            }
+          ],
+          "log_member": "logs/retirement-controls-62.log",
+          "log_sha256": "d7e456dad823811b7bf5d382a457a7dc4cab51a9c2cf72754896079d5fbb0aef",
+          "name": "retirement-controls-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/retirement-controls-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "crates/fe2o3-runtime-model/verus/test-graph-reservation-retirement-v1.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/retirement-source-controls-62.log",
+          "log_sha256": "cc7b08100ab0287c260afecca62718ebbf175f4ebb6ff680372daf84d34015e9",
+          "name": "retirement-source-controls-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/retirement-source-controls-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/runtime-kfd-clippy-62.log",
+          "log_sha256": "bdf7cd4eb69bce8841409205ccaa25360d3564ab83769e7a710076bc45bb6ac2",
+          "name": "runtime-kfd-clippy-62",
+          "script_member": "run-native-qualified-batch-62.sh",
+          "source_snapshot": "snapshot75",
+          "status_member": "logs/runtime-kfd-clippy-62.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot77-registry16-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-63.sh",
+          "sha256": "1bf98e1b51c1ccbf9f1a19aba0ba2cc84c93b20002e717d5a3d5448757504694"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime",
+            "--package",
+            "fe2o3-host",
+            "--package",
+            "fe2o3-kfd",
+            "--package",
+            "cargo-fe2o3",
+            "--package",
+            "fe2o3-compiler-execution-client"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-63.log",
+          "log_sha256": "0bdaeb2aa6a92a0fdfec2d2cc4d0ab71946de5d0654e08c526e4629130ae0f28",
+          "name": "changed-package-clean-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/changed-package-clean-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "run",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "test",
+            "--manifest-path",
+            "crates/cargo-fe2o3/tests/fixtures/native-copy-consumer/Cargo.toml",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 1,
+          "libtest_summaries": [],
+          "log_member": "logs/copy-fixture-controls-63.log",
+          "log_sha256": "06b215c67f0731abdfc4a7e08661a6b1a2103669628d4cb6a3d208319a8f56da",
+          "name": "copy-fixture-controls-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/copy-fixture-controls-63.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 381,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 381,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 381,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 381,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 381,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 381,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 9.48,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 379
+            }
+          ],
+          "log_member": "logs/full-host-63.log",
+          "log_sha256": "8c1e23991a61231a3f4789890754b45d1075df282404306f9bf5c7170c6feb25",
+          "name": "full-host-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/full-host-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "--features",
+            "cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 667.04,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2087
+            }
+          ],
+          "log_member": "logs/full-kfd-63.log",
+          "log_sha256": "b1e476de322b6c67a16b63e3d5116c0b8381c88d62bb83774b6c1a561fa0de49",
+          "name": "full-kfd-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/full-kfd-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 352.95,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 34,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2552
+            }
+          ],
+          "log_member": "logs/full-runtime-63.log",
+          "log_sha256": "d22bdf93852fe4aebe7806fb9efd254191f2ce97b5f1b45a56dfcd3a9a098ff0",
+          "name": "full-runtime-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/full-runtime-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--doc",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 18
+            },
+            {
+              "elapsed_seconds": 2.95,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 82
+            }
+          ],
+          "log_member": "logs/host-docs-63.log",
+          "log_sha256": "a9526af8c485a5f9e36756cef68538bff0186e14486378af08f082deb3ef266d",
+          "name": "host-docs-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/host-docs-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "registry",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.05,
+              "failed": 0,
+              "filtered": 373,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 9
+            }
+          ],
+          "log_member": "logs/host-registry-controls-63.log",
+          "log_sha256": "73424dc779d0d7beda1d9439c37880ca30ddffe5d6eba4c74f4c5513e55870a9",
+          "name": "host-registry-controls-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/host-registry-controls-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-host",
+            "--all-targets",
+            "--",
+            "-D",
+            "clippy::type_complexity",
+            "-D",
+            "clippy::drop_non_drop",
+            "-D",
+            "clippy::needless_range_loop"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/host-registry-scoped-clippy-63.log",
+          "log_sha256": "d995d72ba0c231b367d485f76bf94bc01ef3b7680e8d13826d87ad97c10ea6eb",
+          "name": "host-registry-scoped-clippy-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/host-registry-scoped-clippy-63.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "git",
+            "init",
+            "--bare",
+            "$root/snapshot77-inventory.git"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/inventory-git-63.log",
+          "log_sha256": "8330f022f2500646e21f2033bd53c85ed3719838abb2980207661b673fb14323",
+          "name": "inventory-git-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/inventory-git-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "resident_registry",
+            "--features",
+            "cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.55,
+              "failed": 0,
+              "filtered": 2085,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 5
+            }
+          ],
+          "log_member": "logs/kfd-resident-controls-63.log",
+          "log_sha256": "4b2674336631f466d8c80cf38e0f6649d25611d02dc7ffde02ca2ebadc432924",
+          "name": "kfd-resident-controls-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/kfd-resident-controls-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--bin",
+            "cargo-fe2o3",
+            "application_sandbox",
+            "--",
+            "--test-threads=16"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 571,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 11
+            }
+          ],
+          "log_member": "logs/listener-direct-controls-63.log",
+          "log_sha256": "afbd0b25e20fe251ad1de117f623e2beeaa1c8ca5f29e61a4fc12a287ac9aa05",
+          "name": "listener-direct-controls-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/listener-direct-controls-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-compiler-execution-client",
+            "--lib",
+            "cargo_sandbox::listener",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 2,
+              "filtered": 116,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "FAILED",
+              "passed": 0
+            }
+          ],
+          "log_member": "logs/listener-included-controls-63.log",
+          "log_sha256": "96c1f4ef9d4c2e46d92ef7250b943c49fb8c4541c72d189ff0301d86764dfc4c",
+          "name": "listener-included-controls-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/listener-included-controls-63.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-63",
+          "status_member": "logs/native-qualified-batch-63.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "scripts/tests/runtime-production-proof-pipeline.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/production-proof-sequencing-63.log",
+          "log_sha256": "7c880c9d5baf1d4f18db41eb2a459a8836c624af2f9a887cbcd5d8efd3882b4b",
+          "name": "production-proof-sequencing-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/production-proof-sequencing-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "run",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "check",
+            "--manifest-path",
+            "crates/cargo-fe2o3/tests/fixtures/conditional-custodian-application/Cargo.toml",
+            "--bins",
+            "--offline",
+            "--locked"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/registry16-fixture-binding-63.log",
+          "log_sha256": "2ce483cd1dec059ccf1f1f30cd4640e24376105f9a7ddd2670dc67261c0cc54b",
+          "name": "registry16-fixture-binding-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/registry16-fixture-binding-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--test",
+            "native_registry16_case",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 9
+            }
+          ],
+          "log_member": "logs/registry16-fixture-controls-63.log",
+          "log_sha256": "e4e99c0c92847aa111d3b8c55c572405a40105a270fb99e40e63f7ca32e7fbc5",
+          "name": "registry16-fixture-controls-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/registry16-fixture-controls-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/registry16-integration-check-63.log",
+          "log_sha256": "ecddbec01da769902c565a826eaa8b4b02fbba9c1a65c57f38c3a7533923d2bf",
+          "name": "registry16-integration-check-63",
+          "status_member": "logs/registry16-integration-check-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--test",
+            "native_registry4_case",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 7
+            }
+          ],
+          "log_member": "logs/registry4-fixture-controls-63.log",
+          "log_sha256": "f2ad8d16bb9f9e25336960e340c9aecb75772f3b85690ad4c4f350b023379830",
+          "name": "registry4-fixture-controls-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/registry4-fixture-controls-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "crates/fe2o3-runtime-model/verus/test-graph-reservation-retirement-v1.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/retirement-source-controls-63.log",
+          "log_sha256": "cc7b08100ab0287c260afecca62718ebbf175f4ebb6ff680372daf84d34015e9",
+          "name": "retirement-source-controls-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/retirement-source-controls-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--doc",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 12
+            },
+            {
+              "elapsed_seconds": 2.2,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 91
+            }
+          ],
+          "log_member": "logs/runtime-docs-63.log",
+          "log_sha256": "2409116e37fcf6f4f8a41ae4b3e2a676fe3e2c794850be6992fcd100b8f00e1d",
+          "name": "runtime-docs-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/runtime-docs-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/runtime-kfd-clippy-63.log",
+          "log_sha256": "b7e73429cd5ec51bee25dcbd366cf9c223ff5fc05f98c074fe4eb4d082ac08d0",
+          "name": "runtime-kfd-clippy-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/runtime-kfd-clippy-63.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "registry16",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.14,
+              "failed": 0,
+              "filtered": 2579,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 7
+            }
+          ],
+          "log_member": "logs/runtime-registry16-controls-63.log",
+          "log_sha256": "234802e11ab55b596ae133e60e468f96311b7605ab9043947dafce10b5c7980f",
+          "name": "runtime-registry16-controls-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/runtime-registry16-controls-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "registry4",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.09,
+              "failed": 0,
+              "filtered": 2573,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 13
+            }
+          ],
+          "log_member": "logs/runtime-registry4-controls-63.log",
+          "log_sha256": "d276129c0dca234331fb7b848f546da2dde796c9e8c9b8e8e6464488de59697a",
+          "name": "runtime-registry4-controls-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/runtime-registry4-controls-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "env",
+            "GIT_DIR=$root/snapshot77-inventory.git",
+            "GIT_WORK_TREE=$root/snapshot77",
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--test",
+            "unsafe_source_policy",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 12.38,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 1,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 5
+            }
+          ],
+          "log_member": "logs/unsafe-inventory-63.log",
+          "log_sha256": "0b9a45cacaa14158379abaec66cea252e5062fb3a238fef0484fe23ab6879295",
+          "name": "unsafe-inventory-63",
+          "script_member": "run-native-qualified-batch-63.sh",
+          "source_snapshot": "snapshot77",
+          "status_member": "logs/unsafe-inventory-63.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot78-frontend-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-64.sh",
+          "sha256": "a2593409beaddf705f1446f7952e2197251140a23f4ef3ac7b774804fd92a04a"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "env",
+            "CARGO_TARGET_DIR=$target",
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--bin",
+            "cargo-fe2o3",
+            "authority_release",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.03,
+              "failed": 0,
+              "filtered": 553,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 29
+            }
+          ],
+          "log_member": "logs/authority-release-controls-64.log",
+          "log_sha256": "5301cee8163d0cb2373278675936e8fe65b3a695d026027ead5d908bc48d2a0f",
+          "name": "authority-release-controls-64",
+          "script_member": "run-native-qualified-batch-64.sh",
+          "source_snapshot": "snapshot78",
+          "status_member": "logs/authority-release-controls-64.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "env",
+            "CARGO_TARGET_DIR=$target",
+            "cargo",
+            "run",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--",
+            "test",
+            "--manifest-path",
+            "crates/cargo-fe2o3/tests/fixtures/native-copy-consumer/Cargo.toml",
+            "--lib",
+            "--offline",
+            "--locked",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            }
+          ],
+          "log_member": "logs/copy-host-fixture-controls-64.log",
+          "log_sha256": "58e9325b3063330db17efded182c385def91b10e63c6ac05e1605cfdd18ff739",
+          "name": "copy-host-fixture-controls-64",
+          "script_member": "run-native-qualified-batch-64.sh",
+          "source_snapshot": "snapshot78",
+          "status_member": "logs/copy-host-fixture-controls-64.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/copy-host-lock-64.log",
+          "log_sha256": "c95af243e370c791fc6a18913bcb264bcc28635214357d5ea39b8076a4237ee7",
+          "name": "copy-host-lock-64",
+          "status_member": "logs/copy-host-lock-64.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/frontend-integration-check-64.log",
+          "log_sha256": "a3646240b466845290a60a4e17d8f57549c31785483f11144d20627f0b2de217",
+          "name": "frontend-integration-check-64",
+          "status_member": "logs/frontend-integration-check-64.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "env",
+            "CARGO_TARGET_DIR=$target",
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "cargo-fe2o3",
+            "--bin",
+            "cargo-fe2o3",
+            "application_sandbox",
+            "--",
+            "--test-threads=16"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 571,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 11
+            }
+          ],
+          "log_member": "logs/listener-direct-controls-64.log",
+          "log_sha256": "d69d426a2570431948a171e8367bc9f6e5a45eb14f241a7d6507377ed64d3c2d",
+          "name": "listener-direct-controls-64",
+          "script_member": "run-native-qualified-batch-64.sh",
+          "source_snapshot": "snapshot78",
+          "status_member": "logs/listener-direct-controls-64.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "env",
+            "CARGO_TARGET_DIR=$target",
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-compiler-execution-client",
+            "--lib",
+            "cargo_sandbox::listener",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 116,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            }
+          ],
+          "log_member": "logs/listener-included-controls-64.log",
+          "log_sha256": "c8e5260180673198490bd9c1f9877b9d0616c6102dd341d27a2900fbfcd7a8df",
+          "name": "listener-included-controls-64",
+          "script_member": "run-native-qualified-batch-64.sh",
+          "source_snapshot": "snapshot78",
+          "status_member": "logs/listener-included-controls-64.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "name": "native-qualified-batch-64",
+          "status_member": "logs/native-qualified-batch-64.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshot79-bounded-roster-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-65.sh",
+          "sha256": "0b93f1187082c7cd43b902515e656331f9e1d8795b346e58810044529889fade"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/bounded-roster-integration-check-65.log",
+          "log_sha256": "7319df5fc31dd63bab84e511052ff7ad5a4343cfbc4a8d93d2d908a6ae9dfbc2",
+          "name": "bounded-roster-integration-check-65",
+          "status_member": "logs/bounded-roster-integration-check-65.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-runtime"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-runtime-clean-65.log",
+          "log_sha256": "a28666f904531d70281873a5aad0f9273c9e398c382ed7c0ff5009e159190bc4",
+          "name": "changed-runtime-clean-65",
+          "script_member": "run-native-qualified-batch-65.sh",
+          "source_snapshot": "snapshot79",
+          "status_member": "logs/changed-runtime-clean-65.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 348.31,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 34,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2554
+            }
+          ],
+          "log_member": "logs/full-runtime-65.log",
+          "log_sha256": "583248875d3008c4f6d7273c6cd8a3100fc0088999559b247c9a31da99d84891",
+          "name": "full-runtime-65",
+          "script_member": "run-native-qualified-batch-65.sh",
+          "source_snapshot": "snapshot79",
+          "status_member": "logs/full-runtime-65.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "name": "native-qualified-batch-65",
+          "status_member": "logs/native-qualified-batch-65.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "scripts/tests/runtime-production-proof-pipeline.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/production-proof-sequencing-65.log",
+          "log_sha256": "0b5f9b087d4e4e550064b592e1080399724ed139cc406450ea9dcf7032571b42",
+          "name": "production-proof-sequencing-65",
+          "script_member": "run-native-qualified-batch-65.sh",
+          "source_snapshot": "snapshot79",
+          "status_member": "logs/production-proof-sequencing-65.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "crates/fe2o3-runtime-model/verus/test-graph-reservation-retirement-v1.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/retirement-source-controls-65.log",
+          "log_sha256": "cc7b08100ab0287c260afecca62718ebbf175f4ebb6ff680372daf84d34015e9",
+          "name": "retirement-source-controls-65",
+          "script_member": "run-native-qualified-batch-65.sh",
+          "source_snapshot": "snapshot79",
+          "status_member": "logs/retirement-source-controls-65.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--doc",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 12
+            },
+            {
+              "elapsed_seconds": 2.51,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 91
+            }
+          ],
+          "log_member": "logs/runtime-docs-65.log",
+          "log_sha256": "5a56eaf69c92b948f1fff82588ecf97982dec885e0b5a390a68746f6725c5915",
+          "name": "runtime-docs-65",
+          "script_member": "run-native-qualified-batch-65.sh",
+          "source_snapshot": "snapshot79",
+          "status_member": "logs/runtime-docs-65.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/runtime-kfd-clippy-65.log",
+          "log_sha256": "1f12512d315acc4e32899d110e3fe87d9258c3a69708b66b8cec5fdce0a5cc8a",
+          "name": "runtime-kfd-clippy-65",
+          "script_member": "run-native-qualified-batch-65.sh",
+          "source_snapshot": "snapshot79",
+          "status_member": "logs/runtime-kfd-clippy-65.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "registry16",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.15,
+              "failed": 0,
+              "filtered": 2579,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 9
+            }
+          ],
+          "log_member": "logs/runtime-registry16-controls-65.log",
+          "log_sha256": "0ba9c8ecf4085474eb453187cae6d4f613bcedabff16aa46d16d5da1b78882c5",
+          "name": "runtime-registry16-controls-65",
+          "script_member": "run-native-qualified-batch-65.sh",
+          "source_snapshot": "snapshot79",
+          "status_member": "logs/runtime-registry16-controls-65.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "registry4",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.1,
+              "failed": 0,
+              "filtered": 2575,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 13
+            }
+          ],
+          "log_member": "logs/runtime-registry4-controls-65.log",
+          "log_sha256": "16889d39dfdcc6af0e68f5b6661911891a66241493f60d8427784dad96bfadbd",
+          "name": "runtime-registry4-controls-65",
+          "script_member": "run-native-qualified-batch-65.sh",
+          "source_snapshot": "snapshot79",
+          "status_member": "logs/runtime-registry4-controls-65.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
       "archive": "native-snapshots08-10-cpu-logs.tar.gz",
       "scripts": [],
       "source_inventories": [],

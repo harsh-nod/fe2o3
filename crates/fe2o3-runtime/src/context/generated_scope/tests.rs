@@ -10,6 +10,7 @@ mod cancellation;
 mod copies;
 mod futures;
 mod graph;
+mod rejected;
 pub(super) mod unpublished;
 
 pub(super) struct Borrowed<'a> {
@@ -105,6 +106,8 @@ where
                 .release_unpublished_hold_v1(hold)
                 .map_err(Into::into)
         },
+        rejected: |_, _| Ok(false),
+        retire_rejected: |_, _, _, _| panic!("no classified rejection in ordinary CPU hooks"),
         unpublished: |_, _| Ok(true),
         retire_unpublished: |_, _| Ok(()),
         copy_progress: RuntimeContextV1::progress_stream_v1,

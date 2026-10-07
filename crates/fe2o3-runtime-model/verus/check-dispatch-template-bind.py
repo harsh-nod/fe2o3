@@ -59,7 +59,7 @@ COHORT_PREMISES = BODY.parent / "native_fill_cohort/premises.rs"
 # Independent source-review premises for the concrete immutable owner accessors,
 # not additional Verus inputs or trusted executable theorem contracts.
 CONDITIONAL_READONLY_SOURCES = {
-    BODY.parent.parent / "queue_dispatch_binding.rs": "7399d515ee195cfada6ef75699f696a76debe560cf1611cb504c219f948ee8f0",
+    BODY.parent.parent / "queue_dispatch_binding.rs": "28c28520962696818392a71a0899d50e879604f77643aa9debedadb0c14579b3",
     BODY.parent.parent / "shared_memory.rs": "47e5b54f9a16bb4d726ffb08a995ddafbb217209bb8764bcd9be3fb8905a0400",
     CONDITIONAL_SOURCE: CONDITIONAL_SOURCE_SHA,
     COHORT_SOURCE: "7afca3f847b67cf2ebfb5c61b21f815af40d84b99ea1b95ab868ee144dfaaec0",

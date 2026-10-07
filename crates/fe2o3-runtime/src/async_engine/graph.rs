@@ -1,10 +1,12 @@
 //! Runtime binding of the existing completion graph; no compiler authority.
 
 use super::*;
-use crate::context::{ContextGraphReservationV1, PreparedContextGraphActionV1};
+use crate::context::{
+    ContextGraphReservationV1, ContextGraphSubmissionV1, PreparedContextGraphActionV1,
+};
 use crate::{
     RuntimeAccessV1, RuntimeArgumentsV1, RuntimeAsyncCopyBackendV1, RuntimeBindingV1,
-    RuntimeLaunchGeometryV1, RuntimeMemoryRegionV1, RuntimeSubmissionV1, TypedRuntimeKernelV1,
+    RuntimeLaunchGeometryV1, RuntimeMemoryRegionV1, TypedRuntimeKernelV1,
 };
 use fe2o3_completion::{
     CancellationCodeV1, CompletionAuthorityV1, CompletionGraphIdentityV1, CompletionGraphV1,
@@ -16,6 +18,7 @@ mod admitted;
 mod generated;
 mod host_staging;
 mod peer_placement;
+mod replicas;
 mod versions;
 pub(crate) use admitted::*;
 use generated::GraphReplyV1;
@@ -49,6 +52,7 @@ pub enum RuntimeGraphValidationErrorV1 {
     VersionNotAvailable,
     InvalidHostStaging,
     InvalidPeerGather,
+    InvalidReplicaCopy,
     HostStagingRequiresScope,
     UnorderedMemoryConflict {
         first: CompletionNodeIdV1,
@@ -193,6 +197,7 @@ enum Action<B: RuntimeBackendV1> {
     Launch(Box<dyn FrozenLaunch<B>>),
     Copy(RuntimeMemoryRegionV1, RuntimeMemoryRegionV1),
     PeerCopy(RuntimeMemoryRegionV1, RuntimeMemoryRegionV1),
+    ReplicaCopy(RuntimeMemoryRegionV1, RuntimeMemoryRegionV1),
     HostStaging(HostStagingV1),
 }
 
@@ -210,6 +215,7 @@ pub struct RuntimeGraphRequestV1<B: RuntimeBackendV1> {
     effects: usize,
     version_inputs: BTreeMap<versions::InputKey, RuntimeGraphVersionSourceV1>,
     peer_placement: Option<crate::RuntimePeerGatherPlacementV1>,
+    group: Option<crate::RuntimeGraphGroupV1>,
 }
 impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
     pub fn new(
@@ -241,6 +247,7 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
             effects: 0,
             version_inputs: BTreeMap::new(),
             peer_placement: None,
+            group: None,
         })
     }
 
@@ -350,7 +357,9 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
                         add(binding.region);
                     }
                 }
-                Action::Copy(source, destination) | Action::PeerCopy(source, destination) => {
+                Action::Copy(source, destination)
+                | Action::PeerCopy(source, destination)
+                | Action::ReplicaCopy(source, destination) => {
                     add(*source);
                     add(*destination);
                 }
@@ -362,7 +371,7 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
             // Context range validation precedes this check, so addition cannot overflow.
             let end = start.checked_add(len).expect("validated region");
             for &(other, offset, _, other_access, second) in &effects[i + 1..] {
-                if other != allocation || offset >= end {
+                if other != allocation || (self.group.is_none() && offset >= end) {
                     break;
                 }
                 if first == second
@@ -416,7 +425,7 @@ enum PreparedGraphActionV1 {
 enum ActiveGraphActionV1 {
     Ordinary(
         usize,
-        RuntimeSubmissionV1<()>,
+        ContextGraphSubmissionV1,
         Option<RuntimeCompletionStatusV1>,
     ),
     Generated(usize, RuntimeAsyncGeneratedCompletionV1),
@@ -761,7 +770,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
             }
             return true;
         }
-        match context.poll_with_graph_access_v1(&mut submission, Some(token)) {
+        match context.poll_with_graph_access_v1(&mut submission.original, Some(token)) {
             Ok(_) => {}
             Err(RuntimeErrorV1::BackendRejected(_)) => {
                 self.rejected_observations = self.rejected_observations.saturating_add(1);
@@ -784,7 +793,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
             }
         }
         let status = context
-            .query_submission(&submission)
+            .query_submission(&submission.original)
             .expect("exact owned submission");
         if status == RuntimeCompletionStatusV1::Pending {
             self.active

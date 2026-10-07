@@ -259,7 +259,9 @@ impl VersionLedger {
                         add(binding.region);
                     }
                 }
-                Action::Copy(source, destination) | Action::PeerCopy(source, destination) => {
+                Action::Copy(source, destination)
+                | Action::PeerCopy(source, destination)
+                | Action::ReplicaCopy(source, destination) => {
                     add(*source);
                     add(*destination);
                 }

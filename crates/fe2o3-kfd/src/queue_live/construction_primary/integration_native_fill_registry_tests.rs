@@ -2,15 +2,15 @@
 
 use super::*;
 use crate::queue::dispatch_binding::{
-    Gfx942NativeFillCohortMemberV1, Gfx942NativeFillRegistryInputsV1,
-    Gfx942NativeFillRegistryStorageV1,
+    Gfx942NativeFillCohortMemberV1, Gfx942NativeFillResidentRegistryInputsV1,
+    Gfx942NativeFillResidentRegistryStorageV1,
 };
 use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceKindV1, ResourceVectorV1};
 
-type RegistryRoot<'a> = Root<(
+type RegistryRoot<'a, const N: usize = 4> = Root<(
     Vec<ValidatedKernelEnvelope<'a>>,
-    FixedDispatchPreparationCustodyV1<4>,
-    Gfx942NativeFillRegistryStorageV1,
+    FixedDispatchPreparationCustodyV1<N>,
+    Gfx942NativeFillResidentRegistryStorageV1<N>,
 )>;
 
 fn setup_registry(
@@ -21,10 +21,23 @@ fn setup_registry(
     ResourceCreditAccountV1,
     usize,
 ) {
+    setup_resident_registry(bytes, [1, 37, 65, 129], [64, 64, 128, 192])
+}
+
+fn setup_resident_registry<const N: usize>(
+    bytes: &[u8],
+    counts: [usize; N],
+    grids: [u32; N],
+) -> (
+    Box<RegistryRoot<'_, N>>,
+    Rc<RefCell<Trace>>,
+    ResourceCreditAccountV1,
+    usize,
+) {
     let (mut memory, trace) = setup_memory();
     let members = std::array::from_fn(|index| {
-        let count = [1, 37, 65, 129][index];
-        let grid = [64, 64, 128, 192][index];
+        let count = counts[index];
+        let grid = grids[index];
         let token = memory
             .allocate::<HostVisibleCoherentGttV1>(count * 4)
             .unwrap();
@@ -34,7 +47,7 @@ fn setup_registry(
             Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory.map(token).unwrap()),
         )
     });
-    let inputs = Gfx942NativeFillRegistryInputsV1::admit(members).unwrap();
+    let inputs = Gfx942NativeFillResidentRegistryInputsV1::<N>::admit(members).unwrap();
     let crate::queue::dispatch_binding::Gfx942NativeFillCohortV1 {
         programs,
         packets,
@@ -45,28 +58,29 @@ fn setup_registry(
     trace.borrow_mut().initial_preparation = Some(
         custody
             .primary_snapshot_v1()
-            .with_expected_write_only_ranges_v1(&[(0, 4), (0, 148), (0, 260), (0, 516)]),
+            .with_expected_write_only_ranges_v1(&counts.map(|count| (0, (count * 4) as u64))),
     );
     let account = ResourceCreditAccountV1::new(
         ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, 1 << 20),
-        6,
+        N + 2,
     )
     .unwrap();
-    let storage = Gfx942NativeFillRegistryStorageV1::preallocate(account.clone()).unwrap();
+    let storage =
+        Gfx942NativeFillResidentRegistryStorageV1::<N>::preallocate(account.clone()).unwrap();
     let root = Root::new_with(memory, (programs, custody, storage));
-    let pointer = &*root as *const RegistryRoot<'_> as usize;
+    let pointer = &*root as *const RegistryRoot<'_, N> as usize;
     (root, trace, account, pointer)
 }
 
-fn assert_originals(
-    root: &RegistryRoot<'_>,
+fn assert_originals<const N: usize>(
+    root: &RegistryRoot<'_, N>,
     trace: &Rc<RefCell<Trace>>,
     pointer: usize,
     bytes: &[u8],
 ) {
     assert_common(root, pointer, trace);
     assert_platform(root, None);
-    assert_eq!(root.preparation.0.len(), 4);
+    assert_eq!(root.preparation.0.len(), N);
     for program in &root.preparation.0 {
         assert_eq!(program.envelope().bytes().as_ptr(), bytes.as_ptr());
         assert_eq!(program.envelope().bytes().len(), bytes.len());
@@ -82,10 +96,13 @@ fn assert_originals(
     );
     if let Some(dispatch) = dispatch {
         let identities = dispatch.primary_fixture_identities_v1();
-        assert_eq!(identities.len(), 9);
+        assert_eq!(identities.len(), 2 * N + 1);
         assert_partition(root, identities);
     }
 }
+
+#[path = "integration_native_fill_registry_tests/resident.rs"]
+mod resident;
 
 #[test]
 fn native_fill_registry_primary_retains_four_original_partitions_and_prepaid_tables() {

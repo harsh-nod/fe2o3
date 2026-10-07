@@ -80,7 +80,7 @@ struct Deferred<P> {
     future: crate::RuntimeAsyncCommandFutureV1<Outcome>,
 }
 struct Ordinary {
-    submission: RuntimeSubmissionV1<()>,
+    submission: ContextGraphSubmissionV1,
     retiring: Option<RuntimeCompletionStatusV1>,
 }
 
@@ -454,6 +454,23 @@ impl<P: RuntimeGfx942GeneratedCompletionCarrierV1> Graph<P> {
             }
             if let Some(slot) = self.generated[index]
                 && !self.reconciled[index]
+                && scope.slots[slot].lifecycle.phase == Phase::FailedUnpublished
+            {
+                // SAFETY: this phase requires actual native abort, source
+                // closing checks, Context disposal, carrier drop and hold release.
+                // It is not inferred from rejection or absent completion alone.
+                unsafe {
+                    core.fail(index, 5);
+                }
+                self.observations.push((
+                    core.id(index),
+                    RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                ));
+                self.reconciled[index] = true;
+                changed += 1;
+            }
+            if let Some(slot) = self.generated[index]
+                && !self.reconciled[index]
                 && let Some(outcome) = &scope.slots[slot].lifecycle.outcome
             {
                 if outcome.is_ok() {
@@ -517,7 +534,7 @@ impl<P: RuntimeGfx942GeneratedCompletionCarrierV1> Graph<P> {
             }
             match scope
                 .context
-                .poll_with_graph_access_v1(&mut active.submission, Some(core.token()))
+                .poll_with_graph_access_v1(&mut active.submission.original, Some(core.token()))
             {
                 Ok(_) => {}
                 Err(RuntimeErrorV1::BackendRejected(_)) => {
@@ -538,7 +555,7 @@ impl<P: RuntimeGfx942GeneratedCompletionCarrierV1> Graph<P> {
             }
             let status = scope
                 .context
-                .query_submission(&active.submission)
+                .query_submission(&active.submission.original)
                 .expect("original graph submission");
             if status != RuntimeCompletionStatusV1::Pending {
                 self.observations.push((core.id(index), status));

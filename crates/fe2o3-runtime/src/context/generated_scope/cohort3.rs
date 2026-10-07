@@ -150,6 +150,10 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 ready: Self::gfx942_adoption_ready_v1,
                 adopt: Self::adopt_gfx942_cohort3_v1::<P>,
                 progress: Self::progress_gfx942_cohort3_issue_v1::<P>,
+                rejected: |_, _| Ok(false),
+                retire_rejected: |_, _, _, _| {
+                    Err(RuntimeValidationErrorV1::InvalidBackendDescription.into())
+                },
                 complete: Self::complete_gfx942_cohort3_issue_v1::<P>,
                 unpublished: Self::gfx942_adoption_unpublished_v1,
                 retire_unpublished: Self::retire_gfx942_unpublished_v1,

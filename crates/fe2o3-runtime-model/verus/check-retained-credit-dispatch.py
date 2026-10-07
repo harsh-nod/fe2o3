@@ -67,7 +67,7 @@ EXTRA = {MODEL / "r67_resource_credits.rs", MODEL / "lib.rs",
              "fe2o3-runtime-model", "fe2o3-runtime", "fe2o3-resource-accounting", "fe2o3-kfd"))}
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = 'b0c824766deabb9f2668d90db223a2b30d512d25f60536b9e63821bd628452b6'
+SOURCE_TREE_SHA = '5d2e7f567a481ccee4aa3c40cb62ebfa5830d09c49e7cac4683fa48bfe8cf0b4'
 PROOF_SHA = "84352d8aec33bb9b42611c01a298216dcd12ed6c355ed3ba7a7f410f4681a8ca"
 # Compared against predecessor 2761f359: only the allocation-admission owner's
 # panic-policy comment changed. No declaration, executable body or proof changed.

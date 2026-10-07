@@ -1,4 +1,56 @@
 #[test]
+fn public_release_defaults_to_legacy_and_native_selection_is_explicit() {
+    for command in ["build", "run", PROBE_ARG] {
+        let legacy = [command, "--offline"].map(OsString::from);
+        let (family, arguments) = select_release_family(&legacy).unwrap();
+        assert_eq!(family, ReleaseFamily::LegacyV3);
+        assert_eq!(arguments, legacy);
+        let native = ["--native", command, "--offline"].map(OsString::from);
+        let (family, arguments) = select_release_family(&native).unwrap();
+        assert_eq!(family, ReleaseFamily::NativeV4);
+        assert_eq!(arguments, &native[1..]);
+        assert_eq!(arguments.as_ptr(), native[1..].as_ptr());
+        let argv =
+            child_argv_with_family(OsStr::new("release-fixture"), arguments, family).unwrap();
+        assert_eq!(argv[1], INTERNAL_CHILD_ARG_V4.as_bytes());
+        assert_eq!(argv[2], command.as_bytes());
+        assert_eq!(argv.len(), 4);
+    }
+}
+
+#[test]
+fn public_release_rejects_ambiguous_or_misplaced_native_selection() {
+    for arguments in [
+        vec![],
+        vec!["--native"],
+        vec!["--native", "--native", "build"],
+        vec!["--native", "build", "--native"],
+        vec!["build", "--native"],
+        vec!["--native", "test"],
+        vec!["--native=true", "build"],
+        vec!["--", "--native", "build"],
+        vec!["--native", INTERNAL_CHILD_ARG_V4],
+    ] {
+        let arguments: Vec<_> = arguments.into_iter().map(OsString::from).collect();
+        assert!(select_release_family(&arguments).is_err(), "{arguments:?}");
+    }
+    let non_utf8 = [OsString::from_vec(vec![0xff])];
+    assert!(select_release_family(&non_utf8).is_err());
+}
+
+#[test]
+fn application_arguments_cannot_select_the_release_family() {
+    let arguments = ["run", "--", "--native", "--native"].map(OsString::from);
+    let (family, child) = select_release_family(&arguments).unwrap();
+    assert_eq!(family, ReleaseFamily::LegacyV3);
+    assert_eq!(child, arguments);
+    let explicit = ["--native", "run", "--", "--native"].map(OsString::from);
+    let (family, child) = select_release_family(&explicit).unwrap();
+    assert_eq!(family, ReleaseFamily::NativeV4);
+    assert_eq!(child, &explicit[1..]);
+}
+
+#[test]
 fn each_release_family_requires_its_exact_child_entry() {
     for family in [ReleaseFamily::LegacyV3, ReleaseFamily::NativeV4] {
         let mut record = contract();

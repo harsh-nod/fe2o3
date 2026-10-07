@@ -42,6 +42,7 @@ pub use authorized_execution::{
     Gfx942AuthorizedRuntimeCompletedBufferV1, Gfx942AuthorizedRuntimeDebugExecutionErrorV2,
     Gfx942AuthorizedRuntimeDispatchResultV1, Gfx942AuthorizedRuntimeExecutionErrorV1,
     RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1,
+    RuntimeGfx942RegistryCompletionCarrierV1, RuntimeGfx942RegistryRepeat2CarrierV1,
     WorkerV3Gfx942ExecutionAuthorityV1, execute_authorized_gfx942_runtime_debug_target_dispatch_v1,
     execute_authorized_gfx942_runtime_debug_target_dispatch_v2,
     execute_authorized_gfx942_runtime_dispatch_v1,
@@ -58,7 +59,9 @@ pub use fe2o3_host_api as contract;
 pub use fe2o3_profiler_protocol as profiler;
 pub use generated_source::{
     RuntimeGfx942GeneratedCarrierV1, RuntimeGfx942GeneratedCohort3V1,
-    RuntimeGfx942GeneratedReservationErrorV1, RuntimeGfx942GeneratedSourceMutV1,
+    RuntimeGfx942GeneratedRegistry4Repeat2V1, RuntimeGfx942GeneratedRegistry4V1,
+    RuntimeGfx942GeneratedRegistry16V1, RuntimeGfx942GeneratedReservationErrorV1,
+    RuntimeGfx942GeneratedResidentRegistryV1, RuntimeGfx942GeneratedSourceMutV1,
     RuntimeGfx942GeneratedSourceV1, RuntimeGfx942ReadbackErrorV1,
 };
 pub use kfd_backend::*;
