@@ -515,3 +515,6 @@ mod operational;
 
 #[path = "ordered_program_const_provider_v1_tests.rs"]
 mod const_provider;
+
+#[path = "ordered_program_validation_series_v1_tests.rs"]
+mod validation_series;
