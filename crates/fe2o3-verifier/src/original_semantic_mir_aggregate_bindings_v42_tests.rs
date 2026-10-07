@@ -156,40 +156,45 @@ fn production_checked_transition_generation_has_exact_resource_limits() {
 
 #[test]
 fn expanded_production_support_emits_checked_transition_consumers() {
-    use super::super::expanded_generation::ExpandedGenerationV221;
-    super::super::super::invocations::tests::run_source_transform(
-        LIMIT,
-        LIMIT,
-        |types, functions| {
-            checked_transform(
-                types,
-                functions,
-                SemanticCheckedBinaryOpV1::Add,
-                false,
-                false,
-            )
-        },
-        |plan, out| {
-            super::super::source_function::tests::with_slots(plan, out, |slots, out| {
-                let generation = ExpandedGenerationV221::derive(
-                    plan,
-                    slots,
-                    FormalIndexWidth::Bits64,
-                    fe2o3_kernel_ir::EndiannessV2::Little,
-                    out,
-                )?;
-                generation.emit_support(out)?;
-                assert!(out.text.contains("proof fn checked_add_actual_step_"));
-                assert!(
-                    out.text
-                        .contains("invocation_source_checked_add_local_step_v266(source,")
-                );
-                Ok(())
-            })
-        },
-    )
-    .0
-    .unwrap();
+    use super::super::{
+        expanded_generation::ExpandedGenerationV221, slots::tests::with_tile_slots,
+    };
+    use fe2o3_kernel_ir::ExecutionTileLayoutV1 as Layout;
+    for layout in [Layout::Blocked, Layout::Striped] {
+        super::super::super::invocations::tests::run_source_transform(
+            LIMIT,
+            LIMIT,
+            |types, functions| {
+                checked_transform(
+                    types,
+                    functions,
+                    SemanticCheckedBinaryOpV1::Add,
+                    false,
+                    false,
+                )
+            },
+            |plan, out| {
+                with_tile_slots(plan, layout, out, |slots, out| {
+                    let generation = ExpandedGenerationV221::derive(
+                        plan,
+                        slots,
+                        FormalIndexWidth::Bits64,
+                        fe2o3_kernel_ir::EndiannessV2::Little,
+                        out,
+                    )?;
+                    generation.emit_support(out)?;
+                    assert!(out.text.contains("proof fn checked_add_actual_step_"));
+                    assert!(
+                        out.text
+                            .contains("invocation_source_checked_add_local_step_v266(source,")
+                    );
+                    Ok(())
+                })
+            },
+        )
+        .0
+        .unwrap();
+    }
 }
 
 #[test]
