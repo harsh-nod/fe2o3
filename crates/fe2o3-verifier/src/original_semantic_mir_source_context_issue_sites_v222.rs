@@ -226,7 +226,10 @@ mod tests {
                                 format!("byte_micro_step_{root}_v30(target, little_endian)"),
                                 format!("invocation_source_byte_pc_v36(coupled.source.source, {continuation})"),
                             ] { assert!(current.contains(&text), "{text}"); }
-                            assert!(output.contains("invocation_context_issue_fresh_preserves_current_map_v238("));
+                            assert_eq!(output.matches("invocation_context_issue_fresh_preserves_frame_v259(").count(), 1);
+                            assert!(!output.contains("invocation_context_issue_fresh_preserves_current_map_v238("));
+                            assert!(output.contains("invocation_context_issue_fresh_has_exact_updates_v211("));
+                            assert!(output.contains("assert(coupled.source.source.machine == (MemoryStateV30 {"));
                             assert!(output.contains("original.source, actual.next.state, coupled.execution_map"));
                             assert!(output.contains("assert forall|key: MemoryExecutionReferenceV178|"));
                             expected += 1;
