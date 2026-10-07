@@ -22,7 +22,10 @@ CORE_GROUPS = (
     "cpu-analysis",
     "cpu-lowering",
     "cpu-pliron",
-    "cpu-finalize",
+    "cpu-finalize-0",
+    "cpu-finalize-1",
+    "cpu-finalize-2",
+    "cpu-finalize-3",
     "cpu-integration",
     "auxiliary",
 )
