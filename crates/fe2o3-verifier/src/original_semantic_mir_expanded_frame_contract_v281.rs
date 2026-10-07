@@ -371,7 +371,7 @@ pub(super) fn emit(
         for (root, range) in frames.roots.iter().enumerate() {
             emit!(
                 out,
-                "spec fn invocation_expanded_frame_contract_{root}_v281(source: InvocationSourceByteStateV36, micro: MemoryMicroStateV30, map: InvocationByteMapV36, execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>, target_prefix: Seq<MemoryOperationObservationV30>) -> bool {{ source.machine.valid && micro.state.valid && invocation_source_byte_state_well_formed_v36(source) && source.machine.values.len() == {locals} && micro.state.values.len() == {definitions} && micro.observations == target_prefix && invocation_tile_cursor_{root}_v180(source.machine.pc, micro) && invocation_execution_map_current_v205(source, micro.state, execution_map) && (match source.machine.frames.execution {{ Some(execution) => invocation_runtime_execution_{root}_v37(execution), None => false }}) && ({{ let target = micro.state; match source.machine.pc {{\n"
+                "spec fn invocation_expanded_frame_contract_{root}_v281(source: InvocationSourceByteStateV36, micro: MemoryMicroStateV30, map: InvocationByteMapV36, execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>, target_prefix: Seq<MemoryOperationObservationV30>) -> bool {{ source.machine.valid && micro.state.valid && invocation_source_byte_state_well_formed_v36(source) && source.machine.values.len() == {locals} && micro.state.values.len() == {definitions} && micro.observations == target_prefix && invocation_tile_cursor_{root}_v180(source.machine.pc, micro) && invocation_execution_map_current_v205(source, micro.state, execution_map) && (match source.machine.frames.execution {{ Some(execution) => invocation_runtime_execution_{root}_v37(execution), None => false }}) && ({{ let target = micro.state;\n"
             );
             for frame in &frames.frames[range.clone()] {
                 for cut in &frames.cuts[frame.cuts.clone()] {
@@ -379,7 +379,7 @@ pub(super) fn emit(
                     let depth = frame.depth.checked_add(1).ok_or(Resource::Arithmetic)?;
                     emit!(
                         out,
-                        " {} => source.machine.frames.active.len() == {depth} && invocation_expanded_ancestors_{root}_{}_v281(source, target, map, execution_map) && invocation_expanded_current_{root}_{}_{}_v281(source, target, map, execution_map),\n",
+                        " if source.machine.pc == {} {{ source.machine.frames.active.len() == {depth} && invocation_expanded_ancestors_{root}_{}_v281(source, target, map, execution_map) && invocation_expanded_current_{root}_{}_{}_v281(source, target, map, execution_map) }} else\n",
                         cut.pc,
                         frame.instance,
                         frame.instance,
@@ -387,7 +387,7 @@ pub(super) fn emit(
                     );
                 }
             }
-            emit!(out, " _ => false, }} }}) }}\n");
+            emit!(out, " false }}) }}\n");
         }
         scalar.check_owner(slots, target, out)?;
         execution.check_owner(plan, slots, target, out)?;
