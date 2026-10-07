@@ -116,7 +116,8 @@ spec fn invocation_source_product_well_formed_v282(value: InvocationSourceProduc
 
 spec fn invocation_source_product_complete_v282(value: InvocationSourceProductV282) -> bool {
     invocation_source_product_well_formed_v282(value)
-        && (forall|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(value.source_type) ==>
+        && (forall|ordinal: int| #![trigger invocation_source_product_component_path_v282(value.source_type, ordinal)]
+            0 <= ordinal < invocation_source_product_component_count_v282(value.source_type) ==>
             value.components.contains_key(invocation_source_product_component_path_v282(value.source_type, ordinal)))
 }
 
@@ -228,7 +229,8 @@ spec fn invocation_source_product_current_v282(
 ) -> bool {
     source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
         && invocation_source_product_well_formed_v282(value)
-        && (forall|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(value.source_type) ==>
+        && (forall|ordinal: int| #![trigger invocation_source_product_component_type_v282(value.source_type, ordinal)]
+            0 <= ordinal < invocation_source_product_component_count_v282(value.source_type) ==>
             ({ let path = invocation_source_product_component_path_v282(value.source_type, ordinal);
                 value.components.contains_key(path) ==>
                     match invocation_source_product_component_type_v282(value.source_type, ordinal) {
@@ -387,7 +389,8 @@ spec fn invocation_source_product_snapshot_components_v282(
     } else {
         let original = source.logical.products[place.local];
         let prefix = invocation_source_product_place_path_v282(place);
-        if !(forall|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(place.result_type) ==>
+        if !(forall|ordinal: int| #![trigger invocation_source_product_component_path_v282(place.result_type, ordinal)]
+            0 <= ordinal < invocation_source_product_component_count_v282(place.result_type) ==>
             original.components.contains_key(prefix + invocation_source_product_component_path_v282(place.result_type, ordinal))) {
             None
         } else {
@@ -410,7 +413,8 @@ spec fn invocation_source_product_components_complete_v282(
                     Some(component) => invocation_source_product_atom_typed_v282(component, components[path]),
                     None => false,
                 })
-        && (forall|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(ty) ==>
+        && (forall|ordinal: int| #![trigger invocation_source_product_component_path_v282(ty, ordinal)]
+            0 <= ordinal < invocation_source_product_component_count_v282(ty) ==>
             components.contains_key(invocation_source_product_component_path_v282(ty, ordinal)))
 }
 
