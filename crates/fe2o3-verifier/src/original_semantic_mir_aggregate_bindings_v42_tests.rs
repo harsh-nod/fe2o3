@@ -91,28 +91,11 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  && after.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}) }}),
 {{
  hide(invocation_source_byte_state_well_formed_v36);
- hide(invocation_source_aggregate_well_formed_v42);
- hide(invocation_source_aggregate_complete_v42);
  hide(invocation_source_aggregate_leaf_count_v42);
  hide(invocation_source_aggregate_leaf_path_v42);
  hide(invocation_source_aggregate_leaf_bits_v42);
- hide(invocation_source_checked_v42);
  hide(invocation_source_byte_step_v36);
  hide(invocation_source_byte_event_{root}_{instance}_v36);
- hide(invocation_source_logical_write_v38);
- hide(invocation_source_byte_evaluate_v36);
- assert(invocation_source_byte_evaluate_v36(source,
- InvocationSourceByteValueV36::Local {{ local: {left}, moved: false }},
- 32, {root}, {instance}, little_endian)
- == (InvocationSourceByteEvaluationV36 {{ source, value: MemoryValueV30::Scalar(left) }})) by {{
- invocation_source_local_evaluates_v265(source, {left}, 32, {root}, {instance}, little_endian);
- }}
- assert(invocation_source_byte_evaluate_v36(source,
- InvocationSourceByteValueV36::Local {{ local: {right}, moved: false }},
- 32, {root}, {instance}, little_endian)
- == (InvocationSourceByteEvaluationV36 {{ source, value: MemoryValueV30::Scalar(right) }})) by {{
- invocation_source_local_evaluates_v265(source, {right}, 32, {root}, {instance}, little_endian);
- }}
  assert(invocation_source_aggregate_leaf_count_v42({ty}) == 2
  && invocation_source_aggregate_leaf_path_v42({ty}, 0) == seq![0int]
  && invocation_source_aggregate_leaf_path_v42({ty}, 1) == seq![1int]
@@ -121,44 +104,8 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  && invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}) == Some({event})) by {{
  checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
  }}
- let aggregate = InvocationSourceAggregateV42 {{ source_type: {ty}, execution_lease: None,
- leaves: Map::empty().insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
- .insert(seq![1int], MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})) }};
- let reconstructed = invocation_source_checked_v42(source, {destination}, {ty}, 0, 32, false,
- InvocationSourceByteValueV36::Local {{ local: {left}, moved: false }},
- InvocationSourceByteValueV36::Local {{ local: {right}, moved: false }}, {root}, {instance}, little_endian);
- assert(reconstructed.machine == (MemoryStateV30 {{ values: source.machine.values.update(
- {destination}, MemoryValueV30::Undefined), ..source.machine }})
- && reconstructed.logical.aggregates == source.logical.aggregates.insert({destination}, aggregate)) by {{
- invocation_source_checked_add_reconstruction_step_v259(source, {destination}, {ty},
- InvocationSourceByteValueV36::Local {{ local: {left}, moved: false }},
- InvocationSourceByteValueV36::Local {{ local: {right}, moved: false }},
- left, right, {root}, {instance}, little_endian);
- }}
- assert(invocation_source_byte_step_v36(source,
- invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian)
- == reconstructed) by {{
- invocation_source_checked_event_replays_v264(source, {destination}, {ty}, 0, 32, false,
- InvocationSourceByteValueV36::Local {{ local: {left}, moved: false }},
- InvocationSourceByteValueV36::Local {{ local: {right}, moved: false }},
- {root}, {instance}, little_endian);
- }}
- let after = invocation_source_byte_step_v36(source,
- invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian);
- assert(after.machine == (MemoryStateV30 {{ values: source.machine.values.update(
- {destination}, MemoryValueV30::Undefined), ..source.machine }}));
- assert(after.logical.aggregates == source.logical.aggregates.insert({destination}, aggregate));
- assert(after.logical.aggregates.contains_key({destination}));
- assert(after.logical.aggregates[{destination}] == aggregate);
- let value_path = seq![0int];
- let overflow_path = seq![1int];
- assert(value_path[0] == 0);
- assert(overflow_path[0] == 1);
- assert(value_path != overflow_path);
- assert(after.logical.aggregates[{destination}].leaves[seq![0int]]
- == MemoryValueV30::Scalar((left + right) % 4294967296));
- assert(after.logical.aggregates[{destination}].leaves[seq![1int]]
- == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}));
+ invocation_source_checked_add_local_step_v266(source, {destination}, {ty},
+ {left}, {right}, left, right, {root}, {instance}, little_endian);
 }}
 "#).map_err(|_| out.error())?;
                                 witnesses += 1;
@@ -193,14 +140,14 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
         for step in model.split("proof fn checked_add_actual_step_").skip(1) {
             let body = step.split("\nproof fn ").next().unwrap();
             assert!(body.contains("hide(invocation_source_byte_event_"));
-            assert!(body.contains("invocation_source_checked_event_replays_v264(source,"));
+            assert_eq!(body.matches("invocation_source_checked_add_local_step_v266(source,").count(), 1);
             assert!(!body.contains("reveal(invocation_source_byte_step_v36);"));
-            assert!(body.contains("hide(invocation_source_byte_evaluate_v36);"));
-            assert_eq!(body.matches("assert(invocation_source_byte_evaluate_v36(source,").count(), 2);
-            assert_eq!(body.matches("invocation_source_local_evaluates_v265(source,").count(), 2);
+            assert!(!body.contains("hide(invocation_source_byte_evaluate_v36);"));
+            assert!(!body.contains("invocation_source_local_evaluates_v265(source,"));
+            assert!(!body.contains("let reconstructed ="));
             assert!(!body.contains("reveal(invocation_source_byte_evaluate_v36);"));
-            assert!(body.find("value: MemoryValueV30::Scalar(right) }").unwrap()
-                < body.find("checked_add_actual_schema_").unwrap());
+            assert!(body.find("checked_add_actual_schema_").unwrap()
+                < body.find("invocation_source_checked_add_local_step_v266(source,").unwrap());
         }
         assert!(model.contains("assert(after.machine == (MemoryStateV30"));
         assert!(model.contains("assert(after.logical.aggregates == source.logical.aggregates.insert("));

@@ -381,7 +381,7 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 15);
+    assert_eq!(source.matches("proof fn ").count(), 16);
     let replay = source
         .split_once("proof fn invocation_source_checked_event_replays_v264(")
         .unwrap()
@@ -456,6 +456,16 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         inputs("invocation_source_tile_installed_valid_v265"),
         "after.machine.valid,\n"
     );
+    assert_eq!(
+        inputs("invocation_source_checked_add_local_step_v266"),
+        "source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),\n        0 <= left_local < source.machine.values.len(), 0 <= right_local < source.machine.values.len(),\n        source.machine.values[left_local] == MemoryValueV30::Scalar(left),\n        source.machine.values[right_local] == MemoryValueV30::Scalar(right),\n        0 <= left < 4294967296, 0 <= right < 4294967296,\n        invocation_source_aggregate_leaf_count_v42(source_type) == 2,\n        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],\n        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],\n        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,\n        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,\n"
+    );
+    let local_step = source.split_once("proof fn invocation_source_checked_add_local_step_v266(").unwrap().1;
+    assert!(local_step.contains("let after = invocation_source_byte_step_v36(source,\n        InvocationSourceByteEventV36::Checked {"));
+    assert_eq!(local_step.matches("invocation_source_local_evaluates_v265(source,").count(), 2);
+    assert_eq!(local_step.matches("invocation_source_checked_add_reconstruction_step_v259(source,").count(), 1);
+    assert_eq!(local_step.matches("invocation_source_checked_event_replays_v264(source,").count(), 1);
+    assert!(local_step.contains("assert(value_path != overflow_path);"));
     assert!(source.contains("== (InvocationSourceByteEvaluationV36 { source, value: source.machine.values[local] })"));
     assert!(source.contains("== (InvocationSourceTileResultV161 { source: after, observations })"));
     assert_eq!(
