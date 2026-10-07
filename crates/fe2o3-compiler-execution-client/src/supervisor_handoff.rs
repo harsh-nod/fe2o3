@@ -806,7 +806,7 @@ mod tests {
     use std::mem::MaybeUninit;
     use std::os::fd::{AsFd, AsRawFd};
     use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -827,15 +827,19 @@ mod tests {
     }
 
     impl NamedListener {
-        fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "fe2o3-client-supervisor-{name}-{}-{}",
+        fn root_under(temporary: &Path, pid: u32, sequence: u64) -> PathBuf {
+            temporary.join(format!("fcs-{pid:x}-{sequence:x}"))
+        }
+
+        fn new() -> Self {
+            let root = Self::root_under(
+                &std::env::temp_dir(),
                 std::process::id(),
-                LISTENER_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-            ));
+                LISTENER_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            );
             fs::create_dir(&root).unwrap();
             fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-            let path = root.join("supervisor.sock");
+            let path = root.join("s");
             let descriptor = socket_with(
                 AddressFamily::UNIX,
                 SocketType::SEQPACKET,
@@ -857,6 +861,34 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.root);
         }
+    }
+
+    #[test]
+    fn named_listener_paths_fit_long_private_ci_temporary_roots() {
+        let temporary = Path::new("/home/runner/work/_temp/fe2o3-generic-core.0123456789");
+        for (pid, sequence) in [(1, 0), (u32::MAX, u64::MAX)] {
+            let root = NamedListener::root_under(temporary, pid, sequence);
+            assert_eq!(root.parent(), Some(temporary));
+            assert!(SocketAddrUnix::new(&root.join("s")).is_ok());
+            assert_ne!(
+                root,
+                NamedListener::root_under(temporary, pid, sequence ^ 1)
+            );
+            assert_ne!(
+                root,
+                NamedListener::root_under(temporary, pid ^ 1, sequence)
+            );
+        }
+        for name in ["exact-transfer", "wrong-credentials"] {
+            let old = temporary
+                .join(format!("fe2o3-client-supervisor-{name}-17845-0"))
+                .join("supervisor.sock");
+            assert!(SocketAddrUnix::new(&old).is_err());
+        }
+        let oversized = PathBuf::from("/").join("x".repeat(256));
+        let root = NamedListener::root_under(&oversized, 1, 0);
+        assert_eq!(root.parent(), Some(oversized.as_path()));
+        assert!(SocketAddrUnix::new(&root.join("s")).is_err());
     }
 
     fn policy() -> CompilerExecutionIssuerPolicyV1 {
@@ -1065,7 +1097,7 @@ mod tests {
         if current_uid == 0 || current_gid == 0 {
             return;
         }
-        let listener = NamedListener::new("exact-transfer");
+        let listener = NamedListener::new();
         let mut command = Command::new("/bin/sleep");
         command.arg("30");
         let pending_child = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
@@ -1263,7 +1295,7 @@ mod tests {
             Err(CompilerExecutionHandoffErrorV1::Io(_))
         ));
 
-        let listener = NamedListener::new("wrong-credentials");
+        let listener = NamedListener::new();
         let wrong_uid = if current_uid == 1 { 2 } else { 1 };
         let wrong = CompilerExecutionSupervisorCredentialsV1::new(wrong_uid, current_gid).unwrap();
         assert!(matches!(
