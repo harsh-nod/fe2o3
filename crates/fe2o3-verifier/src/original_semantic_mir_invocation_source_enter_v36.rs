@@ -349,19 +349,33 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             let original_local = u32::try_from(local).map_err(|_| Resource::Arithmetic)?;
             let object = slots.has_original_object(root, instance, original_local, out)?;
             let slot = if object {
-                Some(entry_object_slot(
-                    slots,
-                    (
-                        root,
-                        instance,
-                        row.function,
-                        original_local,
-                        declaration.ty(),
-                    ),
-                    class,
-                    explicit[local],
-                    out,
-                )?)
+                Some(
+                    entry_object_slot(
+                        slots,
+                        (
+                            root,
+                            instance,
+                            row.function,
+                            original_local,
+                            declaration.ty(),
+                        ),
+                        class,
+                        explicit[local],
+                        out,
+                    )
+                    .map_err(|error| match error {
+                        Error::Statement("generated source limit") => error,
+                        Error::Statement(reason) => Error::SourceDescriptor {
+                            root,
+                            instance,
+                            function: Some(row.function.index() as usize),
+                            local: original_local,
+                            phase: "source-enter-object-parameter",
+                            reason,
+                        },
+                        other => other,
+                    })?,
+                )
             } else {
                 slots.legacy_descriptor_by_source(
                     root,
@@ -833,6 +847,7 @@ mod tests {
 
     #[test]
     fn original_mir_byte_entry_object_exact_and_one_short_resource_replay() {
+        use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
         let emit = |plan: &InvocationPlan<'_, '_>,
                     slots: &SourceSlots<'_, '_>,
                     out: &mut Writer<'_, '_>| {
@@ -843,18 +858,24 @@ mod tests {
         };
         let measured = run_object_arguments(LIMIT, LIMIT, emit);
         measured.0.unwrap();
-        run_object_arguments(measured.1, measured.3, emit)
-            .0
-            .unwrap();
+        let exact = run_object_arguments(measured.1, measured.3, emit);
+        exact.0.unwrap();
+        assert_eq!(
+            (exact.1, exact.2, exact.3),
+            (measured.1, measured.2, measured.3)
+        );
+        assert_eq!(exact.2, super::super::super::invocations::tests::FLOOR);
         assert!(
-            run_object_arguments(measured.1 - 1, measured.3, emit)
-                .0
-                .is_err()
+            matches!(run_object_arguments(measured.1 - 1, measured.3, emit).0,
+            Err(Error::Resource(Resource::Work(error)))
+            | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+            if error.actual() == measured.1 && error.limit() == measured.1 - 1)
         );
         assert!(
-            run_object_arguments(measured.1, measured.3 - 1, emit)
-                .0
-                .is_err()
+            matches!(run_object_arguments(measured.1, measured.3 - 1, emit).0,
+            Err(Error::Resource(Resource::Storage(error)))
+            | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+            if error.actual() == measured.3 && error.limit() == measured.3 - 1)
         );
     }
 
