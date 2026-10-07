@@ -63,6 +63,7 @@ pub(super) fn headers() -> usize {
         + 4 * size_of::<usize>()
         + size_of::<Definition>()
         + size_of::<Constant>()
+        + 2 * size_of::<Type>()
         + size_of::<bool>()
         + size_of::<Option<usize>>()
         + 2 * size_of::<Result<Recipe>>()
