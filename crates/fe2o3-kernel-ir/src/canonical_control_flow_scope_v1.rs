@@ -1,7 +1,8 @@
 //! Owner-bound scoped reuse of the existing live-metered CFG implementation.
 
 use super::{
-    ControlFlowError, ControlFlowLimits, MeteredControlFlowErrorV1, MeteredIndexedControlFlowV1,
+    ControlFlowError, ControlFlowLimits, ControlFlowStorageV2, MeteredControlFlowErrorV1,
+    MeteredIndexedControlFlowV1, analyze_control_flow_with_byte_budget_v2,
     analyze_control_flow_with_verification_budget_v1,
 };
 use crate::{
@@ -175,7 +176,15 @@ pub fn with_canonical_kir_control_flow_v1<'graph, 'work, T, E>(
 where
     E: From<Error>,
 {
-    with_owner_control_flow(owner, owner.module(), function, limits, budget, run)
+    with_owner_control_flow(
+        owner,
+        owner.module(),
+        function,
+        limits,
+        budget,
+        run,
+        ControlFlowStorageV2::LegacyRows,
+    )
 }
 
 /// Reuses the same exact-edge, owner-bound CFG algorithm on an actual V18 owner.
@@ -195,10 +204,82 @@ pub fn with_canonical_kir_control_flow_v18<'graph, 'work, T, E>(
 where
     E: From<Error>,
 {
-    with_owner_control_flow(owner, owner.module(), function, limits, budget, run)
+    with_owner_control_flow(
+        owner,
+        owner.module(),
+        function,
+        limits,
+        budget,
+        run,
+        ControlFlowStorageV2::LegacyRows,
+    )
 }
 
-// Only the two connected-owner adapters above may pair a graph and owner.
+/// V18 owner scope using the existing typed-byte CFG allocator, including actual
+/// vector capacities and the scope's named inline/callback frames. The older
+/// entry points retain their logical row-cell accounting contract unchanged.
+/// This is not whole-process RSS accounting or an execution/proof receipt.
+///
+/// An uncalled callback is destroyed after owned CFG storage is released. Its
+/// destructor cannot replace an earlier resource denial with a panic error.
+pub fn with_canonical_kir_control_flow_bytes_v18<'graph, 'work, T, E>(
+    owner: &'graph Owner18,
+    function: Function,
+    limits: ControlFlowLimits,
+    budget: &mut Budget<'work>,
+    run: impl for<'scope> FnOnce(
+        &mut CanonicalKirControlFlowViewV18<'scope, 'graph>,
+        &mut Budget<'work>,
+    ) -> Result<T, E>,
+) -> Result<T, E>
+where
+    E: From<Error>,
+{
+    with_owner_control_flow(
+        owner,
+        owner.module(),
+        function,
+        limits,
+        budget,
+        run,
+        ControlFlowStorageV2::TypedBytes,
+    )
+}
+
+fn byte_scope_headers<T, E, R>(run: &R) -> Result<usize, Resource> {
+    use std::mem::{align_of_val, size_of, size_of_val};
+    let fixed = size_of::<Accounting>()
+        + size_of::<Option<MeteredIndexedControlFlowV1>>()
+        + size_of::<CanonicalKirControlFlowViewV1<'_, '_>>()
+        + size_of::<Option<Error>>()
+        + size_of::<[Option<Box<dyn std::any::Any + Send>>; 3]>()
+        + 2 * size_of::<Result<MeteredIndexedControlFlowV1, MeteredControlFlowErrorV1>>()
+        + size_of::<super::ByteAccountedIndexedControlFlowV2<'_, '_>>()
+        + size_of::<
+            Result<super::ByteAccountedIndexedControlFlowV2<'_, '_>, MeteredControlFlowErrorV1>,
+        >()
+        + 12 * size_of::<&()>()
+        + 4 * size_of::<usize>()
+        + size_of::<ControlFlowLimits>()
+        + size_of::<Function>()
+        + size_of::<ControlFlowStorageV2>()
+        + size_of::<bool>();
+    // Caller-selected result and capture types need checked arithmetic too.
+    fixed
+        .checked_add(size_of::<std::thread::Result<Result<Result<T, E>, Error>>>())
+        .and_then(|n| n.checked_add(size_of::<Option<Result<T, E>>>()))
+        .and_then(|n| n.checked_add(size_of::<Option<R>>()))
+        .and_then(|n| n.checked_add(size_of::<Option<R>>()))
+        .and_then(|n| {
+            size_of_val(run)
+                .checked_mul(2)
+                .and_then(|bytes| n.checked_add(bytes))
+        })
+        .and_then(|n| n.checked_add(align_of_val(run)))
+        .ok_or(Resource::Arithmetic)
+}
+
+// Only the connected-owner adapters above may pair a graph and owner.
 fn with_owner_control_flow<'graph, 'work, O, T, E>(
     owner: &'graph O,
     module: &'graph crate::Module,
@@ -209,6 +290,7 @@ fn with_owner_control_flow<'graph, 'work, O, T, E>(
         &mut CanonicalKirControlFlowViewV1<'scope, 'graph, O>,
         &mut Budget<'work>,
     ) -> Result<T, E>,
+    storage: ControlFlowStorageV2,
 ) -> Result<T, E>
 where
     E: From<Error>,
@@ -222,24 +304,54 @@ where
         cleanup: true,
     };
     let mut flow = None;
-    let mut deferred_panics = [None, None];
+    let mut deferred_panics = [None, None, None];
     let mut constructing = true;
+    let mut pending_run = Some(run);
+    let mut frame = 0usize;
     let protected = catch_unwind(AssertUnwindSafe(|| -> Result<Result<T, E>, Error> {
+        // Preserve legacy capture lifetime; byte-accounted construction keeps an
+        // uncalled callback outside the protected closure until after cleanup.
+        let legacy_run = if storage == ControlFlowStorageV2::LegacyRows {
+            pending_run.take()
+        } else {
+            None
+        };
         accounting.charge(budget, 3)?;
+        if storage == ControlFlowStorageV2::TypedBytes {
+            frame = byte_scope_headers::<T, E, _>(pending_run.as_ref().expect("pending callback"))?;
+            budget.reserve_storage(frame)?;
+        }
         let actual = module
             .functions
             .get(function.0 as usize)
             .filter(|f| f.body.is_some())
             .ok_or(Error::InvalidFunction(function))?;
-        flow = Some(
-            analyze_control_flow_with_verification_budget_v1(actual, limits, budget).map_err(
-                |error| match error {
-                    MeteredControlFlowErrorV1::Resource(error) => Error::Resource(error),
-                    MeteredControlFlowErrorV1::ControlFlow(error) => Error::ControlFlow(error),
-                },
-            )?,
-        );
-        accounting.retained = flow.as_ref().expect("constructed CFG").retained_storage;
+        let built = match storage {
+            ControlFlowStorageV2::TypedBytes => {
+                analyze_control_flow_with_byte_budget_v2(actual, limits, budget).and_then(|owned| {
+                    owned.indexed_v2(actual, budget)?;
+                    // Transfer the same authenticated CFG and its byte charge;
+                    // scoped cleanup owns both from this point onward.
+                    Ok(MeteredIndexedControlFlowV1 {
+                        flow: owned.flow,
+                        retained_storage: owned.retained_bytes,
+                    })
+                })
+            }
+            ControlFlowStorageV2::LegacyRows => {
+                analyze_control_flow_with_verification_budget_v1(actual, limits, budget)
+            }
+        };
+        flow = Some(built.map_err(|error| match error {
+            MeteredControlFlowErrorV1::Resource(error) => Error::Resource(error),
+            MeteredControlFlowErrorV1::ControlFlow(error) => Error::ControlFlow(error),
+        })?);
+        accounting.retained = flow
+            .as_ref()
+            .expect("constructed CFG")
+            .retained_storage
+            .checked_add(frame)
+            .ok_or(Resource::Arithmetic)?;
         constructing = false;
         let mut view = CanonicalKirControlFlowViewV1 {
             owner,
@@ -247,6 +359,9 @@ where
             flow: flow.as_ref().expect("constructed CFG"),
             accounting: &mut accounting,
         };
+        let run = legacy_run
+            .or_else(|| pending_run.take())
+            .expect("pending callback");
         Ok(run(&mut view, budget))
     }));
     let mut returned = None;
@@ -285,6 +400,12 @@ where
         }
         failure = Some(Error::Resource(error));
     }
+    if let Some(run) = pending_run.take()
+        && let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(run)))
+    {
+        deferred_panics[2] = Some(payload);
+        failure.get_or_insert(Error::Panicked);
+    }
     drop(deferred_panics);
     match failure {
         Some(error) => Err(E::from(error)),
@@ -295,3 +416,7 @@ where
 #[cfg(test)]
 #[path = "canonical_control_flow_scope_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "canonical_control_flow_bytes_scope_v18_tests.rs"]
+mod bytes_v18_tests;
