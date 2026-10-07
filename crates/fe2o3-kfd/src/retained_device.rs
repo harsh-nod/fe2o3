@@ -4,6 +4,12 @@ use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
 use crate::{CheckedGfx942XnackMinusDevice, DeviceBindingError};
 
+mod cold_failure;
+pub use cold_failure::{
+    Gfx942ColdDeviceCheckV1, Gfx942ColdDeviceRefusalReasonV1, Gfx942ColdDeviceRefusalV1,
+    Gfx942ColdDeviceResetV1,
+};
+
 pub(crate) trait RetainedDeviceScopeOwnerV1 {
     type Subject: ?Sized;
     type Error;

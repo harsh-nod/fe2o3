@@ -373,6 +373,12 @@ pub use currentness_diagnostic::{
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use device::*;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use retained_device::{
+    Gfx942ColdDeviceCheckV1, Gfx942ColdDeviceRefusalReasonV1, Gfx942ColdDeviceRefusalV1,
+    Gfx942ColdDeviceResetV1,
+};
+
 #[cfg(target_os = "linux")]
 pub mod gfx950_queue_outputs;
 #[cfg(target_os = "linux")]
