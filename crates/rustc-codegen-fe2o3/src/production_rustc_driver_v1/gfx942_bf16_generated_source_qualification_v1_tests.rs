@@ -2706,3 +2706,6 @@ fn actual_generated_owning_handoff_source() {
 
 #[path = "gfx942_bf16_private_worker_v1_tests.rs"]
 mod private_worker;
+
+#[path = "gfx942_bf16_same_owner_connector_v1_tests.rs"]
+mod same_owner_connector;
