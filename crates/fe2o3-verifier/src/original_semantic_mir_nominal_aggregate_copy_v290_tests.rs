@@ -213,8 +213,9 @@ fn owner(assignment: bool) -> ProductionSemanticSsaOwnerV1 {
     let mut inputs = abi.source_input_types().to_vec();
     inputs[ordinal] = workgroup;
     let mut adjusted = abi.adjusted_arguments().to_vec();
+    // Both retained scalar-pair components above are initialized u64 values.
     let attributes = SemanticAbiValueAttributesV1::new(
-        SemanticAbiRegularAttributesV1::new(false, None, false, false, false, false),
+        SemanticAbiRegularAttributesV1::new(false, None, false, false, false, true),
         SemanticAbiExtensionV1::None,
         0,
         None,
@@ -340,7 +341,10 @@ fn run(work: usize, storage: usize, assignment: bool) -> (Result<()>, usize, usi
                         );
                         match aggregates::Transfer::derive(&context, &value, out) {
                             Err(Error::Statement(reason)) => {
-                                assert_eq!(reason, "original MIR byte statement is not modeled")
+                                assert_eq!(
+                                    reason,
+                                    "original MIR typed byte statement is not modeled"
+                                )
                             }
                             Err(error) => return Err(error),
                             Ok(_) => panic!("nominal owner Copy assignment accepted"),
@@ -360,7 +364,10 @@ fn run(work: usize, storage: usize, assignment: bool) -> (Result<()>, usize, usi
                     } else {
                         match context.typed_operand(&Operand::Copy(place.clone()), out) {
                             Err(Error::Statement(reason)) => {
-                                assert_eq!(reason, "original MIR byte statement is not modeled")
+                                assert_eq!(
+                                    reason,
+                                    "original MIR typed byte statement is not modeled"
+                                )
                             }
                             Err(error) => return Err(error),
                             Ok(_) => panic!("nominal owner Copy operand accepted"),
