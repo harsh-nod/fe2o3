@@ -49,6 +49,7 @@ pub use engineering_gfx950::{
     Gfx950EngineeringPeerScopedCapacityCensusObservationV1,
     Gfx950EngineeringPeerScopedCensusWarmLayerObservationV1,
     Gfx950EngineeringPeerScopedCurrentnessCountsV1, Gfx950EngineeringPeerScopedPrefixInputsV1,
+    Gfx950EngineeringPeerScopedTailInputsV1, Gfx950EngineeringPeerScopedTailObservationV1,
     Gfx950EngineeringPeerScopedWarmLayerObservationV1, Gfx950EngineeringPeerStateBankEntryV1,
     Gfx950EngineeringPeerStateBankSnapshotV1, Gfx950EngineeringPeerUnboundGuardedMlpPairV1,
     Gfx950EngineeringPeerWaveMlpStateV1, Gfx950EngineeringPeerWaveMlpTilesDispatchV2,

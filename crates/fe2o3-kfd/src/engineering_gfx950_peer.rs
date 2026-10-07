@@ -38,6 +38,12 @@ mod read_pair_v1;
 #[path = "engineering_gfx950_peer_scoped_currentness_v1.rs"]
 pub(super) mod scoped_currentness;
 
+#[path = "engineering_gfx950_peer_scoped_tail_v1.rs"]
+mod scoped_tail_v1;
+pub use scoped_tail_v1::{
+    Gfx950EngineeringPeerScopedTailInputsV1, Gfx950EngineeringPeerScopedTailObservationV1,
+};
+
 #[path = "engineering_gfx950_peer_wave_output_state_v5.rs"]
 mod wave_output_state_v5;
 pub use wave_output_state_v5::Gfx950EngineeringPeerWaveOutputStateV5;

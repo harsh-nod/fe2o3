@@ -1,4 +1,4 @@
-//! Private short route for the future closed warm-layer owner; no selector.
+//! Private routes for closed layer, bank-rearm and tail owners; no selector.
 use super::*;
 use crate::device::{ScopedCountsV1, ScopedCurrentnessV1};
 
@@ -96,8 +96,9 @@ pub(in crate::engineering_gfx950) struct Window {
 }
 
 impl Window {
-    // Only a future LayerOperation may retain this data between GPU effects.
-    // It must own Prefix/pair quarantine before calling and until successful exit.
+    // Only closed layer, bank-rearm and TailOperation owners retain
+    // this data between effects. Each owns its exact quarantine boundary through
+    // successful result construction and final deadline admission.
     pub(super) fn enter(group: &mut Gfx950EngineeringPeerGroupV1, until: Instant) -> Result<Self> {
         let mut attempt = Attempt {
             group,
@@ -309,8 +310,8 @@ impl Drop for RankAttempt<'_> {
     }
 }
 
-/// Cannot be created by a Context or public caller. The outer LayerOperation
-/// retains the whole Group and quarantines other ranks on error/unwind.
+/// Cannot be created by a Context or public caller. A closed layer, bank or
+/// tail owner retains the whole Group and quarantines ranks on error/unwind.
 pub(in crate::engineering_gfx950) enum RankCurrentness<'call> {
     Full,
     Scoped {
