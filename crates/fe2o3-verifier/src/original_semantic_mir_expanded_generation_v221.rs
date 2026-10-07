@@ -195,6 +195,7 @@ impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view,
             program.emit_checked_local_add_proofs_v288(out)?;
             program.emit_checked_prefix_projections_v296(self.plan, out)?;
             program.emit_checked_target_segments_v298(self.plan, &self.target, self.width, out)?;
+            program.emit_expanded_root_seeds_v300(self.plan, &self.target, out)?;
             self.check(out)
         })
     }

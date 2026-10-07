@@ -82,6 +82,9 @@ pub(super) struct SourceFrameEnter<'slots, 'view, 'source> {
     required: usize,
 }
 
+#[path = "original_semantic_mir_scalar_root_entry_v300.rs"]
+mod scalar_root_entry;
+
 fn mismatch() -> Error {
     Error::Statement("original MIR byte frame entry differs from its exact invocation")
 }

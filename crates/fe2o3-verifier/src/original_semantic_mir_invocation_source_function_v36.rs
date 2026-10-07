@@ -178,6 +178,9 @@ mod checked_prefix;
 #[path = "original_semantic_mir_checked_target_segment_v298.rs"]
 mod checked_target_segment;
 
+#[path = "original_semantic_mir_expanded_root_seed_v300.rs"]
+mod expanded_root_seed;
+
 impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
     pub(super) fn emit_thread_write_normal_proofs_v94(
         &self,
