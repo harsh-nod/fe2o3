@@ -482,6 +482,7 @@ fn call_operand_error(
     phase: &'static str,
 ) -> Error {
     match error {
+        Error::Statement("generated source limit") => error,
         Error::Statement(reason) => {
             let (kind, place) = match operand {
                 Operand::Copy(place) => ("Copy", Some(place)),
@@ -503,6 +504,19 @@ fn call_operand_error(
         }
         other => other,
     }
+}
+
+fn call_operand_headers() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    h::<Error>()
+        + h::<[usize; 5]>()
+        + h::<&Operand>()
+        + h::<Option<&Place>>()
+        + h::<Option<(u32, usize)>>()
+        + h::<(&str, Option<&Place>)>()
+        + h::<([usize; 5], &Operand, &'static str)>()
 }
 
 pub(super) fn slice_metadata_bits_v36(declaration: &Type, out: &mut Writer<'_, '_>) -> Result<u32> {
@@ -1977,6 +1991,7 @@ fn headers() -> usize {
         + h::<&str>()
         + h::<&[Type]>()
         + h::<Option<(u32, &'static str)>>()
+        + call_operand_headers()
         + pointer_events::headers()
         + witness_transfers::headers()
         + descriptor_loans::headers()

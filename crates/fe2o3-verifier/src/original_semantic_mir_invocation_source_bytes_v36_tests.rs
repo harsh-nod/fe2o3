@@ -275,6 +275,21 @@ fn original_mir_call_refusal_keeps_retained_operand_and_first_typed_error() {
         CanonicalKernelIrVerificationStorageLimitV1 as StorageLimit,
         CanonicalKernelIrWorkBudgetV1 as WorkBudget,
     };
+    macro_rules! frame {
+        ($ty:ty) => {
+            size_of::<$ty>() + 2 * size_of::<Result<$ty>>()
+        };
+    }
+    assert_eq!(
+        call_operand_headers(),
+        frame!(Error)
+            + frame!([usize; 5])
+            + frame!(&Operand)
+            + frame!(Option<&Place>)
+            + frame!(Option<(u32, usize)>)
+            + frame!((&str, Option<&Place>))
+            + frame!(([usize; 5], &Operand, &'static str))
+    );
     run(LIMIT, LIMIT, false, 0, |body, out| {
         let context = body.context(out)?;
         let Terminator::Call(call) = context.function.blocks()[0].terminator().kind() else {
@@ -298,6 +313,32 @@ fn original_mir_call_refusal_keeps_retained_operand_and_first_typed_error() {
             ),
             text,
         );
+        assert!(matches!(
+            call_operand_error(
+                Error::Statement("generated source limit"),
+                site,
+                original,
+                "later"
+            ),
+            Error::Statement("generated source limit")
+        ));
+        assert!(matches!(
+            call_operand_error(
+                Error::GeneratedSourceLimit {
+                    section: "earlier",
+                    emitted_bytes: 31,
+                    limit_bytes: 32
+                },
+                site,
+                original,
+                "later"
+            ),
+            Error::GeneratedSourceLimit {
+                section: "earlier",
+                emitted_bytes: 31,
+                limit_bytes: 32
+            }
+        ));
         let mut work = WorkBudget::new(7);
         let denied = work.charge_work(8).unwrap_err();
         for resource in [
