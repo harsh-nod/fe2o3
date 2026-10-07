@@ -453,7 +453,7 @@ fn original_product_schema_zero_length_composites_are_not_nonplain_products() {
             assert!(!slots.is_product_v282(ty, out)?);
             assert_eq!(slots.product_component_count_v282(ty, out)?, None);
             let row = slots.product_component_v282(ty, 0, out)?;
-            assert_eq!(row.path(out)?, &[]);
+            assert!(row.path(out)?.is_empty());
             assert_eq!(row.source_type(out)?, ty);
             assert_eq!(
                 row.atom(out)?,
@@ -513,7 +513,7 @@ fn original_product_schema_nominal_execution_snapshots_are_opaque_not_layout_fie
                     assert!(!slots.product_type_copyable_v282(id, out)?);
                     assert!(slots.aggregate_leaf_count(id, out)?.unwrap() > 1);
                     let atom = slots.product_component_v282(id, 0, out)?;
-                    assert_eq!(atom.path(out)?, &[]);
+                    assert!(atom.path(out)?.is_empty());
                     assert_eq!(atom.source_type(out)?, id);
                     assert_eq!(atom.atom(out)?, ProductAtomV282::ExecutionAggregate(role));
                     assert!(!slots.is_product_v282(id, out)?);
