@@ -322,7 +322,17 @@ fn run_helpers(
                         assert_eq!(operand.recipe.mutable, mutable);
                         assert_eq!(operand.moved, mutable);
                         assert_eq!(operand.recipe.origin, body.locals.start + 4);
-                        assert_eq!(body.invocation_argument(plan, 4, 0, out)?.scalar(), None);
+                        let child = plan
+                            .calls(root, 0, out)?
+                            .iter()
+                            .find(|call| call.block.index() == 4)
+                            .unwrap()
+                            .child
+                            .unwrap();
+                        assert_eq!(
+                            body.invocation_argument(plan, 4, 0, child, out)?.scalar(),
+                            None
+                        );
                         let mut children = 0;
                         for instance in 1..plan.root(root, out)?.instances.len() {
                             let row = plan.instance(root, instance, out)?;

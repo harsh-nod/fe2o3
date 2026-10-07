@@ -199,6 +199,7 @@ spec fn invocation_source_execution_no_conflict_v168(
     source: InvocationSourceByteStateV36, candidate: InvocationSourceExecutionReferenceV168,
 ) -> bool {
     invocation_source_product_execution_no_conflict_v282(source, candidate)
+        && invocation_source_execution_pending_no_conflict_v286(source, candidate)
         && (forall|local: int| source.logical.execution_references.contains_key(local) ==>
         ({ let other = source.logical.execution_references[local];
             invocation_source_execution_record_current_v168(source, other)

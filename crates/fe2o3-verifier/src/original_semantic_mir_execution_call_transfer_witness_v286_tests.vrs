@@ -1,0 +1,101 @@
+// Construct an input through the actual Context-issue and borrow equations.
+// A source-derived, no-premise schema wrapper must instantiate this witness;
+// a scalar-only model cannot establish its Context-shape premise.
+spec fn execution_call_witness_initial_v286() -> InvocationSourceByteStateV36 {
+    let execution = MemoryExecutionContextV37 {
+        rank: 1, extent: seq![1int, 1int, 1int], workgroup: seq![1int, 1int, 1int],
+        group: seq![0int, 0int, 0int], local: seq![0int, 0int, 0int],
+        ieee_operators: |operation: int, bits: int, a: int, b: int, c: int, mode: int| 0int,
+    };
+    InvocationSourceByteStateV36 {
+        machine: MemoryStateV30 {
+            pc: 0, values: seq![MemoryValueV30::Undefined, MemoryValueV30::Undefined, MemoryValueV30::Undefined],
+            memory: ByteMemoryV30 { live: Map::empty(), view_contracts: byte_empty_view_contracts_v38() },
+            generations: Map::empty(), frames: byte_root_frame_with_execution_v37(0, execution), valid: true,
+        },
+        slots: Map::empty(), objects: Map::empty(), logical: invocation_source_logical_initial_v38(3),
+    }
+}
+
+spec fn execution_call_witness_recipe_v286(context_type: int, reference_type: int)
+    -> InvocationSourceExecutionRecipeV168 {
+    InvocationSourceExecutionRecipeV168 {
+        reference_type, source_type: context_type, role: InvocationSourceExecutionRoleV168::Context,
+        mutable: true, instance: 0, block: 0, statement: 1,
+    }
+}
+
+spec fn execution_call_witness_site_v286() -> InvocationSourceExecutionCallSiteV286 {
+    InvocationSourceExecutionCallSiteV286 {
+        root: 0, caller: 0, block: 0, argument: 0, input: 1,
+        caller_owner: 0, child: 1, child_owner: 1, destination: 2,
+        pc: 0, entry_pc: 1, caller_begin: 0, caller_end: 2, child_begin: 2, child_end: 3,
+    }
+}
+
+spec fn execution_call_witness_borrowed_v286(context_type: int, reference_type: int)
+    -> InvocationSourceByteStateV36 {
+    let issued = invocation_source_context_issue_v161(execution_call_witness_initial_v286(),
+        InvocationSourceContextIssueV161 { destination: 0, source_type: context_type });
+    invocation_source_execution_step_v168(issued.source, InvocationSourceExecutionEventV168::Borrow {
+        destination: 1, input: 0, recipe: execution_call_witness_recipe_v286(context_type, reference_type), parent: None,
+    })
+}
+
+spec fn execution_call_witness_installed_v286(context_type: int, reference_type: int)
+    -> InvocationSourceByteStateV36 {
+    let source = execution_call_witness_borrowed_v286(context_type, reference_type);
+    let recipe = execution_call_witness_recipe_v286(context_type, reference_type);
+    let site = execution_call_witness_site_v286();
+    let evaluated = invocation_source_execution_transfer_evaluate_v286(source,
+        InvocationSourceExecutionOperandV168 { local: 1, recipe, moved: true }, site, 0, 0);
+    match evaluated.value {
+        InvocationSourceValueV42::ExecutionTransfer(ticket) => {
+            let entered = invocation_source_entry_initialize_v166(evaluated.source, 1, 2, 3,
+                byte_enter_frame_v30(evaluated.source.machine.frames, 1));
+            invocation_source_execution_transfer_install_v286(entered, ticket, site, recipe)
+        },
+        _ => invocation_source_byte_refused_v36(evaluated.source),
+    }
+}
+
+#[verifier::spinoff_prover]
+proof fn execution_call_constructed_context_witness_v286(context_type: int, reference_type: int)
+    requires context_type >= 0, reference_type >= 0,
+        invocation_source_context_shape_v161(context_type),
+    ensures execution_call_witness_borrowed_v286(context_type, reference_type).machine.valid,
+        invocation_source_execution_reference_current_v168(
+            execution_call_witness_borrowed_v286(context_type, reference_type), 1,
+            execution_call_witness_recipe_v286(context_type, reference_type)),
+        execution_call_witness_installed_v286(context_type, reference_type).machine.valid,
+        invocation_source_execution_reference_current_v168(
+            execution_call_witness_installed_v286(context_type, reference_type), 2,
+            execution_call_witness_recipe_v286(context_type, reference_type)),
+        execution_call_witness_installed_v286(context_type, reference_type).logical.execution_pending == Map::empty(),
+{
+    let initial = execution_call_witness_initial_v286();
+    assert(match initial.machine.frames.execution {
+        Some(execution) => byte_execution_well_formed_v37(execution),
+        None => false,
+    });
+    assert(invocation_source_byte_state_well_formed_v36(initial));
+    let issued = invocation_source_context_issue_v161(initial,
+        InvocationSourceContextIssueV161 { destination: 0, source_type: context_type });
+    assert(issued.source.machine.valid);
+    assert(issued.source.logical.versions =~= seq![1int, 0int, 0int]);
+    assert(invocation_source_byte_state_well_formed_v36(issued.source));
+    let recipe = execution_call_witness_recipe_v286(context_type, reference_type);
+    let source = execution_call_witness_borrowed_v286(context_type, reference_type);
+    let reference = InvocationSourceExecutionReferenceV168 {
+        recipe, identity: InvocationSourceExecutionLoanIdV168 { local: 1, version: 1 },
+        origin: 0, origin_version: 1, frame: initial.machine.frames.active.last(), ancestors: seq![],
+    };
+    assert(source.machine.valid);
+    assert(source.logical.versions =~= seq![1int, 1int, 0int]);
+    assert(source.logical.execution_references =~= Map::empty().insert(1int, reference));
+    assert(source.logical.aggregates =~= issued.source.logical.aggregates);
+    assert(invocation_source_byte_state_well_formed_v36(source));
+    assert(invocation_source_execution_reference_current_v168(source, 1, recipe));
+    execution_call_single_context_handoff_succeeds_v286(source,
+        execution_call_witness_site_v286(), reference, source.logical.aggregates[0]);
+}

@@ -433,6 +433,7 @@ spec fn invocation_source_product_pack_v282(
         },
         InvocationSourceValueV42::Execution(value) =>
             Some(Map::empty().insert(seq![], InvocationSourceProductAtomV282::Execution(value))),
+        InvocationSourceValueV42::ExecutionTransfer(_) => None,
         InvocationSourceValueV42::Descriptor(snapshot) => match descriptor {
             Some(recipe) => Some(Map::empty().insert(seq![], InvocationSourceProductAtomV282::Descriptor { recipe, snapshot })),
             None => None,
@@ -562,6 +563,7 @@ spec fn invocation_source_product_operand_v282(
                     moved || invocation_source_product_copyable_v282(operand.source_type),
                 InvocationSourceOperandV36::Execution(value) =>
                     value.moved || invocation_source_product_copyable_v282(operand.source_type),
+                InvocationSourceOperandV36::ExecutionTransfer { .. } => false,
                 InvocationSourceOperandV36::Scalar { .. } => true,
                 InvocationSourceOperandV36::Product { .. } => false,
             };

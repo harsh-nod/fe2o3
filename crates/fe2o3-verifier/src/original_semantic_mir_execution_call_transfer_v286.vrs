@@ -1,0 +1,163 @@
+// A pending row is exclusive in-flight ownership, not a reusable snapshot.
+// Only the authenticated generated call evaluator creates rows; entry consumes
+// the exact row before installing the original loan in the child parameter.
+struct InvocationSourceExecutionCallSiteV286 {
+    root: int, caller: int, block: int, argument: int, input: int,
+    caller_owner: int, child: int, child_owner: int, destination: int,
+    pc: int, entry_pc: int,
+    caller_begin: int, caller_end: int, child_begin: int, child_end: int,
+}
+
+struct InvocationSourceExecutionTransferV286 {
+    site: InvocationSourceExecutionCallSiteV286,
+    reference: InvocationSourceExecutionReferenceV168,
+    moved_version: int,
+    caller_frame: MemoryDynamicFrameV30,
+    child_invocation: int,
+}
+
+spec fn invocation_source_execution_call_site_shape_v286(
+    site: InvocationSourceExecutionCallSiteV286, count: int,
+) -> bool {
+    site.root >= 0 && site.caller >= 0 && site.block >= 0 && site.argument >= 0
+        && site.caller_owner >= 0 && site.child > 0 && site.child_owner >= 0
+        && site.pc >= 0 && site.entry_pc >= 0
+        && 0 <= site.caller_begin <= site.input < site.caller_end <= count
+        && 0 <= site.child_begin <= site.destination < site.child_end <= count
+        && (site.caller_end <= site.child_begin || site.child_end <= site.caller_begin)
+}
+
+spec fn invocation_source_execution_pending_shape_v286(logical: InvocationSourceLogicalV38) -> bool {
+    logical.execution_pending.dom().finite()
+        && logical.execution_pending.dom().len() <= logical.versions.len()
+        && (forall|local: int| logical.execution_pending.contains_key(local) ==>
+        ({ let ticket = logical.execution_pending[local];
+            local == ticket.site.input
+                && invocation_source_execution_call_site_shape_v286(ticket.site, logical.versions.len() as int)
+                && ticket.reference.recipe.mutable
+                && invocation_source_execution_reference_shape_v168(ticket.reference, logical.versions)
+                && 0 < ticket.moved_version <= logical.versions[local]
+                && ticket.caller_frame.owner == ticket.site.caller_owner
+                && 0 <= ticket.caller_frame.invocation < ticket.child_invocation
+                && !logical.witnesses.contains_key(local) && !logical.references.contains_key(local)
+                && !logical.execution_references.contains_key(local) && !logical.descriptor_references.contains_key(local)
+                && !logical.aggregates.contains_key(local) && !logical.products.contains_key(local)
+                && !logical.enums.contains_key(local)
+                && (forall|other: int| logical.execution_pending.contains_key(other)
+                    && other != local ==>
+                        invocation_source_product_execution_pair_v282(ticket.reference, logical.execution_pending[other].reference, false)
+                            && invocation_source_product_execution_pair_v282(logical.execution_pending[other].reference, ticket.reference, false))
+                && (forall|other: int| logical.execution_references.contains_key(other) ==>
+                    invocation_source_product_execution_pair_v282(ticket.reference, logical.execution_references[other], false)
+                        && invocation_source_product_execution_pair_v282(logical.execution_references[other], ticket.reference, false))
+                && (forall|other: int, path: Seq<int>| logical.products.contains_key(other)
+                    && logical.products[other].components.contains_key(path) ==>
+                    match logical.products[other].components[path] {
+                        InvocationSourceProductAtomV282::Execution(reference) =>
+                            invocation_source_product_execution_pair_v282(ticket.reference, reference, false)
+                                && invocation_source_product_execution_pair_v282(reference, ticket.reference, false),
+                        _ => true,
+                    }) }))
+}
+
+spec fn invocation_source_execution_pending_no_conflict_v286(
+    source: InvocationSourceByteStateV36, candidate: InvocationSourceExecutionReferenceV168,
+) -> bool {
+    forall|local: int| source.logical.execution_pending.contains_key(local) ==>
+        ({ let other = source.logical.execution_pending[local].reference;
+            invocation_source_execution_record_current_v168(source, other)
+                && invocation_source_execution_same_origin_v168(candidate, other)
+                && candidate.identity != other.identity
+                && !candidate.ancestors.contains(other.identity)
+                ==> !candidate.recipe.mutable && !other.recipe.mutable })
+}
+
+spec fn invocation_source_execution_transfer_current_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+) -> bool {
+    source.machine.valid && source.machine.pc >= 0
+        && invocation_source_byte_state_well_formed_v36(source)
+        && source.logical.execution_pending.contains_key(ticket.site.input)
+        && source.logical.execution_pending[ticket.site.input] == ticket
+        && source.logical.versions[ticket.site.input] == ticket.moved_version
+        && source.machine.values[ticket.site.input] == MemoryValueV30::Undefined
+        && invocation_source_execution_record_current_v168(source, ticket.reference)
+        && invocation_source_execution_no_conflict_v168(source, ticket.reference)
+        && source.machine.frames.active.contains(ticket.caller_frame)
+}
+
+spec fn invocation_source_execution_transfer_evaluate_v286(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+    site: InvocationSourceExecutionCallSiteV286, root: int, caller: int,
+) -> InvocationSourceValueEvaluationV42 {
+    if !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || !operand.moved || !operand.recipe.mutable || operand.local != site.input
+        || root != site.root || caller != site.caller || source.machine.pc != site.pc
+        || !invocation_source_execution_call_site_shape_v286(site, source.machine.values.len() as int)
+        || source.machine.frames.active.len() == 0
+        || source.machine.frames.active.last().owner != site.caller_owner
+        || source.logical.execution_pending.contains_key(site.input)
+        || !invocation_source_execution_reference_current_v168(source, operand.local, operand.recipe)
+    {
+        InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(source),
+            value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+    } else {
+        let reference = source.logical.execution_references[operand.local];
+        let consumed = invocation_source_execution_operand_consume_v168(source, operand);
+        let ticket = InvocationSourceExecutionTransferV286 { site, reference,
+            moved_version: consumed.logical.versions[site.input],
+            caller_frame: source.machine.frames.active.last(),
+            child_invocation: source.machine.frames.next_invocation };
+        let pending = InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+            execution_pending: consumed.logical.execution_pending.insert(site.input, ticket),
+            ..consumed.logical }, ..consumed };
+        if !invocation_source_execution_transfer_current_v286(pending, ticket) {
+            InvocationSourceValueEvaluationV42 { source: invocation_source_byte_refused_v36(pending),
+                value: InvocationSourceValueV42::Carrier(MemoryValueV30::Undefined) }
+        } else { InvocationSourceValueEvaluationV42 { source: pending,
+            value: InvocationSourceValueV42::ExecutionTransfer(ticket) } }
+    }
+}
+
+spec fn invocation_source_execution_transfer_entry_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+) -> bool {
+    ticket.site == expected && ticket.reference.recipe == recipe && recipe.mutable
+        && invocation_source_execution_transfer_current_v286(source, ticket)
+        && source.machine.pc == expected.pc
+        && source.machine.frames.active.last() == ticket.caller_frame
+        && source.machine.frames.next_invocation == ticket.child_invocation
+}
+
+spec fn invocation_source_execution_transfer_install_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+) -> InvocationSourceByteStateV36 {
+    if ticket.site != expected || ticket.reference.recipe != recipe || !recipe.mutable
+        || !invocation_source_execution_transfer_current_v286(source, ticket)
+        || source.machine.pc != expected.entry_pc || source.machine.frames.active.len() < 2
+        || source.machine.frames.active[source.machine.frames.active.len() - 2] != ticket.caller_frame
+        || source.machine.frames.active.last() != (MemoryDynamicFrameV30 {
+            owner: expected.child_owner, invocation: ticket.child_invocation })
+        || source.machine.frames.next_invocation != ticket.child_invocation + 1
+    {
+        invocation_source_byte_refused_v36(source)
+    } else {
+        let consumed = InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+            execution_pending: source.logical.execution_pending.remove(expected.input),
+            ..source.logical }, ..source };
+        let installed = invocation_source_execution_install_v168(consumed, expected.destination, ticket.reference);
+        if invocation_source_execution_reference_current_v168(installed, expected.destination, recipe) {
+            installed
+        } else { invocation_source_byte_refused_v36(installed) }
+    }
+}
+
+spec fn invocation_source_execution_pending_abort_v286(
+    logical: InvocationSourceLogicalV38, frame: MemoryDynamicFrameV30,
+) -> InvocationSourceLogicalV38 {
+    InvocationSourceLogicalV38 { execution_pending: Map::new(
+        logical.execution_pending.dom().filter(|local: int| logical.execution_pending[local].caller_frame != frame),
+        |local: int| logical.execution_pending[local]), ..logical }
+}

@@ -228,6 +228,7 @@ spec fn invocation_source_operands_effects_v36(
             | InvocationSourceOperandV36::Slice { .. } => seq![],
             InvocationSourceOperandV36::Product { .. } |
             InvocationSourceOperandV36::Execution(_) |
+            InvocationSourceOperandV36::ExecutionTransfer { .. } |
             InvocationSourceOperandV36::Aggregate { .. } | InvocationSourceOperandV36::Enum { .. }
             | InvocationSourceOperandV36::Descriptor { .. } => {
                 let evaluated = invocation_source_value_evaluate_v42(head.before, head.operand,

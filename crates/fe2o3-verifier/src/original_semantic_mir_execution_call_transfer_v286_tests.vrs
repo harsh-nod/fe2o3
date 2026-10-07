@@ -1,0 +1,397 @@
+// These laws exercise the emitted transfer equations. Rust call-site admission
+// and successful complete-kernel refinement remain separate obligations.
+proof fn execution_call_copy_is_refused_v286(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+    site: InvocationSourceExecutionCallSiteV286, root: int, caller: int,
+)
+    requires !operand.moved,
+    ensures !invocation_source_execution_transfer_evaluate_v286(source, operand, site, root, caller).source.machine.valid,
+{}
+
+proof fn execution_call_shared_reference_is_not_exclusive_transfer_v286(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+    site: InvocationSourceExecutionCallSiteV286, root: int, caller: int,
+)
+    requires !operand.recipe.mutable,
+    ensures !invocation_source_execution_transfer_evaluate_v286(source, operand, site, root, caller).source.machine.valid,
+{}
+
+proof fn execution_call_wrong_source_coordinates_are_refused_v286(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+    site: InvocationSourceExecutionCallSiteV286, root: int, caller: int,
+)
+    requires operand.local != site.input || root != site.root || caller != site.caller
+        || source.machine.pc != site.pc,
+    ensures !invocation_source_execution_transfer_evaluate_v286(source, operand, site, root, caller).source.machine.valid,
+{}
+
+proof fn execution_call_duplicate_evaluation_is_refused_v286(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+    site: InvocationSourceExecutionCallSiteV286, root: int, caller: int,
+)
+    requires source.logical.execution_pending.contains_key(site.input),
+    ensures !invocation_source_execution_transfer_evaluate_v286(source, operand, site, root, caller).source.machine.valid,
+{}
+
+proof fn execution_call_success_retains_original_loan_and_exact_ticket_v286(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+    site: InvocationSourceExecutionCallSiteV286, root: int, caller: int,
+)
+    ensures ({
+        let evaluated = invocation_source_execution_transfer_evaluate_v286(source, operand, site, root, caller);
+        evaluated.source.machine.valid ==> match evaluated.value {
+            InvocationSourceValueV42::ExecutionTransfer(ticket) =>
+                ticket.site == site
+                    && ticket.reference == source.logical.execution_references[operand.local]
+                    && ticket.caller_frame == source.machine.frames.active.last()
+                    && ticket.child_invocation == source.machine.frames.next_invocation
+                    && invocation_source_execution_transfer_current_v286(evaluated.source, ticket),
+            _ => false,
+        }
+    }),
+{}
+
+proof fn execution_call_successful_install_consumes_ticket_and_preserves_loan_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    ensures ({
+        let installed = invocation_source_execution_transfer_install_v286(source, ticket, expected, recipe);
+        installed.machine.valid ==>
+            !installed.logical.execution_pending.contains_key(ticket.site.input)
+                && installed.logical.execution_references.contains_key(expected.destination)
+                && installed.logical.execution_references[expected.destination] == ticket.reference
+                && invocation_source_execution_reference_current_v168(installed, expected.destination, recipe)
+                && !invocation_source_execution_transfer_install_v286(installed, ticket, expected, recipe).machine.valid
+    }),
+{}
+
+proof fn execution_call_input_destination_overlap_is_refused_v286(
+    source: InvocationSourceByteStateV36, operand: InvocationSourceExecutionOperandV168,
+    site: InvocationSourceExecutionCallSiteV286, root: int, caller: int,
+)
+    requires site.input == site.destination,
+    ensures !invocation_source_execution_call_site_shape_v286(site, source.machine.values.len() as int),
+        !invocation_source_execution_transfer_evaluate_v286(source, operand, site, root, caller).source.machine.valid,
+{}
+
+proof fn execution_call_retargeted_ticket_is_refused_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires ticket.site != expected,
+    ensures !invocation_source_execution_transfer_entry_v286(source, ticket, expected, recipe),
+        !invocation_source_execution_transfer_install_v286(source, ticket, expected, recipe).machine.valid,
+{}
+
+proof fn execution_call_retagged_recipe_is_refused_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires ticket.reference.recipe != recipe || !recipe.mutable,
+    ensures !invocation_source_execution_transfer_entry_v286(source, ticket, expected, recipe),
+        !invocation_source_execution_transfer_install_v286(source, ticket, expected, recipe).machine.valid,
+{}
+
+proof fn execution_call_missing_pending_row_cannot_replay_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires !source.logical.execution_pending.contains_key(ticket.site.input),
+    ensures !invocation_source_execution_transfer_current_v286(source, ticket),
+        !invocation_source_execution_transfer_entry_v286(source, ticket, expected, recipe),
+        !invocation_source_execution_transfer_install_v286(source, ticket, expected, recipe).machine.valid,
+{}
+
+proof fn execution_call_replaced_ticket_cannot_replay_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires source.logical.execution_pending.contains_key(ticket.site.input),
+        source.logical.execution_pending[ticket.site.input] != ticket,
+    ensures !invocation_source_execution_transfer_current_v286(source, ticket),
+        !invocation_source_execution_transfer_install_v286(source, ticket, expected, recipe).machine.valid,
+{}
+
+proof fn execution_call_same_site_new_generation_rejects_old_ticket_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires 0 <= ticket.site.input < source.logical.versions.len(),
+        source.logical.versions[ticket.site.input] != ticket.moved_version,
+    ensures !invocation_source_execution_transfer_current_v286(source, ticket),
+        !invocation_source_execution_transfer_install_v286(source, ticket, expected, recipe).machine.valid,
+{}
+
+proof fn execution_call_source_must_remain_consumed_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+)
+    requires 0 <= ticket.site.input < source.machine.values.len(),
+        source.machine.values[ticket.site.input] != MemoryValueV30::Undefined,
+    ensures !invocation_source_execution_transfer_current_v286(source, ticket),
+{}
+
+proof fn execution_call_expired_origin_is_refused_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+)
+    requires 0 <= ticket.reference.origin < source.logical.versions.len(),
+        source.logical.versions[ticket.reference.origin] != ticket.reference.origin_version,
+    ensures !invocation_source_execution_transfer_current_v286(source, ticket),
+{}
+
+proof fn execution_call_exited_caller_is_refused_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+)
+    requires !source.machine.frames.active.contains(ticket.caller_frame),
+    ensures !invocation_source_execution_transfer_current_v286(source, ticket),
+{}
+
+proof fn execution_call_entry_rejects_wrong_invocation_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires source.machine.frames.next_invocation != ticket.child_invocation,
+    ensures !invocation_source_execution_transfer_entry_v286(source, ticket, expected, recipe),
+{}
+
+proof fn execution_call_install_rejects_wrong_child_frame_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires source.machine.frames.active.len() > 0,
+        source.machine.frames.active.last() != (MemoryDynamicFrameV30 {
+            owner: expected.child_owner, invocation: ticket.child_invocation }),
+    ensures !invocation_source_execution_transfer_install_v286(source, ticket, expected, recipe).machine.valid,
+{}
+
+proof fn execution_call_install_rejects_wrong_parent_frame_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires source.machine.frames.active.len() >= 2,
+        source.machine.frames.active[source.machine.frames.active.len() - 2] != ticket.caller_frame,
+    ensures !invocation_source_execution_transfer_install_v286(source, ticket, expected, recipe).machine.valid,
+{}
+
+proof fn execution_call_install_rejects_wrong_entry_pc_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires source.machine.pc != expected.entry_pc,
+    ensures !invocation_source_execution_transfer_install_v286(source, ticket, expected, recipe).machine.valid,
+{}
+
+proof fn execution_call_install_rejects_repeated_child_invocation_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+    expected: InvocationSourceExecutionCallSiteV286, recipe: InvocationSourceExecutionRecipeV168,
+)
+    requires source.machine.frames.next_invocation != ticket.child_invocation + 1,
+    ensures !invocation_source_execution_transfer_install_v286(source, ticket, expected, recipe).machine.valid,
+{}
+
+proof fn execution_call_inflight_unique_loan_blocks_unrelated_alias_v286(
+    source: InvocationSourceByteStateV36, local: int,
+    candidate: InvocationSourceExecutionReferenceV168,
+)
+    requires source.logical.execution_pending.contains_key(local),
+        source.logical.execution_pending[local].reference.recipe.mutable,
+        invocation_source_execution_record_current_v168(source, source.logical.execution_pending[local].reference),
+        invocation_source_execution_same_origin_v168(candidate, source.logical.execution_pending[local].reference),
+        candidate.identity != source.logical.execution_pending[local].reference.identity,
+        !candidate.ancestors.contains(source.logical.execution_pending[local].reference.identity),
+    ensures !invocation_source_execution_pending_no_conflict_v286(source, candidate),
+        !invocation_source_execution_no_conflict_v168(source, candidate),
+{
+    if invocation_source_execution_pending_no_conflict_v286(source, candidate) {
+        assert(!source.logical.execution_pending[local].reference.recipe.mutable);
+    }
+}
+
+proof fn execution_call_pending_row_excludes_resident_copy_v286(
+    logical: InvocationSourceLogicalV38, local: int,
+)
+    requires invocation_source_execution_pending_shape_v286(logical),
+        logical.execution_pending.contains_key(local),
+    ensures !logical.execution_references.contains_key(local),
+        !logical.products.contains_key(local),
+{}
+
+proof fn execution_call_same_identity_resident_elsewhere_is_refused_v286(
+    logical: InvocationSourceLogicalV38, pending: int, resident: int,
+)
+    requires logical.execution_pending.contains_key(pending),
+        logical.execution_pending[pending].reference.recipe.mutable,
+        logical.execution_references.contains_key(resident), pending != resident,
+        logical.execution_pending[pending].reference.identity
+            == logical.execution_references[resident].identity,
+    ensures !invocation_source_execution_pending_shape_v286(logical),
+{
+    if invocation_source_execution_pending_shape_v286(logical) {
+        assert(invocation_source_product_execution_pair_v282(
+            logical.execution_pending[pending].reference,
+            logical.execution_references[resident], false));
+    }
+}
+
+proof fn execution_call_same_identity_second_pending_row_is_refused_v286(
+    logical: InvocationSourceLogicalV38, first: int, second: int,
+)
+    requires logical.execution_pending.contains_key(first),
+        logical.execution_pending.contains_key(second), first != second,
+        logical.execution_pending[first].reference.recipe.mutable,
+        logical.execution_pending[first].reference.identity
+            == logical.execution_pending[second].reference.identity,
+    ensures !invocation_source_execution_pending_shape_v286(logical),
+{
+    if invocation_source_execution_pending_shape_v286(logical) {
+        assert(invocation_source_product_execution_pair_v282(
+            logical.execution_pending[first].reference,
+            logical.execution_pending[second].reference, false));
+    }
+}
+
+proof fn execution_call_abort_discards_only_its_frame_tickets_v286(
+    logical: InvocationSourceLogicalV38, frame: MemoryDynamicFrameV30, local: int,
+)
+    ensures ({
+        let after = invocation_source_execution_pending_abort_v286(logical, frame);
+        after.execution_pending.contains_key(local) <==>
+            logical.execution_pending.contains_key(local)
+                && logical.execution_pending[local].caller_frame != frame
+    }),
+        ({
+        let after = invocation_source_execution_pending_abort_v286(logical, frame);
+        after.execution_pending.contains_key(local) ==>
+            after.execution_pending[local] == logical.execution_pending[local]
+    }),
+{}
+
+proof fn execution_call_abort_never_restores_consumed_reference_v286(
+    logical: InvocationSourceLogicalV38, frame: MemoryDynamicFrameV30,
+)
+    ensures invocation_source_execution_pending_abort_v286(logical, frame).execution_references
+            == logical.execution_references,
+        invocation_source_execution_pending_abort_v286(logical, frame).versions == logical.versions,
+        invocation_source_execution_pending_abort_v286(logical, frame).products == logical.products,
+{}
+
+proof fn execution_call_aborted_frame_tickets_are_not_current_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+)
+    ensures !invocation_source_execution_transfer_current_v286(
+        InvocationSourceByteStateV36 {
+            logical: invocation_source_execution_pending_abort_v286(source.logical, ticket.caller_frame),
+            ..source
+        }, ticket),
+{}
+
+proof fn execution_call_terminal_trap_invalidates_tickets_v286(
+    source: InvocationSourceByteStateV36, ticket: InvocationSourceExecutionTransferV286,
+)
+    requires source.machine.pc < 0,
+    ensures !invocation_source_execution_transfer_current_v286(source, ticket),
+{}
+
+proof fn execution_call_exclusive_ticket_cannot_escape_by_return_v286(
+    ticket: InvocationSourceExecutionTransferV286,
+)
+    ensures !invocation_source_return_value_defined_v42(InvocationSourceValueV42::ExecutionTransfer(ticket)),
+{}
+
+// A single live Context loan is sufficient to exercise the whole handoff.
+// Every premise describes the input; no intermediate success is assumed.
+#[verifier::spinoff_prover]
+proof fn execution_call_single_context_handoff_succeeds_v286(
+    source: InvocationSourceByteStateV36, site: InvocationSourceExecutionCallSiteV286,
+    reference: InvocationSourceExecutionReferenceV168, payload: InvocationSourceAggregateV42,
+)
+    requires source.machine.valid,
+        invocation_source_byte_state_well_formed_v36(source),
+        invocation_source_execution_call_site_shape_v286(site, source.machine.values.len() as int),
+        source.machine.pc == site.pc,
+        source.machine.frames.active.len() > 0,
+        source.machine.frames.active.last().owner == site.caller_owner,
+        reference.frame == source.machine.frames.active.last(),
+        reference.recipe.mutable,
+        reference.recipe.role == InvocationSourceExecutionRoleV168::Context,
+        reference.identity.local == site.input,
+        reference.ancestors == seq![],
+        site.caller_begin <= reference.origin < site.caller_end,
+        reference.origin != site.input,
+        source.logical.execution_references == Map::empty().insert(site.input, reference),
+        source.logical.aggregates == Map::empty().insert(reference.origin, payload),
+        payload.execution_lease.is_none(),
+        source.logical.execution_pending == Map::empty(),
+        source.logical.witnesses == Map::empty(),
+        source.logical.references == Map::empty(),
+        source.logical.descriptor_references == Map::empty(),
+        source.logical.products == Map::empty(),
+        source.logical.enums == Map::empty(),
+        source.objects == Map::empty(),
+        source.slots == Map::empty(),
+        invocation_source_execution_reference_current_v168(source, site.input, reference.recipe),
+    ensures ({
+        let operand = InvocationSourceExecutionOperandV168 {
+            local: site.input, recipe: reference.recipe, moved: true };
+        let evaluated = invocation_source_execution_transfer_evaluate_v286(source, operand, site, site.root, site.caller);
+        let ticket = InvocationSourceExecutionTransferV286 { site, reference,
+            moved_version: source.logical.versions[site.input] + 1,
+            caller_frame: source.machine.frames.active.last(),
+            child_invocation: source.machine.frames.next_invocation };
+        let entered = invocation_source_entry_initialize_v166(evaluated.source,
+            site.entry_pc, site.child_begin, site.child_end,
+            byte_enter_frame_v30(evaluated.source.machine.frames, site.child_owner));
+        let installed = invocation_source_execution_transfer_install_v286(entered, ticket, site, reference.recipe);
+        evaluated.source.machine.valid
+            && evaluated.value == InvocationSourceValueV42::ExecutionTransfer(ticket)
+            && invocation_source_execution_transfer_entry_v286(evaluated.source, ticket, site, reference.recipe)
+            && installed.machine.valid
+            && installed.logical.execution_pending == Map::empty()
+            && installed.logical.execution_references == Map::empty().insert(site.destination, reference)
+            && invocation_source_execution_reference_current_v168(installed, site.destination, reference.recipe)
+    }),
+{
+    let operand = InvocationSourceExecutionOperandV168 {
+        local: site.input, recipe: reference.recipe, moved: true };
+    let consumed = invocation_source_execution_operand_consume_v168(source, operand);
+    let ticket = InvocationSourceExecutionTransferV286 { site, reference,
+        moved_version: source.logical.versions[site.input] + 1,
+        caller_frame: source.machine.frames.active.last(),
+        child_invocation: source.machine.frames.next_invocation };
+    assert(consumed.machine.valid);
+    assert(consumed.logical.execution_references =~= Map::empty());
+    assert(consumed.logical.aggregates =~= source.logical.aggregates);
+    assert(invocation_source_execution_reference_shape_v168(reference, consumed.logical.versions));
+    let pending = InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+        execution_pending: consumed.logical.execution_pending.insert(site.input, ticket),
+        ..consumed.logical }, ..consumed };
+    assert(pending.logical.execution_pending =~= Map::empty().insert(site.input, ticket));
+    assert(invocation_source_execution_pending_shape_v286(pending.logical));
+    assert(invocation_source_byte_state_well_formed_v36(pending));
+    assert(invocation_source_execution_record_current_v168(pending, reference));
+    assert(invocation_source_execution_no_conflict_v168(pending, reference));
+    assert(invocation_source_execution_transfer_current_v286(pending, ticket));
+    let evaluated = invocation_source_execution_transfer_evaluate_v286(source, operand, site, site.root, site.caller);
+    assert(evaluated.source == pending);
+    assert(invocation_source_execution_transfer_entry_v286(pending, ticket, site, reference.recipe));
+    invocation_source_constructor_clear_well_formed_v84(pending,
+        site.child_begin, site.child_end, site.child_owner, site.entry_pc);
+    let entered = invocation_source_entry_initialize_v166(pending,
+        site.entry_pc, site.child_begin, site.child_end,
+        byte_enter_frame_v30(pending.machine.frames, site.child_owner));
+    assert(entered.logical.execution_pending =~= pending.logical.execution_pending);
+    assert(entered.logical.aggregates =~= pending.logical.aggregates);
+    assert(invocation_source_byte_state_well_formed_v36(entered));
+    assert(invocation_source_execution_transfer_current_v286(entered, ticket));
+    let detached = InvocationSourceByteStateV36 { logical: InvocationSourceLogicalV38 {
+        execution_pending: entered.logical.execution_pending.remove(site.input),
+        ..entered.logical }, ..entered };
+    assert(detached.logical.execution_pending =~= Map::empty());
+    assert(invocation_source_byte_state_well_formed_v36(detached));
+    let installed = invocation_source_execution_install_v168(detached, site.destination, reference);
+    assert(installed.machine.valid);
+    assert(installed.logical.execution_references =~= Map::empty().insert(site.destination, reference));
+    assert(installed.logical.aggregates =~= source.logical.aggregates);
+    assert(invocation_source_byte_state_well_formed_v36(installed));
+    assert(invocation_source_execution_reference_current_v168(installed, site.destination, reference.recipe));
+}
