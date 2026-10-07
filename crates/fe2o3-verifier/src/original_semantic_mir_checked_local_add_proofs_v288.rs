@@ -123,6 +123,7 @@ impl Checked {
  ensures ({{ let n = invocation_source_micro_step_{root}_{instance}_v36(c, little_endian);
  let l = c.observations.len() as int;
  n.source.machine.valid && invocation_source_active_{root}_{instance}_v36(n.source)
+ && invocation_source_byte_state_well_formed_v36(n.source)
  && n.source.machine.pc == c.source.machine.pc
  && n.source.machine.values.len() == c.source.machine.values.len()
  && n.source.slots == c.source.slots && n.source.objects == c.source.objects
@@ -171,6 +172,7 @@ proof fn checked_add_actual_prefix_{root}_{instance}_{block}_{statement}_v293(
  let out = invocation_source_micro_run_{root}_{instance}_v36(c, fuel + 1, little_endian);
  let l = c.observations.len() as int;
  out.source.machine.valid && invocation_source_active_{root}_{instance}_v36(out.source)
+ && invocation_source_byte_state_well_formed_v36(out.source)
  && out.source.machine.pc == p.source.machine.pc
  && out.source.machine.values.len() == p.source.machine.values.len()
  && out.source.slots == p.source.slots && out.source.objects == p.source.objects

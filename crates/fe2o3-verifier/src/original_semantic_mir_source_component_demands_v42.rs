@@ -15,6 +15,9 @@ use fe2o3_mir_model::{
 };
 use std::{mem::size_of, ops::Range};
 
+#[path = "original_semantic_mir_component_prefix_demands_v296.rs"]
+mod prefix;
+
 pub(super) struct ComponentDemandsV42<'a, 'view, 'source> {
     slots: &'a SourceSlots<'view, 'source>,
     function: FunctionId,

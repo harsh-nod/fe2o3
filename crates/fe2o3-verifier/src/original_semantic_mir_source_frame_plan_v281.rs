@@ -22,6 +22,9 @@ use std::{
 #[path = "original_semantic_mir_source_frame_plan_v281_tests.rs"]
 mod tests;
 
+#[path = "original_semantic_mir_source_prefix_demands_v296.rs"]
+pub(super) mod prefix;
+
 pub(super) struct Frame {
     pub root: usize,
     pub instance: usize,

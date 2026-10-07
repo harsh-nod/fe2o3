@@ -193,6 +193,7 @@ impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view,
             let execution = ExpandedExecutionBindingsV199::derive(self.plan, self.slots, &self.target, out)?;
             program.emit_context_issue_segments_v222(self.plan, &execution, out)?;
             program.emit_checked_local_add_proofs_v288(out)?;
+            program.emit_checked_prefix_projections_v296(self.plan, out)?;
             self.check(out)
         })
     }

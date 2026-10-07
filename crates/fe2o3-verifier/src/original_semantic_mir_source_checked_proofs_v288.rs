@@ -65,7 +65,7 @@ impl SourceByteProgram<'_, '_, '_> {
 }
 
 impl SourceByteFunction<'_, '_, '_> {
-    fn checked_micro_pc_v293(
+    pub(super) fn checked_micro_pc_v293(
         &self,
         root: usize,
         instance: usize,

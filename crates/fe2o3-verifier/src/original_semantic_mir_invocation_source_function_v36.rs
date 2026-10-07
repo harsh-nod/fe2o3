@@ -172,6 +172,9 @@ pub(super) use context_issue_sites::ContextIssueSiteV222;
 #[path = "original_semantic_mir_source_checked_proofs_v288.rs"]
 mod checked_proofs;
 
+#[path = "original_semantic_mir_source_checked_prefix_v296.rs"]
+mod checked_prefix;
+
 impl<'slots, 'view, 'source> SourceByteProgram<'slots, 'view, 'source> {
     pub(super) fn emit_thread_write_normal_proofs_v94(
         &self,

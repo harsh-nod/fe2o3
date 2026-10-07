@@ -294,6 +294,26 @@ pub(super) enum Event {
 }
 
 impl Event {
+    pub(super) fn checked_prefix_site_v296(self) -> Option<(usize, usize, usize)> {
+        match self {
+            Self::Checked(checked) => checked.prefix_site_v296(),
+            _ => None,
+        }
+    }
+
+    pub(super) fn emit_checked_prefix_v296(
+        self,
+        frames: &super::source_frame_plan::FramePlan<'_, '_, '_, '_>,
+        before: &super::source_frame_plan::prefix::Prefix<'_, '_, '_, '_, '_>,
+        after: &super::source_frame_plan::prefix::Prefix<'_, '_, '_, '_, '_>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        match self {
+            Self::Checked(checked) => checked.emit_prefix_v296(frames, before, after, out),
+            _ => Err(mismatch()),
+        }
+    }
+
     pub(super) fn emit_checked_local_add_proofs_v288(
         self,
         root: usize,
@@ -398,6 +418,33 @@ pub(super) struct SourceByteBody<'slots, 'view, 'source> {
     enum_payloads: Vec<enum_construction::Payload>,
     product_payloads: Vec<TypedOperand>,
     required: usize,
+}
+
+impl SourceByteBody<'_, '_, '_> {
+    pub(super) fn check_prefix_owner_v296(
+        &self,
+        plan: &InvocationPlan<'_, '_>,
+        root: usize,
+        instance: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.slots
+            .check_query_storage_floor(self.required, out.budget)?;
+        out.budget.charge_work(4)?;
+        let row = plan.instance(root, instance, out)?;
+        if self.root != root
+            || self.instance != instance
+            || self.function != row.function.index() as usize
+            || self.locals != row.locals
+            || !std::ptr::eq(
+                plan.source(out)?,
+                self.slots.correspondence(out)?.source(out.budget)?,
+            )
+        {
+            return Err(mismatch());
+        }
+        Ok(())
+    }
 }
 
 struct Context<'a, 'view, 'source> {
@@ -2079,6 +2126,7 @@ pub(super) const SOURCE_BYTES_V36: &str = concat!(
     include_str!("original_semantic_mir_context_issue_coupling_v211.vrs"),
     include_str!("original_semantic_mir_expanded_transition_v259.vrs"),
     include_str!("original_semantic_mir_checked_well_formed_v294.vrs"),
+    include_str!("original_semantic_mir_checked_projections_v296.vrs"),
     include_str!("original_semantic_mir_source_tile_v161.vrs"),
     include_str!("original_semantic_mir_source_entry_initialize_v166.vrs"),
     include_str!("original_semantic_mir_source_entry_select_v167.vrs"),

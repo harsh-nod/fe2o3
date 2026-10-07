@@ -1,0 +1,70 @@
+// Stored projections only. Equality of a resident reference/product does not
+// establish currentness after another local's version changes.
+spec fn invocation_source_stored_aggregate_projection_v296(
+    source: InvocationSourceByteStateV36, local: int, ty: int, leaf: int,
+) -> Option<MemoryValueV30> {
+    let path = invocation_source_aggregate_leaf_path_v42(ty, leaf);
+    if 0 <= leaf < invocation_source_aggregate_leaf_count_v42(ty)
+        && source.logical.aggregates.contains_key(local)
+        && source.logical.aggregates[local].source_type == ty
+        && source.logical.aggregates[local].leaves.contains_key(path) {
+        Some(source.logical.aggregates[local].leaves[path])
+    } else { None }
+}
+
+spec fn invocation_source_stored_product_projection_v296(
+    source: InvocationSourceByteStateV36, local: int, ty: int, leaf: int,
+) -> Option<InvocationSourceProductAtomV282> {
+    let path = invocation_source_product_component_path_v282(ty, leaf);
+    if 0 <= leaf < invocation_source_product_component_count_v282(ty)
+        && source.logical.products.contains_key(local)
+        && source.logical.products[local].source_type == ty
+        && source.logical.products[local].components.contains_key(path) {
+        Some(source.logical.products[local].components[path])
+    } else { None }
+}
+
+proof fn invocation_source_checked_add_local_projections_v296(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int,
+    left_local: int, right_local: int, left: int, right: int,
+    root: int, instance: int, little_endian: bool,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),
+        0 <= left_local < source.machine.values.len(), 0 <= right_local < source.machine.values.len(),
+        source.machine.values[left_local] == MemoryValueV30::Scalar(left),
+        source.machine.values[right_local] == MemoryValueV30::Scalar(right),
+        0 <= left < 4294967296, 0 <= right < 4294967296,
+        invocation_source_aggregate_leaf_count_v42(source_type) == 2,
+        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],
+        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],
+        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,
+        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,
+    ensures ({ let after = invocation_source_byte_step_v36(source,
+        InvocationSourceByteEventV36::Checked {
+            destination, source_type, operation: 0, bits: 32, signed: false,
+            left: InvocationSourceByteValueV36::Local { local: left_local, moved: false },
+            right: InvocationSourceByteValueV36::Local { local: right_local, moved: false } },
+        root, instance, little_endian);
+        (forall|local: int| 0 <= local < source.machine.values.len() && local != destination ==>
+            after.machine.values[local] == source.machine.values[local])
+        && (forall|local: int| local != destination ==>
+            after.logical.aggregates.contains_key(local) == source.logical.aggregates.contains_key(local)
+            && (source.logical.aggregates.contains_key(local) ==>
+                after.logical.aggregates[local] == source.logical.aggregates[local]))
+        && (forall|local: int| local != destination ==>
+            after.logical.products.contains_key(local) == source.logical.products.contains_key(local)
+            && (source.logical.products.contains_key(local) ==>
+                after.logical.products[local] == source.logical.products[local])) }),
+{
+    // Both operand evaluations refer to the prestate, including numeric aliases.
+    invocation_source_local_evaluates_v265(source, left_local, 32, root, instance, little_endian);
+    invocation_source_local_evaluates_v265(source, right_local, 32, root, instance, little_endian);
+    invocation_checked_add_aggregate_complete_v260(source_type, left, right);
+    let lhs = InvocationSourceByteValueV36::Local { local: left_local, moved: false };
+    let rhs = InvocationSourceByteValueV36::Local { local: right_local, moved: false };
+    invocation_source_checked_add_replays_install_v260(source, destination, source_type,
+        lhs, rhs, left, right, root, instance, little_endian);
+    invocation_source_checked_event_replays_v264(source, destination, source_type,
+        0, 32, false, lhs, rhs, root, instance, little_endian);
+}

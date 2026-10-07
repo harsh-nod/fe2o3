@@ -83,6 +83,7 @@ fn checked_transition_model_v288(
                     super::super::emit_execution_v37(relation, root, out)?;
                 }
                 let witnesses = program.emit_checked_local_add_proofs_v288(out)?;
+                assert_eq!(program.emit_checked_prefix_projections_v296(&plan, out)?, witnesses);
                 assert_eq!(witnesses, expected.len());
                 for (name, micro, pc, block, statement) in expected {
                     assert_eq!(out.text.matches(&format!("proof fn {name}")).count(), 1);
@@ -147,6 +148,7 @@ fn production_checked_transition_generation_has_exact_resource_limits() {
                     let program = SourceByteProgram::derive(plan, slots, out)?;
                     super::super::emit_model_prelude_v187(out)?;
                     assert!(program.emit_checked_local_add_proofs_v288(out)? > 0);
+                    assert!(program.emit_checked_prefix_projections_v296(&plan, out)? > 0);
                     assert!(out.text.contains(include_str!(
                         "original_semantic_mir_checked_well_formed_v294.vrs"
                     )));
@@ -349,6 +351,7 @@ fn checked_wf_actual_micro_and_prefix_consumers_retain_arbitrary_frame_shapes() 
             assert!(!requires.contains("logical.products"));
             assert!(ensures.contains("invocation_source_active_"));
             assert!(ensures.contains("_v36(n.source)"));
+            assert!(ensures.contains("invocation_source_byte_state_well_formed_v36(n.source)"));
             assert!(ensures.contains("n.source.machine.pc == c.source.machine.pc"));
             assert!(ensures.contains("n.source.slots == c.source.slots"));
             assert!(ensures.contains("n.source.objects == c.source.objects"));
@@ -358,9 +361,18 @@ fn checked_wf_actual_micro_and_prefix_consumers_retain_arbitrary_frame_shapes() 
             count += 1;
         }
         assert!(count > 0);
+        let mut prefixes = 0;
+        for body in model.split("proof fn checked_add_actual_prefix_").skip(1) {
+            let body = body.split("\nproof fn ").next().unwrap();
+            let (contract, _) = body.split_once("\n{\n").unwrap();
+            let (_, ensures) = contract.split_once("\n ensures ").unwrap();
+            assert!(ensures.contains("invocation_source_byte_state_well_formed_v36(out.source)"));
+            prefixes += 1;
+        }
+        assert_eq!(prefixes, count);
         assert_eq!(
             model
-                .matches("_v36(out.source)\n && out.source.machine.pc == p.source.machine.pc")
+                .matches("invocation_source_byte_state_well_formed_v36(out.source)\n && out.source.machine.pc == p.source.machine.pc")
                 .count(),
             count
         );
