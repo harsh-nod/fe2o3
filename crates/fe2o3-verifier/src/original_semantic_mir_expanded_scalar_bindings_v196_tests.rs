@@ -198,15 +198,20 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         target_range: Option<(usize, usize)>,
         target_index: Option<usize>,
         binary: Option<fe2o3_kernel_ir::BinaryOp>,
+        dependency: Option<(usize, usize, u8)>,
     }
-    let refusal_trace_headers = 6 * size_of::<RefusalFactsFields>()
-        + 2 * size_of::<Error>()
-        + 16 * size_of::<usize>()
-        + 4 * size_of::<&()>()
-        + 2 * size_of::<u8>();
+    let refusal_trace_headers = 12 * size_of::<RefusalFactsFields>()
+        + 4 * size_of::<Error>()
+        + 20 * size_of::<usize>()
+        + 20 * size_of::<&()>()
+        + 6 * size_of::<u8>()
+        + 2 * size_of::<Option<(usize, usize, u8)>>();
+    let reconstruction_diagnostic_results =
+        2 * size_of::<Result<Recipe>>() + 2 * size_of::<Result<()>>();
     let header = retained
         + refusal_coordinates
         + refusal_trace_headers
+        + reconstruction_diagnostic_results
         + construction_and_query_results
         + input_predecessor_and_actual_coordinates
         + expansion_span

@@ -131,6 +131,8 @@ pub struct MixedOptimizerReconstructionRefusalV285 {
     pub target_range: Option<(usize, usize)>,
     pub target_index: Option<usize>,
     pub binary: Option<fe2o3_kernel_ir::BinaryOp>,
+    /// Original dense parent, child and recipe-child ordinal, not source SSA IDs.
+    pub dependency: Option<(usize, usize, u8)>,
 }
 
 #[derive(Debug)]

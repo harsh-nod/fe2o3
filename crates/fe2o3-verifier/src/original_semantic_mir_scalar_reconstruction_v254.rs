@@ -74,6 +74,7 @@ pub(super) fn headers() -> usize {
         + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1]>()
         + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>]>();
     let frame_indices = (14 + 8 + 8 + 2) * size_of::<usize>();
+    let diagnostic_results = 2 * size_of::<Result<Recipe>>() + 2 * size_of::<Result<()>>();
     size_of::<Vec<Option<Recipe>>>()
         + size_of::<Vec<u8>>()
         + size_of::<Vec<(usize, u8)>>()
@@ -102,6 +103,7 @@ pub(super) fn headers() -> usize {
         + snapshot_path
         + borrowed_rosters
         + frame_indices
+        + diagnostic_results
         + 2 * size_of::<Type>()
         + 2 * size_of::<ScalarType>()
         + 2 * size_of::<ValueId>()
@@ -235,7 +237,19 @@ mod tests {
             let mut out = Writer::new(&mut budget).unwrap();
             let result = phi(&input, original, block, &mut out);
             if nonclosed || extra {
-                assert!(matches!(result, Err(Error::Statement(_))));
+                let Error::SourceReconstruction { facts, .. } = result.unwrap_err() else {
+                    panic!("the exact diamond guard must retain its original coordinates");
+                };
+                assert_eq!(facts.original, original);
+                assert_eq!(facts.coordinate, input.definitions()[original].coordinate);
+                assert_eq!(
+                    facts.phase,
+                    if nonclosed {
+                        "phi-arm-exit"
+                    } else {
+                        "phi-common-duplicate"
+                    }
+                );
             } else {
                 let Recipe::Select {
                     condition,
@@ -255,11 +269,23 @@ mod tests {
 
     #[test]
     fn reconstruction_traversal_rejects_cycles_and_out_of_range_dependencies() {
-        for (root, child, accepted) in [
-            (Recipe::Forward(1), Recipe::Actual(0), true),
-            (Recipe::Forward(1), Recipe::Forward(0), false),
-            (Recipe::Forward(0), Recipe::Actual(0), false),
-            (Recipe::Forward(2), Recipe::Actual(0), false),
+        for (root, child, refused) in [
+            (Recipe::Forward(1), Recipe::Actual(0), None),
+            (
+                Recipe::Forward(1),
+                Recipe::Forward(0),
+                Some(("traversal-cycle", (1, 0, 0))),
+            ),
+            (
+                Recipe::Forward(0),
+                Recipe::Actual(0),
+                Some(("traversal-cycle", (0, 0, 0))),
+            ),
+            (
+                Recipe::Forward(2),
+                Recipe::Actual(0),
+                Some(("traversal-bounds", (0, 2, 0))),
+            ),
         ] {
             let mut work = Work::new(LIMIT);
             let mut budget = Budget::new(&mut work, LIMIT);
@@ -273,22 +299,128 @@ mod tests {
                 &mut marks,
                 &mut stack,
                 &mut order,
+                synthetic_facts(0),
                 &mut out,
                 &mut |index, _| {
                     assert_eq!(index, 1);
                     Ok(child)
                 },
             );
-            if accepted {
+            if let Some((phase, dependency)) = refused {
+                let Error::SourceReconstruction { facts, .. } = result.unwrap_err() else {
+                    panic!("synthetic traversal refusal must retain its numeric edge");
+                };
+                assert_eq!(facts.phase, phase);
+                assert_eq!(facts.original, 0);
+                assert_eq!(facts.dependency, Some(dependency));
+                assert!(order.is_empty());
+            } else {
                 result.unwrap();
                 assert_eq!(order, [1, 0]);
                 assert_eq!(marks, [2, 2]);
                 assert!(stack.is_empty());
-            } else {
-                assert!(matches!(result, Err(Error::Statement(_))));
-                assert!(order.is_empty());
             }
             assert!(out.finish().unwrap().is_empty());
+        }
+    }
+
+    fn synthetic_facts(original: usize) -> RefusalFacts {
+        // Numeric error-path tests only, not an admitted source value.
+        RefusalFacts::new(
+            original,
+            Definition::FunctionArgument {
+                function: Function(0),
+                argument: original as u32,
+            },
+            &Type::Scalar(ScalarType::U32),
+        )
+    }
+
+    #[test]
+    fn reconstruction_child_refusal_keeps_first_coordinates_and_traversal_edge() {
+        for root in [
+            Recipe::Forward(1),
+            Recipe::Select {
+                condition: 1,
+                on_true: 0,
+                on_false: 0,
+            },
+        ] {
+            for kind in 0..5 {
+                let mut work = Work::new(LIMIT);
+                let mut budget = Budget::new(&mut work, LIMIT);
+                let mut out = Writer::new(&mut budget).unwrap();
+                let mut recipes = [Some(root), None];
+                let mut marks = [1, 0];
+                let mut stack = vec![(0, 0)];
+                let mut order = Vec::new();
+                let mut expected = synthetic_facts(0);
+                expected.target_function = Some(Function(9));
+                expected.target_range = Some((10, 12));
+                let error = traverse(
+                    &mut recipes,
+                    &mut marks,
+                    &mut stack,
+                    &mut order,
+                    expected,
+                    &mut out,
+                    &mut |index, _| {
+                        assert_eq!(index, 1);
+                        let mut first = synthetic_facts(index);
+                        first.target_index = Some(17);
+                        Err(match kind {
+                            0 => trace_refusal(mismatch(), RefusalPhase::DependencyOwner, first),
+                            1 => Error::Resource(Resource::Accounting),
+                            2 => Error::Source(
+                                fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                                    Resource::Accounting,
+                                ),
+                            ),
+                            3 => Error::Statement("generated source limit"),
+                            _ => Error::GeneratedSourceLimit {
+                                section: "child",
+                                emitted_bytes: 17,
+                                limit_bytes: 19,
+                            },
+                        })
+                    },
+                )
+                .unwrap_err();
+                match kind {
+                    0 => {
+                        let Error::SourceReconstruction { facts, .. } = error else {
+                            panic!("first child facts lost")
+                        };
+                        assert_eq!(facts.original, 1);
+                        assert_eq!(facts.coordinate, synthetic_facts(1).coordinate);
+                        assert_eq!(facts.phase, "dependency-owner");
+                        assert_eq!(facts.target_index, Some(17));
+                        assert_eq!(facts.target_function, expected.target_function);
+                        assert_eq!(facts.target_range, expected.target_range);
+                        assert_eq!(facts.dependency, Some((0, 1, 0)));
+                    }
+                    1 => assert!(matches!(error, Error::Resource(Resource::Accounting))),
+                    2 => assert!(matches!(
+                        error,
+                        Error::Source(
+                            fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                                Resource::Accounting
+                            )
+                        )
+                    )),
+                    3 => assert!(matches!(error, Error::Statement("generated source limit"))),
+                    _ => assert!(matches!(
+                        error,
+                        Error::GeneratedSourceLimit {
+                            section: "child",
+                            emitted_bytes: 17,
+                            limit_bytes: 19
+                        }
+                    )),
+                }
+                assert!(order.is_empty());
+                assert!(out.finish().unwrap().is_empty());
+            }
         }
     }
 
@@ -431,45 +563,53 @@ fn traverse(
     marks: &mut [u8],
     stack: &mut Vec<(usize, u8)>,
     order: &mut Vec<usize>,
+    mut facts: RefusalFacts,
     out: &mut Writer<'_, '_>,
     load: &mut impl FnMut(usize, &mut Writer<'_, '_>) -> Result<Recipe>,
 ) -> Result<()> {
-    out.budget.charge_work(2)?;
-    if marks.len() != recipes.len() {
-        return Err(mismatch());
-    }
-    while let Some(&(current, ordinal)) = stack.last() {
-        out.budget.charge_work(5)?;
-        let recipe = recipes
-            .get(current)
-            .copied()
-            .flatten()
-            .ok_or_else(mismatch)?;
-        if let Some(child) = recipe.child(ordinal) {
-            stack.last_mut().ok_or_else(mismatch)?.1 += 1;
-            if *marks.get(child).ok_or_else(mismatch)? == 1 {
-                return Err(mismatch());
-            }
-            if marks[child] == 0 {
-                out.budget.charge_work(3)?;
-                if stack.len() >= recipes.len() {
+    let mut phase = RefusalPhase::TraversalBounds;
+    let result = (|| {
+        out.budget.charge_work(2)?;
+        if marks.len() != recipes.len() {
+            return Err(mismatch());
+        }
+        while let Some(&(current, ordinal)) = stack.last() {
+            facts.dependency = Some((current, current, ordinal));
+            out.budget.charge_work(8)?;
+            let recipe = recipes
+                .get(current)
+                .copied()
+                .flatten()
+                .ok_or_else(mismatch)?;
+            if let Some(child) = recipe.child(ordinal) {
+                facts.dependency = Some((current, child, ordinal));
+                stack.last_mut().ok_or_else(mismatch)?.1 += 1;
+                if *marks.get(child).ok_or_else(mismatch)? == 1 {
+                    phase = RefusalPhase::TraversalCycle;
                     return Err(mismatch());
                 }
-                recipes[child] = Some(load(child, out)?);
-                marks[child] = 1;
-                stack.push((child, 0));
+                if marks[child] == 0 {
+                    out.budget.charge_work(3)?;
+                    if stack.len() >= recipes.len() {
+                        return Err(mismatch());
+                    }
+                    recipes[child] = Some(load(child, out)?);
+                    marks[child] = 1;
+                    stack.push((child, 0));
+                }
+            } else {
+                out.budget.charge_work(3)?;
+                if order.len() >= recipes.len() {
+                    return Err(mismatch());
+                }
+                marks[current] = 2;
+                order.push(current);
+                stack.pop();
             }
-        } else {
-            out.budget.charge_work(3)?;
-            if order.len() >= recipes.len() {
-                return Err(mismatch());
-            }
-            marks[current] = 2;
-            order.push(current);
-            stack.pop();
         }
-    }
-    Ok(())
+        Ok(())
+    })();
+    result.map_err(|error| trace_refusal(error, phase, facts))
 }
 
 fn operand(
@@ -498,133 +638,147 @@ fn phi(
     block: Block,
     out: &mut Writer<'_, '_>,
 ) -> Result<Recipe> {
-    out.budget.charge_work(4)?;
+    out.budget.charge_work(16)?;
     let owner = input
         .functions()
         .get(block.function.0 as usize)
         .ok_or_else(mismatch)?;
     let row = input.definitions().get(original).ok_or_else(mismatch)?;
-    if owner.coordinate != block.function || !owner.definitions.contains(&original) {
-        return Err(mismatch());
-    }
-    let mut arms = [None; 2];
-    let mut count = 0usize;
-    let mut distinct = false;
-    for edge in input
-        .edge_arguments()
-        .get(owner.edge_arguments.clone())
-        .ok_or_else(mismatch)?
-    {
-        out.budget.charge_work(1)?;
-        if edge.target_definition != original {
-            continue;
+    let facts = RefusalFacts::new(original, row.coordinate, row.ty);
+    let mut phase = RefusalPhase::PhiIncoming;
+    let result = (|| {
+        if owner.coordinate != block.function || !owner.definitions.contains(&original) {
+            return Err(mismatch());
         }
-        out.budget.charge_work(5)?;
-        if edge.coordinate.edge.source.function != block.function
-            || !owner.definitions.contains(&edge.incoming_definition)
+        let mut arms = [None; 2];
+        let mut count = 0usize;
+        let mut distinct = false;
+        for edge in input
+            .edge_arguments()
+            .get(owner.edge_arguments.clone())
+            .ok_or_else(mismatch)?
         {
-            return Err(mismatch());
-        }
-        let incoming = input
-            .definitions()
-            .get(edge.incoming_definition)
-            .ok_or_else(mismatch)?;
-        if incoming.value != Some(edge.value) || incoming.ty != row.ty {
-            return Err(mismatch());
-        }
-        if let Some((_, first)) = arms[0] {
-            distinct |= first != edge.incoming_definition;
-        }
-        if count >= arms.len() {
-            if distinct {
+            out.budget.charge_work(1)?;
+            if edge.target_definition != original {
+                continue;
+            }
+            out.budget.charge_work(5)?;
+            if edge.coordinate.edge.source.function != block.function
+                || !owner.definitions.contains(&edge.incoming_definition)
+            {
                 return Err(mismatch());
             }
-        } else {
-            arms[count] = Some((edge.coordinate.edge.source, edge.incoming_definition));
+            let incoming = input
+                .definitions()
+                .get(edge.incoming_definition)
+                .ok_or_else(mismatch)?;
+            if incoming.value != Some(edge.value) || incoming.ty != row.ty {
+                return Err(mismatch());
+            }
+            if let Some((_, first)) = arms[0] {
+                distinct |= first != edge.incoming_definition;
+            }
+            if count >= arms.len() {
+                if distinct {
+                    return Err(mismatch());
+                }
+            } else {
+                arms[count] = Some((edge.coordinate.edge.source, edge.incoming_definition));
+            }
+            count += 1;
         }
-        count += 1;
-    }
-    out.budget.charge_work(3)?;
-    let (first, first_value) = arms[0].ok_or_else(mismatch)?;
-    if !distinct {
-        return Ok(Recipe::Forward(first_value));
-    }
-    let (second, second_value) = arms[1].ok_or_else(mismatch)?;
-    if first_value == second_value {
-        return Ok(Recipe::Forward(first_value));
-    }
-    if first == second || first == block || second == block {
-        return Err(mismatch());
-    }
-    for arm in [first, second] {
+        out.budget.charge_work(3)?;
+        let (first, first_value) = arms[0].ok_or_else(mismatch)?;
+        if !distinct {
+            return Ok(Recipe::Forward(first_value));
+        }
+        let (second, second_value) = arms[1].ok_or_else(mismatch)?;
+        if first_value == second_value {
+            return Ok(Recipe::Forward(first_value));
+        }
+        if first == second || first == block || second == block {
+            return Err(mismatch());
+        }
+        for arm in [first, second] {
+            phase = RefusalPhase::PhiArmExit;
+            out.budget.charge_work(6)?;
+            let arm = &input.blocks()[block_index(input, arm)?];
+            let [edge] = input.edges().get(arm.edges.clone()).ok_or_else(mismatch)? else {
+                return Err(mismatch());
+            };
+            if !arm.parameters.is_empty() {
+                phase = RefusalPhase::PhiArmParameters;
+                return Err(mismatch());
+            }
+            if !matches!(arm.terminator, Terminator::Branch { .. }) || edge.target != block {
+                return Err(mismatch());
+            }
+        }
+        let mut common = None;
+        let mut seen = [false; 2];
+        let mut on_true = None;
+        let mut on_false = None;
+        phase = RefusalPhase::PhiCommonSource;
+        for edge in input
+            .edges()
+            .get(owner.edges.clone())
+            .ok_or_else(mismatch)?
+        {
+            out.budget.charge_work(2)?;
+            let arm = if edge.target == first {
+                0
+            } else if edge.target == second {
+                1
+            } else {
+                continue;
+            };
+            out.budget.charge_work(5)?;
+            if seen[arm] {
+                phase = RefusalPhase::PhiCommonDuplicate;
+                return Err(mismatch());
+            }
+            if !edge.arguments.is_empty() {
+                phase = RefusalPhase::PhiCommonArguments;
+                return Err(mismatch());
+            }
+            if common.is_some_and(|prior| prior != edge.coordinate.source) {
+                return Err(mismatch());
+            }
+            seen[arm] = true;
+            common = Some(edge.coordinate.source);
+            let value = if arm == 0 { first_value } else { second_value };
+            match edge.coordinate.successor {
+                0 if on_true.is_none() => on_true = Some(value),
+                1 if on_false.is_none() => on_false = Some(value),
+                _ => return Err(mismatch()),
+            }
+        }
+        phase = RefusalPhase::PhiBranch;
         out.budget.charge_work(6)?;
-        let arm = &input.blocks()[block_index(input, arm)?];
-        let [edge] = input.edges().get(arm.edges.clone()).ok_or_else(mismatch)? else {
+        let common = common.ok_or_else(mismatch)?;
+        if !seen[0] || !seen[1] || common == block || common == first || common == second {
+            return Err(mismatch());
+        }
+        let branch = &input.blocks()[block_index(input, common)?];
+        let Terminator::ConditionalBranch { condition, .. } = branch.terminator else {
             return Err(mismatch());
         };
-        if !arm.parameters.is_empty()
-            || !matches!(arm.terminator, Terminator::Branch { .. })
-            || edge.target != block
-        {
+        if branch.edges.len() != 2 {
             return Err(mismatch());
         }
-    }
-    let mut common = None;
-    let mut seen = [false; 2];
-    let mut on_true = None;
-    let mut on_false = None;
-    for edge in input
-        .edges()
-        .get(owner.edges.clone())
-        .ok_or_else(mismatch)?
-    {
-        out.budget.charge_work(2)?;
-        let arm = if edge.target == first {
-            0
-        } else if edge.target == second {
-            1
-        } else {
-            continue;
-        };
-        out.budget.charge_work(5)?;
-        if seen[arm]
-            || !edge.arguments.is_empty()
-            || common.is_some_and(|prior| prior != edge.coordinate.source)
-        {
-            return Err(mismatch());
-        }
-        seen[arm] = true;
-        common = Some(edge.coordinate.source);
-        let value = if arm == 0 { first_value } else { second_value };
-        match edge.coordinate.successor {
-            0 if on_true.is_none() => on_true = Some(value),
-            1 if on_false.is_none() => on_false = Some(value),
-            _ => return Err(mismatch()),
-        }
-    }
-    out.budget.charge_work(6)?;
-    let common = common.ok_or_else(mismatch)?;
-    if !seen[0] || !seen[1] || common == block || common == first || common == second {
-        return Err(mismatch());
-    }
-    let branch = &input.blocks()[block_index(input, common)?];
-    let Terminator::ConditionalBranch { condition, .. } = branch.terminator else {
-        return Err(mismatch());
-    };
-    if branch.edges.len() != 2 {
-        return Err(mismatch());
-    }
-    Ok(Recipe::Select {
-        condition: operand(
-            input,
-            block.function,
-            *condition,
-            &Type::Scalar(ScalarType::Bool),
-            out,
-        )?,
-        on_true: on_true.ok_or_else(mismatch)?,
-        on_false: on_false.ok_or_else(mismatch)?,
-    })
+        Ok(Recipe::Select {
+            condition: operand(
+                input,
+                block.function,
+                *condition,
+                &Type::Scalar(ScalarType::Bool),
+                out,
+            )?,
+            on_true: on_true.ok_or_else(mismatch)?,
+            on_false: on_false.ok_or_else(mismatch)?,
+        })
+    })();
+    result.map_err(|error| trace_refusal(error, phase, facts))
 }
 
 // This selects an equation from the original inventory only. The caller still
@@ -880,19 +1034,36 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
             &mut marks,
             &mut stack,
             &mut order,
+            facts,
             out,
             &mut |child, out| {
-                out.budget.charge_work(3)?;
+                out.budget.charge_work(15)?;
                 let child_row = input.definitions().get(child).ok_or_else(mismatch)?;
+                let mut child_facts = RefusalFacts::new(child, child_row.coordinate, child_row.ty);
+                child_facts.target_function = facts.target_function;
+                child_facts.target_range = facts.target_range;
                 if function(child_row.coordinate) != function(source.coordinate) {
-                    return Err(mismatch());
+                    return Err(trace_refusal(
+                        mismatch(),
+                        RefusalPhase::DependencyOwner,
+                        child_facts,
+                    ));
                 }
-                let recipe = self.reconstruction_recipe(input, child, out)?;
+                let recipe = self
+                    .reconstruction_recipe(input, child, out)
+                    .map_err(|error| {
+                        trace_refusal(error, RefusalPhase::DependencyRecipe, child_facts)
+                    })?;
                 if let Recipe::Actual(index) = recipe {
+                    child_facts.target_index = Some(index);
                     if !actual_function.definitions.contains(&index)
                         || actual.definitions().get(index).map(|row| row.ty) != Some(child_row.ty)
                     {
-                        return Err(mismatch());
+                        return Err(trace_refusal(
+                            mismatch(),
+                            RefusalPhase::DependencyOwner,
+                            child_facts,
+                        ));
                     }
                 }
                 Ok(recipe)

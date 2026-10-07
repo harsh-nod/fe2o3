@@ -17,6 +17,17 @@ pub(super) enum Phase {
     ErasedRecipe,
     TargetLookup,
     TargetOwner,
+    DependencyRecipe,
+    DependencyOwner,
+    TraversalBounds,
+    TraversalCycle,
+    PhiIncoming,
+    PhiArmParameters,
+    PhiArmExit,
+    PhiCommonDuplicate,
+    PhiCommonArguments,
+    PhiCommonSource,
+    PhiBranch,
 }
 
 impl Phase {
@@ -32,6 +43,17 @@ impl Phase {
             Self::ErasedRecipe => "erased-recipe",
             Self::TargetLookup => "target-lookup",
             Self::TargetOwner => "target-owner",
+            Self::DependencyRecipe => "dependency-recipe",
+            Self::DependencyOwner => "dependency-owner",
+            Self::TraversalBounds => "traversal-bounds",
+            Self::TraversalCycle => "traversal-cycle",
+            Self::PhiIncoming => "phi-incoming",
+            Self::PhiArmParameters => "phi-arm-parameters",
+            Self::PhiArmExit => "phi-arm-exit",
+            Self::PhiCommonDuplicate => "phi-common-duplicate",
+            Self::PhiCommonArguments => "phi-common-arguments",
+            Self::PhiCommonSource => "phi-common-source",
+            Self::PhiBranch => "phi-branch",
         }
     }
 }
@@ -57,6 +79,7 @@ impl Facts {
             target_range: None,
             target_index: None,
             binary: None,
+            dependency: None,
         }
     }
 
@@ -68,12 +91,14 @@ impl Facts {
 }
 
 pub(super) fn headers() -> usize {
-    // Root, recipe, transport and retained-locator frames can overlap.
-    6 * size_of::<Facts>()
-        + 2 * size_of::<Error>()
-        + 16 * size_of::<usize>()
-        + 4 * size_of::<&()>()
-        + 2 * size_of::<Phase>()
+    // Root/traversal/loader/phi and annotation frames overlap; closures retain
+    // their original facts until the first failure is returned.
+    12 * size_of::<Facts>()
+        + 4 * size_of::<Error>()
+        + 20 * size_of::<usize>()
+        + 20 * size_of::<&()>()
+        + 6 * size_of::<Phase>()
+        + 2 * size_of::<Option<(usize, usize, u8)>>()
 }
 
 // Diagnostics neither query owners after failure nor replace the first error.
@@ -93,6 +118,9 @@ pub(super) fn annotate(error: Error, phase: Phase, mut facts: Facts) -> Error {
             if first.target_function.is_none() && first.target_range.is_none() {
                 first.target_function = facts.target_function;
                 first.target_range = facts.target_range;
+            }
+            if first.dependency.is_none() {
+                first.dependency = facts.dependency;
             }
             Error::SourceReconstruction {
                 facts: first,
@@ -154,6 +182,7 @@ mod tests {
         facts.target_range = Some((usize::MAX, usize::MAX));
         facts.target_index = Some(usize::MAX);
         facts.binary = Some(BinaryOp::Add);
+        facts.dependency = Some((usize::MAX, usize::MAX, u8::MAX));
         let mut line = Line {
             bytes: [0; LINE_BYTES],
             len: 0,
@@ -220,6 +249,17 @@ mod tests {
             Phase::ErasedRecipe,
             Phase::TargetLookup,
             Phase::TargetOwner,
+            Phase::DependencyRecipe,
+            Phase::DependencyOwner,
+            Phase::TraversalBounds,
+            Phase::TraversalCycle,
+            Phase::PhiIncoming,
+            Phase::PhiArmParameters,
+            Phase::PhiArmExit,
+            Phase::PhiCommonDuplicate,
+            Phase::PhiCommonArguments,
+            Phase::PhiCommonSource,
+            Phase::PhiBranch,
         ] {
             let mut line = Line {
                 bytes: [0; LINE_BYTES],
@@ -236,6 +276,7 @@ mod tests {
         assert_eq!(short.len, LINE_BYTES);
         let mut inner = Facts::new(11, coordinate, &Type::Scalar(ScalarType::U32));
         inner.descendant_count = Some(0);
+        inner.dependency = Some((3, 11, 2));
         let first = annotate(
             Error::Statement("original refusal"),
             Phase::ErasedRecipe,
@@ -278,6 +319,7 @@ mod tests {
             reason: "original refusal", reconstruction: Some(first),
         } if actual == value && first.original == 11 && first.phase == "erased-recipe"
             && first.descendant_count == Some(0) && first.target_function == facts.target_function
-            && first.target_range == facts.target_range && first.target_index.is_none()));
+            && first.target_range == facts.target_range && first.target_index.is_none()
+            && first.dependency == Some((3, 11, 2))));
     }
 }
