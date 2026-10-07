@@ -34,6 +34,9 @@ enum MaterializationModeV1 {
 #[path = "bf16_generated_source_admission_v1.rs"]
 mod generated_admission;
 
+#[path = "bf16_same_owner_handoff_v1.rs"]
+mod same_owner;
+
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     // The legacy entry remains unchanged in behavior. The dedicated importer
     // result, never bytes or a bool, owns the live seed.
@@ -59,105 +62,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         // This is the existing meter created by the ordinary phase. No sibling
         // meter is created, and no work is reconstructed from observed counters.
         let prepared = ssa.with_prepared_materialization_budget_v29(|prepared, budget| {
-            let owned = source_seed.phase_storage_bytes();
-            let floor = budget.storage();
-            let ledger = budget.work_ledger_identity_v1();
-            budget
-                .reserve_storage(owned)
-                .map_err(materialization_resource_error_v29)?;
-            let protected = floor
-                .checked_add(owned)
-                .ok_or_else(|| materialization_resource_error_v29(Resource::Arithmetic))?;
-            #[cfg(test)]
-            let materializer_storage = std::cell::Cell::new(None);
-            let mut occurrence_storage = None;
-            #[cfg(test)]
-            let normal_attempted = std::cell::Cell::new(false);
-            let result = materialize_prepared_with_budget_v29(
-                prepared,
-                budget,
-                |_, _| Ok(()),
-                |mut semantic_ssa, launch, budget| {
-                    #[cfg(test)]
-                    materializer_storage.set(Some(budget.storage()));
-                    // Attach the actual owner's occurrences exactly once. The
-                    // API returns an unreserved receipt: reserve it immediately.
-                    if semantic_ssa.occurrence_storage().is_some() {
-                        return Err(unavailable("BF16 helper occurrence capture was not fresh"));
-                    }
-                    let receipt = semantic_ssa.try_capture_occurrences_with_budget_v1(budget)
-                        .map_err(|error| ProductionPipelineError::PreRankedMaterialization(
-                            fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Occurrences(error)))?;
-                    budget.reserve_storage(receipt.retained_storage())
-                        .map_err(materialization_resource_error_v29)?;
-                    occurrence_storage = Some(receipt.retained_storage());
-                    let observed = fe2o3_lower_mir_kernel::with_checked_bf16_call_instance_v1(
-                        &semantic_ssa, budget,
-                        |relation, budget| source_seed.with_relation(relation, budget, inspect),
-                    ).map_err(inspection)?;
-                    #[cfg(test)]
-                    normal_attempted.set(true);
-                    // SAME owner; ordinary Preexisting capture convention. No
-                    // new constructor, flattening, CalleeCollective exception,
-                    // pass suppression or alternate emission graph exists here.
-                    let owner = match mode {
-                        MaterializationModeV1::Legacy =>
-                            fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
-                                semantic_ssa, launch,
-                                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(), budget,
-                            ),
-                        MaterializationModeV1::NominalInspection =>
-                            fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_bf16_nominal_with_budget_v1(
-                                semantic_ssa, launch,
-                                fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(), budget,
-                            ),
-                    }.map_err(ProductionPipelineError::PreRankedMaterialization)?;
-                    let retained = owner.retained_analysis_storage_v1();
-                    Ok(((owner, observed), retained))
-                },
-            );
-            // On refusal the consumed SSA has already been dropped. Release
-            // only this scope's actual occurrence reservation. A success keeps
-            // it live under the ordinary owner's Preexisting receipt convention.
-            if result.is_err() {
-                if let Some(bytes) = occurrence_storage {
-                    let retained_floor = protected.checked_add(bytes)
-                        .ok_or_else(|| materialization_resource_error_v29(Resource::Arithmetic))?;
-                    if budget.work_ledger_identity_v1() != ledger || budget.storage() < retained_floor {
-                        drop(result);
-                        return Err(Box::new(materialization_resource_error_v29(Resource::Accounting)));
-                    }
-                    budget.release_storage(bytes).map_err(materialization_resource_error_v29)?;
-                }
-            }
-            drop(source_seed);
-            // Drop before release; preserve callback-owned extra reservations,
-            // consumed work and sticky denial history even on a callback error.
-            if budget.work_ledger_identity_v1() != ledger || budget.storage() < protected {
-                drop(result);
-                return Err(Box::new(materialization_resource_error_v29(
-                    Resource::Accounting,
-                )));
-            }
-            budget
-                .release_storage(owned)
-                .map_err(materialization_resource_error_v29)?;
-            #[cfg(test)]
-            observation::record(observation::PhaseObservation {
-                entry_storage: floor,
-                source_storage: owned,
-                occurrence_storage,
-                normal_attempted: normal_attempted.get(),
-                protected_storage: protected,
-                materializer_storage: materializer_storage.get(),
-                final_storage: budget.storage(),
-                same_ledger: budget.work_ledger_identity_v1() == ledger,
-                work: Some(budget.work()),
-                failed_work: budget.failed_work().is_some(),
-                failed_storage: budget.failed_storage().is_some(),
-                result_ok: result.is_ok(),
-            });
-            result
+            materialize_prepared_bf16_source_v1(prepared, source_seed, mode, inspect, budget)
         })?;
         let PreparedMaterializationV29 {
             materialized: (materialized, observed),
@@ -278,4 +183,132 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         }
         Ok((ssa, source_seed))
     }
+}
+
+// Exact original production materialization body, shared by the unchanged
+// stack-backed entry and the opt-in original-account-retaining continuation.
+fn materialize_prepared_bf16_source_v1<'tcx, R: Copy + 'static>(
+    prepared: PreparedSsaMaterializationV29,
+    source_seed: crate::production_bf16_tile_values_source_v1::AuthenticatedBf16TileValuesSourceSeedV1<'tcx>,
+    mode: MaterializationModeV1,
+    inspect: impl for<'a, 'work> FnOnce(
+        &SourceOwnedBf16TileValuesRegionV1<'a, 'tcx>,
+        &mut Budget<'work>,
+    ) -> Result<R, Error>,
+    budget: &mut Budget<'_>,
+) -> Result<
+    PreparedMaterializationV29<(fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1, R)>,
+    Box<ProductionPipelineError>,
+> {
+    let owned = source_seed.phase_storage_bytes();
+    let floor = budget.storage();
+    let ledger = budget.work_ledger_identity_v1();
+    budget
+        .reserve_storage(owned)
+        .map_err(materialization_resource_error_v29)?;
+    let protected = floor
+        .checked_add(owned)
+        .ok_or_else(|| materialization_resource_error_v29(Resource::Arithmetic))?;
+    #[cfg(test)]
+    let materializer_storage = std::cell::Cell::new(None);
+    let mut occurrence_storage = None;
+    #[cfg(test)]
+    let normal_attempted = std::cell::Cell::new(false);
+    let result = materialize_prepared_with_budget_v29(
+        prepared,
+        budget,
+        |_, _| Ok(()),
+        |mut semantic_ssa, launch, budget| {
+            #[cfg(test)]
+            materializer_storage.set(Some(budget.storage()));
+            // Attach the actual owner's occurrences exactly once. The
+            // API returns an unreserved receipt: reserve it immediately.
+            if semantic_ssa.occurrence_storage().is_some() {
+                return Err(unavailable("BF16 helper occurrence capture was not fresh"));
+            }
+            let receipt = semantic_ssa
+                .try_capture_occurrences_with_budget_v1(budget)
+                .map_err(|error| {
+                    ProductionPipelineError::PreRankedMaterialization(
+                        fe2o3_lower_mir_kernel::ProductionPreRankedKirErrorV1::Occurrences(error),
+                    )
+                })?;
+            budget
+                .reserve_storage(receipt.retained_storage())
+                .map_err(materialization_resource_error_v29)?;
+            occurrence_storage = Some(receipt.retained_storage());
+            let observed = fe2o3_lower_mir_kernel::with_checked_bf16_call_instance_v1(
+                &semantic_ssa,
+                budget,
+                |relation, budget| source_seed.with_relation(relation, budget, inspect),
+            )
+            .map_err(inspection)?;
+            #[cfg(test)]
+            normal_attempted.set(true);
+            // SAME owner; ordinary Preexisting capture convention. No
+            // new constructor, flattening, CalleeCollective exception,
+            // pass suppression or alternate emission graph exists here.
+            let owner = match mode {
+                MaterializationModeV1::Legacy =>
+                    fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_with_budget(
+                        semantic_ssa, launch,
+                        fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(), budget,
+                    ),
+                MaterializationModeV1::NominalInspection =>
+                    fe2o3_lower_mir_kernel::ProductionPreRankedKirOwnerV1::try_materialize_bf16_nominal_with_budget_v1(
+                        semantic_ssa, launch,
+                        fe2o3_lower_mir_kernel::ProductionSemanticKirLimitsV1::default(), budget,
+                    ),
+            }.map_err(ProductionPipelineError::PreRankedMaterialization)?;
+            let retained = owner.retained_analysis_storage_v1();
+            Ok(((owner, observed), retained))
+        },
+    );
+    // On refusal the consumed SSA has already been dropped. Release
+    // only this scope's actual occurrence reservation. A success keeps
+    // it live under the ordinary owner's Preexisting receipt convention.
+    if result.is_err() {
+        if let Some(bytes) = occurrence_storage {
+            let retained_floor = protected
+                .checked_add(bytes)
+                .ok_or_else(|| materialization_resource_error_v29(Resource::Arithmetic))?;
+            if budget.work_ledger_identity_v1() != ledger || budget.storage() < retained_floor {
+                drop(result);
+                return Err(Box::new(materialization_resource_error_v29(
+                    Resource::Accounting,
+                )));
+            }
+            budget
+                .release_storage(bytes)
+                .map_err(materialization_resource_error_v29)?;
+        }
+    }
+    drop(source_seed);
+    // Drop before release; preserve callback-owned extra reservations,
+    // consumed work and sticky denial history even on a callback error.
+    if budget.work_ledger_identity_v1() != ledger || budget.storage() < protected {
+        drop(result);
+        return Err(Box::new(materialization_resource_error_v29(
+            Resource::Accounting,
+        )));
+    }
+    budget
+        .release_storage(owned)
+        .map_err(materialization_resource_error_v29)?;
+    #[cfg(test)]
+    observation::record(observation::PhaseObservation {
+        entry_storage: floor,
+        source_storage: owned,
+        occurrence_storage,
+        normal_attempted: normal_attempted.get(),
+        protected_storage: protected,
+        materializer_storage: materializer_storage.get(),
+        final_storage: budget.storage(),
+        same_ledger: budget.work_ledger_identity_v1() == ledger,
+        work: Some(budget.work()),
+        failed_work: budget.failed_work().is_some(),
+        failed_storage: budget.failed_storage().is_some(),
+        result_ok: result.is_ok(),
+    });
+    result
 }

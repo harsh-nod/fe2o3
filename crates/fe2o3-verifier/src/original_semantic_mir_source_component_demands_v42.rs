@@ -1,7 +1,7 @@
 //! Backward demands for independently modeled original value components.
 //! This retains the source CFG and SSA reachability; it is not another SSA plan.
 
-use super::{Error, Resource, Result, SourceSlots, Writer, add, vector};
+use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_mir_model::{
     SsaBlockIdV1,
     semantic_mir_v1::{
@@ -42,6 +42,11 @@ fn mismatch() -> Error {
     Error::Statement("original aggregate component demand differs from its source CFG")
 }
 
+fn add(left: usize, right: usize) -> Result<usize> {
+    left.checked_add(right)
+        .ok_or_else(|| Resource::Arithmetic.into())
+}
+
 fn words_for(bits: usize) -> Result<usize> {
     Ok(add(bits, 63)? / 64)
 }
@@ -70,6 +75,21 @@ fn word_mask(range: &Range<usize>, word: usize) -> u64 {
 }
 
 impl<'a, 'view, 'source> ComponentDemandsV42<'a, 'view, 'source> {
+    pub(super) fn check_owner_v281(
+        &self,
+        slots: &SourceSlots<'_, '_>,
+        function: FunctionId,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.slots
+            .check_query_storage_floor(self.required, out.budget)?;
+        out.budget.charge_work(2)?;
+        if !std::ptr::eq(self.slots, slots) || self.function != function {
+            return Err(mismatch());
+        }
+        Ok(())
+    }
+
     pub(super) fn derive(
         slots: &'a SourceSlots<'view, 'source>,
         function_id: FunctionId,

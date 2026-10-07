@@ -11,7 +11,12 @@ use super::source_function::{
     SourceCallHintsV85, SourceCutHintsV85, SourceEntryHintsV85, SourceStepHintsV85,
 };
 use super::{
-    Error, Resource, Result, Writer, slots::SourceSlots, source_function::SourceByteProgram, vector,
+    Error, Resource, Result, Writer,
+    component_demands::ComponentDemandsV42,
+    slots::SourceSlots,
+    source_frame_demands::{self, ComponentCut},
+    source_function::SourceByteProgram,
+    vector,
 };
 use fe2o3_kernel_ir::{
     CanonicalKirDefinitionCoordinateV1 as Definition, FormalIndexWidth, FunctionRole,
@@ -37,13 +42,9 @@ pub(super) use expanded_live::emit_source_cut_values_v213;
 mod logical;
 use logical::LogicalBinding;
 
-#[path = "original_semantic_mir_source_component_demands_v42.rs"]
-mod component_demands;
-
 #[path = "original_semantic_mir_aggregate_bindings_v42.rs"]
 mod aggregate_bindings;
 use aggregate_bindings::AggregateBindingV42;
-use component_demands::ComponentDemandsV42;
 #[path = "original_semantic_mir_enum_bindings_v49.rs"]
 mod enum_bindings;
 use enum_bindings::EnumBinding;
@@ -66,21 +67,6 @@ struct Binding {
     logical: LogicalBinding,
     definition: Option<usize>,
     frame: usize,
-}
-
-#[derive(Clone, Copy)]
-struct ComponentCut {
-    block: usize,
-    overwritten: Option<(usize, usize)>,
-}
-
-impl ComponentCut {
-    fn at(block: usize) -> Self {
-        Self {
-            block,
-            overwritten: None,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -868,144 +854,31 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
         physical: &Range<usize>,
         out: &mut Writer<'_, '_>,
     ) -> Result<Vec<Binding>> {
-        let caller = plan.instance(root, parent, out)?;
-        let slots = self.slots;
-        let relation = slots.correspondence(out)?;
-        let source = relation.source(out.budget)?;
-        let semantic = source.source_semantic(out.budget)?;
-        let function = &semantic.functions()[caller.function.index() as usize];
-        let ssa = source
-            .source_ssa(out.budget)?
-            .plan_for_function(caller.function)
-            .ok_or_else(mismatch)?
-            .plan();
-        let call = match function
-            .blocks()
-            .get(site.index() as usize)
-            .map(|row| row.terminator().kind())
-        {
-            Some(Terminator::Call(call)) => call,
-            _ => return Err(mismatch()),
-        };
-        let destination = call.destination().ok_or_else(mismatch)?;
-        let next = Block::new(destination.edge().target().index());
-        let overwritten = if destination.place().projections().is_empty()
-            || slots.has_original_object(root, parent, destination.place().local().index(), out)?
-        {
-            None
-        } else {
-            let ty = function
-                .locals()
-                .get(destination.place().local().index() as usize)
-                .ok_or_else(mismatch)?
-                .ty();
-            let (range, result_type) = slots
-                .aggregate_component_range(ty, destination.place().projections(), out)?
-                .ok_or_else(mismatch)?;
-            if result_type != destination.place().ty() {
-                return Err(mismatch());
-            }
-            Some(range)
-        };
-        let live = ssa.live_in(next).ok_or_else(mismatch)?;
-        let mut result = vector(live.len(), out)?;
-        // Reconstruct the caller's exact post-statement SSA environment once.
-        // This is independent of callee liveness and includes every Kill.
-        let mut values = vector(caller.locals.len(), out)?;
-        out.budget.charge_work(caller.locals.len())?;
-        values.resize(caller.locals.len(), None);
-        for &variable in ssa.live_in(Block::new(site.index())).ok_or_else(mismatch)? {
+        let demands = source_frame_demands::caller_demands(
+            self.slots,
+            plan,
+            root,
+            parent,
+            site,
+            boundaries,
+            &mut self.component_demands,
+            out,
+        )?;
+        let mut result = vector(demands.len(), out)?;
+        for demand in &demands {
             out.budget.charge_work(1)?;
-            *values
-                .get_mut(variable.get() as usize)
-                .ok_or_else(mismatch)? =
-                Some(boundaries.value(Block::new(site.index()), variable, out)?);
-        }
-        for &(_, event) in ssa
-            .resolved_events(Block::new(site.index()))
-            .ok_or_else(mismatch)?
-        {
-            out.budget.charge_work(2)?;
-            match event {
-                Event::Define { variable, value } => {
-                    *values
-                        .get_mut(variable.get() as usize)
-                        .ok_or_else(mismatch)? = Some(value)
-                }
-                Event::Kill { variable, .. } => {
-                    *values
-                        .get_mut(variable.get() as usize)
-                        .ok_or_else(mismatch)? = None
-                }
-                Event::Use { .. } => (),
-            }
-        }
-        for &variable in live {
-            out.budget.charge_work(2)?;
-            let is_destination = variable.get() == destination.place().local().index();
-            if is_destination {
-                let Some(overwritten) = &overwritten else {
-                    continue;
-                };
-                let index = caller.function.index() as usize;
-                if self
-                    .component_demands
-                    .get(index)
-                    .ok_or_else(mismatch)?
-                    .is_none()
-                {
-                    self.component_demands[index] =
-                        Some(ComponentDemandsV42::derive(slots, caller.function, out)?);
-                }
-                let demands = self.component_demands[index]
-                    .as_ref()
-                    .ok_or_else(mismatch)?;
-                let count = slots
-                    .aggregate_leaf_count(function.locals()[variable.get() as usize].ty(), out)?
-                    .ok_or_else(mismatch)?;
-                let mut needed = false;
-                for leaf in 0..count {
-                    out.budget.charge_work(1)?;
-                    if !overwritten.contains(&leaf)
-                        && demands.leaf_required(
-                            caller.function,
-                            next.get() as usize,
-                            variable.get() as usize,
-                            leaf,
-                            out,
-                        )?
-                    {
-                        needed = true;
-                    }
-                }
-                if !needed {
-                    continue;
-                }
-            }
-            let value = values
-                .get(variable.get() as usize)
-                .copied()
-                .flatten()
-                .ok_or_else(mismatch)?;
             let binding = self.binding(
                 plan,
                 root,
                 parent,
-                variable.get() as usize,
-                value,
+                demand.local,
+                demand.value,
                 frame,
                 physical,
-                Some(ComponentCut {
-                    block: next.get() as usize,
-                    overwritten: if is_destination {
-                        overwritten.as_ref().map(|range| (range.start, range.end))
-                    } else {
-                        None
-                    },
-                }),
+                Some(demand.components),
                 out,
             )?;
-            if is_destination {
+            if demand.components.overwritten.is_some() {
                 let SourceValue::Aggregate(index) = binding.source else {
                     return Err(mismatch());
                 };
@@ -1080,6 +953,9 @@ fn headers() -> usize {
         + h::<Cut>()
         + h::<Binding>()
         + h::<ComponentCut>()
+        + h::<source_frame_demands::SourceDemand>()
+        + h::<Vec<source_frame_demands::SourceDemand>>()
+        + size_of::<std::slice::Iter<'_, source_frame_demands::SourceDemand>>()
         + h::<AggregateBindingV42>()
         + h::<Vec<AggregateBindingV42>>()
         + h::<Vec<EnumBinding>>()

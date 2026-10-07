@@ -4,6 +4,36 @@ use crate::mixed_optimizer_refinement_v26::semantics::byte_function_v30::ByteInt
 
 const LIMIT: usize = 256 * 1024 * 1024;
 
+#[test]
+fn source_frame_extraction_keeps_nominal_argument_return_and_suspended_bindings() {
+    super::super::super::invocations::tests::run_variant(LIMIT, LIMIT, true, |plan, out| {
+        with_slots(plan, out, |slots, out| {
+            let source = SourceByteProgram::derive(plan, slots, out)?;
+            let paired = PairedInvocations::derive(plan, &source, FormalIndexWidth::Bits64, out)?;
+            assert!(
+                paired
+                    .instances
+                    .iter()
+                    .flatten()
+                    .any(|row| !row.suspended.is_empty())
+            );
+            assert!(
+                paired
+                    .instances
+                    .iter()
+                    .flatten()
+                    .any(|row| !row.arguments.is_empty())
+            );
+            paired.emit(out)?;
+            assert!(out.text.contains("invocation_paired_initial_trace_0_v36"));
+            assert!(!out.text.contains("assume("));
+            Ok(())
+        })
+    })
+    .0
+    .unwrap();
+}
+
 fn check_trace_induction(text: &str, roots: usize) {
     for root in 0..roots {
         let prefix_name = format!("invocation_paired_source_defined_prefix_{root}_v79");
@@ -94,6 +124,9 @@ fn original_mir_paired_descriptor_entry_headers_have_an_independent_layout_oracl
         + envelope::<Cut>()
         + envelope::<Binding>()
         + envelope::<ComponentCut>()
+        + envelope::<source_frame_demands::SourceDemand>()
+        + envelope::<Vec<source_frame_demands::SourceDemand>>()
+        + size_of::<std::slice::Iter<'_, source_frame_demands::SourceDemand>>()
         + envelope::<AggregateBindingV42>()
         + envelope::<Vec<AggregateBindingV42>>()
         + envelope::<Vec<EnumBinding>>()
