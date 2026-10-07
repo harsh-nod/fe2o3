@@ -810,12 +810,71 @@ not a result of the lower-only tests. Diagnostic copy classification does not gr
 machine acceptance. These newer components require an integrated replay; the
 signed nine-family source does not qualify them by inheritance.
 
+## Independent Arena And Retained Producer Checkpoint
+
+Snapshot 95 adds an independent-publication Arena profile alongside the ordered
+profile. Its fifteen-stage CPU qualification passed, including 2,582 runtime
+tests and 2,103 KFD tests. The retained failed development snapshots remain
+failures in `independent92-95-cpu-evidence.tar.gz` (SHA-256
+`8e7ac79d71c68778ab032d80ae990c7310c6bc11e8b5cb0873c3ad810a34dbe0`).
+This is still a finite, single-use 1,024-member Arena, not rolling admission or
+evidence of 1,024 simultaneous GPU dispatches.
+
+Snapshot 98 connects that profile to an actual compiler-bound application caller.
+Its observations describe original publication, Pending and completion receipts;
+an earlier published member must actually remain Pending after a later member's
+observed completion to produce an out-of-order witness. No witness remains an
+unqualified result. Observation counters do not measure kernel duration or
+physical concurrency and cannot release native ownership. The twelve-stage CPU
+batch passed the genuine `cargo-fe2o3 check --bins` fixture binding, 28 Arena
+controls, fourteen caller controls, ninety scope tests, 2,591 runtime tests,
+379 host tests and all runtime/host doctests. All twelve original process groups
+closed, and the final initial-root census found no target references.
+`independent98-cpu-evidence.tar.gz` is 1,833,380 bytes, SHA-256
+`3f37f9b5078561b44103610a5b711c25425649b5b9be7d618948f4831641eee3`.
+Its independent archive readback is `source98-local-readback.tar.gz`, SHA-256
+`b2fa59f35ee615aa9f8a1369aa28895643fbfa4e0b77bd58cbf81cb9a31482eb`.
+
+Snapshot 100 retains the actual completed producer DATA and its lineage across
+two scoped completion steps. The first step validates and detaches within the
+original source bracket; the second rechecks currentness before actual disposal,
+credit release and decoding. The existing direct completion path is unchanged.
+All eleven CPU stages passed, including five retained-producer controls, eighteen
+detached-owner controls, 2,592 runtime tests and runtime doctests.
+`cpu100-retained-producer.tar.gz` is 941,616 bytes, SHA-256
+`38d2f3b034ffb667fff84e63e45d4a08dfdd753e76d58dc171853c451b72a689`.
+This is not yet producer DATA to successor kernel/copy input binding.
+
+Snapshot 96 connects the lower definite cold-device reset owner to Context and
+scoped failure settlement. Only a never-activated device with the original
+no-VM/reset evidence can take this path. Source and hold disposal precede its
+device-local failure result, allowing an unrelated branch to continue. Warm,
+published or ambiguous failures still retain ownership and fail closed. The
+inline cold/ready owner union preserves the existing size bound. Sixteen CPU
+stages passed, including 2,569 runtime tests, 2,094 KFD tests and both packages'
+doctests. `native-snapshot96-cold-runtime-cpu-evidence.tar.gz` is 1,171,363 bytes,
+SHA-256 `d62678132dad0b00cd31594fc13488cc8f456f72e0435c5d736e0324fb38f441`.
+
+Snapshot 102 independently replayed all 23 CPU stages against signed combined
+commit `2eaf58d5774b5113577cb90d94bc0a86ebc2bde8`: 2,610 runtime tests, 2,110
+KFD tests, 379 host tests, all three packages' doctests, all-target checks and
+strict runtime/KFD Clippy passed. Its SSH connection failed after the original
+supervisor had completed; the raw results, source/tool inventories and original
+process-group closure were recovered and independently audited, not inferred
+from that transport exit. `cpu102-combined.tar.gz` is 1,362,698 bytes, SHA-256
+`39aa7b3c65642f006b2177fec881ba6780b5dee7a1fa6ee3e1ca7aab6d9017ca`.
+
+Snapshot 102 does not cover the subsequent caller-98 integration. That merged
+source and its signed-source proof replay remain separate gates. None of
+these results is protected GPU execution, a reset-isolation theorem, a passing
+production runner job, or completion of A1/A2/A3.
+
 ## Open Exit Gates
 
 - A1 still needs genuine protected mixed-duration/high-depth GPU qualification
   of the final async path, not only CPU ownership and executor tests. The native
   registry fixtures include sixteen fill launches and the ordered Arena's CPU
-  controls cover 1,024 slots; neither measures thousands of GPU operations,
+  controls and independent caller cover 1,024 slots; neither measures thousands of GPU operations,
   wakeup overhead or aggregate queue/signal/kernarg retention on hardware.
   The owner-array ceiling is not a whole-process memory bound. The generated
   registry and Arena profiles have finite single-use slots. Thousands of
@@ -827,11 +886,11 @@ signed nine-family source does not qualify them by inheritance.
   General repeated multistage dataflow, measured compute/copy overlap and
   complete executable DAG/settlement refinement are not established by the
   scoped producer/live-validation and planner-input proof campaigns.
-- A3 now has checked versioned replica/group bookkeeping and CPU controls, but
-  still needs complete native cross-device DAG integration and per-device
-  failure isolation with partial-run reporting. A
-  terminal child failure currently makes the entire multi-device router terminal;
-  safe global fail-stop is not unrelated-device continuation. Protected
+- A3 now has checked versioned replica/group bookkeeping and a qualified CPU
+  component for definite cold pre-activation device-local failure. It still
+  needs complete native cross-device DAG integration and hardware-qualified
+  partial-run reporting. Warm, published and ambiguous terminal failures retain
+  global fail-stop; the cold path does not certify general reset independence. Protected
   all-admitted-GPU execution with measured overlap remains unqualified. Ordered
   compute-then-serial-copy roster checks do not qualify overlap or unselected GPUs.
 - Both MI300X aliases reject noninteractive sudo and the ordinary configured root

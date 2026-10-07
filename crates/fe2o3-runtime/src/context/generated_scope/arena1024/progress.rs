@@ -89,7 +89,13 @@ impl<P: RuntimeGfx942RegistryCompletionCarrierV1> RuntimeGfx942Arena1024ScopeV1<
         root.state = State::Unknown;
         let mut transitions = self
             .context
-            .progress_gfx942_arena_round_v1(prepared, &root.roster, &root.hold, &mut root.copied)
+            .progress_gfx942_arena_round_v1(
+                prepared,
+                &root.roster,
+                &root.hold,
+                &mut root.copied,
+                root.observations.as_mut(),
+            )
             .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
         transitions += results::decode_copied(&mut root.cells, &root.copied, |index| {
             let member = prepared.value_mut_v1().members[index]

@@ -24,9 +24,12 @@ mod arena1024;
 mod cancellation;
 mod cohort3;
 mod registry4;
+pub(in crate::context) use arena1024::ArenaObservationsV1;
+pub(crate) use arena1024::ArenaReceiptEventV1;
 pub use arena1024::{
     RuntimeGfx942Arena1024ResultFutureV1, RuntimeGfx942Arena1024ScopeV1,
-    RuntimeGfx942Arena1024TicketV1,
+    RuntimeGfx942Arena1024TicketV1, RuntimeGfx942ArenaMemberObservationV1,
+    RuntimeGfx942ArenaObservationV1, RuntimeGfx942ArenaOutOfOrderObservationV1,
 };
 pub use cancellation::RuntimeGfx942ScopedCancelResultV1;
 pub use cohort3::RuntimeGfx942ScopedCohort3TicketV1;

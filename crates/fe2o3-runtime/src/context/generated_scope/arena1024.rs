@@ -8,8 +8,15 @@ use crate::{RuntimeGfx942GeneratedArena1024V1 as Arena, RuntimeGfx942RegistryCom
 use fe2o3_resource_accounting::{HostMetadataTableV1, ResourceCreditAccountV1};
 use std::{future::Future, pin::Pin, task::Poll};
 
+pub(in crate::context) mod observation;
 mod progress;
 mod results;
+pub(crate) use observation::Event as ArenaReceiptEventV1;
+pub(in crate::context) use observation::Observations as ArenaObservationsV1;
+pub use observation::{
+    RuntimeGfx942ArenaMemberObservationV1, RuntimeGfx942ArenaObservationV1,
+    RuntimeGfx942ArenaOutOfOrderObservationV1,
+};
 #[cfg(test)]
 mod tests;
 use results::{Cell, ReplyPayload};
@@ -31,6 +38,7 @@ struct Root<P> {
     state: State,
     cells: HostMetadataTableV1<Option<Cell>>,
     copied: HostMetadataTableV1<bool>,
+    observations: Option<observation::Observations>,
     // All original replies/futures above drop before their shared payload charge.
     payload: Rc<ReplyPayload>,
 }
@@ -311,6 +319,11 @@ impl<'scope, P: RuntimeGfx942RegistryCompletionCarrierV1>
         })?;
         let copied = HostMetadataTableV1::try_new(SLOTS, Some(&self.metadata), || false)
             .map_err(|_| RuntimeGfx942ScopeErrorV1::Capacity)?;
+        let observations = if self.profile == GeneratedProfileV1::IndependentFillArena1024 {
+            Some(observation::Observations::new(&self.metadata)?)
+        } else {
+            None
+        };
         let roster = self
             .context
             .reserve_gfx942_arena_v1(prepared)
@@ -336,6 +349,7 @@ impl<'scope, P: RuntimeGfx942RegistryCompletionCarrierV1>
             state: State::Adopting,
             cells: results.cells,
             copied,
+            observations,
             payload: results.payload,
         });
         Ok(())

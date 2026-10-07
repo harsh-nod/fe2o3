@@ -1,5 +1,21 @@
 use super::*;
+use crate::ArenaReceiptEventV1 as Event;
 use fe2o3_kfd::Gfx942NativeFillArenaPollV1;
+
+// Called only after the existing selected step succeeds. Neither this classifier
+// nor its inert output is usable as a receipt or permits another native step.
+fn event_after<B, C>(
+    was_unpublished: bool,
+    was_published: bool,
+    receipt: &ReceiptV1<B, C>,
+) -> Event {
+    match receipt {
+        ReceiptV1::Published(_) if was_unpublished => Event::Published,
+        ReceiptV1::Published(_) if was_published => Event::Pending,
+        ReceiptV1::Completed(_) if was_published => Event::Completed,
+        _ => Event::None,
+    }
+}
 
 impl KfdRuntimeBackendV1 {
     pub(crate) fn progress_generated_arena_recipe_v1(
@@ -7,7 +23,7 @@ impl KfdRuntimeBackendV1 {
         plan: &GeneratedShellPlanV1,
         roster: &GeneratedHostRosterV1,
         index: usize,
-    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+    ) -> Result<(bool, Event), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.validate_arena_v1(plan, roster)?;
         if index >= SLOTS {
             return Err(Self::rejected(
@@ -15,6 +31,7 @@ impl KfdRuntimeBackendV1 {
                 "arena recipe index",
             ));
         }
+        let mut observation = (false, Event::None);
         let result = catch_unwind(AssertUnwindSafe(|| {
             self.check_arena_device_v1(plan)?;
             let arena = self
@@ -27,6 +44,8 @@ impl KfdRuntimeBackendV1 {
                 .as_mut()
                 .unwrap_or_else(|| std::process::abort());
             let cell = &mut arena.storage.cells[index];
+            let was_unpublished = matches!(cell.receipt, ReceiptV1::Ready | ReceiptV1::RetryReady);
+            let was_published = matches!(cell.receipt, ReceiptV1::Published(_));
             #[allow(
                 clippy::result_large_err,
                 reason = "original completion is retained without post-publication allocation"
@@ -66,15 +85,22 @@ impl KfdRuntimeBackendV1 {
                 recycle,
             )
             .map_err(|error| self.generated_native_error_v1("arena progress", error))?;
+            let receipt = &self
+                .generated_shells
+                .get(&plan.key)
+                .and_then(|record| record.arena.as_ref())
+                .unwrap_or_else(|| std::process::abort())
+                .storage
+                .cells[index]
+                .receipt;
+            let event = event_after(was_unpublished, was_published, receipt);
+            let recycled = matches!(receipt, ReceiptV1::Recycled);
             self.check_arena_device_v1(plan)?;
+            observation = (recycled, event);
             Ok(())
         }));
         self.finish_generated_native_call_v1(result)?;
-        Ok(self
-            .generated_shells
-            .get(&plan.key)
-            .and_then(|record| record.arena.as_ref())
-            .is_some_and(|arena| matches!(arena.storage.cells[index].receipt, ReceiptV1::Recycled)))
+        Ok(observation)
     }
 
     pub(crate) fn read_generated_arena_recipe_v1(
@@ -126,5 +152,37 @@ impl KfdRuntimeBackendV1 {
             Ok(())
         }));
         self.finish_generated_native_call_v1(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn arena_observation_classifies_only_successful_original_receipt_transitions() {
+        let published = ReceiptV1::<(), ()>::Published(());
+        assert!(matches!(
+            event_after(true, false, &published),
+            Event::Published
+        ));
+        assert!(matches!(
+            event_after(false, true, &published),
+            Event::Pending
+        ));
+        assert!(matches!(
+            event_after(false, true, &ReceiptV1::<(), ()>::Completed(())),
+            Event::Completed
+        ));
+        for receipt in [
+            ReceiptV1::<(), ()>::Ready,
+            ReceiptV1::RetryReady,
+            ReceiptV1::Recycled,
+            ReceiptV1::HandedToLower(receipt::HandoffV1::Poll),
+        ] {
+            assert!(matches!(event_after(true, false, &receipt), Event::None));
+            assert!(matches!(event_after(false, true, &receipt), Event::None));
+        }
+        assert!(matches!(event_after(false, false, &published), Event::None));
     }
 }

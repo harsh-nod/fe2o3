@@ -29,6 +29,10 @@ path = "src/native_registry4_repeat2.rs"
 name = "native-conditional-fill-registry16"
 path = "src/native_registry16.rs"
 
+[[bin]]
+name = "native-independent-fill-arena1024"
+path = "src/native_independent_arena.rs"
+
 [workspace]
 
 [features]

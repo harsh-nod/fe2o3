@@ -30,6 +30,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
         roster: &GeneratedHostRosterV1,
         hold: &ContextUnpublishedHoldV1,
         copied: &mut [bool],
+        mut observations: Option<&mut super::super::generated_scope::ArenaObservationsV1>,
     ) -> Result<usize, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
         let scope = self.generated_adoption_scope_for_hold_v1(hold)?;
         let mut transitions = 0;
@@ -56,11 +57,14 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 if *was_copied {
                     continue;
                 }
-                if !self
+                let (recycled, event) = self
                     .backend
                     .progress_generated_arena_recipe_v1(&plan, roster, index)
-                    .map_err(map_backend_error)?
-                {
+                    .map_err(map_backend_error)?;
+                if let Some(observations) = &mut observations {
+                    observations.record(index, event).map_err(invalid)?;
+                }
+                if !recycled {
                     continue;
                 }
                 let mut read = false;

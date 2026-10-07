@@ -191,6 +191,7 @@ fn unknown_child(mode: &str, marker: &str) -> ! {
         epoch,
         context: &mut context,
         root: Some(Root {
+            observations: None,
             prepared: None,
             storage: None,
             roster,
