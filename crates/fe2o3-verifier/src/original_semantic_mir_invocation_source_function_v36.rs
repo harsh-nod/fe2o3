@@ -862,6 +862,120 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             out,
             "proof fn invocation_source_micro_run_composes_{r}_{i}_v292(cursor: InvocationSourceMicroStateV36, first: nat, second: nat, little_endian: bool)\n ensures invocation_source_micro_run_{r}_{i}_v36(cursor, first + second, little_endian) == invocation_source_micro_run_{r}_{i}_v36(invocation_source_micro_run_{r}_{i}_v36(cursor, first, little_endian), second, little_endian),\n decreases first,\n{{\n if first > 0 && cursor.source.machine.valid {{\n invocation_source_micro_run_composes_{r}_{i}_v292(invocation_source_micro_step_{r}_{i}_v36(cursor, little_endian), (first - 1) as nat, second, little_endian);\n }}\n}}\n"
         )
+        .map_err(|_| out.error())?;
+        write!(
+            out,
+            r#"proof fn invocation_source_micro_step_history_{r}_{i}_v293(c: InvocationSourceMicroStateV36, e: bool)
+    ensures {{
+        let n = invocation_source_micro_step_{r}_{i}_v36(c, e);
+        let l = c.observations.len() as int;
+        n == invocation_source_micro_refused_v36(c)
+        || (n.next_statement == c.next_statement + 1
+            && n.observations.len() == l + 1
+            && n.observations.take(l) == c.observations
+            && n.observations[l].root == {r}
+            && n.observations[l].instance == {i}
+            && n.observations[l].statement == c.next_statement
+            && n.observations[l].before == c.source
+            && n.observations[l].after == n.source)
+    }},
+{{
+    reveal(invocation_source_micro_step_{r}_{i}_v36);
+    reveal(invocation_source_micro_record_v36);
+    reveal(invocation_source_micro_refused_v36);
+    let n = invocation_source_micro_step_{r}_{i}_v36(c, e);
+    let l = c.observations.len() as int;
+    if n.observations.len() == l + 1 {{
+        assert(n.observations.take(l) =~= c.observations);
+    }} else {{
+        assert(n == invocation_source_micro_refused_v36(c));
+    }}
+}}
+proof fn invocation_source_micro_run_history_{r}_{i}_v293(c: InvocationSourceMicroStateV36, f: nat, e: bool)
+    ensures {{
+        let out = invocation_source_micro_run_{r}_{i}_v36(c, f, e);
+        let l = c.observations.len() as int;
+        let d = out.observations.len() as int - l;
+        0 <= d <= f as int
+        && out.observations.take(l) == c.observations
+        && out.next_statement == c.next_statement + d
+        && (forall|j: int| #![trigger out.observations[l + j]] 0 <= j < d ==> {{
+            let row = out.observations[l + j];
+            row.root == {r} && row.instance == {i}
+            && row.statement == c.next_statement + j
+            && row.before == invocation_source_micro_run_{r}_{i}_v36(c, j as nat, e).source
+            && row.after == invocation_source_micro_run_{r}_{i}_v36(c, (j + 1) as nat, e).source
+        }})
+        && (out.source.machine.valid ==> d == f as int)
+    }},
+    decreases f,
+{{
+    reveal_with_fuel(invocation_source_micro_run_{r}_{i}_v36, 2);
+    let out = invocation_source_micro_run_{r}_{i}_v36(c, f, e);
+    let l = c.observations.len() as int;
+    if f == 0 || !c.source.machine.valid {{
+        assert(out == c);
+        assert(out.observations.take(l) =~= c.observations);
+    }} else {{
+        let n = invocation_source_micro_step_{r}_{i}_v36(c, e);
+        invocation_source_micro_step_history_{r}_{i}_v293(c, e);
+        let remaining = (f - 1) as nat;
+        assert(out == invocation_source_micro_run_{r}_{i}_v36(n, remaining, e));
+        if n == invocation_source_micro_refused_v36(c) {{
+            reveal(invocation_source_micro_refused_v36);
+            reveal(invocation_source_byte_refused_v36);
+            reveal(invocation_source_refused_v36);
+            assert(!n.source.machine.valid);
+            assert(out == n);
+            assert(out.observations.take(l) =~= c.observations);
+        }} else {{
+            invocation_source_micro_run_history_{r}_{i}_v293(n, remaining, e);
+            let d1 = out.observations.len() as int - n.observations.len() as int;
+            let d = out.observations.len() as int - l;
+            assert(n.observations.len() == l + 1);
+            assert(d == 1 + d1);
+            assert forall|k: int| 0 <= k < l implies
+                out.observations[k] == c.observations[k] by {{
+                assert(out.observations[k] == n.observations[k]);
+                assert(n.observations[k] == c.observations[k]);
+            }}
+            assert(out.observations.take(l) =~= c.observations);
+            assert(out.observations[l] == n.observations[l]);
+            assert forall|j: int| #![trigger out.observations[l + j]] 0 <= j < d implies {{
+                let row = out.observations[l + j];
+                row.root == {r} && row.instance == {i}
+                && row.statement == c.next_statement + j
+                && row.before == invocation_source_micro_run_{r}_{i}_v36(c, j as nat, e).source
+                && row.after == invocation_source_micro_run_{r}_{i}_v36(c, (j + 1) as nat, e).source
+            }} by {{
+                if j == 0 {{
+                    assert(out.observations[l] == n.observations[l]);
+                    assert(invocation_source_micro_run_{r}_{i}_v36(c, 0, e) == c);
+                    assert(invocation_source_micro_run_{r}_{i}_v36(c, 1, e) == n);
+                }} else {{
+                    let k = (j - 1) as nat;
+                    assert(0 <= j - 1 < d1);
+                    let row = out.observations[(l + 1) + (j - 1)];
+                    assert(row.root == {r} && row.instance == {i}
+                        && row.statement == n.next_statement + (j - 1)
+                        && row.before == invocation_source_micro_run_{r}_{i}_v36(n, k, e).source
+                        && row.after == invocation_source_micro_run_{r}_{i}_v36(n, k + 1, e).source);
+                    invocation_source_micro_run_composes_{r}_{i}_v292(c, 1, k, e);
+                    invocation_source_micro_run_composes_{r}_{i}_v292(c, 1, k + 1, e);
+                    assert(invocation_source_micro_run_{r}_{i}_v36(c, 1, e) == n);
+                    assert(1 + k == j);
+                    assert(1 + (k + 1) == j + 1);
+                }}
+            }}
+            if out.source.machine.valid {{
+                assert(d1 == remaining as int);
+                assert(d == f as int);
+            }}
+        }}
+    }}
+}}
+"#
+        )
         .map_err(|_| out.error())
     }
 }
@@ -975,6 +1089,14 @@ spec fn invocation_source_block_refused_v36(cursor: InvocationSourceMicroStateV3
 #[cfg(test)]
 #[path = "original_semantic_mir_invocation_source_run_v292_tests.rs"]
 mod run_tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_invocation_source_history_v293_tests.rs"]
+mod history_tests;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_invocation_source_history_nonvacuity_v293_tests.rs"]
+mod history_nonvacuity_tests;
 
 #[cfg(test)]
 pub(super) mod tests {

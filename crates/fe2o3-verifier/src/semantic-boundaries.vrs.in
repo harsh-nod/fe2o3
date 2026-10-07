@@ -1,0 +1,86 @@
+// Test-only boundary template emitted by the diagnostic model exporter.
+// Proof qualification is separate.
+// Replace ROOT and INSTANCE only from the authenticated generated instance
+// roster, then insert inside the same complete model's verus! block.
+// These cases do not construct an active source or exercise a failing statement.
+
+proof fn history_zero_fuel_ROOT_INSTANCE_v293(c: InvocationSourceMicroStateV36, e: bool)
+    ensures invocation_source_micro_run_ROOT_INSTANCE_v36(c, 0, e) == c,
+{
+    reveal_with_fuel(invocation_source_micro_run_ROOT_INSTANCE_v36, 1);
+}
+
+proof fn history_constructed_invalid_ROOT_INSTANCE_v293(c: InvocationSourceMicroStateV36, f: nat, e: bool)
+    ensures {
+        let invalid = InvocationSourceMicroStateV36 {
+            source: invocation_source_byte_refused_v36(c.source),
+            next_statement: c.next_statement,
+            observations: c.observations,
+        };
+        invocation_source_micro_run_ROOT_INSTANCE_v36(invalid, f, e) == invalid
+    },
+{
+    let invalid = InvocationSourceMicroStateV36 {
+        source: invocation_source_byte_refused_v36(c.source),
+        next_statement: c.next_statement,
+        observations: c.observations,
+    };
+    reveal(invocation_source_byte_refused_v36);
+    reveal(invocation_source_refused_v36);
+    assert(!invalid.source.machine.valid);
+    reveal_with_fuel(invocation_source_micro_run_ROOT_INSTANCE_v36, 1);
+}
+
+proof fn history_arbitrary_old_prefix_ROOT_INSTANCE_v293(
+    source: InvocationSourceByteStateV36,
+    next_statement: int,
+    old: Seq<InvocationSourceStatementObservationV36>,
+    f: nat,
+    e: bool,
+)
+    ensures {
+        let c = InvocationSourceMicroStateV36 { source, next_statement, observations: old };
+        let out = invocation_source_micro_run_ROOT_INSTANCE_v36(c, f, e);
+        out.observations.take(old.len() as int) == old
+        && out.next_statement == next_statement + out.observations.len() as int - old.len() as int
+    },
+{
+    let c = InvocationSourceMicroStateV36 { source, next_statement, observations: old };
+    invocation_source_micro_run_history_ROOT_INSTANCE_v293(c, f, e);
+}
+
+proof fn history_negative_index_ROOT_INSTANCE_v293(
+    source: InvocationSourceByteStateV36,
+    old: Seq<InvocationSourceStatementObservationV36>,
+    e: bool,
+)
+    ensures {
+        let c = InvocationSourceMicroStateV36 { source, next_statement: -1, observations: old };
+        let n = invocation_source_micro_step_ROOT_INSTANCE_v36(c, e);
+        n == invocation_source_micro_refused_v36(c)
+        && n.observations == old
+        && n.next_statement == -1
+    },
+{
+    reveal(invocation_source_micro_step_ROOT_INSTANCE_v36);
+    reveal(invocation_source_micro_refused_v36);
+}
+
+proof fn history_mismatched_index_ROOT_INSTANCE_v293(
+    source: InvocationSourceByteStateV36,
+    old: Seq<InvocationSourceStatementObservationV36>,
+    e: bool,
+)
+    ensures {
+        let c = InvocationSourceMicroStateV36 {
+            source, next_statement: old.len() as int + 1, observations: old,
+        };
+        let n = invocation_source_micro_step_ROOT_INSTANCE_v36(c, e);
+        n == invocation_source_micro_refused_v36(c)
+        && n.observations == old
+        && n.next_statement == old.len() as int + 1
+    },
+{
+    reveal(invocation_source_micro_step_ROOT_INSTANCE_v36);
+    reveal(invocation_source_micro_refused_v36);
+}

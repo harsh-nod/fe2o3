@@ -37,7 +37,13 @@ fn checked_transition_model_v288(
                                     && let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind()
                                     && checked.operation() == SemanticCheckedBinaryOpV1::Add
                                 {
-                                    expected.push(format!("checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260("));
+                                    expected.push((
+                                        format!("checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260("),
+                                        format!("checked_add_actual_micro_step_{root}_{instance}_{block}_{statement}_v293("),
+                                        row.blocks.start + block,
+                                        block,
+                                        statement,
+                                    ));
                                 }
                             }
                         }
@@ -76,13 +82,23 @@ fn checked_transition_model_v288(
                 }
                 let witnesses = program.emit_checked_local_add_proofs_v288(out)?;
                 assert_eq!(witnesses, expected.len());
-                for name in expected { assert_eq!(out.text.matches(&format!("proof fn {name}")).count(), 1); }
+                for (name, micro, pc, block, statement) in expected {
+                    assert_eq!(out.text.matches(&format!("proof fn {name}")).count(), 1);
+                    let marker = format!("proof fn {micro}");
+                    assert_eq!(out.text.matches(&marker).count(), 1);
+                    let after = out.text.split_once(&marker).unwrap().1;
+                    let declaration = after.split("\nproof fn ").next().unwrap();
+                    assert!(declaration.contains(&format!("c.source.machine.pc == {pc}, c.next_statement == {statement},")));
+                    assert!(declaration.contains(&format!("n.observations[l].block == {block}")));
+                }
                 super::super::support_closure::retain_referenced(out)?;
                 writeln!(out, "}}").map_err(|_| out.error())?;
                 drop(physical);
                 out.budget.release_storage(storage.retained_storage())?;
                 assert_eq!(out.text.matches("proof fn checked_add_actual_schema_").count(), witnesses);
                 assert_eq!(out.text.matches("proof fn checked_add_actual_step_").count(), witnesses);
+                assert_eq!(out.text.matches("proof fn checked_add_actual_micro_step_").count(), witnesses);
+                assert_eq!(out.text.matches("proof fn checked_add_actual_prefix_").count(), witnesses);
                 inspect(&out.text, witnesses);
                 Ok(())
             })
@@ -101,6 +117,8 @@ fn checked_transition_proofs_do_not_relabel_other_operations_as_addition() {
             assert!(model.contains("InvocationSourceByteEventV36::Checked {"));
             assert!(!model.contains("proof fn checked_add_actual_step_"));
             assert!(!model.contains("proof fn checked_add_actual_schema_"));
+            assert!(!model.contains("proof fn checked_add_actual_micro_step_"));
+            assert!(!model.contains("proof fn checked_add_actual_prefix_"));
         });
     }
 }
@@ -125,6 +143,8 @@ fn production_checked_transition_generation_has_exact_resource_limits() {
                 super::super::source_function::tests::with_slots(plan, out, |slots, out| {
                     let program = SourceByteProgram::derive(plan, slots, out)?;
                     assert!(program.emit_checked_local_add_proofs_v288(out)? > 0);
+                    assert!(out.text.contains("proof fn checked_add_actual_micro_step_"));
+                    assert!(out.text.contains("proof fn checked_add_actual_prefix_"));
                     Ok(())
                 })
             },
@@ -178,6 +198,8 @@ fn expanded_production_support_emits_checked_transition_consumers() {
                     )?;
                     generation.emit_support(out)?;
                     assert!(out.text.contains("proof fn checked_add_actual_step_"));
+                    assert!(out.text.contains("proof fn checked_add_actual_micro_step_"));
+                    assert!(out.text.contains("proof fn checked_add_actual_prefix_"));
                     assert!(
                         out.text
                             .contains("invocation_source_checked_add_local_step_v266(source,")

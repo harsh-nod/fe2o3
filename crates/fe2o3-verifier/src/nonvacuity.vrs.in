@@ -1,0 +1,153 @@
+// Unexecuted test-only witness. All substituted coordinates come from one actual
+// SourceByteProgram and its original semantic MIR, never supplied by a caller.
+spec fn history_witness_initial_@@R@@_@@I@@_@@B@@_v293(populated: bool)
+    -> InvocationSourceByteStateV36 {
+    let execution = MemoryExecutionContextV37 {
+        rank: 1, extent: seq![1int, 1int, 1int], workgroup: seq![1int, 1int, 1int],
+        group: seq![0int, 0int, 0int], local: seq![0int, 0int, 0int],
+        ieee_operators: |operation: int, bits: int, a: int, b: int, c: int, mode: int| 0int,
+    };
+@@FRAME_BINDINGS@@
+    InvocationSourceByteStateV36 {
+        machine: MemoryStateV30 {
+            pc: @@PC@@,
+            values: Seq::new(@@N@@, |local: int| if populated {
+                MemoryValueV30::Scalar(0)
+            } else {
+                MemoryValueV30::Undefined
+            }),
+            memory: ByteMemoryV30 { live: Map::empty(), view_contracts: byte_empty_view_contracts_v38() },
+            generations: Map::empty(), frames, valid: true,
+        },
+        slots: Map::empty(), objects: Map::empty(),
+        logical: invocation_source_logical_initial_v38(@@N@@),
+    }
+}
+
+proof fn history_witness_initial_active_@@R@@_@@I@@_@@B@@_v293(populated: bool)
+    ensures {
+        let source = history_witness_initial_@@R@@_@@I@@_@@B@@_v293(populated);
+        source.machine.valid
+        && invocation_source_byte_state_well_formed_v36(source)
+        && invocation_source_active_@@R@@_@@I@@_v36(source)
+        && source.machine.pc == @@PC@@
+        && source.machine.values.len() == @@N@@
+        && invocation_source_statement_count_@@R@@_@@I@@_v36(source.machine.pc) == @@COUNT@@
+    },
+{
+    let source = history_witness_initial_@@R@@_@@I@@_@@B@@_v293(populated);
+    reveal(history_witness_initial_@@R@@_@@I@@_@@B@@_v293);
+    assert(match source.machine.frames.execution {
+        Some(execution) => byte_execution_well_formed_v37(execution),
+        None => false,
+    });
+@@FRAME_FACTS@@
+    assert(byte_frame_runtime_well_formed_v30(source.machine.frames));
+    assert(source.machine.memory.live =~= Map::empty());
+    assert(source.slots =~= Map::empty());
+    assert(source.objects =~= Map::empty());
+    assert(source.logical.execution_pending =~= Map::empty());
+    assert(invocation_source_byte_state_well_formed_v36(source));
+    reveal(invocation_source_active_@@R@@_@@I@@_v36);
+    reveal(invocation_source_statement_count_@@R@@_@@I@@_v36);
+}
+
+proof fn history_witness_undefined_statement_records_@@R@@_@@I@@_@@B@@_v293(extra: nat)
+    ensures {
+        let source = history_witness_initial_@@R@@_@@I@@_@@B@@_v293(false);
+        let start = invocation_source_micro_begin_@@R@@_@@I@@_v36(source);
+        let one = invocation_source_micro_run_@@R@@_@@I@@_v36(start, 1, true);
+        invocation_source_active_@@R@@_@@I@@_v36(source)
+        && start.source == source && start.source.machine.valid
+        && !one.source.machine.valid
+        && one.source == invocation_source_byte_refused_v36(source)
+        && one.next_statement == 1 && one.observations.len() == 1
+        && one.observations[0].root == @@R@@ && one.observations[0].instance == @@I@@
+        && one.observations[0].block == @@B@@ && one.observations[0].statement == 0
+        && one.observations[0].event == invocation_source_byte_event_@@R@@_@@I@@_v36(@@B@@, 0)
+        && one.observations[0].before == source && one.observations[0].after == one.source
+        && invocation_source_micro_run_@@R@@_@@I@@_v36(start, 1 + extra, true) == one
+    },
+{
+    history_witness_initial_active_@@R@@_@@I@@_@@B@@_v293(false);
+    let source = history_witness_initial_@@R@@_@@I@@_@@B@@_v293(false);
+    let start = invocation_source_micro_begin_@@R@@_@@I@@_v36(source);
+    assert(source.machine.values[@@FIRST_INPUT@@] == MemoryValueV30::Undefined);
+    assert(!invocation_source_byte_value_typed_v36(source.machine.values[@@FIRST_INPUT@@], 32));
+    reveal(invocation_source_scalar_@@R@@_@@I@@_@@B@@_0_v36);
+    assert(invocation_source_scalar_@@R@@_@@I@@_@@B@@_0_v36(source)
+        == invocation_source_byte_refused_v36(source));
+    reveal(invocation_source_micro_begin_@@R@@_@@I@@_v36);
+    reveal(invocation_source_micro_step_@@R@@_@@I@@_v36);
+    reveal(invocation_source_micro_record_v36);
+    let one = invocation_source_micro_step_@@R@@_@@I@@_v36(start, true);
+    assert(one.observations.len() == 1);
+    assert(!one.source.machine.valid);
+    // A record is appended despite the scalar operation having refused.
+    assert(one != invocation_source_micro_refused_v36(start));
+    reveal_with_fuel(invocation_source_micro_run_@@R@@_@@I@@_v36, 2);
+    invocation_source_micro_run_composes_@@R@@_@@I@@_v292(start, 1, extra, true);
+}
+
+proof fn history_witness_actual_valid_prefix_@@R@@_@@I@@_@@B@@_v293()
+    ensures {
+        let source = history_witness_initial_@@R@@_@@I@@_@@B@@_v293(true);
+        let start = invocation_source_micro_begin_@@R@@_@@I@@_v36(source);
+        let end = invocation_source_micro_run_@@R@@_@@I@@_v36(start, @@COUNT@@, true);
+        invocation_source_active_@@R@@_@@I@@_v36(source)
+        && invocation_source_active_@@R@@_@@I@@_v36(end.source)
+        && end.source.machine.valid && end.source.machine.pc == @@PC@@
+        && end.next_statement == @@COUNT@@ && end.observations.len() == @@COUNT@@
+        && end.observations[@@LAST@@].root == @@R@@ && end.observations[@@LAST@@].instance == @@I@@
+        && end.observations[@@LAST@@].block == @@B@@ && end.observations[@@LAST@@].statement == @@LAST@@
+        && end.observations[@@LAST@@].before.machine.valid
+        && end.observations[@@LAST@@].after == end.source
+        && end.observations[@@LAST@@].after.machine.valid
+    },
+{
+    history_witness_initial_active_@@R@@_@@I@@_@@B@@_v293(true);
+    let source = history_witness_initial_@@R@@_@@I@@_@@B@@_v293(true);
+    let start = invocation_source_micro_begin_@@R@@_@@I@@_v36(source);
+    reveal(invocation_source_micro_begin_@@R@@_@@I@@_v36);
+    reveal(invocation_source_micro_step_@@R@@_@@I@@_v36);
+    reveal(invocation_source_micro_record_v36);
+    assert(start.source == source);
+    let c0 = start;
+@@ACTUAL_PREFIX_STEPS@@
+    assert(invocation_source_micro_run_@@R@@_@@I@@_v36(start, @@COUNT@@, true) == c@@COUNT@@);
+}
+
+proof fn history_witness_at_count_refuses_without_record_@@R@@_@@I@@_@@B@@_v293()
+    ensures {
+        let start = invocation_source_micro_begin_@@R@@_@@I@@_v36(
+            history_witness_initial_@@R@@_@@I@@_@@B@@_v293(true));
+        let end = invocation_source_micro_run_@@R@@_@@I@@_v36(start, @@COUNT@@, true);
+        let refused = invocation_source_micro_step_@@R@@_@@I@@_v36(end, true);
+        invocation_source_active_@@R@@_@@I@@_v36(end.source)
+        && end.next_statement == invocation_source_statement_count_@@R@@_@@I@@_v36(end.source.machine.pc)
+        && end.next_statement == end.observations.len()
+        && refused == invocation_source_micro_refused_v36(end)
+        && !refused.source.machine.valid
+        && refused.observations == end.observations
+        && refused.next_statement == end.next_statement
+        && refused.observations.len() == @@COUNT@@
+        && refused.observations[@@LAST@@].after.machine.valid
+        && refused.observations[@@LAST@@].after != refused.source
+        && invocation_source_micro_run_@@R@@_@@I@@_v36(start, @@COUNT_PLUS_ONE@@, true) == refused
+    },
+{
+    history_witness_actual_valid_prefix_@@R@@_@@I@@_@@B@@_v293();
+    let start = invocation_source_micro_begin_@@R@@_@@I@@_v36(
+        history_witness_initial_@@R@@_@@I@@_@@B@@_v293(true));
+    let end = invocation_source_micro_run_@@R@@_@@I@@_v36(start, @@COUNT@@, true);
+    reveal(invocation_source_statement_count_@@R@@_@@I@@_v36);
+    reveal(invocation_source_micro_step_@@R@@_@@I@@_v36);
+    reveal(invocation_source_micro_refused_v36);
+    reveal(invocation_source_byte_refused_v36);
+    let refused = invocation_source_micro_step_@@R@@_@@I@@_v36(end, true);
+    assert(refused.observations == end.observations);
+    assert(end.observations[@@LAST@@].after.machine.valid);
+    assert(!refused.source.machine.valid);
+    invocation_source_micro_run_composes_@@R@@_@@I@@_v292(start, @@COUNT@@, 1, true);
+    reveal_with_fuel(invocation_source_micro_run_@@R@@_@@I@@_v36, 2);
+}

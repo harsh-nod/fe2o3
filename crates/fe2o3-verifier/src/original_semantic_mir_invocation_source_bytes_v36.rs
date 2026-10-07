@@ -300,12 +300,13 @@ impl Event {
         instance: usize,
         block: usize,
         statement: usize,
+        pc: Option<usize>,
         out: &mut Writer<'_, '_>,
     ) -> Result<bool> {
         out.budget.charge_work(1)?;
         match self {
             Self::Checked(checked) => {
-                checked.emit_local_add_proofs_v288(root, instance, block, statement, out)
+                checked.emit_local_add_proofs_v288(root, instance, block, statement, pc, out)
             }
             _ => Ok(false),
         }

@@ -126,7 +126,17 @@ pub(crate) fn generate_refinement_v36(
     endianness: fe2o3_kernel_ir::EndiannessV2,
     out: &mut Writer<'_, '_>,
 ) -> Result<[usize; 6]> {
-    generate_refinement_inner_v49(relation, launches, width, endianness, None, &[], out)
+    generate_refinement_inner_v49(
+        relation,
+        launches,
+        width,
+        endianness,
+        None,
+        &[],
+        out,
+        #[cfg(test)]
+        None,
+    )
 }
 
 pub(crate) fn generate_refinement_typed_v49<'a, 'owner, 'rows>(
@@ -186,8 +196,21 @@ pub(crate) fn generate_refinement_typed_with_references_v69<'a, 'owner, 'rows>(
         Some(tail),
         references,
         out,
+        #[cfg(test)]
+        None,
     )
 }
+
+// Diagnostic tests borrow the actual complete generator's live owner-bound values.
+// This callback and parameter do not exist in non-test builds.
+#[cfg(test)]
+type CompleteModelHookV293<'hook> = dyn FnMut(
+        &super::invocations::InvocationPlan<'_, '_>,
+        &slots::SourceSlots<'_, '_>,
+        &source_function::SourceByteProgram<'_, '_, '_>,
+        &mut Writer<'_, '_>,
+    ) -> Result<()>
+    + 'hook;
 
 fn generate_refinement_inner_v49(
     relation: &fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>,
@@ -197,6 +220,7 @@ fn generate_refinement_inner_v49(
     tail: Option<typed_tail::Tail<'_, '_, '_>>,
     references: &[crate::SourceScalarReferenceInputV69<'_>],
     out: &mut Writer<'_, '_>,
+    #[cfg(test)] hook: Option<&mut CompleteModelHookV293<'_>>,
 ) -> Result<[usize; 6]> {
     use std::fmt::Write as _;
     out.budget.reserve_storage(generation_headers_v36())?;
@@ -316,6 +340,10 @@ fn generate_refinement_inner_v49(
     }
     reference_consumer::emit(relation, &plan, &slots, references, launches, width, out)?;
     paired.check_cut_summary_owner_v96(&slots, out)?;
+    #[cfg(test)]
+    if let Some(hook) = hook {
+        hook(&plan, &slots, &byte_source, out)?;
+    }
     support_closure::retain_referenced(out)?;
     write!(out, "}}\n").map_err(|_| out.error())?;
     drop(emitted_original);
