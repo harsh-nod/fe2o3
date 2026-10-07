@@ -53,6 +53,17 @@ struct ExpandedCallbacks {
     result: Option<Result<Option<ExpandedObservation>, String>>,
 }
 
+fn empty_reference_input_identity() -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let domain = b"FE2O3/EXPANDED-PAIR/REFERENCE-INPUTS/V279\0";
+    let mut hash = Sha256::new();
+    hash.update((domain.len() as u64).to_le_bytes());
+    hash.update(domain);
+    hash.update(8u64.to_le_bytes());
+    hash.update(0u64.to_le_bytes());
+    hash.finalize().into()
+}
+
 impl Callbacks for ExpandedCallbacks {
     fn after_analysis<'tcx>(&mut self, _: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         self.result = Some((|| {
@@ -72,7 +83,7 @@ impl Callbacks for ExpandedCallbacks {
                 let observation = transaction
                     .with_original_source_expanded_v259(
                         &mut budget,
-                        |source, original, tile, roots, target, budget| {
+                        |source, original, tile, roots, target, pair, budget| {
                             assert_eq!(roots.len(), 1);
                             assert_eq!(source.root_count(budget)?, 1);
                             assert!(matches!(
@@ -87,6 +98,55 @@ impl Callbacks for ExpandedCallbacks {
                                 ExecutionTileLayoutV1::Blocked
                             );
                             let neutral = tile.neutral_source_v162(budget)?;
+                            pair.check(source, original, tile, budget)?;
+                            let subject = pair.subject(budget)?;
+                            let ssa = source.source_ssa(budget)?;
+                            assert_eq!(subject.semantic, *ssa.source_semantic_sha256());
+                            assert_eq!(subject.ssa, *ssa.identity().as_bytes());
+                            assert_eq!(pair.reference_count(budget)?, 0);
+                            assert_eq!(subject.references, empty_reference_input_identity());
+                            assert_eq!(subject.graphs[0], *source.canonical(budget)?.identity());
+                            assert_eq!(
+                                subject.graphs[1],
+                                *neutral.output_inventory(budget)?.owner().identity()
+                            );
+                            assert_eq!(subject.graphs[2], *tile.output(budget)?.identity());
+                            assert_eq!(pair.roots(budget)?.len(), 1);
+                            let row = pair.roots(budget)?[0];
+                            let retained = source.source_launch(budget)?.roots()[0];
+                            assert_eq!(row.source_launch, retained.source_launch());
+                            assert_eq!(row.source_layout, retained.layout());
+                            assert_eq!(row.source_launch.max_grid(), [u32::MAX, 1, 1]);
+                            assert_eq!(row.source_layout.global_extents(), [0, 1, 1]);
+                            assert_eq!(
+                                row.launch,
+                                fe2o3_kernel_ir::ExplicitLaunchExtent::Exact {
+                                    rank: 1,
+                                    extents: [64 * u64::from(u32::MAX), 1, 1],
+                                }
+                            );
+                            assert_eq!(
+                                pair.runtime(budget)?,
+                                (
+                                    fe2o3_amdgcn_model::production_logical_index_width_v19(),
+                                    fe2o3_kernel_ir::EndiannessV2::Little,
+                                )
+                            );
+                            let foreign = neutral.prepare_tile_expansion_with_layout_v260(
+                                ExecutionTileLayoutV1::Blocked,
+                                budget,
+                            )?;
+                            assert_eq!(
+                                foreign.output(budget)?.identity(),
+                                tile.output(budget)?.identity()
+                            );
+                            assert!(matches!(
+                                pair.check(source, original, &foreign, budget),
+                                Err(SourceError::Unsupported(
+                                    "expanded pair input owner or runtime differs"
+                                ))
+                            ));
+                            foreign.discard(budget)?;
                             let observation = ExpandedObservation {
                                 original: *source.canonical(budget)?.identity().digest(),
                                 neutral: *neutral.output_inventory(budget)?.identity_v18().digest(),
@@ -104,7 +164,7 @@ impl Callbacks for ExpandedCallbacks {
             }
             if matches!(self.case, ExpandedCase::Payload) {
                 let payload = transaction
-                    .with_original_source_expanded_v259(&mut budget, |_, _, _, _, _, budget| {
+                    .with_original_source_expanded_v259(&mut budget, |_, _, _, _, _, _, budget| {
                         budget.reserve_storage(17)?;
                         Ok((Box::new([9u8; 17]), 17))
                     })
@@ -119,7 +179,7 @@ impl Callbacks for ExpandedCallbacks {
                 let mut calls = 0;
                 let refusal = transaction.with_original_source_expanded_v259::<(), _>(
                     &mut budget,
-                    |_, _, _, _, _, _| {
+                    |_, _, _, _, _, _, _| {
                         calls += 1;
                         Err(SourceError::Unsupported("expanded proof is not admitted"))
                     },
@@ -138,7 +198,7 @@ impl Callbacks for ExpandedCallbacks {
                 let mut called = false;
                 let refused = transaction.with_original_source_expanded_v259::<(), _>(
                     &mut budget,
-                    |_, _, _, _, _, budget| {
+                    |_, _, _, _, _, _, budget| {
                         called = true;
                         if refund {
                             budget.release_storage(1)?;
@@ -154,10 +214,10 @@ impl Callbacks for ExpandedCallbacks {
             }
             assert!(matches!(self.case, ExpandedCase::Panic));
             let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                transaction
-                    .with_original_source_expanded_v259::<(), _>(&mut budget, |_, _, _, _, _, _| {
-                        std::panic::panic_any(259usize)
-                    })
+                transaction.with_original_source_expanded_v259::<(), _>(
+                    &mut budget,
+                    |_, _, _, _, _, _, _| std::panic::panic_any(259usize),
+                )
             }))
             .err()
             .expect("expanded consumer unwind must propagate");

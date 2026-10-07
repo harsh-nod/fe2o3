@@ -110,8 +110,10 @@ one authenticated collection and complete ABI-root roster
   -> checked target-neutral Policy11 fixed point
   -> complete original-root tile selection on the same function inventory
   -> one whole-module expansion and independent replay
+  -> private, owner-bound expanded pair input preparation
   -> scoped consumer borrowing source, original correspondence,
-     expanded correspondence, all ABI roots, target and the same budget
+     expanded correspondence, all ABI roots, target, unproved pair inputs
+     and the same budget
 ```
 
 This is a production-stage implementation with ordinary-rustc integration tests,
@@ -147,6 +149,29 @@ The expanded graph requires its own complete source-refinement subject and
 initialization, step and trace proofs. Original-source, scalar-prefix or earlier
 four-graph tail proofs cannot be renamed as expanded-program evidence. This
 stage and its component helper proofs do not grant publication or launch rights.
+
+The private
+[`ExpandedPairInputV279`](../../crates/rustc-codegen-fe2o3/src/production_pipeline_expanded_pair_input_v279.rs)
+retains those same source, correspondence, expansion and authenticated compiler
+binding owners. It records distinct original, neutral and expanded identities,
+the complete ordered root/runtime/tile-policy roster and original static
+invocation census. Launches are joined to retained source layouts and original
+typed descriptors; Index width comes from the actual AMD lowering and byte
+order from the authenticated source/target data layout. These inputs are not a
+nominal optimizer execution transcript or an installed proof-runtime lease.
+The retained source layout's zero dynamic-extent marker stays distinct from the
+nonzero physical coordinate envelope. Their join checks the exact original
+descriptor rank, workgroup and grid ceiling, without treating zero as a wildcard
+or clamping the physical envelope to a source layout marker.
+
+Reference rows come from the existing authenticated binding adapter. The
+expanded stage still refuses every nonempty reference-obligation set before its
+consumer; an owner-backed empty roster is not a discharged reference proof.
+Preparation has no generated-proof, executed-receipt or publication conversion.
+It releases its own reserved backing before the tile owner while preserving the
+callback's separately measured payload. The private stage remains nondefault,
+and the new input preparation and regression assertions require their own
+recorded qualification before a passing-run claim.
 
 The backend CI entry explicitly runs both ignored real-rustc parent tests after
 its ordinary library suite: the expanded-source parent (including the complete

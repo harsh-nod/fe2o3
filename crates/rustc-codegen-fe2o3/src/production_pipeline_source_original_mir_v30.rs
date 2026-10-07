@@ -8,7 +8,7 @@ use fe2o3_kernel_ir::{
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 
-fn runtime_headers() -> Result<usize, Resource> {
+pub(in super::super::super) fn runtime_headers() -> Result<usize, Resource> {
     [
         formal_context_v19::launch_context_headers_v19()?,
         size_of::<crate::semantic_layout_bridge::SemanticLayoutTargetV1>(),
@@ -57,7 +57,7 @@ fn match_launches(
     Ok(())
 }
 
-fn target_byte_order(
+pub(in super::super::super) fn target_byte_order(
     source: fe2o3_mir_model::semantic_mir_v1::SemanticLayoutIdentityV1,
     target: &crate::semantic_layout_bridge::SemanticLayoutTargetV1,
     budget: &mut Budget<'_>,
