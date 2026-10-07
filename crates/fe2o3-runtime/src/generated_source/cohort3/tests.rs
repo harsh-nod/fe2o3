@@ -8,7 +8,8 @@ use std::rc::Rc;
 mod arena1024;
 mod registry16;
 
-const IMAGE: &[u8] = include_bytes!("../../../tests/fixtures/native-fill-worker/kernel.hsaco");
+// Pointer-identity checks require one retained backing, not separate const uses.
+static IMAGE: &[u8] = include_bytes!("../../../tests/fixtures/native-fill-worker/kernel.hsaco");
 
 struct Authority {
     object: [u8; 32],
