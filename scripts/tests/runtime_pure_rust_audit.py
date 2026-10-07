@@ -26,6 +26,9 @@ POLICY = CHECKER.load_policy(
 VIRTUAL_POLICY = CHECKER.load_policy(
     Path(__file__).resolve().parents[1] / "virtual-runtime-no-gpu-policy.json"
 )
+SIM_POLICY = CHECKER.load_policy(
+    Path(__file__).resolve().parents[1] / "sim-runtime-no-gpu-policy.json"
+)
 REVIEWED_BUILD_SCRIPTS = (
     "curve25519-dalek@4.1.3",
     "generic-array@0.14.7",
@@ -218,6 +221,39 @@ def synthetic_elf(
 
 
 class MetadataAuditTests(unittest.TestCase):
+    def test_simulation_crypto_exceptions_remain_exact_and_without_native_linkage(self) -> None:
+        self.assertEqual(REVIEWED_BUILD_SCRIPTS, SIM_POLICY["allowed_cargo_build_script_packages"])
+        self.assertTrue(SIM_POLICY["reject_cargo_links"])
+        self.assertTrue(SIM_POLICY["reject_unapproved_cargo_build_scripts"])
+        for literal in ("/dev/kfd", "/dev/dri", "libamdhip64.so", "libhsa-runtime64.so"):
+            self.assertIn(literal, SIM_POLICY["forbidden_binary_literals"])
+        for name, version, other_version in (
+            ("curve25519-dalek", "4.1.3", "4.1.2"),
+            ("generic-array", "0.14.7", "0.14.6"),
+        ):
+            for source, links, selected_version, refusal in (
+                (CHECKER.CRATES_IO_SOURCE, None, version, None),
+                (CHECKER.CRATES_IO_SOURCE, None, other_version, "unapproved Cargo build script"),
+                (None, None, version, "unapproved source"),
+                ("git+https://example.invalid/replacement", None, version, "unapproved source"),
+                (CHECKER.CRATES_IO_SOURCE, "native-library", version, "Cargo links package"),
+            ):
+                with self.subTest(name=name, source=source, links=links, version=selected_version):
+                    value = metadata(
+                        [package("runtime"), package(
+                            name, source=source, links=links, version=selected_version,
+                            targets=[target(), target("custom-build")],
+                        )],
+                        [node("runtime", [dependency(name, version=selected_version)]),
+                         node(name, version=selected_version)],
+                    )
+                    violations, _ = CHECKER.audit_metadata(value, ("runtime",), SIM_POLICY)
+                    if refusal is None:
+                        self.assertEqual([], violations)
+                    else:
+                        self.assertEqual(1, len(violations))
+                        self.assertIn(refusal, violations[0])
+
     def test_virtual_target_metadata_allowance_does_not_admit_native_code(self) -> None:
         names = ("fe2o3-kir-sim", "fe2o3-amd-target", "fe2o3-target-spec")
         identities = tuple(sorted(f"{name}@0.1.0|workspace" for name in names))
