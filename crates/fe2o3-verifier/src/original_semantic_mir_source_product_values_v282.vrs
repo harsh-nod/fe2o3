@@ -252,7 +252,8 @@ spec fn invocation_source_product_atom_copyable_v282(ty: int) -> bool {
 
 spec fn invocation_source_product_copyable_v282(ty: int) -> bool {
     invocation_source_product_component_count_v282(ty) > 0
-        && (forall|ordinal: int| 0 <= ordinal < invocation_source_product_component_count_v282(ty) ==>
+        && (forall|ordinal: int| #![trigger invocation_source_product_component_type_v282(ty, ordinal)]
+            0 <= ordinal < invocation_source_product_component_count_v282(ty) ==>
             match invocation_source_product_component_type_v282(ty, ordinal) {
                 Some(component) => invocation_source_product_atom_copyable_v282(component),
                 None => false,

@@ -13,6 +13,63 @@ proof fn invocation_source_constructor_logical_clear_well_formed_v84(
     assert forall|i: int| 0 <= i < count implies cleared.versions[i] >= 0 by {
         assert(logical.versions[i] >= 0);
     }
+    // Clearing only increases versions and removes resident records. Historical
+    // loan identities remain well shaped; currentness is checked at each use.
+    assert forall|i: int| 0 <= i < count implies
+        cleared.versions[i] >= logical.versions[i] by {}
+    assert forall|reference: InvocationSourceExecutionReferenceV168|
+        invocation_source_execution_reference_shape_v168(reference, logical.versions) implies
+        invocation_source_execution_reference_shape_v168(reference, cleared.versions) by {
+        assert(cleared.versions[reference.identity.local] >= logical.versions[reference.identity.local]);
+        assert(cleared.versions[reference.origin] >= logical.versions[reference.origin]);
+        assert forall|i: int| 0 <= i < reference.ancestors.len() implies
+            invocation_source_execution_id_shape_v168(reference.ancestors[i], cleared.versions)
+                && reference.ancestors[i] != reference.identity by {
+            assert(invocation_source_execution_id_shape_v168(reference.ancestors[i], logical.versions));
+            assert(cleared.versions[reference.ancestors[i].local]
+                >= logical.versions[reference.ancestors[i].local]);
+        }
+    }
+    assert forall|i: int| cleared.execution_references.contains_key(i) implies
+        0 <= i < count
+            && invocation_source_execution_reference_shape_v168(cleared.execution_references[i], cleared.versions)
+            && !cleared.witnesses.contains_key(i) && !cleared.references.contains_key(i)
+            && !cleared.descriptor_references.contains_key(i)
+            && !cleared.aggregates.contains_key(i) && !cleared.enums.contains_key(i) by {
+        assert(logical.execution_references.contains_key(i));
+        assert(invocation_source_execution_reference_shape_v168(logical.execution_references[i], logical.versions));
+    }
+    assert(invocation_source_execution_ancestry_v168(cleared.execution_references));
+    assert forall|i: int| cleared.products.contains_key(i) implies
+        0 <= i < count && invocation_source_product_well_formed_v282(cleared.products[i])
+            && !cleared.witnesses.contains_key(i) && !cleared.references.contains_key(i)
+            && !cleared.execution_references.contains_key(i) && !cleared.descriptor_references.contains_key(i)
+            && !cleared.aggregates.contains_key(i) && !cleared.enums.contains_key(i) by {
+        assert(logical.products.contains_key(i));
+    }
+    assert forall|local: int, path: Seq<int>| cleared.products.contains_key(local)
+        && cleared.products[local].components.contains_key(path) implies
+        match cleared.products[local].components[path] {
+            InvocationSourceProductAtomV282::Execution(value) =>
+                invocation_source_execution_reference_shape_v168(value, cleared.versions),
+            _ => true,
+        } by {
+        assert(logical.products.contains_key(local));
+        if let InvocationSourceProductAtomV282::Execution(value) = logical.products[local].components[path] {
+            assert(invocation_source_execution_reference_shape_v168(value, logical.versions));
+        }
+    }
+    assert(invocation_source_product_execution_ancestry_v282(cleared));
+    assert(cleared.execution_pending.dom().subset_of(logical.execution_pending.dom()));
+    vstd::set_lib::lemma_len_subset(cleared.execution_pending.dom(), logical.execution_pending.dom());
+    assert forall|local: int| cleared.execution_pending.contains_key(local) implies
+        invocation_source_execution_reference_shape_v168(cleared.execution_pending[local].reference, cleared.versions)
+            && 0 < cleared.execution_pending[local].moved_version <= cleared.versions[local] by {
+        assert(logical.execution_pending.contains_key(local));
+        assert(invocation_source_execution_reference_shape_v168(logical.execution_pending[local].reference, logical.versions));
+        assert(!(begin <= local < end));
+    }
+    assert(invocation_source_execution_pending_shape_v286(cleared));
     assert forall|i: int| cleared.descriptor_references.contains_key(i) implies
         0 <= i < count
             && invocation_source_descriptor_reference_shape_v51(cleared.descriptor_references[i], count)
@@ -128,6 +185,24 @@ proof fn invocation_source_constructor_clear_well_formed_v84(
         },
         logical: invocation_source_logical_clear_v38(source.logical, begin, end), ..source
     };
+    assert forall|i: int| entered.logical.execution_pending.contains_key(i) implies
+        entered.machine.values[i] == MemoryValueV30::Undefined && !entered.objects.contains_key(i) by {
+        reveal(invocation_source_logical_well_formed_v38);
+        assert(source.logical.execution_pending.contains_key(i));
+        assert(!(begin <= i < end));
+    }
+    assert forall|i: int| entered.logical.execution_references.contains_key(i) implies
+        entered.machine.values[i] == MemoryValueV30::Unit && !entered.objects.contains_key(i) by {
+        reveal(invocation_source_logical_well_formed_v38);
+        assert(source.logical.execution_references.contains_key(i));
+        assert(!(begin <= i < end));
+    }
+    assert forall|i: int| entered.logical.products.contains_key(i) implies
+        entered.machine.values[i] == MemoryValueV30::Undefined && !entered.objects.contains_key(i) by {
+        reveal(invocation_source_logical_well_formed_v38);
+        assert(source.logical.products.contains_key(i));
+        assert(!(begin <= i < end));
+    }
     assert forall|i: int| entered.logical.descriptor_references.contains_key(i) implies
         !entered.objects.contains_key(i)
             && match entered.machine.values[i] {
