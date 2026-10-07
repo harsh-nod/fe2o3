@@ -41,6 +41,7 @@ POLICY = [
     "ci-local-test-gate",
     "generic-core-group-tests",
     "generic-cpu-group-tests",
+    "runtime-production-proof-pipeline-tests",
 ]
 GROUPS = {
     "policy": POLICY,

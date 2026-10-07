@@ -1535,6 +1535,8 @@ run_generic_core() {
     python3 -I -B scripts/tests/generic-core-groups.py
   run_step generic-cpu-group-tests \
     python3 -I -B scripts/tests/generic-cpu-groups.py
+  run_step runtime-production-proof-pipeline-tests \
+    python3 -I -B scripts/tests/runtime-production-proof-pipeline.py
   if [[ "${group}" == all ]]; then
     run_generic_core cpu
     run_generic_core auxiliary

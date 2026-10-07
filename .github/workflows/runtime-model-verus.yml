@@ -12,6 +12,8 @@ on:
       - "Cargo.lock"
       - "examples/row_softmax_v1/verify-verus-closure.sh"
       - "examples/wave64_collectives_v1/check-proof-source.py"
+      - "scripts/qualify-runtime-production-proofs.sh"
+      - "scripts/tests/runtime-production-proof-pipeline.py"
   push:
     branches: [main]
     paths:
@@ -24,6 +26,8 @@ on:
       - "Cargo.lock"
       - "examples/row_softmax_v1/verify-verus-closure.sh"
       - "examples/wave64_collectives_v1/check-proof-source.py"
+      - "scripts/qualify-runtime-production-proofs.sh"
+      - "scripts/tests/runtime-production-proof-pipeline.py"
   workflow_dispatch:
 
 permissions:
@@ -124,33 +128,13 @@ jobs:
             --verus "${VERUS}" \
             --output "${A2_CAMPAIGN_ROOT}/campaign"
 
-      - name: Qualify signed-source dispatch and producer preflight
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          # These controllers require signed HEAD and exact Git/SSH tool pins.
-          # A shallow checkout contains the current tree/blobs they authenticate.
-          proof_root=crates/fe2o3-runtime-model/verus
-          python3 -I -B "${proof_root}/check-dispatch-template-prepare.py" \
-            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/template-prepare"
-          python3 -I -B "${proof_root}/check-dispatch-template-preflight.py" \
-            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/template-preflight"
-          python3 -I -B "${proof_root}/check-dispatch-template-bind.py" \
-            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/template-bind"
-          python3 -I -B "${proof_root}/check-dispatch-template-bind.py" --roster \
-            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/template-roster"
-          python3 -I -B "${proof_root}/check-producer-input-preflight.py" \
-            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/producer-preflight"
+      - name: Test required production campaign sequencing
+        run: python3 -I -B scripts/tests/runtime-production-proof-pipeline.py
 
-      - name: Qualify retained routing and credit dispatch
+      - name: Qualify signed-source dispatch and retained proofs
         shell: bash
-        run: |
-          set -Eeuo pipefail
-          proof_root=crates/fe2o3-runtime-model/verus
-          python3 -I -B "${proof_root}/check-retained-pair-routing.py" \
-            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/retained-routing"
-          python3 -I -B "${proof_root}/check-retained-credit-dispatch.py" --campaign \
-            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/retained-credit"
+        # Controllers authenticate signed HEAD and exact Git/SSH tool pins.
+        run: bash scripts/qualify-runtime-production-proofs.sh
 
       - name: Retain complete campaign diagnostics
         if: ${{ always() && env.A2_CAMPAIGN_ROOT != '' }}
