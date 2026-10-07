@@ -86,6 +86,45 @@ fn mismatch() -> Error {
     Error::Statement("original MIR allocation descriptor census differs")
 }
 
+pub(super) fn demand_expanded_arguments(
+    semantic: &fe2o3_mir_model::semantic_mir_v1::AdmittedInertSemanticMirV1,
+    function: fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    requested: &mut [bool],
+    seen: &mut [bool],
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    use fe2o3_mir_model::{SemanticSourceArgumentBindingV1, semantic_mir_v1::SemanticExternAbiV1};
+    out.budget.charge_work(4)?;
+    if requested.len() != semantic.types().len() || seen.len() != semantic.functions().len() {
+        return Err(mismatch());
+    }
+    let visited = seen
+        .get_mut(function.index() as usize)
+        .ok_or_else(mismatch)?;
+    if *visited {
+        return Ok(());
+    }
+    let declaration = semantic
+        .functions()
+        .get(function.index() as usize)
+        .ok_or_else(mismatch)?;
+    if declaration.abi().extern_abi() == SemanticExternAbiV1::RustCall {
+        let (logical, credit) = super::source_enter::logical_arguments(semantic, function, out)?;
+        for argument in logical.source_arguments() {
+            out.budget.charge_work(2)?;
+            if let SemanticSourceArgumentBindingV1::ExpandedTuple(_) = argument.binding() {
+                *requested
+                    .get_mut(argument.ty().index() as usize)
+                    .ok_or_else(mismatch)? = true;
+            }
+        }
+        drop(logical);
+        out.budget.release_storage(credit)?;
+    }
+    *visited = true;
+    Ok(())
+}
+
 fn source_key(root: usize, instance: usize, local: u32, generation: Option<u32>) -> SourceKey {
     [
         root,
@@ -285,11 +324,14 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         let tags = source_tags::SourceTagIndexV39::derive(semantic.types(), out)?;
         let objects =
             source_objects::SourceObjects::derive(plan, relation, &operations, &frames, out)?;
-        // Only original locals without physical backing require value-component
-        // expansion. Retained arrays stay in the separately checked memory domain.
+        // Locals without physical backing and expanded logical arguments need
+        // value schemas. The latter may have no original local at all.
         let mut requested = vector(semantic.types().len(), out)?;
         out.budget.charge_work(semantic.types().len())?;
         requested.resize(semantic.types().len(), false);
+        let mut argument_functions = vector(semantic.functions().len(), out)?;
+        out.budget.charge_work(semantic.functions().len())?;
+        argument_functions.resize(semantic.functions().len(), false);
         let mut storage_at = 0;
         for root in 0..roots {
             for instance in 0..plan.root(root, out)?.instances.len() {
@@ -301,6 +343,13 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
                     .functions()
                     .get(row.function.index() as usize)
                     .ok_or_else(mismatch)?;
+                demand_expanded_arguments(
+                    semantic,
+                    row.function,
+                    &mut requested,
+                    &mut argument_functions,
+                    out,
+                )?;
                 for (local, declaration) in original.locals().iter().enumerate() {
                     out.budget.charge_work(3)?;
                     let key = [root, instance, local];
@@ -322,6 +371,12 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
                 }
             }
         }
+        let argument_credit = argument_functions
+            .capacity()
+            .checked_mul(size_of::<bool>())
+            .ok_or(Resource::Arithmetic)?;
+        drop(argument_functions);
+        out.budget.release_storage(argument_credit)?;
         let aggregates = source_aggregates::SourceAggregateTypesV42::derive(
             semantic.types(),
             &abi,
@@ -867,6 +922,9 @@ pub(super) fn headers() -> usize {
         + h::<Vec<Option<Frame>>>()
         + h::<Vec<(SourceKey, usize)>>()
         + h::<Vec<bool>>()
+        + h::<Vec<bool>>()
+        + 2 * h::<&mut [bool]>()
+        + super::source_enter::logical_argument_headers()
         + h::<[usize; 3]>()
         + h::<SourceKey>()
         + h::<Operation>()
@@ -1633,6 +1691,9 @@ pub(super) mod tests {
                 + h::<Vec<Option<Frame>>>()
                 + h::<Vec<(SourceKey, usize)>>()
                 + h::<Vec<bool>>()
+                + h::<Vec<bool>>()
+                + 2 * h::<&mut [bool]>()
+                + super::super::source_enter::logical_argument_headers()
                 + h::<[usize; 3]>()
                 + h::<SourceKey>()
                 + h::<Operation>()

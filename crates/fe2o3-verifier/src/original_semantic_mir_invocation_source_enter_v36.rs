@@ -9,8 +9,8 @@ use fe2o3_mir_model::{
     SemanticLogicalArgumentErrorV1, SemanticLogicalArgumentMapV1,
     SemanticSourceArgumentBindingV1 as ArgumentBinding,
     semantic_mir_v1::{
-        SemanticExternAbiV1, SemanticLocalIdV1, SemanticPointerMetadataV1 as Metadata,
-        SemanticSourceArgumentOwnershipV1,
+        AdmittedInertSemanticMirV1, SemanticExternAbiV1, SemanticFunctionIdV1, SemanticLocalIdV1,
+        SemanticPointerMetadataV1 as Metadata, SemanticSourceArgumentOwnershipV1,
     },
 };
 use std::{fmt::Write as _, mem::size_of, ops::Range};
@@ -120,19 +120,62 @@ fn logical_argument_storage((sources, fields): (usize, usize)) -> Result<usize> 
         .ok_or_else(|| Resource::Arithmetic.into())
 }
 
-fn logical_argument_headers() -> usize {
+pub(super) fn logical_argument_headers() -> usize {
     fn h<T>() -> usize {
         size_of::<T>() + 2 * size_of::<Result<T>>()
     }
     h::<EmptyExpanded>()
         + h::<SemanticLogicalArgumentMapV1<'_>>()
+        + h::<(SemanticLogicalArgumentMapV1<'_>, usize)>()
         + h::<std::result::Result<SemanticLogicalArgumentMapV1<'_>, SemanticLogicalArgumentErrorV1>>()
         + h::<fe2o3_mir_model::SemanticSourceArgumentV1<'_>>()
         + h::<ArgumentBinding<'_>>()
         + h::<(usize, usize)>()
+        + h::<&AdmittedInertSemanticMirV1>()
+        + h::<SemanticFunctionIdV1>()
         // Map construction, source-argument iterator, and exact row joins.
         + 8 * size_of::<usize>()
         + 8 * size_of::<&()>()
+}
+
+pub(super) fn logical_arguments<'source>(
+    semantic: &'source AdmittedInertSemanticMirV1,
+    function: SemanticFunctionIdV1,
+    out: &mut Writer<'_, '_>,
+) -> Result<(SemanticLogicalArgumentMapV1<'source>, usize)> {
+    out.budget.charge_work(1)?;
+    let declaration = semantic
+        .functions()
+        .get(function.index() as usize)
+        .ok_or_else(mismatch)?;
+    let sources = declaration.abi().source_input_types().len();
+    let adjusted = declaration.abi().adjusted_arguments().len();
+    let prepaid = logical_argument_storage((sources, adjusted))?;
+    out.budget.reserve_storage(prepaid)?;
+    out.budget.charge_work(
+        declaration
+            .locals()
+            .len()
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(sources))
+            .and_then(|n| n.checked_add(adjusted))
+            .ok_or(Resource::Arithmetic)?,
+    )?;
+    let logical = semantic
+        .logical_arguments_v1(function)
+        .map_err(|error| match error {
+            SemanticLogicalArgumentErrorV1::AllocationFailure => {
+                Error::Resource(Resource::Allocation)
+            }
+            SemanticLogicalArgumentErrorV1::UnknownFunction => mismatch(),
+        })?;
+    let retained = logical_argument_storage(logical.allocation_capacities_v1())?;
+    if retained > prepaid {
+        out.budget.reserve_storage(retained - prepaid)?;
+    } else {
+        out.budget.release_storage(prepaid - retained)?;
+    }
+    Ok((logical, retained))
 }
 
 fn empty_expanded_argument(
@@ -389,32 +432,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         let mut arguments = vector(inputs.len(), out)?;
         out.budget.charge_work(inputs.len())?;
         arguments.resize(inputs.len(), None);
-        let prepaid =
-            logical_argument_storage((inputs.len(), function.abi().adjusted_arguments().len()))?;
-        out.budget.reserve_storage(prepaid)?;
-        out.budget.charge_work(
-            function
-                .locals()
-                .len()
-                .checked_mul(2)
-                .and_then(|n| n.checked_add(inputs.len()))
-                .and_then(|n| n.checked_add(function.abi().adjusted_arguments().len()))
-                .ok_or(Resource::Arithmetic)?,
-        )?;
-        let logical = semantic
-            .logical_arguments_v1(row.function)
-            .map_err(|error| match error {
-                SemanticLogicalArgumentErrorV1::AllocationFailure => {
-                    Error::Resource(Resource::Allocation)
-                }
-                SemanticLogicalArgumentErrorV1::UnknownFunction => mismatch(),
-            })?;
-        let logical_storage = logical_argument_storage(logical.allocation_capacities_v1())?;
-        if logical_storage > prepaid {
-            out.budget.reserve_storage(logical_storage - prepaid)?;
-        } else {
-            out.budget.release_storage(prepaid - logical_storage)?;
-        }
+        let (logical, logical_storage) = logical_arguments(semantic, row.function, out)?;
         for (ordinal, mapped) in logical.source_arguments().enumerate() {
             out.budget.charge_work(1)?;
             let argument = mapped.ordinal();

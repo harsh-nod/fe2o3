@@ -86,18 +86,55 @@ fn transform(form: Form, types: &mut Vec<SemanticTypeDeclV1>, functions: &mut Ve
             .with_source_argument_ownership(ownership)
             .unwrap();
         } else {
-            for block in &mut blocks {
+            for (block_index, block) in blocks.iter_mut().enumerate() {
                 if let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() {
                     assert_eq!(call.callee().index() as usize, helper);
                     let mut arguments = call.arguments().to_vec();
-                    arguments.push(SemanticOperandV1::Constant(SemanticConstantV1::new(
-                        argument,
-                        SemanticConstantValueV1::ZeroSized,
-                    )));
+                    let mut statements = block.statements().to_vec();
+                    let operand = if matches!(form, Form::NonemptyTuple) {
+                        let local = SemanticLocalIdV1::from_index(locals.len() as u32);
+                        locals.push(SemanticLocalDeclV1::new(
+                            SemanticLocalIdentityV1::from_sha256(
+                                [u8::try_from(250 + block_index).unwrap(); 32],
+                            ),
+                            argument,
+                            LocalRole::Temporary,
+                            prior.source(),
+                        ));
+                        let place = SemanticPlaceV1::new(local, vec![], argument).unwrap();
+                        statements.push(SemanticStatementV1::new(
+                            prior.source(),
+                            SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                                place.clone(),
+                                SemanticRvalueV1::new(
+                                    argument,
+                                    SemanticRvalueKindV1::Aggregate(
+                                        SemanticAggregateRvalueV1::new(
+                                            SemanticAggregateKindV1::Tuple,
+                                            vec![SemanticOperandV1::Constant(
+                                                SemanticConstantV1::new(
+                                                    unit,
+                                                    SemanticConstantValueV1::ZeroSized,
+                                                ),
+                                            )],
+                                        )
+                                        .unwrap(),
+                                    ),
+                                ),
+                            )),
+                        ));
+                        SemanticOperandV1::Move(place)
+                    } else {
+                        SemanticOperandV1::Constant(SemanticConstantV1::new(
+                            argument,
+                            SemanticConstantValueV1::ZeroSized,
+                        ))
+                    };
+                    arguments.push(operand);
                     *block = SemanticBasicBlockV1::new(
                         block.identity(),
                         block.source(),
-                        block.statements().to_vec(),
+                        statements,
                         SemanticTerminatorV1::new(
                             block.terminator().source(),
                             SemanticTerminatorKindV1::Call(
@@ -321,6 +358,71 @@ fn original_rust_call_nonempty_expansion_remains_an_explicit_typed_refusal() {
 }
 
 #[test]
+fn original_rust_call_schema_demand_covers_no_local_type_once_per_function() {
+    run(Form::EmptyTuple, LIMIT, LIMIT, |plan, slots, out| {
+        let row = plan.instance(0, 1, out)?;
+        let source = plan.source(out)?.source_semantic(out.budget)?;
+        let ty = source.functions()[row.function.index() as usize]
+            .abi()
+            .source_input_types()[2];
+        assert!(
+            source
+                .functions()
+                .iter()
+                .all(|function| function.locals().iter().all(|local| local.ty() != ty))
+        );
+        assert_eq!(slots.aggregate_leaf_count(ty, out)?, Some(1));
+        let leaf = slots.aggregate_leaf(ty, 0, out)?;
+        assert_eq!(leaf.scalar(out)?, ScalarV30::Unit);
+        assert_eq!(leaf.source_type(out)?, ty);
+
+        let mut requested = vector(source.types().len(), out)?;
+        let mut seen = vector(source.functions().len(), out)?;
+        out.budget
+            .charge_work(source.types().len() + source.functions().len())?;
+        requested.resize(source.types().len(), false);
+        seen.resize(source.functions().len(), false);
+        let floor = out.budget.storage();
+        let before = out.budget.work();
+        super::super::slots::demand_expanded_arguments(
+            source,
+            row.function,
+            &mut requested,
+            &mut seen,
+            out,
+        )?;
+        assert!(out.budget.work() > before + 4);
+        assert_eq!(out.budget.storage(), floor);
+        assert_eq!(requested.iter().filter(|&&yes| yes).count(), 1);
+        assert!(requested[ty.index() as usize]);
+        for root in 0..2 {
+            for instance in 1..3 {
+                let repeated = plan.instance(root, instance, out)?;
+                assert_eq!(repeated.function, row.function);
+                let before = out.budget.work();
+                super::super::slots::demand_expanded_arguments(
+                    source,
+                    repeated.function,
+                    &mut requested,
+                    &mut seen,
+                    out,
+                )?;
+                assert_eq!(out.budget.work() - before, 4);
+                assert_eq!(out.budget.storage(), floor);
+            }
+        }
+        assert_eq!(seen.iter().filter(|&&yes| yes).count(), 1);
+        let credit = requested.capacity() + seen.capacity();
+        drop(requested);
+        drop(seen);
+        out.budget.release_storage(credit)?;
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
+#[test]
 fn original_rust_call_argument_plan_has_checked_capacity_and_exact_resource_boundaries() {
     macro_rules! h {
         ($ty:ty) => {
@@ -331,6 +433,7 @@ fn original_rust_call_argument_plan_has_checked_capacity_and_exact_resource_boun
         logical_argument_headers(),
         h!(EmptyExpanded)
             + h!(SemanticLogicalArgumentMapV1<'_>)
+            + h!((SemanticLogicalArgumentMapV1<'_>, usize))
             + h!(
                 std::result::Result<
                     SemanticLogicalArgumentMapV1<'_>,
@@ -340,6 +443,8 @@ fn original_rust_call_argument_plan_has_checked_capacity_and_exact_resource_boun
             + h!(fe2o3_mir_model::SemanticSourceArgumentV1<'_>)
             + h!(ArgumentBinding<'_>)
             + h!((usize, usize))
+            + h!(&AdmittedInertSemanticMirV1)
+            + h!(SemanticFunctionIdV1)
             + 8 * size_of::<usize>()
             + 8 * size_of::<&()>()
     );
