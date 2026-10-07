@@ -51,6 +51,14 @@ fn headers() -> usize {
 }
 
 impl<'a> Boundaries<'a> {
+    pub(super) fn check_plan_v281(&self, plan: &Plan, out: &mut Writer<'_, '_>) -> Result<()> {
+        out.budget.charge_work(1)?;
+        if !std::ptr::eq(self.plan, plan) {
+            return Err(error(BoundaryError::ForeignPlan));
+        }
+        Ok(())
+    }
+
     pub(super) fn derive(
         plan: &'a Plan,
         input: ControlInput<'a>,
