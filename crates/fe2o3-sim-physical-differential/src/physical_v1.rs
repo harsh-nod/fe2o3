@@ -321,8 +321,8 @@ pub fn prepare_physical_differential_v1(
         simulator_kir_version: 7,
         simulator_kir_sha256: *kir.digest(),
         simulator_kir_bytes: kir.canonical_length(),
-        production_kir_sha256: *binding.production_kir_v8_sha256(),
-        production_kir_bytes: binding.production_kir_v8_bytes(),
+        production_kir_sha256: *binding.production_kir_sha256(),
+        production_kir_bytes: binding.production_kir_bytes(),
         bundle_v1: *inner_v1.identity().as_bytes(),
         bundle_v2: *bundle.inner_v3().inner_v2().identity().as_bytes(),
         bundle_v3: *bundle.inner_v3().identity().as_bytes(),
@@ -533,6 +533,17 @@ impl PreparedPhysicalDifferentialV1 {
     }
 }
 
+fn validate_production_kir_identity(
+    production: (u16, [u8; 32], u64),
+    binding: (u16, [u8; 32], u64),
+) -> Result<(), PhysicalDifferentialErrorV1> {
+    // The host binding supports multiple wire versions; this bridge remains V8-only.
+    if production.0 != 8 || production != binding {
+        return Err(PhysicalDifferentialErrorV1::ProductionKirSubstitution);
+    }
+    Ok(())
+}
+
 fn validate_bundle_and_bridge(
     bundle: &VerifiedSimulationBundleV4,
     bridge: &ProductionKirV7StructuralBridgeV1,
@@ -541,12 +552,18 @@ fn validate_bundle_and_bridge(
     let v2 = bundle.inner_v3().inner_v2();
     let v1 = v2.inner_v1();
     let production = v1.production_kir_identity();
-    if production.version() != 8
-        || production.digest() != *binding.production_kir_v8_sha256()
-        || production.canonical_length() != binding.production_kir_v8_bytes()
-    {
-        return Err(PhysicalDifferentialErrorV1::ProductionKirSubstitution);
-    }
+    validate_production_kir_identity(
+        (
+            production.version(),
+            production.digest(),
+            production.canonical_length(),
+        ),
+        (
+            binding.production_kir_version(),
+            *binding.production_kir_sha256(),
+            binding.production_kir_bytes(),
+        ),
+    )?;
     let association = v1
         .require_canonical_compiler_execution_association()
         .map_err(|_| PhysicalDifferentialErrorV1::CompilerExecutionAssociationUnavailable)?;
@@ -1204,6 +1221,29 @@ impl Error for PhysicalDifferentialErrorV1 {}
 mod tests {
     use super::*;
     include!("physical_empty_slice_v1_tests.rs");
+
+    #[test]
+    fn versioned_host_binding_does_not_widen_the_v8_bridge() {
+        let identity = (8, [7; 32], 123);
+        validate_production_kir_identity(identity, identity).unwrap();
+        for version in [0, 7, 9, 10, 11, u16::MAX] {
+            let changed = (version, identity.1, identity.2);
+            for (production, binding) in
+                [(identity, changed), (changed, identity), (changed, changed)]
+            {
+                assert!(matches!(
+                    validate_production_kir_identity(production, binding),
+                    Err(PhysicalDifferentialErrorV1::ProductionKirSubstitution)
+                ));
+            }
+        }
+        for changed in [(8, [8; 32], 123), (8, [7; 32], 124)] {
+            assert!(matches!(
+                validate_production_kir_identity(identity, changed),
+                Err(PhysicalDifferentialErrorV1::ProductionKirSubstitution)
+            ));
+        }
+    }
 
     #[test]
     fn unavailable_never_counts_as_hardware_or_parity() {
