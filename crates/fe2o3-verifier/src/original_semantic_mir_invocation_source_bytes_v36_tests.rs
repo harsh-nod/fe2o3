@@ -269,6 +269,84 @@ fn original_mir_statement_refusal_does_not_reclassify_resource_or_owner_errors()
     ));
 }
 
+#[test]
+fn original_mir_call_refusal_keeps_retained_operand_and_first_typed_error() {
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationStorageLimitV1 as StorageLimit,
+        CanonicalKernelIrWorkBudgetV1 as WorkBudget,
+    };
+    run(LIMIT, LIMIT, false, 0, |body, out| {
+        let context = body.context(out)?;
+        let Terminator::Call(call) = context.function.blocks()[0].terminator().kind() else {
+            panic!("fixture must retain its original call");
+        };
+        let original = &call.arguments()[0];
+        let site = [body.root, body.instance, body.function, 0, 0];
+        let mapped = call_operand_error(unsupported(), site, original, "call-execution-loan");
+        assert!(matches!(&mapped, Error::SourceCallOperand {
+            root, instance, function, block: 0, argument: 0, source_type,
+            kind: "Copy", place: Some((1, 0)), phase: "call-execution-loan",
+            reason: "original MIR typed byte statement is not modeled",
+        } if *root == body.root && *instance == body.instance && *function == body.function
+            && *source_type == original.ty().index()));
+        assert!(std::error::Error::source(&mapped).is_none());
+        let text = format!("{mapped:?}");
+        assert_eq!(
+            format!(
+                "{:?}",
+                call_operand_error(mapped, [99; 5], original, "later")
+            ),
+            text,
+        );
+        let mut work = WorkBudget::new(7);
+        let denied = work.charge_work(8).unwrap_err();
+        for resource in [
+            Resource::Work(denied),
+            Resource::Storage(StorageLimit::new(13, 12)),
+            Resource::Accounting,
+            Resource::Arithmetic,
+            Resource::Allocation,
+        ] {
+            assert!(matches!(
+                call_operand_error(Error::Resource(resource), site, original, "later"),
+                Error::Resource(actual) if actual == resource
+            ));
+        }
+        let source = Error::Source(
+            fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                Resource::Accounting,
+            ),
+        );
+        assert!(matches!(
+            call_operand_error(source, site, original, "later"),
+            Error::Source(
+                fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18::Resource(
+                    Resource::Accounting
+                )
+            )
+        ));
+        let descriptor = Error::SourceDescriptor {
+            root: body.root,
+            instance: body.instance,
+            function: Some(body.function),
+            local: 1,
+            phase: "first",
+            reason: "exact generation",
+        };
+        assert!(matches!(
+            call_operand_error(descriptor, site, original, "later"),
+            Error::SourceDescriptor {
+                phase: "first",
+                reason: "exact generation",
+                ..
+            }
+        ));
+        Ok(())
+    })
+    .0
+    .unwrap();
+}
+
 fn run(
     work: usize,
     storage: usize,

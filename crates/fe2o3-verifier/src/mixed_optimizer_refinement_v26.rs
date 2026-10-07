@@ -163,6 +163,26 @@ pub enum MixedOptimizerRefinementErrorV26 {
         /// Unchanged diagnostic from the refusing binding query.
         reason: &'static str,
     },
+    /// A refused retained call operand, without changing its admission result.
+    SourceCallOperand {
+        /// Source root and original static call-instance ordinals.
+        root: usize,
+        instance: usize,
+        /// Original semantic function, block and argument ordinals.
+        function: usize,
+        block: usize,
+        argument: usize,
+        /// Original operand type, before any physical carrier mapping.
+        source_type: u32,
+        /// Original Copy, Move or Constant classification.
+        kind: &'static str,
+        /// Original local and projection count; constants have no local.
+        place: Option<(u32, usize)>,
+        /// Static interpreter operation, never a source or workload name.
+        phase: &'static str,
+        /// Unchanged diagnostic from the refusing interpreter.
+        reason: &'static str,
+    },
     /// The unchanged bounded source writer refused an emission section.
     GeneratedSourceLimit {
         /// Innermost named emission section that reached the limit.
@@ -291,6 +311,7 @@ impl std::error::Error for Error {
             | Self::SourceFrameBinding { .. }
             | Self::SourceStatement { .. }
             | Self::SourceDescriptor { .. }
+            | Self::SourceCallOperand { .. }
             | Self::GeneratedSourceLimit { .. } => None,
         }
     }
