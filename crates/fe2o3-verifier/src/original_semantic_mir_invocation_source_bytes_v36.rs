@@ -475,6 +475,36 @@ fn statement_error(error: Error, site: [usize; 5], statement: &Statement, types:
     }
 }
 
+fn call_operand_error(
+    error: Error,
+    site: [usize; 5],
+    operand: &Operand,
+    phase: &'static str,
+) -> Error {
+    match error {
+        Error::Statement(reason) => {
+            let (kind, place) = match operand {
+                Operand::Copy(place) => ("Copy", Some(place)),
+                Operand::Move(place) => ("Move", Some(place)),
+                Operand::Constant(_) => ("Constant", None),
+            };
+            Error::SourceCallOperand {
+                root: site[0],
+                instance: site[1],
+                function: site[2],
+                block: site[3],
+                argument: site[4],
+                source_type: operand.ty().index(),
+                kind,
+                place: place.map(|place| (place.local().index(), place.projections().len())),
+                phase,
+                reason,
+            }
+        }
+        other => other,
+    }
+}
+
 pub(super) fn slice_metadata_bits_v36(declaration: &Type, out: &mut Writer<'_, '_>) -> Result<u32> {
     out.budget.charge_work(2)?;
     let BackendRepr::ScalarPair {
@@ -816,7 +846,14 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
             return Err(mismatch());
         };
         let operand = call.arguments().get(argument).ok_or_else(mismatch)?;
-        context.typed_operand(operand, out)
+        context.typed_operand(operand, out).map_err(|error| {
+            call_operand_error(
+                error,
+                [self.root, self.instance, self.function, block, argument],
+                operand,
+                "call-typed-operand",
+            )
+        })
     }
 
     pub(super) fn invocation_argument(
@@ -837,10 +874,15 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
             return Err(mismatch());
         };
         let original = call.arguments().get(argument).ok_or_else(mismatch)?;
+        let site = [self.root, self.instance, self.function, block, argument];
         if let Operand::Copy(place) | Operand::Move(place) = original
-            && products::ProductPlace::derive(&context, place, out)?.is_some()
+            && products::ProductPlace::derive(&context, place, out)
+                .map_err(|error| call_operand_error(error, site, original, "call-product-place"))?
+                .is_some()
         {
-            return context.typed_operand(original, out);
+            return context.typed_operand(original, out).map_err(|error| {
+                call_operand_error(error, site, original, "call-product-operand")
+            });
         }
         if let Some(operand) = execution_loans::call_argument(
             self.slots,
@@ -850,9 +892,16 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
             block,
             argument,
             out,
-        )? {
+        )
+        .map_err(|error| call_operand_error(error, site, original, "call-execution-loan"))?
+        {
             if operand.recipe.mutable {
-                return Err(unsupported());
+                return Err(call_operand_error(
+                    unsupported(),
+                    site,
+                    original,
+                    "call-mutable-execution-snapshot",
+                ));
             }
             return Ok(TypedOperand {
                 ty: TypeId::from_index(operand.recipe.reference_type),
@@ -867,7 +916,9 @@ impl<'slots, 'view, 'source> SourceByteBody<'slots, 'view, 'source> {
             block,
             argument,
             out,
-        )? {
+        )
+        .map_err(|error| call_operand_error(error, site, original, "call-descriptor-loan"))?
+        {
             Some(operand) => Ok(TypedOperand {
                 ty: TypeId::from_index(operand.recipe.reference_type),
                 kind: OperandKind::Descriptor(operand),
