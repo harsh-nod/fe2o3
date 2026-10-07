@@ -5539,6 +5539,149 @@
       ]
     },
     {
+      "archive": "native-snapshot32-cpu-logs.tar.gz",
+      "scripts": [
+        {
+          "member": "archive-qualified-batch-26.sh",
+          "sha256": "10d250b5ef4b23d18ec9c06ed3da9580cf1bb1cc42468248f0862731753ec8b4"
+        },
+        {
+          "member": "run-native-qualified-batch-26.sh",
+          "sha256": "dcfaf2bc92c9322122cfaf53483cd97ac4e8d8542d9e2c6836fa6ecf1a6f3cb7"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        },
+        {
+          "member": "setup-snapshot-32.sh",
+          "sha256": "97cfd0415fc2720764357aa69b2ea6ef46b33bb01b265d76213b203f667525ac"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--all-targets"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/native-final-source-check-26.log",
+          "log_sha256": "c7007d9217c042ffa0fc75ec43bb685c8ed047c5660ccaf931fb773d368562ef",
+          "name": "native-final-source-check-26",
+          "script_member": "run-native-qualified-batch-26.sh",
+          "source_snapshot": "snapshot32",
+          "status_member": "logs/native-final-source-check-26.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "name": "native-qualified-batch-26",
+          "status_member": "logs/native-qualified-batch-26.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "env",
+            "FE2O3_STATIC_PROOF_CUSTODIAN_TARGET_DIR=$root/static-target",
+            "bash",
+            "scripts/qualify-native-static-cpu.sh"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.05,
+              "failed": 0,
+              "filtered": 107,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 382,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 3
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 383,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 373,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 6
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 377,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            },
+            {
+              "elapsed_seconds": 0.04,
+              "failed": 0,
+              "filtered": 378,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 1.02,
+              "failed": 0,
+              "filtered": 107,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 2.37,
+              "failed": 0,
+              "filtered": 107,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            }
+          ],
+          "log_member": "logs/native-static-cpu-pipeline-08.log",
+          "log_sha256": "d32dad694615651bf9ac7ab8a34d78262ff1b577a51e4fe9e2668d9311db2c4f",
+          "name": "native-static-cpu-pipeline-08",
+          "script_member": "run-native-qualified-batch-26.sh",
+          "source_snapshot": "snapshot32",
+          "status_member": "logs/native-static-cpu-pipeline-08.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
       "archive": "native-snapshots08-10-cpu-logs.tar.gz",
       "scripts": [],
       "source_inventories": [],
@@ -10617,6 +10760,2613 @@
           "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
         }
       ]
+    },
+    {
+      "archive": "native-snapshots33-34-cpu-diagnostics.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-28.sh",
+          "sha256": "04bae9aabc49ddb32439a0e2c04196942315d26fa867b59c96e39cc8fde0a310"
+        },
+        {
+          "member": "run-native-qualified-batch-29.sh",
+          "sha256": "e5fecd18a4bac520c07ae88f012989b6a1f030f414d49a0221280b59adba055d"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        },
+        {
+          "member": "run-sim-policy-hotfix-27.sh",
+          "sha256": "add4992eba97e0b9420efc906ee20d03858277516e82a75ac427aae18b8edb51"
+        },
+        {
+          "member": "setup-snapshot-33.sh",
+          "sha256": "19b9c583778cfca63d19ace8a5b3d21312c326a91b27061f0a311ee4e9b10c9b"
+        },
+        {
+          "member": "setup-snapshot-34.sh",
+          "sha256": "d7f4c977d8900650346f24a7f270d2d6857da440704092f5c60ede7b348ddb0b"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-28",
+          "status_member": "logs/native-qualified-batch-28.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-29",
+          "status_member": "logs/native-qualified-batch-29.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-clippy-28.log",
+          "log_sha256": "f2db2fc0c020a4dd68136974944946952f416827a69595907b8c698de4d049f0",
+          "name": "native-runtime-clippy-28",
+          "script_member": "run-native-qualified-batch-28.sh",
+          "source_snapshot": "snapshot33",
+          "status_member": "logs/native-runtime-clippy-28.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-clippy-29.log",
+          "log_sha256": "4b731bd9fc2ea3b224698497612a55b4c439ef646a76fc52a8ac531a3de415d3",
+          "name": "native-runtime-clippy-29",
+          "script_member": "run-native-qualified-batch-29.sh",
+          "source_snapshot": "snapshot34",
+          "status_member": "logs/native-runtime-clippy-29.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "retirement_observation",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 2482,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 0
+            }
+          ],
+          "log_member": "logs/native-runtime-retirement-28.log",
+          "log_sha256": "9599766d702d59090273424145ea2874a0f47c5db8052e20b979cfcf2a1855cc",
+          "name": "native-runtime-retirement-28",
+          "script_member": "run-native-qualified-batch-28.sh",
+          "source_snapshot": "snapshot33",
+          "status_member": "logs/native-runtime-retirement-28.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "retirement_observation",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 2482,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 0
+            }
+          ],
+          "log_member": "logs/native-runtime-retirement-29.log",
+          "log_sha256": "a41d1a166d864dbf6dae238887349ccb37082860df15dc595eecbdc293f6835f",
+          "name": "native-runtime-retirement-29",
+          "script_member": "run-native-qualified-batch-29.sh",
+          "source_snapshot": "snapshot34",
+          "status_member": "logs/native-runtime-retirement-29.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "context::generated_scope",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 36.6,
+              "failed": 0,
+              "filtered": 2439,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 43
+            }
+          ],
+          "log_member": "logs/native-runtime-scope-28.log",
+          "log_sha256": "b045e532392a3c1cdb9ce7c0b9ce350e70699f56ff189d07df6693d44a4ebfb1",
+          "name": "native-runtime-scope-28",
+          "script_member": "run-native-qualified-batch-28.sh",
+          "source_snapshot": "snapshot33",
+          "status_member": "logs/native-runtime-scope-28.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "context::generated_scope",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 36.38,
+              "failed": 0,
+              "filtered": 2439,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 43
+            }
+          ],
+          "log_member": "logs/native-runtime-scope-29.log",
+          "log_sha256": "b65f16c4ee3aef1311456e3320d709e1a070e278a3b04a033504f989c54f32bf",
+          "name": "native-runtime-scope-29",
+          "script_member": "run-native-qualified-batch-29.sh",
+          "source_snapshot": "snapshot34",
+          "status_member": "logs/native-runtime-scope-29.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 348.82,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 34,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2448
+            }
+          ],
+          "log_member": "logs/native-runtime-tests-28.log",
+          "log_sha256": "3299e6fa687c55d37a7112d06952cf4082963c3c8b33058b45dd2f789492dbf2",
+          "name": "native-runtime-tests-28",
+          "script_member": "run-native-qualified-batch-28.sh",
+          "source_snapshot": "snapshot33",
+          "status_member": "logs/native-runtime-tests-28.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 348.56,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 34,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2448
+            }
+          ],
+          "log_member": "logs/native-runtime-tests-29.log",
+          "log_sha256": "815fbd065fdeeedc1d511130658adac48e8ecd0e0ed3b7a9468cdfb99a3da100",
+          "name": "native-runtime-tests-29",
+          "script_member": "run-native-qualified-batch-29.sh",
+          "source_snapshot": "snapshot34",
+          "status_member": "logs/native-runtime-tests-29.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "unpublished",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.04,
+              "failed": 0,
+              "filtered": 2469,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 13
+            }
+          ],
+          "log_member": "logs/native-runtime-unpublished-28.log",
+          "log_sha256": "15f69c948b6e448e9b727e891641992306c749dd33d0ac6e6468c840e5d7d3f8",
+          "name": "native-runtime-unpublished-28",
+          "script_member": "run-native-qualified-batch-28.sh",
+          "source_snapshot": "snapshot33",
+          "status_member": "logs/native-runtime-unpublished-28.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "unpublished",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.03,
+              "failed": 0,
+              "filtered": 2469,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 13
+            }
+          ],
+          "log_member": "logs/native-runtime-unpublished-29.log",
+          "log_sha256": "75230664d5c2a6fc5b0644003979c47f93ad2d2d28d3df5061e55f873a33b81e",
+          "name": "native-runtime-unpublished-29",
+          "script_member": "run-native-qualified-batch-29.sh",
+          "source_snapshot": "snapshot34",
+          "status_member": "logs/native-runtime-unpublished-29.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-sim-physical-differential",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 14
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 0
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            },
+            {
+              "elapsed_seconds": 0.09,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            }
+          ],
+          "log_member": "logs/sim-physical-differential-tests-29.log",
+          "log_sha256": "711873553eb8b1e358ee382576559716fbeae56e239e0850899201da16718da6",
+          "name": "sim-physical-differential-tests-29",
+          "script_member": "run-native-qualified-batch-29.sh",
+          "source_snapshot": "snapshot34",
+          "status_member": "logs/sim-physical-differential-tests-29.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "name": "sim-policy-hotfix-27",
+          "status_member": "logs/sim-policy-hotfix-27.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "build",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-sim-runtime",
+            "--example",
+            "sim-runtime-evidence"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/sim-runtime-build-hotfix-27.log",
+          "log_sha256": "db113466d15c4c068216ce136079304a16f89749226026db2c44072316c8b5d8",
+          "name": "sim-runtime-build-hotfix-27",
+          "script_member": "run-sim-policy-hotfix-27.sh",
+          "source_snapshot": "snapshot32",
+          "status_member": "logs/sim-runtime-build-hotfix-27.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "scripts/runtime_pure_rust_audit.py",
+            "--policy",
+            "$root/sim-runtime-no-gpu-policy-hotfix.json",
+            "elf",
+            "--input",
+            "$target/debug/examples/sim-runtime-evidence"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/sim-runtime-elf-hotfix-27.log",
+          "log_sha256": "fb0a51234bcffb1e300ce9c43fefadd2b927a5b2bb1cf7ec8afb02ea2fb6595d",
+          "name": "sim-runtime-elf-hotfix-27",
+          "script_member": "run-sim-policy-hotfix-27.sh",
+          "source_snapshot": "snapshot32",
+          "status_member": "logs/sim-runtime-elf-hotfix-27.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "scripts/runtime_pure_rust_audit.py",
+            "--policy",
+            "$root/sim-runtime-no-gpu-policy-hotfix.json",
+            "metadata",
+            "--cargo",
+            "--root",
+            "fe2o3-sim-runtime"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/sim-runtime-metadata-hotfix-27.log",
+          "log_sha256": "122f2470cc01849e05640257ee6e915968a3a5e049b9993e5e8032e3fb6b3872",
+          "name": "sim-runtime-metadata-hotfix-27",
+          "script_member": "run-sim-policy-hotfix-27.sh",
+          "source_snapshot": "snapshot32",
+          "status_member": "logs/sim-runtime-metadata-hotfix-27.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshots35-38-fresh-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-30.sh",
+          "sha256": "135bff27aeb6fa5515f4ee95f9bf750248a85bf8dcdb2cc6b1fe97520dd2fe08"
+        },
+        {
+          "member": "run-native-qualified-batch-31.sh",
+          "sha256": "a3d54052f6b780f1bb11d6ef7a1494bd68a41464e213baa4946a37dc75e75253"
+        },
+        {
+          "member": "run-native-qualified-batch-32.sh",
+          "sha256": "18b5e040cbf8542b6ed4ab2604d9c68fc08ff3748b4b232e28ed46eb7ea3841a"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        },
+        {
+          "member": "setup-snapshot-33.sh",
+          "sha256": "19b9c583778cfca63d19ace8a5b3d21312c326a91b27061f0a311ee4e9b10c9b"
+        },
+        {
+          "member": "setup-snapshot-34.sh",
+          "sha256": "d7f4c977d8900650346f24a7f270d2d6857da440704092f5c60ede7b348ddb0b"
+        },
+        {
+          "member": "setup-snapshot-35.sh",
+          "sha256": "ce11129dbf60e542fb2de76a88f916a0aeb505c9034591554b478a8be33988fd"
+        },
+        {
+          "member": "setup-snapshot-36.sh",
+          "sha256": "88bdc34d43a5863188ab709061043a22ed8e47588eeb697fe93f608384f57cef"
+        },
+        {
+          "member": "setup-snapshot-37.sh",
+          "sha256": "70a46f494fbd4b979eee706f7a6dd141b8fc61edb626a1b3ecee78347e2b9623"
+        },
+        {
+          "member": "setup-snapshot-38.sh",
+          "sha256": "4a087ed1d3c9d72554c47accf95638e03c0918c9b29e4b8244ca535f5b1a09c9"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "$root/clean-affected-packages-32.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/affected-clean-32.log",
+          "log_sha256": "1f6e5a18d03de4c9bca89289f7f6427a052b42b3269a082c5777ce6471eca75d",
+          "name": "affected-clean-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/affected-clean-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "generated_runtime_results::staging::tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 365,
+              "ignored": 1,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 7
+            }
+          ],
+          "log_member": "logs/native-host-staging-30.log",
+          "log_sha256": "f32a87b0db1b18773cd44fdd5040c90449246eea8572355e0767b4d76000defc",
+          "name": "native-host-staging-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-host-staging-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "generated_runtime_results::staging::tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.01,
+              "failed": 0,
+              "filtered": 365,
+              "ignored": 1,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 7
+            }
+          ],
+          "log_member": "logs/native-host-staging-31.log",
+          "log_sha256": "2c4c478f7df398823a4fbb89e7e65d66189456d640ff2baf99ff55f649cbb7e0",
+          "name": "native-host-staging-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-host-staging-31.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "generated_runtime_results::staging::tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 365,
+              "ignored": 1,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 7
+            }
+          ],
+          "log_member": "logs/native-host-staging-32.log",
+          "log_sha256": "d8be5e675d6212f8522d3f68ac492192b5b2ace42551116222974bec5f1293f7",
+          "name": "native-host-staging-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-host-staging-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 9.44,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 370
+            }
+          ],
+          "log_member": "logs/native-host-tests-30.log",
+          "log_sha256": "797d31c0c1b6c7840909ef45bdd6a0b3ebbd9c95aee3cfd9ff123658f82dbd1b",
+          "name": "native-host-tests-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-host-tests-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 9.39,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 370
+            }
+          ],
+          "log_member": "logs/native-host-tests-31.log",
+          "log_sha256": "8c027dcd4e21e6366fc77b6c93900e39c75f5bbd3e44e400f23aa42bb13709eb",
+          "name": "native-host-tests-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-host-tests-31.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-host",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 372,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1
+            },
+            {
+              "elapsed_seconds": 9.41,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 370
+            }
+          ],
+          "log_member": "logs/native-host-tests-32.log",
+          "log_sha256": "8c14e82c4dd3f6d3f3e3d343aebca9d789e22f8cd7ecc819d26c179527afe9a8",
+          "name": "native-host-tests-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-host-tests-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "native_fill_cohort_tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.07,
+              "failed": 0,
+              "filtered": 2057,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 7
+            }
+          ],
+          "log_member": "logs/native-kfd-cohort-30.log",
+          "log_sha256": "43b7874fb92142e950bd3552d8d6b019e278992598a46197804cae766ecd27f8",
+          "name": "native-kfd-cohort-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-kfd-cohort-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "native_fill_cohort_tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.07,
+              "failed": 0,
+              "filtered": 2057,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 7
+            }
+          ],
+          "log_member": "logs/native-kfd-cohort-31.log",
+          "log_sha256": "191dcec00b86d3442f3efb820b188c8167a8e0f4c08cfae28fb2539cb704fb41",
+          "name": "native-kfd-cohort-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-kfd-cohort-31.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "conditional_fill",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.1,
+              "failed": 0,
+              "filtered": 2046,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 18
+            }
+          ],
+          "log_member": "logs/native-kfd-conditional-30.log",
+          "log_sha256": "e815e5ab679d137bd515d33b1524dd0299c3ccb838e0539547838fb46035ca1a",
+          "name": "native-kfd-conditional-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-kfd-conditional-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "conditional_fill",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.1,
+              "failed": 0,
+              "filtered": 2046,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 18
+            }
+          ],
+          "log_member": "logs/native-kfd-conditional-31.log",
+          "log_sha256": "12fbe168ad19d1337b0c24476cff66ea55d6cf8347e256a847e6f518f0668934",
+          "name": "native-kfd-conditional-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-kfd-conditional-31.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--doc"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 4
+            },
+            {
+              "elapsed_seconds": 0.1,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 57
+            }
+          ],
+          "log_member": "logs/native-kfd-docs-30.log",
+          "log_sha256": "12e030cf65288c0fe000e665d8f1448a904ce0d6afa129887ddb87134d4239d1",
+          "name": "native-kfd-docs-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-kfd-docs-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--doc"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 4
+            },
+            {
+              "elapsed_seconds": 0.1,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 57
+            }
+          ],
+          "log_member": "logs/native-kfd-docs-31.log",
+          "log_sha256": "25998ca464a8b559cc3d829ffbdbf826bcab6aa598160120e9412b249a253116",
+          "name": "native-kfd-docs-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-kfd-docs-31.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 668.25,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2061
+            }
+          ],
+          "log_member": "logs/native-kfd-tests-30.log",
+          "log_sha256": "247b6d9ef55cb2c16b6c1a2e0f161ccdb626884321c83d98e44e4f1528c5e71a",
+          "name": "native-kfd-tests-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-kfd-tests-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 660.83,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 3,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2061
+            }
+          ],
+          "log_member": "logs/native-kfd-tests-31.log",
+          "log_sha256": "5d3e8cd33106123f7762e1bb5b73b82c23a70bdc35a21f22fe8fe1e0c1625aa0",
+          "name": "native-kfd-tests-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-kfd-tests-31.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-30",
+          "status_member": "logs/native-qualified-batch-30.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-31",
+          "status_member": "logs/native-qualified-batch-31.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "name": "native-qualified-batch-32",
+          "status_member": "logs/native-qualified-batch-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "backing_",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.02,
+              "failed": 0,
+              "filtered": 2470,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 29
+            }
+          ],
+          "log_member": "logs/native-runtime-backing-32.log",
+          "log_sha256": "21320cd9ed1cc1fe1076fda5f9302e42c71f701ceef9569d3b64dc00a242d190",
+          "name": "native-runtime-backing-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-runtime-backing-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--doc",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 12
+            },
+            {
+              "elapsed_seconds": 0.16,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 79
+            }
+          ],
+          "log_member": "logs/native-runtime-docs-30.log",
+          "log_sha256": "7a7457248d8d614148a62172e1a084b05822e5ce2092784ef62a0edafecf8382",
+          "name": "native-runtime-docs-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-runtime-docs-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--doc",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 12
+            },
+            {
+              "elapsed_seconds": 0.15,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 79
+            }
+          ],
+          "log_member": "logs/native-runtime-docs-31.log",
+          "log_sha256": "761e207c92afef731fb566fef6256a4bb476a2c7da6bddc419cab3076b7b7494",
+          "name": "native-runtime-docs-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-runtime-docs-31.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--doc",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 12
+            },
+            {
+              "elapsed_seconds": 0.14,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 79
+            }
+          ],
+          "log_member": "logs/native-runtime-docs-32.log",
+          "log_sha256": "6653ed2d6be00cfe9f90ea35d3d6edb0ae9c8aea397275509e2a63d1562720f4",
+          "name": "native-runtime-docs-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-runtime-docs-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "graph_tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.59,
+              "failed": 0,
+              "filtered": 2437,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 60
+            }
+          ],
+          "log_member": "logs/native-runtime-graph-30.log",
+          "log_sha256": "d95981b98b004dc6e492c5910055376c674f52df11d24ed348dd967ce2c45519",
+          "name": "native-runtime-graph-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-runtime-graph-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "graph_tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-graph-31.log",
+          "log_sha256": "502a21663410b4a80f1503695561e2f9ed975fb929018ee15be53e315305afee",
+          "name": "native-runtime-graph-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-runtime-graph-31.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "graph_tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.59,
+              "failed": 0,
+              "filtered": 2439,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 60
+            }
+          ],
+          "log_member": "logs/native-runtime-graph-32.log",
+          "log_sha256": "6f33c6d9efd139bc00573b5945794bd4e6d309e4f64e6568f0902a86c2f3b7b9",
+          "name": "native-runtime-graph-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-runtime-graph-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "retirement_observation",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 2495,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            }
+          ],
+          "log_member": "logs/native-runtime-retirement-30.log",
+          "log_sha256": "dbaa494567ecc739b2517ac8be2cf35cbb1af33e3e6c0418a2a7ae442075a777",
+          "name": "native-runtime-retirement-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-runtime-retirement-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "retirement_observation",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-retirement-31.log",
+          "log_sha256": "502a21663410b4a80f1503695561e2f9ed975fb929018ee15be53e315305afee",
+          "name": "native-runtime-retirement-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-runtime-retirement-31.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "retirement_observation",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 2497,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            }
+          ],
+          "log_member": "logs/native-runtime-retirement-32.log",
+          "log_sha256": "290377547bcd0b676cec212ad97e822e1ae8f85162dbd64c115c1e80bcee211d",
+          "name": "native-runtime-retirement-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-runtime-retirement-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "context::generated_scope",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-scope-30.log",
+          "log_sha256": "098dcb45c5b554ec937afa3f04558ce8b13510d62354ec0d8dbec11ea1b3c5e0",
+          "name": "native-runtime-scope-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-runtime-scope-30.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "context::generated_scope",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-scope-31.log",
+          "log_sha256": "15a414fe684a29a02d86f6ae76c3ba11094bc32540a6cd4c045d7e36e28da8c1",
+          "name": "native-runtime-scope-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-runtime-scope-31.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "context::generated_scope",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 36.77,
+              "failed": 0,
+              "filtered": 2446,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 53
+            }
+          ],
+          "log_member": "logs/native-runtime-scope-32.log",
+          "log_sha256": "c30ddb689ffa7dfb8d3fa6bdf5a7507e4ccd5b544516d34f656bd90590857fab",
+          "name": "native-runtime-scope-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-runtime-scope-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-tests-30.log",
+          "log_sha256": "b1cbc6e5f4876f396b8037a9228253fb1d1e0bbd2d352f87d2387f6df881406b",
+          "name": "native-runtime-tests-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-runtime-tests-30.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-tests-31.log",
+          "log_sha256": "502a21663410b4a80f1503695561e2f9ed975fb929018ee15be53e315305afee",
+          "name": "native-runtime-tests-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-runtime-tests-31.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 348.54,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 34,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2465
+            }
+          ],
+          "log_member": "logs/native-runtime-tests-32.log",
+          "log_sha256": "bf686b76b5c4d8d11c154f715c0dd3f6489ef870358504c54056fba4aa4ea1df",
+          "name": "native-runtime-tests-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-runtime-tests-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "unpublished",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-unpublished-30.log",
+          "log_sha256": "327ef340a45a8cf78377faf97d2cdb64319352dfaef657a46e56f81399bfab58",
+          "name": "native-runtime-unpublished-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-runtime-unpublished-30.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "unpublished",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-unpublished-31.log",
+          "log_sha256": "c21ff0a4c0973b5bb44e492f984eca5990ab9a7e4977fec67c8cf1eb9a975847",
+          "name": "native-runtime-unpublished-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-runtime-unpublished-31.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "--lib",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "unpublished",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.09,
+              "failed": 0,
+              "filtered": 2479,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 20
+            }
+          ],
+          "log_member": "logs/native-runtime-unpublished-32.log",
+          "log_sha256": "5308e135d23a5f0fdf9832cb003d52dc74cd7dbb5b3a3fd16b7254ba89953302",
+          "name": "native-runtime-unpublished-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-runtime-unpublished-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 134,
+          "libtest_summaries": [],
+          "log_member": "logs/native-runtime-unpublished-diagnostic-31.log",
+          "log_sha256": "049130812d981c8f8e6b5a0ae625de95cc1aa33408a169138e7df87498911766",
+          "name": "native-runtime-unpublished-diagnostic-31",
+          "status_member": "logs/native-runtime-unpublished-diagnostic-31.status",
+          "status_sha256": "e726b440cc164001999e718b51780d80314709efe06e7857282377be9111127b"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-scope-clippy-30.log",
+          "log_sha256": "53e27a60a83b079dd1c9ce13fc8a65769591ea4b55502c7dbc7688b05c067ca5",
+          "name": "native-scope-clippy-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-scope-clippy-30.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-scope-clippy-31.log",
+          "log_sha256": "302f9117da89a8019db364f4a9b2d9c0e62db30f02628f0632dad5e4ae777b0a",
+          "name": "native-scope-clippy-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-scope-clippy-31.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/native-scope-clippy-32.log",
+          "log_sha256": "3ab0a10c0ade325fd75994c5184265f4b968bb8f5ab342cfd4af6891ec7c7567",
+          "name": "native-scope-clippy-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-scope-clippy-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "-p",
+            "fe2o3-host",
+            "-p",
+            "fe2o3-sim-physical-differential",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/native-workspace-check-30.log",
+          "log_sha256": "a7e5cbe33cbd378459b46e089f80997e85d636e676b5373b3ee321c2fb4f4da0",
+          "name": "native-workspace-check-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/native-workspace-check-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "-p",
+            "fe2o3-host",
+            "-p",
+            "fe2o3-sim-physical-differential",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-workspace-check-31.log",
+          "log_sha256": "2dcdffd22a21523c75b126b92c9ddecf742e536c81cb104cf67dc2b4f57d3664",
+          "name": "native-workspace-check-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/native-workspace-check-31.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-runtime",
+            "-p",
+            "fe2o3-kfd",
+            "-p",
+            "fe2o3-host",
+            "-p",
+            "fe2o3-sim-physical-differential",
+            "--all-targets",
+            "--features",
+            "scale-qualification,cpu-runtime-fixtures"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/native-workspace-check-32.log",
+          "log_sha256": "1fcdb9dcfb99f9a78b36d7bd75b9cdde0ac239fad5ad76a7376a1866fb61d6e1",
+          "name": "native-workspace-check-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/native-workspace-check-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-sim-physical-differential",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 14
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 0
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            },
+            {
+              "elapsed_seconds": 0.09,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            }
+          ],
+          "log_member": "logs/sim-physical-differential-tests-30.log",
+          "log_sha256": "e662f9ce42356906f0d0e91e12a7fa9b34091618a321ff235bf212055527f096",
+          "name": "sim-physical-differential-tests-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/sim-physical-differential-tests-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-sim-physical-differential",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 14
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 0
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            },
+            {
+              "elapsed_seconds": 0.09,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            }
+          ],
+          "log_member": "logs/sim-physical-differential-tests-31.log",
+          "log_sha256": "0454431bbe482aa9f447988631c6cabc51015d02c3c5161e3977012864ebce97",
+          "name": "sim-physical-differential-tests-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/sim-physical-differential-tests-31.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-sim-physical-differential",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 14
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 0
+            },
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            },
+            {
+              "elapsed_seconds": 0.09,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 2
+            }
+          ],
+          "log_member": "logs/sim-physical-differential-tests-32.log",
+          "log_sha256": "21fb8c31ed427fa0b58e9250d50772ba05c6d725483f52428ffafe5ee57a5de8",
+          "name": "sim-physical-differential-tests-32",
+          "script_member": "run-native-qualified-batch-32.sh",
+          "source_snapshot": "snapshot38",
+          "status_member": "logs/sim-physical-differential-tests-32.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "$root/clean-workspace-packages-30.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/workspace-clean-30.log",
+          "log_sha256": "38a77e320b8e7e91e68293678b4c898415da8dc987024256ea02e926a03c82fb",
+          "name": "workspace-clean-30",
+          "script_member": "run-native-qualified-batch-30.sh",
+          "source_snapshot": "snapshot36",
+          "status_member": "logs/workspace-clean-30.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "python3",
+            "-I",
+            "-B",
+            "$root/clean-workspace-packages-31.py"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/workspace-clean-31.log",
+          "log_sha256": "7b2487fadfea3f011ed578a71419766f27b0e30ab969c3036532e2240c5e4d26",
+          "name": "workspace-clean-31",
+          "script_member": "run-native-qualified-batch-31.sh",
+          "source_snapshot": "snapshot37",
+          "status_member": "logs/workspace-clean-31.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
+    },
+    {
+      "archive": "native-snapshots39-40-verifier-cpu-evidence.tar.gz",
+      "scripts": [
+        {
+          "member": "run-native-qualified-batch-33.sh",
+          "sha256": "287e06afac40a8d89af653a70366a04ae7ef3b320ce4f8ab2bc0afdf888a1895"
+        },
+        {
+          "member": "run-native-qualified-batch-34.sh",
+          "sha256": "ed110c59052dc82d2df117b5082ebf79dca43b514eaa6065195fc4acfa07d093"
+        },
+        {
+          "member": "run-qualification-05.sh",
+          "sha256": "08a8d12154ac16f9d2d0c0c0fc8b2d15f624bc70a896dab7143d51c28fe6f3bd"
+        },
+        {
+          "member": "setup-snapshot-39.sh",
+          "sha256": "efffb622168e516553909a44656b5a0a389def8813fc5716a1adf6706d012fc0"
+        },
+        {
+          "member": "setup-snapshot-40.sh",
+          "sha256": "23d63e526b976b9730641d2908e578d88b0aa9be5449226d85ae89087da2fb2c"
+        }
+      ],
+      "source_inventories": [],
+      "stages": [
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-kfd",
+            "--package",
+            "fe2o3-verifier"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/changed-package-clean-34.log",
+          "log_sha256": "29c631d324d0ac127ccbc853c0b204cdcfe2cd7f4b492f8adb0142b2394b1d37",
+          "name": "changed-package-clean-34",
+          "script_member": "run-native-qualified-batch-34.sh",
+          "source_snapshot": "snapshot40",
+          "status_member": "logs/changed-package-clean-34.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clippy",
+            "--offline",
+            "--locked",
+            "--no-deps",
+            "-p",
+            "fe2o3-kfd",
+            "--all-targets",
+            "--",
+            "-D",
+            "clippy::all"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-kfd-clippy-34.log",
+          "log_sha256": "717811e4a43a33f3f3ce4ee39d67649dcd1bc2302ab80a7b06a00b55020b0977",
+          "name": "native-kfd-clippy-34",
+          "script_member": "run-native-qualified-batch-34.sh",
+          "source_snapshot": "snapshot40",
+          "status_member": "logs/native-kfd-clippy-34.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "native_fill_cohort_tests",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-kfd-cohort-34.log",
+          "log_sha256": "029d822372cb5f19be1e3273b55375f37a4b523b4d996c34cfc6fe2f7fe630e6",
+          "name": "native-kfd-cohort-34",
+          "script_member": "run-native-qualified-batch-34.sh",
+          "source_snapshot": "snapshot40",
+          "status_member": "logs/native-kfd-cohort-34.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "native_fill_cohort_primary_",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-kfd-cohort-primary-34.log",
+          "log_sha256": "029d822372cb5f19be1e3273b55375f37a4b523b4d996c34cfc6fe2f7fe630e6",
+          "name": "native-kfd-cohort-primary-34",
+          "script_member": "run-native-qualified-batch-34.sh",
+          "source_snapshot": "snapshot40",
+          "status_member": "logs/native-kfd-cohort-primary-34.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--doc"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.0,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 4
+            },
+            {
+              "elapsed_seconds": 0.11,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 0,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 57
+            }
+          ],
+          "log_member": "logs/native-kfd-docs-34.log",
+          "log_sha256": "4d08f69bef74a94d5025c590681028b70440397954add838249dde0263b6350d",
+          "name": "native-kfd-docs-34",
+          "script_member": "run-native-qualified-batch-34.sh",
+          "source_snapshot": "snapshot40",
+          "status_member": "logs/native-kfd-docs-34.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "--lib",
+            "--",
+            "--test-threads=1"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-kfd-tests-34.log",
+          "log_sha256": "029d822372cb5f19be1e3273b55375f37a4b523b4d996c34cfc6fe2f7fe630e6",
+          "name": "native-kfd-tests-34",
+          "script_member": "run-native-qualified-batch-34.sh",
+          "source_snapshot": "snapshot40",
+          "status_member": "logs/native-kfd-tests-34.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-kfd",
+            "-p",
+            "fe2o3-verifier",
+            "--all-targets"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/native-kfd-verifier-check-34.log",
+          "log_sha256": "22ba274144525c42f1dfa1958a4be3e3d250151ac064706901de121763251626",
+          "name": "native-kfd-verifier-check-34",
+          "script_member": "run-native-qualified-batch-34.sh",
+          "source_snapshot": "snapshot40",
+          "status_member": "logs/native-kfd-verifier-check-34.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-33",
+          "status_member": "logs/native-qualified-batch-33.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 1,
+          "name": "native-qualified-batch-34",
+          "status_member": "logs/native-qualified-batch-34.status",
+          "status_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+        },
+        {
+          "argv": [
+            "cargo",
+            "check",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-verifier",
+            "--all-targets"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/verifier-all-target-check-33.log",
+          "log_sha256": "8f857f63624df1915041ebdb6585d75746f6da99d1efe4ad103b91d918151732",
+          "name": "verifier-all-target-check-33",
+          "script_member": "run-native-qualified-batch-33.sh",
+          "source_snapshot": "snapshot39",
+          "status_member": "logs/verifier-all-target-check-33.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-verifier",
+            "--lib",
+            "compiler_proof_broker_v1",
+            "--",
+            "--test-threads=16"
+          ],
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/verifier-broker-parallel-33.log",
+          "log_sha256": "19abdd011fb2b74281bbac9dbe67a665d4d2a9d8f6f53451e8b079af50ae9383",
+          "name": "verifier-broker-parallel-33",
+          "script_member": "run-native-qualified-batch-33.sh",
+          "source_snapshot": "snapshot39",
+          "status_member": "logs/verifier-broker-parallel-33.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "argv": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "-p",
+            "fe2o3-verifier",
+            "--lib",
+            "compiler_proof_broker_v1",
+            "--",
+            "--test-threads=16"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 0.03,
+              "failed": 0,
+              "filtered": 1514,
+              "ignored": 1,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 24
+            }
+          ],
+          "log_member": "logs/verifier-broker-parallel-34.log",
+          "log_sha256": "7d06dcc06a1ab36db5e77a3ec651ee1a9240b69df4380a31735b74cc47341623",
+          "name": "verifier-broker-parallel-34",
+          "script_member": "run-native-qualified-batch-34.sh",
+          "source_snapshot": "snapshot40",
+          "status_member": "logs/verifier-broker-parallel-34.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "argv": [
+            "cargo",
+            "clean",
+            "--package",
+            "fe2o3-verifier"
+          ],
+          "exit_status": 0,
+          "libtest_summaries": [],
+          "log_member": "logs/verifier-clean-33.log",
+          "log_sha256": "d7bbd0a28fececab8ce12c80f8dcfa5c9a69aa03a378e369a8e210e84443373c",
+          "name": "verifier-clean-33",
+          "script_member": "run-native-qualified-batch-33.sh",
+          "source_snapshot": "snapshot39",
+          "status_member": "logs/verifier-clean-33.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/verifier-full-parallel-1-33.log",
+          "log_sha256": "2d851f8a0c9b180681a02bb0e4b42ca3ef170efad1f86f870556a3da77f9bc29",
+          "name": "verifier-full-parallel-1-33",
+          "status_member": "logs/verifier-full-parallel-1-33.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 9.2,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 46,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1493
+            }
+          ],
+          "log_member": "logs/verifier-full-parallel-1-34.log",
+          "log_sha256": "c5ddd7044d02991f862bc635542037e75360bb20e11946ee6eced55d1a272bd6",
+          "name": "verifier-full-parallel-1-34",
+          "status_member": "logs/verifier-full-parallel-1-34.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/verifier-full-parallel-2-33.log",
+          "log_sha256": "2d851f8a0c9b180681a02bb0e4b42ca3ef170efad1f86f870556a3da77f9bc29",
+          "name": "verifier-full-parallel-2-33",
+          "status_member": "logs/verifier-full-parallel-2-33.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 9.02,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 46,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1493
+            }
+          ],
+          "log_member": "logs/verifier-full-parallel-2-34.log",
+          "log_sha256": "fc26cdd8ea73a727cc8f4c9d02768abdb79b9ae3d5b8473bdfda3d5d03731736",
+          "name": "verifier-full-parallel-2-34",
+          "status_member": "logs/verifier-full-parallel-2-34.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 101,
+          "libtest_summaries": [],
+          "log_member": "logs/verifier-full-parallel-3-33.log",
+          "log_sha256": "2d851f8a0c9b180681a02bb0e4b42ca3ef170efad1f86f870556a3da77f9bc29",
+          "name": "verifier-full-parallel-3-33",
+          "status_member": "logs/verifier-full-parallel-3-33.status",
+          "status_sha256": "39b8dc3fc8b44765c8e6f1adee04c5b465e555ab791cc42d0d9e810d5b64297c"
+        },
+        {
+          "command_record": "not included in this archive index; no inferred argv",
+          "exit_status": 0,
+          "libtest_summaries": [
+            {
+              "elapsed_seconds": 9.09,
+              "failed": 0,
+              "filtered": 0,
+              "ignored": 46,
+              "measured": 0,
+              "outcome": "ok",
+              "passed": 1493
+            }
+          ],
+          "log_member": "logs/verifier-full-parallel-3-34.log",
+          "log_sha256": "2dac821984292984def46c988d9a760365093ee3d82eb6cb3de9d6d6b8ef2566",
+          "name": "verifier-full-parallel-3-34",
+          "status_member": "logs/verifier-full-parallel-3-34.status",
+          "status_sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+        }
+      ]
     }
   ],
   "evidence_class": "Validated",
@@ -10631,6 +13381,8 @@
   },
   "limitations": [
     "Counts are per-command libtest summaries, not a deduplicated test count.",
+    "Snapshot34 exposed older Cargo test binary reuse after tar overlays; historical incremental exit-zero statuses require source-to-binary requalification, not promotion to successor acceptance.",
+    "Fresh source replay must record workspace package cleanup and execute the new tests; source inventories alone do not establish compiled binary identity.",
     "A passing earlier source snapshot does not qualify later edits.",
     "No missing command record, absent test summary or ignored test is inferred to pass.",
     "Proof campaigns have independent source manifests and theorem boundaries.",

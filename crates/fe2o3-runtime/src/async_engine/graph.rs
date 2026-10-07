@@ -14,10 +14,12 @@ use fe2o3_completion::{
 use std::collections::VecDeque;
 mod admitted;
 mod generated;
+mod host_staging;
 mod versions;
 pub(crate) use admitted::*;
 use generated::GraphReplyV1;
 pub use generated::*;
+pub(crate) use host_staging::HostStagingV1;
 pub use versions::{
     MAX_RUNTIME_GRAPH_VERSION_REFERENCES_V1, MAX_RUNTIME_GRAPH_VERSIONS_V1,
     RuntimeGraphDataVersionV1, RuntimeGraphInputVersionV1, RuntimeGraphVersionRecordV1,
@@ -27,6 +29,10 @@ pub use versions::{
 pub const MAX_RUNTIME_GRAPH_NODES_V1: usize = 256;
 pub const MAX_RUNTIME_GRAPH_KERNARG_BYTES_V1: usize = 65_536;
 pub const MAX_RUNTIME_GRAPH_EFFECTS_V1: usize = 1_024;
+/// Per-action byte-work ceiling for a new ordinary HostStaging action. This is
+/// neither the scope's metadata bound nor a replacement for original result
+/// credits or Context allocation admission. Caller scratch remains caller-owned.
+pub const MAX_RUNTIME_GRAPH_HOST_STAGING_BYTES_V1: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeGraphValidationErrorV1 {
@@ -39,6 +45,8 @@ pub enum RuntimeGraphValidationErrorV1 {
     DuplicateVersionInput,
     InvalidVersionInput,
     VersionNotAvailable,
+    InvalidHostStaging,
+    HostStagingRequiresScope,
     UnorderedMemoryConflict {
         first: CompletionNodeIdV1,
         second: CompletionNodeIdV1,
@@ -181,6 +189,7 @@ impl<B: RuntimeBackendV1, A: RuntimeArgumentsV1> FrozenLaunch<B> for Launch<A> {
 enum Action<B: RuntimeBackendV1> {
     Launch(Box<dyn FrozenLaunch<B>>),
     Copy(RuntimeMemoryRegionV1, RuntimeMemoryRegionV1),
+    HostStaging(HostStagingV1),
 }
 
 /// A bounded, process-local graph request. Its identities and effects are
@@ -317,6 +326,7 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
                 ancestors[i][p / 64] |= 1 << (p % 64);
             }
         }
+        self.validate_host_staging_dependencies_v1(&ancestors)?;
         let mut effects = Vec::with_capacity(self.effects);
         for (&node, action) in &self.actions {
             let mut add = |region: RuntimeMemoryRegionV1| {
@@ -338,6 +348,7 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
                     add(*source);
                     add(*destination);
                 }
+                Action::HostStaging(staging) => add(staging.destination),
             }
         }
         effects.sort_unstable_by_key(|effect| (effect.0, effect.1));

@@ -12,7 +12,7 @@ ROOT = BASE.parents[2]
 V = BASE.relative_to(ROOT)
 PROOF = V / "context_producer_journal_composition_v1.rs"
 EXTENSION = V / "producer_planner_input_composition_v1.rs"
-GUARD_SHA = '3d3ee9bcc33a71924ffc3cc4a79a3ea3d02e408a9b2cf37503a895e18d02333e'
+GUARD_SHA = 'ae0bba16ccccf30f5858cefec512d422a1c4a8122955094c24d0c5924e222b8f'
 COMPLETION = tuple(V / ("context_completion_reconciliation_" + name + "_v1.rs")
                    for name in ("graph", "validation", "effects"))
 BINDINGS = (

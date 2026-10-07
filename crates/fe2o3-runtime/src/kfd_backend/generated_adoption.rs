@@ -8,6 +8,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 mod issue;
 mod readback;
 mod receipt;
+mod unpublished;
+pub(crate) use receipt::observe_generated_retirement_v1;
 use receipt::{ReceiptV1, RetirementV1};
 #[cfg(feature = "hardware-qualification")]
 pub(super) mod qualification;

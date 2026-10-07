@@ -252,6 +252,7 @@ impl VersionLedger {
                     add(*source);
                     add(*destination);
                 }
+                Action::HostStaging(staging) => add(staging.destination),
             }
         }
         for &(node, allocation, offset, len) in request.version_inputs.keys() {

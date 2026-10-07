@@ -195,6 +195,10 @@ fn generated_submission_release_cannot_discard_unretired_custody() {
             .unwrap()
             .receipt = receipt;
         assert!(backend.generated_submission_can_retire_v1(100));
+        // Descriptive receipt metadata without an original native lane cannot
+        // establish the new cancellation boundary, even for Ready/RetryReady.
+        assert!(!backend.generated_data_unpublished_v1(&plan, Some(100)));
+        assert!(!backend.generated_data_unpublished_v1(&plan, None));
         assert!(matches!(
             backend.release_submission_v1(100),
             Err(RuntimeBackendFailureV1::Rejected(_))

@@ -805,8 +805,8 @@ mod tests {
     use std::io::IoSliceMut;
     use std::mem::MaybeUninit;
     use std::os::fd::{AsFd, AsRawFd};
-    use std::os::unix::fs::PermissionsExt;
-    use std::path::PathBuf;
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -827,15 +827,26 @@ mod tests {
     }
 
     impl NamedListener {
-        fn new(name: &str) -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "fe2o3-client-supervisor-{name}-{}-{}",
+        fn new() -> Self {
+            Self::new_in(&std::env::temp_dir())
+        }
+
+        fn new_in(preferred: &Path) -> Self {
+            let component = format!(
+                "f3c-{}-{:x}",
                 std::process::id(),
                 LISTENER_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-            ));
-            fs::create_dir(&root).unwrap();
-            fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
-            let path = root.join("supervisor.sock");
+            );
+            let preferred_root = preferred.join(&component);
+            let root = match SocketAddrUnix::new(&preferred_root.join("s")) {
+                Ok(_) => preferred_root,
+                Err(error) if error.raw_os_error() == libc::ENAMETOOLONG => {
+                    Path::new("/tmp").join(component)
+                }
+                Err(error) => panic!("invalid preferred test socket path: {error}"),
+            };
+            let path = root.join("s");
+            let address = SocketAddrUnix::new(&path).unwrap();
             let descriptor = socket_with(
                 AddressFamily::UNIX,
                 SocketType::SEQPACKET,
@@ -843,14 +854,55 @@ mod tests {
                 None,
             )
             .unwrap();
-            bind(&descriptor, &SocketAddrUnix::new(&path).unwrap()).unwrap();
-            listen(&descriptor, 8).unwrap();
-            Self {
+            fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+            // Cleanup owns the exact newly-created directory before bind/listen
+            // can fail. Filesystem errors never select a different temp root.
+            let value = Self {
                 root,
                 path,
                 descriptor,
-            }
+            };
+            bind(&value.descriptor, &address).unwrap();
+            listen(&value.descriptor, 8).unwrap();
+            value
         }
+    }
+
+    #[test]
+    fn named_listener_retains_a_short_supplied_temp_directory() {
+        let parent = NamedListener::new_in(Path::new("/tmp"));
+        let listener = NamedListener::new_in(&parent.root);
+        assert_eq!(listener.root.parent(), Some(parent.root.as_path()));
+        assert_eq!(
+            fs::metadata(&listener.root).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let root = listener.root.clone();
+        drop(listener);
+        assert!(!root.exists());
+        let missing = parent.root.join("missing");
+        assert!(std::panic::catch_unwind(|| NamedListener::new_in(&missing)).is_err());
+        assert!(!missing.exists());
+    }
+
+    #[test]
+    fn named_listener_handles_overlong_temp_paths_without_global_env_changes() {
+        let preferred = Path::new("/tmp").join("x".repeat(160));
+        assert_eq!(
+            SocketAddrUnix::new(&preferred.join("s"))
+                .unwrap_err()
+                .raw_os_error(),
+            libc::ENAMETOOLONG
+        );
+        let listener = NamedListener::new_in(&preferred);
+        assert_eq!(listener.root.parent(), Some(Path::new("/tmp")));
+        assert_eq!(
+            rustix::net::getsockname(&listener.descriptor).unwrap(),
+            SocketAddrAny::from(SocketAddrUnix::new(&listener.path).unwrap())
+        );
+        let root = listener.root.clone();
+        drop(listener);
+        assert!(!root.exists());
     }
 
     impl Drop for NamedListener {
@@ -1065,7 +1117,7 @@ mod tests {
         if current_uid == 0 || current_gid == 0 {
             return;
         }
-        let listener = NamedListener::new("exact-transfer");
+        let listener = NamedListener::new();
         let mut command = Command::new("/bin/sleep");
         command.arg("30");
         let pending_child = PendingCompilerExecutionChildChannelV1::prepare(&mut command).unwrap();
@@ -1263,7 +1315,7 @@ mod tests {
             Err(CompilerExecutionHandoffErrorV1::Io(_))
         ));
 
-        let listener = NamedListener::new("wrong-credentials");
+        let listener = NamedListener::new();
         let wrong_uid = if current_uid == 1 { 2 } else { 1 };
         let wrong = CompilerExecutionSupervisorCredentialsV1::new(wrong_uid, current_gid).unwrap();
         assert!(matches!(

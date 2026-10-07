@@ -21,9 +21,10 @@ provenance records, not authenticated proof or launch authority.
 
 ## A2 Live-Validation Composition
 
-The two completed A2 campaigns below precede the final production
-modularization. They qualify their archived source inventories only. Final-source
-replays, including the affected signed-source template controls, remain pending.
+The two historical A2 campaigns below precede the final production
+modularization. They qualify their archived source inventories only. The later
+signed-source replay is recorded separately below; no result qualifies the
+subsequent cancellation, staging or cohort changes merely by inheritance.
 Interrupted later campaigns are retained as incomplete evidence in the artifact
 index, not substituted for complete runs.
 
@@ -74,7 +75,166 @@ See `crates/fe2o3-runtime-model/verus/PRODUCER_PLANNER_INPUT_V1.md` and the arch
 its tests; the reviewed-host lane runs the actual proof campaign. These are
 different evidence classes, not interchangeable successes.
 
+## Signed Foundation Replay
+
+The following completed campaigns use signed commit
+`49df8c3c490d0cd8d30a2ab3a56b6bd4e193d8f6`, not the later feature candidate.
+Its complete remote source inventory covers 15,284 files and 220,045,019 bytes;
+opening and closing byte/mode inventories agree. The pinned Verus closure has
+190 files and 129,019,839 bytes. The copied public Rust toolchain and its
+installation-metadata differences are recorded explicitly in the raw evidence.
+No private signing key, GPU execution or protected application exchange is
+part of these campaigns.
+
+- `native49-live114-planner13-evidence.tar.gz`, SHA-256
+  `a0794e1e083570f5793f38a6e179a80c0e4e9ef7f0d996b3e40d8fec81394429`:
+  live validation passed six whole-root positive brackets and 108 strict logical
+  negatives in 461.316 seconds; planner composition passed two 260-obligation
+  positives and eleven strict negatives in 60.495 seconds. All 147 recorded
+  process groups across setup and accepted campaigns are absent. The first live
+  attempt remains rejected because its stderr did not meet the classifier;
+  fixing the private Rust setup did not relax that classifier.
+- `native49-live114-planner13-semantic-audit.tar.gz`, SHA-256
+  `03b0542e499c616a97f8b0b805ab41864299665aa3e1e105e450f3608051d877`:
+  an independent archived-log replay reclassified all 127 accepted solver records
+  using the maintained classifiers and exact staged sources. This is an audit of
+  the recorded execution, not a second solver run.
+- `generic-verus-signed49-mi350-20261007.tar.gz`, SHA-256
+  `2c91dd7880229078f325146330d0cb58323de8f97fedaa4704c6df36a8f0c95b`:
+  the unchanged generic gate exited zero in 1065.285 seconds, including all seven
+  executable mutation campaigns and all 694 distinct fixed negatives. Source and
+  verifier inventories are unchanged; all 143 observed process groups are absent.
+  Its failed private-tool-path setup attempt is retained separately in the same
+  archive, not counted as acceptance.
+- `generic-verus-signed64-timeout-20261007.tar.gz`, SHA-256
+  `99cbd9efa1d9c715fe15675b23a2a372eb06b73cad088bb64054f72d822131fd`:
+  the older local foundation run failed on a 120-second lifecycle mutation
+  timeout. It is incomplete evidence, not an accepted prefix or a logical
+  negative. The successful remote replay kept the same per-proof limits.
+- `a2-signed-49-template-retained-20261007.tar.gz`, SHA-256
+  `43a994012e537d03a34008b4e69e49977ba160746a6e3f4d87852fb6e40aab41`:
+  all seven signed-source campaigns passed, including 102 template/preflight
+  negatives, eleven routing negatives and 25 retained-credit negatives. The
+  194 command records contain 21 full positive brackets, 138 intended logical
+  rejections and 35 signature, closure and calibration controls. The positive
+  roots verify 30, 46, 64, 64, 15, 4 and 41 obligations respectively, each in
+  original, relocated and closing runs. These are component counts, not whole
+  runtime theorems.
+- `a2-signed49-template-retained-semantic-audit-20261007.tar.gz`, SHA-256
+  `5655f0456fd1216d42161bd6a21fb44eee4a96c30a96a0a1d334451d65745627`:
+  independent replay accepted all 194 raw command records, exact signed source
+  files, mutated/relocated input bytes, fourteen release-closure checks and seven
+  source-signature checks. All 202 recorded groups, including controllers and
+  the wrapper, were absent at recorded closure. This is not a new solver run or
+  a current host-wide process census. The binder/roster's explicit std/hash trust
+  and the retained-credit campaign's measured-only host-tool boundary remain
+  part of the claim; the audit does not remove those assumptions.
+
+These are component-scoped logical results. They do not prove complete Context
+or DAG execution, opaque identity/lock behavior, native execution, performance,
+or any whole A1/A2/A3 milestone. The reviewed production GitHub job still needs
+qualified runner capacity; local success does not turn a queued job into a pass.
+
+## Successor Source Controls
+
+`a2-successor-source38-controls-20261007.tar.gz`, SHA-256
+`ceeb059562a4be0f9a75f70c9690ccba67219b545aacca87a0650719f832f65e`,
+retains all 22 passing source controls and the prior failed binder-shadow control.
+The latter exposed an alias check incorrectly applied to whitespace-compacted
+Rust. The correction uses the existing token-preserving lexer; the negative was
+retained, not weakened. All 44 recorded groups across both attempts were absent.
+Before/after source and support byte/mode inventories match. The existing
+executable proof closures remain byte-identical to the signed foundation, but
+the broader source inventories are new and require fresh maintained campaigns.
+See `crates/fe2o3-runtime-model/verus/RUNTIME_SUCCESSOR_BOUNDARIES_V1.md` for
+the precise cancellation, HostStaging and cohort exclusions.
+
+`a2-source40-constructor-controls-20261007.tar.gz`, SHA-256
+`d2e66caccb22151d9e35dd5d84e9dd9f452ca899b024fd22eac1f402748ecccf`,
+retains a later complete 22-control replay after adding the original-primary
+cohort constructor. All controls passed in 580.18 seconds aggregate, all 22
+recorded groups were absent, and complete opening/closing source and support
+inventories matched. This is source-control qualification, not solver execution
+or successful compilation: the constructor test privacy error described below
+was still present in this snapshot. Later test and incoming-main edits require
+their own refreshed source captures.
+
+Two separately retained CPU-only preflights prepare a future private replay:
+`mi350-pinned-keygen-preflight-20261007.tar.gz` (SHA-256
+`235d71f16b67208ede61cc81af109020e50d55bfcb4437d566adf76a37e67576`)
+and `rustup-directory-override-preflight-20261007.tar.gz` (SHA-256
+`93b3b6bb37092a412925c4cde5fa5da35790bae31183a47b856786c0eb8fafc2`).
+The first tests the already-pinned public SSH verifier in a disposable private
+mount namespace, without changing the host executable or copying a private key.
+Host dynamic libraries are measured dependencies, not historical library pins.
+The second demonstrates an owned per-directory Rustup override with downloads
+disabled. Its two tiny one-obligation proofs test setup only. The first setup
+assertion failure is retained: `rustup toolchain list` can return zero while
+attempting a channel sync. Only private Rustup settings changed; source, Verus
+and installed toolchain inventories did not. Neither preflight is successor
+campaign qualification, hardware execution or a configured production runner.
+
 ## Incremental CPU Qualification
+
+### Fresh Successor Replay
+
+`native-snapshots35-38-fresh-cpu-evidence.tar.gz`, SHA-256
+`7213c717e711471cf18c6ccc78c7c09a86060207340f893dcff46cb94e900ed6`,
+retains 128 members: exact source manifests and deltas, clean/build/test scripts,
+statuses, complete logs, closing source checks and final test-executable digests.
+Snapshot 35 was captured only. Snapshots 36 and 37 each explicitly cleaned all
+145 workspace packages. Snapshot 38 then cleaned the changed runtime package and
+its host/physical-differential dependents; its only Rust delta from 37 corrected
+the new capacity test's mock constructor. KFD source and dependencies were
+unchanged from the fresh 37 build.
+
+The accepted snapshot 38 batch passed all-target checks, strict runtime/KFD
+Clippy, 2,465 runtime tests (34 ignored), 370 host tests (three ignored), and the
+physical differential library/CLI/doctests. The 53 scoped runtime tests include
+the actual newly added unpublished-cancellation and graph-staging tests; both
+new staging-capacity tests and the retirement observations also ran. KFD's fresh
+snapshot 37 run passed 2,061 tests (three ignored) and all its doctests. Runtime
+and host results are CPU qualification, not protected or native execution.
+Later cohort-constructor changes require separate KFD qualification.
+
+Failed predecessors remain explicit: snapshot 36 exposed invalid scope-permit
+test assertions and two test-only Clippy findings; snapshot 37 failed runtime
+test compilation on a nonexistent mock constructor. Snapshot 38 setup initially
+refused nine inherited Python bytecode caches absent from the source inventory.
+Their exact paths and hashes were recorded before removing only those caches in
+the new owned snapshot. Its corrected full-file inventory matches exactly.
+The earlier snapshots retain their recorded extra caches; no old source was
+silently rewritten. The source 37 setup script printed `Snapshot36`, but all
+actual source paths, manifests and hashes were for 37; that diagnostic-label
+mistake is preserved rather than rewriting the executed script.
+
+`native-snapshots39-40-verifier-cpu-evidence.tar.gz`, SHA-256
+`055dc01946ad4cb26f61b3e0281f8ed3b9c3f2fc0ec912954c4e44fc1d7ed4d6`,
+retains 47 members covering two failed batches and their exact source inventories.
+Snapshot 39 explicitly cleaned the verifier package but failed to compile two
+test-fixture API uses. Snapshot 40 cleaned both KFD and verifier; the verifier
+broker tests passed (24 passed, one ignored), followed by three full runs at
+16 test threads (1,493 passed, 46 ignored each). These exercise isolated child
+descriptor ownership and the sealed-executable readiness handshake, without
+changing production admission. KFD's new constructor test failed compilation
+because it accessed three private packet fields. No KFD library test in that
+batch is accepted; its passing doctests are separate results. The correction
+reconstructs malformed packets using existing constructors, without widening
+production field visibility.
+
+### Historical Cache Limitation
+
+Qualification correction: later snapshot 34 exposed reuse of an older Cargo
+test binary from the shared target directory. Its runtime commands omitted the
+new unpublished-cancellation tests even though the snapshot inventory contained
+them. Tar overlay timestamps can be older than cached artifacts. Consequently,
+an exit-zero status or historical test count below is a recorded observation,
+not sufficient evidence that every changed snapshot source was compiled. The
+incremental CPU records require source-to-binary requalification; none may be
+used to close a successor milestone on its own. Fresh replays explicitly clean
+all workspace package artifacts and check that the new test names execute.
+Direct Verus campaigns have separate source authentication and are not Cargo
+test-binary results.
 
 These are source-snapshot results, not qualification of every subsequent edit.
 Builds used the pinned `nightly-2026-04-03` toolchain on `mi350`, two Cargo build

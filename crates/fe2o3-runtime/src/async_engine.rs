@@ -457,6 +457,8 @@ pub enum RuntimeAsyncEngineCallErrorV1 {
     InvalidPreparedTicket,
     /// This operation never entered context submission. Not GPU completion.
     CancelledBeforeSubmission,
+    /// Adopted DATA was retired before packet publication. Not successful output.
+    CancelledBeforePublication,
     EngineStopped,
     ReentrantCall,
     CommandPanicked,

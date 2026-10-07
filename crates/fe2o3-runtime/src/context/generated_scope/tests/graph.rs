@@ -5,6 +5,8 @@ use fe2o3_completion::{
 };
 use std::{future::Future, pin::Pin, task::Poll};
 
+mod staging;
+
 type Backend = KfdMultiDeviceRuntimeBackendV1;
 type Context = RuntimeContextV1<Backend>;
 
@@ -153,6 +155,10 @@ fn lexical_diamond_defers_original_holds_and_joins_both_generated_branch_orders(
                     };
                     assert!(matches!(
                         scope.cancel_before_adoption_v1(&original_graph_node),
+                        Err(RuntimeGfx942ScopeErrorV1::Graph(RuntimeGraphErrorV1::Busy))
+                    ));
+                    assert!(matches!(
+                        scope.cancel_before_publication_v1(&original_graph_node),
                         Err(RuntimeGfx942ScopeErrorV1::Graph(RuntimeGraphErrorV1::Busy))
                     ));
                     scope.drain_v1().unwrap();

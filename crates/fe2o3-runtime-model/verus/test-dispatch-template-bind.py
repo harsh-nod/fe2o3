@@ -92,10 +92,28 @@ for path in readonly_sources:
     rejects(lambda: r["conditional_readonly_sources"]({p: s for p, s in readonly_sources.items() if p != path}))
     rejects(lambda: r["conditional_readonly_sources"]({**readonly_sources, path: readonly_sources[path] + "\nfn effect() {}"}))
 rejects(lambda: r["conditional_readonly_sources"]({**readonly_sources, Path("/foreign.rs"): ""}))
+for owner, target, declaration, name in r["CONDITIONAL_MODULE_EDGES"]:
+    need(target in readonly_sources, "full concrete cohort branch source is retained")
+    for replacement in (
+        "", declaration + declaration, declaration.replace(".rs", "-foreign.rs"),
+        "/* " + declaration + " */", "// " + declaration.replace("\n", "\n// "),
+        'r###"' + declaration + '"###', "#[cfg(any())]\n" + declaration,
+        "#[cfg_attr(all(), cfg(any()))]\n" + declaration,
+        "fn unrelated() { " + declaration + " }",
+    ):
+        changed = readonly_sources[owner].replace(declaration, replacement)
+        rejects(lambda: r["conditional_cohort_wiring"]({**readonly_sources, owner: changed}))
+    for suffix in ("\nmod " + name + " {}", "\nuse other as " + name + ";"):
+        rejects(lambda: r["conditional_cohort_wiring"](
+            {**readonly_sources, owner: readonly_sources[owner] + suffix}))
+    rejects(lambda: r["conditional_cohort_wiring"](
+        {p: s for p, s in readonly_sources.items() if p != target}))
 for replacement in ("", "#[cfg(any())]\n", "// "):
     declaration = '#[path = "queue_dispatch_binding/conditional_fill.rs"]\nmod conditional_fill;'
     changed = binding.replace(declaration, replacement + declaration if replacement else "")
     rejects(lambda: r["conditional_guard_wiring"](changed, conditional_source))
+for suffix in ("\nmod conditional_fill {}", "\nuse other as conditional_fill;"):
+    rejects(lambda: r["conditional_guard_wiring"](binding + suffix, conditional_source))
 for suffix in ("\nimpl Drop for ConditionalFillStorageV1 { fn drop(&mut self) {} }",
                "\nuse std::cell::Cell;", "\nfn injected_effect() {}"):
     rejects(lambda: r["conditional_guard_wiring"](binding, conditional_source + suffix))

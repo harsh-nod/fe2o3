@@ -53,14 +53,27 @@ TRUSTED = {
 BODY_SHA = "40242c2cd87fb8afcbe24ea3a327a7fd72e549e57a5f00bba939ec0feb0043b1"
 ROSTER_BODY_SHA = "dab4466fd7d4f5944facb9221d81891ffc2b5c54090568ab0b58fb1fc5c41433"
 CONDITIONAL_SOURCE = BODY.with_name("conditional_fill.rs")
-CONDITIONAL_SOURCE_SHA = "7b8c5bddb5624307619d254f12efa6daf42ff7f38394a823f47f367d3446493c"
+CONDITIONAL_SOURCE_SHA = "d3fe97f4011705f11f858326f660c9b3f269de4d4daaa0184c1a0c8d862212de"
+COHORT_SOURCE = BODY.with_name("native_fill_cohort.rs")
+COHORT_PREMISES = BODY.parent / "native_fill_cohort/premises.rs"
 # Independent source-review premises for the concrete immutable owner accessors,
 # not additional Verus inputs or trusted executable theorem contracts.
 CONDITIONAL_READONLY_SOURCES = {
-    BODY.parent.parent / "queue_dispatch_binding.rs": "37ce070e9003f6beae10dee9e374e984f387f8cbc24264bbe9e0090d68458b6e",
+    BODY.parent.parent / "queue_dispatch_binding.rs": "5ff91fa6ec10e893d10cae2661a93ddf2484065959c35641dbca62da5f869126",
     BODY.parent.parent / "shared_memory.rs": "47e5b54f9a16bb4d726ffb08a995ddafbb217209bb8764bcd9be3fb8905a0400",
     CONDITIONAL_SOURCE: CONDITIONAL_SOURCE_SHA,
+    COHORT_SOURCE: "7afca3f847b67cf2ebfb5c61b21f815af40d84b99ea1b95ab868ee144dfaaec0",
+    COHORT_PREMISES: "8ac8f7d769fb439369ac90aa45342b6d83d3b87557060b9bb71ba19efe555473",
 }
+# These exact edges bind the additional read-only cohort branch, not a theorem
+# about cohort preparation, per-member spatial composition or publication.
+CONDITIONAL_MODULE_EDGES = (
+    (BODY.parent.parent / "queue_dispatch_binding.rs", COHORT_SOURCE,
+     '#[path = "queue_dispatch_binding/native_fill_cohort.rs"]\nmod native_fill_cohort;',
+     "native_fill_cohort"),
+    (COHORT_SOURCE, COHORT_PREMISES,
+     '#[path = "native_fill_cohort/premises.rs"]\nmod premises;', "premises"),
+)
 # Filled only from the complete positive solver result, never guessed.
 EXPECTED_VERIFIED = 64
 
@@ -173,6 +186,23 @@ def conditional_readonly_sources(sources):
     for path, expected in CONDITIONAL_READONLY_SOURCES.items():
         need(hashlib.sha256(sources[path].encode()).hexdigest() == expected,
              "reviewed immutable conditional accessor source: " + str(path))
+    conditional_cohort_wiring(sources)
+
+
+def conditional_cohort_wiring(sources):
+    need(set(sources) == set(CONDITIONAL_READONLY_SOURCES), "complete conditional module source roster")
+    for owner, target, declaration, name in CONDITIONAL_MODULE_EDGES:
+        need(target in sources, "retained complete cohort module")
+        source = sources[owner]
+        sentinel = "__conditional_cohort_module_" + name + "__"
+        need(sentinel not in source and source.count(declaration) == 1,
+             "one exact cohort module: " + name)
+        active = compact(source.replace(declaration, sentinel))
+        need(active.count(sentinel) == 1, "active cohort module: " + name)
+        direct_item(active, active.index(sentinel))
+        need(not re.search(r"\b(?:mod|as)\s+" + name + r"\b",
+                           lexer()(source.replace(declaration, ""))),
+             "no cohort module shadow: " + name)
 
 
 def conditional_guard_wiring(binding, source):
@@ -188,7 +218,8 @@ def conditional_guard_wiring(binding, source):
     active = compact(binding.replace(declaration, sentinel))
     need(active.count(sentinel) == 1, "active conditional guard module")
     direct_item(active, active.index(sentinel))
-    need(not re.search(r"\b(?:mod|as)conditional_fill\b", active),
+    need(not re.search(r"\b(?:mod|as)\s+conditional_fill\b",
+                       lexer()(binding.replace(declaration, ""))),
          "no conditional guard module shadow")
 
 

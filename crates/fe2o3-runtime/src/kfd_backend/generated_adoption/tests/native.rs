@@ -47,6 +47,7 @@ fn install_roster(
     backend
         .adopt_generated_data_v1(&plan, &roster, program, &buffers)
         .unwrap();
+    assert!(backend.generated_data_unpublished_v1(&plan, None));
     (plan, roster)
 }
 
@@ -289,6 +290,8 @@ fn run_issue(bootstrap: bool, full_roster: bool) {
         .unwrap();
     assert_ne!(first_id, second_id);
     for (plan, id) in [(&first_plan, first_id), (&second_plan, second_id)] {
+        assert!(backend.generated_data_unpublished_v1(plan, Some(id)));
+        assert!(!backend.generated_data_unpublished_v1(plan, None));
         assert_eq!(backend.poll_v1(id).unwrap(), BackendPollV1::Pending);
         assert!(matches!(
             backend.generated_shells[&plan.key]
@@ -339,6 +342,7 @@ fn run_issue(bootstrap: bool, full_roster: bool) {
         std::thread::yield_now();
     }
     for (plan, id) in [(&first_plan, first_id), (&second_plan, second_id)] {
+        assert!(!backend.generated_data_unpublished_v1(plan, Some(id)));
         assert!(matches!(
             backend.poll_v1(id),
             Err(RuntimeBackendFailureV1::Quiescent(_))

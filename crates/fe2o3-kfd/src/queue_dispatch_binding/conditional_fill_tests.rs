@@ -5,6 +5,9 @@ use fe2o3_amdhsa_loader::{AdmittedProfile, KernelGlobalBufferAbiV1, validate};
 use fe2o3_hsaco::ArgumentAccess;
 use fe2o3_kernel_analysis::PhysicalMachineEffectRequestV1;
 
+#[path = "native_fill_cohort/tests.rs"]
+mod native_fill_cohort_tests;
+
 fn payload() -> PhysicalMachineEffectRequestV1 {
     PhysicalMachineEffectRequestV1::decode_canonical(include_bytes!(
         "../../../fe2o3-kernel-analysis/src/gfx942_fill_analysis_v1/fill.request"

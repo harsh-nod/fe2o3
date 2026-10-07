@@ -9,6 +9,7 @@ use crate::{
 };
 
 mod completion;
+mod unpublished;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PhaseV1 {
@@ -359,21 +360,16 @@ macro_rules! impl_generated_issue_context {
                     let backend_submission = token.backend_submission;
                     // At most two lower steps: observe and recycle, with no waiting or
                     // publication. A still-pending packet remains owned after Stop.
-                    for _ in 0..2 {
-                        if self
-                            .backend
-                            .generated_submission_can_retire_v1(backend_submission)
-                        {
-                            break;
-                        }
-                        self.backend
-                            .progress_generated_submission_v1(backend_submission)
-                            .map_err(map_backend_error)?;
-                    }
-                    if !self
-                        .backend
-                        .generated_submission_can_retire_v1(backend_submission)
-                    {
+                    if !crate::kfd_backend::observe_generated_retirement_v1(
+                        &mut self.backend,
+                        |backend| backend.generated_submission_can_retire_v1(backend_submission),
+                        |backend| {
+                            backend
+                                .progress_generated_submission_v1(backend_submission)
+                                .map(|_| ())
+                                .map_err(map_backend_error)
+                        },
+                    )? {
                         return Ok(());
                     }
                     let unread = self.generated_issue_exclusive_readers_v1(&plan);

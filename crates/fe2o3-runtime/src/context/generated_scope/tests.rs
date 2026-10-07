@@ -10,6 +10,7 @@ mod cancellation;
 mod copies;
 mod futures;
 mod graph;
+mod unpublished;
 
 struct Borrowed<'a> {
     ticks: Cell<usize>,
@@ -96,6 +97,8 @@ where
                 .release_unpublished_hold_v1(hold)
                 .map_err(Into::into)
         },
+        unpublished: |_, _| Ok(true),
+        retire_unpublished: |_, _| Ok(()),
         copy_progress: RuntimeContextV1::progress_stream_v1,
         graph_submit: RuntimeContextV1::submit_graph_action_v1,
         graph_progress: |context, stream, access| {

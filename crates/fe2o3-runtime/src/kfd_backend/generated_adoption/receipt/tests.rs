@@ -21,6 +21,84 @@ fn lower_error() -> fe2o3_kfd::ComputeAqlQueueSessionErrorV1 {
 }
 
 #[test]
+fn retirement_observation_never_polls_ready_or_retry_ready_originals() {
+    for mut receipt in [
+        ReceiptV1::<(), ()>::Ready,
+        ReceiptV1::RetryReady,
+        ReceiptV1::Recycled,
+    ] {
+        let checks = std::cell::Cell::new(0);
+        let accepted = observe_generated_retirement_v1(
+            &mut receipt,
+            |owner| {
+                checks.set(checks.get() + 1);
+                owner.retirement().is_some()
+            },
+            |_| -> Result<(), ()> { panic!("ready owner must not enter native progress") },
+        )
+        .unwrap();
+        assert!(accepted);
+        assert_eq!(checks.get(), 2);
+        // Legacy retirement accepts Recycled; unpublished cancellation does not.
+        assert_eq!(
+            receipt.issue_ready(),
+            !matches!(receipt, ReceiptV1::Recycled)
+        );
+    }
+}
+
+#[test]
+fn retirement_observation_preserves_two_steps_final_check_and_original_error() {
+    for pending in [false, true] {
+        let trace = std::cell::RefCell::new(Vec::new());
+        let mut receipt = ReceiptV1::Published(());
+        let result = observe_generated_retirement_v1(
+            &mut receipt,
+            |owner| {
+                trace.borrow_mut().push("ready");
+                owner.retirement().is_some()
+            },
+            |owner| {
+                trace.borrow_mut().push("progress");
+                if !pending {
+                    *owner = match owner {
+                        ReceiptV1::Published(()) => ReceiptV1::Completed(()),
+                        ReceiptV1::Completed(()) => ReceiptV1::Recycled,
+                        _ => panic!("unexpected progress"),
+                    };
+                }
+                Ok::<_, ()>(())
+            },
+        )
+        .unwrap();
+        assert_eq!(result, !pending);
+        assert_eq!(
+            *trace.borrow(),
+            ["ready", "progress", "ready", "progress", "ready"]
+        );
+        assert!(!receipt.issue_ready());
+    }
+    let mut receipt = ReceiptV1::<(), ()>::HandedToLower(HandoffV1::Issue);
+    let checks = std::cell::Cell::new(0);
+    assert_eq!(
+        observe_generated_retirement_v1(
+            &mut receipt,
+            |owner| {
+                checks.set(checks.get() + 1);
+                owner.retirement().is_some()
+            },
+            |_| Err(19)
+        ),
+        Err(19)
+    );
+    assert_eq!(checks.get(), 1);
+    assert!(matches!(
+        receipt,
+        ReceiptV1::HandedToLower(HandoffV1::Issue)
+    ));
+}
+
+#[test]
 fn returned_publication_is_rooted_before_closing_unwind() {
     let (batch, drops) = token();
     let mut receipt: ReceiptV1<Token, Token> = ReceiptV1::Ready;
@@ -123,6 +201,7 @@ fn retirement_rejects_every_live_or_unknown_handoff_state() {
         ReceiptV1::<(), ()>::Recycled.retirement(),
         Some(RetirementV1::Recycled)
     );
+    assert!(!ReceiptV1::<(), ()>::Recycled.issue_ready());
 }
 
 #[test]

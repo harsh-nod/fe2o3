@@ -170,6 +170,7 @@ pub use xgmi_batch_diagnostic::{
 #[cfg(feature = "hardware-diagnostic")]
 pub use xgmi_diagnostic::{KfdRuntimeXgmiCallObservationV1, KfdRuntimeXgmiDiagnosticCallV1};
 mod generated_adoption;
+pub(crate) use generated_adoption::observe_generated_retirement_v1;
 #[cfg(feature = "hardware-qualification")]
 pub use generated_adoption::qualification::{
     KfdGeneratedCopyCoexistenceFailureV1, KfdGeneratedCopyCoexistenceWitnessV1,

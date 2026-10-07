@@ -175,6 +175,32 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .map(PreparedContextGraphActionV1::Copy)
     }
 
+    pub(crate) fn prepare_graph_host_staging_v1(
+        &self,
+        stream: RuntimeStreamIdV1,
+        destination: RuntimeMemoryRegionV1,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        self.require_live()?;
+        let record = self
+            .allocations
+            .get(&destination.allocation)
+            .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
+        if record.kind != RuntimeMemoryKindV1::HostVisible {
+            return Err(RuntimeValidationErrorV1::Unsupported.into());
+        }
+        if destination.access != RuntimeAccessV1::Write
+            || destination.byte_offset != 0
+            || destination.byte_len == 0
+            || destination.byte_len != record.byte_len
+        {
+            return Err(RuntimeValidationErrorV1::InvalidRange.into());
+        }
+        if self.unheld_stream_v1(stream)?.device != record.device {
+            return Err(RuntimeValidationErrorV1::WrongDevice.into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn submit_graph_action_v1(
         &mut self,
         token: ContextGraphReservationV1,

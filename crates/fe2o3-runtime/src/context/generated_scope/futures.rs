@@ -49,6 +49,9 @@ impl Future for RuntimeGfx942ScopedCompletionFutureV1<'_> {
             Poll::Ready(Err(crate::RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission)) => {
                 Poll::Ready(Err(RuntimeGfx942ScopeErrorV1::CancelledBeforeSubmission))
             }
+            Poll::Ready(Err(crate::RuntimeAsyncEngineCallErrorV1::CancelledBeforePublication)) => {
+                Poll::Ready(Err(RuntimeGfx942ScopeErrorV1::CancelledBeforePublication))
+            }
             Poll::Ready(Err(_)) => Poll::Ready(Err(RuntimeGfx942ScopeErrorV1::Unknown)),
         }
     }

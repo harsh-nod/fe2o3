@@ -32,6 +32,22 @@ pub(super) enum PollV1<P, C> {
     Completed(C),
 }
 
+pub(crate) fn observe_generated_retirement_v1<T, E>(
+    owner: &mut T,
+    ready: impl Fn(&T) -> bool,
+    mut progress: impl FnMut(&mut T) -> Result<(), E>,
+) -> Result<bool, E> {
+    // Observation/recycle only. Keep the legacy two-step bound and final
+    // readiness check; original Ready/RetryReady custody never enters progress.
+    for _ in 0..2 {
+        if ready(owner) {
+            break;
+        }
+        progress(owner)?;
+    }
+    Ok(ready(owner))
+}
+
 impl<P, C> ReceiptV1<P, C> {
     pub(super) fn issue_ready(&self) -> bool {
         matches!(self, Self::Ready | Self::RetryReady)

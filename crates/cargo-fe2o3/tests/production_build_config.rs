@@ -885,8 +885,74 @@ fn production_build_has_one_fixed_device_then_host_plan() {
     assert!(plan.contains("command: \"build\""));
     assert!(plan.contains("PRODUCTION_GFX942_RUSTC_TARGET_V1"));
     assert!(plan.contains("reject_caller_target"));
-    assert!(!plan.contains("enum Pipeline"));
-    assert!(!plan.contains("selector"));
+    assert!(has_fixed_production_phases(plan));
+}
+
+fn has_fixed_production_phases(source: &str) -> bool {
+    let Ok(file) = syn::parse_file(source) else {
+        return false;
+    };
+    if file
+        .items
+        .iter()
+        .any(|item| matches!(item, syn::Item::Enum(item) if item.ident == "Pipeline"))
+    {
+        return false;
+    }
+    let plans: Vec<_> = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Struct(item) if item.ident == "ProductionCargoPlan" => Some(item),
+            _ => None,
+        })
+        .collect();
+    let [plan] = plans.as_slice() else {
+        return false;
+    };
+    let syn::Fields::Named(fields) = &plan.fields else {
+        return false;
+    };
+    plan.generics.params.is_empty()
+        && plan.generics.where_clause.is_none()
+        && fields.named.len() == 2
+        && fields
+            .named
+            .iter()
+            .zip(["device", "host"])
+            .all(|(field, name)| {
+                field.attrs.is_empty()
+                    && field.ident.as_ref().is_some_and(|ident| ident == name)
+                    && matches!(&field.ty, syn::Type::Path(path)
+                    if path.qself.is_none() && path.path.is_ident("CargoPhase"))
+            })
+}
+
+#[test]
+fn production_phase_shape_ignores_local_cargo_target_selection() {
+    assert!(has_fixed_production_phases(
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }
+         fn device_library_args() { for selector in [\"--lib\", \"--bins\"] {} }"
+    ));
+}
+
+#[test]
+fn production_phase_shape_rejects_alternate_pipeline_storage() {
+    for source in [
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase, selector: Pipeline }",
+        "struct ProductionCargoPlan { device: Pipeline, host: CargoPhase }",
+        "struct ProductionCargoPlan { device: CargoPhase, host: Option<CargoPhase> }",
+        "struct ProductionCargoPlan { #[cfg(feature = \"device\")] device: CargoPhase, host: CargoPhase }",
+        "struct ProductionCargoPlan<T> { device: CargoPhase, host: T }",
+        "struct ProductionCargoPlan(CargoPhase, CargoPhase);",
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }
+         enum Pipeline { Production, Other }",
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }
+         struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }",
+        "struct DifferentPlan { device: CargoPhase, host: CargoPhase }",
+    ] {
+        assert!(!has_fixed_production_phases(source), "{source}");
+    }
 }
 
 #[test]

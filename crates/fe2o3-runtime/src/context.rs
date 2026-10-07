@@ -2560,7 +2560,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         allocation: RuntimeAllocationIdV1,
         bytes: &[u8],
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
-        self.require_live()?;
+        self.write_host_visible_with_graph_access_v1(allocation, bytes, None)
+    }
+
+    fn write_host_visible_with_graph_access_v1(
+        &mut self,
+        allocation: RuntimeAllocationIdV1,
+        bytes: &[u8],
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        self.require_graph_access(access)?;
         let record = self
             .allocations
             .get(&allocation)
@@ -2571,7 +2580,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if u64::try_from(bytes.len()).ok() != Some(record.byte_len) {
             return Err(RuntimeValidationErrorV1::InvalidRange.into());
         }
-        self.write_allocation(allocation, 0, bytes)
+        self.write_allocation_with_graph_access_v1(allocation, 0, bytes, access)
     }
 
     pub fn write_allocation(
@@ -2580,7 +2589,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         byte_offset: u64,
         bytes: &[u8],
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
-        self.require_live()?;
+        self.write_allocation_with_graph_access_v1(allocation, byte_offset, bytes, None)
+    }
+
+    fn write_allocation_with_graph_access_v1(
+        &mut self,
+        allocation: RuntimeAllocationIdV1,
+        byte_offset: u64,
+        bytes: &[u8],
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        self.require_graph_access(access)?;
         let record = *self
             .allocations
             .get(&allocation)

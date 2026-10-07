@@ -180,6 +180,7 @@ pub(crate) struct FixedDispatchPreparationCustodyV1<const N: usize> {
     current_materialized_sha256: Option<[u8; 32]>,
     kernarg: KernargStageV1,
     conditional_fill: Option<Box<conditional_fill::ConditionalFillStorageV1>>,
+    native_fill_cohort: bool,
     prepared_packets: Vec<PreparedDispatchPacketV1>,
     data_authorities: Vec<DispatchDataAuthorityV1>,
     data_premises: Vec<RetainedDataPremiseV1>,
@@ -210,6 +211,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             current_materialized_sha256: None,
             kernarg: KernargStageV1::Empty,
             conditional_fill: None,
+            native_fill_cohort: false,
             prepared_packets: Vec::new(),
             data_authorities: Vec::new(),
             data_premises: Vec::new(),
@@ -221,6 +223,15 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             #[cfg(test)]
             fault: None,
         }
+    }
+
+    pub(in crate::queue) fn new_native_fill_cohort(
+        packets: [Gfx942FixedDispatchPacketV1; N],
+        data: Vec<Gfx942FixedDispatchDataV1>,
+    ) -> Self {
+        let mut custody = Self::new(packets, data);
+        custody.native_fill_cohort = true;
+        custody
     }
 
     fn step(&mut self, stage: PreparationStageV1) -> Result<(), Gfx942DispatchBindingErrorV1> {
@@ -314,14 +325,35 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
             &layouts,
             &initialized,
         )?);
-        let fill = conditional_fill::check_plan(
-            programs,
-            &self.packets,
-            self.plan.as_ref().unwrap(),
-            self.control,
-        )?;
+        let (fill, cohort_models) = if self.native_fill_cohort {
+            (
+                None,
+                Some(native_fill_cohort::check_plan(
+                    programs,
+                    &self.packets,
+                    self.plan.as_ref().unwrap(),
+                    self.control,
+                )?),
+            )
+        } else {
+            (
+                conditional_fill::check_plan(
+                    programs,
+                    &self.packets,
+                    self.plan.as_ref().unwrap(),
+                    self.control,
+                )?,
+                None,
+            )
+        };
         self.step(PreparationStageV1::Capacity)?;
         self.conditional_fill = fill.as_ref().map(|_| Box::default());
+        if cohort_models.is_some() {
+            self.conditional_fill = Some(Box::new(conditional_fill::ConditionalFillStorageV1 {
+                cohort: Some(Box::new(native_fill_cohort::CohortStorageV1::new(N)?)),
+                ..Default::default()
+            }));
+        }
         let capacity_error =
             |_| Gfx942DispatchBindingErrorV1::InvalidCode("preparation output capacity");
         self.program_identity
@@ -466,6 +498,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         };
         let plan = self.plan.as_ref().unwrap();
         let data = self.retained_data.as_ref().unwrap();
+        let conditional_storage = &mut self.conditional_fill;
         let conditional_kernarg = memory.write_kernarg(token, |bytes| {
             bytes.fill(0);
             for (input, packet) in self.packets.iter().zip(&plan.packets) {
@@ -496,9 +529,17 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
                     _ => unreachable!("implicit-kernarg preflight plan/value mismatch"),
                 }
             }
-            fill.as_ref()
-                .map(|_| bytes[..conditional_fill::KERNARG_BYTES].try_into().unwrap())
-        })?;
+            if let Some(cohort) = conditional_storage
+                .as_mut()
+                .and_then(|storage| storage.cohort.as_mut())
+            {
+                cohort.capture(bytes, plan)?;
+            }
+            Ok::<_, Gfx942DispatchBindingErrorV1>(
+                fill.as_ref()
+                    .map(|_| bytes[..conditional_fill::KERNARG_BYTES].try_into().unwrap()),
+            )
+        })??;
         if let Some(storage) = &mut self.conditional_fill {
             storage.kernarg = conditional_kernarg;
         }
@@ -579,9 +620,41 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
                         prepared,
                     )?);
             }
+            if let Some(models) = &cohort_models {
+                self.step(PreparationStageV1::ConditionalFill)?;
+                let KernargStageV1::Retained(kernarg) = &self.kernarg else {
+                    unreachable!("retained cohort kernarg")
+                };
+                self.conditional_fill
+                    .as_mut()
+                    .and_then(|storage| storage.cohort.as_mut())
+                    .expect("prepaid cohort storage")
+                    .check_member(
+                        index,
+                        &models[index],
+                        &self.packets[index],
+                        self.plan.as_ref().unwrap(),
+                        native_fill_cohort::NativeMemberCustodyV1 {
+                            code: &self.code[index],
+                            code_identity: self.code_identity[index],
+                            kernarg,
+                            output: &self.retained_data.as_ref().unwrap()[index].authority,
+                            generation: self.generation.as_ref().unwrap(),
+                        },
+                        prepared,
+                    )?;
+            }
             self.prepared_packets.push(prepared);
         }
         self.commit()?;
+        if self.native_fill_cohort {
+            let owner = self.completed.as_ref().expect("completed original cohort");
+            owner
+                .conditional_fill
+                .as_ref()
+                .expect("retained cohort premises")
+                .revalidate(owner)?;
+        }
         self.step(PreparationStageV1::Complete)
     }
 

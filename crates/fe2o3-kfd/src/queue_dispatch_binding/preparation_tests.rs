@@ -403,14 +403,40 @@ fn inputs(data: &[Gfx942FixedDispatchDataV1]) -> Vec<Input> {
 }
 
 fn assert_inputs<const N: usize>(owner: &FixedDispatchPreparationCustodyV1<N>, expected: &[Input]) {
-    assert_inputs_with_completed(owner, expected, owner.completed.as_ref());
+    assert_inputs_with_completed(owner, expected, None, owner.completed.as_ref());
+}
+
+struct ExpectedDataEffectV1 {
+    effect: Option<DeviceDataEffectV1>,
+    writable_ranges: Vec<CompletedWritableRangeV1>,
+}
+
+fn ordinary_data_effect<const N: usize>(index: usize) -> ExpectedDataEffectV1 {
+    ExpectedDataEffectV1 {
+        effect: (index == 0).then_some(DeviceDataEffectV1::ReadWrite),
+        writable_ranges: if index == 0 {
+            vec![
+                CompletedWritableRangeV1 {
+                    offset: 0,
+                    byte_len: 4096,
+                };
+                N
+            ]
+        } else {
+            Vec::new()
+        },
+    }
 }
 
 fn assert_inputs_with_completed<const N: usize>(
     owner: &FixedDispatchPreparationCustodyV1<N>,
     expected: &[Input],
+    expected_effects: Option<&[ExpectedDataEffectV1]>,
     completed: Option<&DispatchResourceOwnerV1>,
 ) {
+    if let Some(effects) = expected_effects {
+        assert_eq!(effects.len(), expected.len());
+    }
     if let Some(completed) = completed {
         assert_eq!(completed.data.len(), expected.len());
         assert_eq!(completed.data_premises.len(), expected.len());
@@ -426,22 +452,10 @@ fn assert_inputs_with_completed<const N: usize>(
             assert_eq!(premise.initialized_content, input.content);
             assert_eq!(premise.fully_initialized, input.initialized);
             assert_eq!(premise.valid_bytes, input.layout.requested_bytes());
-            assert_eq!(
-                premise.effect,
-                (index == 0).then_some(DeviceDataEffectV1::ReadWrite)
-            );
-            let ranges = if index == 0 {
-                vec![
-                    CompletedWritableRangeV1 {
-                        offset: 0,
-                        byte_len: 4096
-                    };
-                    N
-                ]
-            } else {
-                Vec::new()
-            };
-            assert_eq!(premise.writable_ranges.as_ref(), ranges);
+            let ordinary = ordinary_data_effect::<N>(index);
+            let effect = expected_effects.map_or(&ordinary, |effects| &effects[index]);
+            assert_eq!(premise.effect, effect.effect);
+            assert_eq!(premise.writable_ranges.as_ref(), effect.writable_ranges);
             assert!(premise.completed_snapshots.is_empty());
         }
     } else if let Some(retained) = &owner.retained_data {
@@ -456,24 +470,10 @@ fn assert_inputs_with_completed<const N: usize>(
         assert_eq!(plan.data.len(), expected.len());
         for (index, plan) in plan.data.iter().enumerate() {
             assert_eq!(plan.layout, expected[index].layout);
-            assert_eq!(
-                plan.effect,
-                (index == 0).then_some(DeviceDataEffectV1::ReadWrite)
-            );
-            if index == 0 {
-                assert_eq!(
-                    plan.writable_ranges.as_ref(),
-                    vec![
-                        CompletedWritableRangeV1 {
-                            offset: 0,
-                            byte_len: 4096
-                        };
-                        N
-                    ]
-                );
-            } else {
-                assert!(plan.writable_ranges.is_empty());
-            }
+            let ordinary = ordinary_data_effect::<N>(index);
+            let effect = expected_effects.map_or(&ordinary, |effects| &effects[index]);
+            assert_eq!(plan.effect, effect.effect);
+            assert_eq!(plan.writable_ranges.as_ref(), effect.writable_ranges);
             assert!(plan.completed_snapshots.is_empty());
         }
     } else {
@@ -535,6 +535,7 @@ pub(crate) struct PrimaryPreparationSnapshotV1 {
     data: Vec<Input>,
     data_vector: Option<(usize, usize)>,
     packets: Vec<PacketSnapshotV1>,
+    expected_effects: Option<Vec<ExpectedDataEffectV1>>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -617,7 +618,22 @@ impl PrimaryPreparationSnapshotV1 {
             data: Vec::new(),
             data_vector: None,
             packets: packets.iter().map(PacketSnapshotV1::capture).collect(),
+            expected_effects: None,
         }
+    }
+
+    pub(crate) fn with_expected_write_only_ranges_v1(mut self, ranges: &[(u64, u64)]) -> Self {
+        assert_eq!(ranges.len(), self.data.len());
+        self.expected_effects = Some(
+            ranges
+                .iter()
+                .map(|&(offset, byte_len)| ExpectedDataEffectV1 {
+                    effect: Some(DeviceDataEffectV1::WriteOnly),
+                    writable_ranges: vec![CompletedWritableRangeV1 { offset, byte_len }],
+                })
+                .collect(),
+        );
+        self
     }
 
     pub(crate) fn capture_data(&mut self, data: &[Gfx942FixedDispatchDataV1]) {
@@ -684,6 +700,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
                 self.original_data.capacity(),
             )),
             packets: self.packets.iter().map(PacketSnapshotV1::capture).collect(),
+            expected_effects: None,
         }
     }
 
@@ -759,6 +776,7 @@ impl<const N: usize> FixedDispatchPreparationCustodyV1<N> {
         assert_inputs_with_completed(
             self,
             &expected.data,
+            expected.expected_effects.as_deref(),
             transferred.or(self.completed.as_ref()),
         );
         if transferred.is_some() {

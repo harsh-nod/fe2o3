@@ -6,7 +6,7 @@ const COUNT: usize = 4096;
 fn ticks(index: usize, round: usize) -> usize {
     // Distinct short and long cohorts force out-of-order decoders and periods
     // without transitions, so the actual caller-provided notification is used.
-    if (index + round) % 2 == 0 {
+    if (index + round).is_multiple_of(2) {
         64 + (COUNT - 1 - index) % 8
     } else {
         (COUNT - 1 - index) % 8

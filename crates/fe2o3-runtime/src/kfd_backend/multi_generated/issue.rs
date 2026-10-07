@@ -223,6 +223,40 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             })
     }
 
+    pub(crate) fn generated_data_unpublished_v1(
+        &self,
+        plan: &GeneratedShellPlanV1,
+        submission: Option<u64>,
+    ) -> bool {
+        if self.require_live().is_err() || !self.validate_generated_shell_records_v1(plan) {
+            return false;
+        }
+        let shell = self.generated_shells[&plan.key];
+        let local = match submission {
+            None => {
+                if self.generated_submissions.values().any(|route| {
+                    route.shell.global.key == plan.key
+                        || (route.shell.scope.child == shell.scope.child
+                            && route.shell.local.key == shell.local.key)
+                }) {
+                    return false;
+                }
+                None
+            }
+            Some(id) => {
+                let Some(route) = self.generated_submissions.get(&id) else {
+                    return false;
+                };
+                if route.shell != shell || !self.generated_submission_matches_v1(id, *route) {
+                    return false;
+                }
+                route.local
+            }
+        };
+        self.children[shell.scope.child.expect("validated child")]
+            .generated_data_unpublished_v1(&shell.local, local)
+    }
+
     pub(crate) fn read_generated_submission_v1(
         &mut self,
         plan: &GeneratedShellPlanV1,

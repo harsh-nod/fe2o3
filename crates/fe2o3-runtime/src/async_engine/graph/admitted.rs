@@ -2,6 +2,54 @@
 
 use super::*;
 
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+mod backing_tests {
+    use super::*;
+
+    #[test]
+    fn prepared_staging_backing_observes_reserved_capacity_not_node_length() {
+        let mut context =
+            RuntimeContextV1::open(crate::KfdRuntimeBackendV1::mock_worker_v3_generated_only_v1())
+                .unwrap();
+        let stream = context.create_stream(context.devices()[0].id()).unwrap();
+        let identity = context.completion_stream_identity_v1(stream).unwrap();
+        let node = CompletionNodeIdV1::new(1).unwrap();
+        let mut request = Some(
+            RuntimeGraphRequestV1::new(
+                CompletionGraphV1::new(
+                    identity.context(),
+                    vec![identity],
+                    vec![fe2o3_completion::CompletionNodeV1::future(
+                        node,
+                        fe2o3_completion::FutureIdentityV1::new(identity, [1; 32]),
+                        None,
+                    )],
+                )
+                .unwrap(),
+                vec![(identity, stream)],
+            )
+            .unwrap(),
+        );
+        let mut plan =
+            PreparedGraphAdmissionV1::prepare_scoped_v1(&mut context, &mut request, |_, _, _| {
+                Ok::<(), RuntimeGraphErrorV1<crate::KfdRuntimeBackendErrorV1>>(())
+            })
+            .unwrap();
+        plan.host_staging.reserve_exact(8);
+        assert!(plan.host_staging.capacity() > plan.len());
+        assert_eq!(
+            plan.host_staging_backing_bytes_v1(),
+            Some(plan.host_staging.capacity() * std::mem::size_of::<Option<HostStagingV1>>())
+        );
+        assert_ne!(
+            plan.host_staging_backing_bytes_v1(),
+            Some(plan.len() * std::mem::size_of::<Option<HostStagingV1>>())
+        );
+        drop(plan);
+        assert!(context.cleanup().is_complete());
+    }
+}
+
 /// Failed pre-publication admission returns the exact still-owned request.
 pub(crate) struct GraphAdmissionFailureV1<B: RuntimeBackendV1, E> {
     pub(crate) request: RuntimeGraphRequestV1<B>,
@@ -27,6 +75,7 @@ pub(crate) struct PreparedGraphAdmissionV1<B: RuntimeBackendV1> {
     node_streams: Vec<RuntimeStreamIdV1>,
     issued: Vec<bool>,
     streams: Vec<RuntimeStreamIdV1>,
+    host_staging: Vec<Option<HostStagingV1>>,
 }
 
 impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
@@ -38,13 +87,49 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
     pub(crate) fn prepare<E: From<RuntimeGraphErrorV1<B::Error>>>(
         context: &mut RuntimeContextV1<B>,
         request: &mut Option<RuntimeGraphRequestV1<B>>,
-        mut validate_generated: impl FnMut(
+        validate_generated: impl FnMut(
             &mut RuntimeContextV1<B>,
             CompletionNodeIdV1,
             RuntimeStreamIdV1,
         ) -> Result<(), E>,
     ) -> Result<Self, E> {
+        Self::prepare_with_host_staging_v1(context, request, validate_generated, false)
+    }
+
+    pub(crate) fn prepare_scoped_v1<E: From<RuntimeGraphErrorV1<B::Error>>>(
+        context: &mut RuntimeContextV1<B>,
+        request: &mut Option<RuntimeGraphRequestV1<B>>,
+        validate_generated: impl FnMut(
+            &mut RuntimeContextV1<B>,
+            CompletionNodeIdV1,
+            RuntimeStreamIdV1,
+        ) -> Result<(), E>,
+    ) -> Result<Self, E> {
+        Self::prepare_with_host_staging_v1(context, request, validate_generated, true)
+    }
+
+    fn prepare_with_host_staging_v1<E: From<RuntimeGraphErrorV1<B::Error>>>(
+        context: &mut RuntimeContextV1<B>,
+        request: &mut Option<RuntimeGraphRequestV1<B>>,
+        mut validate_generated: impl FnMut(
+            &mut RuntimeContextV1<B>,
+            CompletionNodeIdV1,
+            RuntimeStreamIdV1,
+        ) -> Result<(), E>,
+        allow_host_staging: bool,
+    ) -> Result<Self, E> {
         let original = request.as_ref().expect("unadmitted graph request");
+        if !allow_host_staging
+            && original
+                .actions
+                .values()
+                .any(|action| matches!(action, Action::HostStaging(_)))
+        {
+            return Err(RuntimeGraphErrorV1::Invalid(
+                RuntimeGraphValidationErrorV1::HostStagingRequiresScope,
+            )
+            .into());
+        }
         let mut prepare = || {
             for (&identity, &stream) in &original.streams {
                 let actual = context
@@ -61,6 +146,7 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
             let mut ids = Vec::new();
             let mut node_streams = Vec::new();
             let mut issued = Vec::new();
+            let mut host_staging = Vec::new();
             for node in original.graph.nodes() {
                 let stream = original.streams[&node.stream()];
                 let action = match (node.kind(), original.actions.get(&node.id())) {
@@ -76,6 +162,12 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
                                 .map_err(RuntimeGraphErrorV1::Context)?,
                         )
                     }
+                    (CompletionNodeKindV1::Future(_), Some(Action::HostStaging(staging))) => {
+                        context
+                            .prepare_graph_host_staging_v1(stream, staging.destination)
+                            .map_err(RuntimeGraphErrorV1::Context)?;
+                        None
+                    }
                     (CompletionNodeKindV1::Future(_), None) => {
                         validate_generated(context, node.id(), stream)?;
                         None
@@ -86,6 +178,10 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
                 ids.push(node.id());
                 node_streams.push(stream);
                 issued.push(false);
+                host_staging.push(match original.actions.get(&node.id()) {
+                    Some(Action::HostStaging(staging)) => Some(*staging),
+                    _ => None,
+                });
             }
             original
                 .validate_hazards()
@@ -93,10 +189,18 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
             let versions =
                 versions::VersionLedger::prepare(original).map_err(RuntimeGraphErrorV1::Invalid)?;
             let streams = original.streams.values().copied().collect();
-            Ok((versions, actions, ids, node_streams, issued, streams))
+            Ok((
+                versions,
+                actions,
+                ids,
+                node_streams,
+                issued,
+                streams,
+                host_staging,
+            ))
         };
         match prepare() {
-            Ok((versions, actions, ids, node_streams, issued, streams)) => Ok(Self {
+            Ok((versions, actions, ids, node_streams, issued, streams, host_staging)) => Ok(Self {
                 request: request.take().expect("successfully prepared request"),
                 versions,
                 actions,
@@ -104,6 +208,7 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
                 node_streams,
                 issued,
                 streams,
+                host_staging,
             }),
             Err(error) => Err(error),
         }
@@ -111,6 +216,13 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
 
     pub(crate) fn len(&self) -> usize {
         self.ids.len()
+    }
+
+    /// Newly retained staging backing, separate from the pre-existing core.
+    pub(crate) fn host_staging_backing_bytes_v1(&self) -> Option<usize> {
+        self.host_staging
+            .capacity()
+            .checked_mul(std::mem::size_of::<Option<HostStagingV1>>())
     }
 
     /// The caller preallocates its active/observation rosters before this step.
@@ -143,6 +255,7 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
                 node_streams: self.node_streams,
                 issued: self.issued,
                 streams: self.streams,
+                host_staging: self.host_staging,
             },
             self.actions,
         ))
@@ -160,6 +273,7 @@ pub(crate) struct AdmittedGraphV1 {
     node_streams: Vec<RuntimeStreamIdV1>,
     issued: Vec<bool>,
     streams: Vec<RuntimeStreamIdV1>,
+    host_staging: Vec<Option<HostStagingV1>>,
 }
 
 /// Descriptive terminal data, produced only after exact Context release.
@@ -200,6 +314,10 @@ impl AdmittedGraphV1 {
         self.token
     }
 
+    pub(crate) fn host_staging(&self, index: usize) -> Option<HostStagingV1> {
+        self.host_staging[index]
+    }
+
     pub(crate) fn issued(&self, index: usize) -> bool {
         self.issued[index]
     }
@@ -235,6 +353,20 @@ impl AdmittedGraphV1 {
             return false;
         }
         // SAFETY: delegated exact-retirement obligation is established above.
+        unsafe { self.authority.mark_succeeded(self.ids[index]).unwrap() };
+        true
+    }
+
+    /// # Safety
+    /// This separately admitted HostStaging node's exact synchronous Context
+    /// write and original journal settlement must have succeeded under `token`.
+    /// Generated completion alone or supplied bytes cannot establish this premise.
+    pub(crate) unsafe fn succeed_host_staging(&mut self, index: usize) -> bool {
+        if self.host_staging[index].is_none() || !self.versions.commit(index) {
+            return false;
+        }
+        // SAFETY: the exact ordinary host-write settlement is the caller's
+        // obligation; this commits no generated kernel effect or provenance.
         unsafe { self.authority.mark_succeeded(self.ids[index]).unwrap() };
         true
     }

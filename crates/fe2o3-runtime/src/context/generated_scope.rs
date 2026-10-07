@@ -18,7 +18,7 @@ pub use copies::{RuntimeGfx942ScopedCopyFutureV1, RuntimeGfx942ScopedCopyTicketV
 mod graph;
 pub use graph::{
     RuntimeGfx942ScopedGraphAdmissionErrorV1, RuntimeGfx942ScopedGraphFutureV1,
-    RuntimeGfx942ScopedGraphTicketV1,
+    RuntimeGfx942ScopedGraphStagingErrorV1, RuntimeGfx942ScopedGraphTicketV1,
 };
 mod cancellation;
 pub use cancellation::RuntimeGfx942ScopedCancelResultV1;
@@ -40,6 +40,7 @@ pub enum RuntimeGfx942ScopeErrorV1 {
     InvalidTicket,
     CompletionObserverTaken,
     CancelledBeforeSubmission,
+    CancelledBeforePublication,
     Deadline,
     Unknown,
     CopyFailed { code: i64 },
@@ -162,6 +163,10 @@ struct Hooks<B: RuntimeBackendV1, P> {
     adopt: Step<B, P>,
     progress: Progress<B, P>,
     complete: Step<B, P>,
+    unpublished:
+        fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
+    retire_unpublished:
+        fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<(), NativeError>,
     copy_progress: fn(&mut RuntimeContextV1<B>, RuntimeStreamIdV1) -> Result<(), NativeError>,
     graph_submit: GraphSubmit<B>,
     graph_progress: GraphProgress<B>,
@@ -386,6 +391,9 @@ where
         if slot.lifecycle.phase == Phase::Cancelled {
             return Err(RuntimeGfx942ScopeErrorV1::CancelledBeforeSubmission);
         }
+        if slot.lifecycle.phase == Phase::CancelledUnpublished {
+            return Err(RuntimeGfx942ScopeErrorV1::CancelledBeforePublication);
+        }
         Ok(slot.lifecycle.outcome.as_ref())
     }
 
@@ -566,6 +574,8 @@ macro_rules! impl_scoped_generated {
                         adopt: Self::adopt_gfx942_prepared_v1::<P>,
                         progress: Self::progress_gfx942_issue_v1::<P>,
                         complete: Self::complete_gfx942_issue_v1::<P>,
+                        unpublished: Self::gfx942_adoption_unpublished_v1,
+                        retire_unpublished: Self::retire_gfx942_unpublished_v1,
                         copy_progress: Self::progress_stream_v1,
                         graph_submit: Self::submit_graph_action_v1,
                         graph_progress: |context, stream, access| context.drive_stream_with_graph_access_v1(

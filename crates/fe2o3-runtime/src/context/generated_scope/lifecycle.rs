@@ -7,6 +7,7 @@ pub(super) enum Phase {
     Completing,
     Settled,
     Cancelled,
+    CancelledUnpublished,
     Unknown,
 }
 
@@ -26,7 +27,10 @@ impl<T, O> Lifecycle<T, O> {
     }
 
     pub fn unsettled(&self) -> bool {
-        !matches!(self.phase, Phase::Settled | Phase::Cancelled)
+        !matches!(
+            self.phase,
+            Phase::Settled | Phase::Cancelled | Phase::CancelledUnpublished
+        )
     }
 
     pub fn cancel_before_adoption<E>(
@@ -51,7 +55,10 @@ impl<T, O> Lifecycle<T, O> {
         decode: impl FnOnce(T) -> O,
     ) -> Result<bool, E> {
         let phase = self.phase;
-        if matches!(phase, Phase::Settled | Phase::Cancelled | Phase::Unknown) {
+        if matches!(
+            phase,
+            Phase::Settled | Phase::Cancelled | Phase::CancelledUnpublished | Phase::Unknown
+        ) {
             return Ok(false);
         }
         // A failed or unwinding native call is never eligible for a second try.
@@ -70,6 +77,25 @@ impl<T, O> Lifecycle<T, O> {
             self.outcome = Some(decode(self.value.take().expect("settled scoped owner")));
         }
         Ok(advanced)
+    }
+
+    pub fn cancel_unpublished<C, E>(
+        &mut self,
+        context: &mut C,
+        retire_native: impl FnOnce(&mut C) -> Result<(), E>,
+        release_hold: impl FnOnce(&mut C) -> Result<(), E>,
+    ) -> Result<bool, E> {
+        if self.phase != Phase::Issuing {
+            return Ok(false);
+        }
+        // The owning caller first checks exact original nonpublication. Neither
+        // native disposal nor carrier destruction is retryable after entry.
+        self.phase = Phase::Unknown;
+        retire_native(context)?;
+        drop(self.value.take().expect("original unpublished carrier"));
+        release_hold(context)?;
+        self.phase = Phase::CancelledUnpublished;
+        Ok(true)
     }
 }
 

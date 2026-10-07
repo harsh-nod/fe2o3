@@ -268,6 +268,8 @@ mod fixed_dispatch;
 mod initial_bind;
 #[path = "queue_live/model_loan.rs"]
 pub(in crate::queue) mod model_loan;
+#[path = "queue_live/native_fill_cohort.rs"]
+mod native_fill_cohort;
 use model_loan::execute_live_model_custody_v1;
 #[path = "queue_live/compute_xgmi.rs"]
 mod compute_xgmi;

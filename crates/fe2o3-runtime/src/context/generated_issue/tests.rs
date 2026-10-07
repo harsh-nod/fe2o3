@@ -5,6 +5,7 @@ use crate::authorized_execution::tests::{source_authority, source_projection_wit
 mod completion_tests;
 mod journal_tests;
 mod multi_tests;
+mod unpublished_tests;
 
 fn install(
     context: &mut RuntimeContextV1<KfdRuntimeBackendV1>,
