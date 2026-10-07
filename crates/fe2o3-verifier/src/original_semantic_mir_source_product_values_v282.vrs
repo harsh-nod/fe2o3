@@ -152,15 +152,17 @@ spec fn invocation_source_product_execution_payload_v282(
         && match source.machine.frames.execution {
             Some(execution) => byte_execution_well_formed_v37(execution)
                 && match invocation_source_product_atom_kind_v282(value.source_type) {
-                    InvocationSourceProductAtomKindV282::ExecutionAggregate(0) =>
-                        invocation_source_context_shape_v161(value.source_type)
-                            && (forall|i: int| 0 <= i < 5 ==> value.leaves[seq![i]] == MemoryValueV30::Unit),
-                    InvocationSourceProductAtomKindV282::ExecutionAggregate(1) =>
-                        invocation_source_workgroup_shape_v168(value.source_type)
-                            && value.leaves[seq![0int]] == MemoryValueV30::Scalar(invocation_source_workgroup_size_v168(execution))
-                            && value.leaves[seq![1int]] == MemoryValueV30::Scalar(invocation_source_workgroup_rank_v168(execution))
-                            && (forall|i: int| 0 <= i < 3 ==> value.leaves[seq![2int, i]] == MemoryValueV30::Unit)
-                            && value.leaves[seq![3int]] == MemoryValueV30::Unit,
+                    InvocationSourceProductAtomKindV282::ExecutionAggregate(role) =>
+                        if role == 0 {
+                            invocation_source_context_shape_v161(value.source_type)
+                                && (forall|i: int| 0 <= i < 5 ==> value.leaves[seq![i]] == MemoryValueV30::Unit)
+                        } else if role == 1 {
+                            invocation_source_workgroup_shape_v168(value.source_type)
+                                && value.leaves[seq![0int]] == MemoryValueV30::Scalar(invocation_source_workgroup_size_v168(execution))
+                                && value.leaves[seq![1int]] == MemoryValueV30::Scalar(invocation_source_workgroup_rank_v168(execution))
+                                && (forall|i: int| 0 <= i < 3 ==> value.leaves[seq![2int, i]] == MemoryValueV30::Unit)
+                                && value.leaves[seq![3int]] == MemoryValueV30::Unit
+                        } else { false },
                     _ => false,
                 },
             None => false,
