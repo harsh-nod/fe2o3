@@ -68,7 +68,7 @@ jobs:
         run: crates/fe2o3-runtime-model/verus/verify-verus.sh
 
   producer-live-composition:
-    name: Production producer, live-allocation and planner-input composition
+    name: Production producer, planner and retained-dispatch proofs
     # The unchanged proof admission requires 16 GiB available, not total RAM.
     # Never run unreviewed pull-request code on a protected/shared host.
     if: ${{ github.repository == 'harsh-nod/fe2o3' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
@@ -124,6 +124,34 @@ jobs:
             --verus "${VERUS}" \
             --output "${A2_CAMPAIGN_ROOT}/campaign"
 
+      - name: Qualify signed-source dispatch and producer preflight
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          # These controllers require signed HEAD and exact Git/SSH tool pins.
+          # A shallow checkout contains the current tree/blobs they authenticate.
+          proof_root=crates/fe2o3-runtime-model/verus
+          python3 -I -B "${proof_root}/check-dispatch-template-prepare.py" \
+            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/template-prepare"
+          python3 -I -B "${proof_root}/check-dispatch-template-preflight.py" \
+            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/template-preflight"
+          python3 -I -B "${proof_root}/check-dispatch-template-bind.py" \
+            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/template-bind"
+          python3 -I -B "${proof_root}/check-dispatch-template-bind.py" --roster \
+            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/template-roster"
+          python3 -I -B "${proof_root}/check-producer-input-preflight.py" \
+            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/producer-preflight"
+
+      - name: Qualify retained routing and credit dispatch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          proof_root=crates/fe2o3-runtime-model/verus
+          python3 -I -B "${proof_root}/check-retained-pair-routing.py" \
+            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/retained-routing"
+          python3 -I -B "${proof_root}/check-retained-credit-dispatch.py" --campaign \
+            --verus "${VERUS}" --output "${A2_CAMPAIGN_ROOT}/retained-credit"
+
       - name: Retain complete campaign diagnostics
         if: ${{ always() && env.A2_CAMPAIGN_ROOT != '' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -132,6 +160,13 @@ jobs:
           path: |
             ${{ env.A2_CAMPAIGN_ROOT }}/campaign
             ${{ env.A2_CAMPAIGN_ROOT }}/planner-input
+            ${{ env.A2_CAMPAIGN_ROOT }}/template-prepare
+            ${{ env.A2_CAMPAIGN_ROOT }}/template-preflight
+            ${{ env.A2_CAMPAIGN_ROOT }}/template-bind
+            ${{ env.A2_CAMPAIGN_ROOT }}/template-roster
+            ${{ env.A2_CAMPAIGN_ROOT }}/producer-preflight
+            ${{ env.A2_CAMPAIGN_ROOT }}/retained-routing
+            ${{ env.A2_CAMPAIGN_ROOT }}/retained-credit
           if-no-files-found: warn
           retention-days: 7
 

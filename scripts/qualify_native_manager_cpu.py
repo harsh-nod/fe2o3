@@ -109,7 +109,9 @@ def qualify(image, pin, output, capture):
                 raise ValueError("packaged image differs from explicit pin or original path")
             report["image"] = measured
             nonroot()
-            result = capture.run_command([str(image)], output, {"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            # The static secure-start ABI requires one nonempty argv and no
+            # environment, before libc or Rust can inspect inherited custody.
+            result = capture.run_command([str(image)], output, {},
                                          output / "manager.log", 5, MAX_LOG, executable_fd=fd)
             report["execution"] = result
             with (output / "manager.log").open("rb") as log:

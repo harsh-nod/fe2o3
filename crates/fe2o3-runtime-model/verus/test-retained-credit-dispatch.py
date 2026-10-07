@@ -29,6 +29,39 @@ exec(compile(path.read_bytes(), str(path), "exec"), check.__dict__)
 sources = check.snapshot()
 check.audit(sources)
 need(len(check.FILES) == 14 and check.include_closure(sources) == set(check.FILES), "exact executable closure")
+need(check.CORRESPONDENCE_FILES == set(check.FILES) | set(check.OWNERS.values()) | {
+    check.RUNTIME / "context/allocation_witness.rs", check.MODEL / "r67_resource_credits.rs",
+}, "exact dispatch correspondence includes the admission account projection and ordinal implementation")
+
+
+def rebound_capture_refused(selected, before, after):
+    need(sources[selected].count(before) == 1 and before != after,
+         "nonvacuous successor correspondence control")
+    changed = {**sources, selected: sources[selected].replace(before, after)}
+    original_tree, original_proof = check.SOURCE_TREE_SHA, check.PROOF_SHA
+    try:
+        check.SOURCE_TREE_SHA = check.tree_hash({p: t for p, t in changed.items() if p != check.PROOF})
+        check.PROOF_SHA = check.sha(changed[check.PROOF])
+        refused(lambda: check.audit(changed), "capture repin concealed changed dispatch correspondence")
+    finally:
+        check.SOURCE_TREE_SHA, check.PROOF_SHA = original_tree, original_proof
+
+
+for selected, before, after in (
+    (check.RUNTIME / "context/allocation_witness.rs", "        &self.account\n", "        &self.other_account\n"),
+    (check.OWNERS["context"], "pub(super) struct ContextAllocationAdmissionV1 {",
+     "pub(super) struct ContextAllocationAdmissionV1 {\n    unchecked_credit: bool,"),
+    (check.OWNERS["runtime"], "    device: RuntimeDeviceIdV1,\n    inner:",
+     "    device: u64,\n    inner:"),
+    (check.BODIES["account"], "if Arc::ptr_eq(account, actual)", "if true"),
+    (check.PROOF, "struct Locked<T> {", "struct Locked<T> {\n    unchecked_freshness: bool,"),
+    (check.RUNTIME / "context.rs", "#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]",
+     "#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialOrd)]"),
+    (check.RUNTIME / "context.rs", "                self.local\n", "                self.context_generation\n"),
+    (check.RUNTIME / "context.rs", "runtime_id!(RuntimeAllocationIdV1);",
+     "unreviewed_id!(RuntimeAllocationIdV1);"),
+):
+    rebound_capture_refused(selected, before, after)
 for selected in set(check.FILES) | set(check.OWNERS.values()):
     changed = dict(sources)
     changed[selected] += "\n"
@@ -43,20 +76,24 @@ for name, invocation in check.INVOCATIONS.items():
     owner = check.OWNERS[name]
     # A rebound source pin must not conceal a detached native entry point.
     changed[owner] = check.compact(changed[owner]).replace(invocation, "false")
-    original = check.SOURCE_TREE_SHA
+    original, original_correspondence = check.SOURCE_TREE_SHA, check.CORRESPONDENCE_SHA
     try:
         check.SOURCE_TREE_SHA = check.tree_hash({p: t for p, t in changed.items() if p != check.PROOF})
+        check.CORRESPONDENCE_SHA = check.tree_hash({p: changed[p] for p in check.CORRESPONDENCE_FILES})
         refused(lambda: check.audit(changed), "native shared entry bypass accepted")
     finally:
         check.SOURCE_TREE_SHA = original
+        check.CORRESPONDENCE_SHA = original_correspondence
 changed = dict(sources)
 changed[check.PROOF] = changed[check.PROOF].replace("// The unchanged arena include", "// A changed arena include", 1)
-original = check.PROOF_SHA
+original, original_correspondence = check.PROOF_SHA, check.CORRESPONDENCE_SHA
 try:
     check.PROOF_SHA = check.sha(changed[check.PROOF])
+    check.CORRESPONDENCE_SHA = check.tree_hash({p: changed[p] for p in check.CORRESPONDENCE_FILES})
     refused(lambda: check.audit(changed), "domain prefix drift accepted despite rebound fixture pin")
 finally:
     check.PROOF_SHA = original
+    check.CORRESPONDENCE_SHA = original_correspondence
 
 cases = check.mutations(sources)
 need(len(cases) == check.MUTANT_COUNT == 25, "exact twenty-five actual-body mutants constructed")

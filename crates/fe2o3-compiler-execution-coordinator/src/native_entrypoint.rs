@@ -248,10 +248,10 @@ fn drain<'work>(
     }
     let mut wait_error = None;
     for _ in 0..turns {
-        if wait_error.is_none() {
-            if let Err(error) = runtime.wait(b) {
-                wait_error = Some(error);
-            }
+        if wait_error.is_none()
+            && let Err(error) = runtime.wait(b)
+        {
+            wait_error = Some(error);
         }
         runtime.pump()?;
         if runtime.retire_foreground(b)? {
@@ -276,6 +276,8 @@ struct Native<'work> {
     creator: CreatorScope,
 }
 
+// Fixed deployment custody is already budgeted inline, without a fallible heap handoff.
+#[allow(clippy::large_enum_variant)]
 enum Admission {
     Inherited,
     Fixed(Option<Deployment>),

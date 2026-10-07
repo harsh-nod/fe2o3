@@ -438,31 +438,30 @@ impl<P: RuntimeGfx942GeneratedCompletionCarrierV1> Graph<P> {
             }
             if let Some(slot) = self.generated[index]
                 && !self.reconciled[index]
+                && let Some(outcome) = &scope.slots[slot].lifecycle.outcome
             {
-                if let Some(outcome) = &scope.slots[slot].lifecycle.outcome {
-                    if outcome.is_ok() {
-                        // SAFETY: lifecycle outcome follows original native
-                        // release plus consumption of its original decoder.
-                        if !unsafe { core.succeed_operation(index) } {
-                            scope.context.quarantine_after_async_command_panic_v1();
-                            return Err(RuntimeGfx942ScopeErrorV1::Unknown);
-                        }
-                        self.observations
-                            .push((core.id(index), RuntimeCompletionStatusV1::Succeeded));
-                    } else {
-                        // SAFETY: a failed decoder is reached only after the
-                        // same native release; it cannot create successful DATA.
-                        unsafe {
-                            core.fail(index, 4);
-                        }
-                        self.observations.push((
-                            core.id(index),
-                            RuntimeCompletionStatusV1::QuiescentWithoutResult,
-                        ));
+                if outcome.is_ok() {
+                    // SAFETY: lifecycle outcome follows original native
+                    // release plus consumption of its original decoder.
+                    if !unsafe { core.succeed_operation(index) } {
+                        scope.context.quarantine_after_async_command_panic_v1();
+                        return Err(RuntimeGfx942ScopeErrorV1::Unknown);
                     }
-                    self.reconciled[index] = true;
-                    changed += 1;
+                    self.observations
+                        .push((core.id(index), RuntimeCompletionStatusV1::Succeeded));
+                } else {
+                    // SAFETY: a failed decoder is reached only after the
+                    // same native release; it cannot create successful DATA.
+                    unsafe {
+                        core.fail(index, 4);
+                    }
+                    self.observations.push((
+                        core.id(index),
+                        RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                    ));
                 }
+                self.reconciled[index] = true;
+                changed += 1;
             }
             let Some(mut active) = self.active[index].take() else {
                 continue;

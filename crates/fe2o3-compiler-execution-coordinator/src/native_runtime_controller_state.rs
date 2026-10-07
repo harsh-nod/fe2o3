@@ -116,15 +116,14 @@ impl<I> TaskImages<I> {
     }
 
     fn release_unused(&mut self, index: Option<usize>) {
-        if let Some(index) = index {
-            if !self
+        if let Some(index) = index
+            && !self
                 .tasks
                 .iter()
                 .flatten()
                 .any(|task| task.image == Some(index))
-            {
-                self.images[index] = None;
-            }
+        {
+            self.images[index] = None;
         }
     }
 }

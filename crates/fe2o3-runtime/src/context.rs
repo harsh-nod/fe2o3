@@ -2160,9 +2160,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     ) -> Result<(), RuntimeValidationErrorV1> {
         if self.terminal {
             Err(RuntimeValidationErrorV1::ContextTerminal)
-        } else if self.scope_epoch.require_access().is_err() {
-            Err(RuntimeValidationErrorV1::ContextReserved)
-        } else if self.graph_reservation != access || self.native_pair_reservation.is_some() {
+        } else if self.scope_epoch.require_access().is_err()
+            || self.graph_reservation != access
+            || self.native_pair_reservation.is_some()
+        {
             Err(RuntimeValidationErrorV1::ContextReserved)
         } else {
             Ok(())

@@ -69,12 +69,11 @@ pub(crate) fn inspect(file: BorrowedFd<'_>, b: &mut Budget<'_>) -> Result<()> {
                 }
             }
             fs::FileType::Fifo | fs::FileType::Socket => return Ok(()),
-            fs::FileType::CharacterDevice => {
+            fs::FileType::CharacterDevice
                 if (fs::major(stat.st_rdev), fs::minor(stat.st_rdev)) == (1, 3)
-                    || is_terminal(file, &stat)
-                {
-                    return Ok(());
-                }
+                    || is_terminal(file, &stat) =>
+            {
+                return Ok(());
             }
             _ => {}
         }

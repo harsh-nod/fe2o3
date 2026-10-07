@@ -86,11 +86,13 @@ where
     /// Drives original borrowed carriers on the caller's thread and executor.
     ///
     /// Each nonadvancing roster scan awaits the caller's wake future if work remains.
-    /// Advancing scans reuse the finite original lifecycle phases without sleeping.
+    /// Every nonterminal scan yields before another scan, including when the
+    /// supplied wake future is immediately ready. The driver requests at most
+    /// one cooperative self-wake per scan; it creates no thread or timer.
     /// Supply a real timer/notification that schedules its waker no later than
-    /// the supplied absolute deadline. An immediately-ready wake source may
-    /// busy-poll; this API neither creates a timer nor claims interrupt-driven
-    /// progress. It never self-wakes or starts an owner thread.
+    /// the supplied absolute deadline to avoid idle busy-polling across executor
+    /// turns. Synchronous hook duration and native interrupt integration are not
+    /// bounded by this scheduling boundary.
     ///
     /// Submit and obtain observers first, then drive this future concurrently
     /// with those observers inside the lexical callback. Dropping the driver
@@ -105,10 +107,28 @@ where
     {
         while self.pending_v1() != 0 {
             let transitions = self.progress_v1()?;
-            if self.pending_v1() != 0 && transitions == 0 {
+            if self.pending_v1() == 0 {
+                break;
+            }
+            if transitions == 0 {
                 wait(self.deadline).await;
             }
+            yield_to_executor().await;
         }
         self.settled_result_v1()
     }
+}
+
+async fn yield_to_executor() {
+    let mut yielded = false;
+    std::future::poll_fn(move |cx| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await
 }

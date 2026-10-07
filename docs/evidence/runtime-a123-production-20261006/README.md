@@ -94,6 +94,10 @@ and bounded command lifetimes. No GPU execution was performed.
 | `native-snapshot21-cpu-logs.tar.gz` | `76bb2181cf95a42e0e349afb1a0d498383b34bc3d2097f5dbf5f6f1e741a3322` | Passing exporter and selected foundation checks, complete Cargo/verifier and service-manifest failures, original-account/host doctests, exact scripts and source inventory. |
 | `native-snapshot22-cpu-logs.tar.gz` | `3125b256713239789db77f367311b1efed11583d8dfca45f5656cb1245c6ed4e` | Corrected Cargo/verifier and custody suites, static deployment replay, plus retained macro-fixture and build-script audit failures. |
 | `native-snapshot23-cpu-logs.tar.gz` | `ac4f3b695573acb40cab6ae566a410974da05c27b3ebdb63e5d00dafcbb51a6a` | Joined compiler/application phase tests, doctests, binding-only compilation and static deployment replay; stale macro executable and overbroad Clippy invocation remained failures. |
+| `native-snapshots25-26-cpu-logs.tar.gz` | `25a342d7b6e8d9c6cbd4916ae0ad8078ed49631a671d0c475a879edab934e3b2` | Post-modularization build repairs, full runtime/model/Cargo/host/broker/verifier suites, and retained KFD source-scan and phase-fixture failures. |
+| `native-snapshot27-cpu-logs.tar.gz` | `1004acb0295b4e1f182ebae1454b69b9b7414ac4aa96446d084084641f41afe4` | Corrected phase/ownership controls, full coordinator/spawn tests and doctests; scoped Clippy findings and packaged-manager pre-Rust refusal remain failures. |
+| `native-snapshots28-29-cpu-logs.tar.gz` | `af84f5b8fc841e6c57359e973a40b5e7fa6399c3399feacb21c786985e05fde2` | Complete signed-source KFD tests, fresh macro/binding and dependency audits; cooperative-driver/coordinator tests and corrected static contracts; both obsolete duplicate-child panic expectations remain failed full-runtime runs. |
+| `native-snapshots30-31-cpu-logs.tar.gz` | `36094d1082fb4238acf00268164ab7048f5ad41bfa5868f3b702a4161886d7b0` | Bounded collision controls and two complete 2448-test runtime replays; retained seven-finding Clippy failure, then clean scoped Clippy and 17 scoped ownership doctests. |
 
 Snapshot 11 passed the following full library suites:
 
@@ -198,6 +202,76 @@ The subsequent modularization preserves the original production source growth
 limits. Final source-policy, full CPU and maintained proof replays are separate
 gates; passing source-scanner calibration alone is not a solver campaign.
 
+Snapshot 26 passed full runtime (2442), model (1138), Cargo (570), host (369),
+broker (450), and verifier (1493) suites. Four KFD source-scan tests failed
+against relocated declarations; 2050 passed and three were ignored. The
+relocated-source fixes preserve their original assertions and await replay.
+One phase fixture compared a borrowed ledger identity across an owning move.
+Its correction compares identity while the original pool remains stationary,
+checks retained accounting after final shutdown, and adds a foreign-pool refusal.
+
+Snapshot 27 passed all selected all-target checks, coordinator (365), spawn
+(347), coordinator doctests (8 ordinary, 77 compile-fail), and the three exact
+allocation-collision/credit-retention controls. The static replay built the real
+images and passed 14 phase/child/creator controls, but its packaged manager
+exited 126 before Rust rather than producing the required nonroot refusal.
+The harness supplied environment entries that secure startup forbids. The
+corrected harness uses an empty environment; it still requires exact exit 98,
+message bytes, complete bounded capture and original-child reaping. Six Python
+observer tests pass, including a real retained-FD empty-environment control;
+the subsequent packaged replay is recorded below. Thirteen scoped coordinator
+Clippy findings are addressed without introducing unaccounted heap custody.
+
+Snapshot 28 represents the complete signed `64ba4c359` checkpoint. It passes all
+2054 KFD tests (three ignored), all 30 pure-Rust audit tests and the actual locked
+metadata audit over eight production roots and 82 packages. Cleaning only the
+two affected packages in the owned target directory eliminates stale embedded
+fixture paths: all macro tests pass (90 library, four renamed-dependency and ten
+typed-launch tests), followed by the fresh actual Cargo binding-only fixture.
+
+Snapshot 29 combines the coordinator/harness fixes with the cooperative-driver
+candidate. It passes all 38 focused scope tests, including exact poll/wake counts
+and 4096-owner sibling-fairness controls on Tokio and LocalPool. These are CPU
+lifecycle owners, not 4096 concurrently GPU-published dispatches. Coordinator
+Clippy passes with `--no-deps -D clippy::all`; 365 coordinator tests, eight ordinary
+and 77 compile-fail coordinator doctests, 17 scoped runtime compile-fail tests,
+and 40 native-harness Python tests also pass. The static replay rebuilds all five
+images, passes the exact empty-environment nonroot refusal and both private-root
+deployment contracts. It explicitly reports `joinedProtectedPhaseQualified=false`
+and `rootServiceCleanupQualified=false`: no service or GPU run occurred.
+
+Both snapshots' full runtime processes abort in an inherited duplicate-child
+insertion test. That test still expected unwinding after allocation collision,
+where the production owner must abort without dropping possibly live storage.
+These runs remain failures with no inferred full-suite count. The test-only
+successor uses the existing bounded exact-child harness: SIGABRT, an explicit
+pre-fault custody marker, no panic/unwind, no core dump, a 20-second deadline,
+16 KiB stderr cap and kill/reap on timeout. The independent post-owner recoverable
+panic test and production collision behavior are unchanged.
+
+Snapshot 30 passes all seven focused allocation controls and the complete runtime
+suite: 2448 passed, zero failed, 34 explicitly ignored, no filtering, in 347.13
+seconds. Its scoped runtime Clippy run correctly fails seven findings. Four
+source files then add owning result/function aliases, preserve inline owner
+returns without boxing, and simplify conditions with the same evaluation and
+error order. Independent review found no ownership or behavior change.
+Snapshot 31 passes scoped runtime Clippy with `--no-deps -D clippy::all`, another
+complete 2448-test run (zero failed, 34 ignored, 348.49 seconds), and all 17 scoped
+compile-fail ownership doctests. Neither run executes the ignored GPU tests.
+
+The resulting 507-file runtime and 512-file runtime/schema captures pass all 15
+producer source/diagnostic/construction commands with identical before/after
+byte-and-mode manifests. Earlier stale-count and Context-file pin refusals remain
+retained. Exact proof closures and all 119 live/planner mutant texts are unchanged;
+that comparison is not successor solver qualification. Retained routing and
+credit controls separately pass with unchanged narrow correspondence pins.
+
+The complete signed local checkpoint `64ba4c359baa9e62d98132dcc7fa60d7ab332666`
+passes workspace formatting and the actual commit-to-commit hygiene CLI against
+`17078d5bff96de343c4d248c8e1883c4792d9bf0`. All 24 hygiene-policy regression
+tests pass. This checkpoint is an input to further qualification, not milestone
+closure or evidence of a successful production workflow.
+
 Earlier failures also exposed test-process interference: unrelated libtest forks
 could inherit a pipe writer or shared lock descriptor. Selected tests now create
 those descriptors only after exact-test re-exec, with a watchdog, kill/reap guard,
@@ -226,7 +300,18 @@ These tests cover installed-image/profile/account and replacement contracts.
 The manager case uses an inert installed image and refuses live-manager admission.
 They do not show a successful genuine manager/application exchange or protected
 GPU execution. The new hosted `native-static-cpu` CI job is source-integrated;
-an actual GitHub execution remains to be observed after landing.
+an actual GitHub execution remains to be observed after landing. The generic
+validation aggregate now requires this job, including rejecting a failed,
+cancelled, skipped or absent result. Its wiring controls cover all three required
+jobs; source integration alone is not branch protection or a successful run.
+
+The reviewed-host proof job also runs the five signed-source dispatch/producer
+campaigns and the retained-routing/credit campaigns. Every added evidence
+directory participates in the existing always-upload and owned cleanup steps.
+Local parsed-workflow tests exercise the exact command arguments and fail-fast
+shell sequencing; these stubbed invocations do not run a solver. This job still
+needs a properly isolated reviewed runner, with the pinned Git/SSH tools and
+unchanged proof resource limits. No shared host was registered as a runner.
 
 The complete static CPU script passed again on snapshot 14 after the original
 account and host async changes. Its archive includes fresh five-image digests,

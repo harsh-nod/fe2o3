@@ -125,12 +125,12 @@ fn sysinfo_ehdr(auxv: &[u8]) -> Result<u64> {
                 ));
             }
             terminal = true;
-        } else if kind == 33 {
-            if sysinfo.replace(value).is_some() || value == 0 || value & 4095 != 0 {
-                return Err(Error::Invalid(
-                    "kernel auxiliary vector has invalid SYSINFO_EHDR",
-                ));
-            }
+        } else if kind == 33
+            && (sysinfo.replace(value).is_some() || value == 0 || value & 4095 != 0)
+        {
+            return Err(Error::Invalid(
+                "kernel auxiliary vector has invalid SYSINFO_EHDR",
+            ));
         }
     }
     if !terminal {

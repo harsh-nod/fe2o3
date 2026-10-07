@@ -284,26 +284,30 @@ class CpuGroupTests(unittest.TestCase):
         self.assertIn("generic-core-${{ matrix.group }}-logs-${{ github.run_attempt }}", core)
         aggregate = workflow.split("\n  generic-validation:\n", 1)[1]
         self.assertIn("    if: ${{ always() }}", aggregate)
-        self.assertIn("      - generic-core\n      - rustc-codegen-shards", aggregate)
+        self.assertIn("      - generic-core\n      - rustc-codegen-shards\n      - native-static-cpu\n", aggregate)
         self.assertIn("scripts/require-ci-success.sh", aggregate)
         self.assertIn('"${GENERIC_CORE_RESULT}"', aggregate)
         self.assertIn('"${RUSTC_CODEGEN_SHARDS_RESULT}"', aggregate)
+        self.assertIn("NATIVE_STATIC_CPU_RESULT: ${{ needs.native-static-cpu.result }}", aggregate)
+        self.assertIn('"${NATIVE_STATIC_CPU_RESULT}"', aggregate)
         script = SCRIPT.read_text()
         self.assertIn('CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"', script)
         self.assertIn('CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"', script)
 
     def test_strict_aggregate_rejects_failure_cancellation_skips_and_missing_results(self):
         checker = ROOT / "scripts/require-ci-success.sh"
-        for statuses in [
-            ("success", "success"), ("success", "failure"), ("cancelled", "success"),
-            ("success", "skipped"), ("", "success"), ("success", ""),
-        ]:
+        success = ("success", "success", "success")
+        cases = [success]
+        for index in range(3):
+            for rejected in ("failure", "cancelled", "skipped", ""):
+                cases.append(success[:index] + (rejected,) + success[index + 1:])
+        for statuses in cases:
             with self.subTest(statuses=statuses):
                 result = subprocess.run(
                     ["bash", str(checker), *statuses], cwd=ROOT,
                     capture_output=True, check=False, timeout=10,
                 )
-                self.assertEqual(result.returncode == 0, statuses == ("success", "success"))
+                self.assertEqual(result.returncode == 0, statuses == success)
 
 
 def standalone_metadata_commands():

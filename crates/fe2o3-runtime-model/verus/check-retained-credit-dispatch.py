@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Serialized retained-credit dispatch; concrete identity/lock/map boundaries."""
+"""Serialized retained-credit dispatch; concrete identity/lock/map boundaries.
+
+The successor capture is not a proof of added runtime/native behavior. Exact
+production/proof correspondence is pinned independently of that capture; the
+original scalar identity, raw-lock and exact-key map projections are unchanged.
+"""
 import hashlib
 import json
 from pathlib import Path
@@ -62,8 +67,15 @@ EXTRA = {MODEL / "r67_resource_credits.rs", MODEL / "lib.rs",
              "fe2o3-runtime-model", "fe2o3-runtime", "fe2o3-resource-accounting", "fe2o3-kfd"))}
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_TREE_SHA = "3efad3f549c088548f74cad94741d8126b69ae7274999473768323b27309d37f"
+SOURCE_TREE_SHA = "853808c4371d000b2166ca9dfbdb36e0f540bc4e3ddc702244694556161ecc80"
 PROOF_SHA = "84352d8aec33bb9b42611c01a298216dcd12ed6c355ed3ba7a7f410f4681a8ca"
+# Compared against predecessor 2761f359: only the allocation-admission owner's
+# panic-policy comment changed. No declaration, executable body or proof changed.
+CORRESPONDENCE_FILES = frozenset(set(FILES) | set(OWNERS.values()) | {
+    RUNTIME / "context/allocation_witness.rs", MODEL / "r67_resource_credits.rs",
+})
+CORRESPONDENCE_SHA = "be7346ca406901c79719d6223116e6a416e36d17ebd502383f9ad1a3b074d611"
+IDENTITY_MACRO_SHA = "f4d9eebd7707202b1e85c6c0cea32c623fbd80846865b0cc4076c6bf7f788c8a"
 EXPECTED_VERIFIED = 41
 MUTANT_COUNT = 25
 
@@ -125,7 +137,17 @@ def include_closure(sources):
 def audit(sources):
     need(set(sources) == source_paths(), "complete runtime/accounting/KFD Rust input roster")
     need(tree_hash({path: text for path, text in sources.items() if path != PROOF}) == SOURCE_TREE_SHA,
-         "reviewed production/dependency bytes")
+         "complete captured production/dependency bytes")
+    need(tree_hash({path: sources[path] for path in CORRESPONDENCE_FILES}) == CORRESPONDENCE_SHA,
+         "exact serialized dispatch declarations, owners, projections and proof bodies")
+    context = sources[RUNTIME / "context.rs"]
+    start, end = "macro_rules! runtime_id {", "runtime_id!(RuntimeDeviceIdV1);"
+    need(context.count(start) == context.count(end) == 1 and context.index(start) < context.index(end),
+         "unique actual identity declaration and device invocation")
+    need(sha(context[context.index(start):context.index(end)]) == IDENTITY_MACRO_SHA,
+         "unchanged complete generation/local identity declaration, equality and getter")
+    need(context.count("runtime_id!(RuntimeAllocationIdV1);") == 1,
+         "actual allocation identity uses the same complete declaration")
     need(sha(sources[PROOF]) == PROOF_SHA, "exact serialized dispatch root")
     need(include_closure(sources) == set(FILES), "exact fourteen-file executable closure")
     need(sources[PROOF].startswith(sources[V / "domain_retained_observation_v1.rs"]),

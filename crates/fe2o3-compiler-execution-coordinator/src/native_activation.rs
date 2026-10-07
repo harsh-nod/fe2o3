@@ -338,10 +338,10 @@ fn parse_environment(main_pid: i32, snapshot: &EnvironmentSnapshot) -> Result<Ac
             .filter(|&offset| offset > 0)
             .ok_or_else(|| invalid("activation", "malformed environment entry"))?;
         let key = &entry[..split];
-        if let Some(slot) = ACTIVATION_KEYS.iter().position(|&name| name == key) {
-            if values[slot].replace(&entry[split + 1..]).is_some() {
-                return Err(invalid("activation", "duplicate activation variable"));
-            }
+        if let Some(slot) = ACTIVATION_KEYS.iter().position(|&name| name == key)
+            && values[slot].replace(&entry[split + 1..]).is_some()
+        {
+            return Err(invalid("activation", "duplicate activation variable"));
         }
     }
     let [Some(pid), Some(fds), Some(names), Some(notify)] = values else {

@@ -28,15 +28,16 @@ fn bounded_stderr(stderr: &mut std::process::ChildStderr, bytes: &mut Vec<u8>) {
     }
 }
 
-#[test]
-fn ordinary_duplicate_insert_stops_without_unwinding_either_owner() {
-    const CHILD: &str = "FE2O3_TEST_ORDINARY_ALLOCATION_COLLISION";
-    const TEST: &str = "kfd_backend::allocation_table::tests::ordinary_duplicate_insert_stops_without_unwinding_either_owner";
-    const READY: &str = "ordinary collision original and incoming records retained";
-    const UNWIND: &str = "ordinary collision unwound";
-    const PANIC: &str = "ordinary collision panic hook invoked";
+pub(in crate::kfd_backend) fn assert_collision_aborts(
+    test: &str,
+    child_environment: &str,
+    ready: &str,
+    exercise: impl FnOnce(),
+) {
+    const UNWIND: &str = "allocation collision unwound";
+    const PANIC: &str = "allocation collision panic hook invoked";
 
-    if std::env::var_os(CHILD).is_some() {
+    if std::env::var_os(child_environment).is_some() {
         // Piped crash handlers ignore RLIMIT_CORE; keep deliberate aborts local.
         rustix::process::set_dumpable_behavior(rustix::process::DumpableBehavior::NotDumpable)
             .unwrap();
@@ -48,15 +49,6 @@ fn ordinary_duplicate_insert_stops_without_unwinding_either_owner() {
             },
         )
         .unwrap();
-        let mut backend = KfdRuntimeBackendV1::mock();
-        let original = backend
-            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 4, 4)
-            .unwrap();
-        let incoming = backend
-            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 4, 4)
-            .unwrap();
-        let incoming = backend.allocations.remove(&incoming).unwrap();
-        assert!(backend.allocations.get(&original).is_some());
         struct UnwindProbe;
         impl Drop for UnwindProbe {
             fn drop(&mut self) {
@@ -65,15 +57,14 @@ fn ordinary_duplicate_insert_stops_without_unwinding_either_owner() {
         }
         let _probe = UnwindProbe;
         std::panic::set_hook(Box::new(|_| eprintln!("{PANIC}")));
-        eprintln!("{READY}");
-        backend.allocations.insert(original, incoming);
-        panic!("ordinary collision returned");
+        exercise();
+        panic!("allocation collision returned");
     }
 
     let mut child = OwnedChild(
         std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", TEST, "--nocapture"])
-            .env(CHILD, "1")
+            .args(["--exact", test, "--nocapture"])
+            .env(child_environment, "1")
             .env("RUST_BACKTRACE", "0")
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
@@ -99,7 +90,27 @@ fn ordinary_duplicate_insert_stops_without_unwinding_either_owner() {
     };
     let stderr = String::from_utf8_lossy(&bytes);
     assert_eq!(status.signal(), Some(6), "{stderr}");
-    assert!(stderr.contains(READY), "{stderr}");
+    assert!(stderr.contains(ready), "{stderr}");
     assert!(!stderr.contains(UNWIND), "{stderr}");
     assert!(!stderr.contains(PANIC), "{stderr}");
+}
+
+#[test]
+fn ordinary_duplicate_insert_stops_without_unwinding_either_owner() {
+    const CHILD: &str = "FE2O3_TEST_ORDINARY_ALLOCATION_COLLISION";
+    const TEST: &str = "kfd_backend::allocation_table::tests::ordinary_duplicate_insert_stops_without_unwinding_either_owner";
+    const READY: &str = "ordinary collision original and incoming records retained";
+    assert_collision_aborts(TEST, CHILD, READY, || {
+        let mut backend = KfdRuntimeBackendV1::mock();
+        let original = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 4, 4)
+            .unwrap();
+        let incoming = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 4, 4)
+            .unwrap();
+        let incoming = backend.allocations.remove(&incoming).unwrap();
+        assert!(backend.allocations.get(&original).is_some());
+        eprintln!("{READY}");
+        backend.allocations.insert(original, incoming);
+    });
 }

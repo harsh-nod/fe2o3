@@ -319,6 +319,7 @@ jobs:
     needs:
       - generic-core
       - rustc-codegen-shards
+      - native-static-cpu
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -332,7 +333,9 @@ jobs:
         env:
           GENERIC_CORE_RESULT: ${{ needs.generic-core.result }}
           RUSTC_CODEGEN_SHARDS_RESULT: ${{ needs.rustc-codegen-shards.result }}
+          NATIVE_STATIC_CPU_RESULT: ${{ needs.native-static-cpu.result }}
         run: >-
           scripts/require-ci-success.sh
           "${GENERIC_CORE_RESULT}"
           "${RUSTC_CODEGEN_SHARDS_RESULT}"
+          "${NATIVE_STATIC_CPU_RESULT}"

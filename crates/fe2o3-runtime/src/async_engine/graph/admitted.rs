@@ -8,6 +8,14 @@ pub(crate) struct GraphAdmissionFailureV1<B: RuntimeBackendV1, E> {
     pub(crate) error: E,
 }
 
+type GraphAdmissionResultV1<B> = Result<
+    (
+        AdmittedGraphV1,
+        Vec<Option<Box<PreparedContextGraphActionV1>>>,
+    ),
+    GraphAdmissionFailureV1<B, RuntimeGraphErrorV1<<B as RuntimeBackendV1>::Error>>,
+>;
+
 /// Frozen validation and ordinary preparations, before Context reservation.
 /// Generated DATA remains frozen in the adapter's original carriers; dependency
 /// edges do not rebind it or add it to the ordinary allocation version ledger.
@@ -108,16 +116,9 @@ impl<B: RuntimeBackendV1> PreparedGraphAdmissionV1<B> {
     /// The caller preallocates its active/observation rosters before this step.
     /// No native action is issued here. The exact retained request is consumed
     /// only after the original Context grants its exclusive reservation.
-    pub(crate) fn commit(
-        self,
-        context: &mut RuntimeContextV1<B>,
-    ) -> Result<
-        (
-            AdmittedGraphV1,
-            Vec<Option<Box<PreparedContextGraphActionV1>>>,
-        ),
-        GraphAdmissionFailureV1<B, RuntimeGraphErrorV1<B::Error>>,
-    > {
+    // Refusal returns the original request without a new fallible heap allocation.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn commit(self, context: &mut RuntimeContextV1<B>) -> GraphAdmissionResultV1<B> {
         let token = match context.reserve_graph_v1(self.ids.len()) {
             Ok(token) => token,
             Err(error) => {
@@ -288,6 +289,8 @@ impl AdmittedGraphV1 {
     /// The adapter must retain this owner while operations remain active. This
     /// final step also checks the actual Context's complete native owner roster;
     /// a terminal dependency state alone never releases the reservation.
+    // Failed retirement returns the complete owner without allocating to retain it.
+    #[allow(clippy::result_large_err)]
     pub(crate) fn finish<B: RuntimeBackendV1>(
         self,
         context: &mut RuntimeContextV1<B>,

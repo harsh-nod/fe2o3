@@ -144,6 +144,17 @@ type Progress<B, P> = fn(
     &ContextUnpublishedHoldV1,
 ) -> Result<bool, NativeError>;
 
+type GraphSubmit<B> = fn(
+    &mut RuntimeContextV1<B>,
+    ContextGraphReservationV1,
+    PreparedContextGraphActionV1,
+) -> Result<RuntimeSubmissionV1<()>, NativeError>;
+type GraphProgress<B> = fn(
+    &mut RuntimeContextV1<B>,
+    RuntimeStreamIdV1,
+    Option<ContextGraphReservationV1>,
+) -> Result<(), NativeError>;
+
 struct Hooks<B: RuntimeBackendV1, P> {
     reserve: Reserved<B, P>,
     preflight: Preflight<B, P>,
@@ -152,16 +163,8 @@ struct Hooks<B: RuntimeBackendV1, P> {
     progress: Progress<B, P>,
     complete: Step<B, P>,
     copy_progress: fn(&mut RuntimeContextV1<B>, RuntimeStreamIdV1) -> Result<(), NativeError>,
-    graph_submit: fn(
-        &mut RuntimeContextV1<B>,
-        ContextGraphReservationV1,
-        PreparedContextGraphActionV1,
-    ) -> Result<RuntimeSubmissionV1<()>, NativeError>,
-    graph_progress: fn(
-        &mut RuntimeContextV1<B>,
-        RuntimeStreamIdV1,
-        Option<ContextGraphReservationV1>,
-    ) -> Result<(), NativeError>,
+    graph_submit: GraphSubmit<B>,
+    graph_progress: GraphProgress<B>,
 }
 
 /// Owns every carrier until exact native settlement and its original decoder.
@@ -459,7 +462,8 @@ macro_rules! impl_scoped_generated {
             /// The callback may await its submitted observers and driver. On
             /// normal callback return, the same scope asynchronously drains any
             /// remaining owners using only the caller's wake factory. A ready
-            /// wake source can busy-poll; no timer or owner thread is created.
+            /// wake source can busy-poll across executor turns; each nonterminal
+            /// scan cooperatively yields, and no timer or owner thread is created.
             ///
             /// Dropping a polled scope with unsettled owners fails stop. Forgetting
             /// it leaves a persistent Context reservation: ordinary mutation and

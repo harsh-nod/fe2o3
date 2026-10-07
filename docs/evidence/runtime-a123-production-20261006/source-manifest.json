@@ -15,11 +15,11 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "b9a85db5a2da5ad0a51e79798888c226a5faaaf5542e7ea0a725e9ffda4d858b"
+      "sha256": "3e2af8e9eaf7f7300fca94466a9844634cf274a1ba9079ed2252d68c315d7b8f"
     },
     {
       "path": ".github/workflows/runtime-model-verus.yml",
-      "sha256": "7700f0100797c5beba0227548a53a2e5ac02aa5e8c10704617075b963118c207"
+      "sha256": "4f7ac422b8e8cbc10f91ed5b131a13dcddb5a554c5ebb3edf2e4984c50785c34"
     },
     {
       "path": "scripts/ci-local.sh",
@@ -43,11 +43,11 @@
     },
     {
       "path": "crates/fe2o3-runtime-model/verus/pins/PRODUCER_LIVE_CAMPAIGN_INPUTS.json",
-      "sha256": "b391abd80f2da04f55bf754518b1d588f6fb8de0f6bc2fc49ded1e5dae531e32"
+      "sha256": "ce31c89496180fb1b683e1b0cfab545467fbe275509a404003eb49cb29fa6cd2"
     },
     {
       "path": "crates/fe2o3-runtime-model/verus/pins/PRODUCER_PLANNER_INPUT_CAMPAIGN_V1.json",
-      "sha256": "01bbcc2ec08dab892ce824032370ec2d9016461721961a8daed60e741fd97bee"
+      "sha256": "0b4fa81844b89ac53213a34bd6bf2d9c661fa458e68082cf2ebb2e6827705ecc"
     }
   ],
   "group_hash_algorithm": "SHA-256 of records sorted by repository-relative path: lowercase file SHA-256, two ASCII spaces, POSIX repository-relative path, newline. UTF-8; no domain prefix.",
@@ -59,9 +59,9 @@
       "records_sha256": "893408d8c1b467cc7f5b550f24d051b49cecbbf87325de5261bb65d54f2da7a9"
     },
     {
-      "files": 507,
+      "files": 508,
       "package": "fe2o3-runtime",
-      "records_sha256": "511f22e881dc1b9bfa2f3e05ce935b5cf054b5109bf8d8ac738cf92c8afca016"
+      "records_sha256": "37e35b60dd6beeb35f772b939c601a52bb89cc232550acd52a535be2a3cc0148"
     },
     {
       "files": 314,
@@ -111,7 +111,7 @@
     {
       "files": 108,
       "package": "fe2o3-compiler-execution-coordinator",
-      "records_sha256": "9d75f8e619ef8124c4eeb20d70c744b2d65673865066fe77757401bae7c8760d"
+      "records_sha256": "8aff2c38dd814aca9c0359c61cf41ff3984960f12d80e5296ec4c049380cba71"
     },
     {
       "files": 118,
@@ -139,7 +139,7 @@
       "records_sha256": "e364bca79400a60613a4f734c2026b44f04d2c370b3b98ea0f16ca244503f936"
     }
   ],
-  "integration_base_commit": "17078d5bff96de343c4d248c8e1883c4792d9bf0",
+  "integration_base_commit": "64ba4c359baa9e62d98132dcc7fa60d7ab332666",
   "reproduction": [
     "cargo fmt --all -- --check",
     "bash scripts/tests/ci-local-test-gate.sh",

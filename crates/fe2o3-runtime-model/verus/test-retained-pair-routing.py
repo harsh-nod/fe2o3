@@ -30,6 +30,33 @@ sys.modules[check.__name__] = check
 exec(compile(path.read_bytes(), str(path), "exec"), check.__dict__)
 sources = check.snapshot()
 check.audit(sources)
+need(check.CORRESPONDENCE_FILES == {check.OWNER, check.DECLARATIONS, check.BODY, check.PROOF},
+     "exact unchanged production/proof correspondence, not the whole-runtime capture")
+
+
+def rebound_capture_refused(selected, before, after):
+    need(sources[selected].count(before) == 1 and before != after,
+         "nonvacuous successor correspondence control")
+    changed = {**sources, selected: sources[selected].replace(before, after)}
+    original_tree, original_proof = check.SOURCE_TREE_SHA, check.PROOF_SHA
+    try:
+        check.SOURCE_TREE_SHA = check.tree_hash({p: t for p, t in changed.items()
+                                               if p.is_relative_to(check.SRC)})
+        check.PROOF_SHA = check.sha(changed[check.PROOF])
+        refused(lambda: check.audit(changed), "capture repin concealed changed routing correspondence")
+    finally:
+        check.SOURCE_TREE_SHA, check.PROOF_SHA = original_tree, original_proof
+
+
+for selected, before, after in (
+    (check.OWNER, "publish: impl FnOnce(Vec<R>) -> Result<Vec<T>, S>",
+     "publish: impl FnMut(Vec<R>) -> Result<Vec<T>, S>"),
+    (check.OWNER, "    ids: &'a [u64],", "    ids: &'a [u32],"),
+    (check.DECLARATIONS, "Prepared(Vec<R>),", "Prepared(Vec<()>),"),
+    (check.BODY, "Ok(tickets) => BatchPhase::Pending(tickets)", "Ok(_tickets) => BatchPhase::Ready"),
+    (check.PROOF, "    owner: O,", "    owner: O,\n    unchecked_native_authority: bool,"),
+):
+    rebound_capture_refused(selected, before, after)
 
 
 def hostile(path, before, after):

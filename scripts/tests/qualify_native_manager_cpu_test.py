@@ -32,7 +32,7 @@ class PackagedManagerCPU(unittest.TestCase):
     def test_exact_status_and_capture(self):
         q.validate_capture(outcome(), q.EXPECTED)
         for key, value in (("status", "timeout"), ("status", "log-limit"), ("exitCode", 0),
-                           ("exitCode", True), ("exitCode", 125), ("logComplete", False),
+                           ("exitCode", True), ("exitCode", 125), ("exitCode", 126), ("logComplete", False),
                            ("directChildReaped", False), ("logBytes", len(q.EXPECTED) + 1),
                            ("logSha256", "0" * 64)):
             with self.subTest(key=key), self.assertRaises(ValueError):
@@ -54,6 +54,8 @@ class PackagedManagerCPU(unittest.TestCase):
                 calls, reports = [], []
                 def run(arguments, cwd, environment, log, timeout, maximum, *, executable_fd):
                     calls.append(arguments)
+                    self.assertEqual(arguments, [str(image)])
+                    self.assertEqual(environment, {}, "secure-start refuses any environment entry")
                     self.assertEqual(os.fstat(executable_fd).st_ino, original_inode)
                     self.assertEqual((timeout, maximum), (5, q.MAX_LOG))
                     if mutation == "replace-path":
@@ -116,6 +118,27 @@ class PackagedManagerCPU(unittest.TestCase):
                     self.assertEqual(result["status"], expected)
                     self.assertTrue(result["directChildReaped"])
                     self.assertFalse(result["logComplete"])
+            finally:
+                os.close(fd)
+
+    def test_real_fd_capture_preserves_explicit_empty_environment(self):
+        # A normal env binary observes the subprocess boundary only. It is not
+        # the packaged manager and cannot qualify protected startup or custody.
+        capture = q.support()
+        with tempfile.TemporaryDirectory(prefix="fe2o3-empty-exec-env-") as directory:
+            root = Path(directory)
+            fd = os.open("/usr/bin/env", os.O_RDONLY | os.O_CLOEXEC)
+            try:
+                with mock.patch.dict(os.environ, {"FE2O3_TEST_AMBIENT_ENTRY": "must-not-inherit"}):
+                    for index, (environment, expected) in enumerate((
+                            ({}, b""), ({"LC_ALL": "C"}, b"LC_ALL=C\n"))):
+                        log = root / f"capture-{index}"
+                        result = capture.run_command(["nonempty-argv0"], root, environment,
+                                                     log, 5, 1024, executable_fd=fd)
+                        self.assertEqual(result["exitCode"], 0)
+                        self.assertTrue(result["directChildReaped"])
+                        self.assertTrue(result["logComplete"])
+                        self.assertEqual(log.read_bytes(), expected)
             finally:
                 os.close(fd)
 

@@ -172,4 +172,4 @@ impl std::ops::Index<&u64> for AllocationTableV1 {
 }
 
 #[cfg(test)]
-mod tests;
+pub(super) mod tests;

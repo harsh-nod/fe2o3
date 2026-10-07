@@ -66,6 +66,8 @@ pub(super) enum Phase {
     Cancelled,
 }
 
+// Issuer retention is prepaid inline; do not introduce allocation during custody transfer.
+#[allow(clippy::large_enum_variant)]
 pub(super) enum Owner<'work> {
     Gated(Trace<'work>),
     Issued(Issued<'work, Helper>),

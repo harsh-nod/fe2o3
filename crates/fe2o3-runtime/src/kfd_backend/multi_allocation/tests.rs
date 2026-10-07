@@ -181,24 +181,30 @@ fn multi_allocation_post_owner_panic_preserves_payload_and_hidden_custody() {
 
 #[test]
 fn multi_allocation_duplicate_child_insertion_cannot_create_outer_alias() {
-    let mut backend = std::mem::ManuallyDrop::new(fixture());
-    let first = backend
-        .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
-        .unwrap();
-    let local = backend.allocations[&first].local;
-    backend.children[0].next_handle = local;
-    let next = backend.next_handle;
-    assert!(
-        catch_unwind(AssertUnwindSafe(|| {
-            backend.allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
-        }))
-        .is_err()
-    );
-    assert!(backend.terminal && backend.children[0].terminal);
-    assert!(!backend.children[1].terminal);
-    assert_eq!(backend.allocations.len(), 1);
-    assert_eq!(backend.allocations[&first].local, local);
-    assert_eq!(backend.children[0].allocations.len(), 1);
-    assert_eq!(backend.next_handle, next);
-    dispose_synthetic(std::mem::ManuallyDrop::into_inner(backend));
+    const CHILD: &str = "FE2O3_TEST_MULTI_ALLOCATION_COLLISION";
+    const TEST: &str = "kfd_backend::multi_allocation::tests::multi_allocation_duplicate_child_insertion_cannot_create_outer_alias";
+    const READY: &str = "multi collision original route and child record retained";
+    allocation_table::tests::assert_collision_aborts(TEST, CHILD, READY, || {
+        let mut backend = std::mem::ManuallyDrop::new(fixture());
+        let first = backend
+            .allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8)
+            .unwrap();
+        let route = backend.allocations[&first];
+        assert_eq!(route.child, 0);
+        assert_eq!(backend.allocations.len(), 1);
+        assert_eq!(backend.next_handle, first + 1);
+        assert!(!backend.terminal);
+        assert!(!backend.children[0].terminal && !backend.children[1].terminal);
+        assert_eq!(backend.children[0].allocations.len(), 1);
+        assert!(backend.children[0].allocations.get(&route.local).is_some());
+        assert_eq!(backend.children[0].staged_context_bytes, 8);
+        assert_eq!(backend.children[0].next_handle, route.local + 1);
+        assert!(backend.children[1].allocations.is_empty());
+        assert_eq!(backend.children[1].staged_context_bytes, 0);
+        assert_eq!(backend.children[1].next_handle, 1);
+        backend.children[0].next_handle = route.local;
+        eprintln!("{READY}");
+        let _ = backend.allocate_v1(7, RuntimeMemoryKindV1::HostVisible, 8, 8);
+        panic!("duplicate child allocation returned and could create an outer alias");
+    });
 }

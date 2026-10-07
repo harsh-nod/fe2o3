@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Conditional actual routing refinement; native callbacks remain receipt boundaries.
 
-This development draft refuses campaigns until both the full positive count and
-actual selected-function diagnostics are measured. No native/timeout/Drop claim.
+The complete successor capture is separate from the unchanged four-file routing
+correspondence. A fresh campaign is required for this capture; historical counts
+are expectations, not successor results. No native/timeout/Drop claim.
 """
 import hashlib
 import json
@@ -22,9 +23,13 @@ PROOF = V / "retained_pair_routing_v1.rs"
 FILES = [PROOF, DECLARATIONS, BODY]
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_FILES = 413
-SOURCE_TREE_SHA = "fcad695a69a1c653b16818fd0c7b30583b32ed49647956aea5daf64fb85aea6f"
+SOURCE_FILES = 507
+SOURCE_TREE_SHA = "4f534a5a317066ab1e5d3c5d265589c3fa8a9c8b7fa8d233ccf3d091b70d5f13"
 PROOF_SHA = "c5138489a6b5e2773fb510a9a502aeeb9cd21ef88ff7d9863dacd94d7e797341"
+# All four files are byte-identical to the reproduced predecessor 2761f359.
+# Native callback implementations outside this owner remain explicit boundaries.
+CORRESPONDENCE_FILES = frozenset({OWNER, DECLARATIONS, BODY, PROOF})
+CORRESPONDENCE_SHA = "9a672158fd53a9450a058832481b7c9198a2e05703ad88df1113b01d2ed320bd"
 EXPECTED_VERIFIED = 4
 SELECTION_NOTES = {
     "*Observations::publish": frozenset({"verifying root module (selected functions)"}),
@@ -63,7 +68,9 @@ def audit(sources):
     implementation = {path: text for path, text in sources.items() if path.is_relative_to(SRC)}
     need(set(sources) == set(implementation) | {PROOF}, "complete runtime Rust roster plus routing proof")
     need(len(implementation) == SOURCE_FILES and tree_hash(implementation) == SOURCE_TREE_SHA,
-         "reviewed runtime roster and bytes including native callback adapters")
+         "complete captured runtime roster and bytes including native callback adapters")
+    need(tree_hash({path: sources[path] for path in CORRESPONDENCE_FILES}) == CORRESPONDENCE_SHA,
+         "unchanged exact routing declarations, bodies, owner and receipt contracts")
     need(sha(sources[PROOF]) == PROOF_SHA, "exact conditional receipt/argument/result/frame contracts")
     owner = sources[OWNER]
     proof = sources[PROOF]
