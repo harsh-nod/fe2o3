@@ -358,14 +358,25 @@ fn expanded_product_carrier_query_refuses_scalar_source_and_invalid_component() 
             })
             .unwrap()
             .ty();
-        let scalar = &frames.demands[call
+        // The negative needs an authentic scalar endpoint, not a scalar that
+        // happens to survive this call. Include current demands of this frame.
+        let scalar = frames
             .demands
-            .clone()
-            .find(|at| {
-                semantic.functions()[0].locals()[frames.demands[*at].source.local].ty()
-                    == scalar_type
+            .iter()
+            .find(|demand| {
+                let owner = &frames.frames[demand.frame];
+                owner.root == 0
+                    && owner.instance == 0
+                    && semantic.functions()[0].locals()[demand.source.local].ty() == scalar_type
             })
-            .unwrap()];
+            .expect("root frame has an authentic current scalar demand");
+        assert_eq!(
+            slots
+                .correspondence(out)?
+                .ssa_typed_endpoint_v36(0, 0, scalar.source.value, out.budget)?
+                .source_type(out.budget)?,
+            scalar_type
+        );
         assert!(matches!(
             bindings.emit_source_product_conjunct_v283(
                 plan,
