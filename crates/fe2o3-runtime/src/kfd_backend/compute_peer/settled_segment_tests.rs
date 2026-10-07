@@ -626,13 +626,12 @@ fn settled_segments_completed_control_depth_preserves_legacy_transfer_limit() {
                     .unwrap(),
             );
         }
-        for _ in 0..16 {
-            if p.f
-                .backend
-                .drain_v1(control, Instant::now() + Duration::from_millis(100))
-                .unwrap()
-                == BackendPollV1::Succeeded
-            {
+        // This checks historical dependency depth, not elapsed completion time.
+        // Allow a bounded number of cooperative steps per scripted copy so
+        // shared-runner scheduling cannot exhaust a wall-clock drain window.
+        for _ in 0..16 * depth {
+            p.f.backend.progress_stream_v1(p.f.peer_stream).unwrap();
+            if p.f.backend.poll_v1(control).unwrap() == BackendPollV1::Succeeded {
                 break;
             }
         }
