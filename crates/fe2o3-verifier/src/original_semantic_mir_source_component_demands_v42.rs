@@ -70,6 +70,21 @@ fn word_mask(range: &Range<usize>, word: usize) -> u64 {
 }
 
 impl<'a, 'view, 'source> ComponentDemandsV42<'a, 'view, 'source> {
+    pub(super) fn check_owner_v281(
+        &self,
+        slots: &SourceSlots<'_, '_>,
+        function: FunctionId,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.slots
+            .check_query_storage_floor(self.required, out.budget)?;
+        out.budget.charge_work(2)?;
+        if !std::ptr::eq(self.slots, slots) || self.function != function {
+            return Err(mismatch());
+        }
+        Ok(())
+    }
+
     pub(super) fn derive(
         slots: &'a SourceSlots<'view, 'source>,
         function_id: FunctionId,
