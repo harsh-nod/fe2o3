@@ -260,7 +260,9 @@ fn run(
     // All planner, traversal and writer objects have dropped before owner cleanup.
     let used = budget.work();
     let peak = budget.peak_storage();
-    budget.rollback_storage(floor).unwrap();
+    budget
+        .release_storage(budget.storage().checked_sub(floor).unwrap())
+        .unwrap();
     assert_eq!(budget.storage(), FLOOR + retained);
     (result, used, peak)
 }
@@ -442,7 +444,9 @@ fn control_reconstruction_plan_rejects_foreign_owner_account_and_reduced_floor()
                     Err(Error::Resource(Resource::Accounting))
                 ));
                 assert_eq!(out.budget.storage(), paid);
-                out.budget.rollback_storage(floor).unwrap();
+                out.budget
+                    .release_storage(out.budget.storage().checked_sub(floor).unwrap())
+                    .unwrap();
                 assert!(out.finish().unwrap().is_empty());
             }
         });
@@ -471,7 +475,9 @@ fn control_reconstruction_owned_scratch_drops_before_unwind_refund() {
             out.budget.storage() > floor,
             "unwinding cannot silently refund live owner accounting"
         );
-        out.budget.rollback_storage(floor).unwrap();
+        out.budget
+            .release_storage(out.budget.storage().checked_sub(floor).unwrap())
+            .unwrap();
         assert_eq!(out.budget.storage(), floor);
         assert!(out.finish().unwrap().is_empty());
     });
@@ -519,7 +525,9 @@ fn control_reconstruction_plan_keeps_first_denial_across_foreign_and_restored_qu
         assert!(matches!(plan.check(input, &mut out), Err(Error::Resource(next)) if next == first));
         out.budget.reserve_storage(1).unwrap();
         assert!(matches!(plan.discard(&mut out), Err(Error::Resource(next)) if next == first));
-        out.budget.rollback_storage(floor).unwrap();
+        out.budget
+            .release_storage(out.budget.storage().checked_sub(floor).unwrap())
+            .unwrap();
         assert!(out.finish().unwrap().is_empty());
     });
 }
