@@ -1,4 +1,7 @@
 //! Original SSA argument forwarding, not erased-value or transition admission.
+use super::super::super::forwarding_observation::{
+    ExpandedSupportForwardingV288 as Event, Observer,
+};
 use super::*;
 use fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1 as EdgeArgument;
 use fe2o3_kernel_ir::CanonicalKirFunctionCoordinateV1 as Function;
@@ -24,6 +27,7 @@ pub(super) fn headers() -> usize {
         + size_of::<std::ops::Range<usize>>()
         + size_of::<std::slice::Iter<'_, EdgeArgument>>()
         + 2 * size_of::<Result<usize>>()
+        + super::super::super::forwarding_observation::headers()
 }
 
 impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
@@ -35,6 +39,15 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
         &self,
         original: usize,
         out: &mut Writer<'_, '_>,
+    ) -> Result<usize> {
+        self.source_transport_definition_observed(original, out, &mut |_, _| Ok(()))
+    }
+
+    pub(super) fn source_transport_definition_observed(
+        &self,
+        original: usize,
+        out: &mut Writer<'_, '_>,
+        observe: &mut Observer<'_>,
     ) -> Result<usize> {
         self.slots.with_source_query_v42(out, |out| {
             self.check(out)?;
@@ -54,6 +67,14 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                 let facts =
                     RefusalFacts::new(current, row.coordinate, row.ty).descendants(descendants);
                 if !descendants.is_empty() {
+                    observe(
+                        Event::Retained {
+                            original: current,
+                            coordinate: row.coordinate,
+                            descendants: descendants.len(),
+                        },
+                        out,
+                    )?;
                     return self.source_definition(current, out).map_err(|error| {
                         trace_refusal(error, RefusalPhase::TransportDescendants, facts)
                     });
@@ -73,6 +94,13 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                         facts,
                     ));
                 };
+                observe(
+                    Event::Erased {
+                        original: current,
+                        coordinate: row.coordinate,
+                    },
+                    out,
+                )?;
                 out.budget.charge_work(4)?;
                 let function = input
                     .functions()
@@ -110,6 +138,15 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                         return Err(mismatch());
                     }
                     incoming = Some(edge.incoming_definition);
+                    observe(
+                        Event::Incoming {
+                            original: current,
+                            edge: edge.coordinate,
+                            incoming: edge.incoming_definition,
+                            coordinate: predecessor.coordinate,
+                        },
+                        out,
+                    )?;
                 }
                 out.budget.charge_work(1)?;
                 current = incoming.ok_or_else(|| {

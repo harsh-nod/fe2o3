@@ -113,6 +113,15 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     let forwarding_iteration = size_of::<std::ops::Range<usize>>()
         + size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1>>();
     let forwarding_results = 2 * size_of::<Result<usize>>();
+    type Observe<'a> =
+        dyn FnMut(crate::ExpandedSupportForwardingV288, &mut Writer<'_, '_>) -> Result<()> + 'a;
+    let forwarding_observation = 4 * size_of::<crate::ExpandedSupportForwardingV288>()
+        + 8 * size_of::<&mut Observe<'_>>()
+        + 2 * size_of::<Option<&mut Observe<'_>>>()
+        + 16 * size_of::<usize>()
+        + 8 * size_of::<&()>()
+        + 3 * size_of::<Result<()>>()
+        + size_of::<std::collections::TryReserveError>();
     use fe2o3_kernel_ir::{
         CanonicalKirBlockCoordinateV1 as RebuildBlock,
         CanonicalKirFunctionCoordinateV1 as RebuildFunction,
@@ -219,6 +228,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + forwarding_coordinates
         + forwarding_iteration
         + forwarding_results
+        + forwarding_observation
         + reconstruction_vectors
         + reconstruction_allocation_results
         + reconstruction_query_frames
@@ -952,7 +962,6 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
                 let predecessor = neutral.output_inventory(out.budget)?;
                 let actual = target.inventory(out)?;
                 let mut forwarded = 0;
-                let mut forwarded_slices = 0;
                 let mut forwarded_scalars = 0;
                 let mut missing_computations = 0;
                 let mut ambiguous_inputs = 0;
@@ -1039,6 +1048,25 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
                     match expected {
                         Some(expected) => {
                             assert_eq!(pairs.source_transport_definition(index, out)?, expected);
+                            let mut observed = 0;
+                            let selected = pairs.source_transport_definition_observed(
+                                index,
+                                out,
+                                &mut |_, _| {
+                                    observed += 1;
+                                    Ok(())
+                                },
+                            )?;
+                            assert_eq!(selected, expected);
+                            assert!(observed > 1);
+                            assert!(matches!(
+                                pairs.source_transport_definition_observed(
+                                    index,
+                                    out,
+                                    &mut |_, _| Err(Error::Statement("selected observer refusal"))
+                                ),
+                                Err(Error::Statement("selected observer refusal"))
+                            ));
                             assert!(chain.len() > 1);
                             if forwarded == 0 {
                                 eprintln!(
@@ -1047,7 +1075,7 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
                             }
                             forwarded += 1;
                             match row.ty {
-                                Type::Slice(_) => forwarded_slices += 1,
+                                Type::Slice(_) => (),
                                 Type::Scalar(_) => forwarded_scalars += 1,
                                 _ => {
                                     unreachable!("oracle selects only complete scalar/slice types")
@@ -1065,10 +1093,10 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
                     forwarded_scalars > 0,
                     "fixture must retain nonvacuous scalar forwarding"
                 );
-                assert!(
-                    forwarded_slices > 0,
-                    "fixture must retain nonvacuous whole-slice forwarding"
-                );
+                // Semantic Slice liveness does not require a canonical phi to
+                // survive construction and then be erased. Required whole-Slice
+                // erasure coverage is independently joined in the actual eight
+                // rustc Product-frame cases through forwarding_v288.
                 assert!(
                     missing_computations > 0,
                     "erased computations must remain refused"
@@ -1099,6 +1127,52 @@ fn expanded_scalar_forwarding_joins_original_edges_with_exact_bounds() {
             | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
             if error.actual() == measured.3 && error.limit() == measured.3 - 1));
     }
+}
+
+#[test]
+fn expanded_forwarding_observer_resource_failure_remains_owner_latched() {
+    let result = run_fixture(Layout::Blocked, LIMIT, LIMIT, |slots, _, out| {
+        let target = TileTargetV176::derive(slots, out)?;
+        let pairs = ExpandedScalarBindingsV196::derive(slots, &target, out)?;
+        let input = slots.correspondence(out)?.inventory(out.budget)?;
+        let neutral = slots
+            .tile_owner_v176(out)?
+            .neutral_source_v162(out.budget)?;
+        let mut retained = None;
+        for (index, row) in input.definitions().iter().enumerate() {
+            if !neutral
+                .definition_descendants(row.coordinate, out.budget)?
+                .is_empty()
+            {
+                retained = Some(index);
+                break;
+            }
+        }
+        let index = retained.expect("actual retained original definition");
+        let mut called = 0;
+        let refused = pairs.source_transport_definition_observed(index, out, &mut |_, out| {
+            called += 1;
+            out.budget.reserve_storage(usize::MAX)?;
+            unreachable!("observer cannot admit unbounded backing")
+        });
+        assert_eq!(called, 1);
+        assert!(matches!(
+            &refused,
+            Err(Error::Resource(Resource::Arithmetic))
+                | Err(Error::Source(SourceError::Resource(Resource::Arithmetic)))
+        ));
+        assert!(matches!(
+            pairs.source_transport_definition(index, out),
+            Err(Error::Resource(Resource::Arithmetic))
+                | Err(Error::Source(SourceError::Resource(Resource::Arithmetic)))
+        ));
+        refused.map(|_| ())
+    });
+    assert!(matches!(
+        result.0,
+        Err(Error::Resource(Resource::Arithmetic))
+            | Err(Error::Source(SourceError::Resource(Resource::Arithmetic)))
+    ));
 }
 
 #[test]

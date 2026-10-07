@@ -223,6 +223,16 @@ impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view,
         cuts: &TileMicroCutsV180<'_, 'slots, 'view, 'source>,
         out: &mut Writer<'_, '_>,
     ) -> Result<()> {
+        self.emit_frame_contracts_observed_v288(frames, cuts, out, &mut |_, _| Ok(()))
+    }
+
+    pub(super) fn emit_frame_contracts_observed_v288(
+        &self,
+        frames: &super::source_frame_plan::FramePlan<'_, '_, '_, '_>,
+        cuts: &TileMicroCutsV180<'_, 'slots, 'view, 'source>,
+        out: &mut Writer<'_, '_>,
+        observe: &mut super::forwarding_observation::Observer<'_>,
+    ) -> Result<()> {
         self.check(out)?;
         super::expanded_frame_contract::emit(
             frames,
@@ -232,6 +242,7 @@ impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view,
             cuts,
             self.width,
             out,
+            observe,
         )?;
         self.check(out)
     }

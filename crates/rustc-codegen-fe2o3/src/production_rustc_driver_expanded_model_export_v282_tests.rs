@@ -404,6 +404,8 @@ fn product_frame_export_preserves_distinct_carrier_observation_and_original_inpu
         census: [1; 32],
         runtime: [2; 32],
         carries: [1, 1],
+        forwarding: [2, 3],
+        forwarding_identity: [3; 32],
     };
     export_observation(
         &directory,

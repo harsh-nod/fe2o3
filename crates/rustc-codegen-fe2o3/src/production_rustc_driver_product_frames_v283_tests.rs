@@ -10,6 +10,252 @@ pub(super) struct Observation {
     pub(super) census: [u8; 32],
     pub(super) runtime: [u8; 32],
     pub(super) carries: [usize; 2],
+    pub(super) forwarding: [usize; 2],
+    pub(super) forwarding_identity: [u8; 32],
+}
+
+pub(super) fn definition_identity(
+    hash: &mut Sha256,
+    definition: fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1,
+    budget: &mut Budget<'_>,
+) -> Result<(), SourceError> {
+    use fe2o3_kernel_ir::CanonicalKirDefinitionCoordinateV1 as D;
+    let fields = match definition {
+        D::FunctionArgument { function, argument } => [0, function.0, argument, 0, 0],
+        D::BlockArgument { block, argument } => [1, block.function.0, block.block, argument, 0],
+        D::Result { operation, result } => [
+            2,
+            operation.block.function.0,
+            operation.block.block,
+            operation.operation,
+            result,
+        ],
+    };
+    for field in fields {
+        number(hash, field as usize, budget)?;
+    }
+    Ok(())
+}
+
+fn forwarding_identity(
+    original: &fe2o3_lower_mir_kernel::ProductionSourceCorrespondenceV18<'_>,
+    tile: &fe2o3_lower_mir_kernel::ProductionSourceTileExpansionV159<'_, '_>,
+    rows: &ExpandedSupportCensusV280<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<([usize; 2], [u8; 32]), SourceError> {
+    use fe2o3_kernel_analysis::CanonicalKirInventoryV18 as Inventory;
+    use fe2o3_kernel_ir::{CanonicalKirDefinitionCoordinateV1 as D, ScalarType, Type};
+    use fe2o3_verifier::ExpandedSupportForwardingV288 as E;
+    let scratch = 3 * std::mem::size_of::<Sha256>()
+        + 4 * std::mem::size_of::<fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>>()
+        + 4 * std::mem::size_of::<E>()
+        + 2 * std::mem::size_of::<Inventory<'_>>()
+        + 2 * std::mem::size_of::<Type>()
+        + 32 * std::mem::size_of::<&()>()
+        + 128 * std::mem::size_of::<usize>();
+    budget.reserve_storage(scratch)?;
+    let input = original.inventory(budget)?;
+    let neutral = tile.neutral_source_v162(budget)?;
+    let prior = neutral.output_inventory(budget)?;
+    let (actual, storage) = Inventory::derive_v18(tile.output(budget)?, budget)
+        .expect("independent inventory of the authentic expanded owner");
+    budget.reserve_storage(storage.retained_storage())?;
+    assert!(std::ptr::eq(actual.owner(), tile.output(budget)?));
+    let mut hash = Sha256::new();
+    let mut counts = [0usize; 2];
+    let mut at = 0;
+    while at < rows.forwarding_v288.len() {
+        budget.charge_work(12)?;
+        let E::Begin {
+            root,
+            instance,
+            value,
+            atom,
+            source_type,
+            original: first,
+            coordinate,
+        } = rows.forwarding_v288[at]
+        else {
+            panic!("each complete observed path starts at its demanded original component");
+        };
+        at += 1;
+        assert!(root < 2);
+        assert!(rows.frame_demands_v281.iter().any(|demand| (
+            demand.root,
+            demand.instance,
+            demand.value
+        ) == (root, instance, value)));
+        budget.charge_work(rows.frame_demands_v281.len())?;
+        let endpoint = original.ssa_typed_endpoint_v36(root, instance, value, budget)?;
+        let component = endpoint.component(atom, budget)?;
+        assert_eq!(component.source_type(budget)?.index(), source_type);
+        assert_eq!(component.original_definition(budget)?, Some(first));
+        assert_eq!(input.definitions()[first].coordinate, coordinate);
+        assert_eq!(
+            component.physical_type(budget)?,
+            Some(input.definitions()[first].ty)
+        );
+        let Type::Slice(slice) = input.definitions()[first].ty else {
+            panic!("whole original Slice")
+        };
+        assert_eq!(slice.element.as_ref(), &Type::Scalar(ScalarType::U32));
+        for field in [
+            root,
+            instance,
+            atom,
+            source_type as usize,
+            first,
+            slice.address_space as usize,
+            slice.access as usize,
+        ] {
+            number(&mut hash, field, budget)?;
+        }
+        definition_identity(&mut hash, coordinate, budget)?;
+        let cfg = neutral.output_root_cfg_v18(root, budget)?;
+        let owner = cfg.function().coordinate;
+        assert_eq!(rows.roots[root].target_function, owner);
+        assert_eq!(
+            actual.functions()[owner.0 as usize].function.id,
+            cfg.function().function.id
+        );
+        assert!(actual.kernels().iter().any(|kernel| kernel.entry == owner));
+        budget.charge_work(actual.kernels().len())?;
+        let mut current = first;
+        let mut erased = 0;
+        let mut terminal = None;
+        for _ in 0..input.definitions().len() {
+            budget.charge_work(8)?;
+            let row = &input.definitions()[current];
+            assert_eq!(row.ty, input.definitions()[first].ty);
+            let descendants = neutral.definition_descendants(row.coordinate, budget)?;
+            if !descendants.is_empty() {
+                assert_eq!(
+                    rows.forwarding_v288[at],
+                    E::Retained {
+                        original: current,
+                        coordinate: row.coordinate,
+                        descendants: descendants.len(),
+                    }
+                );
+                at += 1;
+                // These scalar-root fixtures retain one whole-Slice descendant;
+                // independently locate its exact value/type in the actual owner.
+                let [descendant] = descendants else {
+                    panic!("one complete retained Slice descendant")
+                };
+                let mut found = None;
+                for definition in prior.definitions() {
+                    budget.charge_work(1)?;
+                    if definition.coordinate == descendant.output {
+                        assert!(found.is_none());
+                        found = Some(definition);
+                    }
+                }
+                let retained = found.unwrap();
+                assert_eq!(retained.ty, row.ty);
+                let mut selected = None;
+                for index in actual.functions()[owner.0 as usize].definitions.clone() {
+                    budget.charge_work(3)?;
+                    let candidate = &actual.definitions()[index];
+                    if candidate.value == retained.value && candidate.ty == retained.ty {
+                        assert!(selected.is_none());
+                        selected = Some(index);
+                    }
+                }
+                let selected =
+                    selected.expect("unique whole-Slice target with original retained identity");
+                assert_eq!(
+                    rows.forwarding_v288[at],
+                    E::Target {
+                        actual: selected,
+                        coordinate: actual.definitions()[selected].coordinate,
+                        function: owner,
+                    }
+                );
+                at += 1;
+                for field in [current, descendants.len(), selected, owner.0 as usize] {
+                    number(&mut hash, field, budget)?;
+                }
+                definition_identity(&mut hash, actual.definitions()[selected].coordinate, budget)?;
+                terminal = Some(selected);
+                break;
+            }
+            assert_eq!(
+                rows.forwarding_v288[at],
+                E::Erased {
+                    original: current,
+                    coordinate: row.coordinate
+                }
+            );
+            at += 1;
+            erased += 1;
+            let D::BlockArgument { block, .. } = row.coordinate else {
+                panic!("erased Slice is an original block argument")
+            };
+            number(&mut hash, current, budget)?;
+            definition_identity(&mut hash, row.coordinate, budget)?;
+            let mut incoming = None;
+            let mut edges = 0;
+            // Enumerate the full independent inventory, not a producer path count.
+            for edge in input.edge_arguments() {
+                budget.charge_work(1)?;
+                if edge.target_definition != current {
+                    continue;
+                }
+                budget.charge_work(8)?;
+                let predecessor = &input.definitions()[edge.incoming_definition];
+                assert_eq!(edge.coordinate.edge.source.function, block.function);
+                assert!(
+                    input.functions()[block.function.0 as usize]
+                        .definitions
+                        .contains(&edge.incoming_definition)
+                );
+                assert_eq!(predecessor.value, Some(edge.value));
+                assert_eq!(predecessor.ty, row.ty);
+                assert!(incoming.is_none_or(|prior| prior == edge.incoming_definition));
+                incoming = Some(edge.incoming_definition);
+                assert_eq!(
+                    rows.forwarding_v288[at],
+                    E::Incoming {
+                        original: current,
+                        edge: edge.coordinate,
+                        incoming: edge.incoming_definition,
+                        coordinate: predecessor.coordinate
+                    }
+                );
+                at += 1;
+                edges += 1;
+                for field in [
+                    edge.coordinate.edge.source.function.0,
+                    edge.coordinate.edge.source.block,
+                    edge.coordinate.edge.successor,
+                    edge.coordinate.argument,
+                ] {
+                    number(&mut hash, field as usize, budget)?;
+                }
+                number(&mut hash, edge.incoming_definition, budget)?;
+                definition_identity(&mut hash, predecessor.coordinate, budget)?;
+            }
+            assert!(edges > 0);
+            current = incoming.unwrap();
+        }
+        assert!(
+            terminal.is_some(),
+            "bounded complete path, not a cyclic prefix"
+        );
+        if erased > 0 {
+            counts[root] += 1;
+        }
+    }
+    assert!(
+        counts.iter().all(|count| *count > 0),
+        "required genuine erased whole-Slice path for every root"
+    );
+    let digest = hash.finalize().into();
+    drop(actual);
+    budget.release_storage(storage.retained_storage())?;
+    budget.release_storage(scratch)?;
+    Ok((counts, digest))
 }
 
 fn carrier_fields(
@@ -149,6 +395,7 @@ impl Callbacks for ProductCallbacks {
                         }
                     }
                     assert_eq!(carries, [1, 1], "one genuine original Product across a call per root");
+                    let (forwarding, forwarding_identity) = forwarding_identity(original, tile, &rows, budget)?;
                     let bytes = model.generated_source(budget).map_err(SourceError::ExpandedModel)?;
                     budget.charge_work(bytes.len())?;
                     let text = std::str::from_utf8(bytes).unwrap();
@@ -159,6 +406,8 @@ impl Callbacks for ProductCallbacks {
                         census: census_identity(&rows, budget)?,
                         runtime: pair.subject(budget)?.runtime_and_instances,
                         carries,
+                        forwarding,
+                        forwarding_identity,
                     };
                     model_export::observe_product_frame(bytes, &observation, budget)?;
                     budget.release_storage(scratch)?;
@@ -222,6 +471,7 @@ fn actual_rustc_product_carriers_retain_current_and_suspended_source_demands_v28
         |_| source(),
         |_, _, label, outcome, observations| {
             assert_eq!(outcome.carries, [1, 1]);
+            assert!(outcome.forwarding.iter().all(|count| *count > 0));
             if let Some(previous) = observations.get(label) {
                 assert_eq!(&outcome, previous);
             } else {

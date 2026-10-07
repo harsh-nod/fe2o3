@@ -61,6 +61,9 @@ mod source_frame_plan;
 #[path = "original_semantic_mir_expanded_frame_contract_v281.rs"]
 mod expanded_frame_contract;
 
+#[path = "original_semantic_mir_forwarding_observation_v288.rs"]
+mod forwarding_observation;
+
 #[path = "original_semantic_mir_invocation_paired_v36.rs"]
 mod paired;
 

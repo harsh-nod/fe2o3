@@ -227,6 +227,7 @@ fn census_identity(
         rows.candidates.len(),
         rows.zero_edges.len(),
         rows.frame_demands_v281.len(),
+        rows.forwarding_v288.len(),
     ] {
         number(&mut hash, length, budget)?;
     }
@@ -334,6 +335,82 @@ fn census_identity(
             value[2],
         ] {
             number(&mut hash, field, budget)?;
+        }
+    }
+    for row in rows.forwarding_v288 {
+        use fe2o3_verifier::ExpandedSupportForwardingV288 as F;
+        match *row {
+            F::Begin {
+                root,
+                instance,
+                value,
+                atom,
+                source_type,
+                original,
+                coordinate,
+            } => {
+                for field in [0, root, instance, atom, source_type as usize, original] {
+                    number(&mut hash, field, budget)?;
+                }
+                let value = match value {
+                    fe2o3_mir_model::SsaValueV1::Definition(id) => [0, id.get() as usize, 0],
+                    fe2o3_mir_model::SsaValueV1::BlockArgument { block, variable } => {
+                        [1, block.get() as usize, variable.get() as usize]
+                    }
+                };
+                for field in value {
+                    number(&mut hash, field, budget)?;
+                }
+                product_frames::definition_identity(&mut hash, coordinate, budget)?;
+            }
+            F::Erased {
+                original,
+                coordinate,
+            } => {
+                for field in [1, original] {
+                    number(&mut hash, field, budget)?;
+                }
+                product_frames::definition_identity(&mut hash, coordinate, budget)?;
+            }
+            F::Incoming {
+                original,
+                edge,
+                incoming,
+                coordinate,
+            } => {
+                for field in [
+                    2,
+                    original,
+                    edge.edge.source.function.0 as usize,
+                    edge.edge.source.block as usize,
+                    edge.edge.successor as usize,
+                    edge.argument as usize,
+                    incoming,
+                ] {
+                    number(&mut hash, field, budget)?;
+                }
+                product_frames::definition_identity(&mut hash, coordinate, budget)?;
+            }
+            F::Retained {
+                original,
+                coordinate,
+                descendants,
+            } => {
+                for field in [3, original, descendants] {
+                    number(&mut hash, field, budget)?;
+                }
+                product_frames::definition_identity(&mut hash, coordinate, budget)?;
+            }
+            F::Target {
+                actual,
+                coordinate,
+                function,
+            } => {
+                for field in [4, actual, function.0 as usize] {
+                    number(&mut hash, field, budget)?;
+                }
+                product_frames::definition_identity(&mut hash, coordinate, budget)?;
+            }
         }
     }
     Ok(hash.finalize().into())
