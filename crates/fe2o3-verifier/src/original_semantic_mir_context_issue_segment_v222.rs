@@ -186,7 +186,7 @@ proof fn invocation_context_issue_current_map_segment_{root}_{instance}_{block}_
         source, target, execution_map, little_endian);
     invocation_context_issue_fresh_has_exact_updates_v211(
         source.source, target.state, execution_map, issue, site, {definition});
-    invocation_context_issue_fresh_preserves_current_map_v238(
+    invocation_context_issue_fresh_preserves_frame_v259(
         source.source, target.state, execution_map, issue, site, {definition});
     let coupled = invocation_context_issue_coupled_v211(
         source.source, target.state, execution_map, issue, site, {definition});
@@ -196,6 +196,9 @@ proof fn invocation_context_issue_current_map_segment_{root}_{instance}_{block}_
     assert(invocation_execution_map_entry_v205(coupled.source.source, coupled.target,
         identity, coupled.execution_map[identity]));
     assert(invocation_source_byte_state_well_formed_v36(coupled.source.source));
+    assert(coupled.source.source.machine == (MemoryStateV30 {{
+        values: source.source.machine.values.update({destination}, MemoryValueV30::Undefined),
+        ..source.source.machine }}));
     assert(coupled.source.source.machine.pc == {pc});
     let continued = invocation_source_byte_pc_v36(coupled.source.source, {continuation});
     assert(continued.machine == (MemoryStateV30 {{ pc: {continuation}, ..coupled.source.source.machine }}));
