@@ -401,6 +401,107 @@ fn source_ssa_failure_tail_has_exact_resource_and_foreign_plan_boundaries() {
 }
 
 #[test]
+fn source_ssa_failure_tail_keeps_each_redefined_variable_before_interleaved_moves() {
+    for reversed in [false, true] {
+        let a = Variable::new(u32::from(reversed));
+        let b = Variable::new(u32::from(!reversed));
+        let input = SsaConstructionInputV1::new(
+            Block::new(0),
+            2,
+            vec![true; 2],
+            vec![Variable::new(0), Variable::new(1)],
+            vec![
+                block(
+                    vec![
+                        SsaEventV1::Define(a),
+                        SsaEventV1::Use(b),
+                        SsaEventV1::Use(a),
+                        SsaEventV1::Kill(a),
+                        SsaEventV1::Use(b),
+                        SsaEventV1::Kill(b),
+                    ],
+                    &[1],
+                )
+                .with_terminal_failure_start(2),
+                block(vec![SsaEventV1::Use(b), SsaEventV1::Use(a)], &[]),
+            ],
+        );
+        let plan = plan_ssa_with_limits_v1(&input, SsaPlannerLimitsV1::default()).unwrap();
+        let edges = [vec![Block::new(1)], vec![]];
+        let rows = [
+            SourceSsaBlockEventsV299 {
+                events: 6,
+                terminal_failure_start: Some(2),
+            },
+            SourceSsaBlockEventsV299 {
+                events: 2,
+                terminal_failure_start: None,
+            },
+        ];
+        let Some(Event::Define {
+            variable,
+            value: a_new,
+        }) = plan.resolved_event(Block::new(0), 0)
+        else {
+            panic!("original prefix definition");
+        };
+        assert_eq!(variable, a);
+        let b_old = plan
+            .entry_definitions()
+            .iter()
+            .find(|row| row.variable() == b)
+            .unwrap()
+            .value();
+        assert_ne!(
+            a_new,
+            plan.entry_definitions()
+                .iter()
+                .find(|row| row.variable() == a)
+                .unwrap()
+                .value()
+        );
+        for (ordinal, variable, value) in [(2, a, a_new), (4, b, b_old)] {
+            assert_eq!(
+                plan.resolved_event(Block::new(0), ordinal),
+                Some(Event::Use { variable, value })
+            );
+            assert_eq!(
+                plan.resolved_event(Block::new(0), ordinal + 1),
+                Some(Event::Kill {
+                    variable,
+                    previous: Some(value)
+                })
+            );
+        }
+        assert!(matches!(
+            run(&plan, &edges, 1_000_000, 1 << 20).0,
+            Err(Error::Statement(_))
+        ));
+        let values = failure_run(&plan, &edges, &rows, 1_000_000, 1 << 20)
+            .0
+            .unwrap();
+        assert_eq!(values.len(), 3);
+        assert!(values.contains(&(Block::new(0), b, b_old)));
+        assert!(values.contains(&(Block::new(1), a, a_new)));
+        assert!(values.contains(&(Block::new(1), b, b_old)));
+        assert_eq!(
+            plan.resolved_event(Block::new(1), 0),
+            Some(Event::Use {
+                variable: b,
+                value: b_old
+            })
+        );
+        assert_eq!(
+            plan.resolved_event(Block::new(1), 1),
+            Some(Event::Use {
+                variable: a,
+                value: a_new
+            })
+        );
+    }
+}
+
+#[test]
 fn source_ssa_boundaries_apply_definitions_only_on_their_original_edge() {
     let variable = Variable::new(0);
     let input = SsaConstructionInputV1::new(
