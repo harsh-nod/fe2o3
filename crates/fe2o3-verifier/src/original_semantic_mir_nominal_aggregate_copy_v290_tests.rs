@@ -392,13 +392,31 @@ fn run(work: usize, storage: usize, assignment: bool) -> (Result<()>, usize, usi
 
 #[test]
 fn original_nominal_aggregate_copy_calls_and_assignments_refuse_without_changing_moves() {
+    use fe2o3_kernel_ir::{
+        CanonicalKernelIrVerificationResourceBudgetV1 as CaptureBudget,
+        CanonicalKernelIrWorkBudgetV1 as CaptureWork,
+    };
     use fe2o3_lower_mir_kernel::{
         ProductionPendingScopedSourceErrorV29 as Pending, ProductionSemanticKirErrorV1 as Semantic,
         ProductionSourceOwnedViewErrorV18 as Source,
     };
+    use fe2o3_pliron::{
+        ProductionSemanticSsaEventRoleV1 as CapturedRole,
+        ProductionSemanticSsaOccurrenceSiteV1 as CapturedSite,
+        ProductionSemanticSsaOperandRoleV1 as CapturedOperand,
+    };
     for assignment in [false, true] {
-        let hostile = owner(assignment);
+        let mut hostile = owner(assignment);
+        let mut capture_work = CaptureWork::new(LIMIT);
+        let mut capture_budget = CaptureBudget::new(&mut capture_work, LIMIT);
+        let capture = hostile
+            .try_capture_occurrences_with_budget_v1(&mut capture_budget)
+            .unwrap();
+        capture_budget
+            .reserve_storage(capture.retained_storage())
+            .unwrap();
         let semantic = hostile.source_semantic();
+        let occurrences = hostile.occurrences_v1().unwrap();
         let mut sites = Vec::new();
         for (function, declaration) in semantic.functions().iter().enumerate() {
             for (block, body) in declaration.blocks().iter().enumerate() {
@@ -429,11 +447,49 @@ fn original_nominal_aggregate_copy_calls_and_assignments_refuse_without_changing
                 } else {
                     None
                 };
+                let rows = occurrences
+                    .function(SemanticFunctionIdV1::from_index(function as u32))
+                    .unwrap();
+                assert!(std::ptr::eq(rows.owner(), &hostile));
+                let source_block = fe2o3_mir_model::SsaBlockIdV1::new(block as u32);
+                let call_site = CapturedSite::Terminator {
+                    block: source_block,
+                };
+                let mut expected = vec![(call_site, CapturedOperand::CallArgument(1))];
+                if let Some(statement) = statement {
+                    expected.push((
+                        CapturedSite::Statement {
+                            block: source_block,
+                            statement,
+                        },
+                        CapturedOperand::RvalueOperand(0),
+                    ));
+                }
+                // Full source preparation refuses these storage-retained uses
+                // during nominal identity planning, before the live-Copy guard.
+                for (site, operand) in expected {
+                    let mut matching = rows.events().iter().filter(|event| {
+                        event.site() == site
+                            && event.operand() == operand
+                            && event.role() == CapturedRole::BaseUse
+                    });
+                    let event = matching.next().unwrap();
+                    assert!(matching.next().is_none());
+                    assert_eq!(event.event().variable().get(), place.local().index());
+                    assert!(event.is_reachable());
+                    assert!(!event.is_promoted());
+                    assert!(event.resolved().is_none());
+                }
                 sites.push((function as u32, Some(block as u32), statement));
             }
         }
         assert_eq!(sites.len(), 2);
+        drop(occurrences);
         drop(hostile);
+        capture_budget
+            .release_storage(capture.retained_storage())
+            .unwrap();
+        assert_eq!(capture_budget.storage(), 0);
         let reached = std::cell::Cell::new(false);
         let refused =
             super::super::source_function::tile_fixture_tests::run_fixture_with_owner_v290(
@@ -453,10 +509,13 @@ fn original_nominal_aggregate_copy_calls_and_assignments_refuse_without_changing
                 statement,
                 detail,
             })))) => {
-                assert_eq!(detail, "owned execution roles cannot be copied");
-                assert!(sites.contains(&(function, block, statement)));
+                assert_eq!(
+                    detail,
+                    "nominal identity equations differ from their original source"
+                );
+                assert_eq!((function, block, statement), (0, None, None));
             }
-            result => panic!("expected exact earlier owned-Copy refusal: {result:?}"),
+            result => panic!("expected exact earlier nominal-identity refusal: {result:?}"),
         }
         assert_eq!(refused.2, FLOOR);
         let result = run(LIMIT, LIMIT, assignment);
