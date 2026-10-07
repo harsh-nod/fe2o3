@@ -381,7 +381,7 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 16);
+    assert_eq!(source.matches("proof fn ").count(), 17);
     let replay = source
         .split_once("proof fn invocation_source_checked_event_replays_v264(")
         .unwrap()
@@ -444,6 +444,17 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     assert!(!frame_body.contains("invocation_context_issue_fresh_has_exact_updates_v211("));
     assert_eq!(frame_body.matches("invocation_context_issue_fresh_preserves_current_map_v238(").count(), 1);
     assert_eq!(frame_body.matches("invocation_context_issue_coupling_replays_both_actual_steps_v211(").count(), 1);
+    assert_eq!(frame_body.matches("invocation_source_context_issue_frame_projection_v267(source, issue);").count(), 1);
+    for source_only in [
+        "let aggregate =",
+        "InvocationSourceAggregateV42 {",
+        "invocation_source_context_issue_frame_v262(source, issue);",
+        "assert(after.logical.aggregates.contains_key(issue.destination));",
+        "assert(after.logical.aggregates[issue.destination] == aggregate);",
+        "assert(after.logical.aggregates =~=",
+    ] {
+        assert!(!frame_body.contains(source_only), "source-only normalization leaked into coupled frame: {source_only}");
+    }
     let inputs = |name: &str| {
         source
             .split_once(&format!("proof fn {name}("))
@@ -481,6 +492,21 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         inputs("invocation_source_context_issue_frame_v262"),
     );
     assert_eq!(
+        inputs("invocation_source_context_issue_frame_projection_v267"),
+        inputs("invocation_source_context_issue_frame_v262"),
+    );
+    let projection = source
+        .split_once("proof fn invocation_source_context_issue_frame_projection_v267(")
+        .unwrap().1
+        .split_once("proof fn invocation_context_issue_fresh_preserves_frame_v259(")
+        .unwrap().0;
+    assert_eq!(projection.matches("invocation_source_context_issue_frame_v262(source, issue);").count(), 1);
+    assert!(projection.contains("let after = source_step.source;"));
+    assert!(projection.contains("issue.destination, after.logical.aggregates[issue.destination]"));
+    assert!(projection.contains("assert(after.logical.aggregates[issue.destination] == aggregate);"));
+    assert!(!projection.contains("target"));
+    assert!(!projection.contains("execution_map"));
+    assert_eq!(
         inputs("invocation_source_checked_add_replays_install_v260"),
         inputs("invocation_source_checked_add_reconstruction_step_v259").replacen(
             "source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),\n",
@@ -512,6 +538,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "hide(invocation_context_issue_fresh_enabled_v211);\n    hide(byte_execution_well_formed_v37);\n    hide(byte_execution_next_epoch_v178);",
         "reveal(invocation_context_issue_fresh_enabled_v211);",
         "invocation_source_context_issue_frame_v262(source, issue);",
+        "invocation_source_context_issue_frame_projection_v267(source, issue);",
         "invocation_source_context_issue_replays_install_v263(source, issue);",
         "hide(invocation_source_tile_installed_v161);",
         "hide(invocation_source_tile_refused_v161);",
@@ -598,6 +625,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "invocation_target_context_issue_frame_v262",
         "invocation_source_checked_add_install_frame_v262",
         "invocation_source_context_issue_replays_install_v263",
+        "invocation_source_context_issue_frame_projection_v267",
     ] {
         let header = source
             .split_once(&format!("proof fn {name}("))
