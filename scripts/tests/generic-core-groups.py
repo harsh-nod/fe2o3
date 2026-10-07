@@ -237,7 +237,7 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
                 "test", "--locked", "-p", "rustc-codegen-fe2o3", "--lib",
                 "production_rustc_driver_v1::checked_output_source_v1_tests::"
                 "context_source_v29_tests::pending_source_tests::expanded_source_tests::"
-                "expanded_model_tests::actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_overflow",
+                "expanded_model_tests::actual_rustc_expanded_support_model_covers_complete_roots_and_runtime_width_boundaries",
                 "--", "--ignored", "--exact", "--test-threads=1",
             ]},
             {"command": "cargo", "arguments": [
@@ -265,7 +265,7 @@ class RustcSysrootBootstrapTests(unittest.TestCase):
         ])
 
     def test_expanded_model_failure_stops_before_later_backend_stages(self) -> None:
-        suffix = "actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_overflow"
+        suffix = "actual_rustc_expanded_support_model_covers_complete_roots_and_runtime_width_boundaries"
         result, calls, _ = self.invoke(test_failure=suffix)
         self.assertEqual(result.returncode, 29, result.stderr)
         self.assertEqual(result.stdout.splitlines(), [

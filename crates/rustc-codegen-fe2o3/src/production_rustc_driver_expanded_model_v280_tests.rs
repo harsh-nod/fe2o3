@@ -1,6 +1,6 @@
 //! Genuine private V259 -> V280 progression, separate from V259 input positives.
 use super::*;
-use fe2o3_verifier::{ExpandedSupportCensusV280, MixedOptimizerRefinementErrorV26};
+use fe2o3_verifier::ExpandedSupportCensusV280;
 use sha2::{Digest, Sha256};
 
 #[path = "production_rustc_driver_expanded_aggregate_diagnostic_v280_tests.rs"]
@@ -13,7 +13,7 @@ mod model_export;
 mod product_frames;
 
 const MODEL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_child";
-const REFUSAL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_refusal_child";
+const WIDE_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_wide_runtime_child";
 const ACCOUNT_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_account_child";
 const ACCOUNT_CASE: &str = "FE2O3_TEST_EXPANDED_MODEL_ACCOUNT_V280";
 
@@ -202,6 +202,35 @@ struct ModelObservation {
     counts: [usize; 6],
     helper_instances: [usize; 2],
     model_consumer_called: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+struct WideRootObservation {
+    source_root: u32,
+    rank: u8,
+    exact_workgroup: [u32; 3],
+    max_grid: [u32; 3],
+    source_layout: [u64; 3],
+    physical_extents: [u64; 3],
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+struct WideRuntimeObservation {
+    index_bits: u8,
+    little_endian: bool,
+    roots: [WideRootObservation; 2],
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WideModelObservation {
+    observation: ModelObservation,
+    runtime: WideRuntimeObservation,
+    diagnostic_export: bool,
+}
+
+struct CollectedObservation {
+    observation: ModelObservation,
+    wide_runtime: Option<WideRuntimeObservation>,
 }
 
 fn number(hash: &mut Sha256, value: usize, budget: &mut Budget<'_>) -> Result<(), SourceError> {
@@ -416,21 +445,9 @@ fn census_identity(
     Ok(hash.finalize().into())
 }
 
-fn is_domain_refusal(error: &(dyn std::error::Error + 'static)) -> bool {
-    if matches!(
-        error.downcast_ref::<MixedOptimizerRefinementErrorV26>(),
-        Some(MixedOptimizerRefinementErrorV26::Statement(
-            "expanded generation differs from its retained source or runtime"
-        ))
-    ) {
-        return true;
-    }
-    error.source().is_some_and(is_domain_refusal)
-}
-
 struct ModelCallbacks {
-    refusal: bool,
-    result: Option<Result<Option<ModelObservation>, String>>,
+    wide: bool,
+    result: Option<Result<CollectedObservation, String>>,
 }
 
 impl Callbacks for ModelCallbacks {
@@ -443,6 +460,7 @@ impl Callbacks for ModelCallbacks {
             let mut work = Work::new(500_000_000);
             let mut budget = Budget::new(&mut work, 20_000_000);
             let mut called = 0;
+            let wide = self.wide;
             let result = transaction.with_original_source_expanded_model_v280(
                 &mut budget,
                 |source, original, tile, roots, _, pair, model, budget| {
@@ -451,7 +469,15 @@ impl Callbacks for ModelCallbacks {
                         + 40 * std::mem::size_of::<usize>()
                         + std::mem::size_of::<
                             fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>,
-                        >();
+                        >()
+                        + std::mem::size_of::<CollectedObservation>()
+                        + 2 * std::mem::size_of::<WideRuntimeObservation>()
+                        + 2 * std::mem::size_of::<[Option<WideRootObservation>; 2]>()
+                        + 2 * std::mem::size_of::<WideRootObservation>()
+                        + 4 * std::mem::size_of::<[u64; 3]>()
+                        + 2 * std::mem::size_of::<[u32; 3]>()
+                        + 16 * std::mem::size_of::<usize>()
+                        + 16 * std::mem::size_of::<&()>();
                     budget.reserve_storage(scratch)?;
                     pair.check(source, original, tile, budget)?;
                     assert_eq!(pair.reference_count(budget)?, 0);
@@ -466,6 +492,69 @@ impl Callbacks for ModelCallbacks {
                     let text = std::str::from_utf8(bytes).unwrap();
                     assert!(text.contains("micro: MemoryMicroStateV30"));
                     assert!(text.contains("micro.observations == target_prefix"));
+                    let wide_runtime = if wide {
+                        use fe2o3_kernel_ir::{EndiannessV2, ExplicitLaunchExtent, FormalIndexWidth};
+                        let (width, endian) = pair.runtime(budget)?;
+                        assert_eq!(width, FormalIndexWidth::Bits64);
+                        assert_eq!(endian, EndiannessV2::Little);
+                        let checked = pair.roots(budget)?;
+                        assert_eq!(checked.len(), 2);
+                        let mut captured = [None; 2];
+                        for (root, input) in checked.iter().enumerate() {
+                            budget.charge_work(24)?;
+                            let retained = source.source_launch(budget)?.roots()[root];
+                            assert_eq!(input.source_root, source.root(root, budget)?.0);
+                            assert_eq!(input.source_launch, retained.source_launch());
+                            assert_eq!(input.source_layout, retained.layout());
+                            let rank = input.source_launch.rank();
+                            let workgroup = input.source_launch.exact_workgroup().unwrap();
+                            let grid = input.source_launch.max_grid();
+                            assert_eq!(rank, 1);
+                            assert_eq!(workgroup, [64, 1, 1]);
+                            assert_eq!(&grid[1..], &[1, 1]);
+                            assert!(matches!(grid[0], u32::MAX | 67_108_864));
+                            let ExplicitLaunchExtent::Exact { rank: physical_rank, extents } = input.launch else {
+                                panic!("exact authenticated physical envelope");
+                            };
+                            let expected = [
+                                u64::from(workgroup[0]).checked_mul(u64::from(grid[0])).unwrap(),
+                                1,
+                                1,
+                            ];
+                            assert_eq!(physical_rank, rank);
+                            assert_eq!(extents, expected);
+                            assert_eq!(input.source_layout.global_extents(), [0, 1, 1]);
+                            captured[root] = Some(WideRootObservation {
+                                source_root: input.source_root.index(), rank,
+                                exact_workgroup: workgroup, max_grid: grid,
+                                source_layout: input.source_layout.global_extents(),
+                                physical_extents: extents,
+                            });
+                        }
+                        let captured = captured.map(Option::unwrap);
+                        assert_eq!(captured[0].max_grid, captured[1].max_grid);
+                        let launch_literals = match captured[0].max_grid[0] {
+                            u32::MAX => [
+                                "spec fn invocation_runtime_launch_0_v36() -> (int, Seq<int>) { (1, seq![274877906880int, 1int, 1int]) }",
+                                "spec fn invocation_runtime_launch_1_v36() -> (int, Seq<int>) { (1, seq![274877906880int, 1int, 1int]) }",
+                            ],
+                            67_108_864 => [
+                                "spec fn invocation_runtime_launch_0_v36() -> (int, Seq<int>) { (1, seq![4294967296int, 1int, 1int]) }",
+                                "spec fn invocation_runtime_launch_1_v36() -> (int, Seq<int>) { (1, seq![4294967296int, 1int, 1int]) }",
+                            ],
+                            _ => unreachable!(),
+                        };
+                        for literal in [
+                            "spec fn invocation_runtime_index_bytes_v36() -> int { 8 }",
+                            launch_literals[0], launch_literals[1],
+                        ] {
+                            budget.charge_work(text.len())?;
+                            assert_eq!(text.matches(literal).count(), 1);
+                        }
+                        Some(WideRuntimeObservation { index_bits: 64, little_endian: true, roots: captured })
+                    } else {
+                        None
+                    };
                     assert!(
                         bytes.len() <= fe2o3_verifier::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3
                     );
@@ -605,50 +694,57 @@ impl Callbacks for ModelCallbacks {
                         helper_instances,
                         model_consumer_called: true,
                     };
-                    model_export::observe(bytes, &observation, budget)?;
+                    // Wide boundary cases are observed in-process only. Their
+                    // reused response basenames must not enter the finite export roster.
+                    if !wide {
+                        model_export::observe(bytes, &observation, budget)?;
+                    }
                     budget.release_storage(scratch)?;
-                    Ok((observation, 0))
+                    Ok((CollectedObservation { observation, wide_runtime }, 0))
                 },
             );
-            if self.refusal {
-                let error = result
-                    .err()
-                    .ok_or_else(|| "out-of-domain model was accepted".to_owned())?;
-                assert_eq!(called, 0, "domain refusal must precede the model consumer");
-                assert!(
-                    is_domain_refusal(&error),
-                    "exact model domain refusal: {error:?}"
-                );
-                Ok(None)
-            } else {
-                let observed = result
-                    .map_err(|error| format!("actual expanded support: {error:?}"))?
-                    .into_observation();
-                assert_eq!(called, 1);
-                Ok(Some(observed))
-            }
+            let observed = result
+                .map_err(|error| format!("actual expanded support: {error:?}"))?
+                .into_observation();
+            assert_eq!(called, 1);
+            Ok(observed)
         })());
         Compilation::Stop
     }
 }
 
-fn child(refusal: bool) {
+fn child(wide: bool) {
     let Some(path) = env::var_os(ARGS) else {
         return;
     };
     let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let mut callbacks = ModelCallbacks {
-        refusal,
-        result: None,
-    };
+    let mut callbacks = ModelCallbacks { wide, result: None };
     rustc_driver::run_compiler(&args, &mut callbacks);
     let result = callbacks.result.expect("actual expanded model callback");
-    std::fs::write(
-        env::var_os(RESULT).unwrap(),
-        serde_json::to_vec(&result).unwrap(),
-    )
-    .unwrap();
-    assert!(result.is_ok(), "expanded support: {result:?}");
+    if wide {
+        let result = result.map(|collected| WideModelObservation {
+            observation: collected.observation,
+            runtime: collected.wide_runtime.expect("wide runtime capture"),
+            diagnostic_export: false,
+        });
+        std::fs::write(
+            env::var_os(RESULT).unwrap(),
+            serde_json::to_vec(&result).unwrap(),
+        )
+        .unwrap();
+        assert!(result.is_ok(), "wide expanded support: {result:?}");
+    } else {
+        let result = result.map(|collected| {
+            assert!(collected.wide_runtime.is_none());
+            Some(collected.observation)
+        });
+        std::fs::write(
+            env::var_os(RESULT).unwrap(),
+            serde_json::to_vec(&result).unwrap(),
+        )
+        .unwrap();
+        assert!(result.is_ok(), "expanded support: {result:?}");
+    }
 }
 
 #[test]
@@ -659,7 +755,7 @@ fn expanded_model_child() {
 
 #[test]
 #[ignore = "process helper; exact source request supplied by its parent"]
-fn expanded_model_refusal_child() {
+fn expanded_model_wide_runtime_child() {
     child(true);
 }
 
@@ -725,7 +821,7 @@ fn expanded_model_account_child() {
 
 #[test]
 #[ignore = "requires pinned nightly rust-src and authentic ordinary AMD source compilation"]
-fn actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_overflow() {
+fn actual_rustc_expanded_support_model_covers_complete_roots_and_runtime_width_boundaries() {
     run_actual_sources::<Option<ModelObservation>>(
         &[
             ("two", "two"),
@@ -752,22 +848,46 @@ fn actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_
             }
         },
     );
-    run_actual_sources::<Option<ModelObservation>>(
-        &[("default", "default"), ("one-over", "one-over")],
+    run_actual_sources::<WideModelObservation>(
+        &[("default", "default"), ("above-u32", "above-u32")],
         &[(0, 0), (3, 0)],
-        REFUSAL_CHILD,
-        "EXPANDED_SUPPORT_DOMAIN_V280",
+        WIDE_CHILD,
+        "EXPANDED_SUPPORT_WIDE_V292",
         |case| {
             expanded_roots_tests::root_source_with_grid(
                 "two",
                 match case {
                     "default" => None,
-                    "one-over" => Some(67_108_864),
+                    "above-u32" => Some(67_108_864),
                     _ => unreachable!(),
                 },
             )
         },
-        |_, _, _, outcome, _| assert!(outcome.is_none()),
+        |_, _, label, outcome, _| {
+            let grid = match label {
+                "default" => u32::MAX,
+                "above-u32" => 67_108_864,
+                _ => unreachable!(),
+            };
+            assert_eq!(outcome.runtime.index_bits, 64);
+            assert!(outcome.runtime.little_endian);
+            assert!(!outcome.diagnostic_export);
+            assert!(outcome.observation.model_consumer_called);
+            assert_eq!(outcome.observation.counts[0], 2);
+            assert_ne!(outcome.observation.model, [0; 32]);
+            assert_ne!(outcome.observation.census, [0; 32]);
+            assert_ne!(
+                outcome.runtime.roots[0].source_root,
+                outcome.runtime.roots[1].source_root
+            );
+            for root in outcome.runtime.roots {
+                assert_eq!(root.rank, 1);
+                assert_eq!(root.exact_workgroup, [64, 1, 1]);
+                assert_eq!(root.max_grid, [grid, 1, 1]);
+                assert_eq!(root.source_layout, [0, 1, 1]);
+                assert_eq!(root.physical_extents, [64 * u64::from(grid), 1, 1]);
+            }
+        },
     );
     run_actual_sources::<usize>(
         &[("model-account", "two")],

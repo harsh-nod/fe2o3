@@ -384,12 +384,47 @@ fn expanded_support_runtime_domain_keeps_exact_32_bit_ceiling() {
         &mut budget,
     )
     .unwrap();
-    for (rank, extents) in [
-        (1, [u64::from(u32::MAX) + 1, 1, 1]),
-        (1, [64 * u64::from(u32::MAX), 1, 1]),
-        (1, [0, 1, 1]),
-        (1, [64, 2, 1]),
-    ] {
-        assert!(check(FormalIndexWidth::Bits32, rank, extents, &mut budget).is_err());
+    for extent in [u64::from(u32::MAX) + 1, 64 * u64::from(u32::MAX)] {
+        assert!(matches!(
+            check(FormalIndexWidth::Bits32, 1, [extent, 1, 1], &mut budget),
+            Err(Error::Statement(
+                "expanded generation differs from its retained source or runtime"
+            ))
+        ));
     }
+    // Actual AMD Index lowering is 64-bit. These wide envelopes are in-domain;
+    // this does not replace the explicitly 32-bit refusals above.
+    for extent in [
+        u64::from(u32::MAX),
+        u64::from(u32::MAX) + 1,
+        64 * u64::from(u32::MAX),
+        u64::MAX,
+    ] {
+        check(FormalIndexWidth::Bits64, 1, [extent, 1, 1], &mut budget).unwrap();
+    }
+    for width in [FormalIndexWidth::Bits32, FormalIndexWidth::Bits64] {
+        for (rank, extents) in [
+            (0, [1, 1, 1]),
+            (4, [1, 1, 1]),
+            (1, [0, 1, 1]),
+            (2, [1, 0, 1]),
+            (3, [1, 1, 0]),
+            (1, [64, 2, 1]),
+            (1, [64, 1, 2]),
+            (2, [64, 1, 2]),
+        ] {
+            assert!(matches!(
+                check(width, rank, extents, &mut budget),
+                Err(Error::Statement(
+                    "expanded generation differs from its retained source or runtime"
+                ))
+            ));
+        }
+    }
+    assert!(matches!(
+        check(FormalIndexWidth::Unknown, 1, [1, 1, 1], &mut budget),
+        Err(Error::Statement(
+            "expanded generation differs from its retained source or runtime"
+        ))
+    ));
 }

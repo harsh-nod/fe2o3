@@ -1190,7 +1190,7 @@ run_rustc_codegen_lib_tests() {
   run_step rustc-codegen-expanded-model-tests \
     env CARGO_PROFILE_DEV_DEBUG=1 \
       cargo test --locked -p "${RUSTC_CODEGEN_TEST_PACKAGE}" --lib \
-        production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::actual_rustc_expanded_support_model_covers_complete_roots_and_refuses_domain_overflow -- \
+        production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::actual_rustc_expanded_support_model_covers_complete_roots_and_runtime_width_boundaries -- \
         --ignored --exact --test-threads=1
   run_step rustc-codegen-product-frame-tests \
     env CARGO_PROFILE_DEV_DEBUG=1 \
