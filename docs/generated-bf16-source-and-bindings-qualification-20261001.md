@@ -75,10 +75,45 @@ callback-error and callback-panic controls. Their original Rust acceptance
 checks remain authoritative for this regression; the legacy parent preserves
 raw JSON without claiming independent numerical replay of that JSON.
 
-Fresh generated helpers still encounter the exact typed unsupported nominal
-source-ranked BF16 consumer. The test requires that refusal. Removing it needs
+In the earlier campaign above, fresh generated helpers encountered the exact
+typed unsupported nominal source-ranked BF16 consumer. The test requires that refusal. Removing it needs
 the missing caller capability, tensor layout, full-wave and result-permutation
 obligations, not merely a passing CPU run.
+
+## Private non-test connector checkpoint — 2026-10-07
+
+A separately tested integration candidate now contains the crate-private
+`bf16_same_owner_handoff_v1` connector as non-test compiler code. It retains
+the actual source owner and its original resource account through the existing
+checked lowering and typed handoff stages. It does not reconstruct an owner
+from exported bytes or create a replacement budget.
+
+Four fresh real-rustc observations used newly prepared, matching compiler-owned
+dependency metadata and invocation records. Identity (session 1) and Swap01
+(session 3) each completed the connector and then dropped its opaque handoff.
+Their separate wrong-return controls each reached exactly
+`Unavailable("BF16 same-owner source profile")`; arbitrary errors were not
+accepted. Each case recorded exactly one actual compiler callback and unchanged
+source inputs.
+
+The public/default route is unchanged: the source-only inspection and Cargo
+workflows still retain the documented normal-ranked refusal. These private
+ignored entrypoints are not a public connector API or a new replay command.
+All four observations keep normal admission, formal admission, Worker invocation,
+artifact/launch authority and hardware observation false. The typed handoff is
+not an emitted kernel artifact, numerical qualification or M4 completion.
+
+This is evidence for the exact `d95ad106b5016f7f60c86827ebd896cdafe6c497`
+candidate plus its five connector source changes: source census
+`916b2c1e0677698fd6b77dc4deab8dbf338ef331a1e5dc2402e79298db32217d`
+and test ELF SHA-256
+`f50352c0f6608f78452dce9519b121a00626bb21355aa4ee84bc5378d10b33f5`.
+The four-case aggregate is
+`bf16-production-connector-four-cases-actual-root-r75-r2/RESULT.json`,
+SHA-256 `14cec9fc3cb545530bf70de26a7878162280bb4e6ad163c0e171aff3333064b7`.
+Public integration and tests of a subsequently merged tree are separate from
+this recorded candidate; the prior failed preparation and timed-out full suite
+remain failed, not additional passing evidence.
 
 ## Imported bindings storage
 
@@ -137,5 +172,5 @@ and machine-specific preparation are retained qualification tooling, not a
 supported public workflow. The later public guide covers direct extractor
 inspection and source publication with a current rustc invocation; it does not
 turn this historical parent into a public replay command. A clean-checkout
-end-to-end setup, normal BF16 production continuation, debugger integration and
+end-to-end setup, public normal BF16 production continuation, debugger integration and
 hardware qualification remain separate work.
