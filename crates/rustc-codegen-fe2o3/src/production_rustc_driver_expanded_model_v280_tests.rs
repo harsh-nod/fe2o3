@@ -523,7 +523,9 @@ impl Callbacks for ModelCallbacks {
                             ];
                             assert_eq!(physical_rank, rank);
                             assert_eq!(extents, expected);
-                            assert_eq!(input.source_layout.global_extents(), [0, 1, 1]);
+                            // Only the architecture's dynamic grid limit uses a zero marker.
+                            let source_extent = if grid[0] == u32::MAX { 0 } else { expected[0] };
+                            assert_eq!(input.source_layout.global_extents(), [source_extent, 1, 1]);
                             captured[root] = Some(WideRootObservation {
                                 source_root: input.source_root.index(), rank,
                                 exact_workgroup: workgroup, max_grid: grid,
@@ -864,9 +866,9 @@ fn actual_rustc_expanded_support_model_covers_complete_roots_and_runtime_width_b
             )
         },
         |_, _, label, outcome, _| {
-            let grid = match label {
-                "default" => u32::MAX,
-                "above-u32" => 67_108_864,
+            let (grid, source_extent) = match label {
+                "default" => (u32::MAX, 0),
+                "above-u32" => (67_108_864, 4_294_967_296),
                 _ => unreachable!(),
             };
             assert_eq!(outcome.runtime.index_bits, 64);
@@ -884,7 +886,7 @@ fn actual_rustc_expanded_support_model_covers_complete_roots_and_runtime_width_b
                 assert_eq!(root.rank, 1);
                 assert_eq!(root.exact_workgroup, [64, 1, 1]);
                 assert_eq!(root.max_grid, [grid, 1, 1]);
-                assert_eq!(root.source_layout, [0, 1, 1]);
+                assert_eq!(root.source_layout, [source_extent, 1, 1]);
                 assert_eq!(root.physical_extents, [64 * u64::from(grid), 1, 1]);
             }
         },
