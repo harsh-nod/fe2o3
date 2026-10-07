@@ -1,4 +1,5 @@
 use super::*;
+use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
 use fe2o3_mir_model::semantic_mir_v1::*;
 
 const LIMIT: usize = 100_000_000;
@@ -465,12 +466,18 @@ fn original_rust_call_argument_plan_has_checked_capacity_and_exact_resource_boun
     let exact = run(Form::EmptyTuple, measured.1, measured.3, emit);
     exact.0.unwrap();
     assert_eq!((exact.1, exact.2, exact.3), (measured.1, FLOOR, measured.3));
+    let short_work = run(Form::EmptyTuple, measured.1 - 1, measured.3, emit);
     assert!(
-        matches!(run(Form::EmptyTuple, measured.1 - 1, measured.3, emit).0,
-        Err(Error::Resource(Resource::Work(error))) if error.actual() == measured.1 && error.limit() == measured.1 - 1)
+        matches!(&short_work.0,
+        Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+            if error.actual() == measured.1 && error.limit() == measured.1 - 1),
+        "{short_work:?}"
     );
+    let short_storage = run(Form::EmptyTuple, measured.1, measured.3 - 1, emit);
     assert!(
-        matches!(run(Form::EmptyTuple, measured.1, measured.3 - 1, emit).0,
-        Err(Error::Resource(Resource::Storage(error))) if error.actual() == measured.3 && error.limit() == measured.3 - 1)
+        matches!(&short_storage.0,
+        Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
+            if error.actual() == measured.3 && error.limit() == measured.3 - 1),
+        "{short_storage:?}"
     );
 }
