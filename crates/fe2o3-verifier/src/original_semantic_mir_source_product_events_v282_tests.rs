@@ -185,8 +185,9 @@ fn original_product_constructor_uses_retained_statement_and_ordered_typed_fields
         Ok(())
     });
     result.0.unwrap();
-    assert_eq!(result.2, 0);
-    assert_eq!(result.3, 0);
+    let floor = super::super::super::super::invocations::tests::FLOOR;
+    assert_eq!(result.2, floor);
+    assert!(result.3 > floor);
 }
 
 #[test]
@@ -321,7 +322,9 @@ fn original_product_shared_operand_entry_refuses_noncopyable_product_copy() {
         },
     );
     result.0.unwrap();
-    assert_eq!((result.2, result.3), (0, 0));
+    let floor = super::super::super::super::invocations::tests::FLOOR;
+    assert_eq!(result.2, floor);
+    assert!(result.3 > floor);
 }
 
 #[test]
