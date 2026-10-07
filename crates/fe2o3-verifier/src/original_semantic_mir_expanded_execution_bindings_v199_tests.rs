@@ -381,7 +381,17 @@ fn exercise(
 #[test]
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
-    assert_eq!(source.matches("proof fn ").count(), 12);
+    assert_eq!(source.matches("proof fn ").count(), 13);
+    let replay = source
+        .split_once("proof fn invocation_source_checked_event_replays_v264(")
+        .unwrap()
+        .1
+        .split_once("\n{\n")
+        .unwrap()
+        .0;
+    assert!(!replay.contains("requires"));
+    assert!(replay.contains("destination, source_type, operation, bits, signed, left, right"));
+    assert!(replay.contains("== invocation_source_checked_v42(source, destination, source_type, operation,"));
     for name in [
         "invocation_context_marker_aggregate_well_formed_v260",
         "invocation_checked_add_aggregate_complete_v260",

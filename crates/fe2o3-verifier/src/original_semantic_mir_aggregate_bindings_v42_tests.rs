@@ -98,6 +98,7 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  hide(invocation_source_aggregate_leaf_bits_v42);
  hide(invocation_source_checked_v42);
  hide(invocation_source_byte_step_v36);
+ hide(invocation_source_byte_event_{root}_{instance}_v36);
  hide(invocation_source_logical_write_v38);
  assert(invocation_source_aggregate_leaf_count_v42({ty}) == 2
  && invocation_source_aggregate_leaf_path_v42({ty}, 0) == seq![0int]
@@ -124,7 +125,10 @@ fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
  assert(invocation_source_byte_step_v36(source,
  invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian)
  == reconstructed) by {{
- reveal(invocation_source_byte_step_v36);
+ invocation_source_checked_event_replays_v264(source, {destination}, {ty}, 0, 32, false,
+ InvocationSourceByteValueV36::Local {{ local: {left}, moved: false }},
+ InvocationSourceByteValueV36::Local {{ local: {right}, moved: false }},
+ {root}, {instance}, little_endian);
  }}
  let after = invocation_source_byte_step_v36(source,
  invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian);
@@ -173,6 +177,12 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
         assert!(model.contains("hide(invocation_source_aggregate_leaf_count_v42);"));
         assert!(model.contains("assert(reconstructed.machine == (MemoryStateV30"));
         assert!(model.contains("== reconstructed) by {"));
+        for step in model.split("proof fn checked_add_actual_step_").skip(1) {
+            let body = step.split("\nproof fn ").next().unwrap();
+            assert!(body.contains("hide(invocation_source_byte_event_"));
+            assert!(body.contains("invocation_source_checked_event_replays_v264(source,"));
+            assert!(!body.contains("reveal(invocation_source_byte_step_v36);"));
+        }
         assert!(model.contains("assert(after.machine == (MemoryStateV30"));
         assert!(model.contains("assert(after.logical.aggregates == source.logical.aggregates.insert("));
         assert!(model.contains("assert(value_path != overflow_path);"));
