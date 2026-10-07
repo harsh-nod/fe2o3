@@ -84,9 +84,9 @@ pub use receipt::{
 };
 pub use semantics::original_scalar_v30::{
     ExpandedSupportCallKindV280, ExpandedSupportCallV280, ExpandedSupportCensusV280,
-    ExpandedSupportCursorV280, ExpandedSupportCutV280, ExpandedSupportInstanceV280,
-    ExpandedSupportModelV280, ExpandedSupportRootV280, ExpandedSupportRuntimeV280,
-    with_expanded_support_model_v280,
+    ExpandedSupportCursorV280, ExpandedSupportCutV280, ExpandedSupportFrameDemandV281,
+    ExpandedSupportInstanceV280, ExpandedSupportModelV280, ExpandedSupportRootV280,
+    ExpandedSupportRuntimeV280, with_expanded_support_model_v280,
 };
 
 const DOMAIN: &[u8] = b"FE2O3/V18/POLICY9/SHARED-OPERATOR-BLOCK-SIMULATION/V26\0";

@@ -216,4 +216,23 @@ impl<'plan, 'slots, 'view, 'source> ExpandedGenerationV221<'plan, 'slots, 'view,
         writeln!(out, "}}").map_err(|_| out.error())?;
         self.check(out)
     }
+
+    pub(super) fn emit_frame_contracts_v281(
+        &self,
+        frames: &super::source_frame_plan::FramePlan<'_, '_, '_, '_>,
+        cuts: &TileMicroCutsV180<'_, 'slots, 'view, 'source>,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        self.check(out)?;
+        super::expanded_frame_contract::emit(
+            frames,
+            self.plan,
+            self.slots,
+            &self.target,
+            cuts,
+            self.width,
+            out,
+        )?;
+        self.check(out)
+    }
 }

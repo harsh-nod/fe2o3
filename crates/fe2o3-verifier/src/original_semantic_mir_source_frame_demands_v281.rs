@@ -194,17 +194,17 @@ pub(super) fn caller_demands<'slots, 'view, 'source>(
         {
             None
         } else {
-            let ty = function
-                .locals()
-                .get(destination.place().local().index() as usize)
-                .ok_or_else(mismatch)?
-                .ty();
-            let (range, result_type) = slots
-                .aggregate_component_range(ty, destination.place().projections(), out)?
+            let cached = component_demands
+                .get_mut(caller.function.index() as usize)
                 .ok_or_else(mismatch)?;
-            if result_type != destination.place().ty() {
-                return Err(mismatch());
+            if cached.is_none() {
+                *cached = Some(ComponentDemandsV42::derive(slots, caller.function, out)?);
             }
+            let range = cached
+                .as_ref()
+                .ok_or_else(mismatch)?
+                .projected_range_v283(slots, caller.function, destination.place(), out)?
+                .ok_or_else(mismatch)?;
             Some(range)
         };
         let live = ssa.live_in(next).ok_or_else(mismatch)?;
@@ -245,9 +245,12 @@ pub(super) fn caller_demands<'slots, 'view, 'source>(
                 }
                 let demands = cached.as_ref().ok_or_else(mismatch)?;
                 demands.check_owner_v281(slots, caller.function, out)?;
-                let count = slots
-                    .aggregate_leaf_count(function.locals()[variable.get() as usize].ty(), out)?
-                    .ok_or_else(mismatch)?;
+                let (_, _, count) = demands.local_domain_v283(
+                    slots,
+                    caller.function,
+                    variable.get() as usize,
+                    out,
+                )?;
                 for leaf in 0..count {
                     out.budget.charge_work(1)?;
                     if !overwritten.contains(&leaf)

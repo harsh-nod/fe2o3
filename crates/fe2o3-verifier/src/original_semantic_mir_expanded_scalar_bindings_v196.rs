@@ -21,6 +21,9 @@ mod source_relation;
 #[path = "original_semantic_mir_expanded_source_leaf_v207.rs"]
 mod source_leaf;
 
+#[path = "original_semantic_mir_expanded_source_product_v283.rs"]
+mod source_product;
+
 #[path = "original_semantic_mir_expanded_scalar_forwarding_v244.rs"]
 mod forwarding;
 
@@ -50,6 +53,7 @@ impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots
             + relation::headers()
             + source_relation::headers()
             + source_leaf::headers()
+            + source_product::headers()
             + forwarding::headers()
             + reconstruction::headers()
             + size_of::<Definition>()

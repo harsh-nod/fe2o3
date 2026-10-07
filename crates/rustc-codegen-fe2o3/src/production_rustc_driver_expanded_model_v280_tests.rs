@@ -9,6 +9,9 @@ mod aggregate_diagnostic;
 #[path = "production_rustc_driver_expanded_model_export_v282_tests.rs"]
 mod model_export;
 
+#[path = "production_rustc_driver_product_frames_v283_tests.rs"]
+mod product_frames;
+
 const MODEL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_child";
 const REFUSAL_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_refusal_child";
 const ACCOUNT_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::expanded_model_account_child";
@@ -223,6 +226,7 @@ fn census_identity(
         rows.cuts.len(),
         rows.candidates.len(),
         rows.zero_edges.len(),
+        rows.frame_demands_v281.len(),
     ] {
         number(&mut hash, length, budget)?;
     }
@@ -254,6 +258,9 @@ fn census_identity(
             row.cuts.end,
             row.calls.start,
             row.calls.end,
+            row.parent_call_v281.is_some() as usize,
+            row.parent_call_v281.unwrap_or(0),
+            row.depth_v281,
         ] {
             number(&mut hash, value, budget)?;
         }
@@ -268,6 +275,10 @@ fn census_identity(
             row.reachable as usize,
             row.child.is_some() as usize,
             row.child.unwrap_or(0),
+            row.continuation_v281.is_some() as usize,
+            row.continuation_v281.unwrap_or(0),
+            row.carries_v281.start,
+            row.carries_v281.end,
         ] {
             number(&mut hash, value, budget)?;
         }
@@ -282,6 +293,8 @@ fn census_identity(
             row.zero_edges.start,
             row.zero_edges.end,
             row.zero_rank,
+            row.current_v281.start,
+            row.current_v281.end,
         ] {
             number(&mut hash, value, budget)?;
         }
@@ -299,6 +312,29 @@ fn census_identity(
     for &(from, to) in rows.zero_edges {
         number(&mut hash, from, budget)?;
         number(&mut hash, to, budget)?;
+    }
+    for demand in rows.frame_demands_v281 {
+        let value = match demand.value {
+            fe2o3_mir_model::SsaValueV1::Definition(id) => [0, id.get() as usize, 0],
+            fe2o3_mir_model::SsaValueV1::BlockArgument { block, variable } => {
+                [1, block.get() as usize, variable.get() as usize]
+            }
+        };
+        for field in [
+            demand.root,
+            demand.instance,
+            demand.local,
+            demand.logical_local,
+            demand.component_block,
+            demand.overwritten.is_some() as usize,
+            demand.overwritten.map_or(0, |range| range.0),
+            demand.overwritten.map_or(0, |range| range.1),
+            value[0],
+            value[1],
+            value[2],
+        ] {
+            number(&mut hash, field, budget)?;
+        }
     }
     Ok(hash.finalize().into())
 }
@@ -334,8 +370,11 @@ impl Callbacks for ModelCallbacks {
                 &mut budget,
                 |source, original, tile, roots, _, pair, model, budget| {
                     called += 1;
-                    let scratch =
-                        2 * std::mem::size_of::<Sha256>() + 24 * std::mem::size_of::<usize>();
+                    let scratch = 2 * std::mem::size_of::<Sha256>()
+                        + 40 * std::mem::size_of::<usize>()
+                        + std::mem::size_of::<
+                            fe2o3_lower_mir_kernel::ProductionSourceSsaEndpointV36<'_, '_>,
+                        >();
                     budget.reserve_storage(scratch)?;
                     pair.check(source, original, tile, budget)?;
                     assert_eq!(pair.reference_count(budget)?, 0);
@@ -347,6 +386,9 @@ impl Callbacks for ModelCallbacks {
                     budget.charge_work(bytes.len())?;
                     let model_identity = Sha256::digest(bytes).into();
                     assert!(!bytes.is_empty());
+                    let text = std::str::from_utf8(bytes).unwrap();
+                    assert!(text.contains("micro: MemoryMicroStateV30"));
+                    assert!(text.contains("micro.observations == target_prefix"));
                     assert!(
                         bytes.len() <= fe2o3_verifier::MAX_GENERATED_VERUS_PROOF_SOURCE_BYTES_V3
                     );
@@ -398,6 +440,14 @@ impl Callbacks for ModelCallbacks {
                                 );
                                 if !entry.active {
                                     assert!(cut.candidates.is_empty());
+                                    assert!(cut.current_v281.is_empty());
+                                }
+                                for demand in &rows.frame_demands_v281[cut.current_v281.clone()] {
+                                    budget.charge_work(1)?;
+                                    assert_eq!(
+                                        (demand.root, demand.instance, demand.component_block),
+                                        (root, instance, block)
+                                    );
                                 }
                             }
                             if let Some((parent, block)) = incoming {
@@ -406,8 +456,27 @@ impl Callbacks for ModelCallbacks {
                                     original.defined_call_instance(root, parent, block, budget)?,
                                     instance
                                 );
+                                let call = &rows.calls[entry.parent_call_v281.unwrap()];
+                                if !entry.active {
+                                    assert!(call.carries_v281.is_empty());
+                                }
+                                assert_eq!(
+                                    (call.root, call.caller, call.block, call.child),
+                                    (root, parent, block.index(), Some(instance))
+                                );
+                                let ancestor = &rows.instances[row.instances.start + parent];
+                                assert_eq!(entry.depth_v281, ancestor.depth_v281 + 1);
+                                for demand in &rows.frame_demands_v281[call.carries_v281.clone()] {
+                                    budget.charge_work(1)?;
+                                    assert_eq!((demand.root, demand.instance), (root, parent));
+                                    assert_eq!(
+                                        Some(demand.component_block),
+                                        call.continuation_v281
+                                    );
+                                }
                             } else {
                                 assert_eq!(instance, 0);
+                                assert_eq!((entry.parent_call_v281, entry.depth_v281), (None, 0));
                             }
                         }
                         instance_end = row.instances.end;
@@ -417,6 +486,28 @@ impl Callbacks for ModelCallbacks {
                         (instance_end, cut_end),
                         (rows.instances.len(), rows.cuts.len())
                     );
+                    assert!(!rows.frame_demands_v281.is_empty());
+                    for demand in rows.frame_demands_v281 {
+                        budget.charge_work(2)?;
+                        let frame = &rows.instances
+                            [rows.roots[demand.root].instances.start + demand.instance];
+                        assert!(demand.local < frame.locals.len());
+                        assert_eq!(demand.logical_local, frame.locals.start + demand.local);
+                        let endpoint = original.ssa_typed_endpoint_v36(
+                            demand.root,
+                            demand.instance,
+                            demand.value,
+                            budget,
+                        )?;
+                        assert_eq!(
+                            endpoint.source_function(budget)?.index(),
+                            frame.source_function
+                        );
+                        assert_eq!(
+                            endpoint.source_local(budget)?.index() as usize,
+                            demand.local
+                        );
+                    }
                     let (helper_instances, mapped) =
                         expanded_roots_tests::original_helper_instances(source, original, budget)?;
                     assert!(mapped.into_iter().all(|count| count > 0));

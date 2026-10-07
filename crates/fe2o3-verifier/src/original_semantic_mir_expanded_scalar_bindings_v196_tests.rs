@@ -65,6 +65,24 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + size_of::<Result<()>>()
         + 14 * size_of::<usize>()
         + size_of::<Option<usize>>();
+    fn product_frame<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    let source_product_scratch = 2 * product_frame::<Endpoint<'_, '_>>()
+        + product_frame::<super::super::super::slots::SourceProductComponentV282<'_, '_, '_>>()
+        + product_frame::<super::super::super::slots::ProductAtomV282>()
+        + product_frame::<fe2o3_lower_mir_kernel::ProductionSourceSsaCarrierShapeV37>()
+        + product_frame::<Option<usize>>()
+        + product_frame::<&[u32]>()
+        + product_frame::<std::slice::Iter<'_, u32>>()
+        + product_frame::<super::super::Value>()
+        + product_frame::<FormalIndexWidth>()
+        + product_frame::<fe2o3_mir_model::semantic_mir_v1::SemanticRustTypeKindV1>()
+        + product_frame::<fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdV1>()
+        + product_frame::<Option<&Type>>()
+        + product_frame::<()>()
+        + 18 * size_of::<usize>()
+        + 20 * size_of::<&()>();
     type ForwardingOwner<'a, 'b, 'c, 'd> = ExpandedScalarBindingsV196<'a, 'b, 'c, 'd>;
     let forwarding_wrapper =
         size_of::<(&ForwardingOwner<'_, '_, '_, '_>, &mut Writer<'_, '_>, usize)>();
@@ -147,6 +165,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + relation_scratch
         + source_relation_scratch
         + source_leaf_scratch
+        + source_product_scratch
         + checked_replacement_scratch
         + forwarding_wrapper
         + forwarding_callback

@@ -55,6 +55,12 @@ mod component_demands;
 #[path = "original_semantic_mir_source_frame_demands_v281.rs"]
 mod source_frame_demands;
 
+#[path = "original_semantic_mir_source_frame_plan_v281.rs"]
+mod source_frame_plan;
+
+#[path = "original_semantic_mir_expanded_frame_contract_v281.rs"]
+mod expanded_frame_contract;
+
 #[path = "original_semantic_mir_invocation_paired_v36.rs"]
 mod paired;
 
