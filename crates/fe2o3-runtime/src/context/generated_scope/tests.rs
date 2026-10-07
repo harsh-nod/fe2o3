@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 
 mod async_lending;
 mod cancellation;
+mod cold_device;
 mod copies;
 mod futures;
 mod graph;
@@ -92,6 +93,7 @@ where
         preflight: |_, _, _, _, _| Ok(()),
         ready: |_, _| Ok(true),
         adopt: |_, _, _, _| Ok(()),
+        cold: None,
         progress: |_, prepared, _, _| {
             let ticks = &prepared.value().ticks;
             if ticks.get() == 0 {

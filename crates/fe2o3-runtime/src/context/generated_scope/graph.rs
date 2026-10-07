@@ -454,11 +454,16 @@ impl<P: RuntimeGfx942GeneratedCompletionCarrierV1> Graph<P> {
             }
             if let Some(slot) = self.generated[index]
                 && !self.reconciled[index]
-                && scope.slots[slot].lifecycle.phase == Phase::FailedUnpublished
+                && matches!(
+                    scope.slots[slot].lifecycle.phase,
+                    Phase::FailedUnpublished | Phase::ColdDeviceFailed { .. }
+                )
             {
                 // SAFETY: this phase requires actual native abort, source
                 // closing checks, Context disposal, carrier drop and hold release.
-                // It is not inferred from rejection or absent completion alone.
+                // The distinct cold phase instead requires the original no-VM
+                // reset owner plus actual source/carrier/hold disposal. Neither
+                // is inferred from rejection or absent completion alone.
                 unsafe {
                     core.fail(index, 5);
                 }

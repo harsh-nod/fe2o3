@@ -58,7 +58,7 @@ impl KfdRuntimeBackendV1 {
     pub fn shutdown_native_v1(
         &mut self,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
-        self.require_live()?;
+        self.require_live_or_cold_metadata_v1()?;
         if self.has_live_generated_native_v1()
             || self.native_reconciliations.iter().any(Option::is_some)
             || !self.streams.is_empty()
@@ -91,6 +91,12 @@ impl KfdRuntimeBackendV1 {
         // Multi-device shutdown may revisit a completed child after another
         // child rejects cleanup. Never re-enter native teardown after retirement.
         if self.queue_retired {
+            return Ok(());
+        }
+        if self.admitted_device.cold().is_some() {
+            // The original no-VM reset owner remains retained until backend
+            // disposal. This closes metadata only, never a native teardown.
+            self.queue_retired = true;
             return Ok(());
         }
         #[cfg(all(test, feature = "cpu-runtime-fixtures"))]

@@ -149,6 +149,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 preflight: Self::preflight_gfx942_cohort3_v1::<P>,
                 ready: Self::gfx942_adoption_ready_v1,
                 adopt: Self::adopt_gfx942_cohort3_v1::<P>,
+                cold: None,
                 progress: Self::progress_gfx942_cohort3_issue_v1::<P>,
                 rejected: |_, _| Ok(false),
                 retire_rejected: |_, _, _, _| {

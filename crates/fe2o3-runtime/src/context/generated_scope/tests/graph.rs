@@ -5,6 +5,7 @@ use fe2o3_completion::{
 };
 use std::{future::Future, pin::Pin, task::Poll};
 
+mod cold_device;
 mod rejected;
 mod replicas;
 mod retained_producer;

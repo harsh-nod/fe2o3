@@ -55,6 +55,13 @@ impl Future for RuntimeGfx942ScopedCompletionFutureV1<'_> {
             Poll::Ready(Err(crate::RuntimeAsyncEngineCallErrorV1::RejectedBeforePublication)) => {
                 Poll::Ready(Err(RuntimeGfx942ScopeErrorV1::RejectedBeforePublication))
             }
+            Poll::Ready(Err(
+                crate::RuntimeAsyncEngineCallErrorV1::DeviceUnavailableBeforeActivation {
+                    device_uid,
+                },
+            )) => Poll::Ready(Err(
+                RuntimeGfx942ScopeErrorV1::DeviceUnavailableBeforeActivation { device_uid },
+            )),
             Poll::Ready(Err(_)) => Poll::Ready(Err(RuntimeGfx942ScopeErrorV1::Unknown)),
         }
     }

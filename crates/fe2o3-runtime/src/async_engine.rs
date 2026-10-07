@@ -461,6 +461,10 @@ pub enum RuntimeAsyncEngineCallErrorV1 {
     CancelledBeforePublication,
     /// No successful result: classified rejection and original-owner settlement.
     RejectedBeforePublication,
+    /// Original no-VM reset owner retained; this operation never activated DATA.
+    DeviceUnavailableBeforeActivation {
+        device_uid: u64,
+    },
     EngineStopped,
     ReentrantCall,
     CommandPanicked,

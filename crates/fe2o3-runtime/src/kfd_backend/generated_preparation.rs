@@ -92,7 +92,7 @@ impl KfdRuntimeBackendV1 {
                     Ok(prepare(device))
                 }
             };
-            match (&mut self.admitted_device, &mut self.queue) {
+            match (self.admitted_device.as_mut(), self.queue.as_mut()) {
                 (Some(device), None) => device
                     .with_retained_device_v1(prepare)
                     .map_err(|error| error.to_string())

@@ -6,6 +6,9 @@ use generated_shells::{GeneratedShellCommitPlanV1, GeneratedShellPlanV1};
 
 mod issue;
 pub(super) use issue::MultiGeneratedSubmissionV1;
+mod cold_device;
+pub(super) use cold_device::DeviceCustodyV1;
+pub(crate) use cold_device::GeneratedColdDeviceFailureV1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GeneratedAdoptionScopeV1 {

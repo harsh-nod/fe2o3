@@ -13,7 +13,7 @@
     "crates/fe2o3-runtime/src/context/tests/replica_tests.rs": "e8165ceee21b93e0eb88c3eb42b160f43234a7ab3d3622ac538b0e0ff5c24389",
     "crates/fe2o3-runtime/src/context/tests/replica_tests/retirement.rs": "c7930e7538d68613b730e35c4265ebd0a9da8049fee217efda743105c5e209f1",
     "crates/fe2o3-runtime/src/context/unpublished.rs": "7f205fc8f12d555559d3dc3e36e537247ea738cd7f058269301a8d7984b2dd75",
-    "crates/fe2o3-runtime/src/lib.rs": "a5db4706145eeb0e3384352a735d222ed0dd721c95559e0e361ed0161f8ce543"
+    "crates/fe2o3-runtime/src/lib.rs": "033d6456204d29ff172e7f2a6232ff8e6643dddf60bd44dc65a6350eab3c8faa"
   },
   "scope": "post-access shared retirement only; no native disposal"
 }

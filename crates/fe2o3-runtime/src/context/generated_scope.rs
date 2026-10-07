@@ -57,6 +57,11 @@ pub enum RuntimeGfx942ScopeErrorV1 {
     /// Actual classified rejection followed by complete original-owner disposal.
     /// Native DATA may have existed; this does not certify a no-effect writer.
     RejectedBeforePublication,
+    /// Inert failure identity after exact source/hold disposal; not a reset or
+    /// health certificate for any other device.
+    DeviceUnavailableBeforeActivation {
+        device_uid: u64,
+    },
     Deadline,
     Unknown,
     CopyFailed {
@@ -174,6 +179,21 @@ type Progress<B, P> = fn(
     &ContextUnpublishedHoldV1,
 ) -> Result<bool, NativeError>;
 
+type ColdCheck<B, P> =
+    fn(
+        &mut RuntimeContextV1<B>,
+        &mut RuntimeGfx942PreparedV1<P>,
+        &GeneratedHostRosterV1,
+        &ContextUnpublishedHoldV1,
+    ) -> Result<Option<generated_preparation::ContextColdDeviceFailureV1>, NativeError>;
+type ColdSettle<B, P> = fn(
+    &mut RuntimeContextV1<B>,
+    &mut RuntimeGfx942PreparedV1<P>,
+    &GeneratedHostRosterV1,
+    &ContextUnpublishedHoldV1,
+    &generated_preparation::ContextColdDeviceFailureV1,
+) -> Result<(), NativeError>;
+
 type GraphSubmit<B> = fn(
     &mut RuntimeContextV1<B>,
     ContextGraphReservationV1,
@@ -198,6 +218,7 @@ struct Hooks<B: RuntimeBackendV1, P> {
     preflight: Preflight<B, P>,
     ready: fn(&RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
     adopt: Step<B, P>,
+    cold: Option<(ColdCheck<B, P>, ColdSettle<B, P>)>,
     progress: Progress<B, P>,
     rejected: fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
     retire_rejected: Step<B, P>,
@@ -367,11 +388,18 @@ where
             let context = &mut *self.context;
             let hooks = &self.hooks;
             let before = slot.lifecycle.phase;
+            let mut cold_failure = None;
             let mut changed = slot
                 .lifecycle
                 .advance(
                     |phase, prepared| match phase {
                         Phase::Adopting => {
+                            if let Some((check, _)) = hooks.cold {
+                                cold_failure = check(context, prepared, &slot.roster, &slot.hold)?;
+                                if cold_failure.is_some() {
+                                    return Ok(false);
+                                }
+                            }
                             if !(hooks.ready)(context, &slot.hold)? {
                                 return Ok(false);
                             }
@@ -389,6 +417,35 @@ where
                     hooks.decode,
                 )
                 .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
+            if let Some(failure) = cold_failure {
+                let Some((_, settle)) = hooks.cold else {
+                    std::process::abort()
+                };
+                let device_uid = failure.device_uid();
+                changed = slot
+                    .lifecycle
+                    .settle_cold_device(
+                        context,
+                        device_uid,
+                        |context, prepared| {
+                            settle(context, prepared, &slot.roster, &slot.hold, &failure)
+                        },
+                        |context| {
+                            context
+                                .release_unpublished_hold_v1(&slot.hold)
+                                .map_err(Into::into)
+                        },
+                    )
+                    .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
+                if !changed {
+                    std::process::abort();
+                }
+                slot.reply.complete(Err(
+                    crate::RuntimeAsyncEngineCallErrorV1::DeviceUnavailableBeforeActivation {
+                        device_uid,
+                    },
+                ));
+            }
             if before == Phase::Issuing
                 && !changed
                 && (hooks.rejected)(context, &slot.hold)
@@ -456,6 +513,11 @@ where
         if slot.lifecycle.phase == Phase::FailedUnpublished {
             return Err(RuntimeGfx942ScopeErrorV1::RejectedBeforePublication);
         }
+        if let Phase::ColdDeviceFailed { device_uid } = slot.lifecycle.phase {
+            return Err(
+                RuntimeGfx942ScopeErrorV1::DeviceUnavailableBeforeActivation { device_uid },
+            );
+        }
         Ok(slot.lifecycle.outcome.as_ref())
     }
 
@@ -480,6 +542,11 @@ where
 
     fn settled_result_v1(&self) -> Result<(), RuntimeGfx942ScopeErrorV1> {
         for slot in &self.slots {
+            if let Phase::ColdDeviceFailed { device_uid } = slot.lifecycle.phase {
+                return Err(
+                    RuntimeGfx942ScopeErrorV1::DeviceUnavailableBeforeActivation { device_uid },
+                );
+            }
             if slot.lifecycle.phase == Phase::FailedUnpublished {
                 return Err(RuntimeGfx942ScopeErrorV1::RejectedBeforePublication);
             }
@@ -493,6 +560,19 @@ where
             }
         }
         Ok(())
+    }
+
+    /// Inert partial failure manifest of disposed, never-activated preparations.
+    /// The retained device owners remain private in Context. These identities
+    /// cannot certify reset independence, native quiescence, or other devices.
+    pub fn cold_device_failures_v1(&self) -> impl Iterator<Item = (usize, u64)> + '_ {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| match slot.lifecycle.phase {
+                Phase::ColdDeviceFailed { device_uid } => Some((index, device_uid)),
+                _ => None,
+            })
     }
 }
 
@@ -646,6 +726,7 @@ macro_rules! impl_scoped_generated {
                         preflight: Self::preflight_gfx942_adoption_v1::<P>,
                         ready: Self::gfx942_adoption_ready_v1,
                         adopt: Self::adopt_gfx942_prepared_v1::<P>,
+                        cold: Some((Self::check_gfx942_cold_device_v1::<P>, Self::settle_gfx942_cold_device_v1::<P>)),
                         progress: Self::progress_gfx942_issue_preserving_rejection_v1::<P>,
                         rejected: Self::gfx942_issue_rejected_v1,
                         retire_rejected: Self::settle_gfx942_rejected_v1::<P>,

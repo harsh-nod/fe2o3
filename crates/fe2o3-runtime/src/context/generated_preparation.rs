@@ -10,6 +10,8 @@ use crate::{KfdMultiDeviceRuntimeBackendV1, KfdRuntimeBackendErrorV1, KfdRuntime
 
 mod adoption;
 mod arena1024;
+mod cold_device;
+pub(super) use cold_device::ContextColdDeviceFailureV1;
 mod cohort3;
 mod registry4;
 

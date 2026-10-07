@@ -90,7 +90,7 @@ mod allocation_table;
 mod multi_admission;
 mod multi_allocation;
 mod multi_generated;
-pub(crate) use multi_generated::GeneratedAdoptionScopeV1;
+pub(crate) use multi_generated::{GeneratedAdoptionScopeV1, GeneratedColdDeviceFailureV1};
 mod multi_open;
 #[cfg(feature = "hardware-qualification")]
 mod multi_qualification;
@@ -1390,7 +1390,7 @@ struct StagingBudgetsV1 {
 pub struct KfdRuntimeBackendV1 {
     description: BackendDeviceDescriptionV1,
     dispatch_capacity: RuntimeDispatchCapacityV1,
-    admitted_device: Option<CheckedGfx942XnackMinusDevice>,
+    admitted_device: multi_generated::DeviceCustodyV1,
     queue: Option<ComputeAqlQueueSessionV1>,
     #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
     cpu_queue: Option<Box<ordinary_queue_io::CpuOrdinaryQueueV1>>,
@@ -1913,7 +1913,7 @@ impl KfdRuntimeBackendV1 {
         Self {
             description,
             dispatch_capacity: dispatch.capacity,
-            admitted_device,
+            admitted_device: multi_generated::DeviceCustodyV1::from_ready(admitted_device),
             queue: None,
             #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
             cpu_queue: None,
@@ -2339,6 +2339,11 @@ impl KfdRuntimeBackendV1 {
                     KfdRuntimeBackendErrorKindV1::Terminal,
                     "KFD backend is terminal",
                 ),
+            ))
+        } else if self.admitted_device.cold().is_some() {
+            Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "original cold device is permanently unavailable",
             ))
         } else {
             Ok(())
@@ -6157,7 +6162,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         &mut self,
         stream: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
-        self.require_live()?;
+        self.require_live_or_cold_metadata_v1()?;
         self.require_no_generated_stream_v1(stream)?;
         if !self.streams.contains_key(&stream) {
             return Err(Self::rejected(

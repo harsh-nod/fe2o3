@@ -45,6 +45,7 @@ fn cpu_scope<'scope, 'env, 'owners>(
             preflight: |_, _, _, _, _| Ok(()),
             ready: |_, _| Ok(true),
             adopt: |_, _, _, _| Ok(()),
+            cold: None,
             progress: |_, prepared, _, _| {
                 let members = &prepared.value().members;
                 let all = members.iter().all(|m| m.ticks.get() == 0);

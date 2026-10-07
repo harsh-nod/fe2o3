@@ -54,6 +54,13 @@ pub struct Gfx942ColdDeviceResetV1 {
 }
 
 impl Gfx942ColdDeviceResetV1 {
+    /// Rechecks only the original opener/process occurrence. Success grants no
+    /// device reactivation, native settlement, or process-global gate reset.
+    /// Refusal leaves this permanently unavailable original owner retained.
+    pub fn check_process(&self) -> Result<(), DeviceBindingError> {
+        self.device.check_process()
+    }
+
     /// Cached inert identity; not a replacement device or execution capability.
     pub const fn observation(&self) -> &DeviceBindingObservation {
         self.device.observation()

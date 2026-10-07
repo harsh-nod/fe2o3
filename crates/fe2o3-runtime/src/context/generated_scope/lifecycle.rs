@@ -10,6 +10,7 @@ pub(super) enum Phase {
     Cancelled,
     CancelledUnpublished,
     FailedUnpublished,
+    ColdDeviceFailed { device_uid: u64 },
     Unknown,
 }
 
@@ -35,6 +36,7 @@ impl<T, O> Lifecycle<T, O> {
                 | Phase::Cancelled
                 | Phase::CancelledUnpublished
                 | Phase::FailedUnpublished
+                | Phase::ColdDeviceFailed { .. }
         )
     }
 
@@ -66,6 +68,7 @@ impl<T, O> Lifecycle<T, O> {
                 | Phase::Cancelled
                 | Phase::CancelledUnpublished
                 | Phase::FailedUnpublished
+                | Phase::ColdDeviceFailed { .. }
                 | Phase::Unknown
         ) {
             return Ok(false);
@@ -136,6 +139,32 @@ impl<T, O> Lifecycle<T, O> {
         self.phase = Phase::FailedUnpublished;
         Ok(true)
     }
+
+    pub fn settle_cold_device<C, E>(
+        &mut self,
+        context: &mut C,
+        device_uid: u64,
+        validate_original_and_source: impl FnOnce(&mut C, &mut T) -> Result<(), E>,
+        release_hold: impl FnOnce(&mut C) -> Result<(), E>,
+    ) -> Result<bool, E> {
+        if self.phase != Phase::Adopting {
+            return Ok(false);
+        }
+        self.phase = Phase::Unknown;
+        let Some(value) = self.value.as_mut() else {
+            std::process::abort()
+        };
+        validate_original_and_source(context, value)?;
+        let Some(value) = self.value.take() else {
+            std::process::abort()
+        };
+        drop(value);
+        release_hold(context)?;
+        // No decoder or writer success. The backend still retains the original
+        // unavailable no-VM device, independent of this disposed preparation.
+        self.phase = Phase::ColdDeviceFailed { device_uid };
+        Ok(true)
+    }
 }
 
 #[cfg(test)]
@@ -151,6 +180,99 @@ mod tests {
         fn drop(&mut self) {
             self.dropped.set(self.dropped.get() + 1);
             assert!(!self.panic, "injected never-issued disposal failure");
+        }
+    }
+
+    #[test]
+    fn cold_failure_checks_original_before_disposal_and_publishes_only_after_hold_release() {
+        let dropped = Cell::new(0);
+        let mut slot = Lifecycle::<_, ()>::new(Disposal {
+            dropped: &dropped,
+            panic: false,
+        });
+        let mut checked = false;
+        assert_eq!(
+            slot.settle_cold_device(
+                &mut checked,
+                17,
+                |checked, _| {
+                    assert_eq!(dropped.get(), 0);
+                    *checked = true;
+                    Ok::<_, ()>(())
+                },
+                |checked| {
+                    assert!(*checked);
+                    assert_eq!(dropped.get(), 1);
+                    Ok(())
+                },
+            ),
+            Ok(true)
+        );
+        assert_eq!(slot.phase, Phase::ColdDeviceFailed { device_uid: 17 });
+        assert!(!slot.unsettled());
+        assert!(slot.value.is_none() && slot.outcome.is_none());
+        assert_eq!(
+            slot.advance::<()>(
+                |_, _| panic!("cold failure cannot adopt"),
+                |_| panic!("cold failure cannot decode")
+            ),
+            Ok(false)
+        );
+        assert_eq!(
+            slot.settle_cold_device::<_, ()>(
+                &mut (),
+                17,
+                |_, _| panic!("no second check"),
+                |_| panic!("no second release")
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn cold_failure_check_disposal_or_hold_error_remains_unknown_and_cannot_retry() {
+        for stage in 0..4 {
+            let dropped = Cell::new(0);
+            let released = Cell::new(false);
+            let mut slot = Lifecycle::<_, ()>::new(Disposal {
+                dropped: &dropped,
+                panic: stage == 2,
+            });
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                slot.settle_cold_device(
+                    &mut (),
+                    17,
+                    |_, _| {
+                        if stage == 1 {
+                            panic!("original source check panic");
+                        }
+                        if stage == 0 { Err(7) } else { Ok(()) }
+                    },
+                    |_| {
+                        released.set(true);
+                        Err(7)
+                    },
+                )
+            }));
+            if stage == 1 || stage == 2 {
+                assert!(result.is_err());
+            } else {
+                assert_eq!(result.unwrap(), Err(7));
+            }
+            assert_eq!(slot.phase, Phase::Unknown);
+            assert!(slot.unsettled() && slot.outcome.is_none());
+            assert_eq!(dropped.get(), usize::from(stage >= 2));
+            assert_eq!(slot.value.is_some(), stage < 2);
+            assert_eq!(released.get(), stage == 3);
+            assert_eq!(
+                slot.settle_cold_device::<_, ()>(
+                    &mut (),
+                    17,
+                    |_, _| panic!("unknown cannot retry"),
+                    |_| panic!("unknown cannot release")
+                ),
+                Ok(false)
+            );
         }
     }
 
