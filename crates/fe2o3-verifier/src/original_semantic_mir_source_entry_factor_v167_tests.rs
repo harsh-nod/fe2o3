@@ -9,25 +9,28 @@ fn function<'a>(model: &'a str, name: &str) -> (&'a str, &'a str) {
     (header, body)
 }
 
-// Frozen 2c9254c entry declarations, before factoring. Recomposition must
-// preserve every guard, allocation, frame update and ordered argument install.
+// Recomposition preserves the historical declarations plus the two exact
+// pending-ticket boundaries added by V286; both byte identities are checked.
 #[test]
 fn source_entry_factor_recomposes_all_original_guards_and_bodies() {
-    for (disjoint, copied, expected) in [
+    for (disjoint, copied, historical, expected) in [
         (
             false,
             false,
             "8cdfdf2f46f98b356dae16637a269f32596dae3866f72d91733f849105bf9ed9",
+            "faa54a70a3c84a9508e949e95c6fb7ddd21ff22a9bbe995d00bd22dd57272b66",
         ),
         (
             false,
             true,
             "8cdfdf2f46f98b356dae16637a269f32596dae3866f72d91733f849105bf9ed9",
+            "faa54a70a3c84a9508e949e95c6fb7ddd21ff22a9bbe995d00bd22dd57272b66",
         ),
         (
             true,
             false,
             "669048bb37cca42dde2a5c7d6d207bbcbe0f2d3d564342a10e73d0a709acd4de",
+            "8092907fc931ea306526db2b6f610ae9ceb27706d09082ae76e182e5754cf8bf",
         ),
     ] {
         super::run_write_model(super::LIMIT, super::LIMIT, disjoint, copied, |model| {
@@ -48,6 +51,12 @@ fn source_entry_factor_recomposes_all_original_guards_and_bodies() {
             let digest = |text: &str| Sha256::digest(text.as_bytes()).iter()
                 .map(|byte| format!("{byte:02x}")).collect::<String>();
             assert_eq!(digest(&original), expected);
+            let pending_guard = " || source.logical.execution_pending.dom().len() != 0";
+            let pending_body = " if entered.logical.execution_pending.dom().len() == 0 { entered } else { invocation_source_byte_refused_v36(entered) }";
+            assert_eq!(original.matches(pending_guard).count(), 6);
+            assert_eq!(original.matches(pending_body).count(), 6);
+            let prior = original.replace(pending_guard, "").replace(pending_body, " entered");
+            assert_eq!(digest(&prior), historical);
             let bad_guard = original.replacen("!source.machine.valid", "source.machine.valid", 1);
             let bad_body = original.replacen("invocation_source_byte_put_local_v36(entered,", "invocation_source_byte_put_local_v36(source,", 1);
             assert_ne!(bad_guard, original);

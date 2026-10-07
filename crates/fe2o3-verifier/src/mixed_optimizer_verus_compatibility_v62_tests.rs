@@ -58,12 +58,12 @@ fn finite_domain_compatibility_program_retains_equations_and_private_parent_impo
 }
 
 #[test]
-fn finite_domain_compatibility_source_keeps_all_twenty_three_finite_maps() {
+fn finite_domain_compatibility_source_keeps_all_twenty_five_finite_maps() {
     let sources = [
         (super::super::byte_memory_v30::BYTE_MEMORY_V30, 3),
         (
             include_str!("original_semantic_mir_source_logical_locals_v38.vrs"),
-            7,
+            8,
         ),
         (
             include_str!("original_semantic_mir_invocation_source_frames_v36.rs"),
@@ -85,6 +85,10 @@ fn finite_domain_compatibility_source_keeps_all_twenty_three_finite_maps() {
             include_str!("original_semantic_mir_source_product_values_v282.vrs"),
             6,
         ),
+        (
+            include_str!("original_semantic_mir_execution_call_transfer_v286.vrs"),
+            1,
+        ),
     ];
     let mut count = 0;
     for (source, expected) in sources {
@@ -96,10 +100,13 @@ fn finite_domain_compatibility_source_keeps_all_twenty_three_finite_maps() {
         assert!(!source.contains("new_assuming_finite"));
         count += expected;
     }
-    assert_eq!(count, 23);
+    assert_eq!(count, 25);
     let logical = include_str!("original_semantic_mir_source_logical_locals_v38.vrs");
     assert!(logical.contains("execution_references: Map::new(logical.execution_references.dom().filter(|i: int| !(begin <= i < end)),\n            |i: int| logical.execution_references[i])"));
     assert!(logical.contains("products: Map::new(logical.products.dom().filter(|i: int| !(begin <= i < end)),\n            |i: int| logical.products[i])"));
+    assert!(logical.contains("execution_pending: Map::new(logical.execution_pending.dom().filter(|i: int| !(begin <= i < end)),\n            |i: int| logical.execution_pending[i])"));
+    let transfer = include_str!("original_semantic_mir_execution_call_transfer_v286.vrs");
+    assert!(transfer.contains("execution_pending: Map::new(\n        logical.execution_pending.dom().filter(|local: int| logical.execution_pending[local].caller_frame != frame),\n        |local: int| logical.execution_pending[local])"));
     let aggregate = include_str!("original_semantic_mir_source_aggregate_values_v42.vrs");
     assert!(aggregate.contains(".filter(|key: Seq<int>| invocation_source_path_prefix_v42(path, key))\n                .map(|key: Seq<int>| key.subrange(path.len() as int, key.len() as int))"));
     assert!(aggregate.contains(".union(value.leaves.dom().map(|suffix: Seq<int>| path + suffix))"));

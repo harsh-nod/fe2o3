@@ -65,7 +65,7 @@ fn generated_warning_cleanup_removes_only_nine_finite_tautologies() {
             let anchor = " && (forall|local: int| source.logical.descriptor_references.contains_key(local) ==>";
             assert_eq!(expected.matches(anchor).count(), 1);
             expected = expected.replacen(anchor, &format!(
-                " && (forall|local: int| source.logical.execution_references.contains_key(local) ==> source.machine.values[local] == MemoryValueV30::Unit && !source.objects.contains_key(local)){anchor}"
+                " && (forall|local: int| source.logical.execution_pending.contains_key(local) ==> source.machine.values[local] == MemoryValueV30::Undefined && !source.objects.contains_key(local)) && (forall|local: int| source.logical.execution_references.contains_key(local) ==> source.machine.values[local] == MemoryValueV30::Unit && !source.objects.contains_key(local)){anchor}"
             ), 1);
             let anchor = " && (forall|local: int| source.logical.enums.contains_key(local) ==>";
             assert_eq!(expected.matches(anchor).count(), 1);
@@ -82,7 +82,7 @@ fn generated_warning_cleanup_removes_only_nine_finite_tautologies() {
             let anchor = " && (forall|i: int| logical.execution_references.contains_key(i) ==>";
             assert_eq!(expected.matches(anchor).count(), 1);
             expected = expected.replacen(anchor, &format!(
-                " && invocation_source_product_execution_ancestry_v282(logical) && (forall|i: int| logical.products.contains_key(i) ==> 0 <= i < count && invocation_source_product_well_formed_v282(logical.products[i]) && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i) && !logical.execution_references.contains_key(i) && !logical.descriptor_references.contains_key(i) && !logical.aggregates.contains_key(i) && !logical.enums.contains_key(i)){anchor}"
+                " && invocation_source_execution_pending_shape_v286(logical) && invocation_source_product_execution_ancestry_v282(logical) && (forall|i: int| logical.products.contains_key(i) ==> 0 <= i < count && invocation_source_product_well_formed_v282(logical.products[i]) && !logical.witnesses.contains_key(i) && !logical.references.contains_key(i) && !logical.execution_references.contains_key(i) && !logical.descriptor_references.contains_key(i) && !logical.aggregates.contains_key(i) && !logical.enums.contains_key(i)){anchor}"
             ), 1);
         }
         assert_eq!(
