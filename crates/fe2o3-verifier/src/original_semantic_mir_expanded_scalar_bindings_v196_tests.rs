@@ -149,7 +149,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     let reconstruction_phi_borrows = 9 * size_of::<&()>();
     let reconstruction_operand_borrows = 4 * size_of::<&()>();
     let reconstruction_traversal_borrows =
-        size_of::<&mut [Option<Recipe>]>() + size_of::<&mut [u8]>() + 4 * size_of::<&()>();
+        size_of::<&mut Vec<Option<Recipe>>>() + size_of::<&mut Vec<u8>>() + 4 * size_of::<&()>();
     let reconstruction_loader_frame = (5 + 2) * size_of::<&()>()
         + size_of::<usize>()
         + size_of::<Recipe>()
@@ -208,10 +208,64 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         + 2 * size_of::<Option<(usize, usize, u8)>>();
     let reconstruction_diagnostic_results =
         2 * size_of::<Result<Recipe>>() + 2 * size_of::<Result<()>>();
+    #[allow(dead_code)]
+    #[derive(Clone, Copy)]
+    enum ControlTermFields {
+        Original(usize),
+        Control(usize),
+    }
+    #[allow(dead_code)]
+    #[derive(Clone, Copy)]
+    struct ControlSelectFields {
+        condition: usize,
+        on_true: ControlTermFields,
+        on_false: ControlTermFields,
+    }
+    #[allow(dead_code)]
+    struct ControlPlanFields<'a, 'g> {
+        input: &'a fe2o3_kernel_analysis::CanonicalKirInventoryV18<'g>,
+        slot: usize,
+        ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+        floor: usize,
+        retained: usize,
+        failure: std::cell::Cell<Option<Resource>>,
+        root: ControlTermFields,
+        controls: Vec<ControlSelectFields>,
+    }
+    let reconstruction_control_install = size_of::<ControlPlanFields<'_, '_>>()
+        + size_of::<Result<ControlPlanFields<'_, '_>>>()
+        + 3 * size_of::<ControlSelectFields>()
+        + 4 * size_of::<ControlTermFields>()
+        + size_of::<Option<&fe2o3_kernel_analysis::CanonicalKirInventoryV18<'_>>>()
+        + size_of::<
+            std::iter::Enumerate<std::iter::Copied<std::slice::Iter<'_, ControlSelectFields>>>,
+        >()
+        + 4 * size_of::<Result<usize>>()
+        + 2 * size_of::<Result<Recipe>>()
+        + 16 * size_of::<&()>()
+        + 12 * size_of::<usize>();
+    let reconstruction_growth_frames = 2 * size_of::<Vec<Option<Recipe>>>()
+        + 2 * size_of::<Vec<u8>>()
+        + 2 * size_of::<Vec<(usize, u8)>>()
+        + 2 * size_of::<Vec<usize>>()
+        + size_of::<Result<Vec<Option<Recipe>>>>()
+        + size_of::<Result<Vec<u8>>>()
+        + size_of::<Result<Vec<(usize, u8)>>>()
+        + size_of::<Result<Vec<usize>>>()
+        + 4 * size_of::<Result<()>>()
+        + 12 * size_of::<usize>()
+        + 8 * size_of::<&()>();
+    let reconstruction_emission_frame = size_of::<&[Option<Recipe>]>()
+        + size_of::<&[usize]>()
+        + 2 * size_of::<&()>()
+        + size_of::<Result<()>>();
     let header = retained
         + refusal_coordinates
         + refusal_trace_headers
         + reconstruction_diagnostic_results
+        + reconstruction_control_install
+        + reconstruction_growth_frames
+        + reconstruction_emission_frame
         + construction_and_query_results
         + input_predecessor_and_actual_coordinates
         + expansion_span

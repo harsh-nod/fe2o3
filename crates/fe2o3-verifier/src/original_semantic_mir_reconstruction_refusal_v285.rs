@@ -28,6 +28,7 @@ pub(super) enum Phase {
     PhiCommonArguments,
     PhiCommonSource,
     PhiBranch,
+    ControlRegion,
 }
 
 impl Phase {
@@ -54,6 +55,7 @@ impl Phase {
             Self::PhiCommonArguments => "phi-common-arguments",
             Self::PhiCommonSource => "phi-common-source",
             Self::PhiBranch => "phi-branch",
+            Self::ControlRegion => "cfg-region",
         }
     }
 }

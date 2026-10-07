@@ -10,12 +10,17 @@ use fe2o3_kernel_ir::{
 };
 use std::fmt::Write as _;
 
+#[path = "original_semantic_mir_control_reconstruction_v291.rs"]
+mod control_reconstruction;
+
 macro_rules! emit {
     ($out:expr, $($arg:tt)*) => { write!($out, $($arg)*).map_err(|_| $out.error())? };
 }
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Recipe {
+    // Unexpanded original phi. Never emitted or interpreted as a control-node ID.
+    Region(usize),
     Actual(usize),
     Literal(u32),
     Forward(usize),
@@ -52,7 +57,7 @@ pub(super) fn headers() -> usize {
     let phi_refs = 9 * size_of::<&()>();
     let operand_refs = 4 * size_of::<&()>();
     let traversal_borrows =
-        size_of::<&mut [Option<Recipe>]>() + size_of::<&mut [u8]>() + 4 * size_of::<&()>();
+        size_of::<&mut Vec<Option<Recipe>>>() + size_of::<&mut Vec<u8>>() + 4 * size_of::<&()>();
     let loader_frame = (5 + 2) * size_of::<&()>()
         + size_of::<usize>()
         + size_of::<Recipe>()
@@ -75,6 +80,37 @@ pub(super) fn headers() -> usize {
         + size_of::<&[fe2o3_kernel_analysis::CanonicalKirEdgeRefV1<'_>]>();
     let frame_indices = (14 + 8 + 8 + 2) * size_of::<usize>();
     let diagnostic_results = 2 * size_of::<Result<Recipe>>() + 2 * size_of::<Result<()>>();
+    let control_install = size_of::<control_reconstruction::Plan<'_, '_>>()
+        + size_of::<Result<control_reconstruction::Plan<'_, '_>>>()
+        + 3 * size_of::<control_reconstruction::Select>()
+        + 4 * size_of::<control_reconstruction::Term>()
+        + size_of::<Option<&Inventory<'_>>>()
+        + size_of::<
+            std::iter::Enumerate<
+                std::iter::Copied<std::slice::Iter<'_, control_reconstruction::Select>>,
+            >,
+        >()
+        + 4 * size_of::<Result<usize>>()
+        + 2 * size_of::<Result<Recipe>>()
+        + 16 * size_of::<&()>()
+        + 12 * size_of::<usize>();
+    // Growth pays the old and new allocations simultaneously; these are the
+    // additional inline frames for each possible vector element type.
+    let growth_frames = 2 * size_of::<Vec<Option<Recipe>>>()
+        + 2 * size_of::<Vec<u8>>()
+        + 2 * size_of::<Vec<(usize, u8)>>()
+        + 2 * size_of::<Vec<usize>>()
+        + size_of::<Result<Vec<Option<Recipe>>>>()
+        + size_of::<Result<Vec<u8>>>()
+        + size_of::<Result<Vec<(usize, u8)>>>()
+        + size_of::<Result<Vec<usize>>>()
+        + 4 * size_of::<Result<()>>()
+        + 12 * size_of::<usize>()
+        + 8 * size_of::<&()>();
+    let emission_frame = size_of::<&[Option<Recipe>]>()
+        + size_of::<&[usize]>()
+        + 2 * size_of::<&()>()
+        + size_of::<Result<()>>();
     size_of::<Vec<Option<Recipe>>>()
         + size_of::<Vec<u8>>()
         + size_of::<Vec<(usize, u8)>>()
@@ -104,6 +140,9 @@ pub(super) fn headers() -> usize {
         + borrowed_rosters
         + frame_indices
         + diagnostic_results
+        + control_install
+        + growth_frames
+        + emission_frame
         + 2 * size_of::<Type>()
         + 2 * size_of::<ScalarType>()
         + 2 * size_of::<ValueId>()
@@ -136,7 +175,7 @@ mod tests {
         object_bytes: 4096,
     };
 
-    fn diamond(nonclosed: bool, extra_predecessor: bool) -> Module {
+    pub(super) fn diamond(nonclosed: bool, extra_predecessor: bool) -> Module {
         let mut entry = BasicBlock::new(BlockId(100));
         entry.terminator = Some(Terminator::ConditionalBranch {
             condition: ValueId(2),
@@ -290,8 +329,8 @@ mod tests {
             let mut work = Work::new(LIMIT);
             let mut budget = Budget::new(&mut work, LIMIT);
             let mut out = Writer::new(&mut budget).unwrap();
-            let mut recipes = [Some(root), None];
-            let mut marks = [1, 0];
+            let mut recipes = vec![Some(root), None];
+            let mut marks = vec![1, 0];
             let mut stack = vec![(0, 0)];
             let mut order = Vec::new();
             let result = traverse(
@@ -300,6 +339,7 @@ mod tests {
                 &mut stack,
                 &mut order,
                 synthetic_facts(0),
+                None,
                 &mut out,
                 &mut |index, _| {
                     assert_eq!(index, 1);
@@ -350,8 +390,8 @@ mod tests {
                 let mut work = Work::new(LIMIT);
                 let mut budget = Budget::new(&mut work, LIMIT);
                 let mut out = Writer::new(&mut budget).unwrap();
-                let mut recipes = [Some(root), None];
-                let mut marks = [1, 0];
+                let mut recipes = vec![Some(root), None];
+                let mut marks = vec![1, 0];
                 let mut stack = vec![(0, 0)];
                 let mut order = Vec::new();
                 let mut expected = synthetic_facts(0);
@@ -363,6 +403,7 @@ mod tests {
                     &mut stack,
                     &mut order,
                     expected,
+                    None,
                     &mut out,
                     &mut |index, _| {
                         assert_eq!(index, 1);
@@ -558,12 +599,159 @@ fn function(coordinate: Definition) -> Function {
     }
 }
 
+fn emit_nodes(
+    input: &Inventory<'_>,
+    recipes: &[Option<Recipe>],
+    order: &[usize],
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    for &node in order {
+        out.budget.charge_work(2)?;
+        match recipes[node].ok_or_else(mismatch)? {
+            Recipe::Region(_) => return Err(mismatch()),
+            Recipe::Literal(bits) => {
+                emit!(
+                    out,
+                    "let reconstructed_{node} = MemoryValueV30::Scalar({bits}int); let reconstructed_ok_{node} = true; "
+                );
+            }
+            Recipe::Actual(index) => {
+                let limit = if input.definitions()[node].ty == &Type::Scalar(ScalarType::Bool) {
+                    2u64
+                } else {
+                    1u64 << 32
+                };
+                emit!(
+                    out,
+                    "let reconstructed_{node} = target.values[{index}]; let reconstructed_ok_{node} = (match reconstructed_{node} {{ MemoryValueV30::Scalar(bits) => 0 <= bits < {limit}, _ => false }}); "
+                );
+            }
+            Recipe::Forward(child) => {
+                emit!(
+                    out,
+                    "let reconstructed_{node} = reconstructed_{child}; let reconstructed_ok_{node} = reconstructed_ok_{child}; "
+                );
+            }
+            Recipe::CheckedAdd {
+                left,
+                right,
+                overflow,
+            } => {
+                emit!(
+                    out,
+                    "let reconstructed_sum_{node} = (match reconstructed_{left} {{ MemoryValueV30::Scalar(bits) => bits, _ => 0int }}) + (match reconstructed_{right} {{ MemoryValueV30::Scalar(bits) => bits, _ => 0int }}); let reconstructed_ok_{node} = reconstructed_ok_{left} && reconstructed_ok_{right}; let reconstructed_{node} = MemoryValueV30::Scalar("
+                );
+                out.budget.charge_work(1)?;
+                if overflow {
+                    emit!(
+                        out,
+                        "if reconstructed_sum_{node} >= 4294967296 {{ 1int }} else {{ 0int }}"
+                    );
+                } else {
+                    emit!(out, "reconstructed_sum_{node} % 4294967296");
+                }
+                emit!(out, "); ");
+            }
+            Recipe::Select {
+                condition,
+                on_true,
+                on_false,
+            } => {
+                emit!(
+                    out,
+                    "let reconstructed_branch_{node} = reconstructed_{condition} == MemoryValueV30::Scalar(1); let reconstructed_{node} = if reconstructed_branch_{node} {{ reconstructed_{on_true} }} else {{ reconstructed_{on_false} }}; let reconstructed_ok_{node} = reconstructed_ok_{condition} && (if reconstructed_branch_{node} {{ reconstructed_ok_{on_true} }} else {{ reconstructed_ok_{on_false} }}); "
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn grow<T: Copy>(values: &mut Vec<T>, needed: usize, out: &mut Writer<'_, '_>) -> Result<()> {
+    out.budget.charge_work(2)?;
+    if needed <= values.capacity() {
+        return Ok(());
+    }
+    let count = needed.max(
+        values
+            .capacity()
+            .checked_mul(2)
+            .ok_or(Resource::Arithmetic)?,
+    );
+    let mut next = vector(count, out)?;
+    out.budget.charge_work(values.len())?;
+    next.extend_from_slice(values);
+    let old = std::mem::replace(values, next);
+    let released = old
+        .capacity()
+        .checked_mul(size_of::<T>())
+        .ok_or(Resource::Arithmetic)?;
+    drop(old);
+    out.budget.release_storage(released)?;
+    Ok(())
+}
+
+fn install_region(
+    input: &Inventory<'_>,
+    original: usize,
+    recipes: &mut Vec<Option<Recipe>>,
+    marks: &mut Vec<u8>,
+    stack: &mut Vec<(usize, u8)>,
+    order: &mut Vec<usize>,
+    out: &mut Writer<'_, '_>,
+) -> Result<Recipe> {
+    use control_reconstruction::{Select, Term};
+    let plan = control_reconstruction::derive(input, original, out)?;
+    plan.check(input, out)?;
+    let base = recipes.len();
+    let root = match plan.root {
+        Term::Original(value) => Recipe::Forward(value),
+        Term::Control(root) => {
+            let selected = *plan.controls.get(root).ok_or_else(mismatch)?;
+            let end = base.checked_add(root).ok_or(Resource::Arithmetic)?;
+            grow(recipes, end, out)?;
+            grow(marks, end, out)?;
+            grow(stack, end, out)?;
+            grow(order, end, out)?;
+            let term = |term: Term, before: usize| -> Result<usize> {
+                match term {
+                    Term::Original(value) if value < input.definitions().len() => Ok(value),
+                    Term::Control(control) if control < before => base
+                        .checked_add(control)
+                        .ok_or_else(|| Resource::Arithmetic.into()),
+                    _ => Err(mismatch()),
+                }
+            };
+            let recipe = |node: Select, before: usize| -> Result<Recipe> {
+                if node.condition >= input.definitions().len() {
+                    return Err(mismatch());
+                }
+                Ok(Recipe::Select {
+                    condition: node.condition,
+                    on_true: term(node.on_true, before)?,
+                    on_false: term(node.on_false, before)?,
+                })
+            };
+            for (ordinal, node) in plan.controls[..root].iter().copied().enumerate() {
+                out.budget.charge_work(6)?;
+                recipes.push(Some(recipe(node, ordinal)?));
+                marks.push(0);
+            }
+            out.budget.charge_work(6)?;
+            recipe(selected, root)?
+        }
+    };
+    plan.discard(out)?;
+    Ok(root)
+}
+
 fn traverse(
-    recipes: &mut [Option<Recipe>],
-    marks: &mut [u8],
+    recipes: &mut Vec<Option<Recipe>>,
+    marks: &mut Vec<u8>,
     stack: &mut Vec<(usize, u8)>,
     order: &mut Vec<usize>,
     mut facts: RefusalFacts,
+    input: Option<&Inventory<'_>>,
     out: &mut Writer<'_, '_>,
     load: &mut impl FnMut(usize, &mut Writer<'_, '_>) -> Result<Recipe>,
 ) -> Result<()> {
@@ -574,15 +762,32 @@ fn traverse(
             return Err(mismatch());
         }
         while let Some(&(current, ordinal)) = stack.last() {
-            facts.dependency = Some((current, current, ordinal));
+            let original_count = input.map_or(usize::MAX, |input| input.definitions().len());
+            facts.dependency = (current < original_count).then_some((current, current, ordinal));
             out.budget.charge_work(8)?;
-            let recipe = recipes
+            let mut recipe = recipes
                 .get(current)
                 .copied()
                 .flatten()
                 .ok_or_else(mismatch)?;
+            if let Recipe::Region(original) = recipe {
+                if original != current || current >= original_count {
+                    return Err(mismatch());
+                }
+                recipe = install_region(
+                    input.ok_or_else(mismatch)?,
+                    original,
+                    recipes,
+                    marks,
+                    stack,
+                    order,
+                    out,
+                )?;
+                recipes[current] = Some(recipe);
+            }
             if let Some(child) = recipe.child(ordinal) {
-                facts.dependency = Some((current, child, ordinal));
+                facts.dependency = (current < original_count && child < original_count)
+                    .then_some((current, child, ordinal));
                 stack.last_mut().ok_or_else(mismatch)?.1 += 1;
                 if *marks.get(child).ok_or_else(mismatch)? == 1 {
                     phase = RefusalPhase::TraversalCycle;
@@ -593,7 +798,12 @@ fn traverse(
                     if stack.len() >= recipes.len() {
                         return Err(mismatch());
                     }
-                    recipes[child] = Some(load(child, out)?);
+                    if recipes[child].is_none() {
+                        if child >= original_count {
+                            return Err(mismatch());
+                        }
+                        recipes[child] = Some(load(child, out)?);
+                    }
                     marks[child] = 1;
                     stack.push((child, 0));
                 }
@@ -632,6 +842,7 @@ fn operand(
 
 // Only an exact two-arm diamond is accepted. Each arm has one incoming edge,
 // and its sole outgoing edge carries the selected original phi argument.
+#[cfg(test)]
 fn phi(
     input: &Inventory<'_>,
     original: usize,
@@ -928,7 +1139,11 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                 .map_err(|error| trace_refusal(error, RefusalPhase::RecipeDescendants, facts));
         }
         match row.coordinate {
-            Definition::BlockArgument { block, .. } => phi(input, original, block, out),
+            Definition::BlockArgument { .. } => {
+                control_reconstruction::identity(input, original, out)
+                    .map(|identity| identity.map_or(Recipe::Region(original), Recipe::Forward))
+                    .map_err(|error| trace_refusal(error, RefusalPhase::PhiIncoming, facts))
+            }
             Definition::Result { operation, .. } => {
                 out.budget.charge_work(2)?;
                 let op = &input.operations()[operation_index(input, operation)?];
@@ -1035,6 +1250,7 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
             &mut stack,
             &mut order,
             facts,
+            Some(input),
             out,
             &mut |child, out| {
                 out.budget.charge_work(15)?;
@@ -1079,64 +1295,7 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
             "(target.values.len() == {} && ({{ ",
             self.actual_definitions
         );
-        for &node in &order {
-            out.budget.charge_work(2)?;
-            match recipes[node].ok_or_else(mismatch)? {
-                Recipe::Literal(bits) => {
-                    emit!(
-                        out,
-                        "let reconstructed_{node} = MemoryValueV30::Scalar({bits}int); let reconstructed_ok_{node} = true; "
-                    );
-                }
-                Recipe::Actual(index) => {
-                    let limit = if input.definitions()[node].ty == &Type::Scalar(ScalarType::Bool) {
-                        2u64
-                    } else {
-                        1u64 << 32
-                    };
-                    emit!(
-                        out,
-                        "let reconstructed_{node} = target.values[{index}]; let reconstructed_ok_{node} = (match reconstructed_{node} {{ MemoryValueV30::Scalar(bits) => 0 <= bits < {limit}, _ => false }}); "
-                    );
-                }
-                Recipe::Forward(child) => {
-                    emit!(
-                        out,
-                        "let reconstructed_{node} = reconstructed_{child}; let reconstructed_ok_{node} = reconstructed_ok_{child}; "
-                    );
-                }
-                Recipe::CheckedAdd {
-                    left,
-                    right,
-                    overflow,
-                } => {
-                    emit!(
-                        out,
-                        "let reconstructed_sum_{node} = (match reconstructed_{left} {{ MemoryValueV30::Scalar(bits) => bits, _ => 0int }}) + (match reconstructed_{right} {{ MemoryValueV30::Scalar(bits) => bits, _ => 0int }}); let reconstructed_ok_{node} = reconstructed_ok_{left} && reconstructed_ok_{right}; let reconstructed_{node} = MemoryValueV30::Scalar("
-                    );
-                    out.budget.charge_work(1)?;
-                    if overflow {
-                        emit!(
-                            out,
-                            "if reconstructed_sum_{node} >= 4294967296 {{ 1int }} else {{ 0int }}"
-                        );
-                    } else {
-                        emit!(out, "reconstructed_sum_{node} % 4294967296");
-                    }
-                    emit!(out, "); ");
-                }
-                Recipe::Select {
-                    condition,
-                    on_true,
-                    on_false,
-                } => {
-                    emit!(
-                        out,
-                        "let reconstructed_branch_{node} = reconstructed_{condition} == MemoryValueV30::Scalar(1); let reconstructed_{node} = if reconstructed_branch_{node} {{ reconstructed_{on_true} }} else {{ reconstructed_{on_false} }}; let reconstructed_ok_{node} = reconstructed_ok_{condition} && (if reconstructed_branch_{node} {{ reconstructed_ok_{on_true} }} else {{ reconstructed_ok_{on_false} }}); "
-                    );
-                }
-            }
-        }
+        emit_nodes(input, &recipes, &order, out)?;
         emit!(
             out,
             "reconstructed_ok_{original} && invocation_value_related_v36(original, reconstructed_{original}, map, source.machine.memory, target.memory) }}))"
