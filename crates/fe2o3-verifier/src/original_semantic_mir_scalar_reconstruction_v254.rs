@@ -122,7 +122,7 @@ mod tests {
     use crate::mixed_optimizer_refinement_v26::Budget;
     use fe2o3_kernel_ir::{
         AccessMode, AddressSpace, BasicBlock, BlockId, CanonicalKernelIrWorkBudgetV1 as Work,
-        Function as IrFunction, Instruction, MemoryAccess, Module, Signature,
+        Function as IrFunction, MemoryAccess, Module, Operation as Instruction, Signature,
         StorageLayoutLimitsV1, UnaryOp, ValueDef, VerifiedCanonicalKernelIrModuleV18 as Owner,
     };
 
