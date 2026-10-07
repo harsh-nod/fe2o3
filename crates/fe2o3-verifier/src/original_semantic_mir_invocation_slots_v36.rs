@@ -1549,6 +1549,7 @@ pub(super) mod tests {
             source_tags::SourceTagIndexV39,
             source_objects::SourceObjects,
             source_aggregates::SourceAggregateTypesV42,
+            source_products::SourceProductTypesV282,
             memory_types::SourceMemoryTypesV51,
             usize,
         );
