@@ -133,6 +133,21 @@ pub enum MixedOptimizerRefinementErrorV26 {
     Execution(crate::FunctionalRefinementVerusExecutionErrorV2),
     Receipt(&'static str),
     Statement(&'static str),
+    /// A local-only allocation lookup refused an exact source generation.
+    SourceDescriptor {
+        /// Source root ordinal.
+        root: usize,
+        /// Original static call-instance ordinal within the root.
+        instance: usize,
+        /// Semantic function of the retained allocation row, when present.
+        function: Option<usize>,
+        /// Original local ordinal, before flattened storage mapping.
+        local: u32,
+        /// Static query operation; never a source or workload name.
+        phase: &'static str,
+        /// Unchanged diagnostic from the refusing allocation query.
+        reason: &'static str,
+    },
     /// The unchanged bounded source writer refused an emission section.
     GeneratedSourceLimit {
         /// Innermost named emission section that reached the limit.
@@ -225,6 +240,7 @@ impl std::error::Error for Error {
             Self::Statement(_)
             | Self::Receipt(_)
             | Self::SourceStatement { .. }
+            | Self::SourceDescriptor { .. }
             | Self::GeneratedSourceLimit { .. } => None,
         }
     }

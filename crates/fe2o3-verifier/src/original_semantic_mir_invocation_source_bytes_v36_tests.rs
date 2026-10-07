@@ -196,6 +196,21 @@ fn original_mir_statement_refusal_keeps_original_coordinates_kind_type_and_reaso
         // Already contextualized errors must not be reassigned to a later site.
         let same = statement_error(error, [99; 5], &Statement::Nop, &[]);
         assert_eq!(format!("{same:?}"), text);
+        for statement in [
+            Statement::StorageLive(
+                fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1::from_index(3),
+            ),
+            Statement::StorageDead(
+                fe2o3_mir_model::semantic_mir_v1::SemanticLocalIdV1::from_index(3),
+            ),
+        ] {
+            let error = statement_error(unsupported(), site, &statement, context.types);
+            assert!(matches!(error, Error::SourceStatement {
+                root, instance, function, block: 0, statement: 0,
+                kind: "StorageLive" | "StorageDead", result_type: None,
+                reason: "original MIR typed byte statement is not modeled",
+            } if root == body.root && instance == body.instance && function == body.function));
+        }
         Ok(())
     })
     .0
@@ -232,6 +247,25 @@ fn original_mir_statement_refusal_does_not_reclassify_resource_or_owner_errors()
                 "exact original owner differs"
             )
         )
+    ));
+    let descriptor = Error::SourceDescriptor {
+        root: 2,
+        instance: 4,
+        function: Some(7),
+        local: 9,
+        phase: "source-byte-access",
+        reason: "exact generation is required",
+    };
+    assert!(matches!(
+        statement_error(descriptor, [99; 5], &Statement::Nop, &[]),
+        Error::SourceDescriptor {
+            root: 2,
+            instance: 4,
+            function: Some(7),
+            local: 9,
+            phase: "source-byte-access",
+            reason: "exact generation is required",
+        }
     ));
 }
 

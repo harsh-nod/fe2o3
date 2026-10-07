@@ -135,6 +135,7 @@ impl<'slots, 'view, 'source> SourceScalarStatements<'slots, 'view, 'source> {
                     self.root,
                     self.instance,
                     u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
+                    "source-scalar-nonmemory-local",
                     out,
                 )?
                 .is_some()

@@ -215,7 +215,7 @@ fn original_logical_enums_derive_from_promoted_original_locals_without_object_ba
                                     assert_eq!(variant, 0);
                                     assert_eq!(count, aggregate.operands().len());
                                     assert!(!slots.has_original_object(root, instance, 4, out)?);
-                                    assert!(slots.legacy_descriptor_by_source(root, instance, 4, out)?.is_none());
+                                    assert!(slots.legacy_descriptor_by_source(root, instance, 4, "enum-payload-test", out)?.is_none());
                                     counts[root][0] += 1;
                                 }
                                 Event::LogicalEnum(LogicalEvent::Discriminant { destination, input, .. }) => {
@@ -288,6 +288,7 @@ fn joined_program(
                                     root,
                                     origin.instance as usize,
                                     4,
+                                    "enum-copy-test",
                                     out
                                 )?
                                 .is_none()

@@ -68,7 +68,7 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
             };
             let logical = LogicalBinding::derive(self.slots, plan, root, &endpoint, out)?;
             let private = match self.slots.legacy_descriptor_by_source(root, instance,
-                u32::try_from(local).map_err(|_| Resource::Arithmetic)?, out)? {
+                u32::try_from(local).map_err(|_| Resource::Arithmetic)?, "expanded-scalar-binding", out)? {
                 Some((descriptor, _)) => {
                     let bits = ScalarV30::from_source(semantic.types(), source_type)?.width();
                     if bits == 0 || !matches!(logical, LogicalBinding::Plain) {

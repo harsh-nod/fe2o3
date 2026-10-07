@@ -395,7 +395,13 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                                 )?
                                 || result
                                     .slots
-                                    .legacy_descriptor_by_source(root, instance, local as u32, out)?
+                                    .legacy_descriptor_by_source(
+                                        root,
+                                        instance,
+                                        local as u32,
+                                        "paired-entry-scalar",
+                                        out,
+                                    )?
                                     .is_some()
                             {
                                 return Err(mismatch());
@@ -792,6 +798,7 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
             root,
             instance,
             u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
+            "paired-scalar-binding",
             out,
         )? {
             Some((descriptor, _)) => SourceValue::Slot {

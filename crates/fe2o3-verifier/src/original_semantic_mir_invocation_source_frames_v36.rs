@@ -177,6 +177,7 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                             root,
                             instance,
                             u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
+                            "source-frame-return-local",
                             out,
                         )?
                         .is_some()
@@ -307,7 +308,13 @@ impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
                 // Original objects have exact statement generations and were
                 // authenticated above; only legacy storage uses a local key.
                 if slots
-                    .legacy_descriptor_by_source(root, parent, local, out)?
+                    .legacy_descriptor_by_source(
+                        root,
+                        parent,
+                        local,
+                        "source-frame-caller-destination",
+                        out,
+                    )?
                     .is_some()
                 {
                     return Err(mismatch());

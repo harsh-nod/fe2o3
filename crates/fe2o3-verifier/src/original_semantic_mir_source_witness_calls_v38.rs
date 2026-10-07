@@ -222,7 +222,13 @@ fn argument(
     };
     if !place.projections().is_empty()
         || slots
-            .legacy_descriptor_by_source(root, instance, place.local().index(), out)?
+            .legacy_descriptor_by_source(
+                root,
+                instance,
+                place.local().index(),
+                "witness-call-place",
+                out,
+            )?
             .is_some()
     {
         return Err(unsupported());
