@@ -96,11 +96,19 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
             if let Some((descriptor, bits)) = private {
                 let bytes = if bits == 1 { 1 } else { bits / 8 };
                 emit!(out, "source.slots.contains_key({descriptor}) && ({{ let slot = invocation_source_slot_{descriptor}_v36(); let pointer = source.slots[{descriptor}]; (match pointer.allocation {{ MemoryAllocationV30::Private {{ owner, invocation, site, .. }} => owner == source.machine.frames.active[{frame}].owner && invocation == source.machine.frames.active[{frame}].invocation && owner == slot.owner && site == slot.site, _ => false }}) && invocation_source_read_enabled_v36(source.machine, pointer, {bytes}, slot.alignment) && ({{ let original = MemoryValueV30::Scalar(byte_load_v30(source.machine.memory, pointer, {bytes}, invocation_runtime_little_endian_v36())); invocation_source_byte_value_typed_v36(original, {bits}) && ");
-                self.emit_source_original_relation(root, actual, width, out)?;
+                self.emit_source_original_relation(root, actual, width, out)
+                    .map_err(|error| error.at_frame_binding_v284(
+                        [root, instance, owner as usize, local - row.locals.start],
+                        value, None, "scalar", "original-target-reconstruction",
+                    ))?;
                 emit!(out, " }}) }})");
             } else {
                 emit!(out, "let original = source.machine.values[{local}]; ");
-                self.emit_source_original_relation(root, actual, width, out)?;
+                self.emit_source_original_relation(root, actual, width, out)
+                    .map_err(|error| error.at_frame_binding_v284(
+                        [root, instance, owner as usize, local - row.locals.start],
+                        value, None, "scalar", "original-target-reconstruction",
+                    ))?;
                 logical.emit_current(local, out)?;
             }
             emit!(out, " }}))");

@@ -148,6 +148,21 @@ pub enum MixedOptimizerRefinementErrorV26 {
         /// Unchanged diagnostic from the refusing allocation query.
         reason: &'static str,
     },
+    /// Refusal of a necessary original-frame binding, not a proof result.
+    SourceFrameBinding {
+        /// Original root, instance, semantic function and local ordinals.
+        source: [usize; 4],
+        /// Exact original SSA identity selected by the retained frame demand.
+        value: fe2o3_mir_model::SsaValueV1,
+        /// Scalar leaf or Product atom ordinal, when dispatched componentwise.
+        component: Option<usize>,
+        /// Static modeled domain, never a workload or source name.
+        domain: &'static str,
+        /// Binding phase which first refused the original endpoint.
+        phase: &'static str,
+        /// Unchanged diagnostic from the refusing binding query.
+        reason: &'static str,
+    },
     /// The unchanged bounded source writer refused an emission section.
     GeneratedSourceLimit {
         /// Innermost named emission section that reached the limit.
@@ -179,6 +194,40 @@ pub enum MixedOptimizerRefinementErrorV26 {
 }
 type Error = MixedOptimizerRefinementErrorV26;
 type Result<T> = std::result::Result<T, Error>;
+impl Error {
+    fn frame_binding_headers_v284() -> usize {
+        // Conversion inputs/output and the map_err closure's borrowed frame.
+        3 * size_of::<Self>()
+            + size_of::<[usize; 4]>()
+            + size_of::<fe2o3_mir_model::SsaValueV1>()
+            + size_of::<Option<usize>>()
+            + 3 * size_of::<&'static str>()
+            + 8 * size_of::<&()>()
+    }
+
+    fn at_frame_binding_v284(
+        self,
+        source: [usize; 4],
+        value: fe2o3_mir_model::SsaValueV1,
+        component: Option<usize>,
+        domain: &'static str,
+        phase: &'static str,
+    ) -> Self {
+        match self {
+            Self::Statement("generated source limit") => self,
+            Self::Statement(reason) => Self::SourceFrameBinding {
+                source,
+                value,
+                component,
+                domain,
+                phase,
+                reason,
+            },
+            // Resource/custody failures and earlier coordinates keep precedence.
+            error => error,
+        }
+    }
+}
 impl From<SourceError> for Error {
     fn from(value: SourceError) -> Self {
         Self::Source(value)
@@ -239,6 +288,7 @@ impl std::error::Error for Error {
             Self::Execution(error) => Some(error),
             Self::Statement(_)
             | Self::Receipt(_)
+            | Self::SourceFrameBinding { .. }
             | Self::SourceStatement { .. }
             | Self::SourceDescriptor { .. }
             | Self::GeneratedSourceLimit { .. } => None,
