@@ -9,6 +9,15 @@ mod profiles;
 mod session;
 pub(super) use session::Session;
 
+#[path = "engineering_gfx950_peer_combined_mlp_paired_terminal_v1.rs"]
+mod terminal_pair;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum TerminalPolicy {
+    Legacy,
+    PairedFences,
+}
+
 #[path = "engineering_gfx950_peer_combined_mlp_paired_retained_v1.rs"]
 mod retained;
 pub(super) use retained::{RetainedPair, UnboundPair, rearm_pairs};
@@ -66,8 +75,29 @@ trait CoordinatorBackend {
         states: &[CombinedMlpSnapshotV1; 2],
         deadline: Instant,
     ) -> Result<[(u64, u64); 2]>;
+    fn complete_terminal_pair_until(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<([CombinedMlpSnapshotV1; 2], [(u64, u64); 2])> {
+        legacy_terminal_until(self, deadline)
+    }
     fn pause(&mut self);
     fn poison(&mut self);
+}
+
+fn legacy_terminal_until(
+    backend: &mut (impl CoordinatorBackend + ?Sized),
+    deadline: Instant,
+) -> Result<([CombinedMlpSnapshotV1; 2], [(u64, u64); 2])> {
+    backend.terminal()?;
+    deadline_check(backend.now(), deadline)?;
+    let first = backend.complete(0)?;
+    deadline_check(backend.now(), deadline)?;
+    let second = backend.complete(1)?;
+    let states = [first, second];
+    deadline_check(backend.now(), deadline)?;
+    let frontiers = backend.finish(&states, deadline)?;
+    Ok((states, frontiers))
 }
 
 fn coordinate(backend: &mut impl CoordinatorBackend, timeout_ms: u32) -> Result<Completion> {
@@ -78,6 +108,15 @@ fn coordinate_until(
     backend: &mut impl CoordinatorBackend,
     timeout_ms: u32,
     outer_deadline: Option<Instant>,
+) -> Result<Completion> {
+    coordinate_with_terminal_policy(backend, timeout_ms, outer_deadline, TerminalPolicy::Legacy)
+}
+
+fn coordinate_with_terminal_policy(
+    backend: &mut impl CoordinatorBackend,
+    timeout_ms: u32,
+    outer_deadline: Option<Instant>,
+    terminal_policy: TerminalPolicy,
 ) -> Result<Completion> {
     let started = backend.now();
     let result = (|| {
@@ -124,14 +163,10 @@ fn coordinate_until(
             backend.retire(rank, deadline)?;
         }
         deadline_check(backend.now(), deadline)?;
-        backend.terminal()?;
-        deadline_check(backend.now(), deadline)?;
-        let first = backend.complete(0)?;
-        deadline_check(backend.now(), deadline)?;
-        let second = backend.complete(1)?;
-        let states = [first, second];
-        deadline_check(backend.now(), deadline)?;
-        let observed_queue_frontiers = backend.finish(&states, deadline)?;
+        let (states, observed_queue_frontiers) = match terminal_policy {
+            TerminalPolicy::Legacy => legacy_terminal_until(backend, deadline)?,
+            TerminalPolicy::PairedFences => backend.complete_terminal_pair_until(deadline)?,
+        };
         let finished = backend.now();
         deadline_check(finished, deadline)?;
         Ok(Completion {
@@ -314,6 +349,13 @@ impl CoordinatorBackend for Native<'_, '_> {
 
     fn pause(&mut self) {
         std::thread::sleep(Duration::from_micros(50));
+    }
+
+    fn complete_terminal_pair_until(
+        &mut self,
+        deadline: Instant,
+    ) -> Result<([CombinedMlpSnapshotV1; 2], [(u64, u64); 2])> {
+        terminal_pair::complete(self, deadline)
     }
 
     fn poison(&mut self) {

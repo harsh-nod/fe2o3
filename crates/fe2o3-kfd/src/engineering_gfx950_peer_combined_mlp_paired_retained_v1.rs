@@ -453,8 +453,32 @@ impl RetainedPair {
         inputs: Inputs<'_>,
         timeout_ms: u32,
     ) -> Result<Completion> {
+        self.run_with_terminal_policy(group, inputs, timeout_ms, TerminalPolicy::Legacy)
+    }
+
+    pub(in super::super) fn run_paired_terminal(
+        &mut self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        inputs: Inputs<'_>,
+        timeout_ms: u32,
+    ) -> Result<Completion> {
+        self.run_with_terminal_policy(group, inputs, timeout_ms, TerminalPolicy::PairedFences)
+    }
+
+    fn run_with_terminal_policy(
+        &mut self,
+        group: &mut Gfx950EngineeringPeerGroupV1,
+        inputs: Inputs<'_>,
+        timeout_ms: u32,
+        terminal_policy: TerminalPolicy,
+    ) -> Result<Completion> {
         let mut op = Operation::new(group, std::slice::from_mut(self));
         let until = deadline(Instant::now(), timeout_ms)?;
+        if terminal_policy == TerminalPolicy::PairedFences
+            && op.pairs[0].arena_policy != ArenaPolicy::ReuseRetired
+        {
+            return Err("paired terminal fences require a reusable retained pair".into());
+        }
         // Reject missing/extra private reuse custody before touching a context
         // or allowing any fresh allocation. Operation already owns quarantine.
         op.pairs[0].arena_policy.require_run(
@@ -481,7 +505,8 @@ impl RetainedPair {
             validated_terminal: None,
         };
         // Keep the unchanged coordinator's strict in-flight reservation checks.
-        let result = coordinate_until(&mut native, timeout_ms, Some(until))?;
+        let result =
+            coordinate_with_terminal_policy(&mut native, timeout_ms, Some(until), terminal_policy)?;
         deadline_check(Instant::now(), until)?;
         let proof = native
             .staged

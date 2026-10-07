@@ -237,6 +237,31 @@ impl Gfx950EngineeringPeerGroupV1 {
             .map(Into::into)
     }
 
+    /// Explicitly use paired terminal fences for one reusable-pair dispatch.
+    /// Only pairs bound by the reusable exact-own-residual constructor qualify;
+    /// Fresh-policy pairs are refused and quarantined. Their first dispatch
+    /// still allocates its arenas normally; the arena policy is not changed.
+    ///
+    /// This changes currentness cadence inside the exclusive terminal-owner
+    /// transition: two fresh full Group fences replace eight. All intermediate
+    /// queue/fault probes, three atomic state observations per rank, actual
+    /// completion signals, and deadline checks remain. Both owners stay
+    /// Submitted until the trailing full fence and deadline succeed. Refusal or
+    /// unwind quarantines both owners and the Group; no result is published.
+    ///
+    /// This is engineering-only, not cached or operational currentness. It does
+    /// not change global policy, rearm/seal checks, or the ordinary dispatch
+    /// method's cadence. No timing or throughput gain is implied.
+    pub fn dispatch_guarded_mlp_pair_paired_terminal_v1(
+        &mut self,
+        pair: &mut Gfx950EngineeringPeerRetainedGuardedMlpPairV1,
+        inputs: Gfx950EngineeringPeerGuardedMlpInputsV1<'_>,
+        timeout_ms: u32,
+    ) -> Result<Gfx950EngineeringPeerGuardedMlpObservationV1> {
+        pair.run_paired_terminal(self, inputs.private_inputs(), timeout_ms)
+            .map(Into::into)
+    }
+
     /// Validate the whole initial mixed bank without resetting any owner.
     pub fn validate_guarded_mlp_initial_bank_v1(
         &mut self,

@@ -247,6 +247,71 @@ fn pair(
 }
 
 #[test]
+fn retained_paired_terminal_opt_in_refuses_fresh_before_context_access() {
+    let kernels = kernels();
+    let mut group = group();
+    let mut pair = pair(&group, &kernels);
+    let roles = inputs(&kernels);
+    let public = Gfx950EngineeringPeerGuardedMlpInputsV1 {
+        ranks: roles
+            .ranks
+            .each_ref()
+            .map(|r| Gfx950EngineeringPeerGuardedMlpRankInputsV1 {
+                kernels: r.kernels,
+                mlp_roots: r.mlp_roots,
+                residual_input: r.residual_input,
+                output: r.output,
+            }),
+        partials: roles.partials,
+        projection_sha256: roles.projection_sha256,
+        mlp_sha256: roles.mlp_sha256,
+    };
+    let error = group
+        .dispatch_guarded_mlp_pair_paired_terminal_v1(&mut pair, public, 10)
+        .err()
+        .expect("Fresh-policy opt-in must refuse");
+    assert_eq!(
+        error,
+        "paired terminal fences require a reusable retained pair"
+    );
+    assert_eq!(pair.phase, Phase::Poisoned);
+    assert!(
+        pair.owners
+            .iter()
+            .all(|owner| owner.activation == Activation::Poisoned)
+    );
+    assert!(group.poisoned && group.buffers.is_empty());
+    assert_eq!(group.next_buffer, 5);
+    assert!(!group.shared_full_currentness);
+}
+
+#[test]
+fn retained_paired_terminal_opt_in_preserves_missing_reuse_proof_refusal() {
+    let kernels = kernels();
+    let mut group = group();
+    let mut pair = pair(&group, &kernels);
+    pair.arena_policy = ArenaPolicy::ReuseRetired;
+    for owner in &mut pair.owners {
+        owner.generation = 2;
+    }
+    let error = pair
+        .run_paired_terminal(&mut group, inputs(&kernels), 10)
+        .unwrap_err();
+    assert_eq!(
+        error,
+        "retained paired arena policy or generation custody changed"
+    );
+    assert_eq!(pair.phase, Phase::Poisoned);
+    assert!(
+        pair.owners
+            .iter()
+            .all(|owner| owner.activation == Activation::Poisoned)
+    );
+    assert!(group.poisoned && group.buffers.is_empty());
+    assert_eq!(group.next_buffer, 5);
+}
+
+#[test]
 fn retained_arena_policy_preserves_fresh_default_and_requires_rearm_custody() {
     let group = group();
     let kernels = kernels();
