@@ -1,0 +1,838 @@
+// Actual transition footprints for the expanded paired caller. A footprint is
+// not permission to preserve a live reference whose origin is overwritten.
+proof fn invocation_source_logical_write_aggregates_v268(
+    logical: InvocationSourceLogicalV38, local: int,
+)
+    ensures invocation_source_logical_write_v38(logical, local).aggregates
+        == logical.aggregates.remove(local),
+{
+    reveal(invocation_source_logical_write_v38);
+}
+
+proof fn invocation_checked_add_values_typed_v268(left: int, right: int)
+    requires 0 <= left < 4294967296, 0 <= right < 4294967296,
+    ensures invocation_source_byte_value_typed_v36(
+        MemoryValueV30::Scalar((left + right) % 4294967296), 32)
+        && invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(
+            if left + right >= 4294967296 { 1int } else { 0int }), 1),
+{
+    reveal(invocation_source_byte_value_typed_v36);
+    reveal(memory_value_modulus_v30);
+}
+
+proof fn invocation_source_plain_aggregate_install_frame_v260(
+    source: InvocationSourceByteStateV36, destination: int, aggregate: InvocationSourceAggregateV42,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),
+        invocation_source_aggregate_well_formed_v42(aggregate), aggregate.execution_lease.is_none(),
+    ensures invocation_source_aggregate_install_v42(source, destination, aggregate)
+        == (InvocationSourceByteStateV36 {
+            machine: MemoryStateV30 { values: source.machine.values.update(
+                destination, MemoryValueV30::Undefined), ..source.machine },
+            logical: InvocationSourceLogicalV38 {
+                aggregates: source.logical.aggregates.insert(destination, aggregate),
+                ..invocation_source_logical_write_v38(source.logical, destination) }, ..source }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_install_v42);
+    hide(invocation_source_byte_put_local_v36);
+    hide(invocation_source_logical_write_v38);
+    hide(invocation_source_execution_lease_current_v170);
+    hide(invocation_source_byte_refused_v36);
+    assert(invocation_source_byte_put_local_v36(source, destination, MemoryValueV30::Undefined)
+        == (InvocationSourceByteStateV36 {
+            machine: MemoryStateV30 { values: source.machine.values.update(
+                destination, MemoryValueV30::Undefined), ..source.machine },
+            logical: invocation_source_logical_write_v38(source.logical, destination), ..source })) by {
+        reveal(invocation_source_byte_put_local_v36);
+    }
+    invocation_source_logical_write_aggregates_v268(source.logical, destination);
+    assert(source.logical.aggregates.remove(destination).insert(destination, aggregate)
+        =~= source.logical.aggregates.insert(destination, aggregate));
+    reveal(invocation_source_aggregate_install_v42);
+}
+
+proof fn invocation_context_marker_aggregate_well_formed_v260(source_type: int)
+    requires invocation_source_context_shape_v161(source_type),
+    ensures invocation_source_aggregate_well_formed_v42(InvocationSourceAggregateV42 {
+        source_type, execution_lease: None, leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Unit)
+            .insert(seq![1int], MemoryValueV30::Unit)
+            .insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+            .insert(seq![4int], MemoryValueV30::Unit) }),
+{
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_byte_value_typed_v36);
+    assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Unit, 0)) by {
+        reveal(invocation_source_byte_value_typed_v36);
+    }
+    let leaves = Map::empty()
+        .insert(seq![0int], MemoryValueV30::Unit)
+        .insert(seq![1int], MemoryValueV30::Unit)
+        .insert(seq![2int], MemoryValueV30::Unit)
+        .insert(seq![3int], MemoryValueV30::Unit)
+        .insert(seq![4int], MemoryValueV30::Unit);
+    assert forall|path: Seq<int>| leaves.contains_key(path) implies
+        exists|ordinal: int| 0 <= ordinal < 5
+            && path == invocation_source_aggregate_leaf_path_v42(source_type, ordinal)
+            && invocation_source_byte_value_typed_v36(leaves[path],
+                invocation_source_aggregate_leaf_bits_v42(source_type, ordinal)) by {
+        let ordinal = if path == seq![0int] { 0int }
+            else if path == seq![1int] { 1int }
+            else if path == seq![2int] { 2int }
+            else if path == seq![3int] { 3int } else { 4int };
+        assert(0 <= ordinal < 5 && path == seq![ordinal]);
+        assert(invocation_source_aggregate_leaf_path_v42(source_type, ordinal) == path);
+        assert(invocation_source_aggregate_leaf_bits_v42(source_type, ordinal) == 0);
+        assert(leaves[path] == MemoryValueV30::Unit);
+    }
+    reveal(invocation_source_aggregate_well_formed_v42);
+}
+
+proof fn invocation_checked_add_aggregate_complete_v260(source_type: int, left: int, right: int)
+    requires invocation_source_aggregate_leaf_count_v42(source_type) == 2,
+        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],
+        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],
+        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,
+        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,
+        0 <= left < 4294967296, 0 <= right < 4294967296,
+    ensures ({ let aggregate = InvocationSourceAggregateV42 {
+        source_type, execution_lease: None, leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+            .insert(seq![1int], MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int })) };
+        invocation_source_aggregate_well_formed_v42(aggregate)
+            && invocation_source_aggregate_complete_v42(aggregate) }),
+{
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_complete_v42);
+    hide(invocation_source_byte_value_typed_v36);
+    hide(memory_value_modulus_v30);
+    invocation_checked_add_values_typed_v268(left, right);
+    assert((seq![0int])[0] == 0 && (seq![1int])[0] == 1);
+    assert(seq![0int] != seq![1int]);
+    let leaves = Map::empty()
+        .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+        .insert(seq![1int], MemoryValueV30::Scalar(
+            if left + right >= 4294967296 { 1int } else { 0int }));
+    assert forall|path: Seq<int>| leaves.contains_key(path) implies
+        exists|ordinal: int| 0 <= ordinal < 2
+            && path == invocation_source_aggregate_leaf_path_v42(source_type, ordinal)
+            && invocation_source_byte_value_typed_v36(leaves[path],
+                invocation_source_aggregate_leaf_bits_v42(source_type, ordinal)) by {
+        if path == seq![0int] {
+            assert(invocation_source_aggregate_leaf_path_v42(source_type, 0) == path);
+            assert(leaves[path] == MemoryValueV30::Scalar((left + right) % 4294967296));
+        } else {
+            assert(path == seq![1int]);
+            assert(invocation_source_aggregate_leaf_path_v42(source_type, 1) == path);
+            assert(leaves[path] == MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int }));
+        }
+    }
+    assert forall|ordinal: int| 0 <= ordinal < 2 implies
+        leaves.contains_key(invocation_source_aggregate_leaf_path_v42(source_type, ordinal)) by {
+        if ordinal != 0 { assert(ordinal == 1); }
+    }
+    reveal(invocation_source_aggregate_well_formed_v42);
+    reveal(invocation_source_aggregate_complete_v42);
+}
+
+proof fn invocation_source_context_issue_frame_v262(
+    source: InvocationSourceByteStateV36, issue: InvocationSourceContextIssueV161,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= issue.destination < source.machine.values.len(),
+        !source.objects.contains_key(issue.destination),
+        invocation_source_context_shape_v161(issue.source_type),
+        source.machine.frames.execution.is_some(),
+        byte_execution_well_formed_v37(source.machine.frames.execution.unwrap()),
+    ensures ({ let aggregate = InvocationSourceAggregateV42 {
+        source_type: issue.source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Unit)
+            .insert(seq![1int], MemoryValueV30::Unit)
+            .insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+            .insert(seq![4int], MemoryValueV30::Unit) };
+        let after = invocation_source_context_issue_v161(source, issue);
+        after.observations == Seq::empty()
+            && after.source == (InvocationSourceByteStateV36 {
+                machine: MemoryStateV30 {
+                    values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+                    ..source.machine },
+                logical: InvocationSourceLogicalV38 {
+                    aggregates: source.logical.aggregates.insert(issue.destination, aggregate),
+                    ..invocation_source_logical_write_v38(source.logical, issue.destination) }, ..source }) }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_context_shape_v161);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_aggregate_install_v42);
+    hide(invocation_source_context_issue_v161);
+    hide(invocation_source_tile_installed_v161);
+    hide(invocation_source_observe_effects_v39);
+    hide(invocation_source_logical_write_v38);
+    hide(byte_execution_well_formed_v37);
+    let aggregate = InvocationSourceAggregateV42 {
+        source_type: issue.source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Unit)
+            .insert(seq![1int], MemoryValueV30::Unit)
+            .insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+            .insert(seq![4int], MemoryValueV30::Unit) };
+    assert(invocation_source_aggregate_well_formed_v42(aggregate)) by {
+        invocation_context_marker_aggregate_well_formed_v260(issue.source_type);
+    }
+    assert(aggregate.execution_lease.is_none());
+    let installed = invocation_source_aggregate_install_v42(source, issue.destination, aggregate);
+    assert(installed == (InvocationSourceByteStateV36 {
+        machine: MemoryStateV30 {
+            values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+            ..source.machine },
+        logical: InvocationSourceLogicalV38 {
+            aggregates: source.logical.aggregates.insert(issue.destination, aggregate),
+            ..invocation_source_logical_write_v38(source.logical, issue.destination) }, ..source })) by {
+        invocation_source_plain_aggregate_install_frame_v260(source, issue.destination, aggregate);
+    }
+    assert(installed.machine.valid);
+    assert(invocation_source_context_issue_v161(source, issue)
+        == invocation_source_tile_installed_v161(source, installed, Seq::empty())) by {
+        invocation_source_context_issue_replays_install_v263(source, issue);
+    }
+    assert(invocation_source_tile_installed_v161(source, installed, Seq::empty())
+        == (InvocationSourceTileResultV161 {
+            source: installed,
+            observations: Seq::empty() })) by {
+        invocation_source_tile_installed_valid_v265(source, installed, Seq::empty());
+    }
+}
+
+proof fn invocation_target_context_issue_frame_v262(
+    target: MemoryStateV30, site: MemorySourceOperationV30, destination: int,
+)
+    requires target.valid && byte_state_memory_well_formed_v30(target),
+        target.frames.active.len() > 0, target.frames.execution.is_some(),
+        byte_execution_well_formed_v37(target.frames.execution.unwrap()),
+        0 <= destination < target.values.len(),
+        byte_execution_next_epoch_v178(target, destination, 0, site) == Some(0),
+    ensures ({ let after = byte_execution_step_v178(target, site, 0, destination, -1);
+        after == (MemoryStateV30 {
+            values: target.values.update(destination, after.values[destination]), ..target }) }),
+{
+    hide(byte_state_memory_well_formed_v30);
+    hide(byte_execution_well_formed_v37);
+    hide(byte_execution_next_epoch_v178);
+    hide(byte_execution_step_v178);
+    let value = MemoryValueV30::Execution(MemoryExecutionCapabilityV178 {
+        identity: MemoryExecutionReferenceV178 {
+            definition: destination, epoch: 0, frame: target.frames.active.last() },
+        site, role: 0, parent: None, child: None, active: true });
+    assert(byte_execution_step_v178(target, site, 0, destination, -1)
+        == (MemoryStateV30 { values: target.values.update(destination, value), ..target })) by {
+        reveal(byte_execution_step_v178);
+    }
+    assert(byte_execution_step_v178(target, site, 0, destination, -1).values[destination] == value);
+}
+
+proof fn invocation_source_checked_add_install_frame_v262(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int,
+    left: int, right: int,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),
+        invocation_source_aggregate_leaf_count_v42(source_type) == 2,
+        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],
+        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],
+        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,
+        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,
+        0 <= left < 4294967296, 0 <= right < 4294967296,
+    ensures ({ let aggregate = InvocationSourceAggregateV42 {
+        source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+            .insert(seq![1int], MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int })) };
+        invocation_source_aggregate_complete_v42(aggregate)
+            && invocation_source_aggregate_install_v42(source, destination, aggregate)
+                == (InvocationSourceByteStateV36 {
+                    machine: MemoryStateV30 {
+                        values: source.machine.values.update(destination, MemoryValueV30::Undefined),
+                        ..source.machine },
+                    logical: InvocationSourceLogicalV38 {
+                        aggregates: source.logical.aggregates.insert(destination, aggregate),
+                        ..invocation_source_logical_write_v38(source.logical, destination) }, ..source }) }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_complete_v42);
+    hide(invocation_source_aggregate_install_v42);
+    hide(invocation_source_logical_write_v38);
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    let aggregate = InvocationSourceAggregateV42 {
+        source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+            .insert(seq![1int], MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int })) };
+    assert(invocation_source_aggregate_well_formed_v42(aggregate)
+        && invocation_source_aggregate_complete_v42(aggregate)) by {
+        invocation_checked_add_aggregate_complete_v260(source_type, left, right);
+    }
+    assert(aggregate.execution_lease.is_none());
+    invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);
+}
+
+proof fn invocation_source_context_issue_replays_install_v263(
+    source: InvocationSourceByteStateV36, issue: InvocationSourceContextIssueV161,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= issue.destination < source.machine.values.len(),
+        !source.objects.contains_key(issue.destination),
+        invocation_source_context_shape_v161(issue.source_type),
+        source.machine.frames.execution.is_some(),
+        byte_execution_well_formed_v37(source.machine.frames.execution.unwrap()),
+    ensures ({ let aggregate = InvocationSourceAggregateV42 {
+        source_type: issue.source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Unit)
+            .insert(seq![1int], MemoryValueV30::Unit)
+            .insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+            .insert(seq![4int], MemoryValueV30::Unit) };
+        invocation_source_context_issue_v161(source, issue)
+            == invocation_source_tile_installed_v161(source,
+                invocation_source_aggregate_install_v42(source, issue.destination, aggregate),
+                Seq::empty()) }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_context_shape_v161);
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_aggregate_install_v42);
+    hide(invocation_source_tile_installed_v161);
+    hide(invocation_source_tile_refused_v161);
+    hide(byte_execution_well_formed_v37);
+    reveal(invocation_source_context_issue_v161);
+}
+
+proof fn invocation_source_context_issue_frame_projection_v267(
+    source: InvocationSourceByteStateV36, issue: InvocationSourceContextIssueV161,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= issue.destination < source.machine.values.len(),
+        !source.objects.contains_key(issue.destination),
+        invocation_source_context_shape_v161(issue.source_type),
+        source.machine.frames.execution.is_some(),
+        byte_execution_well_formed_v37(source.machine.frames.execution.unwrap()),
+    ensures ({ let source_step = invocation_source_context_issue_v161(source, issue);
+        let after = source_step.source;
+        source_step.observations == Seq::empty()
+            && after.machine == (MemoryStateV30 {
+                values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+                ..source.machine })
+            && after.slots == source.slots && after.objects == source.objects
+            && after.logical == (InvocationSourceLogicalV38 {
+                aggregates: source.logical.aggregates.insert(
+                    issue.destination, after.logical.aggregates[issue.destination]),
+                ..invocation_source_logical_write_v38(source.logical, issue.destination) }) }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_context_shape_v161);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_aggregate_install_v42);
+    hide(invocation_source_context_issue_v161);
+    hide(invocation_source_logical_write_v38);
+    hide(byte_execution_well_formed_v37);
+    let aggregate = InvocationSourceAggregateV42 {
+        source_type: issue.source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Unit)
+            .insert(seq![1int], MemoryValueV30::Unit)
+            .insert(seq![2int], MemoryValueV30::Unit)
+            .insert(seq![3int], MemoryValueV30::Unit)
+            .insert(seq![4int], MemoryValueV30::Unit) };
+    let source_step = invocation_source_context_issue_v161(source, issue);
+    assert(source_step.observations == Seq::empty()
+        && source_step.source == (InvocationSourceByteStateV36 {
+            machine: MemoryStateV30 {
+                values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+                ..source.machine },
+            logical: InvocationSourceLogicalV38 {
+                aggregates: source.logical.aggregates.insert(issue.destination, aggregate),
+                ..invocation_source_logical_write_v38(source.logical, issue.destination) }, ..source })) by {
+        invocation_source_context_issue_frame_v262(source, issue);
+    }
+    let after = source_step.source;
+    assert(after.machine == (MemoryStateV30 {
+        values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+        ..source.machine }));
+    assert(after.slots == source.slots && after.objects == source.objects);
+    assert(after.logical.aggregates == source.logical.aggregates.insert(issue.destination, aggregate));
+    assert(after.logical.aggregates.contains_key(issue.destination));
+    assert(after.logical.aggregates[issue.destination] == aggregate);
+    assert(after.logical.aggregates =~= source.logical.aggregates.insert(
+        issue.destination, after.logical.aggregates[issue.destination]));
+    assert(after.logical == (InvocationSourceLogicalV38 {
+        aggregates: source.logical.aggregates.insert(
+            issue.destination, after.logical.aggregates[issue.destination]),
+        ..invocation_source_logical_write_v38(source.logical, issue.destination) }));
+}
+
+proof fn invocation_context_issue_fresh_preserves_frame_v259(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    issue: InvocationSourceContextIssueV161, site: MemorySourceOperationV30,
+    destination: int,
+)
+    requires invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),
+        invocation_execution_map_current_v205(source, target, execution_map),
+    ensures ({ let next = invocation_context_issue_coupled_v211(
+        source, target, execution_map, issue, site, destination);
+        let after = next.source.source;
+        next.updated && invocation_execution_map_current_v205(after, next.target, next.execution_map)
+            && next.source.observations == Seq::empty()
+            && after.machine == (MemoryStateV30 {
+                values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+                ..source.machine })
+            && after.slots == source.slots && after.objects == source.objects
+            && after.logical == (InvocationSourceLogicalV38 {
+                aggregates: source.logical.aggregates.insert(
+                    issue.destination, after.logical.aggregates[issue.destination]),
+                ..invocation_source_logical_write_v38(source.logical, issue.destination) })
+            && next.target == (MemoryStateV30 {
+                values: target.values.update(destination, next.target.values[destination]),
+                ..target }) }),
+{
+    hide(invocation_execution_map_current_v205);
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(byte_state_memory_well_formed_v30);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_aggregate_install_v42);
+    hide(invocation_source_context_issue_v161);
+    hide(invocation_context_issue_coupled_v211);
+    hide(invocation_source_logical_write_v38);
+    hide(invocation_source_context_shape_v161);
+    hide(invocation_context_issue_fresh_enabled_v211);
+    hide(byte_execution_well_formed_v37);
+    hide(byte_execution_next_epoch_v178);
+    hide(byte_execution_step_v178);
+    assert(source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
+        && 0 <= issue.destination < source.machine.values.len()
+        && !source.objects.contains_key(issue.destination)
+        && invocation_source_context_shape_v161(issue.source_type)
+        && source.machine.frames.execution.is_some()
+        && byte_execution_well_formed_v37(source.machine.frames.execution.unwrap())
+        && target.valid && byte_state_memory_well_formed_v30(target)
+        && target.frames.active.len() > 0 && target.frames.execution.is_some()
+        && byte_execution_well_formed_v37(target.frames.execution.unwrap())
+        && 0 <= destination < target.values.len()
+        && byte_execution_next_epoch_v178(target, destination, 0, site) == Some(0)) by {
+        reveal(invocation_context_issue_fresh_enabled_v211);
+    }
+    let source_step = invocation_source_context_issue_v161(source, issue);
+    assert(source_step.observations == Seq::empty()
+        && source_step.source.machine == (MemoryStateV30 {
+            values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+            ..source.machine })
+        && source_step.source.slots == source.slots && source_step.source.objects == source.objects
+        && source_step.source.logical == (InvocationSourceLogicalV38 {
+            aggregates: source.logical.aggregates.insert(
+                issue.destination, source_step.source.logical.aggregates[issue.destination]),
+            ..invocation_source_logical_write_v38(source.logical, issue.destination) })) by {
+        invocation_source_context_issue_frame_projection_v267(source, issue);
+    }
+    let target_step = byte_execution_step_v178(target, site, 0, destination, -1);
+    assert(target_step == (MemoryStateV30 {
+        values: target.values.update(destination, target_step.values[destination]), ..target })) by {
+        invocation_target_context_issue_frame_v262(target, site, destination);
+    }
+    let next = invocation_context_issue_coupled_v211(
+        source, target, execution_map, issue, site, destination);
+    assert(next.updated && invocation_execution_map_current_v205(
+        next.source.source, next.target, next.execution_map)
+        && next.source == source_step && next.target == target_step) by {
+        invocation_context_issue_fresh_preserves_current_map_v238(
+            source, target, execution_map, issue, site, destination);
+        invocation_context_issue_coupling_replays_both_actual_steps_v211(
+            source, target, execution_map, issue, site, destination);
+    }
+    assert(next.source == invocation_source_context_issue_v161(source, issue));
+    let after = next.source.source;
+    assert(after.machine == (MemoryStateV30 {
+        values: source.machine.values.update(issue.destination, MemoryValueV30::Undefined),
+        ..source.machine }));
+    assert(after.slots == source.slots && after.objects == source.objects);
+    assert(after.logical == (InvocationSourceLogicalV38 {
+        aggregates: source.logical.aggregates.insert(
+            issue.destination, after.logical.aggregates[issue.destination]),
+        ..invocation_source_logical_write_v38(source.logical, issue.destination) }));
+    assert(next.target == (MemoryStateV30 {
+        values: target.values.update(destination, next.target.values[destination]),
+        ..target }));
+}
+
+// This is an actual operation preservation rule, not an assumed equality of
+// successor snapshots. Callers must derive that a retained dependency is not
+// the authentic ContextIssue destination.
+proof fn invocation_context_issue_preserves_snapshot_v259(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    issue: InvocationSourceContextIssueV161, site: MemorySourceOperationV30,
+    destination: int, dependency: int,
+)
+    requires invocation_context_issue_fresh_enabled_v211(source, target, issue, site, destination),
+        invocation_execution_map_current_v205(source, target, execution_map),
+        0 <= dependency < target.values.len(), dependency != destination,
+    ensures invocation_context_issue_coupled_v211(
+        source, target, execution_map, issue, site, destination).target.values[dependency]
+        == target.values[dependency],
+{
+    invocation_context_issue_fresh_preserves_frame_v259(
+        source, target, execution_map, issue, site, destination);
+}
+
+// The two expressions are exactly the U32 value and Bool overflow recipes
+// emitted by scalar_reconstruction_v254. Signed arithmetic is not admitted.
+proof fn invocation_reconstructed_checked_add_u32_v259(left: int, right: int)
+    requires 0 <= left < 4294967296, 0 <= right < 4294967296,
+    ensures invocation_source_checked_pair_v44(
+        MemoryValueV30::Scalar(left), MemoryValueV30::Scalar(right), 0, 32, false)
+        == Some((MemoryValueV30::Scalar((left + right) % 4294967296),
+            MemoryValueV30::Scalar(if left + right >= 4294967296 { 1int } else { 0int }))),
+{
+    assert(0 <= (left + right) % 4294967296 < 4294967296);
+}
+
+// Dispatch transports the actual pair result without assuming installation succeeds.
+proof fn invocation_source_checked_pair_replays_install_v269(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int,
+    operation: int, bits: int, signed: bool,
+    left_operand: InvocationSourceByteValueV36, right_operand: InvocationSourceByteValueV36,
+    left: int, right: int, value: MemoryValueV30, overflow: MemoryValueV30,
+    root: int, instance: int, little_endian: bool,
+)
+    requires source.machine.valid,
+        bits == 8 || bits == 16 || bits == 32 || bits == 64, 0 <= operation < 3,
+        invocation_source_aggregate_leaf_count_v42(source_type) == 2,
+        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],
+        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],
+        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == bits,
+        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,
+        !matches!(left_operand, InvocationSourceByteValueV36::Read { .. }),
+        !matches!(right_operand, InvocationSourceByteValueV36::Read { .. }),
+        invocation_source_byte_evaluate_v36(source, left_operand, bits, root, instance, little_endian)
+            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(left) }),
+        invocation_source_byte_evaluate_v36(source, right_operand, bits, root, instance, little_endian)
+            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(right) }),
+        invocation_source_checked_pair_v44(MemoryValueV30::Scalar(left),
+            MemoryValueV30::Scalar(right), operation, bits, signed) == Some((value, overflow)),
+    ensures invocation_source_checked_v42(source, destination, source_type,
+        operation, bits, signed, left_operand, right_operand, root, instance, little_endian)
+        == invocation_source_aggregate_install_v42(source, destination,
+            InvocationSourceAggregateV42 { source_type, execution_lease: None,
+                leaves: Map::empty().insert(seq![0int], value).insert(seq![1int], overflow) }),
+{
+    let lhs = invocation_source_byte_evaluate_v36(
+        source, left_operand, bits, root, instance, little_endian);
+    assert(lhs.source == source);
+    assert(lhs.value == MemoryValueV30::Scalar(left));
+    assert(lhs.source.machine.valid);
+    let rhs = invocation_source_byte_evaluate_v36(
+        lhs.source, right_operand, bits, root, instance, little_endian);
+    assert(rhs.source == source);
+    assert(rhs.value == MemoryValueV30::Scalar(right));
+    assert(rhs.source.machine.valid);
+    assert(invocation_source_checked_pair_v44(lhs.value, rhs.value, operation, bits, signed)
+        == Some((value, overflow)));
+    reveal(invocation_source_checked_v42);
+}
+
+// Replay is independent of installation validity and its whole-state footprint.
+proof fn invocation_source_checked_add_replays_install_v260(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int,
+    left_operand: InvocationSourceByteValueV36, right_operand: InvocationSourceByteValueV36,
+    left: int, right: int, root: int, instance: int, little_endian: bool,
+)
+    requires source.machine.valid,
+        invocation_source_aggregate_leaf_count_v42(source_type) == 2,
+        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],
+        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],
+        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,
+        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,
+        !matches!(left_operand, InvocationSourceByteValueV36::Read { .. }),
+        !matches!(right_operand, InvocationSourceByteValueV36::Read { .. }),
+        invocation_source_byte_evaluate_v36(source, left_operand, 32, root, instance, little_endian)
+            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(left) }),
+        invocation_source_byte_evaluate_v36(source, right_operand, 32, root, instance, little_endian)
+            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(right) }),
+        0 <= left < 4294967296, 0 <= right < 4294967296,
+    ensures invocation_source_checked_v42(source, destination, source_type,
+        0, 32, false, left_operand, right_operand, root, instance, little_endian)
+        == invocation_source_aggregate_install_v42(source, destination,
+            InvocationSourceAggregateV42 { source_type, execution_lease: None,
+                leaves: Map::empty()
+                    .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+                    .insert(seq![1int], MemoryValueV30::Scalar(
+                        if left + right >= 4294967296 { 1int } else { 0int })) }),
+{
+    let actual_pair = invocation_source_checked_pair_v44(
+        MemoryValueV30::Scalar(left), MemoryValueV30::Scalar(right), 0, 32, false);
+    match actual_pair {
+        Some(pair) => {
+            invocation_source_checked_pair_replays_install_v269(source, destination, source_type,
+                0, 32, false, left_operand, right_operand, left, right,
+                pair.0, pair.1, root, instance, little_endian);
+        },
+        None => {},
+    }
+    // This also excludes None; arithmetic is introduced after abstract dispatch.
+    invocation_reconstructed_checked_add_u32_v259(left, right);
+}
+
+// Pure operand evaluation is an input obligation. Read operands, Move effects,
+// and object-backed destinations require their separate operational laws.
+proof fn invocation_source_checked_add_reconstruction_step_v259(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int,
+    left_operand: InvocationSourceByteValueV36, right_operand: InvocationSourceByteValueV36,
+    left: int, right: int, root: int, instance: int, little_endian: bool,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),
+        invocation_source_aggregate_leaf_count_v42(source_type) == 2,
+        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],
+        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],
+        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,
+        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,
+        !matches!(left_operand, InvocationSourceByteValueV36::Read { .. }),
+        !matches!(right_operand, InvocationSourceByteValueV36::Read { .. }),
+        invocation_source_byte_evaluate_v36(source, left_operand, 32, root, instance, little_endian)
+            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(left) }),
+        invocation_source_byte_evaluate_v36(source, right_operand, 32, root, instance, little_endian)
+            == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(right) }),
+        0 <= left < 4294967296, 0 <= right < 4294967296,
+    ensures ({ let after = invocation_source_checked_v42(source, destination, source_type,
+        0, 32, false, left_operand, right_operand, root, instance, little_endian);
+        let aggregate = InvocationSourceAggregateV42 { source_type, execution_lease: None,
+            leaves: Map::empty()
+                .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+                .insert(seq![1int], MemoryValueV30::Scalar(
+                    if left + right >= 4294967296 { 1int } else { 0int })) };
+        after.machine == (MemoryStateV30 {
+            values: source.machine.values.update(destination, MemoryValueV30::Undefined),
+            ..source.machine })
+            && after.slots == source.slots && after.objects == source.objects
+            && after.logical == (InvocationSourceLogicalV38 {
+                aggregates: source.logical.aggregates.insert(destination, aggregate),
+                ..invocation_source_logical_write_v38(source.logical, destination) })
+            && invocation_source_aggregate_complete_v42(aggregate) }),
+{
+    hide(invocation_source_byte_evaluate_v36);
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_complete_v42);
+    hide(invocation_source_aggregate_install_v42);
+    hide(invocation_source_byte_put_local_v36);
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_checked_pair_v44);
+    hide(invocation_source_checked_v42);
+    hide(invocation_source_logical_write_v38);
+    let aggregate = InvocationSourceAggregateV42 {
+        source_type, execution_lease: None,
+        leaves: Map::empty()
+            .insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+            .insert(seq![1int], MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int })) };
+    let installed = invocation_source_aggregate_install_v42(source, destination, aggregate);
+    assert(invocation_source_aggregate_complete_v42(aggregate)
+        && installed == (InvocationSourceByteStateV36 {
+            machine: MemoryStateV30 {
+                values: source.machine.values.update(destination, MemoryValueV30::Undefined),
+                ..source.machine },
+            logical: InvocationSourceLogicalV38 {
+                aggregates: source.logical.aggregates.insert(destination, aggregate),
+                ..invocation_source_logical_write_v38(source.logical, destination) }, ..source })) by {
+        invocation_source_checked_add_install_frame_v262(source, destination, source_type, left, right);
+    }
+    let after = invocation_source_checked_v42(source, destination, source_type,
+        0, 32, false, left_operand, right_operand, root, instance, little_endian);
+    assert(after == installed) by {
+        invocation_source_checked_add_replays_install_v260(source, destination, source_type,
+            left_operand, right_operand, left, right, root, instance, little_endian);
+    }
+    assert(after.machine == (MemoryStateV30 {
+        values: source.machine.values.update(destination, MemoryValueV30::Undefined),
+        ..source.machine }));
+    assert(after.slots == source.slots && after.objects == source.objects);
+    assert(after.logical == (InvocationSourceLogicalV38 {
+        aggregates: source.logical.aggregates.insert(destination, aggregate),
+        ..invocation_source_logical_write_v38(source.logical, destination) }));
+}
+
+proof fn invocation_source_checked_event_replays_v264(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int,
+    operation: int, bits: int, signed: bool,
+    left: InvocationSourceByteValueV36, right: InvocationSourceByteValueV36,
+    root: int, instance: int, little_endian: bool,
+)
+    ensures invocation_source_byte_step_v36(source,
+        InvocationSourceByteEventV36::Checked {
+            destination, source_type, operation, bits, signed, left, right },
+        root, instance, little_endian)
+        == invocation_source_checked_v42(source, destination, source_type, operation,
+            bits, signed, left, right, root, instance, little_endian),
+{
+    hide(invocation_source_checked_v42);
+    reveal(invocation_source_byte_step_v36);
+}
+
+proof fn invocation_source_local_evaluates_v265(
+    source: InvocationSourceByteStateV36, local: int, bits: int,
+    root: int, instance: int, little_endian: bool,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= local < source.machine.values.len(),
+        invocation_source_byte_value_typed_v36(source.machine.values[local], bits),
+    ensures invocation_source_byte_evaluate_v36(source,
+        InvocationSourceByteValueV36::Local { local, moved: false },
+        bits, root, instance, little_endian)
+        == (InvocationSourceByteEvaluationV36 { source, value: source.machine.values[local] }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_byte_value_typed_v36);
+    reveal(invocation_source_byte_evaluate_v36);
+}
+
+proof fn invocation_source_tile_installed_valid_v265(
+    before: InvocationSourceByteStateV36, after: InvocationSourceByteStateV36,
+    observations: Seq<InvocationSourceEffectObservationV39>,
+)
+    requires after.machine.valid,
+    ensures invocation_source_tile_installed_v161(before, after, observations)
+        == (InvocationSourceTileResultV161 { source: after, observations }),
+{
+    hide(invocation_source_observe_effects_v39);
+    reveal(invocation_source_tile_installed_v161);
+    assert(observations + Seq::empty() =~= observations);
+}
+
+proof fn invocation_source_checked_add_local_step_v266(
+    source: InvocationSourceByteStateV36, destination: int, source_type: int,
+    left_local: int, right_local: int, left: int, right: int,
+    root: int, instance: int, little_endian: bool,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),
+        0 <= left_local < source.machine.values.len(), 0 <= right_local < source.machine.values.len(),
+        source.machine.values[left_local] == MemoryValueV30::Scalar(left),
+        source.machine.values[right_local] == MemoryValueV30::Scalar(right),
+        0 <= left < 4294967296, 0 <= right < 4294967296,
+        invocation_source_aggregate_leaf_count_v42(source_type) == 2,
+        invocation_source_aggregate_leaf_path_v42(source_type, 0) == seq![0int],
+        invocation_source_aggregate_leaf_path_v42(source_type, 1) == seq![1int],
+        invocation_source_aggregate_leaf_bits_v42(source_type, 0) == 32,
+        invocation_source_aggregate_leaf_bits_v42(source_type, 1) == 1,
+    ensures ({ let after = invocation_source_byte_step_v36(source,
+        InvocationSourceByteEventV36::Checked {
+            destination, source_type, operation: 0, bits: 32, signed: false,
+            left: InvocationSourceByteValueV36::Local { local: left_local, moved: false },
+            right: InvocationSourceByteValueV36::Local { local: right_local, moved: false } },
+        root, instance, little_endian);
+        after.machine.valid && after.machine.memory == source.machine.memory
+            && after.machine.frames == source.machine.frames
+            && after.machine.generations == source.machine.generations
+            && after.logical.aggregates.contains_key(destination)
+            && after.logical.aggregates[destination].leaves[seq![0int]]
+                == MemoryValueV30::Scalar((left + right) % 4294967296)
+            && after.logical.aggregates[destination].leaves[seq![1int]]
+                == MemoryValueV30::Scalar(if left + right >= 4294967296 { 1int } else { 0int }) }),
+{
+    hide(invocation_source_byte_state_well_formed_v36);
+    hide(invocation_source_aggregate_well_formed_v42);
+    hide(invocation_source_aggregate_complete_v42);
+    hide(invocation_source_aggregate_leaf_count_v42);
+    hide(invocation_source_aggregate_leaf_path_v42);
+    hide(invocation_source_aggregate_leaf_bits_v42);
+    hide(invocation_source_checked_v42);
+    hide(invocation_source_byte_step_v36);
+    hide(invocation_source_logical_write_v38);
+    hide(invocation_source_byte_evaluate_v36);
+    assert(invocation_source_byte_evaluate_v36(source,
+        InvocationSourceByteValueV36::Local { local: left_local, moved: false },
+        32, root, instance, little_endian)
+        == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(left) })) by {
+        invocation_source_local_evaluates_v265(source, left_local, 32, root, instance, little_endian);
+    }
+    assert(invocation_source_byte_evaluate_v36(source,
+        InvocationSourceByteValueV36::Local { local: right_local, moved: false },
+        32, root, instance, little_endian)
+        == (InvocationSourceByteEvaluationV36 { source, value: MemoryValueV30::Scalar(right) })) by {
+        invocation_source_local_evaluates_v265(source, right_local, 32, root, instance, little_endian);
+    }
+    let aggregate = InvocationSourceAggregateV42 { source_type, execution_lease: None,
+        leaves: Map::empty().insert(seq![0int], MemoryValueV30::Scalar((left + right) % 4294967296))
+            .insert(seq![1int], MemoryValueV30::Scalar(
+                if left + right >= 4294967296 { 1int } else { 0int })) };
+    let reconstructed = invocation_source_checked_v42(source, destination, source_type, 0, 32, false,
+        InvocationSourceByteValueV36::Local { local: left_local, moved: false },
+        InvocationSourceByteValueV36::Local { local: right_local, moved: false },
+        root, instance, little_endian);
+    assert(reconstructed.machine == (MemoryStateV30 { values: source.machine.values.update(
+        destination, MemoryValueV30::Undefined), ..source.machine })
+        && reconstructed.logical.aggregates == source.logical.aggregates.insert(destination, aggregate)) by {
+        invocation_source_checked_add_reconstruction_step_v259(source, destination, source_type,
+            InvocationSourceByteValueV36::Local { local: left_local, moved: false },
+            InvocationSourceByteValueV36::Local { local: right_local, moved: false },
+            left, right, root, instance, little_endian);
+    }
+    let event = InvocationSourceByteEventV36::Checked {
+        destination, source_type, operation: 0, bits: 32, signed: false,
+        left: InvocationSourceByteValueV36::Local { local: left_local, moved: false },
+        right: InvocationSourceByteValueV36::Local { local: right_local, moved: false } };
+    assert(invocation_source_byte_step_v36(source, event, root, instance, little_endian)
+        == reconstructed) by {
+        invocation_source_checked_event_replays_v264(source, destination, source_type, 0, 32, false,
+            InvocationSourceByteValueV36::Local { local: left_local, moved: false },
+            InvocationSourceByteValueV36::Local { local: right_local, moved: false },
+            root, instance, little_endian);
+    }
+    let after = invocation_source_byte_step_v36(source, event, root, instance, little_endian);
+    assert(after.machine == (MemoryStateV30 { values: source.machine.values.update(
+        destination, MemoryValueV30::Undefined), ..source.machine }));
+    assert(after.logical.aggregates == source.logical.aggregates.insert(destination, aggregate));
+    assert(after.logical.aggregates.contains_key(destination));
+    assert(after.logical.aggregates[destination] == aggregate);
+    let value_path = seq![0int];
+    let overflow_path = seq![1int];
+    assert(value_path[0] == 0);
+    assert(overflow_path[0] == 1);
+    assert(value_path != overflow_path);
+    assert(after.logical.aggregates[destination].leaves[seq![0int]]
+        == MemoryValueV30::Scalar((left + right) % 4294967296));
+    assert(after.logical.aggregates[destination].leaves[seq![1int]]
+        == MemoryValueV30::Scalar(if left + right >= 4294967296 { 1int } else { 0int }));
+}
