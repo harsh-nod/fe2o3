@@ -857,7 +857,12 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             }
             write!(out, " }} else").map_err(|_| out.error())?;
         }
-        write!(out, " {{ invocation_source_block_refused_v36(cursor) }}\n }}\n}}\nspec fn invocation_source_micro_run_{r}_{i}_v36(cursor: InvocationSourceMicroStateV36, fuel: nat, little_endian: bool) -> InvocationSourceMicroStateV36\n decreases fuel\n{{ if fuel == 0 || !cursor.source.machine.valid {{ cursor }} else {{ invocation_source_micro_run_{r}_{i}_v36(invocation_source_micro_step_{r}_{i}_v36(cursor, little_endian), (fuel - 1) as nat, little_endian) }} }}\nspec fn invocation_source_block_{r}_{i}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{ let cursor = invocation_source_micro_begin_{r}_{i}_v36(source); let count = invocation_source_statement_count_{r}_{i}_v36(source.machine.pc); if count < 0 {{ invocation_source_block_refused_v36(cursor) }} else {{ invocation_source_micro_finish_{r}_{i}_v36(invocation_source_micro_run_{r}_{i}_v36(cursor, count as nat, little_endian), little_endian) }} }}\n").map_err(|_| out.error())
+        write!(out, " {{ invocation_source_block_refused_v36(cursor) }}\n }}\n}}\nspec fn invocation_source_micro_run_{r}_{i}_v36(cursor: InvocationSourceMicroStateV36, fuel: nat, little_endian: bool) -> InvocationSourceMicroStateV36\n decreases fuel\n{{ if fuel == 0 || !cursor.source.machine.valid {{ cursor }} else {{ invocation_source_micro_run_{r}_{i}_v36(invocation_source_micro_step_{r}_{i}_v36(cursor, little_endian), (fuel - 1) as nat, little_endian) }} }}\nspec fn invocation_source_block_{r}_{i}_v36(source: InvocationSourceByteStateV36, little_endian: bool) -> InvocationSourceBlockResultV36 {{ let cursor = invocation_source_micro_begin_{r}_{i}_v36(source); let count = invocation_source_statement_count_{r}_{i}_v36(source.machine.pc); if count < 0 {{ invocation_source_block_refused_v36(cursor) }} else {{ invocation_source_micro_finish_{r}_{i}_v36(invocation_source_micro_run_{r}_{i}_v36(cursor, count as nat, little_endian), little_endian) }} }}\n").map_err(|_| out.error())?;
+        write!(
+            out,
+            "proof fn invocation_source_micro_run_composes_{r}_{i}_v292(cursor: InvocationSourceMicroStateV36, first: nat, second: nat, little_endian: bool)\n ensures invocation_source_micro_run_{r}_{i}_v36(cursor, first + second, little_endian) == invocation_source_micro_run_{r}_{i}_v36(invocation_source_micro_run_{r}_{i}_v36(cursor, first, little_endian), second, little_endian),\n decreases first,\n{{\n if first > 0 && cursor.source.machine.valid {{\n invocation_source_micro_run_composes_{r}_{i}_v292(invocation_source_micro_step_{r}_{i}_v36(cursor, little_endian), (first - 1) as nat, second, little_endian);\n }}\n}}\n"
+        )
+        .map_err(|_| out.error())
     }
 }
 
@@ -966,6 +971,10 @@ spec fn invocation_source_block_refused_v36(cursor: InvocationSourceMicroStateV3
         before_control: cursor.source, observations: cursor.observations, operands: seq![], returned: None }
 }
 "#;
+
+#[cfg(test)]
+#[path = "original_semantic_mir_invocation_source_run_v292_tests.rs"]
+mod run_tests;
 
 #[cfg(test)]
 pub(super) mod tests {
