@@ -45,6 +45,7 @@ fn mismatch() -> Error {
 impl<'target, 'slots, 'view, 'source> ExpandedScalarBindingsV196<'target, 'slots, 'view, 'source> {
     fn headers() -> usize {
         size_of::<Self>()
+            + Error::frame_binding_headers_v284()
             + 2 * size_of::<Result<Self>>()
             + 3 * size_of::<Definition>()
             + size_of::<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>()

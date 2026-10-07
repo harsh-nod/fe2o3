@@ -37,6 +37,12 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
     let expansion_span = size_of::<fe2o3_lower_mir_kernel::ProductionSourceTileOperationSpanV159>();
     let tile_projection = size_of::<TileLeaf>();
     let tile_results = 2 * size_of::<Result<Option<usize>>>();
+    let refusal_coordinates = 3 * size_of::<Error>()
+        + size_of::<[usize; 4]>()
+        + size_of::<fe2o3_mir_model::SsaValueV1>()
+        + size_of::<Option<usize>>()
+        + 3 * size_of::<&'static str>()
+        + 8 * size_of::<&()>();
     let relation_scratch = 2 * size_of::<Option<usize>>()
         + 3 * size_of::<usize>()
         + size_of::<FormalIndexWidth>()
@@ -157,6 +163,7 @@ fn exercise(slots: &SourceSlots<'_, '_>, out: &mut Writer<'_, '_>) -> Result<()>
         std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirEdgeArgumentRefV1>,
     >() + size_of::<std::slice::Iter<'_, usize>>();
     let header = retained
+        + refusal_coordinates
         + construction_and_query_results
         + input_predecessor_and_actual_coordinates
         + expansion_span

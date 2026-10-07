@@ -10,6 +10,92 @@ use fe2o3_kernel_ir::{EndiannessV2, ExecutionTileLayoutV1};
 const LIMIT: usize = 512 * 1024 * 1024;
 
 #[test]
+fn expanded_frame_binding_refusals_preserve_coordinates_and_prior_errors() {
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    use fe2o3_mir_model::{SsaBlockIdV1, SsaValueV1, SsaVariableIdV1};
+    // Synthetic coordinates test error transport only, not endpoint admission.
+    let site = [2, 3, 7, 11];
+    let value = SsaValueV1::BlockArgument {
+        block: SsaBlockIdV1::new(5),
+        variable: SsaVariableIdV1::new(11),
+    };
+    let annotate = |error: Error| {
+        error.at_frame_binding_v284(site, value, Some(1), "product", "source-component")
+    };
+    assert!(matches!(
+        annotate(Error::Statement("retained endpoint")),
+        Error::SourceFrameBinding {
+            source, value: actual, component: Some(1), domain: "product",
+            phase: "source-component", reason: "retained endpoint",
+        } if source == site && actual == value
+    ));
+    assert!(matches!(
+        annotate(Error::Resource(Resource::Accounting)),
+        Error::Resource(Resource::Accounting)
+    ));
+    assert!(matches!(
+        annotate(Error::Source(SourceError::Resource(Resource::Accounting))),
+        Error::Source(SourceError::Resource(Resource::Accounting))
+    ));
+    assert!(matches!(
+        annotate(Error::Statement("generated source limit")),
+        Error::Statement("generated source limit")
+    ));
+    let inner = Error::Statement("locator refused").at_frame_binding_v284(
+        [0, 1, 2, 3],
+        value,
+        None,
+        "scalar",
+        "original-target-reconstruction",
+    );
+    assert!(matches!(
+        annotate(inner),
+        Error::SourceFrameBinding {
+            source: [0, 1, 2, 3],
+            component: None,
+            domain: "scalar",
+            phase: "original-target-reconstruction",
+            reason: "locator refused",
+            ..
+        }
+    ));
+    assert!(matches!(
+        annotate(Error::SourceStatement {
+            root: 0,
+            instance: 1,
+            function: 2,
+            block: 3,
+            statement: 4,
+            kind: "Assign",
+            result_type: None,
+            reason: "original refusal",
+        }),
+        Error::SourceStatement {
+            root: 0,
+            instance: 1,
+            function: 2,
+            block: 3,
+            statement: 4,
+            kind: "Assign",
+            result_type: None,
+            reason: "original refusal",
+        }
+    ));
+    assert!(matches!(
+        annotate(Error::GeneratedSourceLimit {
+            section: "support",
+            emitted_bytes: 123,
+            limit_bytes: 456,
+        }),
+        Error::GeneratedSourceLimit {
+            section: "support",
+            emitted_bytes: 123,
+            limit_bytes: 456,
+        }
+    ));
+}
+
+#[test]
 fn expanded_frame_contracts_keep_complete_microstate_prefix_and_shared_caller_demands() {
     for layout in [
         ExecutionTileLayoutV1::Blocked,

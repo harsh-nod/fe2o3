@@ -133,7 +133,11 @@ impl ExpandedScalarBindingsV196<'_, '_, '_, '_> {
                 emit!(out, "{field}int,");
             }
             emit!(out, "]; let product = source.logical.products[{local}]; product.components.contains_key(path) && invocation_source_product_atom_current_v282(source, {}, product.components[path], invocation_runtime_little_endian_v36()) && (match product.components[path] {{ InvocationSourceProductAtomV282::Carrier(original) => {{ ", atom_type.index());
-            self.emit_source_original_relation(root, original, width, out)?;
+            self.emit_source_original_relation(root, original, width, out)
+                .map_err(|error| error.at_frame_binding_v284(
+                    [root, instance, owner as usize, local - row.locals.start],
+                    value, Some(ordinal), "product", "original-target-reconstruction",
+                ))?;
             emit!(out, " }}, _ => false }}) }}))");
             Ok(())
         })

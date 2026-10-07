@@ -35,7 +35,8 @@ fn mismatch() -> Error {
 }
 
 fn headers() -> usize {
-    4 * size_of::<Range<usize>>()
+    Error::frame_binding_headers_v284()
+        + 4 * size_of::<Range<usize>>()
         + 36 * size_of::<usize>()
         + 24 * size_of::<&()>()
         + 3 * size_of::<Result<()>>()
@@ -112,6 +113,12 @@ fn demands(
             return Err(mismatch());
         }
         let demand = &demand.source;
+        let site = [
+            owner.root,
+            owner.instance,
+            owner.function.index() as usize,
+            demand.local,
+        ];
         let endpoint = relation.ssa_typed_endpoint_v36(
             owner.root,
             owner.instance,
@@ -135,15 +142,25 @@ fn demands(
             for atom in 0..count {
                 out.budget.charge_work(1)?;
                 if frames.leaf_required(frame, index, atom, out)? {
-                    scalar.emit_source_product_conjunct_v283(
-                        plan,
-                        owner.root,
-                        owner.instance,
-                        demand.value,
-                        atom,
-                        width,
-                        out,
-                    )?;
+                    scalar
+                        .emit_source_product_conjunct_v283(
+                            plan,
+                            owner.root,
+                            owner.instance,
+                            demand.value,
+                            atom,
+                            width,
+                            out,
+                        )
+                        .map_err(|error| {
+                            error.at_frame_binding_v284(
+                                site,
+                                demand.value,
+                                Some(atom),
+                                "product",
+                                "source-component",
+                            )
+                        })?;
                 }
             }
             continue;
@@ -169,7 +186,11 @@ fn demands(
         };
         if matches!(role, Some(Role::KernelContext | Role::Workgroup)) {
             emit!(out, " && ");
-            execution.emit_mapped_conjunct_v205(owner.root, owner.instance, demand.value, out)?;
+            execution
+                .emit_mapped_conjunct_v205(owner.root, owner.instance, demand.value, out)
+                .map_err(|error| {
+                    error.at_frame_binding_v284(site, demand.value, None, "execution", "source-map")
+                })?;
             continue;
         }
         let payload = matches!(
@@ -180,37 +201,55 @@ fn demands(
         if payload || matches!(carrier, Carrier::Aggregate { .. }) {
             if payload {
                 emit!(out, " && ");
-                execution.emit_payload_lease_conjunct_v209(
-                    owner.root,
-                    owner.instance,
-                    demand.value,
-                    out,
-                )?;
+                execution
+                    .emit_payload_lease_conjunct_v209(owner.root, owner.instance, demand.value, out)
+                    .map_err(|error| {
+                        error.at_frame_binding_v284(
+                            site,
+                            demand.value,
+                            None,
+                            "execution-payload",
+                            "source-lease",
+                        )
+                    })?;
             }
             let count = slots.aggregate_leaf_count(ty, out)?.ok_or_else(mismatch)?;
             for leaf in 0..count {
                 out.budget.charge_work(1)?;
                 if frames.leaf_required(frame, index, leaf, out)? {
-                    scalar.emit_source_leaf_conjunct(
-                        plan,
-                        owner.root,
-                        owner.instance,
-                        demand.value,
-                        leaf,
-                        width,
-                        out,
-                    )?;
+                    scalar
+                        .emit_source_leaf_conjunct(
+                            plan,
+                            owner.root,
+                            owner.instance,
+                            demand.value,
+                            leaf,
+                            width,
+                            out,
+                        )
+                        .map_err(|error| {
+                            error.at_frame_binding_v284(
+                                site,
+                                demand.value,
+                                Some(leaf),
+                                "aggregate",
+                                "source-leaf",
+                            )
+                        })?;
                 }
             }
         } else if matches!(carrier, Carrier::Unit | Carrier::Value) {
-            scalar.emit_source_conjunct(
-                plan,
-                owner.root,
-                owner.instance,
-                demand.value,
-                width,
-                out,
-            )?;
+            scalar
+                .emit_source_conjunct(plan, owner.root, owner.instance, demand.value, width, out)
+                .map_err(|error| {
+                    error.at_frame_binding_v284(
+                        site,
+                        demand.value,
+                        None,
+                        "scalar",
+                        "source-endpoint",
+                    )
+                })?;
         } else {
             return Err(Error::Statement(
                 "expanded frame contract requires a complete enum component relation",
