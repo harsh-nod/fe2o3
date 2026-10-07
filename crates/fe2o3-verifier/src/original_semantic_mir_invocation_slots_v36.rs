@@ -36,6 +36,13 @@ pub(super) use source_objects::ObjectActivation;
 mod source_aggregates;
 pub(super) use source_aggregates::SourceAggregateLeafV42;
 
+#[path = "original_semantic_mir_source_product_types_v282.rs"]
+mod source_products;
+pub(super) use source_products::{Atom as ProductAtomV282, SourceProductComponentV282};
+#[cfg(test)]
+#[path = "original_semantic_mir_source_product_v282_tests.rs"]
+mod source_product_tests;
+
 #[path = "original_semantic_mir_source_memory_types_v51.rs"]
 mod memory_types;
 
@@ -70,6 +77,7 @@ pub(super) struct SourceSlots<'a, 'source> {
     tags: source_tags::SourceTagIndexV39,
     objects: source_objects::SourceObjects,
     aggregates: source_aggregates::SourceAggregateTypesV42,
+    products: source_products::SourceProductTypesV282,
     memory_types: memory_types::SourceMemoryTypesV51,
     required: usize,
 }
@@ -320,6 +328,13 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             &requested,
             out,
         )?;
+        let products = source_products::SourceProductTypesV282::derive(
+            semantic.types(),
+            &abi,
+            &aggregates,
+            &requested,
+            out,
+        )?;
         let requested_credit = requested
             .capacity()
             .checked_mul(size_of::<bool>())
@@ -338,6 +353,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
             tags,
             objects,
             aggregates,
+            products,
             memory_types,
             required: out.budget.storage(),
         })
@@ -773,6 +789,7 @@ impl<'a, 'source> SourceSlots<'a, 'source> {
         .map_err(|_| out.error())?;
         self.objects.emit(out)?;
         self.aggregates.emit(out)?;
+        self.products.emit(out)?;
         self.memory_types.emit(out)?;
         self.emit_checked_object_types_v47(out)?;
         self.emit_logical_enum_types_v47(out)
