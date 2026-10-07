@@ -1,0 +1,26 @@
+{
+  "schema": "fe2o3-disabled-physical-v12-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-one-stop-native-owner-v1.inc",
+  "before": {
+    "bytes": 14923,
+    "sha256": "954472f0a2f40cf01c0200fef33ae4d5d3bcf9e41e8f8b4269703323d0a6cc4d"
+  },
+  "after": {
+    "bytes": 15085,
+    "sha256": "b100eece44dcb3b40f5e9ffdc2d2de839e882bc6df4c0f56985e80b62689daac"
+  },
+  "changes": [
+    {
+      "beforeOffset": 2632,
+      "afterOffset": 2632,
+      "before": "  debit (counter::work,m_proc.size ());\n",
+      "after": ""
+    },
+    {
+      "beforeOffset": 2865,
+      "afterOffset": 2825,
+      "before": "  require (got>0 && static_cast<std::size_t> (got)<m_proc.size ()\n           && m_proc[static_cast<std::size_t> (got)-1]=='\\n',failure::owner_changed);\n  const auto end=static_cast<std::size_t> (got);\n",
+      "after": "  require (got>0 && static_cast<std::size_t> (got)<m_proc.size (),\n           failure::owner_changed);\n  const auto end=static_cast<std::size_t> (got);\n  // Work here measures admitted record extent, not byte visits or instructions.\n  // Requested I/O was prepaid above; no buffer byte is inspected before this debit.\n  debit (counter::work,end);\n  require (m_proc[end-1]=='\\n',failure::owner_changed);\n"
+    }
+  ]
+}

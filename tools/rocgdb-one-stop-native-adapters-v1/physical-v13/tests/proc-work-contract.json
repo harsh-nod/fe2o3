@@ -1,0 +1,12 @@
+{
+  "schema": "fe2o3-proc-record-logical-work-contract-v1",
+  "changed_charge_semantics": true,
+  "charge_unit": "logical admitted returned record extent; not byte visits or CPU instructions",
+  "requested_bytes": 1024,
+  "maximum_returned_bytes": 1023,
+  "work_cap": 131072,
+  "proc_requested_cap": 16384,
+  "storage_change_bytes": 0,
+  "native_qualified": false,
+  "terminal_success_guaranteed": false
+}

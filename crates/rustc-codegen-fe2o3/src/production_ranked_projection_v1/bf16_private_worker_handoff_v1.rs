@@ -1602,3 +1602,7 @@ mod genuine_observation {
 #[cfg(test)]
 #[path = "bf16_private_worker_observation_v1_tests.rs"]
 mod worker_observation;
+
+// Opt-in closed engineering continuation; no ordinary/default selector.
+#[path = "bf16_same_owner_engineering_v1.rs"]
+mod same_owner_engineering;

@@ -1,5 +1,6 @@
 //! Opt-in compiler-private source-to-handoff connection.
-//! No Worker execution, normal admission, publication, or launch capability.
+//! Construction is Worker-free; a separate consuming engineering method is opt-in.
+//! No normal admission, publication, retained artifact or launch capability.
 //! The live source seed and actual SSA move through the existing constructors;
 //! neither copied evidence nor a test-only materializer can supply this owner.
 use super::super::retained_materialization_phase_v1::RetainedMaterializationPhaseV1;
@@ -28,9 +29,10 @@ fn source_profile(
     Ok(())
 }
 
-/// Opaque, non-Clone custody. It has no owner/bytes extraction method, Worker
-/// method, serializer, or publication conversion. Dropping this value drops
-/// the actual handoff before the retained original materialization account.
+/// Opaque, non-Clone custody with no owner/bytes extraction, serialization or
+/// publication conversion. Its closed consuming engineering continuation is
+/// non-default and retains no artifact or launch authority. Dropping this value
+/// drops the actual handoff before the original materialization account.
 #[allow(dead_code)]
 pub(crate) struct Bf16SameOwnerHandoffV1 {
     phase: RetainedMaterializationPhaseV1<PrivateBf16WorkerHandoffCompilationV1>,
@@ -132,3 +134,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
 #[cfg(test)]
 #[path = "bf16_same_owner_handoff_v1_tests.rs"]
 mod tests;
+
+// Explicit consuming continuation only; preparation remains Worker-free.
+#[path = "bf16_same_owner_engineering_v1.rs"]
+mod engineering;

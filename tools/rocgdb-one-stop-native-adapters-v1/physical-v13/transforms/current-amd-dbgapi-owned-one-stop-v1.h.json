@@ -1,0 +1,20 @@
+{
+  "schema": "fe2o3-disabled-physical-v13-byte-ranges-v1",
+  "path": "gdb/amd-dbgapi-owned-one-stop-v1.h",
+  "before": {
+    "bytes": 37019,
+    "sha256": "5159f5682c2b875014d9a80a9516cfed6772d64330e0fda4773f793105a213c8"
+  },
+  "after": {
+    "bytes": 37019,
+    "sha256": "8af25db0a71eafb2d183605bde06a7e2c55cdebe7c3c095384bcb52ad7295c8f"
+  },
+  "changes": [
+    {
+      "beforeOffset": 5131,
+      "afterOffset": 5131,
+      "before": "324130;\n  static constexpr std::uint64_t file_observed_bytes = 8324128;\n  static constexpr std::uint64_t file_probe_bytes = 2;\n  static constexpr std::uint64_t file_rounds = 8324224",
+      "after": "444882;\n  static constexpr std::uint64_t file_observed_bytes = 8444880;\n  static constexpr std::uint64_t file_probe_bytes = 2;\n  static constexpr std::uint64_t file_rounds = 8444928"
+    }
+  ]
+}

@@ -3341,3 +3341,44 @@ target/layout/resource/ISA correspondence and target-qualified execution remain
 separate M4 duties, including gfx950. The public
 [Cargo source workflow](bf16-cargo-source-workflow.md) is unchanged.
 Accepted milestones remain M1/M2/V1/V2/U1/U2/U3 (7/18).
+
+## Consuming same-owner BF16 engineering continuation — 2026-10-07
+
+The non-test crate-private continuation now consumes the original owner through
+a fixed engineering Worker loan and returns no reusable owner or artifact.
+Three independently checked paired campaigns passed: positive Identity/Swap01
+with four Worker invocations, wrong-return refusal with zero, and owner-entry
+refusals with zero. Original source/accounts and full descriptor replay were
+retained; cleanup records and point-in-time scope/process absence checks joined.
+The 26 focused continuation controls, 821 BF16 controls and 31 retained-account
+controls also pass on the merged compiler tree.
+
+[Implementation, actual-source identity and limits](bf16-source-authoring.md#internal-consuming-engineering-continuation--october-7)
+distinguish these actuals from later merged-tree regression and the older
+44-field Worker checkpoint. This does not enable the ordinary ranked/canonical
+route, prove GPU numerical behavior or grant publication/load/launch authority.
+Accepted milestones remain M1/M2/V1/V2/U1/U2/U3 (7/18).
+
+## Disabled terminal-cleanup debugger successor — 2026-10-07
+
+The retained live attempt reached target local completion, normal inferior
+exit and phase 11, then refused GDB's deletion of an internal shared-library
+breakpoint. That attempt remains failed; its partial transcript is not a
+qualified capture or a full transcript.
+
+The [disabled physical-v13 source package](../tools/rocgdb-one-stop-native-adapters-v1/physical-v13/README.md)
+adds a one-use terminal deletion relation tied to the retained identity and
+twelve guarded predicates. Its marker is armed only after successful phase-11
+submission and consumed before deletion returns. Other deletion paths still
+refuse; the controller still requires its genuine normal-exit MI sequence.
+The generic work/storage limits and all activation/capture/publication flags
+remain unchanged.
+
+Qualification completed here: 86 public package source controls, four relocated
+C++ fixtures normally and under UBSan (the terminal fixture has 39 scenarios),
+the complete 63-file disabled successor and external API-header checks, and
+forward/reverse inert patch checks. The separate fresh private GDB build passed
+with all nine overlay dependencies. Those CPU/source results do not qualify a
+new live capture: fresh layout, startup, currentness, owner/controller and
+separately bounded native observation remain required. V3/V4/V5 remain open;
+accepted milestones stay M1/M2/V1/V2/U1/U2/U3 (7/18).
