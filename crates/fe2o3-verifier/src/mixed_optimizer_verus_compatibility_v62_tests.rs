@@ -133,6 +133,56 @@ fn generated_indexed_patterns_use_spec_aware_match_syntax() {
 }
 
 #[test]
+fn generated_product_execution_roles_use_spec_integer_comparisons() {
+    let source = run(37, LIMIT, LIMIT, |out| {
+        emit!(
+            out,
+            "{}",
+            include_str!("original_semantic_mir_source_product_values_v282.vrs")
+        );
+        Ok(())
+    })
+    .0
+    .unwrap();
+    let payload = source
+        .split_once("spec fn invocation_source_product_execution_payload_v282(")
+        .expect("actual Product execution payload predicate")
+        .1
+        .split_once("\nspec fn invocation_source_product_execution_pair_v282(")
+        .expect("complete Product execution payload predicate")
+        .0;
+    assert_eq!(
+        payload,
+        r#"
+    source: InvocationSourceByteStateV36, value: InvocationSourceAggregateV42,
+) -> bool {
+    invocation_source_aggregate_complete_v42(value)
+        && match source.machine.frames.execution {
+            Some(execution) => byte_execution_well_formed_v37(execution)
+                && match invocation_source_product_atom_kind_v282(value.source_type) {
+                    InvocationSourceProductAtomKindV282::ExecutionAggregate(role) =>
+                        if role == 0 {
+                            invocation_source_context_shape_v161(value.source_type)
+                                && (forall|i: int| 0 <= i < 5 ==> value.leaves[seq![i]] == MemoryValueV30::Unit)
+                        } else if role == 1 {
+                            invocation_source_workgroup_shape_v168(value.source_type)
+                                && value.leaves[seq![0int]] == MemoryValueV30::Scalar(invocation_source_workgroup_size_v168(execution))
+                                && value.leaves[seq![1int]] == MemoryValueV30::Scalar(invocation_source_workgroup_rank_v168(execution))
+                                && (forall|i: int| 0 <= i < 3 ==> value.leaves[seq![2int, i]] == MemoryValueV30::Unit)
+                                && value.leaves[seq![3int]] == MemoryValueV30::Unit
+                        } else { false },
+                    _ => false,
+                },
+            None => false,
+        }
+}
+"#
+    );
+    assert!(!source.contains("ExecutionAggregate(0) =>"));
+    assert!(!source.contains("ExecutionAggregate(1) =>"));
+}
+
+#[test]
 fn finite_domain_compatibility_program_has_exact_and_one_short_resources() {
     let (source, work, peak) = run(37, LIMIT, LIMIT, emit_finite_domain_program_v62);
     let source = source.unwrap();
