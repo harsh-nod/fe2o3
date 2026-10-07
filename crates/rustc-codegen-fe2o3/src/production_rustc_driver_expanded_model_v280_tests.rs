@@ -119,7 +119,7 @@ impl Callbacks for AccountCallbacks {
                 "the actual generated model must precede every callback case"
             );
             assert_eq!(slot, std::ptr::from_ref(&budget) as usize);
-            assert_eq!(ledger, budget.work_ledger_identity_v1());
+            assert!(ledger == budget.work_ledger_identity_v1());
             match self.case {
                 AccountCase::Panic => {
                     let payload = outcome
