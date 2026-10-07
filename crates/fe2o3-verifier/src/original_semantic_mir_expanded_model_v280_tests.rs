@@ -60,7 +60,7 @@ fn run_width(
                 )
             }));
             assert_eq!(slot, std::ptr::from_ref(&*out.budget) as usize);
-            assert_eq!(ledger, out.budget.work_ledger_identity_v1());
+            assert!(ledger == out.budget.work_ledger_identity_v1());
             assert_eq!(out.budget.storage(), floor);
             let result = match result {
                 Ok(result) => result,
