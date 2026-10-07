@@ -202,6 +202,21 @@ index, enum-field, or address-taking support for projected product operands.
 Unsupported schema rows refuse at construction admission rather than producing an
 apparently admitted constructor that can only fail at runtime.
 
+RustCall entry keeps logical source arguments distinct from ABI-expanded field
+locals. The retained semantic argument map supplies each original tuple ordinal,
+field order, type and local; a metered flat field table reuses the existing entry
+classification, lifetime and installation checks. Unit and empty-tuple arguments
+are validated even when they have no destination local. Nonempty tuples project
+already evaluated snapshots by removing exactly one authenticated outer field
+prefix. All projected fields must be complete and current before frame
+initialization, and descriptor recipes travel with their original snapshots.
+Projection does not reevaluate an operand, invent a local, or manufacture a loan.
+Mutable execution-transfer tickets nested in a Product remain unsupported;
+ordinary whole-argument transfer and its pending-ticket checks stay separate.
+The projection regression laws cover refusal, exact field domains and conditional
+preservation, not unconditional successful call admission or complete trace
+refinement. Fresh generated-model and actual-kernel checks remain required.
+
 This extension changes the shared generated logical state, value enum and support
 prelude even for models that do not use products. Earlier complete nominal-byte
 identity results remain historical; qualification must record the explicit model

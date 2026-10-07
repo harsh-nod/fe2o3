@@ -1,0 +1,173 @@
+proof fn entry_field_invalid_source_refused_v289(
+    source: InvocationSourceByteStateV36, argument: InvocationSourceValueV42,
+    parent: int, field: int, child: int, little_endian: bool,
+)
+    requires !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source),
+    ensures invocation_source_entry_field_v289(source, argument, parent, field, child, little_endian).is_none(),
+{}
+
+proof fn entry_field_wrong_child_refused_v289(
+    source: InvocationSourceByteStateV36, argument: InvocationSourceValueV42,
+    parent: int, field: int, child: int, little_endian: bool,
+)
+    requires !invocation_source_product_composite_v282(parent)
+        || invocation_source_product_child_v282(parent, field) != Some(child),
+    ensures invocation_source_entry_field_v289(source, argument, parent, field, child, little_endian).is_none(),
+{}
+
+proof fn entry_field_wrong_product_parent_refused_v289(
+    source: InvocationSourceByteStateV36, value: InvocationSourceProductV282,
+    parent: int, field: int, child: int, little_endian: bool,
+)
+    requires value.source_type != parent,
+    ensures invocation_source_entry_field_v289(source, InvocationSourceValueV42::Product(value),
+        parent, field, child, little_endian).is_none(),
+{}
+
+proof fn entry_field_wrong_aggregate_parent_refused_v289(
+    source: InvocationSourceByteStateV36, value: InvocationSourceAggregateV42,
+    parent: int, field: int, child: int, little_endian: bool,
+)
+    requires value.source_type != parent,
+    ensures invocation_source_entry_field_v289(source, InvocationSourceValueV42::Aggregate(value),
+        parent, field, child, little_endian).is_none(),
+{}
+
+proof fn entry_field_partial_product_refused_v289(
+    source: InvocationSourceByteStateV36, value: InvocationSourceProductV282,
+    parent: int, field: int, child: int, little_endian: bool,
+)
+    requires !invocation_source_product_complete_v282(value),
+    ensures invocation_source_entry_field_v289(source, InvocationSourceValueV42::Product(value),
+        parent, field, child, little_endian).is_none(),
+{}
+
+proof fn entry_field_stale_product_refused_v289(
+    source: InvocationSourceByteStateV36, value: InvocationSourceProductV282,
+    parent: int, field: int, child: int, little_endian: bool,
+)
+    requires !invocation_source_product_current_v282(source, value, little_endian),
+    ensures invocation_source_entry_field_v289(source, InvocationSourceValueV42::Product(value),
+        parent, field, child, little_endian).is_none(),
+{}
+
+proof fn entry_field_leased_plain_aggregate_refused_v289(
+    source: InvocationSourceByteStateV36, value: InvocationSourceAggregateV42,
+    parent: int, field: int, child: int, little_endian: bool,
+)
+    requires value.execution_lease.is_some(),
+    ensures invocation_source_entry_field_v289(source, InvocationSourceValueV42::Aggregate(value),
+        parent, field, child, little_endian).is_none(),
+{}
+
+proof fn entry_field_stale_nested_lease_refused_v289(
+    source: InvocationSourceByteStateV36, value: InvocationSourceProductV282,
+    aggregate: InvocationSourceAggregateV42, ordinal: int, atom_type: int,
+    parent: int, field: int, child: int, little_endian: bool,
+)
+    requires
+        0 <= ordinal < invocation_source_product_component_count_v282(value.source_type),
+        invocation_source_product_component_type_v282(value.source_type, ordinal) == Some(atom_type),
+        value.components.contains_key(invocation_source_product_component_path_v282(value.source_type, ordinal)),
+        value.components[invocation_source_product_component_path_v282(value.source_type, ordinal)]
+            == InvocationSourceProductAtomV282::Aggregate(aggregate),
+        aggregate.execution_lease.is_some(),
+        !invocation_source_execution_lease_current_v170(source, aggregate.execution_lease.unwrap()),
+    ensures invocation_source_entry_field_v289(source, InvocationSourceValueV42::Product(value),
+        parent, field, child, little_endian).is_none(),
+{
+    assert(!invocation_source_product_atom_current_v282(source, atom_type,
+        InvocationSourceProductAtomV282::Aggregate(aggregate), little_endian));
+    assert(!invocation_source_product_current_v282(source, value, little_endian));
+    entry_field_stale_product_refused_v289(source, value, parent, field, child, little_endian);
+}
+
+// This is the exact domain expression used by the production projector.
+// Both directions exclude a sibling field without dropping a nested suffix.
+proof fn entry_field_exact_prefix_domain_v289(
+    original: Map<Seq<int>, InvocationSourceProductAtomV282>, field: int, suffix: Seq<int>,
+)
+    ensures {
+        let prefix = seq![field];
+        let components = Map::new(original.dom().filter(|path: Seq<int>|
+            invocation_source_path_prefix_v42(prefix, path))
+            .map(|path: Seq<int>| path.drop_first()),
+            |path: Seq<int>| original[prefix + path]);
+        components.contains_key(suffix) == original.contains_key(prefix + suffix)
+            && (components.contains_key(suffix) ==> components[suffix] == original[prefix + suffix])
+    },
+{
+    let prefix = seq![field];
+    let selected = original.dom().filter(|path: Seq<int>|
+        invocation_source_path_prefix_v42(prefix, path));
+    let strip = |path: Seq<int>| path.drop_first();
+    selected.lemma_map_contains(strip, suffix);
+    if original.contains_key(prefix + suffix) {
+        assert(invocation_source_path_prefix_v42(prefix, prefix + suffix));
+        assert(strip(prefix + suffix) =~= suffix);
+        assert(selected.contains(prefix + suffix));
+        assert(selected.map(strip).contains(suffix));
+    }
+    if selected.map(strip).contains(suffix) {
+        let path = choose|path: Seq<int>| selected.contains(path) && strip(path) == suffix;
+        assert(prefix + suffix =~= path);
+        assert(original.contains_key(prefix + suffix));
+    }
+}
+
+proof fn entry_field_success_retains_schema_and_current_components_v289(
+    source: InvocationSourceByteStateV36, argument: InvocationSourceValueV42,
+    parent: int, field: int, child: int, little_endian: bool,
+    projected: InvocationSourceEntryFieldV289,
+)
+    requires invocation_source_entry_field_v289(source, argument, parent, field, child, little_endian)
+        == Some(projected),
+    ensures
+        source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        invocation_source_product_composite_v282(parent),
+        invocation_source_product_child_v282(parent, field) == Some(child),
+        invocation_source_product_pack_v282(parent, argument, None).is_some(),
+        ({
+            let original = invocation_source_product_pack_v282(parent, argument, None).unwrap();
+            let prefix = seq![field];
+            let components = Map::new(original.dom().filter(|path: Seq<int>|
+                invocation_source_path_prefix_v42(prefix, path))
+                .map(|path: Seq<int>| path.drop_first()),
+                |path: Seq<int>| original[prefix + path]);
+            invocation_source_product_components_complete_v282(child, components)
+                && invocation_source_product_components_current_v282(source, child, components, little_endian)
+                && invocation_source_product_unpack_v282(child, components) == Some(projected.value)
+        }),
+{}
+
+proof fn entry_field_descriptor_recipe_preserved_v289(
+    source: InvocationSourceByteStateV36, value: InvocationSourceProductV282,
+    parent: int, field: int, child: int, little_endian: bool,
+    recipe: InvocationSourceDescriptorRecipeV51, snapshot: InvocationSourceDescriptorSnapshotV53,
+    projected: InvocationSourceEntryFieldV289,
+)
+    requires
+        invocation_source_entry_field_v289(source, InvocationSourceValueV42::Product(value),
+            parent, field, child, little_endian) == Some(projected),
+        value.components.contains_key(seq![field]),
+        value.components[seq![field]] == InvocationSourceProductAtomV282::Descriptor { recipe, snapshot },
+        !invocation_source_product_type_v282(child),
+        !invocation_source_product_composite_v282(child),
+    ensures projected.value == InvocationSourceValueV42::Descriptor(snapshot),
+        projected.descriptor == Some(recipe),
+{
+    assert(value.source_type == parent && invocation_source_product_complete_v282(value));
+    assert(invocation_source_product_pack_v282(parent, InvocationSourceValueV42::Product(value), None)
+        == Some(value.components));
+    entry_field_exact_prefix_domain_v289(value.components, field, seq![]);
+    let prefix = seq![field];
+    assert(prefix + seq![] =~= prefix);
+    let components = Map::new(value.components.dom().filter(|path: Seq<int>|
+        invocation_source_path_prefix_v42(prefix, path))
+        .map(|path: Seq<int>| path.drop_first()),
+        |path: Seq<int>| value.components[prefix + path]);
+    assert(components.contains_key(seq![]));
+    assert(components[seq![]] == InvocationSourceProductAtomV282::Descriptor { recipe, snapshot });
+    assert(invocation_source_product_unpack_v282(child, components)
+        == Some(InvocationSourceValueV42::Descriptor(snapshot)));
+}

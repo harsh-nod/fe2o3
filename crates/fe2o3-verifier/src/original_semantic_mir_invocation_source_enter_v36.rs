@@ -31,6 +31,7 @@ enum Class {
 #[derive(Clone, Copy, Debug)]
 struct Argument {
     local: usize,
+    ty: u32,
     class: Class,
     descriptor: Option<usize>,
     bytes: u64,
@@ -46,8 +47,16 @@ enum EmptyExpanded {
 
 #[derive(Clone, Copy, Debug)]
 enum EntryArgument {
-    Whole(Argument),
+    Whole(usize),
     ExpandedEmpty(EmptyExpanded),
+    Expanded { ty: u32, first: usize, count: usize },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FieldBinding {
+    argument: usize,
+    field: Option<usize>,
+    local: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -68,6 +77,7 @@ pub(super) struct SourceFrameEnter<'slots, 'view, 'source> {
     before: usize,
     entry: usize,
     arguments: Vec<Option<EntryArgument>>,
+    fields: Vec<Argument>,
     allocations: Vec<Slot>,
     required: usize,
 }
@@ -207,6 +217,125 @@ fn empty_expanded_argument(
     }
 }
 
+fn expanded_field_binding(
+    function: &Function,
+    ordinal: usize,
+    ty: fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdV1,
+    shape: &Shape,
+    fields: &[SemanticLocalIdV1],
+    ownership: SemanticSourceArgumentOwnershipV1,
+    out: &mut Writer<'_, '_>,
+) -> Result<()> {
+    out.budget.charge_work(6)?;
+    if function.abi().extern_abi() != SemanticExternAbiV1::RustCall
+        || ordinal != function.abi().fixed_count() as usize
+        || function.abi().source_input_types().get(ordinal) != Some(&ty)
+        || ownership != SemanticSourceArgumentOwnershipV1::ByValue
+    {
+        return Err(mismatch());
+    }
+    let Shape::Tuple(tuple) = shape else {
+        return Err(unsupported());
+    };
+    if fields.is_empty() || fields.len() != tuple.fields().len() {
+        return Err(mismatch());
+    }
+    for (field, (&local, &field_type)) in fields.iter().zip(tuple.fields()).enumerate() {
+        out.budget.charge_work(4)?;
+        let declaration = function
+            .locals()
+            .get(local.index() as usize)
+            .ok_or_else(mismatch)?;
+        if declaration.ty() != field_type
+            || declaration.role()
+                != (LocalRole::RustCallTupleField {
+                    argument: u32::try_from(ordinal).map_err(|_| Resource::Arithmetic)?,
+                    field: u32::try_from(field).map_err(|_| Resource::Arithmetic)?,
+                })
+        {
+            return Err(mismatch());
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn argument_origin_headers() -> usize {
+    use fe2o3_mir_model::semantic_mir_v1::{
+        SemanticAggregateTypeV1, SemanticLocalDeclV1, SemanticTypeDeclV1, SemanticTypeIdV1,
+    };
+    fn h<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    h::<&AdmittedInertSemanticMirV1>()
+        + h::<&Function>()
+        + h::<&mut Writer<'_, '_>>()
+        + h::<SemanticLocalIdV1>()
+        + h::<&SemanticLocalDeclV1>()
+        + h::<LocalRole>()
+        + h::<SemanticExternAbiV1>()
+        + h::<SemanticTypeIdV1>()
+        + h::<&SemanticTypeDeclV1>()
+        + h::<&Shape>()
+        + h::<&SemanticAggregateTypeV1>()
+        + h::<Option<&SemanticTypeIdV1>>()
+        + h::<fe2o3_pliron::ProductionSemanticSsaEntryOriginV1>()
+        + 3 * h::<u32>()
+        + 3 * h::<usize>()
+}
+
+#[cfg(test)]
+pub(super) fn argument_origin_header_oracle() -> usize {
+    rust_call_tests::argument_origin_header_oracle()
+}
+
+pub(super) fn argument_origin(
+    semantic: &AdmittedInertSemanticMirV1,
+    function: &Function,
+    local: SemanticLocalIdV1,
+    out: &mut Writer<'_, '_>,
+) -> Result<fe2o3_pliron::ProductionSemanticSsaEntryOriginV1> {
+    use fe2o3_pliron::ProductionSemanticSsaEntryOriginV1 as Origin;
+    out.budget.charge_work(8)?;
+    let declaration = function
+        .locals()
+        .get(local.index() as usize)
+        .ok_or_else(mismatch)?;
+    match declaration.role() {
+        LocalRole::Argument(argument) => {
+            if function.abi().source_input_types().get(argument as usize) != Some(&declaration.ty())
+            {
+                return Err(mismatch());
+            }
+            Ok(Origin::Argument(argument))
+        }
+        LocalRole::RustCallTupleField { argument, field } => {
+            if function.abi().extern_abi() != SemanticExternAbiV1::RustCall
+                || function.abi().fixed_count() != argument
+            {
+                return Err(mismatch());
+            }
+            let ty = *function
+                .abi()
+                .source_input_types()
+                .get(argument as usize)
+                .ok_or_else(mismatch)?;
+            let Shape::Tuple(tuple) = semantic
+                .types()
+                .get(ty.index() as usize)
+                .ok_or_else(mismatch)?
+                .shape()
+            else {
+                return Err(mismatch());
+            };
+            if tuple.fields().get(field as usize) != Some(&declaration.ty()) {
+                return Err(mismatch());
+            }
+            Ok(Origin::RustCallTupleField { argument, field })
+        }
+        _ => Err(mismatch()),
+    }
+}
+
 type EntryObjectSite = (
     usize,
     usize,
@@ -291,7 +420,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             let EntryArgument::Whole(argument) = argument.ok_or_else(mismatch)? else {
                 return Err(mismatch());
             };
-            arguments.push(argument.local);
+            arguments.push(self.fields.get(argument).ok_or_else(mismatch)?.local);
         }
         Ok(super::source_function::SourceEntryHintsV85 {
             owner: self.owner,
@@ -316,14 +445,11 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         )?;
         Ok(self.allocations.is_empty()
             && self.arguments.iter().all(|argument| {
-                matches!(
-                    argument,
-                    Some(EntryArgument::Whole(Argument {
+                matches!(argument, Some(EntryArgument::Whole(index)) if matches!(self.fields.get(*index), Some(Argument {
                         class: Class::Scalar(_),
                         descriptor: None,
                         ..
-                    }))
-                )
+                    })))
             }))
     }
 
@@ -433,6 +559,11 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         out.budget.charge_work(inputs.len())?;
         arguments.resize(inputs.len(), None);
         let (logical, logical_storage) = logical_arguments(semantic, row.function, out)?;
+        let capacity = inputs
+            .len()
+            .checked_add(function.abi().adjusted_arguments().len())
+            .ok_or(Resource::Arithmetic)?;
+        let mut bindings = vector(capacity, out)?;
         for (ordinal, mapped) in logical.source_arguments().enumerate() {
             out.budget.charge_work(1)?;
             let argument = mapped.ordinal();
@@ -444,9 +575,72 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             if ordinal != argument as usize || inputs.get(ordinal) != Some(&mapped.ty()) {
                 return Err(mismatch());
             }
-            let local = match mapped.binding() {
-                ArgumentBinding::Whole(local) => local.index() as usize,
+            let binding = match mapped.binding() {
+                ArgumentBinding::Whole(local) => {
+                    let index = bindings.len();
+                    if index == bindings.capacity() {
+                        return Err(mismatch());
+                    }
+                    bindings.push(FieldBinding {
+                        argument: ordinal,
+                        field: None,
+                        local: local.index() as usize,
+                    });
+                    EntryArgument::Whole(index)
+                }
                 ArgumentBinding::ExpandedTuple(fields) => {
+                    if !fields.is_empty() {
+                        expanded_field_binding(
+                            function,
+                            ordinal,
+                            mapped.ty(),
+                            ty.shape(),
+                            fields,
+                            mapped.source_ownership(),
+                            out,
+                        )
+                        .map_err(|error| {
+                            entry_error(
+                                (
+                                    root,
+                                    instance,
+                                    Some(row.function.index()),
+                                    Some((ordinal, mapped.ty().index())),
+                                    None,
+                                ),
+                                "source-entry-expanded-argument",
+                                error,
+                            )
+                        })?;
+                        if !slots.product_type_supported_v282(mapped.ty(), out)? {
+                            return Err(unsupported());
+                        }
+                        let first = bindings.len();
+                        for (field, local) in fields.iter().enumerate() {
+                            out.budget.charge_work(1)?;
+                            if bindings.len() == bindings.capacity() {
+                                return Err(mismatch());
+                            }
+                            bindings.push(FieldBinding {
+                                argument: ordinal,
+                                field: Some(field),
+                                local: local.index() as usize,
+                            });
+                        }
+                        if arguments
+                            .get_mut(ordinal)
+                            .ok_or_else(mismatch)?
+                            .replace(EntryArgument::Expanded {
+                                ty: mapped.ty().index(),
+                                first,
+                                count: fields.len(),
+                            })
+                            .is_some()
+                        {
+                            return Err(mismatch());
+                        }
+                        continue;
+                    }
                     let empty = empty_expanded_argument(
                         function,
                         ordinal,
@@ -487,10 +681,35 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                     continue;
                 }
             };
+            if arguments
+                .get_mut(ordinal)
+                .ok_or_else(mismatch)?
+                .replace(binding)
+                .is_some()
+            {
+                return Err(mismatch());
+            }
+        }
+        let mut fields = vector(bindings.len(), out)?;
+        for binding in &bindings {
+            out.budget.charge_work(1)?;
+            let FieldBinding {
+                argument,
+                field,
+                local,
+            } = *binding;
             let declaration = function.locals().get(local).ok_or_else(mismatch)?;
+            let ty = semantic
+                .types()
+                .get(declaration.ty().index() as usize)
+                .ok_or_else(mismatch)?;
             out.budget.charge_work(5)?;
-            if declaration.role() != LocalRole::Argument(argument)
-                || inputs.get(argument as usize) != Some(&declaration.ty())
+            if field.is_none()
+                && (declaration.role()
+                    != LocalRole::Argument(
+                        u32::try_from(argument).map_err(|_| Resource::Arithmetic)?,
+                    )
+                    || inputs.get(argument) != Some(&declaration.ty()))
             {
                 return Err(entry_error(
                     (
@@ -520,13 +739,11 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 out,
             )? {
                 if recipe.mutable {
+                    if field.is_some() {
+                        return Err(unsupported());
+                    }
                     Class::ExecutionTransfer(execution_transfer::Transfer::for_entry(
-                        slots,
-                        plan,
-                        root,
-                        instance,
-                        argument as usize,
-                        out,
+                        slots, plan, root, instance, argument, out,
                     )?)
                 } else {
                     Class::Execution(recipe)
@@ -632,34 +849,22 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             } else {
                 (None, 0, 0)
             };
-            let argument_slot = arguments.get_mut(argument as usize).ok_or_else(mismatch)?;
-            if argument_slot
-                .replace(EntryArgument::Whole(Argument {
-                    local: row
-                        .locals
-                        .start
-                        .checked_add(local)
-                        .ok_or(Resource::Arithmetic)?,
-                    class,
-                    descriptor,
-                    bytes,
-                    alignment,
-                    object,
-                }))
-                .is_some()
-            {
-                return Err(entry_error(
-                    (
-                        root,
-                        instance,
-                        Some(row.function.index()),
-                        Some((argument as usize, declaration.ty().index())),
-                        Some(original_local),
-                    ),
-                    "source-entry-argument-duplicate",
-                    mismatch(),
-                ));
+            if fields.len() == fields.capacity() {
+                return Err(mismatch());
             }
+            fields.push(Argument {
+                local: row
+                    .locals
+                    .start
+                    .checked_add(local)
+                    .ok_or(Resource::Arithmetic)?,
+                ty: declaration.ty().index(),
+                class,
+                descriptor,
+                bytes,
+                alignment,
+                object,
+            });
         }
         out.budget.charge_work(arguments.len())?;
         if let Some(argument) = arguments.iter().position(Option::is_none) {
@@ -677,6 +882,12 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
         }
         drop(logical);
         out.budget.release_storage(logical_storage)?;
+        let binding_storage = bindings
+            .capacity()
+            .checked_mul(size_of::<FieldBinding>())
+            .ok_or(Resource::Arithmetic)?;
+        drop(bindings);
+        out.budget.release_storage(binding_storage)?;
         let mut depth = 0usize;
         let mut current = instance;
         loop {
@@ -725,9 +936,76 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             before,
             entry,
             arguments,
+            fields,
             allocations,
             required: out.budget.storage(),
         })
+    }
+
+    fn emit_projection(&self, out: &mut Writer<'_, '_>) -> Result<()> {
+        write!(out, "spec fn invocation_source_entry_arguments_{}_{}_v289(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> Option<Seq<InvocationSourceValueV42>> {{\n if arguments.len() != {} {{ None }} else {{\n", self.root, self.instance, self.arguments.len()).map_err(|_| out.error())?;
+        for (ordinal, binding) in self.arguments.iter().enumerate() {
+            out.budget.charge_work(1)?;
+            if let EntryArgument::Expanded { ty, first, count } = binding.ok_or_else(mismatch)? {
+                for field in 0..count {
+                    out.budget.charge_work(2)?;
+                    let index = first.checked_add(field).ok_or(Resource::Arithmetic)?;
+                    let argument = self.fields.get(index).ok_or_else(mismatch)?;
+                    write!(out, " let field_{index} = invocation_source_entry_field_v289(source, arguments[{ordinal}], {ty}, {field}, {}, little_endian);\n", argument.ty).map_err(|_| out.error())?;
+                }
+            }
+        }
+        write!(out, " if false").map_err(|_| out.error())?;
+        for binding in &self.arguments {
+            out.budget.charge_work(1)?;
+            if let EntryArgument::Expanded { first, count, .. } = binding.ok_or_else(mismatch)? {
+                for field in 0..count {
+                    out.budget.charge_work(2)?;
+                    let index = first.checked_add(field).ok_or(Resource::Arithmetic)?;
+                    let argument = self.fields.get(index).ok_or_else(mismatch)?;
+                    write!(out, " || field_{index}.is_none()").map_err(|_| out.error())?;
+                    if let Class::Descriptor(recipe) = argument.class {
+                        write!(out, " || field_{index}.unwrap().descriptor != Some(")
+                            .map_err(|_| out.error())?;
+                        recipe.emit(out)?;
+                        write!(out, ")").map_err(|_| out.error())?;
+                    }
+                }
+            }
+        }
+        write!(out, " {{ None }} else {{ Some(seq![").map_err(|_| out.error())?;
+        let mut emitted = 0usize;
+        for (ordinal, binding) in self.arguments.iter().enumerate() {
+            out.budget.charge_work(1)?;
+            match binding.ok_or_else(mismatch)? {
+                EntryArgument::Whole(index) if index == emitted => {
+                    write!(out, "arguments[{ordinal}],").map_err(|_| out.error())?;
+                    emitted = emitted.checked_add(1).ok_or(Resource::Arithmetic)?;
+                }
+                EntryArgument::Expanded { first, count, .. } if first == emitted => {
+                    for field in 0..count {
+                        out.budget.charge_work(1)?;
+                        let index = first.checked_add(field).ok_or(Resource::Arithmetic)?;
+                        write!(out, "field_{index}.unwrap().value,").map_err(|_| out.error())?;
+                        emitted = emitted.checked_add(1).ok_or(Resource::Arithmetic)?;
+                    }
+                }
+                // Admission permits only one outer expanded argument. An
+                // empty argument cannot coexist with a nonempty expansion.
+                _ => return Err(mismatch()),
+            }
+        }
+        if emitted != self.fields.len() {
+            return Err(mismatch());
+        }
+        write!(out, "]) }}\n }}\n}}\n").map_err(|_| out.error())
+    }
+
+    fn emit_projected_wrappers(&self, out: &mut Writer<'_, '_>) -> Result<()> {
+        out.budget.charge_work(3)?;
+        // Keep the original guard/body signatures for existing source-step
+        // lemmas. The actual entry evaluates the pure projection once.
+        write!(out, "spec fn invocation_source_entry_refuses_{0}_{1}_v167(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> bool {{\n match invocation_source_entry_arguments_{0}_{1}_v289(source, arguments, little_endian) {{ None => true, Some(fields) => invocation_source_entry_refuses_{0}_{1}_projected_v289(source, fields, little_endian) }}\n}}\nspec fn invocation_source_entry_body_{0}_{1}_v167(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n match invocation_source_entry_arguments_{0}_{1}_v289(source, arguments, little_endian) {{ None => invocation_source_byte_refused_v36(source), Some(fields) => invocation_source_entry_body_{0}_{1}_projected_v289(source, fields, little_endian) }}\n}}\nspec fn invocation_source_enter_{0}_{1}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n match invocation_source_entry_arguments_{0}_{1}_v289(source, arguments, little_endian) {{ None => invocation_source_byte_refused_v36(source), Some(fields) => invocation_source_entry_select_v167(source, invocation_source_entry_refuses_{0}_{1}_projected_v289(source, fields, little_endian), invocation_source_entry_body_{0}_{1}_projected_v289(source, fields, little_endian)) }}\n}}\n", self.root, self.instance).map_err(|_| out.error())
     }
 
     pub(super) fn emit(&self, out: &mut Writer<'_, '_>) -> Result<()> {
@@ -737,6 +1015,20 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 .retain_query_resource_error_v18(Resource::Accounting)
                 .into());
         }
+        out.budget.charge_work(self.arguments.len())?;
+        let expanded = self
+            .arguments
+            .iter()
+            .any(|argument| matches!(argument, Some(EntryArgument::Expanded { .. })));
+        if expanded {
+            self.emit_projection(out)?;
+        }
+        let suffix = if expanded { "projected_v289" } else { "v167" };
+        let argument_count = if expanded {
+            self.fields.len()
+        } else {
+            self.arguments.len()
+        };
         write!(out, "spec fn invocation_source_active_{}_{}_v36(source: InvocationSourceByteStateV36) -> bool {{ source.machine.valid && invocation_source_byte_state_well_formed_v36(source) && source.machine.values.len() >= {} && source.machine.frames.active.len() == {} && source.machine.frames.active[0].invocation == 0", self.root, self.instance, self.locals.end, self.owners.len()).map_err(|_| out.error())?;
         for (i, owner) in self.owners.iter().enumerate() {
             out.budget.charge_work(1)?;
@@ -753,7 +1045,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             self.owners.len() - 1
         };
         out.budget.charge_work(3)?;
-        write!(out, "spec fn invocation_source_entry_refuses_{}_{}_v167(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> bool {{\n !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, self.arguments.len(), before_depth).map_err(|_| out.error())?;
+        write!(out, "spec fn invocation_source_entry_refuses_{}_{}_{suffix}(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> bool {{\n !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source) || source.machine.pc != {} || source.machine.values.len() < {} || arguments.len() != {} || source.machine.frames.active.len() != {} || source.machine.frames.active[0].invocation != 0", self.root, self.instance, self.before, self.locals.end, argument_count, before_depth).map_err(|_| out.error())?;
         write!(
             out,
             " || (exists|local: int| {} <= local < {} && source.objects.contains_key(local))",
@@ -780,29 +1072,30 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             write!(out, " || source.slots.contains_key({})", slot.descriptor)
                 .map_err(|_| out.error())?;
         }
-        out.budget.charge_work(self.arguments.len())?;
+        out.budget.charge_work(self.fields.len())?;
         let transfers = self
-            .arguments
+            .fields
             .iter()
-            .filter(|argument| {
-                matches!(
-                    argument,
-                    Some(EntryArgument::Whole(Argument {
-                        class: Class::ExecutionTransfer(_),
-                        ..
-                    }))
-                )
-            })
+            .filter(|argument| matches!(argument.class, Class::ExecutionTransfer(_)))
             .count();
         write!(
             out,
             " || source.logical.execution_pending.dom().len() != {transfers}"
         )
         .map_err(|_| out.error())?;
-        for (i, argument) in self.arguments.iter().enumerate() {
+        for i in 0..argument_count {
             out.budget.charge_work(1)?;
             write!(out, " || !(").map_err(|_| out.error())?;
-            let argument = match argument.ok_or_else(mismatch)? {
+            let binding = if expanded {
+                EntryArgument::Whole(i)
+            } else {
+                self.arguments
+                    .get(i)
+                    .copied()
+                    .flatten()
+                    .ok_or_else(mismatch)?
+            };
+            let argument = match binding {
                 EntryArgument::ExpandedEmpty(EmptyExpanded::Unit) => {
                     write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Carrier(MemoryValueV30::Unit) => true, _ => false }})").map_err(|_| out.error())?;
                     continue;
@@ -811,7 +1104,8 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                     write!(out, "match arguments[{i}] {{ InvocationSourceValueV42::Aggregate(value) => value.source_type == {ty} && value.execution_lease.is_none() && invocation_source_aggregate_complete_v42(value), _ => false }})").map_err(|_| out.error())?;
                     continue;
                 }
-                EntryArgument::Whole(argument) => argument,
+                EntryArgument::Whole(index) => *self.fields.get(index).ok_or_else(mismatch)?,
+                EntryArgument::Expanded { .. } => return Err(mismatch()),
             };
             match argument.class {
                 Class::ExecutionTransfer(transfer) => {
@@ -840,7 +1134,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             }.map_err(|_| out.error())?;
             write!(out, ")").map_err(|_| out.error())?;
         }
-        write!(out, "\n}}\nspec fn invocation_source_entry_body_{}_{}_v167(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, ", self.root, self.instance, self.entry, self.locals.start, self.locals.end).map_err(|_| out.error())?;
+        write!(out, "\n}}\nspec fn invocation_source_entry_body_{}_{}_{suffix}(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n let entered = invocation_source_entry_initialize_v166(source, {}, {}, {}, ", self.root, self.instance, self.entry, self.locals.start, self.locals.end).map_err(|_| out.error())?;
         if self.instance == 0 {
             write!(out, "source.machine.frames").map_err(|_| out.error())?;
         } else {
@@ -862,13 +1156,8 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 }
             }
         }
-        for (i, argument) in self.arguments.iter().enumerate() {
+        for (i, argument) in self.fields.iter().enumerate() {
             out.budget.charge_work(1)?;
-            let EntryArgument::Whole(argument) = argument.ok_or_else(mismatch)? else {
-                // The exact empty source argument was validated above. There
-                // is deliberately no callee local to install or overwrite.
-                continue;
-            };
             if let Class::ExecutionTransfer(transfer) = argument.class {
                 write!(out, " let entered = match arguments[{i}] {{ InvocationSourceValueV42::ExecutionTransfer(value) => invocation_source_execution_transfer_install_v286(entered, value, ").map_err(|_| out.error())?;
                 transfer.emit_site(out)?;
@@ -924,7 +1213,11 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                 write!(out, " let entered = invocation_source_byte_put_local_v36(entered, {}, argument_{i});\n", argument.local).map_err(|_| out.error())?;
             }
         }
-        write!(out, " if entered.logical.execution_pending.dom().len() == 0 {{ entered }} else {{ invocation_source_byte_refused_v36(entered) }}\n}}\nspec fn invocation_source_enter_{0}_{1}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n invocation_source_entry_select_v167(source, invocation_source_entry_refuses_{0}_{1}_v167(source, arguments, little_endian), invocation_source_entry_body_{0}_{1}_v167(source, arguments, little_endian))\n}}\n", self.root, self.instance).map_err(|_| out.error())
+        write!(out, " if entered.logical.execution_pending.dom().len() == 0 {{ entered }} else {{ invocation_source_byte_refused_v36(entered) }}\n}}\n").map_err(|_| out.error())?;
+        if expanded {
+            return self.emit_projected_wrappers(out);
+        }
+        write!(out, "spec fn invocation_source_enter_{0}_{1}_v36(source: InvocationSourceByteStateV36, arguments: Seq<InvocationSourceValueV42>, little_endian: bool) -> InvocationSourceByteStateV36 {{\n invocation_source_entry_select_v167(source, invocation_source_entry_refuses_{0}_{1}_v167(source, arguments, little_endian), invocation_source_entry_body_{0}_{1}_v167(source, arguments, little_endian))\n}}\n", self.root, self.instance).map_err(|_| out.error())
     }
 }
 
@@ -942,6 +1235,46 @@ fn step_hint_headers() -> usize {
         + 2 * size_of::<&()>()
 }
 
+fn projection_headers() -> usize {
+    fn h<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    h::<&Argument>()
+        + h::<&EntryArgument>()
+        + h::<EntryArgument>()
+        + h::<&str>()
+        + h::<std::slice::Iter<'_, Option<EntryArgument>>>()
+        + h::<std::iter::Enumerate<std::slice::Iter<'_, Option<EntryArgument>>>>()
+        + h::<(usize, &Option<EntryArgument>)>()
+        + h::<Range<usize>>()
+        + h::<Class>()
+        + 8 * h::<usize>()
+        + 8 * size_of::<&()>()
+}
+
+fn field_plan_headers() -> usize {
+    use fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdV1;
+    fn h<T>() -> usize {
+        size_of::<T>() + 2 * size_of::<Result<T>>()
+    }
+    h::<Vec<Argument>>()
+        + h::<Vec<FieldBinding>>()
+        + h::<FieldBinding>()
+        + h::<fe2o3_pliron::ProductionSemanticSsaEntryOriginV1>()
+        + h::<std::slice::Iter<'_, FieldBinding>>()
+        + h::<std::iter::Enumerate<std::slice::Iter<'_, SemanticLocalIdV1>>>()
+        + h::<(usize, &SemanticLocalIdV1)>()
+        + h::<
+            std::iter::Enumerate<
+                std::iter::Zip<
+                    std::slice::Iter<'_, SemanticLocalIdV1>,
+                    std::slice::Iter<'_, SemanticTypeIdV1>,
+                >,
+            >,
+        >()
+        + h::<(usize, (&SemanticLocalIdV1, &SemanticTypeIdV1))>()
+}
+
 fn headers() -> usize {
     fn h<T>() -> usize {
         size_of::<T>() + 2 * size_of::<Result<T>>()
@@ -951,9 +1284,11 @@ fn headers() -> usize {
         + h::<Vec<u32>>()
         + h::<Vec<Slot>>()
         + h::<Vec<Option<EntryArgument>>>()
+        + field_plan_headers()
         + h::<Slot>()
         + h::<Option<EntryArgument>>()
         + h::<Argument>()
+        + projection_headers()
         + logical_argument_headers()
         + h::<Range<usize>>()
         + h::<Class>()
