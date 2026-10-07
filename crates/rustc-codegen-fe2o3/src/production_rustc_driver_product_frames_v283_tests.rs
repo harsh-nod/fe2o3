@@ -5,11 +5,11 @@ use fe2o3_mir_model::{SsaVariableIdV1, semantic_mir_v1 as mir};
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::pending_source_tests::expanded_source_tests::expanded_model_tests::product_frames::product_frame_child";
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
-struct Observation {
-    model: [u8; 32],
-    census: [u8; 32],
-    runtime: [u8; 32],
-    carries: [usize; 2],
+pub(super) struct Observation {
+    pub(super) model: [u8; 32],
+    pub(super) census: [u8; 32],
+    pub(super) runtime: [u8; 32],
+    pub(super) carries: [usize; 2],
 }
 
 fn carrier_fields(
@@ -160,6 +160,7 @@ impl Callbacks for ProductCallbacks {
                         runtime: pair.subject(budget)?.runtime_and_instances,
                         carries,
                     };
+                    model_export::observe_product_frame(bytes, &observation, budget)?;
                     budget.release_storage(scratch)?;
                     Ok((observation, 0))
                 }).map_err(|error| format!("actual Product frame model: {error:?}"))?;
