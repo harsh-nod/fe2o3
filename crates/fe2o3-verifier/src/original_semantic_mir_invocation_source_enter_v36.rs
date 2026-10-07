@@ -25,6 +25,7 @@ struct Argument {
     descriptor: Option<usize>,
     bytes: u64,
     alignment: u32,
+    object: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -55,6 +56,54 @@ fn mismatch() -> Error {
 
 fn unsupported() -> Error {
     Error::Statement("original MIR byte argument lifetime or payload is not modeled")
+}
+
+type EntryObjectSite = (
+    usize,
+    usize,
+    fe2o3_mir_model::semantic_mir_v1::SemanticFunctionIdV1,
+    u32,
+    fe2o3_mir_model::semantic_mir_v1::SemanticTypeIdV1,
+);
+
+fn entry_object_slot<'a>(
+    slots: &'a SourceSlots<'_, '_>,
+    (root, instance, function, local, ty): EntryObjectSite,
+    class: Class,
+    explicit: bool,
+    out: &mut Writer<'_, '_>,
+) -> Result<(
+    usize,
+    &'a fe2o3_lower_mir_kernel::ProductionSourceAllocationFrameV32,
+)> {
+    // Entry is an authenticated activation origin, not a choice of
+    // one lifetime from a local's generation roster.
+    let activation = slots
+        .object_activation(root, instance, local, 0, out)?
+        .ok_or_else(unsupported)?;
+    out.budget.charge_work(14)?;
+    if activation.origin != fe2o3_lower_mir_kernel::ProductionSourceObjectActivationV40::Entry
+        || activation.ty != ty
+        || explicit
+        || !matches!(class, Class::Scalar(bits) if bits != 0)
+    {
+        return Err(unsupported());
+    }
+    let (descriptor, frame) = slots.descriptor_by_source(root, instance, local, Some(0), out)?;
+    if !matches!(class, Class::Scalar(bits) if frame.bytes() == u64::from(bits.div_ceil(8))) {
+        return Err(unsupported());
+    }
+    if descriptor != activation.descriptor
+        || frame.root() != root
+        || frame.instance() != instance
+        || frame.function() != function
+        || frame.local() != local
+        || frame.semantic_type() != ty
+        || frame.source_generation() != Some(0)
+    {
+        return Err(mismatch());
+    }
+    Ok((descriptor, frame))
 }
 
 fn storage_markers(function: &Function, out: &mut Writer<'_, '_>) -> Result<Vec<bool>> {
@@ -297,21 +346,31 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                     },
                 }
             };
-            let slot = slots.legacy_descriptor_by_source(
-                root,
-                instance,
-                u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
-                "source-enter-parameter",
-                out,
-            )?;
-            if slots.has_original_object(
-                root,
-                instance,
-                u32::try_from(local).map_err(|_| Resource::Arithmetic)?,
-                out,
-            )? {
-                return Err(unsupported());
-            }
+            let original_local = u32::try_from(local).map_err(|_| Resource::Arithmetic)?;
+            let object = slots.has_original_object(root, instance, original_local, out)?;
+            let slot = if object {
+                Some(entry_object_slot(
+                    slots,
+                    (
+                        root,
+                        instance,
+                        row.function,
+                        original_local,
+                        declaration.ty(),
+                    ),
+                    class,
+                    explicit[local],
+                    out,
+                )?)
+            } else {
+                slots.legacy_descriptor_by_source(
+                    root,
+                    instance,
+                    original_local,
+                    "source-enter-parameter",
+                    out,
+                )?
+            };
             let (descriptor, bytes, alignment) = if let Some((descriptor, slot)) = slot {
                 let Class::Scalar(bits) = class else {
                     return Err(unsupported());
@@ -335,6 +394,7 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
                     descriptor,
                     bytes,
                     alignment,
+                    object,
                 })
                 .is_some()
             {
@@ -530,7 +590,11 @@ impl<'slots, 'view, 'source> SourceFrameEnter<'slots, 'view, 'source> {
             }
             write!(out, " let argument_{i} = match arguments[{i}] {{ InvocationSourceValueV42::Carrier(value) => value, _ => MemoryValueV30::Undefined }};\n").map_err(|_| out.error())?;
             if let Some(descriptor) = argument.descriptor {
-                write!(out, " let entered = match invocation_source_byte_slot_v36(entered, {descriptor}, invocation_source_slot_{descriptor}_v36(), {}, {}) {{ Some(pointer) => InvocationSourceByteStateV36 {{ machine: invocation_source_store_v36(entered.machine, pointer, {}, {}, argument_{i}, little_endian), ..entered }}, None => invocation_source_byte_refused_v36(entered) }};\n", self.root, self.instance, argument.bytes, argument.alignment).map_err(|_| out.error())?;
+                if argument.object {
+                    write!(out, " let entered = match invocation_source_byte_address_v36(entered, InvocationSourceByteAccessV36 {{ base: InvocationSourceByteBaseV36::ObjectLocal({}), offset: 0, width: {}, alignment: {} }}, {}, {}) {{ Some(pointer) => InvocationSourceByteStateV36 {{ machine: invocation_source_store_v36(entered.machine, pointer, {}, {}, argument_{i}, little_endian), ..entered }}, None => invocation_source_byte_refused_v36(entered) }};\n", argument.local, argument.bytes, argument.alignment, self.root, self.instance, argument.bytes, argument.alignment).map_err(|_| out.error())?;
+                } else {
+                    write!(out, " let entered = match invocation_source_byte_slot_v36(entered, {descriptor}, invocation_source_slot_{descriptor}_v36(), {}, {}) {{ Some(pointer) => InvocationSourceByteStateV36 {{ machine: invocation_source_store_v36(entered.machine, pointer, {}, {}, argument_{i}, little_endian), ..entered }}, None => invocation_source_byte_refused_v36(entered) }};\n", self.root, self.instance, argument.bytes, argument.alignment).map_err(|_| out.error())?;
+                }
             } else {
                 write!(out, " let entered = invocation_source_byte_put_local_v36(entered, {}, argument_{i});\n", argument.local).map_err(|_| out.error())?;
             }
@@ -569,6 +633,11 @@ fn headers() -> usize {
         + execution_loans::headers()
         + h::<super::slots::ObjectActivation>()
         + h::<Option<super::slots::ObjectActivation>>()
+        + h::<(
+            usize,
+            &fe2o3_lower_mir_kernel::ProductionSourceAllocationFrameV32,
+        )>()
+        + h::<EntryObjectSite>()
         + 32 * size_of::<usize>()
         + 24 * size_of::<&()>()
 }
@@ -578,6 +647,278 @@ mod tests {
     use super::*;
     use crate::mixed_optimizer_refinement_v26::SOURCE_LIMIT;
     const LIMIT: usize = 100_000_000;
+
+    fn run_object_arguments(
+        work: usize,
+        storage: usize,
+        examine: impl FnOnce(
+            &InvocationPlan<'_, '_>,
+            &SourceSlots<'_, '_>,
+            &mut Writer<'_, '_>,
+        ) -> Result<()>,
+    ) -> (Result<()>, usize, usize, usize) {
+        use fe2o3_mir_model::semantic_mir_v1::*;
+        super::super::super::invocations::tests::run_source_transform(
+            work,
+            storage,
+            |types, functions| {
+                let word = SemanticTypeIdV1::from_index(0);
+                let raw = SemanticTypeIdV1::from_index(types.len() as u32);
+                types.push(SemanticTypeDeclV1::new(
+                    SemanticTypeIdentityV1::from_sha256([230; 32]),
+                    SemanticLayoutIdentityV1::from_sha256([231; 32]),
+                    SemanticTypeLayoutV1::new_with_backend_repr(
+                        Some(8),
+                        8,
+                        SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                            SemanticBackendPrimitiveV1::pointer(0, 8, 8),
+                            SemanticScalarValidityRangeV1::new(0, u64::MAX.into()),
+                        )),
+                        false,
+                    )
+                    .unwrap(),
+                    SemanticTypeShapeV1::Pointer(
+                        SemanticPointerTypeV1::new_with_kind(
+                            word,
+                            SemanticPointerKindV1::Raw,
+                            SemanticMutabilityV1::Mutable,
+                            0,
+                            64,
+                            SemanticPointerMetadataV1::None,
+                        )
+                        .unwrap(),
+                    ),
+                ));
+                for (ordinal, function) in functions.iter_mut().enumerate() {
+                    let prior = &*function;
+                    let source = prior.source();
+                    let mut locals = prior.locals().to_vec();
+                    let pointer = SemanticLocalIdV1::from_index(locals.len() as u32);
+                    assert_eq!(locals[1].role(), SemanticLocalRoleV1::Argument(0));
+                    assert_eq!(locals[1].ty(), word);
+                    locals.push(SemanticLocalDeclV1::new(
+                        SemanticLocalIdentityV1::from_sha256([232 + ordinal as u8; 32]),
+                        raw,
+                        SemanticLocalRoleV1::Temporary,
+                        source,
+                    ));
+                    let mut blocks = prior.blocks().to_vec();
+                    let entry = prior.entry().index() as usize;
+                    let mut statements = vec![SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                            SemanticPlaceV1::new(pointer, vec![], raw).unwrap(),
+                            SemanticRvalueV1::new(
+                                raw,
+                                SemanticRvalueKindV1::AddressOf {
+                                    place: SemanticPlaceV1::new(
+                                        SemanticLocalIdV1::from_index(1),
+                                        vec![],
+                                        word,
+                                    )
+                                    .unwrap(),
+                                    mutability: SemanticMutabilityV1::Mutable,
+                                },
+                            ),
+                        )),
+                    )];
+                    statements.extend_from_slice(blocks[entry].statements());
+                    blocks[entry] = SemanticBasicBlockV1::new(
+                        blocks[entry].identity(),
+                        blocks[entry].source(),
+                        statements,
+                        blocks[entry].terminator().clone(),
+                    )
+                    .unwrap();
+                    let mut rebuilt = SemanticFunctionDeclV1::new(
+                        prior.identity(),
+                        prior.role(),
+                        prior.item_definition_identity(),
+                        prior.monomorphization_identity(),
+                        prior.generic_type_arguments_identity(),
+                        prior.const_generic_arguments_identity(),
+                        source,
+                        prior.abi().clone(),
+                        locals,
+                        prior.entry(),
+                        blocks,
+                    )
+                    .unwrap();
+                    if let Some(kernel) = prior.kernel_entry() {
+                        rebuilt = rebuilt.with_kernel_entry(kernel.clone());
+                    }
+                    *function = rebuilt;
+                }
+            },
+            |plan, out| {
+                let source = plan.source(out)?;
+                let owner = source.canonical(out.budget)?;
+                let (inventory, receipt) =
+                    super::super::super::super::Inventory::derive_v18(owner, out.budget)?;
+                out.budget.reserve_storage(receipt.retained_storage())?;
+                let result = source.with_ranked_correspondence_v18(
+                    &inventory,
+                    out.budget,
+                    |relation, budget| {
+                        let mut writer = Writer::new(budget)?;
+                        let slots = SourceSlots::derive(plan, relation, &mut writer)?;
+                        examine(plan, &slots, &mut writer)
+                    },
+                );
+                drop(inventory);
+                if result.is_ok() {
+                    out.budget.release_storage(receipt.retained_storage())?;
+                }
+                result
+            },
+        )
+    }
+
+    #[test]
+    fn original_mir_byte_entry_installs_exact_scalar_entry_objects() {
+        let result = run_object_arguments(LIMIT, LIMIT, |plan, slots, out| {
+            for root in 0..2 {
+                for instance in 0..3 {
+                    let row = plan.instance(root, instance, out)?;
+                    let activation = slots.object_activation(root, instance, 1, 0, out)?.unwrap();
+                    assert_eq!(
+                        activation.origin,
+                        fe2o3_lower_mir_kernel::ProductionSourceObjectActivationV40::Entry
+                    );
+                    let entry = SourceFrameEnter::derive(plan, slots, root, instance, out)?;
+                    let argument = entry.arguments[0].unwrap();
+                    assert!(argument.object);
+                    assert_eq!(argument.class, Class::Scalar(32));
+                    assert_eq!(argument.local, row.locals.start + 1);
+                    assert_eq!(argument.descriptor, Some(activation.descriptor));
+                    assert_eq!((argument.bytes, argument.alignment), (4, 4));
+                    assert_eq!(
+                        entry
+                            .allocations
+                            .iter()
+                            .filter(|slot| slot.descriptor == activation.descriptor
+                                && slot.object
+                                && slot.implicit
+                                && slot.local == argument.local)
+                            .count(),
+                        1
+                    );
+                    assert!(!entry.heap_conservation_shape(out)?);
+                    let before = out.text.len();
+                    entry.emit(out)?;
+                    let emitted = &out.text[before..];
+                    let activate = format!(
+                        "let entered = invocation_source_object_activate_v40(entered, {},",
+                        activation.descriptor
+                    );
+                    let install = format!(
+                        "let entered = match invocation_source_byte_address_v36(entered, InvocationSourceByteAccessV36 {{ base: InvocationSourceByteBaseV36::ObjectLocal({}), offset: 0, width: 4, alignment: 4 }}",
+                        argument.local
+                    );
+                    assert_eq!(emitted.matches(&activate).count(), 1);
+                    assert_eq!(emitted.matches(&install).count(), 1);
+                    assert!(emitted.find(&activate).unwrap() < emitted.find(&install).unwrap());
+                    assert!(!emitted.contains(&format!(
+                        "invocation_source_byte_put_local_v36(entered, {}, argument_0)",
+                        argument.local
+                    )));
+                }
+            }
+            Ok(())
+        });
+        result.0.unwrap();
+        assert_eq!(result.2, super::super::super::invocations::tests::FLOOR);
+        assert!(result.3 > result.2);
+    }
+
+    #[test]
+    fn original_mir_byte_entry_object_exact_and_one_short_resource_replay() {
+        let emit = |plan: &InvocationPlan<'_, '_>,
+                    slots: &SourceSlots<'_, '_>,
+                    out: &mut Writer<'_, '_>| {
+            for instance in 0..3 {
+                SourceFrameEnter::derive(plan, slots, 0, instance, out)?.emit(out)?;
+            }
+            Ok(())
+        };
+        let measured = run_object_arguments(LIMIT, LIMIT, emit);
+        measured.0.unwrap();
+        run_object_arguments(measured.1, measured.3, emit)
+            .0
+            .unwrap();
+        assert!(
+            run_object_arguments(measured.1 - 1, measured.3, emit)
+                .0
+                .is_err()
+        );
+        assert!(
+            run_object_arguments(measured.1, measured.3 - 1, emit)
+                .0
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn original_mir_byte_entry_object_refuses_foreign_endpoints_and_nonscalar_payloads() {
+        use fe2o3_mir_model::semantic_mir_v1::{SemanticFunctionIdV1, SemanticTypeIdV1};
+        run_object_arguments(LIMIT, LIMIT, |plan, slots, out| {
+            out.budget.reserve_storage(headers())?;
+            let row = plan.instance(0, 0, out)?;
+            let activation = slots.object_activation(0, 0, 1, 0, out)?.unwrap();
+            let original = (0, 0, row.function, 1, activation.ty);
+            let admitted = entry_object_slot(slots, original, Class::Scalar(32), false, out)?;
+            assert_eq!(admitted.0, activation.descriptor);
+            assert_eq!(admitted.1.source_generation(), Some(0));
+            for class in [
+                Class::Scalar(0),
+                Class::Scalar(16),
+                Class::Pointer,
+                Class::Slice(64),
+                Class::Aggregate(activation.ty.index()),
+                Class::Product(activation.ty.index()),
+                Class::Enum(activation.ty.index()),
+            ] {
+                assert!(matches!(
+                    entry_object_slot(slots, original, class, false, out),
+                    Err(Error::Statement(
+                        "original MIR byte argument lifetime or payload is not modeled"
+                    ))
+                ));
+            }
+            assert!(matches!(
+                entry_object_slot(slots, original, Class::Scalar(32), true, out),
+                Err(Error::Statement(
+                    "original MIR byte argument lifetime or payload is not modeled"
+                ))
+            ));
+            for foreign in [
+                (
+                    0,
+                    0,
+                    SemanticFunctionIdV1::from_index(u32::MAX),
+                    1,
+                    activation.ty,
+                ),
+                (
+                    0,
+                    0,
+                    row.function,
+                    1,
+                    SemanticTypeIdV1::from_index(u32::MAX),
+                ),
+                (0, 0, row.function, 99, activation.ty),
+            ] {
+                assert!(matches!(
+                    entry_object_slot(slots, foreign, Class::Scalar(32), false, out),
+                    Err(Error::Statement(_))
+                ));
+            }
+            assert!(out.text.is_empty());
+            Ok(())
+        })
+        .0
+        .unwrap();
+    }
 
     fn run(
         work: usize,
