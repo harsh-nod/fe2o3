@@ -5,6 +5,10 @@ use crate::{RuntimeGraphErrorV1, RuntimeGraphReportV1, RuntimeGraphRequestV1};
 use fe2o3_completion::{CompletionNodeIdV1, CompletionNodeStateV1};
 use std::{future::Future, pin::Pin, task::Poll};
 
+mod staging;
+mod state;
+pub use staging::RuntimeGfx942ScopedGraphStagingErrorV1;
+
 #[derive(Debug)]
 pub enum RuntimeGfx942ScopedGraphAdmissionErrorV1<E> {
     Graph(RuntimeGraphErrorV1<KfdRuntimeBackendErrorV1>),
@@ -77,7 +81,7 @@ struct Deferred<P> {
     future: crate::RuntimeAsyncCommandFutureV1<Outcome>,
 }
 struct Ordinary {
-    submission: RuntimeSubmissionV1<()>,
+    submission: ContextGraphSubmissionV1,
     retiring: Option<RuntimeCompletionStatusV1>,
 }
 
@@ -94,10 +98,16 @@ fn filled<T>(
 }
 
 fn add_backing<T>(total: &mut usize, values: &Vec<T>) -> Result<(), RuntimeGfx942ScopeErrorV1> {
-    *total = values
+    let bytes = values
         .capacity()
         .checked_mul(size_of::<T>())
-        .and_then(|bytes| total.checked_add(bytes))
+        .ok_or(RuntimeGfx942ScopeErrorV1::Capacity)?;
+    add_backing_bytes(total, bytes)
+}
+
+fn add_backing_bytes(total: &mut usize, bytes: usize) -> Result<(), RuntimeGfx942ScopeErrorV1> {
+    *total = total
+        .checked_add(bytes)
         .filter(|&bytes| bytes <= MAX_RUNTIME_GFX942_SCOPED_ROSTER_BYTES_V1)
         .ok_or(RuntimeGfx942ScopeErrorV1::Capacity)?;
     Ok(())
@@ -192,7 +202,7 @@ where
         let mut staging = base;
         add_backing(&mut staging, &generated).map_err(Admission::Scope)?;
         let hooks = &self.hooks;
-        let plan = PreparedGraphAdmissionV1::prepare(
+        let plan = PreparedGraphAdmissionV1::prepare_scoped_v1(
             self.context,
             &mut request,
             |context, node, stream| {
@@ -227,6 +237,12 @@ where
             return Err(Admission::Scope(RuntimeGfx942ScopeErrorV1::Capacity));
         }
         let len = plan.len();
+        add_backing_bytes(
+            &mut staging,
+            plan.host_staging_backing_bytes_v1()
+                .ok_or(Admission::Scope(RuntimeGfx942ScopeErrorV1::Capacity))?,
+        )
+        .map_err(Admission::Scope)?;
         let per_node = size_of::<Option<Deferred<P>>>()
             .checked_add(size_of::<Option<Ordinary>>())
             .and_then(|n| n.checked_add(size_of::<Option<usize>>()))
@@ -273,7 +289,8 @@ where
             .map_err(|_| Admission::Scope(RuntimeGfx942ScopeErrorV1::Capacity))?;
         // Include the temporary original-preparation array and every new
         // adapter-owned array in the peak backing bound before graph commit.
-        // The unchanged admitted graph core and all pointees are separate.
+        // New core staging backing was counted by actual capacity above. The
+        // pre-existing admitted graph core and all pointees are separate.
         add_backing(&mut staging, &graph.deferred).map_err(Admission::Scope)?;
         add_backing(&mut staging, &graph.active).map_err(Admission::Scope)?;
         add_backing(&mut staging, &graph.generated).map_err(Admission::Scope)?;
@@ -438,6 +455,28 @@ impl<P: RuntimeGfx942GeneratedCompletionCarrierV1> Graph<P> {
             }
             if let Some(slot) = self.generated[index]
                 && !self.reconciled[index]
+                && matches!(
+                    scope.slots[slot].lifecycle.phase,
+                    Phase::FailedUnpublished | Phase::ColdDeviceFailed { .. }
+                )
+            {
+                // SAFETY: this phase requires actual native abort, source
+                // closing checks, Context disposal, carrier drop and hold release.
+                // The distinct cold phase instead requires the original no-VM
+                // reset owner plus actual source/carrier/hold disposal. Neither
+                // is inferred from rejection or absent completion alone.
+                unsafe {
+                    core.fail(index, 5);
+                }
+                self.observations.push((
+                    core.id(index),
+                    RuntimeCompletionStatusV1::QuiescentWithoutResult,
+                ));
+                self.reconciled[index] = true;
+                changed += 1;
+            }
+            if let Some(slot) = self.generated[index]
+                && !self.reconciled[index]
                 && let Some(outcome) = &scope.slots[slot].lifecycle.outcome
             {
                 if outcome.is_ok() {
@@ -501,7 +540,7 @@ impl<P: RuntimeGfx942GeneratedCompletionCarrierV1> Graph<P> {
             }
             match scope
                 .context
-                .poll_with_graph_access_v1(&mut active.submission, Some(core.token()))
+                .poll_with_graph_access_v1(&mut active.submission.original, Some(core.token()))
             {
                 Ok(_) => {}
                 Err(RuntimeErrorV1::BackendRejected(_)) => {
@@ -522,7 +561,7 @@ impl<P: RuntimeGfx942GeneratedCompletionCarrierV1> Graph<P> {
             }
             let status = scope
                 .context
-                .query_submission(&active.submission)
+                .query_submission(&active.submission.original)
                 .expect("original graph submission");
             if status != RuntimeCompletionStatusV1::Pending {
                 self.observations.push((core.id(index), status));
@@ -534,7 +573,11 @@ impl<P: RuntimeGfx942GeneratedCompletionCarrierV1> Graph<P> {
 
         if let Some(index) = core.pop_ready_notification() {
             changed += 1;
-            if core.state(index) == CompletionNodeStateV1::Ready {
+            // Host staging is driven explicitly with the original charged
+            // output. Popping readiness is not a successful host write.
+            if core.state(index) == CompletionNodeStateV1::Ready
+                && core.host_staging(index).is_none()
+            {
                 if !core.begin(index) {
                     scope.context.quarantine_after_async_command_panic_v1();
                     return Err(RuntimeGfx942ScopeErrorV1::Unknown);
@@ -655,10 +698,11 @@ where
     // Graph admission bounds the complete roster and preallocates each reply.
     // No fallible operation lies between this original hold and slot rooting.
     scope.slots.push(Slot {
+        sdma_backed: false,
         lifecycle: Lifecycle::new(owner.prepared),
         roster: owner.roster,
         hold,
-        domain: owner.domain,
+        domain: CompletionDomainsV1::Singleton(owner.domain),
         reply: owner.reply,
         future: Some(owner.future),
     });
@@ -680,5 +724,20 @@ mod backing_tests {
         let mut overflow = usize::MAX;
         assert!(add_backing(&mut overflow, &entries).is_err());
         assert_eq!(overflow, usize::MAX);
+    }
+
+    #[test]
+    fn staging_backing_counts_capacity_and_refuses_without_changing_total() {
+        let mut entries = Vec::<Option<crate::async_engine::HostStagingV1>>::with_capacity(8);
+        entries.push(None);
+        assert!(entries.capacity() > entries.len());
+        let bytes = entries.capacity() * size_of::<Option<crate::async_engine::HostStagingV1>>();
+        let mut total = MAX_RUNTIME_GFX942_SCOPED_ROSTER_BYTES_V1 - bytes;
+        add_backing_bytes(&mut total, bytes).unwrap();
+        assert_eq!(total, MAX_RUNTIME_GFX942_SCOPED_ROSTER_BYTES_V1);
+        assert!(add_backing_bytes(&mut total, 1).is_err());
+        assert_eq!(total, MAX_RUNTIME_GFX942_SCOPED_ROSTER_BYTES_V1);
+        assert!(add_backing_bytes(&mut total, usize::MAX).is_err());
+        assert_eq!(total, MAX_RUNTIME_GFX942_SCOPED_ROSTER_BYTES_V1);
     }
 }

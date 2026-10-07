@@ -92,10 +92,106 @@ for path in readonly_sources:
     rejects(lambda: r["conditional_readonly_sources"]({p: s for p, s in readonly_sources.items() if p != path}))
     rejects(lambda: r["conditional_readonly_sources"]({**readonly_sources, path: readonly_sources[path] + "\nfn effect() {}"}))
 rejects(lambda: r["conditional_readonly_sources"]({**readonly_sources, Path("/foreign.rs"): ""}))
+for owner, target, declaration, name in r["CONDITIONAL_MODULE_EDGES"]:
+    need(target in readonly_sources, "full concrete readonly branch source is retained")
+    redirected = (declaration.replace(".rs", "-foreign.rs") if ".rs" in declaration
+                  else declaration.replace(name, name + "_foreign"))
+    for replacement in (
+        "", declaration + declaration, redirected,
+        "/* " + declaration + " */", "// " + declaration.replace("\n", "\n// "),
+        'r###"' + declaration + '"###', "#[cfg(any())]\n" + declaration,
+        "#[cfg_attr(all(), cfg(any()))]\n" + declaration,
+        "fn unrelated() { " + declaration + " }",
+    ):
+        need(replacement != declaration, "changed readonly module control")
+        changed = readonly_sources[owner].replace(declaration, replacement)
+        rejects(lambda: r["conditional_cohort_wiring"]({**readonly_sources, owner: changed}))
+    for suffix in ("\nmod " + name + " {}", "\nuse other as " + name + ";"):
+        rejects(lambda: r["conditional_cohort_wiring"](
+            {**readonly_sources, owner: readonly_sources[owner] + suffix}))
+    rejects(lambda: r["conditional_cohort_wiring"](
+        {p: s for p, s in readonly_sources.items() if p != target}))
+
+
+def rejects_with_outer_repin(path, old, new):
+    # A broad capture refresh cannot silently change the independently reviewed
+    # immutable accessor. These are source controls, not executed Verus mutants.
+    need(readonly_sources[path].count(old) == 1, "unique readonly mutation site")
+    changed = readonly_sources[path].replace(old, new)
+    need(changed != readonly_sources[path], "changed readonly source control")
+    globals_ = r["conditional_readonly_sources"].__globals__
+    original = globals_["CONDITIONAL_READONLY_SOURCES"]
+    globals_["CONDITIONAL_READONLY_SOURCES"] = {
+        **original, path: hashlib.sha256(changed.encode()).hexdigest()}
+    try:
+        rejects(lambda: r["conditional_readonly_sources"]({**readonly_sources, path: changed}))
+    finally:
+        globals_["CONDITIONAL_READONLY_SOURCES"] = original
+
+
+for path, old, new in (
+    (r["CONDITIONAL_SOURCE"], "return arena.revalidate(owner);", "return Ok(());"),
+    (r["CONDITIONAL_SOURCE"], "self.kernarg.is_some() || self.premises.is_some() || self.cohort.is_some()", "false"),
+    (r["ARENA_PREMISES"], "owner.generation.ensure_pristine()?;", ""),
+    (r["ARENA_PREMISES"], "self.checked != self.capacity.slots()", "self.checked == self.capacity.slots()"),
+    (r["ARENA_PREMISES"], "data.effect != Some(DeviceDataEffectV1::WriteOnly)", "false"),
+    (r["ARENA_PREMISES"], "slot.packet != owner.packets.get(index).copied()", "false"),
+    (r["ARENA_PREMISES"], "let range = self.selected(owner, index, None)?;", "let range = self.selected(owner, 0, None)?;"),
+    (r["ARENA_PREMISES"], "for index in 0..self.capacity.slots() {", "for index in 0..self.capacity.slots() - 1 {"),
+    (r["ARENA_PREMISES"], "range.offset != end || range.byte_len == 0", "false"),
+    (r["ARENA_PREMISES"], "self.require_root(owner)?.check_native()?;", "self.require_root(owner)?;"),
+    (r["ARENA_PREMISES"], "left.gpu_va() < end && right.gpu_va() < left_end", "false"),
+    (r["ARENA_PREMISES"], "root.order != self.order", "false"),
+    (r["ARENA_PREMISES"], "root.capacity != self.capacity", "false"),
+    (r["ARENA_PREMISES"], "owner.packets.len() != self.capacity.slots()", "false"),
+    (r["ARENA_PREMISES"], "data.writable_ranges.len() != self.capacity.slots()", "false"),
+    (r["ARENA_SOURCE"], "Self::Original1024 => SLOTS,", "Self::Original1024 => 2048,"),
+    (r["ARENA_SOURCE"], "Self::Independent2048 => GFX942_INDEPENDENT_FILL_ARENA2048_SLOTS_V1,", "Self::Independent2048 => SLOTS,"),
+    (r["ARENA_SOURCE"], "self == Self::Original1024 || order == ArenaOrderV1::IndependentDisjointWriteOnly", "true"),
+    (r["ARENA_PREMISES"], ".is_some_and(|packet| packet.ordering != self.order.packet_order())", ".is_some_and(|_packet| false)"),
+    (r["ARENA_SOURCE"], "Self::Ordered => AqlDispatchOrderingV1::WaitForPrior,", "Self::Ordered => AqlDispatchOrderingV1::Independent,"),
+    (r["ARENA_SOURCE"], "Self::IndependentDisjointWriteOnly => AqlDispatchOrderingV1::Independent,", "Self::IndependentDisjointWriteOnly => AqlDispatchOrderingV1::WaitForPrior,"),
+    (r["PRISTINE_SOURCE"], "pub(super) fn ensure_pristine(&self)", "pub(super) fn ensure_pristine(&mut self)"),
+    (r["TABLE_SOURCE"], "fn deref(&self) -> &Self::Target {\n        &self.slots\n    }", "fn deref(&self) -> &Self::Target { panic!(\"effect\") }"),
+):
+    rejects_with_outer_repin(path, old, new)
+
+for before, after in (
+    ("GFX942_NATIVE_FILL_ARENA_SLOTS_V1: usize = 1024;", "GFX942_NATIVE_FILL_ARENA_SLOTS_V1: usize = 2048;"),
+    ("GFX942_INDEPENDENT_FILL_ARENA2048_SLOTS_V1: usize = 2048;", "GFX942_INDEPENDENT_FILL_ARENA2048_SLOTS_V1: usize = 4096;"),
+    ("pub(super) const SLOTS: usize = GFX942_NATIVE_FILL_ARENA_SLOTS_V1;", "pub(super) const SLOTS: usize = 2048;"),
+    ("    Independent2048,\n}", "    Independent2048,\n    Unbounded,\n}"),
+):
+    rejects_with_outer_repin(r["ARENA_SOURCE"], before, after)
+for item in r["ARENA_CAPACITY_ITEMS"]:
+    code, exact = r["compact"](readonly_sources[r["ARENA_SOURCE"]]), r["compact"](item)
+    for replacement in ("#[cfg(any())]" + exact, "fnunrelated(){" + exact + "}", exact + exact):
+        rejects(lambda: r["conditional_arena_capacity"](code.replace(exact, replacement)))
+for name in ("SLOTS", "GFX942_NATIVE_FILL_ARENA_SLOTS_V1",
+             "GFX942_INDEPENDENT_FILL_ARENA2048_SLOTS_V1", "ArenaCapacityV1"):
+    for suffix in ("\nuse other::Alias as " + name + ";", "\nmod " + name + " {}"):
+        rejects(lambda: r["conditional_arena_capacity"](readonly_sources[r["ARENA_SOURCE"]] + suffix))
+
+for path, owner, method, _ in r["ARENA_READONLY_METHODS"]:
+    code, method = r["compact"](readonly_sources[path]), r["compact"](method)
+    actual = r["readonly_method"](readonly_sources[path], owner, method)
+    need(code.count(actual) == 1, "unique complete readonly body control")
+    for replacement in ("#[cfg(any())]" + actual, "fnunrelated(){" + actual + "}", actual + actual):
+        rejects(lambda: r["readonly_method"](code.replace(actual, replacement), owner, method))
+for path, name in ((r["BODY"].parent.parent / "queue_dispatch_binding.rs", "HostMetadataTableV1"),
+                   (r["ACCOUNT_SOURCE"], "HostMetadataTableV1"),
+                   (r["ARENA_SOURCE"], "ArenaPremisesV1"),
+                   (r["TABLE_SOURCE"], "Deref")):
+    for suffix in ("\nuse other::Alias as " + name + ";", "\nmod " + name + " {}"):
+        rejects(lambda: r["conditional_arena_accessors"](
+            {**readonly_sources, path: readonly_sources[path] + suffix}))
+
 for replacement in ("", "#[cfg(any())]\n", "// "):
     declaration = '#[path = "queue_dispatch_binding/conditional_fill.rs"]\nmod conditional_fill;'
     changed = binding.replace(declaration, replacement + declaration if replacement else "")
     rejects(lambda: r["conditional_guard_wiring"](changed, conditional_source))
+for suffix in ("\nmod conditional_fill {}", "\nuse other as conditional_fill;"):
+    rejects(lambda: r["conditional_guard_wiring"](binding + suffix, conditional_source))
 for suffix in ("\nimpl Drop for ConditionalFillStorageV1 { fn drop(&mut self) {} }",
                "\nuse std::cell::Cell;", "\nfn injected_effect() {}"):
     rejects(lambda: r["conditional_guard_wiring"](binding, conditional_source + suffix))

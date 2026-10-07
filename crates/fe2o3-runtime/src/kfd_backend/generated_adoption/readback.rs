@@ -9,6 +9,36 @@ enum ReadbackErrorV1<E> {
     Copy(E),
 }
 
+type DestinationV1 = (Gfx942RuntimeBufferAccessV1, Vec<u8>);
+
+enum DestinationsV1<'a> {
+    Singleton(&'a mut [DestinationV1]),
+    Cohort3([&'a mut [DestinationV1]; 3]),
+}
+
+impl DestinationsV1<'_> {
+    fn len(&self) -> Option<usize> {
+        match self {
+            Self::Singleton(values) => Some(values.len()),
+            Self::Cohort3(values) => values.iter().all(|member| member.len() == 1).then_some(3),
+        }
+    }
+
+    fn get(&self, index: usize) -> Option<&DestinationV1> {
+        match self {
+            Self::Singleton(values) => values.get(index),
+            Self::Cohort3(values) => values.get(index)?.first(),
+        }
+    }
+
+    fn get_mut(&mut self, index: usize) -> Option<&mut DestinationV1> {
+        match self {
+            Self::Singleton(values) => values.get_mut(index),
+            Self::Cohort3(values) => values.get_mut(index)?.first_mut(),
+        }
+    }
+}
+
 pub(super) fn roster_matches_plan_v1(
     plan: &GeneratedShellPlanV1,
     roster: &GeneratedHostRosterV1,
@@ -28,21 +58,31 @@ pub(super) fn roster_matches_plan_v1(
             })
 }
 
+#[cfg(test)]
 fn read_roster_v1<E>(
     roster: &GeneratedHostRosterV1,
     destinations: &mut [(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
+    copy: impl FnMut(usize, &mut [u8]) -> Result<(), E>,
+) -> Result<(), ReadbackErrorV1<E>> {
+    read_destinations_v1(roster, &mut DestinationsV1::Singleton(destinations), copy)
+}
+
+fn read_destinations_v1<E>(
+    roster: &GeneratedHostRosterV1,
+    destinations: &mut DestinationsV1<'_>,
     mut copy: impl FnMut(usize, &mut [u8]) -> Result<(), E>,
 ) -> Result<(), ReadbackErrorV1<E>> {
     if roster.count == 0
         || roster.count > roster.buffers.len()
-        || destinations.len() != roster.count
+        || destinations.len() != Some(roster.count)
         || roster.buffers[roster.count..].iter().any(Option::is_some)
     {
         return Err(ReadbackErrorV1::Roster);
     }
     let mut total = 0u64;
     // Validate the whole destination roster before modifying even its first byte.
-    for (ordinal, (access, bytes)) in destinations.iter().enumerate() {
+    for ordinal in 0..roster.count {
+        let (access, bytes) = destinations.get(ordinal).ok_or(ReadbackErrorV1::Roster)?;
         let slot = roster.buffers[ordinal].ok_or(ReadbackErrorV1::Roster)?;
         if slot.ordinal != ordinal
             || slot.bytes == 0
@@ -59,7 +99,10 @@ fn read_roster_v1<E>(
     if total != roster.readback_bytes {
         return Err(ReadbackErrorV1::Roster);
     }
-    for (ordinal, (_, bytes)) in destinations.iter_mut().enumerate() {
+    for ordinal in 0..roster.count {
+        let (_, bytes) = destinations
+            .get_mut(ordinal)
+            .ok_or(ReadbackErrorV1::Roster)?;
         copy(ordinal, bytes).map_err(ReadbackErrorV1::Copy)?;
     }
     Ok(())
@@ -72,6 +115,48 @@ impl KfdRuntimeBackendV1 {
         submission: u64,
         roster: &GeneratedHostRosterV1,
         destinations: &mut [(Gfx942RuntimeBufferAccessV1, Vec<u8>)],
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if plan.profile != crate::generated_source::GeneratedProfileV1::Singleton {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "singleton readback profile mismatch",
+            ));
+        }
+        self.read_generated_destinations_v1(
+            plan,
+            submission,
+            roster,
+            &mut DestinationsV1::Singleton(destinations),
+        )
+    }
+
+    pub(crate) fn read_generated_cohort3_submission_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        submission: u64,
+        roster: &GeneratedHostRosterV1,
+        destinations: [&mut [DestinationV1]; 3],
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if plan.profile != crate::generated_source::GeneratedProfileV1::NativeFillCohort3 {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "cohort readback profile mismatch",
+            ));
+        }
+        self.read_generated_destinations_v1(
+            plan,
+            submission,
+            roster,
+            &mut DestinationsV1::Cohort3(destinations),
+        )
+    }
+
+    fn read_generated_destinations_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        submission: u64,
+        roster: &GeneratedHostRosterV1,
+        destinations: &mut DestinationsV1<'_>,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         if self.generated_submission_plan_v1(submission)? != *plan {
             return Err(Self::rejected(
@@ -86,7 +171,7 @@ impl KfdRuntimeBackendV1 {
         let owner = native.submission.as_ref().expect("indexed submission");
         if !owner.roster.matches(roster)
             || !roster_matches_plan_v1(plan, roster)
-            || !matches!(owner.receipt, ReceiptV1::Recycled)
+            || !owner.receipt.recycled()
         {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::InvalidLaunch,
@@ -107,7 +192,7 @@ impl KfdRuntimeBackendV1 {
                     if count != plan.count {
                         return Err(ReadbackErrorV1::Roster);
                     }
-                    read_roster_v1(roster, destinations, |ordinal, bytes| {
+                    read_destinations_v1(roster, destinations, |ordinal, bytes| {
                         let request = fe2o3_kfd::Gfx942CompletedDispatchReadRequestV1::new(
                             generation,
                             ordinal,

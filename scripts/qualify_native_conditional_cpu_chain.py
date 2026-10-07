@@ -79,7 +79,7 @@ def command(cargo, source, target, producer_source):
     if (not isinstance(producer_source, str) or not 0 < len(producer_source.encode("utf-8")) <= 4096
             or any(c in producer_source for c in "\0\n\r")):
         raise ValueError("exact bounded producer source spelling required")
-    return [str(cargo), "authority", "release", "run", "--native-application-proof-custodian",
+    return [str(cargo), "authority", "release", "--native", "run", "--native-application-proof-custodian",
             "--manifest-path", str(Path(source) / application.FIXTURE / "Cargo.toml"),
             "--target-dir", str(target), "--offline", "--frozen", "--bin",
             "native-conditional-proof-only", "--", "--native-v5-proof-only",

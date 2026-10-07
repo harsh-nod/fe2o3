@@ -140,7 +140,7 @@ fn rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission() {
         ),
         (
             include_str!("../generated_adoption.rs"),
-            "    fn bind_generated_data_v1(",
+            "    fn acquire_generated_vm_v1(",
             "    fn observe_generated_queue_creation_v1(",
             ".acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(",
         ),
@@ -178,6 +178,30 @@ fn rooted_n1_constructor_and_all_startup_paths_preserve_owned_admission() {
             body[take..native]
                 .contains("Some(native_budget::BackingAdmissionV1::Host(admission))=>")
         );
+    }
+    for (source, start, end, next) in [
+        (
+            include_str!("../generated_adoption.rs"),
+            "    fn bind_generated_data_v1(",
+            "    fn acquire_generated_vm_v1(",
+            ".create_compute_aql_queue_with_fixed_dispatch(",
+        ),
+        (
+            include_str!("../generated_adoption/cohort3.rs"),
+            "    pub(crate) fn adopt_generated_cohort3_data_v1(",
+            "    fn bind_generated_cohort3_primary_v1(",
+            "self.bind_generated_cohort3_primary_v1(",
+        ),
+    ] {
+        let body = source
+            .split_once(start)
+            .unwrap()
+            .1
+            .split_once(end)
+            .unwrap()
+            .0;
+        assert_eq!(body.matches("self.acquire_generated_vm_v1()?").count(), 1);
+        assert!(body.find("self.acquire_generated_vm_v1()?").unwrap() < body.find(next).unwrap());
     }
 }
 

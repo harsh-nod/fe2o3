@@ -25,6 +25,12 @@ const OUTER_SCRATCH: usize = 11;
 const INNER_SCRATCH: usize = 7;
 const TEMPORARY: usize = 5;
 
+fn isolated_readiness_case(name: &str, run: impl FnOnce()) {
+    // This test module is included under both native protocol versions.
+    let (_, module) = module_path!().split_once("::").unwrap();
+    crate::eof_test_process::isolated_eof_case(&format!("{module}::{name}"), run);
+}
+
 struct FakeOwner<'a> {
     drops: &'a Cell<usize>,
     panic_on_drop: bool,
@@ -332,6 +338,13 @@ fn namespace_frame_and_eof_use_separate_finite_attempts() {
 
 #[test]
 fn readiness_uses_shared_frame_and_requires_a_separate_eof_attempt() {
+    isolated_readiness_case(
+        "readiness_uses_shared_frame_and_requires_a_separate_eof_attempt",
+        readiness_uses_shared_frame_and_requires_a_separate_eof_attempt_isolated,
+    );
+}
+
+fn readiness_uses_shared_frame_and_requires_a_separate_eof_attempt_isolated() {
     for count in [1, 2] {
         let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
         assert_eq!(
@@ -362,6 +375,13 @@ fn readiness_uses_shared_frame_and_requires_a_separate_eof_attempt() {
 
 #[test]
 fn shared_readiness_preserves_native_pending_and_framing_errors() {
+    isolated_readiness_case(
+        "shared_readiness_preserves_native_pending_and_framing_errors",
+        shared_readiness_preserves_native_pending_and_framing_errors_isolated,
+    );
+}
+
+fn shared_readiness_preserves_native_pending_and_framing_errors_isolated() {
     let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
     let mut frame = ExactPipeFrame::default();
     assert!(read_readiness(&mut frame, &reader).unwrap().is_none());
@@ -420,6 +440,13 @@ fn native_readiness_rejects_oversize_packet_mode_and_blocking_pipes() {
 
 #[test]
 fn readiness_wait_prepays_shared_pipe_work_and_scratch_before_io() {
+    isolated_readiness_case(
+        "readiness_wait_prepays_shared_pipe_work_and_scratch_before_io",
+        readiness_wait_prepays_shared_pipe_work_and_scratch_before_io_isolated,
+    );
+}
+
+fn readiness_wait_prepays_shared_pipe_work_and_scratch_before_io_isolated() {
     let limits = Wait::new(2, Wait::MAX_TIMEOUT).unwrap();
     for mode in 0..3 {
         let (reader, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();

@@ -1,0 +1,19 @@
+{
+  "files": {
+    "crates/fe2o3-resource-accounting/src/host_table.rs": "a712150724fa106875d40acd77b8e639a7675e50cd7a7b03e1f7d14e9847d8b9",
+    "crates/fe2o3-runtime-model/src/lib.rs": "a6d9c7df3505704176be4e7db7538ab6f84ffa440289b0cb72e7e180718a9701",
+    "crates/fe2o3-runtime-model/src/r63_graph_reservation.rs": "47278b598c7c1adb7efd176accbcaf24d7cbafe006476acabec7275d8fce70f2",
+    "crates/fe2o3-runtime-model/verus/graph_reservation_retirement_definitions_v1.rs": "2dda9aa8cfe4565dfef3da1f1db63175bc4c976db6006638585ec4bec1cc5e81",
+    "crates/fe2o3-runtime-model/verus/graph_reservation_retirement_v1.rs": "bcd9bdb759ee6985ef68b3888404d81a3d21e5f0ff6d49cae3182aae940c8f81",
+    "crates/fe2o3-runtime/src/context.rs": "ec1dd779894deb2adf2f8c03c883de2b2ff27f4bbb2ac06fe52b26328d5cf3f8",
+    "crates/fe2o3-runtime/src/context/graph.rs": "56da8345c26c52173ae3dabc59a9d7614164e9a7be0cc128f48ed3d41c3d56ea",
+    "crates/fe2o3-runtime/src/context/graph/retirement_bodies.rs": "819355ca52baf31779f41de790177edbe498dd4f002f35bd4f6b8f7b0cd04e8d",
+    "crates/fe2o3-runtime/src/context/replicas.rs": "1d3f7c640527413be2c45e690b162a3042482f5f967fc12d5746055f4c236e08",
+    "crates/fe2o3-runtime/src/context/replicas/storage.rs": "2711a74b9d35437804626d672292734a663ca73df490bccece44158b99eadca0",
+    "crates/fe2o3-runtime/src/context/tests/replica_tests.rs": "e8165ceee21b93e0eb88c3eb42b160f43234a7ab3d3622ac538b0e0ff5c24389",
+    "crates/fe2o3-runtime/src/context/tests/replica_tests/retirement.rs": "c7930e7538d68613b730e35c4265ebd0a9da8049fee217efda743105c5e209f1",
+    "crates/fe2o3-runtime/src/context/unpublished.rs": "7f205fc8f12d555559d3dc3e36e537247ea738cd7f058269301a8d7984b2dd75",
+    "crates/fe2o3-runtime/src/lib.rs": "033d6456204d29ff172e7f2a6232ff8e6643dddf60bd44dc65a6350eab3c8faa"
+  },
+  "scope": "post-access shared retirement only; no native disposal"
+}

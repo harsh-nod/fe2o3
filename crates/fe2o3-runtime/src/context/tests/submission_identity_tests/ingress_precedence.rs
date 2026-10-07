@@ -147,7 +147,7 @@ fn genuine_graph_reservation_preserves_query_and_public_ingress_precedence() {
                         Err(RuntimeErrorV1::BackendTerminal(_))
                     ));
                 }
-                let mut token = copy_token(&submission);
+                let mut token = copy_token(&submission.original);
                 if foreign_token {
                     token.id.context_generation = foreign.context_generation;
                 }
@@ -194,13 +194,13 @@ fn genuine_graph_reservation_preserves_query_and_public_ingress_precedence() {
                 } else {
                     assert_eq!(
                         context
-                            .poll_with_graph_access_v1(&mut submission, Some(reservation))
+                            .poll_with_graph_access_v1(&mut submission.original, Some(reservation))
                             .unwrap(),
                         RuntimePollV1::Pending
                     );
                     assert_eq!(
                         context
-                            .poll_with_graph_access_v1(&mut submission, Some(reservation))
+                            .poll_with_graph_access_v1(&mut submission.original, Some(reservation))
                             .unwrap(),
                         RuntimePollV1::Succeeded
                     );

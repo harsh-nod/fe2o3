@@ -32,6 +32,7 @@ use super::*;
 mod application;
 #[path = "program_v2_tests.rs"]
 mod native_program;
+mod socket_fixture;
 
 static RESERVED_CHILD_FD_LOCK: Mutex<()> = Mutex::new(());
 static TEST_ANCHOR_SERVICE_PEERS: Mutex<Vec<OwnedFd>> = Mutex::new(Vec::new());
@@ -103,12 +104,16 @@ impl Fixture {
     }
 
     fn with_code(name: &str, code: &[u8]) -> Self {
+        Self::with_code_in(name, code, &std::env::temp_dir())
+    }
+
+    fn with_code_in(name: &str, code: &[u8], parent: &Path) -> Self {
         // Keep the executable TMPDIR mount, but not the unbounded test label.
         // TempDir owns exactly this freshly created, collision-safe directory.
         let temporary = tempfile::Builder::new()
             .prefix(FIXTURE_PREFIX)
             .rand_bytes(FIXTURE_RANDOM_BYTES)
-            .tempdir_in(std::env::temp_dir())
+            .tempdir_in(parent)
             .unwrap_or_else(|error| panic!("create {name} fixture: {error}"));
         let root = temporary.path().to_path_buf();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();

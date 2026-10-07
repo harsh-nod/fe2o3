@@ -7,16 +7,21 @@ use std::cell::{Cell, RefCell};
 
 mod async_lending;
 mod cancellation;
+mod cold_device;
 mod copies;
 mod futures;
 mod graph;
+mod rejected;
+mod sdma_backing;
+mod settled_exit;
+pub(super) mod unpublished;
 
-struct Borrowed<'a> {
-    ticks: Cell<usize>,
-    decoded: &'a Cell<usize>,
-    dropped: &'a Cell<usize>,
-    domain: std::sync::Arc<()>,
-    completion_order: Option<(&'a RefCell<Vec<usize>>, usize)>,
+pub(super) struct Borrowed<'a> {
+    pub(super) ticks: Cell<usize>,
+    pub(super) decoded: &'a Cell<usize>,
+    pub(super) dropped: &'a Cell<usize>,
+    pub(super) domain: std::sync::Arc<()>,
+    pub(super) completion_order: Option<(&'a RefCell<Vec<usize>>, usize)>,
 }
 impl Drop for Borrowed<'_> {
     fn drop(&mut self) {
@@ -61,7 +66,7 @@ unsafe impl RuntimeGfx942GeneratedCompletionCarrierV1 for Borrowed<'_> {
     }
 }
 
-fn context() -> RuntimeContextV1<KfdRuntimeBackendV1> {
+pub(super) fn context() -> RuntimeContextV1<KfdRuntimeBackendV1> {
     RuntimeContextV1::open(KfdRuntimeBackendV1::mock_worker_v3_generated_only_v1()).unwrap()
 }
 
@@ -72,6 +77,14 @@ where
         + RuntimeAsyncCopyBackendV1,
 {
     Hooks {
+        domains: |value| {
+            value
+                .completion_domain_v1()
+                .map(CompletionDomainsV1::Singleton)
+        },
+        decode: RuntimeGfx942PreparedV1::complete_readback_v1,
+        progress_graph: |scope| scope.progress_graph_v1(),
+        progress_copies: |scope| scope.progress_copies_v1(),
         reserve: |_, _| {
             let (_, projection) = crate::authorized_execution::tests::source_projection_with_access(
                 fe2o3_aql::AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
@@ -82,6 +95,8 @@ where
         preflight: |_, _, _, _, _| Ok(()),
         ready: |_, _| Ok(true),
         adopt: |_, _, _, _| Ok(()),
+        sdma_adoption: None,
+        cold: None,
         progress: |_, prepared, _, _| {
             let ticks = &prepared.value().ticks;
             if ticks.get() == 0 {
@@ -94,8 +109,13 @@ where
         complete: |context, _, _, hold| {
             context
                 .release_unpublished_hold_v1(hold)
+                .map(|()| true)
                 .map_err(Into::into)
         },
+        rejected: |_, _| Ok(false),
+        retire_rejected: |_, _, _, _| panic!("no classified rejection in ordinary CPU hooks"),
+        unpublished: |_, _| Ok(true),
+        retire_unpublished: |_, _| Ok(()),
         copy_progress: RuntimeContextV1::progress_stream_v1,
         graph_submit: RuntimeContextV1::submit_graph_action_v1,
         graph_progress: |context, stream, access| {

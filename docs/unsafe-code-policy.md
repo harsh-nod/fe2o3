@@ -41,6 +41,68 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+### A1-A3 Integration Review (2026-10-07)
+
+The runtime integration review reconciles the 129 source entries reported by
+the candidate `727f32888ff27391223e0c2b2546d867fdc0e453` hosted inventory gate,
+plus the successor Registry4 and replica/graph boundaries. Four reviewers
+divided the actual implementations and callers by ownership, not by counts:
+host/macros/completion, runtime/KFD, process identity/custodian/spawn, and the
+compiler/Cargo/proof boundary. Exact reviewed source hashes and raw review notes
+are retained with the qualification evidence. This inventory update does not
+qualify an unexecuted native path or promote a milestone to complete.
+
+The integrating review found two refusal-cleanup defects. The seccomp-listener
+receiver validated an SCM_RIGHTS envelope before owning its descriptors. It now
+drains received rights into RAII before any envelope/cardinality rejection;
+surplus rights are dropped and truncated messages are still refused. The
+compiler-proof inherited-input entry admitted its first source before claiming
+the second. It now claims both original, distinct slots once before either
+flag or endpoint validation. Its unsafe contract still requires exclusive,
+valid inherited ownership. Pipe-EOF tests cover refusal cleanup; isolated
+subprocesses exclude unrelated test forks retaining transient descriptor aliases.
+
+The reviewed obligations remain explicit:
+
+- Generated ABI/effect adapters implement an unsafe correspondence contract;
+  parsed layouts and exact retained artifact/currentness owners are required.
+  Registry4 uses a separate completion contract. Early copied results neither
+  retire its common source debit nor authorize scalar graph completion.
+- Graph success follows original operation release and version commitment.
+  Definite unpublished failure follows actual original disposal, never a
+  classification string. Ambiguous custody remains retained and terminal.
+  Replica test authorities and deny-only examples are not native providers.
+- KFD ioctl buffers, nested event records, aligned atomics and volatile mappings
+  retain their original owners. Queue destruction precedes event/mapping
+  teardown. Exact-layout Box conversions preserve one allocation and one drop.
+  None of these source reviews proves firmware, device coherence or the kernel.
+- Process identity queries borrow original pidfds and initialized ABI records.
+  Protected clone/exec keeps original cleanup owners before fallible admission,
+  uses async-signal-safe child operations, and requires the existing dedicated
+  creator, exclusive reaping and external whole-domain custodian contracts.
+  Observed PIDs and readiness bytes do not reconstruct process authority.
+- Inherited compiler/application inputs are consumed once under their explicit
+  startup contracts. Registration, ACK and proof sources remain distinct.
+  Test-only descriptor/environment mutation runs in owned isolated helpers;
+  root-only fixtures remain opt-in. Unsafe parsed macro fixtures remain counted
+  but do not supply a production implementation.
+
+The maintained tokenizing inventory remains unchanged and fail-closed. A local
+standalone build of that exact test source is only the mechanical refresh tool;
+the pinned-toolchain Cargo gate and affected implementation tests must still
+pass on the final integrated candidate. Counts are not executable refinement,
+memory-safety proof, hardware evidence, or permission to bypass admission.
+
+The separately reviewed two-cycle Registry4 successor adds one marker trait,
+its private host implementation, and an inert test implementation. Both copied
+result frames are reserved from the original result account before adoption;
+the first result may remain alive while the second uses distinct storage and
+its own one-shot gate. Rearm checks all four original recycled/copied generation
+owners before mutation, retains monotone counters, and refuses a third cycle.
+Common native/source custody survives both decodes and any refusal. This is
+eight bounded publications with at most four outstanding, not rolling admission,
+thousands in flight, device overlap or an out-of-order hardware result.
+
 The private V53 consuming execution adapter adds one unsafe backend trait and
 one private implementation of the existing gfx942 runtime authority. A safe
 content callback cannot establish protected compiler/proof provenance or native

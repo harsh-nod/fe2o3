@@ -1,0 +1,19 @@
+{
+  "files": {
+    "crates/fe2o3-completion/src/graph.rs": "68f3d512a491e865b4a68f4e79d11e211f79e464dbab7f49f4564b97c13d529a",
+    "crates/fe2o3-runtime-model/src/lib.rs": "a6d9c7df3505704176be4e7db7538ab6f84ffa440289b0cb72e7e180718a9701",
+    "crates/fe2o3-runtime-model/src/r65_graph_versions.rs": "519666a7186185c13103e9d2eb74ff47f86c7f3dcc3ade98d4d6d30308b0cfd7",
+    "crates/fe2o3-runtime-model/verus/graph_version_ledger_definitions_v1.rs": "a9093e556838b9da392f5aba146883e0680cf39d390a0d87829aaf0b3d489a78",
+    "crates/fe2o3-runtime-model/verus/graph_version_ledger_v1.rs": "553d3fff82245eed1474519f1644c440e0ea4cb966e5637514766ab3ec3d2222",
+    "crates/fe2o3-runtime/src/async_engine.rs": "e7f0a9a6ccb32cb4fa9b0978bf8c1eac632981448b7712f4e53c2abe86f9f17e",
+    "crates/fe2o3-runtime/src/async_engine/graph.rs": "065ac6c67bd6aebb2f1cc06cd2ad787086049d98b304cad3d7df1052b6612742",
+    "crates/fe2o3-runtime/src/async_engine/graph/admitted.rs": "3aca54c04570bf8badedfb3ab1a9ab85c7de384f4fa5ed59c25e29e3be198004",
+    "crates/fe2o3-runtime/src/async_engine/graph/versions.rs": "6c73b719afda877e4e38d261b1bf37c71f1aad8f2ad4206aa8f08ef0173819d2",
+    "crates/fe2o3-runtime/src/async_engine/graph/versions/transition_bodies.rs": "c8325bca1a037c1455282c4e31148db9f441db9fa544e3260cb3db92f8eb7808",
+    "crates/fe2o3-runtime/src/async_engine/graph/versions/transition_tests.rs": "c7b038667778fab0927791433f7f3846c94e5795b27f5e0ff48e540066241bf9",
+    "crates/fe2o3-runtime/src/context/generated_scope/graph/staging.rs": "83e875ec37c28547a7c6d2f5e99188fc7518967396e1d5521aee98fb36251ddb",
+    "crates/fe2o3-runtime/src/lib.rs": "033d6456204d29ff172e7f2a6232ff8e6643dddf60bd44dc65a6350eab3c8faa"
+  },
+  "predecessor": "2653a4ead0ac1c659b82c5d49b56230a1c096b1f",
+  "scope": "conditional shared begin/commit only; no native settlement"
+}
