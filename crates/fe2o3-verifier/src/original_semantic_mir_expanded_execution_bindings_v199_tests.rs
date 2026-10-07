@@ -501,6 +501,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "hide(invocation_source_logical_write_v38);",
         "hide(invocation_source_context_shape_v161);",
         "hide(invocation_context_issue_fresh_enabled_v211);",
+        "hide(invocation_context_issue_fresh_enabled_v211);\n    hide(byte_execution_well_formed_v37);\n    hide(byte_execution_next_epoch_v178);",
         "reveal(invocation_context_issue_fresh_enabled_v211);",
         "invocation_source_context_issue_frame_v262(source, issue);",
         "invocation_source_context_issue_replays_install_v263(source, issue);",

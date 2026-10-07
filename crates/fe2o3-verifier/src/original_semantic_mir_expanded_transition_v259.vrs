@@ -325,6 +325,7 @@ proof fn invocation_context_issue_fresh_preserves_frame_v259(
     hide(invocation_source_logical_write_v38);
     hide(invocation_source_context_shape_v161);
     hide(invocation_context_issue_fresh_enabled_v211);
+    hide(byte_execution_well_formed_v37);
     hide(byte_execution_next_epoch_v178);
     hide(byte_execution_step_v178);
     assert(source.machine.valid && invocation_source_byte_state_well_formed_v36(source)
