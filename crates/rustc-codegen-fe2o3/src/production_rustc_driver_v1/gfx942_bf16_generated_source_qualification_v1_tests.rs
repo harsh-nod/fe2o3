@@ -2709,3 +2709,6 @@ mod private_worker;
 
 #[path = "gfx942_bf16_same_owner_connector_v1_tests.rs"]
 mod same_owner_connector;
+
+#[path = "gfx942_bf16_same_owner_engineering_v1_tests.rs"]
+mod same_owner_engineering;
