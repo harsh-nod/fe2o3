@@ -122,7 +122,11 @@ impl Checked {
  0 <= left < 4294967296, 0 <= right < 4294967296,
  ensures ({{ let n = invocation_source_micro_step_{root}_{instance}_v36(c, little_endian);
  let l = c.observations.len() as int;
- n.source.machine.valid && n.next_statement == c.next_statement + 1
+ n.source.machine.valid && invocation_source_active_{root}_{instance}_v36(n.source)
+ && n.source.machine.pc == c.source.machine.pc
+ && n.source.machine.values.len() == c.source.machine.values.len()
+ && n.source.slots == c.source.slots && n.source.objects == c.source.objects
+ && n.next_statement == c.next_statement + 1
  && n.observations.len() == l + 1 && n.observations.take(l) == c.observations
  && n.observations[l].root == {root} && n.observations[l].instance == {instance}
  && n.observations[l].block == {block} && n.observations[l].statement == {statement}
@@ -137,9 +141,12 @@ impl Checked {
 {{
  checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
  checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260(c.source, left, right, little_endian);
+ invocation_source_checked_add_local_well_formed_v294(c.source, {destination}, {ty},
+     {left}, {right}, left, right, {root}, {instance}, little_endian);
  let event = invocation_source_byte_event_{root}_{instance}_v36({block}, {statement});
  assert(event.is_some());
  let after = invocation_source_byte_step_v36(c.source, event.unwrap(), {root}, {instance}, little_endian);
+ assert(invocation_source_active_{root}_{instance}_v36(after));
  reveal(invocation_source_micro_step_{root}_{instance}_v36);
  let n = invocation_source_micro_step_{root}_{instance}_v36(c, little_endian);
  assert(n == invocation_source_micro_record_v36(c, after, {root}, {instance}, {block}, {statement}, event));
@@ -163,7 +170,11 @@ proof fn checked_add_actual_prefix_{root}_{instance}_{block}_{statement}_v293(
  ensures ({{ let p = invocation_source_micro_run_{root}_{instance}_v36(c, fuel, little_endian);
  let out = invocation_source_micro_run_{root}_{instance}_v36(c, fuel + 1, little_endian);
  let l = c.observations.len() as int;
- out.source.machine.valid && out.observations.len() == l + fuel + 1
+ out.source.machine.valid && invocation_source_active_{root}_{instance}_v36(out.source)
+ && out.source.machine.pc == p.source.machine.pc
+ && out.source.machine.values.len() == p.source.machine.values.len()
+ && out.source.slots == p.source.slots && out.source.objects == p.source.objects
+ && out.observations.len() == l + fuel + 1
  && out.observations.take(l) == c.observations
  && out.next_statement == c.next_statement + fuel + 1
  && out.observations[l + fuel].root == {root} && out.observations[l + fuel].instance == {instance}

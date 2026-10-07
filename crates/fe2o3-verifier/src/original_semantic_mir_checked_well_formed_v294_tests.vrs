@@ -1,0 +1,144 @@
+// Diagnostic proof cases, not proof results. The first case constructs every
+// resident-map family; only original schema/value-shape inputs are premises.
+spec fn checked_wf_hostile_logical_v294(
+    product_type: int, aggregate: InvocationSourceAggregateV42, variant: InvocationSourceEnumV47,
+) -> InvocationSourceLogicalV38 {
+    let frame = MemoryDynamicFrameV30 { owner: 0, invocation: 0 };
+    let loan = InvocationSourceReferenceV38 { origin: 0, version: 4, frame,
+        source_type: 0, origin_generation: 0, borrow_instance: 0, borrow_block: 0, borrow_statement: 0 };
+    let shared = InvocationSourceExecutionReferenceV168 {
+        recipe: InvocationSourceExecutionRecipeV168 { reference_type: 0, source_type: 0,
+            role: InvocationSourceExecutionRoleV168::Context, mutable: false,
+            instance: 0, block: 0, statement: 0 },
+        identity: InvocationSourceExecutionLoanIdV168 { local: 2, version: 4 },
+        origin: 0, origin_version: 4, frame, ancestors: seq![],
+    };
+    let pending = InvocationSourceExecutionTransferV286 {
+        site: InvocationSourceExecutionCallSiteV286 {
+            root: 0, caller: 0, block: 0, argument: 0, input: 3,
+            caller_owner: 0, child: 1, child_owner: 1, destination: 5,
+            pc: 0, entry_pc: 1, caller_begin: 0, caller_end: 4, child_begin: 4, child_end: 8 },
+        reference: InvocationSourceExecutionReferenceV168 {
+            recipe: InvocationSourceExecutionRecipeV168 { mutable: true, ..shared.recipe },
+            identity: InvocationSourceExecutionLoanIdV168 { local: 3, version: 3 },
+            origin: 0, origin_version: 4, ..shared },
+        moved_version: 4, caller_frame: frame, child_invocation: 1,
+    };
+    InvocationSourceLogicalV38 {
+        versions: Seq::new(8, |i: int| 4int),
+        witnesses: Map::empty().insert(0int, 0int),
+        references: Map::empty().insert(1int, loan),
+        execution_references: Map::empty().insert(2int, shared),
+        execution_pending: Map::empty().insert(3int, pending),
+        products: Map::empty().insert(4int, InvocationSourceProductV282 {
+            source_type: product_type, components: Map::empty() }),
+        aggregates: Map::empty().insert(5int, aggregate),
+        enums: Map::empty().insert(6int, variant),
+        descriptor_references: Map::empty().insert(7int, InvocationSourceDescriptorReferenceV51 {
+            loan, reference_type: 0, mutable: false, metadata_bits: 64, width: 1 }),
+    }
+}
+
+proof fn checked_wf_constructed_resident_maps_v294(
+    product_type: int, aggregate: InvocationSourceAggregateV42, variant: InvocationSourceEnumV47,
+    destination: int,
+)
+    requires invocation_source_product_type_v282(product_type),
+        invocation_source_aggregate_well_formed_v42(aggregate),
+        invocation_source_enum_well_formed_v47(variant), 0 <= destination < 8,
+    ensures ({ let before = checked_wf_hostile_logical_v294(product_type, aggregate, variant);
+        let after = invocation_source_logical_write_v38(before, destination);
+        invocation_source_logical_well_formed_v38(before, 8)
+            && invocation_source_logical_well_formed_v38(after, 8)
+            && before.execution_pending.contains_key(3) && before.products.contains_key(4)
+            && after.versions[destination] == 5
+            && (destination != 3 ==> after.execution_pending[3] == before.execution_pending[3])
+            && (destination != 4 ==> after.products[4] == before.products[4]) }),
+{
+    let before = checked_wf_hostile_logical_v294(product_type, aggregate, variant);
+    assert(before.execution_pending.dom() =~= set![3int]);
+    assert(before.execution_pending.dom().finite() && before.execution_pending.dom().len() == 1);
+    assert(invocation_source_execution_reference_shape_v168(before.execution_references[2], before.versions));
+    assert(invocation_source_execution_reference_shape_v168(before.execution_pending[3].reference, before.versions));
+    assert(invocation_source_execution_pending_shape_v286(before));
+    assert(invocation_source_product_well_formed_v282(before.products[4]));
+    assert(invocation_source_product_execution_ancestry_v282(before));
+    assert(invocation_source_logical_well_formed_v38(before, 8));
+    invocation_source_logical_write_well_formed_v294(before, 8, destination);
+}
+
+// This separate no-premise case needs no aggregate/product/enum schema. It
+// overwrites a pending transfer's origin without relabeling its old version.
+proof fn checked_wf_constructed_pending_origin_overwrite_v294()
+    ensures ({
+        let shape = checked_wf_hostile_logical_v294(0,
+            InvocationSourceAggregateV42 { source_type: 0, leaves: Map::empty(), execution_lease: None },
+            InvocationSourceEnumV47 { source_type: 0, variant: 0, fields: Map::empty() });
+        let before = InvocationSourceLogicalV38 {
+            products: Map::empty(), aggregates: Map::empty(), enums: Map::empty(), ..shape };
+        let after = invocation_source_logical_write_v38(before, 0);
+        invocation_source_logical_well_formed_v38(before, 8)
+            && invocation_source_logical_well_formed_v38(after, 8)
+            && before.execution_pending.contains_key(3)
+            && after.execution_pending == before.execution_pending
+            && after.execution_references == before.execution_references
+            && after.versions[0] == 5
+            && after.execution_pending[3].reference.origin == 0
+            && after.execution_pending[3].reference.origin_version == 4
+    }),
+{
+    let shape = checked_wf_hostile_logical_v294(0,
+        InvocationSourceAggregateV42 { source_type: 0, leaves: Map::empty(), execution_lease: None },
+        InvocationSourceEnumV47 { source_type: 0, variant: 0, fields: Map::empty() });
+    let before = InvocationSourceLogicalV38 {
+        products: Map::empty(), aggregates: Map::empty(), enums: Map::empty(), ..shape };
+    assert(before.execution_pending.dom() =~= set![3int]);
+    assert(before.execution_pending.dom().finite() && before.execution_pending.dom().len() == 1);
+    assert(invocation_source_execution_reference_shape_v168(before.execution_references[2], before.versions));
+    assert(invocation_source_execution_reference_shape_v168(before.execution_pending[3].reference, before.versions));
+    assert(invocation_source_execution_pending_shape_v286(before));
+    assert(invocation_source_logical_well_formed_v38(before, 8));
+    invocation_source_logical_write_well_formed_v294(before, 8, 0);
+    let after = invocation_source_logical_write_v38(before, 0);
+    assert(after.execution_pending =~= before.execution_pending);
+    assert(after.execution_references =~= before.execution_references);
+}
+
+// Arbitrary full-frame inputs: neither empty maps nor a single-frame runtime
+// is required. Records other than the destination retain their exact payloads.
+proof fn checked_wf_arbitrary_frames_and_pending_v294(
+    source: InvocationSourceByteStateV36, destination: int, other: int,
+    aggregate: InvocationSourceAggregateV42,
+)
+    requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
+        0 <= destination < source.machine.values.len(), !source.objects.contains_key(destination),
+        invocation_source_aggregate_well_formed_v42(aggregate), aggregate.execution_lease.is_none(),
+        other != destination,
+    ensures ({ let after = invocation_source_aggregate_install_v42(source, destination, aggregate);
+        invocation_source_byte_state_well_formed_v36(after)
+            && after.machine.frames == source.machine.frames
+            && after.machine.memory == source.machine.memory
+            && after.machine.generations == source.machine.generations
+            && (source.logical.execution_pending.contains_key(other) ==>
+                after.logical.execution_pending.contains_key(other)
+                    && after.logical.execution_pending[other] == source.logical.execution_pending[other])
+            && (source.logical.products.contains_key(other) ==>
+                after.logical.products.contains_key(other)
+                    && after.logical.products[other] == source.logical.products[other]) }),
+{
+    invocation_source_plain_aggregate_install_well_formed_v294(source, destination, aggregate);
+    invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);
+}
+
+proof fn checked_wf_install_refusals_stay_invalid_v294(
+    source: InvocationSourceByteStateV36, destination: int, aggregate: InvocationSourceAggregateV42,
+)
+    requires !source.machine.valid || !invocation_source_byte_state_well_formed_v36(source)
+        || destination < 0 || source.machine.values.len() <= destination
+        || source.objects.contains_key(destination)
+        || !invocation_source_aggregate_well_formed_v42(aggregate),
+    ensures !invocation_source_aggregate_install_v42(source, destination, aggregate).machine.valid,
+{
+    reveal(invocation_source_aggregate_install_v42);
+    reveal(invocation_source_byte_put_local_v36);
+}

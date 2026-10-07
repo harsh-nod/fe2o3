@@ -2,6 +2,8 @@ use super::*;
 use fe2o3_mir_model::semantic_mir_v1::*;
 
 const LIMIT: usize = 256 * 1024 * 1024;
+const CHECKED_WF_CASES: &str =
+    include_str!("original_semantic_mir_checked_well_formed_v294_tests.vrs");
 
 fn checked_add_transition_model_v260(inspect: impl FnOnce(&str)) {
     checked_transition_model_v288(SemanticCheckedBinaryOpV1::Add, |model, count| {
@@ -91,6 +93,7 @@ fn checked_transition_model_v288(
                     assert!(declaration.contains(&format!("c.source.machine.pc == {pc}, c.next_statement == {statement},")));
                     assert!(declaration.contains(&format!("n.observations[l].block == {block}")));
                 }
+                write!(out, "{CHECKED_WF_CASES}").map_err(|_| out.error())?;
                 super::super::support_closure::retain_referenced(out)?;
                 writeln!(out, "}}").map_err(|_| out.error())?;
                 drop(physical);
@@ -142,9 +145,18 @@ fn production_checked_transition_generation_has_exact_resource_limits() {
             |plan, out| {
                 super::super::source_function::tests::with_slots(plan, out, |slots, out| {
                     let program = SourceByteProgram::derive(plan, slots, out)?;
+                    super::super::emit_model_prelude_v187(out)?;
                     assert!(program.emit_checked_local_add_proofs_v288(out)? > 0);
+                    assert!(out.text.contains(include_str!(
+                        "original_semantic_mir_checked_well_formed_v294.vrs"
+                    )));
                     assert!(out.text.contains("proof fn checked_add_actual_micro_step_"));
                     assert!(out.text.contains("proof fn checked_add_actual_prefix_"));
+                    assert!(out.text.contains(
+                        "invocation_source_checked_add_local_well_formed_v294(c.source,"
+                    ));
+                    assert!(out.text.contains("_v36(n.source)"));
+                    assert!(out.text.contains("_v36(out.source)"));
                     Ok(())
                 })
             },
@@ -307,6 +319,102 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
             assert!(!model.contains(forbidden));
         }
     });
+}
+
+#[test]
+fn checked_wf_actual_micro_and_prefix_consumers_retain_arbitrary_frame_shapes() {
+    checked_add_transition_model_v260(|model| {
+        assert!(model.contains(include_str!(
+            "original_semantic_mir_checked_well_formed_v294.vrs"
+        )));
+        assert!(model.contains(CHECKED_WF_CASES));
+        for name in [
+            "checked_wf_constructed_resident_maps_v294",
+            "checked_wf_constructed_pending_origin_overwrite_v294",
+            "checked_wf_arbitrary_frames_and_pending_v294",
+            "checked_wf_install_refusals_stay_invalid_v294",
+        ] {
+            assert_eq!(model.matches(&format!("proof fn {name}(")).count(), 1);
+        }
+        let mut count = 0;
+        for body in model
+            .split("proof fn checked_add_actual_micro_step_")
+            .skip(1)
+        {
+            let body = body.split("\nproof fn ").next().unwrap();
+            let (contract, proof) = body.split_once("\n{\n").unwrap();
+            let (requires, ensures) = contract.split_once("\n ensures ").unwrap();
+            assert!(!requires.contains("Map::empty"));
+            assert!(!requires.contains("execution_pending"));
+            assert!(!requires.contains("logical.products"));
+            assert!(ensures.contains("invocation_source_active_"));
+            assert!(ensures.contains("_v36(n.source)"));
+            assert!(ensures.contains("n.source.machine.pc == c.source.machine.pc"));
+            assert!(ensures.contains("n.source.slots == c.source.slots"));
+            assert!(ensures.contains("n.source.objects == c.source.objects"));
+            assert!(
+                proof.contains("invocation_source_checked_add_local_well_formed_v294(c.source,")
+            );
+            count += 1;
+        }
+        assert!(count > 0);
+        assert_eq!(
+            model
+                .matches("_v36(out.source)\n && out.source.machine.pc == p.source.machine.pc")
+                .count(),
+            count
+        );
+    });
+}
+
+#[test]
+fn checked_wf_laws_do_not_assume_empty_maps_or_poststate_well_formedness() {
+    let laws = include_str!("original_semantic_mir_checked_well_formed_v294.vrs");
+    assert_eq!(laws.matches("proof fn ").count(), 3);
+    for body in laws.split("proof fn ").skip(1) {
+        let contract = body.split_once("\n{").unwrap().0;
+        let requires = contract
+            .split_once("    requires ")
+            .unwrap()
+            .1
+            .split_once("    ensures ")
+            .unwrap()
+            .0;
+        assert!(!requires.contains("Map::empty"));
+        assert!(!requires.contains("after"));
+        assert!(!requires.contains("target"));
+        assert!(!requires.contains("execution_pending"));
+        assert!(!requires.contains("logical.products"));
+    }
+    for forbidden in ["assume(", "admit(", "external_body", "assume_specification"] {
+        assert!(!laws.contains(forbidden));
+        assert!(!CHECKED_WF_CASES.contains(forbidden));
+    }
+    let witness = CHECKED_WF_CASES
+        .split_once("proof fn checked_wf_constructed_pending_origin_overwrite_v294()")
+        .unwrap()
+        .1
+        .split_once("\n{\n")
+        .unwrap()
+        .0;
+    assert!(!witness.contains("requires"));
+    assert!(witness.contains("after.execution_pending[3].reference.origin_version == 4"));
+    assert!(witness.contains("after.versions[0] == 5"));
+    for family in [
+        "witnesses",
+        "references",
+        "execution_references",
+        "execution_pending",
+        "products",
+        "aggregates",
+        "enums",
+        "descriptor_references",
+    ] {
+        assert!(
+            CHECKED_WF_CASES.contains(&format!("{family}: Map::empty().insert(")),
+            "{family}"
+        );
+    }
 }
 
 #[test]
