@@ -190,6 +190,9 @@ impl<'tcx> RetainedReferenceInputsV1<'tcx> {
         match (&self.enrollment, loan) {
             (Some(retained), Some(loan)) => {
                 retained.revalidate(tcx, loan, work)?;
+                // A fresh scoped loan must establish descriptor membership
+                // before origin access, even when the retained roster is empty.
+                let _ = loan.request(work)?;
                 retained.validate_inputs(functions, work)?;
             }
             (None, None) => {}
