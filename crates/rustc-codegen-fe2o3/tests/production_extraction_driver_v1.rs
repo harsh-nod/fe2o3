@@ -16,6 +16,7 @@ mod inert_invocation_v3;
 
 include!("production_extraction_driver_v1/generative_provider_tests.rs");
 include!("production_extraction_driver_v1/source_census_tests.rs");
+include!("production_extraction_driver_v1/inlined_source_safety_v1.rs");
 
 struct ScratchTarget {
     path: PathBuf,
