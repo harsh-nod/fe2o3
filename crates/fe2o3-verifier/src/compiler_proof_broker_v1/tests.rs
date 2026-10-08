@@ -216,6 +216,49 @@ fn child_descriptor_installation_rejects_occupied_reserved_slots() {
 
 #[test]
 fn child_command_drop_releases_all_captured_endpoint_aliases() {
+    // Other libtest threads may fork with CLOEXEC aliases before their children exec. Create
+    // these endpoints only in the isolated child so immediate peer closure tests this Command.
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "compiler_proof_broker_v1::tests::child_command_drop_isolated_child",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = crate::executor::spawn_artifact_coordinated_child(&mut command)
+        .unwrap()
+        .wait_with_output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}{}",
+        stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| *line == "compiler-proof-child-command-drop-completed-v352")
+            .count(),
+        1,
+        "{stdout}"
+    );
+}
+
+#[test]
+#[ignore = "isolated immediate endpoint closure assertion"]
+fn child_command_drop_isolated_child() {
+    assert_child_command_drop_releases_all_captured_endpoint_aliases();
+    println!("\ncompiler-proof-child-command-drop-completed-v352");
+}
+
+fn assert_child_command_drop_releases_all_captured_endpoint_aliases() {
     let (server, client) = transport::pair().unwrap();
     let server = Endpoint::admit(server).unwrap();
     let client = rustix::io::fcntl_dupfd_cloexec(client, DESCRIPTOR_FLOOR).unwrap();
@@ -291,5 +334,5 @@ fn low_descriptor_limit_child() {
     let _capabilities = (0..5)
         .map(|_| rustix::io::fcntl_dupfd_cloexec(&source, DESCRIPTOR_FLOOR).unwrap())
         .collect::<Vec<_>>();
-    child_command_drop_releases_all_captured_endpoint_aliases();
+    assert_child_command_drop_releases_all_captured_endpoint_aliases();
 }
