@@ -64,7 +64,7 @@ bit exact.
 The content binding carries exact SHA-256 identities:
 
 - attributed source: `3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d`;
-- CPU oracle: `837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407`;
+- CPU oracle: `a4f1d28280757de0f09227dbe6cdde515c0c6633dc48dbf7cf7d2a3079c9f7de`;
 - reviewed correspondence: `9d009122b179b15a2aab987404f1589611b171742bc1b3f1e98163245a53f48e`.
 
 Those identities are domain-separated with an outer 20-byte Git commit. The

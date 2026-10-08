@@ -282,7 +282,7 @@ fn exact_identities_and_transcript_fail_closed_under_mutation() {
     );
     assert_eq!(
         encode_hex(&exact.cpu_oracle_sha256),
-        "837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407"
+        "a4f1d28280757de0f09227dbe6cdde515c0c6633dc48dbf7cf7d2a3079c9f7de"
     );
     assert_eq!(
         encode_hex(&exact.correspondence_sha256),

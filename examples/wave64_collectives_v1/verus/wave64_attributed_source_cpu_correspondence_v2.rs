@@ -30,10 +30,10 @@ pub open spec fn attributed_source_identity_v2() -> Digest256V2 {
 
 pub open spec fn cpu_oracle_identity_v2() -> Digest256V2 {
     Digest256V2 {
-        word0: 0x837aae894e5c04da,
-        word1: 0x4b598e45f344f2e5,
-        word2: 0xdf0aa8bc6155acf0,
-        word3: 0xbf05809ecd86d407,
+        word0: 0xa4f1d28280757de0,
+        word1: 0xf09227dbe6cdde51,
+        word2: 0x5c0c6633dc48dbf7,
+        word3: 0xcf7d2a3079c9f7de,
     }
 }
 

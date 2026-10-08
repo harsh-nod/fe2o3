@@ -223,7 +223,7 @@ fn documentation_keeps_refinement_and_execution_boundaries_explicit() {
         "Source-model-to-Kernel-IR refinement",
         "Reviewed attributed-source-to-CPU correspondence",
         "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
-        "837aae894e5c04da4b598e45f344f2e5df0aa8bc6155acf0bf05809ecd86d407",
+        "a4f1d28280757de0f09227dbe6cdde515c0c6633dc48dbf7cf7d2a3079c9f7de",
         "9d009122b179b15a2aab987404f1589611b171742bc1b3f1e98163245a53f48e",
         "b8daeb2bc953924a424542820bed566e52d57290",
         "da2722bd3ce349228644300b13bb45d4683d1ebd60f8b7749e7764ec6569e894",
