@@ -39,6 +39,56 @@ fn assert_leading_opacity_headers(theorem: &str) {
     }
 }
 
+fn assert_constructor_summary_residual(text: &str, root: usize, pc: usize, conserves_heap: bool) {
+    let body = theorem(
+        text,
+        &format!("invocation_paired_cut_{root}_pc{pc}_residual_v85"),
+    );
+    assert_leading_opacity_headers(body);
+    let (premises, conclusion) = body
+        .split_once(" requires ")
+        .unwrap()
+        .1
+        .split_once(" ensures ")
+        .unwrap();
+    assert_eq!(
+        premises.trim(),
+        format!(
+            "invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"
+        )
+    );
+    assert_eq!(
+        conclusion.split_once("\n{\n").unwrap().0.trim(),
+        format!(
+            "invocation_paired_residual_{root}_v85(invocation_paired_source_step_{root}_v36(source).state, invocation_paired_actual_step_{root}_v36(target).state),"
+        )
+    );
+    for name in [
+        "invocation_source_logical_clear_v38",
+        "invocation_source_logical_write_v38",
+    ] {
+        assert_eq!(body.matches(&format!(" hide({name});")).count(), 1);
+    }
+    let summary = format!(" invocation_constructor_states_{root}_{pc}_v162(source, target);");
+    assert_eq!(body.matches(&summary).count(), 1);
+    let valid = if conserves_heap {
+        format!(" invocation_paired_source_preserved_{root}_v77(source, target);")
+    } else {
+        format!(" invocation_paired_source_defined_step_valid_{root}_v92(source);")
+    };
+    assert_eq!(body.matches(&valid).count(), 1);
+    assert!(body.find(&summary).unwrap() < body.find(&valid).unwrap());
+    for forbidden in [
+        "reveal_with_fuel(invocation_source_micro_run_",
+        "reveal_with_fuel(invocation_byte_follow_",
+        "assume(",
+        "admit(",
+        "external_body",
+    ] {
+        assert!(!body.contains(forbidden), "{forbidden}");
+    }
+}
+
 pub(super) fn check_four(text: &str, name: &str, root: usize) {
     let header = theorem(text, name).split_once("\n{\n").unwrap().0;
     for conclusion in [
@@ -454,6 +504,14 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                                 let premises = observations.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
                                 assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));
                                 let residual = theorem(&out.text, &format!("invocation_paired_cut_{root}_pc{pc}_residual_v85"));
+                                if has_state {
+                                    assert_constructor_summary_residual(&out.text, root, pc, hints.conserves_heap);
+                                } else {
+                                    assert!(residual.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
+                                    assert!(residual.contains(&format!("reveal_with_fuel(invocation_byte_follow_{root}_v36, {follow_fuel});")));
+                                    assert!(!residual.contains("hide(invocation_source_logical_clear_v38);"));
+                                    assert!(!residual.contains("hide(invocation_source_logical_write_v38);"));
+                                }
                                 for predicate in ["invocation_source_byte_storage_related", "invocation_paired_source_defined"] {
                                     assert!(residual.contains(&format!("hide({predicate}_{root}_v36);")));
                                 }
@@ -491,6 +549,70 @@ fn original_mir_step_partitions_use_all_authentic_roots_cuts_and_constructor_coo
                 })
             },
         ).0.unwrap();
+    }
+}
+
+#[test]
+fn original_mir_constructor_residual_summary_keeps_both_return_variants_and_contracts() {
+    for unit_return in [false, true] {
+        super::super::super::invocations::tests::run_variant(
+            LIMIT, LIMIT, unit_return, |plan, out| with_slots(plan, out, |slots, out| {
+                let mut program = SourceByteProgram::derive(plan, slots, out)?;
+                let paired = PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
+                program.emit(out)?;
+                paired.emit(out)?;
+                for (root, row) in paired.roots.iter().enumerate() {
+                    let hints = row.step_hints.as_ref().unwrap();
+                    let mut summaries = 0;
+                    for cut in row.cuts.iter().flatten() {
+                        let pc = cut.source;
+                        let name = format!("invocation_constructor_states_{root}_{pc}_v162");
+                        if out.text.contains(&format!("proof fn {name}(")) {
+                            summaries += 1;
+                            assert_constructor_summary_residual(&out.text, root, pc, hints.conserves_heap);
+                            let state = theorem(&out.text, &name);
+                            for (side, value) in [("source", "source"), ("actual", "target")] {
+                                assert!(state.contains(&format!("invocation_paired_{side}_step_{root}_v36({value}).state == invocation_constructor_{value}_{root}_{pc}_v162({value})")));
+                            }
+                        }
+                    }
+                    assert!(summaries > 0, "no genuine constructor summary for root {root}");
+                }
+                Ok(())
+            }),
+        ).0.unwrap();
+    }
+}
+
+#[test]
+fn original_mir_constructor_residual_path_does_not_add_paired_claims_to_tile_layouts() {
+    use super::super::{
+        expanded_generation::ExpandedGenerationV221,
+        source_function::tile_fixture_tests::run_fixture_with_plan,
+    };
+    use fe2o3_kernel_ir::{EndiannessV2, ExecutionTileLayoutV1 as Layout};
+    for layout in [Layout::Blocked, Layout::Striped] {
+        run_fixture_with_plan(layout, LIMIT, LIMIT, |plan, slots, _, out| {
+            let generation = ExpandedGenerationV221::derive(
+                plan,
+                slots,
+                FormalIndexWidth::Bits64,
+                EndiannessV2::Little,
+                out,
+            )?;
+            let start = out.text.len();
+            generation.emit_support(out)?;
+            generation.finish(out)?;
+            let text = &out.text[start..];
+            assert!(text.contains("proof fn invocation_context_issue_segment_"));
+            assert!(text.contains("spec fn invocation_source_micro_run_"));
+            assert!(!text.contains("proof fn invocation_paired_"));
+            assert!(!text.contains("proof fn invocation_constructor_states_"));
+            assert!(!text.contains("proof fn invocation_constructor_source_record_"));
+            Ok(())
+        })
+        .0
+        .unwrap();
     }
 }
 
@@ -706,6 +828,9 @@ fn original_mir_step_nonempty_blocks_and_moved_captures_keep_complete_fallback_o
                                 assert!(!fallback.contains("hide(invocation_source_enter_"));
                                 assert!(!fallback.contains("hide(invocation_source_byte_storage_related_"));
                                 assert!(!fallback.contains("invocation_related_target_inputs_v96("));
+                                assert!(!fallback.contains("hide(invocation_source_logical_clear_v38);"));
+                                assert!(!fallback.contains("hide(invocation_source_logical_write_v38);"));
+                                assert!(!fallback.contains("invocation_constructor_states_"));
                                 assert!(!out.text.contains(&format!("proof fn invocation_constructor_states_{root}_{pc}_v162(")));
                                 let premises = fallback.split_once(" requires ").unwrap().1.split_once(" ensures ").unwrap().0;
                                 assert_eq!(premises.trim(), format!("invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},"));

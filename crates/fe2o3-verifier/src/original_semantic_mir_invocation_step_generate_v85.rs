@@ -131,6 +131,13 @@ pub(super) fn emit(
                     _ => {
                         if constructor_state.is_some() {
                             constructor_states::opacity(root, out)?;
+                            if matches!(goal, Goal::Residual) {
+                                out.budget.charge_work(2)?;
+                                emit!(
+                                    out,
+                                    " hide(invocation_source_logical_clear_v38);\n hide(invocation_source_logical_write_v38);\n"
+                                );
+                            }
                         }
                         out.budget.charge_work(1)?;
                         if matches!(goal, Goal::Heap) && hint.has_write_normalization() {
@@ -162,14 +169,31 @@ pub(super) fn emit(
                         if constructor_state.is_some() {
                             constructor_states::consume(root, cut.source, out)?;
                         }
-                        unfold(
-                            root,
-                            follow_fuel,
-                            hints,
-                            hint,
-                            matches!(goal, Goal::Observations),
-                            out,
-                        )?;
+                        if constructor_state.is_some() && matches!(goal, Goal::Residual) {
+                            // The summary supplies both actual state equations. Residual
+                            // projections do not need another dispatcher/edge replay.
+                            out.budget.charge_work(1)?;
+                            if hints.conserves_heap {
+                                emit!(
+                                    out,
+                                    " invocation_paired_source_preserved_{root}_v77(source, target);\n"
+                                );
+                            } else {
+                                emit!(
+                                    out,
+                                    " invocation_paired_source_defined_step_valid_{root}_v92(source);\n"
+                                );
+                            }
+                        } else {
+                            unfold(
+                                root,
+                                follow_fuel,
+                                hints,
+                                hint,
+                                matches!(goal, Goal::Observations),
+                                out,
+                            )?;
+                        }
                         if matches!(goal, Goal::Heap) {
                             hint.emit_write_normalization(root, out)?;
                         }
