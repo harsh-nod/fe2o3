@@ -30,6 +30,7 @@ mod native_refined_forwarding_carrier_v1;
 mod proof_binding;
 mod proof_binding_v4;
 mod receipt;
+mod rustc_enrollment_inventory_v1;
 mod semantic_to_llvm_v3;
 mod target_lineage_v3;
 
@@ -116,6 +117,7 @@ pub use proof_binding_v4::{
     InertProofBindingAssociationV4, MAX_INERT_PROOF_BINDING_ASSOCIATION_BYTES_V4,
     MAX_INERT_PROOF_BINDING_VERUS_EVIDENCE_BYTES_V4,
 };
+pub use rustc_enrollment_inventory_v1::*;
 pub use receipt::{
     InertAbiReceiptIdentityV3, InertAbiReceiptV3, InertAmdgpuLoweringReceiptIdentityV3,
     InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirIdentityV3,
