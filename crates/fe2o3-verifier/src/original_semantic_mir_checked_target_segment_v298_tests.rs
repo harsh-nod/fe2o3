@@ -22,6 +22,22 @@ fn fixture(
         &mut Writer<'_, '_>,
     ) -> Result<()>,
 ) -> (Result<()>, usize, usize, usize) {
+    fixture_with_prefix(layout, operator, false, work, storage, examine)
+}
+
+fn fixture_with_prefix(
+    layout: Layout,
+    operator: SourceOp,
+    retained_prefix: bool,
+    work: usize,
+    storage: usize,
+    examine: impl FnOnce(
+        &InvocationPlan<'_, '_>,
+        &SourceSlots<'_, '_>,
+        &mut Writer<'_, '_>,
+    ) -> Result<()>,
+) -> (Result<()>, usize, usize, usize) {
+    use fe2o3_mir_model::semantic_mir_v1::*;
     super::super::super::super::invocations::tests::run_source_transform(
         work,
         storage,
@@ -29,6 +45,62 @@ fn fixture(
             super::super::super::paired::aggregate_tests::checked_leaf_transform(
                 types, functions, operator,
             );
+            if retained_prefix {
+                let old = functions.last_mut().unwrap();
+                let mut blocks = old.blocks().to_vec();
+                let mut statements = blocks[0].statements().to_vec();
+                let SemanticStatementKindV1::Assign(assignment) = statements.last().unwrap().kind()
+                else {
+                    panic!("Checked assignment");
+                };
+                let SemanticRvalueKindV1::CheckedBinary(checked) = assignment.value().kind() else {
+                    panic!("Checked rvalue");
+                };
+                let SemanticOperandV1::Copy(left) = checked.left() else {
+                    panic!("copied left operand");
+                };
+                let prefix = SemanticStatementV1::new(
+                    old.source(),
+                    SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
+                        left.clone(),
+                        SemanticRvalueV1::new(
+                            left.ty(),
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::BitXor,
+                                left: checked.left().clone(),
+                                right: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                                    left.ty(),
+                                    SemanticConstantValueV1::Scalar(
+                                        SemanticScalarValueV1::new(0x8000_0000, 4).unwrap(),
+                                    ),
+                                )),
+                            },
+                        ),
+                    )),
+                );
+                statements.insert(statements.len() - 1, prefix);
+                blocks[0] = SemanticBasicBlockV1::new(
+                    blocks[0].identity(),
+                    old.source(),
+                    statements,
+                    blocks[0].terminator().clone(),
+                )
+                .unwrap();
+                *old = SemanticFunctionDeclV1::new(
+                    old.identity(),
+                    old.role(),
+                    old.item_definition_identity(),
+                    old.monomorphization_identity(),
+                    old.generic_type_arguments_identity(),
+                    old.const_generic_arguments_identity(),
+                    old.source(),
+                    old.abi().clone(),
+                    old.locals().to_vec(),
+                    old.entry(),
+                    blocks,
+                )
+                .unwrap();
+            }
         },
         |plan, out| with_tile_slots(plan, layout, out, |slots, out| examine(plan, slots, out)),
     )
@@ -380,50 +452,121 @@ fn actual_checked_target_segment_uses_global_target_cursors_and_relative_history
     let (mut nonzero_function, mut nonzero_block, mut nonzero_prefix, mut terminal) =
         (false, false, false, false);
     let (mut source_nonzero_prefix, mut source_nonzero_offset) = (false, false);
-    fixture(
-        Layout::Striped,
-        SourceOp::Add,
-        LIMIT,
-        LIMIT,
-        |plan, slots, out| {
-            assert!(
-                inspect_segments(plan, slots, out, |segment, out| {
-                    let inventory = segment.target.inventory(out)?;
-                    let operation = &inventory.operations()[segment.target_operation];
-                    nonzero_function |= operation.coordinate.block.function.0 != 0;
-                    nonzero_block |= segment.target_block != 0;
-                    nonzero_prefix |= segment.target_prefix != 0;
-                    source_nonzero_prefix |= segment.statement != 0;
-                    source_nonzero_offset |= segment.source_pc != segment.block;
-                    terminal |= segment.target_next.is_none();
-                    let start = out.text.len();
-                    segment.emit(out)?;
-                    let text = &out.text[start..];
-                    assert!(text.contains(&format!(
-                        "t.state.pc == {}, t.next_operation == {}",
-                        segment.target_block, segment.target_operation
-                    )));
-                    assert!(text.contains(&format!(
-                        "t.observations.len() == {}",
-                        segment.target_prefix
-                    )));
-                    assert!(text.contains(&format!(
-                        "s.source.machine.pc == {} && s.next_statement == {}",
-                        segment.source_pc, segment.statement
-                    )));
-                    if segment.target_next.is_none() {
-                        assert!(text.contains("_v298() -> int { -1 }"));
-                    }
-                    Ok(())
-                })? > 0
-            );
-            Ok(())
-        },
-    )
-    .0
-    .unwrap();
-    assert!(nonzero_function && nonzero_block && nonzero_prefix && terminal);
-    assert!(source_nonzero_prefix && source_nonzero_offset);
+    for retained_prefix in [false, true] {
+        fixture_with_prefix(
+            Layout::Striped,
+            SourceOp::Add,
+            retained_prefix,
+            LIMIT,
+            LIMIT,
+            |plan, slots, out| {
+                assert!(
+                    inspect_segments(plan, slots, out, |segment, out| {
+                        let inventory = segment.target.inventory(out)?;
+                        let operation = &inventory.operations()[segment.target_operation];
+                        if retained_prefix {
+                            use fe2o3_kernel_ir::{BinaryOp, OperationKind};
+                            assert!(
+                                segment.target_prefix > 0,
+                                "XOR must precede the actual Checked operation"
+                            );
+                            let block = &inventory.blocks()[segment.target_block];
+                            let prefix = inventory.operations()
+                                [block.operations.start..segment.target_operation]
+                                .iter()
+                                .find(|row| {
+                                    matches!(
+                                        row.operation.kind,
+                                        OperationKind::Binary {
+                                            op: BinaryOp::BitXor,
+                                            ..
+                                        }
+                                    ) && row.results.contains(&segment.checked.operands[0])
+                                })
+                                .expect("retained XOR result must feed Checked operand zero");
+                            assert_eq!(prefix.results.len(), 1);
+                            assert_eq!(prefix.results.start, segment.checked.operands[0]);
+                            assert_eq!(prefix.coordinate.block, operation.coordinate.block);
+                            assert_eq!(prefix.operands.len(), 2);
+                            let OperationKind::Binary { lhs, rhs, .. } = prefix.operation.kind
+                            else {
+                                unreachable!()
+                            };
+                            assert_ne!(
+                                lhs, rhs,
+                                "nonzero constant XOR must not be self-cancelling"
+                            );
+                            for (ordinal, value) in [lhs, rhs].into_iter().enumerate() {
+                                let usage = &inventory.uses()[prefix.operands.start + ordinal];
+                                assert_eq!(usage.value, value);
+                                assert_eq!(
+                                    inventory.definitions()[usage.definition].value,
+                                    Some(value)
+                                );
+                                assert_eq!(
+                                    inventory.definitions()[usage.definition].ty,
+                                    &fe2o3_kernel_ir::Type::Scalar(
+                                        fe2o3_kernel_ir::ScalarType::U32
+                                    )
+                                );
+                            }
+                        } else {
+                            assert_eq!(
+                                segment.target_prefix, 0,
+                                "original copied-local fixture has no retained prefix operation"
+                            );
+                        }
+                        nonzero_function |= operation.coordinate.block.function.0 != 0;
+                        nonzero_block |= segment.target_block != 0;
+                        nonzero_prefix |= segment.target_prefix != 0;
+                        source_nonzero_prefix |= segment.statement != 0;
+                        source_nonzero_offset |= segment.source_pc != segment.block;
+                        terminal |= segment.target_next.is_none();
+                        let start = out.text.len();
+                        segment.emit(out)?;
+                        let text = &out.text[start..];
+                        assert!(text.contains(&format!(
+                            "t.state.pc == {}, t.next_operation == {}",
+                            segment.target_block, segment.target_operation
+                        )));
+                        assert!(text.contains(&format!(
+                            "t.observations.len() == {}",
+                            segment.target_prefix
+                        )));
+                        assert!(text.contains(&format!(
+                            "s.source.machine.pc == {} && s.next_statement == {}",
+                            segment.source_pc, segment.statement
+                        )));
+                        if segment.target_next.is_none() {
+                            assert!(text.contains("_v298() -> int { -1 }"));
+                        }
+                        Ok(())
+                    })? > 0
+                );
+                Ok(())
+            },
+        )
+        .0
+        .unwrap();
+    }
+    assert!(
+        nonzero_function,
+        "target function coordinate must be nonzero"
+    );
+    assert!(nonzero_block, "target block coordinate must be nonzero");
+    assert!(
+        nonzero_prefix,
+        "genuine retained target prefix must be nonempty"
+    );
+    assert!(terminal, "terminal Checked must retain the -1 next cursor");
+    assert!(
+        source_nonzero_prefix,
+        "source statement ordinal must be nonzero"
+    );
+    assert!(
+        source_nonzero_offset,
+        "absolute source PC must differ from relative block"
+    );
 }
 
 #[test]
