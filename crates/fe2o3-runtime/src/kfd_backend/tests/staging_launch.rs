@@ -279,6 +279,7 @@ fn logical_streams_and_events_enforce_submission_ownership() {
     backend.submissions.insert(
         99,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream: left,
             status: BackendPollV1::Succeeded,
             dependency_depth: 1,
@@ -338,6 +339,7 @@ fn live_event_retains_completed_submission_state() {
     backend.submissions.insert(
         42,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Succeeded,
             dependency_depth: 1,

@@ -68,6 +68,7 @@ mod mixed_optimizer_refinement_v26;
 mod mixed_target_selection_family;
 mod mixed_target_selection_v53;
 mod mixed_target_selection_v89;
+mod native_copy_classification_v1;
 pub use mixed_optimizer_refinement_v26::{
     AggregateMemoryCfgObligationV30, AggregateMemoryCfgSubjectV30,
     ExecutedMixedComposedRefinementV29, ExecutedMixedOptimizerBlockSimulationV26,
@@ -327,6 +328,9 @@ pub use multi_kernel_proof::{
     PersistentlyFreshKernelProofAdmissionRequestV1,
     PersistentlyFreshMultiKernelProofAdmissionErrorV1,
     PersistentlyFreshMultiKernelProofAdmissionV1,
+};
+pub use native_copy_classification_v1::{
+    NativeCopyProgramClassificationV1, classify_native_copy_program_v1,
 };
 pub use persistent_freshness::{
     MAX_PERSISTENT_FRESHNESS_ENTRIES_V1, MAX_PERSISTENT_FRESHNESS_STATE_BYTES_V1,

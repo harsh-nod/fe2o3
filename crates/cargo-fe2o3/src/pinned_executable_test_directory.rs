@@ -9,17 +9,17 @@ pub(crate) struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     pub(crate) fn new() -> Self {
-        Self::allocate_with_counter(&NEXT_DIRECTORY_ID)
+        Self::allocate_with_counter(&std::env::temp_dir(), &NEXT_DIRECTORY_ID)
     }
 
-    fn allocate_with_counter(counter: &AtomicU64) -> Self {
+    fn allocate_with_counter(parent: &Path, counter: &AtomicU64) -> Self {
         loop {
             let id = counter
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                     current.checked_add(1)
                 })
                 .expect("pinned executable test directory counter exhausted");
-            let path = std::env::temp_dir().join(format!(
+            let path = parent.join(format!(
                 "cargo-fe2o3-pinned-executable-{}-{id}",
                 std::process::id()
             ));
@@ -91,6 +91,10 @@ mod tests {
         const THREADS: usize = 32;
         const DIRECTORIES_PER_THREAD: usize = 32;
 
+        // Other parallel tests may reuse a released global name. Retain a private
+        // parent so this test observes only its own allocations and cleanup.
+        let parent = TestDirectory::new();
+        let parent_path = parent.path();
         let duplicate_counters = [AtomicU64::new(0), AtomicU64::new(0)];
         let start = Arc::new(Barrier::new(THREADS));
         let directories = std::thread::scope(|scope| {
@@ -101,7 +105,7 @@ mod tests {
                     scope.spawn(move || {
                         start.wait();
                         (0..DIRECTORIES_PER_THREAD)
-                            .map(|_| TestDirectory::allocate_with_counter(counter))
+                            .map(|_| TestDirectory::allocate_with_counter(parent_path, counter))
                             .collect::<Vec<_>>()
                     })
                 })

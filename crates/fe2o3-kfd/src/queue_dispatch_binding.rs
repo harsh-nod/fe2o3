@@ -29,6 +29,29 @@ pub(crate) use preparation::FixedDispatchPreparationCustodyV1;
 
 #[path = "queue_dispatch_binding/conditional_fill.rs"]
 mod conditional_fill;
+#[path = "queue_dispatch_binding/native_fill_arena.rs"]
+mod native_fill_arena;
+#[path = "queue_dispatch_binding/native_fill_cohort.rs"]
+mod native_fill_cohort;
+#[path = "queue_dispatch_binding/native_fill_registry.rs"]
+mod native_fill_registry;
+pub(super) use native_fill_arena::{ArenaCapacityV1, ArenaOrderV1, ArenaRecipeV1};
+pub use native_fill_arena::{
+    GFX942_INDEPENDENT_FILL_ARENA2048_SLOTS_V1, GFX942_NATIVE_FILL_ARENA_SLOTS_V1,
+    Gfx942IndependentFillArena2048FailureV1, Gfx942IndependentFillArena2048InputsV1,
+    Gfx942IndependentFillArena2048PacketsV1, Gfx942IndependentFillArena2048StorageV1,
+    Gfx942IndependentFillArenaInputsV1, Gfx942NativeFillArenaFailureV1,
+    Gfx942NativeFillArenaInputsV1, Gfx942NativeFillArenaPacketsV1, Gfx942NativeFillArenaStorageV1,
+};
+pub use native_fill_cohort::{
+    Gfx942NativeFillCohortFailureV1, Gfx942NativeFillCohortMemberV1, Gfx942NativeFillCohortV1,
+};
+pub(super) use native_fill_registry::RegistryRecipeV1;
+pub use native_fill_registry::{
+    Gfx942NativeFillRegistryInputsV1, Gfx942NativeFillRegistryRepeat2StorageV1,
+    Gfx942NativeFillRegistryStorageV1, Gfx942NativeFillResidentRegistryInputsV1,
+    Gfx942NativeFillResidentRegistryStorageV1,
+};
 
 #[path = "queue_dispatch_binding/generation_preflight.rs"]
 mod generation_preflight;
@@ -3515,6 +3538,22 @@ fn plan_public_fixed_dispatch_resources<const N: usize>(
     data_layouts: &[Gfx942FixedDispatchDataLayoutV1],
     data_initialized: &[bool],
 ) -> Result<FixedDispatchPreparationPlanV1, Gfx942DispatchBindingErrorV1> {
+    plan_fixed_dispatch_resources_with_order(
+        programs,
+        packets,
+        data_layouts,
+        data_initialized,
+        AqlDispatchOrderingV1::WaitForPrior,
+    )
+}
+
+fn plan_fixed_dispatch_resources_with_order<const N: usize>(
+    programs: &[ValidatedKernelEnvelope<'_>],
+    packets: &[Gfx942FixedDispatchPacketV1; N],
+    data_layouts: &[Gfx942FixedDispatchDataLayoutV1],
+    data_initialized: &[bool],
+    ordering: AqlDispatchOrderingV1,
+) -> Result<FixedDispatchPreparationPlanV1, Gfx942DispatchBindingErrorV1> {
     validate_packet_count::<N>()?;
     if programs.is_empty() || programs.len() > GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1 {
         return Err(Gfx942DispatchBindingErrorV1::ProgramCount {
@@ -3537,7 +3576,7 @@ fn plan_public_fixed_dispatch_resources<const N: usize>(
     }
     if let Some(packet) = packets
         .iter()
-        .position(|packet| packet.ordering != AqlDispatchOrderingV1::WaitForPrior)
+        .position(|packet| packet.ordering != ordering)
     {
         return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
             packet,
@@ -3687,8 +3726,44 @@ fn plan_public_fixed_dispatch_resources<const N: usize>(
 /// allocation, queue or execution authority. Unsupported fixed profiles reject.
 pub fn project_gfx942_fixed_host_packet_v1(
     program: &ValidatedKernelEnvelope<'_>,
+    packet: Gfx942FixedDispatchPacketV1,
+    buffer_lengths: &[usize],
+) -> Result<Gfx942FixedDispatchPacketV1, Gfx942DispatchBindingErrorV1> {
+    project_fixed_host_packet_with_order_v1(
+        program,
+        packet,
+        buffer_lengths,
+        AqlDispatchOrderingV1::WaitForPrior,
+    )
+}
+
+/// Inert independent fill transport only. Actual disjoint-range and original
+/// native custody admission remains required by the separate arena constructor.
+/// The ordinary fixed-packet projection continues to reject Independent.
+pub fn project_gfx942_independent_fill_host_packet_v1(
+    program: &ValidatedKernelEnvelope<'_>,
+    packet: Gfx942FixedDispatchPacketV1,
+    buffer_lengths: &[usize],
+) -> Result<Gfx942FixedDispatchPacketV1, Gfx942DispatchBindingErrorV1> {
+    if !packet.conditional_fill {
+        return Err(Gfx942DispatchBindingErrorV1::InvalidKernarg {
+            packet: 0,
+            detail: "independent arena member requires closed fill",
+        });
+    }
+    project_fixed_host_packet_with_order_v1(
+        program,
+        packet,
+        buffer_lengths,
+        AqlDispatchOrderingV1::Independent,
+    )
+}
+
+fn project_fixed_host_packet_with_order_v1(
+    program: &ValidatedKernelEnvelope<'_>,
     mut packet: Gfx942FixedDispatchPacketV1,
     buffer_lengths: &[usize],
+    ordering: AqlDispatchOrderingV1,
 ) -> Result<Gfx942FixedDispatchPacketV1, Gfx942DispatchBindingErrorV1> {
     validate_gfx942_kernel_profile(program)?;
     if buffer_lengths.is_empty() || buffer_lengths.len() > MAX_DISPATCH_DATA_LEASES_V1 {
@@ -3744,11 +3819,12 @@ pub fn project_gfx942_fixed_host_packet_v1(
             })
         })
         .collect::<Result<Vec<_>, Gfx942DispatchBindingErrorV1>>()?;
-    let plan = plan_public_fixed_dispatch_resources(
+    let plan = plan_fixed_dispatch_resources_with_order(
         core::slice::from_ref(program),
         core::array::from_ref(&packet),
         &layouts,
         &vec![true; layouts.len()],
+        ordering,
     )?;
     let _ = conditional_fill::check_plan(
         core::slice::from_ref(program),

@@ -89,8 +89,13 @@ fn executor_fairness(tokio: bool) {
     let decoded = Rc::new(Cell::new(0));
     let dropped = Cell::new(0);
     let ticks: Vec<_> = (0..COUNT).map(|index| index % 8).collect();
-    let (mut scope, tickets) = fixture(&mut context, &decoded, &dropped, &ticks);
-    scope.deadline = Instant::now() + Duration::from_secs(120);
+    let (mut scope, tickets) = fixture_with_timeout(
+        &mut context,
+        &decoded,
+        &dropped,
+        &ticks,
+        Duration::from_secs(120),
+    );
     let observed = Rc::new(Cell::new(None));
     let sibling = {
         let observed = Rc::clone(&observed);

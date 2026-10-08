@@ -312,6 +312,7 @@ fn released_tail_selects_unfinished_compute_roots_without_resurrecting_terminal_
             backend.submissions.insert(
                 id,
                 SubmissionRecordV1 {
+                    origin: SubmissionOriginV1::Ordinary,
                     stream,
                     status,
                     dependency_depth: 1,
@@ -338,6 +339,7 @@ fn released_tail_selects_unfinished_compute_roots_without_resurrecting_terminal_
         backend.submissions.insert(
             20,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream,
                 status: BackendPollV1::Succeeded,
                 dependency_depth: 1,
@@ -524,6 +526,7 @@ fn inspect_cancel_failure_and_drop(kind: usize, successor: bool, mutation: usize
             backend.submissions.insert(
                 cancelled,
                 SubmissionRecordV1 {
+                    origin: SubmissionOriginV1::Ordinary,
                     stream,
                     status: BackendPollV1::Failed { code: -2 },
                     dependency_depth: 1,

@@ -122,12 +122,20 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         batch: Gfx942DispatchBatchV1<N>,
     ) -> Result<Gfx942DispatchPollWithProgressV1<N>, ComputeAqlQueueSessionErrorV1> {
+        self.poll_selected_fixed_dispatch(batch, &mut recipe::RecipeV1::Ordinary)
+    }
+
+    pub(in super::super) fn poll_selected_fixed_dispatch<const N: usize>(
+        &mut self,
+        batch: Gfx942DispatchBatchV1<N>,
+        recipe: &mut recipe::RecipeV1<'_>,
+    ) -> Result<Gfx942DispatchPollWithProgressV1<N>, ComputeAqlQueueSessionErrorV1> {
         let (completion, identity) = unwrap_published(batch);
-        if self
-            .dispatch
+        self.dispatch
             .as_ref()
-            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?
-            .validate_published(identity, &completion)
+            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)?;
+        if recipe
+            .validate_published(self, identity, &completion)
             .is_err()
         {
             self.poison_terminal();
@@ -136,12 +144,7 @@ impl ComputeAqlQueueSessionV1 {
         match self.poll_completion_batch_with_progress(completion) {
             Ok(poll) => {
                 if let Gfx942CompletionPollWithProgressV1::Ready { completed, .. } = &poll
-                    && self
-                        .dispatch
-                        .as_mut()
-                        .expect("dispatch owner retained")
-                        .mark_completed(identity, completed)
-                        .is_err()
+                    && recipe.mark_completed(self, identity, completed).is_err()
                 {
                     self.poison_terminal();
                     return Err(Gfx942DispatchBindingErrorV1::StaleDispatchGeneration.into());
@@ -149,9 +152,7 @@ impl ComputeAqlQueueSessionV1 {
                 Ok(wrap_poll_with_progress(poll, identity))
             }
             Err(error) => {
-                if let Some(dispatch) = self.dispatch.as_mut() {
-                    dispatch.poison();
-                }
+                recipe.poison(self);
                 Err(error)
             }
         }
@@ -327,6 +328,15 @@ impl ComputeAqlQueueSessionV1 {
         &mut self,
         completed: Gfx942CompletedDispatchBatchV1<N>,
     ) -> Result<Gfx942CompletionRecycleObservationV1, Gfx942FixedDispatchRecycleFailureV1<N>> {
+        self.recycle_selected_fixed_dispatch(completed, &mut recipe::RecipeV1::Ordinary)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub(in super::super) fn recycle_selected_fixed_dispatch<const N: usize>(
+        &mut self,
+        completed: Gfx942CompletedDispatchBatchV1<N>,
+        recipe: &mut recipe::RecipeV1<'_>,
+    ) -> Result<Gfx942CompletionRecycleObservationV1, Gfx942FixedDispatchRecycleFailureV1<N>> {
         let (completion, identity) = unwrap_completed(completed);
         let completion_occurrence = completion.occurrence_v1();
         let completion_occurrence = match completion_occurrence {
@@ -339,11 +349,8 @@ impl ComputeAqlQueueSessionV1 {
                 });
             }
         };
-        if self
-            .dispatch
-            .as_ref()
-            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)
-            .and_then(|dispatch| dispatch.validate_completed(identity, &completion))
+        if recipe
+            .validate_completed(self, identity, &completion)
             .is_err()
         {
             self.poison_terminal();
@@ -358,19 +365,14 @@ impl ComputeAqlQueueSessionV1 {
                 let failure = Gfx942FixedDispatchRecycleFailureV1::from_completion_failure(
                     error, completion, identity,
                 );
-                if failure.retryable_completed.is_none()
-                    && let Some(dispatch) = self.dispatch.as_mut()
-                {
-                    dispatch.poison();
+                if failure.retryable_completed.is_none() {
+                    recipe.poison(self);
                 }
                 return Err(failure);
             }
         };
-        if self
-            .dispatch
-            .as_mut()
-            .expect("dispatch owner retained")
-            .mark_recycled_occurrence(identity, completion_occurrence)
+        if recipe
+            .recycle(self, identity, completion_occurrence)
             .is_err()
         {
             self.poison_terminal();

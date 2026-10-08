@@ -23,3 +23,11 @@ python3 -I -B "$proof_root/check-retained-pair-routing.py" \
   --verus "$VERUS" --output "$A2_CAMPAIGN_ROOT/retained-routing"
 python3 -I -B "$proof_root/check-retained-credit-dispatch.py" --campaign \
   --verus "$VERUS" --output "$A2_CAMPAIGN_ROOT/retained-credit"
+python3 -I -B "$proof_root/qualify-graph-version-ledger-v1.py" \
+  --verus "$VERUS" --output "$A2_CAMPAIGN_ROOT/graph-version-ledger"
+python3 -I -B "$proof_root/qualify-graph-reservation-retirement-v1.py" \
+  --verus "$VERUS" --output "$A2_CAMPAIGN_ROOT/graph-reservation-retirement"
+python3 -I -B "$proof_root/qualify-context-cached-poll-v1.py" \
+  --verus "$VERUS" --output "$A2_CAMPAIGN_ROOT/context-cached-poll"
+python3 -I -B "$proof_root/qualify-context-writer-lookup-v1.py" \
+  --verus "$VERUS" --output "$A2_CAMPAIGN_ROOT/context-writer-lookup"

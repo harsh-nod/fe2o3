@@ -253,6 +253,7 @@ fn scripted_same_device_sdma_clean_retry_after_progress_is_quiescent() {
     backend.submissions.insert(
         dependency,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Pending,
             dependency_depth: 1,
@@ -310,6 +311,7 @@ fn scripted_same_device_sdma_prepublication_cancel_preserves_pair() {
     backend.submissions.insert(
         dependency,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Pending,
             dependency_depth: 1,
@@ -418,6 +420,7 @@ fn scripted_sdma_clean_retry_after_prior_window_progress_is_quiescent() {
     backend.submissions.insert(
         dependency,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Pending,
             dependency_depth: 1,

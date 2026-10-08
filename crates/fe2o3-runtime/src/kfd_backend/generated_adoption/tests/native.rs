@@ -47,6 +47,7 @@ fn install_roster(
     backend
         .adopt_generated_data_v1(&plan, &roster, program, &buffers)
         .unwrap();
+    assert!(backend.generated_data_unpublished_v1(&plan, None));
     (plan, roster)
 }
 
@@ -71,7 +72,7 @@ fn native_fixture(
         buffers.push(crate::Gfx942KfdDispatchBufferV1::new(vec![0x5a; 80]).unwrap());
     }
     let roster = GeneratedHostRosterV1 {
-        source_identity: Arc::new(()),
+        source_identity: Arc::new(()).into(),
         buffers: core::array::from_fn(|index| {
             buffers
                 .get(index)
@@ -91,7 +92,7 @@ fn native_fixture(
             .map(|buffer| buffer.bytes().len() as u64)
             .sum(),
         fixup_count: 3,
-        dispatch_contract_sha256: admitted.signature(),
+        dispatch_contract_sha256: admitted.signature().into(),
     };
     let rows: Vec<_> = admitted
         .arguments()
@@ -289,6 +290,8 @@ fn run_issue(bootstrap: bool, full_roster: bool) {
         .unwrap();
     assert_ne!(first_id, second_id);
     for (plan, id) in [(&first_plan, first_id), (&second_plan, second_id)] {
+        assert!(backend.generated_data_unpublished_v1(plan, Some(id)));
+        assert!(!backend.generated_data_unpublished_v1(plan, None));
         assert_eq!(backend.poll_v1(id).unwrap(), BackendPollV1::Pending);
         assert!(matches!(
             backend.generated_shells[&plan.key]
@@ -299,7 +302,7 @@ fn run_issue(bootstrap: bool, full_roster: bool) {
                 .as_ref()
                 .unwrap()
                 .receipt,
-            ReceiptV1::Ready
+            NativeReceiptV1::Singleton(ReceiptV1::Ready)
         ));
         assert!(matches!(
             backend.release_submission_v1(id),
@@ -339,6 +342,7 @@ fn run_issue(bootstrap: bool, full_roster: bool) {
         std::thread::yield_now();
     }
     for (plan, id) in [(&first_plan, first_id), (&second_plan, second_id)] {
+        assert!(!backend.generated_data_unpublished_v1(plan, Some(id)));
         assert!(matches!(
             backend.poll_v1(id),
             Err(RuntimeBackendFailureV1::Quiescent(_))
@@ -452,7 +456,7 @@ fn check_full_roster(
         .map(|(_, bytes)| (bytes.as_ptr(), bytes.capacity()))
         .collect();
     let mut foreign = roster.clone();
-    foreign.source_identity = Arc::new(());
+    foreign.source_identity = Arc::new(()).into();
     let before = destinations.clone();
     assert!(matches!(
         backend.read_generated_submission_v1(plan, id, &foreign, &mut destinations),

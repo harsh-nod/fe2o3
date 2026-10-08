@@ -13,6 +13,7 @@ fn direct_kfd_cancels_only_an_unpublished_dependency_waiter() {
     backend.submissions.insert(
         40,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Pending,
             dependency_depth: 1,
@@ -209,6 +210,7 @@ fn direct_kfd_submission_capacity_counts_compute_sdma_and_completed() {
     backend.submissions.insert(
         1,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream: 1,
             status: BackendPollV1::Succeeded,
             dependency_depth: 1,

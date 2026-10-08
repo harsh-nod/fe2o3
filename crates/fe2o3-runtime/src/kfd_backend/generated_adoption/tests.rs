@@ -8,6 +8,15 @@ use std::rc::Rc;
 mod native;
 
 pub(super) fn shells() -> (KfdRuntimeBackendV1, GeneratedShellPlanV1) {
+    let (backend, plan, _) = shells_with_roster();
+    (backend, plan)
+}
+
+pub(super) fn shells_with_roster() -> (
+    KfdRuntimeBackendV1,
+    GeneratedShellPlanV1,
+    GeneratedHostRosterV1,
+) {
     let mut backend = KfdRuntimeBackendV1::mock();
     let (binding, logical) = crate::RuntimeContextV1::generated_shell_test_binding_v1(&mut backend);
     let (hsaco, projection) = source_projection();
@@ -22,7 +31,7 @@ pub(super) fn shells() -> (KfdRuntimeBackendV1, GeneratedShellPlanV1) {
         .bind_generated_shell_requests_v1(plan, core::array::from_fn(|_| None))
         .unwrap();
     backend.commit_generated_shells_v1(bound, &mut source, &roster);
-    (backend, plan)
+    (backend, plan, roster)
 }
 
 fn native_state(phase: PhaseV1, lane: usize) -> GeneratedNativeAdoptionV1 {
@@ -32,8 +41,11 @@ fn native_state(phase: PhaseV1, lane: usize) -> GeneratedNativeAdoptionV1 {
         lane,
         native_lane: None,
         data: Vec::new(),
+        detached: detached::RetainedDetachedV1::empty(),
         returned: ReturnedDataV1::empty(),
         submission: None,
+        sdma: sdma_backing::NativeCustody::empty(),
+        copy: None,
     }
 }
 
@@ -49,7 +61,7 @@ impl KfdRuntimeBackendV1 {
         native.submission = Some(issue::GeneratedSubmissionV1 {
             id,
             roster: roster.clone(),
-            receipt: ReceiptV1::Ready,
+            receipt: ReceiptV1::Ready.into(),
         });
         self.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
         assert!(self.generated_submissions.insert(id, plan.key).is_none());
@@ -178,7 +190,7 @@ fn generated_submission_release_cannot_discard_unretired_custody() {
     native.submission = Some(issue::GeneratedSubmissionV1 {
         id: 100,
         roster: GeneratedHostRosterV1::from_projection(&projection).unwrap(),
-        receipt: ReceiptV1::Ready,
+        receipt: ReceiptV1::Ready.into(),
     });
     backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
     backend.generated_submissions.insert(100, plan.key);
@@ -193,8 +205,12 @@ fn generated_submission_release_cannot_discard_unretired_custody() {
             .submission
             .as_mut()
             .unwrap()
-            .receipt = receipt;
+            .receipt = receipt.into();
         assert!(backend.generated_submission_can_retire_v1(100));
+        // Descriptive receipt metadata without an original native lane cannot
+        // establish the new cancellation boundary, even for Ready/RetryReady.
+        assert!(!backend.generated_data_unpublished_v1(&plan, Some(100)));
+        assert!(!backend.generated_data_unpublished_v1(&plan, None));
         assert!(matches!(
             backend.release_submission_v1(100),
             Err(RuntimeBackendFailureV1::Rejected(_))
@@ -204,6 +220,94 @@ fn generated_submission_release_cannot_discard_unretired_custody() {
         assert!(!backend.terminal);
     }
     // Metadata-only test disposal, not a native release receipt.
+    backend.generated_shells.get_mut(&plan.key).unwrap().native = None;
+    backend.generated_submissions.clear();
+    backend.dispose_generated_shells_v1(&plan);
+}
+
+#[test]
+fn cohort3_receipt_substitution_cannot_retire_or_release_a_singleton_original() {
+    for phase in [PhaseV1::Adopted, PhaseV1::Retired] {
+        let (mut backend, plan) = shells();
+        let (_, projection) = source_projection();
+        let mut native = native_state(phase, 0);
+        native.returned.install(Vec::new());
+        native.returned.completed = plan.count;
+        native.submission = Some(issue::GeneratedSubmissionV1 {
+            id: 100,
+            roster: GeneratedHostRosterV1::from_projection(&projection).unwrap(),
+            receipt: NativeReceiptV1::Cohort3(ReceiptV1::Recycled),
+        });
+        backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
+        backend.generated_submissions.insert(100, plan.key);
+        assert!(!backend.generated_submission_can_retire_v1(100));
+        assert!(matches!(
+            backend.release_submission_v1(100),
+            Err(RuntimeBackendFailureV1::Rejected(_))
+        ));
+        assert_eq!(backend.generated_submissions.get(&100), Some(&plan.key));
+        assert_eq!(
+            backend.generated_shells[&plan.key]
+                .native
+                .as_ref()
+                .unwrap()
+                .phase,
+            phase
+        );
+        assert!(!backend.terminal);
+        // Only descriptive, handle-free metadata was substituted; no native receipt exists.
+        backend.generated_shells.get_mut(&plan.key).unwrap().native = None;
+        backend.generated_submissions.clear();
+        backend.dispose_generated_shells_v1(&plan);
+    }
+}
+
+#[test]
+fn classified_rejection_metadata_without_original_lane_cannot_settle_or_release() {
+    let (mut backend, plan) = shells();
+    let (_, projection) = source_projection();
+    let roster = GeneratedHostRosterV1::from_projection(&projection).unwrap();
+    let id = backend.install_generated_receipt_metadata_for_test_v1(&plan, &roster);
+    let native = backend
+        .generated_shells
+        .get_mut(&plan.key)
+        .unwrap()
+        .native
+        .as_mut()
+        .unwrap();
+    let NativeReceiptV1::Singleton(receipt) = &mut native.submission.as_mut().unwrap().receipt
+    else {
+        panic!("singleton fixture");
+    };
+    receipt
+        .issue_with_rejection(true, || {
+            Err(
+                Gfx942FixedDispatchSubmissionFailureV1::RejectedBeforeSideEffect(
+                    fe2o3_kfd::ComputeAqlQueueSessionErrorV1::Contract("injected metadata only"),
+                ),
+            )
+        })
+        .unwrap();
+    assert!(!backend.generated_rejected_publication_v1(&plan, id));
+    assert!(!backend.generated_submission_can_retire_v1(id));
+    assert!(matches!(
+        backend.retire_generated_rejected_data_v1(&plan, id),
+        Err(RuntimeBackendFailureV1::Rejected(_))
+    ));
+    assert!(matches!(
+        backend.release_submission_v1(id),
+        Err(RuntimeBackendFailureV1::Rejected(_))
+    ));
+    assert!(!backend.terminal);
+    assert_eq!(backend.generated_submissions.get(&id), Some(&plan.key));
+    assert_eq!(
+        backend.generated_shells[&plan.key]
+            .native
+            .as_ref()
+            .unwrap()
+            .phase,
+        PhaseV1::Adopted
+    );
     backend.generated_shells.get_mut(&plan.key).unwrap().native = None;
     backend.generated_submissions.clear();
     backend.dispose_generated_shells_v1(&plan);
@@ -234,7 +338,7 @@ fn generated_retry_ready_submission_releases_only_after_recorded_native_retireme
     native.submission = Some(issue::GeneratedSubmissionV1 {
         id: 100,
         roster: GeneratedHostRosterV1::from_projection(&projection).unwrap(),
-        receipt: ReceiptV1::RetryReady,
+        receipt: ReceiptV1::RetryReady.into(),
     });
     backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
     backend.generated_submissions.insert(100, plan.key);
@@ -383,6 +487,7 @@ fn generated_native_phases_disable_shell_disposal_even_before_packet_transfer() 
     for phase in [
         PhaseV1::Entering,
         PhaseV1::Adopted,
+        PhaseV1::Detached,
         PhaseV1::Retiring,
         PhaseV1::Retired,
     ] {
@@ -406,7 +511,14 @@ fn generated_retired_disposal_requires_complete_returned_roster_and_no_control()
     native.returned.install(Vec::new());
     native.returned.completed = plan.count - 1;
     backend.generated_shells.get_mut(&plan.key).unwrap().native = Some(native);
-    backend.generated_shells.get_mut(&plan.key).unwrap().control = None;
+    drop(
+        backend
+            .generated_shells
+            .get_mut(&plan.key)
+            .unwrap()
+            .control
+            .take(),
+    );
     assert!(!backend.validate_generated_shell_disposal_v1(&plan));
     backend
         .generated_shells

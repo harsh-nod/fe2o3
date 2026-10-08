@@ -1,0 +1,72 @@
+{
+  "crates/fe2o3-runtime-model/verus/CONTEXT_CACHED_POLL_BOUNDARY.md": {
+    "bytes": 4367,
+    "mode": 420,
+    "sha256": "a4b79832d9d9fce23de938ca63292dd4f8fdd2426cb43598e13b85d218e4b362"
+  },
+  "crates/fe2o3-runtime-model/verus/check-context-cached-poll-v1.py": {
+    "bytes": 18479,
+    "mode": 420,
+    "sha256": "934001946675fbae90bf0bace3346ace2d65465106ad2207ab992ed92031bfa5"
+  },
+  "crates/fe2o3-runtime-model/verus/context-cached-poll-diagnostics-v1.py": {
+    "bytes": 18979,
+    "mode": 420,
+    "sha256": "31203435d53127d16f3bb1e08816791b1ae7be987bf4cb5c32c3fc68f5168bb8"
+  },
+  "crates/fe2o3-runtime-model/verus/context-cached-poll-mutations-v1.py": {
+    "bytes": 4213,
+    "mode": 420,
+    "sha256": "3b430090fdead4280849c2b9ebd04c8315338fe0b11c5c50319e02bf537c5076"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_CACHED_POLL_DIAGNOSTICS_V1.json": {
+    "bytes": 419121,
+    "mode": 420,
+    "sha256": "a3a6fce645560532cc5d8b613d21202e6d7d420d159c209da15ce3a2d4660343"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_CACHED_POLL_INPUTS_V1.json": {
+    "bytes": 1287,
+    "mode": 420,
+    "sha256": "a707efc99cf50683b733bb11fac8025c8d00e7b58a7d500cf52d30aa60dfca60"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_CACHED_POLL_INPUTS_V1_SHA256": {
+    "bytes": 65,
+    "mode": 420,
+    "sha256": "fde9516c9029d45a4773fa1400008a050915218508b8b8c97f3e3986528b466c"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_CACHED_POLL_PREDECESSOR_V1.json": {
+    "bytes": 5831,
+    "mode": 420,
+    "sha256": "4d2f5c6b2e264348b5487215489981331f67045342b83cd179c24ce11c9604af"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_CACHED_POLL_TOOLCHAIN.toml": {
+    "bytes": 56,
+    "mode": 420,
+    "sha256": "0b5ab62ff48b93d11576964057a24fe8122e76b50d797779e2b3b11f3e0e50f1"
+  },
+  "crates/fe2o3-runtime-model/verus/qualify-context-cached-poll-v1.py": {
+    "bytes": 10421,
+    "mode": 420,
+    "sha256": "c00c7c60e1a5aedc5e052c3cc875a83021fc4ea74b74a3b4f34f131ba89acdc0"
+  },
+  "crates/fe2o3-runtime-model/verus/test-context-cached-poll-diagnostics-v1.py": {
+    "bytes": 13503,
+    "mode": 420,
+    "sha256": "975d29e8d25babcd8d88ec3fae8cfaae09b1b73632fde58b8d62d0e16598e5e5"
+  },
+  "crates/fe2o3-runtime-model/verus/test-context-cached-poll-v1.py": {
+    "bytes": 14230,
+    "mode": 420,
+    "sha256": "081c0c9b984d37ea6e00ef422f3e828db2e5b79f6f612a7aa7f3bfad20990a94"
+  },
+  "scripts/qualify-runtime-production-proofs.sh": {
+    "bytes": 1994,
+    "mode": 420,
+    "sha256": "e012c2c4dc475e8579c98477502b5ea91dee20bd6c141cc1e1bd3656b822b68d"
+  },
+  "scripts/tests/runtime-production-proof-pipeline.py": {
+    "bytes": 9715,
+    "mode": 420,
+    "sha256": "ac43e067e6326385ac1dc8df67a1d2ef24b64c87af398f3738b54b6a72601cd4"
+  }
+}

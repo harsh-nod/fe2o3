@@ -315,6 +315,7 @@ fn inspect_case(case: usize) {
             backend.submissions.insert(
                 submission,
                 SubmissionRecordV1 {
+                    origin: SubmissionOriginV1::Ordinary,
                     stream,
                     status: BackendPollV1::Succeeded,
                     dependency_depth: 0,

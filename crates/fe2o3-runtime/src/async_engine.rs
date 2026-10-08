@@ -457,6 +457,14 @@ pub enum RuntimeAsyncEngineCallErrorV1 {
     InvalidPreparedTicket,
     /// This operation never entered context submission. Not GPU completion.
     CancelledBeforeSubmission,
+    /// Adopted DATA was retired before packet publication. Not successful output.
+    CancelledBeforePublication,
+    /// No successful result: classified rejection and original-owner settlement.
+    RejectedBeforePublication,
+    /// Original no-VM reset owner retained; this operation never activated DATA.
+    DeviceUnavailableBeforeActivation {
+        device_uid: u64,
+    },
     EngineStopped,
     ReentrantCall,
     CommandPanicked,

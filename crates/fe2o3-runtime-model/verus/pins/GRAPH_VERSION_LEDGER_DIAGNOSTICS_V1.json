@@ -1,0 +1,78 @@
+{
+  "begin-current-retained": {
+    "diagnostics": "6e71fe6aa10d1c989be9fe0f15ed64a1ee3c6ed5f3adbfe75f41f50e78017042",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "begin-input-refusal-ignored": {
+    "diagnostics": "47794631b0966d7404bf39fb8a3e169cfc1805cb2ad57d57948b02d5899881d4",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "begin-pending-dropped": {
+    "diagnostics": "6e71fe6aa10d1c989be9fe0f15ed64a1ee3c6ed5f3adbfe75f41f50e78017042",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "begin-pending-owner-ignored": {
+    "diagnostics": "47794631b0966d7404bf39fb8a3e169cfc1805cb2ad57d57948b02d5899881d4",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "begin-planned-phase-ignored": {
+    "diagnostics": "47794631b0966d7404bf39fb8a3e169cfc1805cb2ad57d57948b02d5899881d4",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "begin-predecessor-ignored": {
+    "diagnostics": "47794631b0966d7404bf39fb8a3e169cfc1805cb2ad57d57948b02d5899881d4",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "begin-premature-commit": {
+    "diagnostics": "6e71fe6aa10d1c989be9fe0f15ed64a1ee3c6ed5f3adbfe75f41f50e78017042",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "begin-refusal-mutates-started": {
+    "diagnostics": "8645a5397fe41200b39d0755bab5004b2e04e33ca9fbacd736b762891a9db713",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "begin-repeated-accepted": {
+    "diagnostics": "0dd89ff9d2b40ddcd8e262f4aa9f84d6466cf2e8bd39b0f424215daee6516fb5",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "begin-tail-unchecked": {
+    "diagnostics": "0dd89ff9d2b40ddcd8e262f4aa9f84d6466cf2e8bd39b0f424215daee6516fb5",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "commit-current-retained": {
+    "diagnostics": "01bc69cdff216c8a685f061d2d26fff897810ca234121ddf13cef21ff7fafc72",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "commit-flight-phase-ignored": {
+    "diagnostics": "5afee1b71a15b923b807d58cf922a1b016705b1f4dd01ae99e9eb8e6a20240b1",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "commit-invalidated-current-ignored": {
+    "diagnostics": "5afee1b71a15b923b807d58cf922a1b016705b1f4dd01ae99e9eb8e6a20240b1",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "commit-pending-owner-ignored": {
+    "diagnostics": "5afee1b71a15b923b807d58cf922a1b016705b1f4dd01ae99e9eb8e6a20240b1",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "commit-pending-retained": {
+    "diagnostics": "01bc69cdff216c8a685f061d2d26fff897810ca234121ddf13cef21ff7fafc72",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "commit-phase-unsettled": {
+    "diagnostics": "01bc69cdff216c8a685f061d2d26fff897810ca234121ddf13cef21ff7fafc72",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "commit-refusal-mutates-started": {
+    "diagnostics": "bfc6cf487f30afb83c089a1239d28c1e2b430608a55e8d1efcf9f0076dcc5fdc",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "commit-tail-unchecked": {
+    "diagnostics": "99db4c781f7b51a607c4bb443644ed06357087659dc70fe95e562f4ecf2d9a20",
+    "stdout": "3d28473d1d18a0b903269c8bd1376962b9cb6f222fd43e9c26491ec8998ffc2b"
+  },
+  "positive": {
+    "diagnostics": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "stdout": "9cbd22fb6cd41ec05e6bbf749692d32c97cada13480560284c07a55e88a24cb7"
+  }
+}

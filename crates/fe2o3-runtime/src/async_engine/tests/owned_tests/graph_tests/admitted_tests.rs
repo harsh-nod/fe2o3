@@ -2,6 +2,64 @@ use super::*;
 use crate::RuntimeValidationErrorV1;
 use crate::async_engine::PreparedGraphAdmissionV1;
 
+#[test]
+fn static_graph_rejects_host_staging_before_preparation_or_reservation() {
+    let mut h = Harness::new();
+    let stream = h.streams[0];
+    let identity = h.context.completion_stream_identity_v1(stream).unwrap();
+    let device = h.context.devices()[0].id();
+    let allocation = h
+        .context
+        .allocate(device, crate::RuntimeMemoryKindV1::HostVisible, 32, 8)
+        .unwrap();
+    let mut request = RuntimeGraphRequestV1::new(
+        CompletionGraphV1::new(
+            identity.context(),
+            vec![identity],
+            vec![
+                CompletionNodeV1::future(id(1), FutureIdentityV1::new(identity, [1; 32]), None),
+                CompletionNodeV1::future(
+                    id(2),
+                    FutureIdentityV1::new(identity, [2; 32]),
+                    Some(id(1)),
+                ),
+            ],
+        )
+        .unwrap(),
+        vec![(identity, stream)],
+    )
+    .unwrap();
+    request
+        .bind_host_staging_v1(
+            id(2),
+            id(1),
+            RuntimeMemoryRegionV1 {
+                allocation,
+                access: RuntimeAccessV1::Write,
+                byte_offset: 0,
+                byte_len: 32,
+            },
+        )
+        .unwrap();
+    let mut original = Some(request);
+    let result = PreparedGraphAdmissionV1::prepare(
+        &mut h.context,
+        &mut original,
+        |_, _, _| -> Result<(), RuntimeGraphErrorV1<MockError>> {
+            panic!("static refusal precedes callback")
+        },
+    );
+    assert!(matches!(
+        result,
+        Err(RuntimeGraphErrorV1::Invalid(
+            RuntimeGraphValidationErrorV1::HostStagingRequiresScope
+        ))
+    ));
+    assert!(original.is_some());
+    assert_eq!(h.issue_count(), 0);
+    h.context.release_allocation(allocation).unwrap();
+}
+
 fn prepared(
     h: &mut Harness,
     request: RuntimeGraphRequestV1<MockBackend>,
