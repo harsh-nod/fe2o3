@@ -272,12 +272,14 @@ impl<'plan, 'slots, 'view, 'source> FramePlan<'plan, 'slots, 'view, 'source> {
                         }
                     }
                     let boundaries = if row.active {
-                        Some(Boundaries::derive(
+                        Some(Boundaries::derive_source_v299(
                             ssa,
                             ControlInput {
                                 entry: block(function.entry().index() as usize)?,
                                 successors: &successors,
                             },
+                            archive,
+                            row.function,
                             out,
                         )?)
                     } else {

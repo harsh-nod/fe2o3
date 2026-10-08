@@ -82,9 +82,9 @@ pub(in super::super) fn emit_source_cut_values_v213(
                     })?;
                     successors.push(edges);
                 }
-                let boundaries = Boundaries::derive(ssa, ControlInput {
+                let boundaries = Boundaries::derive_source_v299(ssa, ControlInput {
                     entry: Block::new(function.entry().index()), successors: &successors,
-                }, out)?;
+                }, archive, row.function, out)?;
                 let demands = ComponentDemandsV42::derive(slots, row.function, out)?;
                 let analysis_storage = out.budget.storage().checked_sub(analysis_floor)
                     .ok_or(Resource::Accounting)?;

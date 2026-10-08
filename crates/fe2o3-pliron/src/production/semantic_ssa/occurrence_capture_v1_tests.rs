@@ -354,6 +354,114 @@ fn with_capture(
 }
 
 #[test]
+fn sealed_block_events_distinguish_nonreturning_assert_from_cleanup() {
+    for cleanup in [false, true] {
+        let base = admitted_single_function_semantic();
+        let mut types = scalar_types(&base);
+        let boolean = SemanticTypeIdV1::from_index(types.len() as u32);
+        types.push(SemanticTypeDeclV1::new(
+            SemanticTypeIdentityV1::from_sha256(test_bytes(164)),
+            SemanticLayoutIdentityV1::from_sha256(test_bytes(165)),
+            SemanticTypeLayoutV1::new_with_backend_repr(
+                Some(1),
+                1,
+                SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
+                    SemanticBackendPrimitiveV1::integer(false, 8, 1),
+                    SemanticScalarValidityRangeV1::new(0, 1),
+                )),
+                false,
+            )
+            .unwrap(),
+            SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool),
+        ));
+        let root = root_with(
+            &base.functions()[0],
+            vec![
+                test_local(170, 0, SemanticLocalRoleV1::Return),
+                test_local(171, 1, SemanticLocalRoleV1::Temporary),
+            ],
+            vec![
+                test_block(
+                    180,
+                    vec![test_assign_to(test_typed_place(1, 1), number(7))],
+                    SemanticTerminatorKindV1::Assert {
+                        condition: SemanticOperandV1::Constant(SemanticConstantV1::new(
+                            boolean,
+                            SemanticConstantValueV1::Scalar(
+                                SemanticScalarValueV1::new(1, 1).unwrap(),
+                            ),
+                        )),
+                        expected: true,
+                        message: SemanticAssertMessageV1::DivisionByZero(SemanticOperandV1::Move(
+                            test_typed_place(1, 1),
+                        )),
+                        target: test_edge(SemanticEdgeRoleV1::AssertSuccess, 1),
+                        unwind: if cleanup {
+                            SemanticUnwindActionV1::Cleanup(test_edge(
+                                SemanticEdgeRoleV1::AssertUnwind,
+                                1,
+                            ))
+                        } else {
+                            SemanticUnwindActionV1::Unreachable
+                        },
+                    },
+                ),
+                test_block(181, vec![], SemanticTerminatorKindV1::Return),
+            ],
+        );
+        let owner = admit_owner(
+            InertSemanticMirRequestV1::new(
+                base.target(),
+                types,
+                vec![],
+                vec![],
+                vec![],
+                vec![root],
+                vec![SemanticFunctionIdV1::from_index(0)],
+            )
+            .unwrap(),
+        );
+        with_capture(owner, |owner| {
+            let rows = owner
+                .occurrences_v1()
+                .unwrap()
+                .function(SemanticFunctionIdV1::from_index(0))
+                .unwrap();
+            assert_eq!(rows.block_count_v299(), 2);
+            let events = rows.block_events_v299(SsaBlockIdV1::new(0)).unwrap();
+            assert_eq!(
+                events.iter().map(|row| row.event()).collect::<Vec<_>>(),
+                vec![
+                    SsaEventV1::Define(variable(1)),
+                    SsaEventV1::Use(variable(1)),
+                    SsaEventV1::Kill(variable(1))
+                ]
+            );
+            assert_eq!(
+                rows.terminal_failure_start(SsaBlockIdV1::new(0)),
+                if cleanup { None } else { Some(1) }
+            );
+            assert!(
+                rows.block_events_v299(SsaBlockIdV1::new(1))
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(rows.block_events_v299(SsaBlockIdV1::new(2)).is_none());
+            let plan = owner.plan_for_function(rows.function()).unwrap().plan();
+            for event in events {
+                assert_eq!(
+                    event.resolved(),
+                    plan.resolved_event(SsaBlockIdV1::new(0), event.ordinal())
+                        .copied()
+                );
+                assert!(event.resolved().is_some());
+            }
+            assert_eq!(rows.successors().len(), if cleanup { 2 } else { 1 });
+        });
+    }
+}
+
+#[test]
 fn sealed_capture_preserves_rust_call_field_origins_in_local_order() {
     for count in [0, 3] {
         let base = admitted_single_function_semantic();
