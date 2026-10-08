@@ -441,7 +441,7 @@ fn source_ssa_failure_tail_keeps_each_redefined_variable_before_interleaved_move
         let Some(Event::Define {
             variable,
             value: a_new,
-        }) = plan.resolved_event(Block::new(0), 0)
+        }) = plan.resolved_event(Block::new(0), 0).copied()
         else {
             panic!("original prefix definition");
         };
@@ -462,11 +462,11 @@ fn source_ssa_failure_tail_keeps_each_redefined_variable_before_interleaved_move
         );
         for (ordinal, variable, value) in [(2, a, a_new), (4, b, b_old)] {
             assert_eq!(
-                plan.resolved_event(Block::new(0), ordinal),
+                plan.resolved_event(Block::new(0), ordinal).copied(),
                 Some(Event::Use { variable, value })
             );
             assert_eq!(
-                plan.resolved_event(Block::new(0), ordinal + 1),
+                plan.resolved_event(Block::new(0), ordinal + 1).copied(),
                 Some(Event::Kill {
                     variable,
                     previous: Some(value)
@@ -485,14 +485,14 @@ fn source_ssa_failure_tail_keeps_each_redefined_variable_before_interleaved_move
         assert!(values.contains(&(Block::new(1), a, a_new)));
         assert!(values.contains(&(Block::new(1), b, b_old)));
         assert_eq!(
-            plan.resolved_event(Block::new(1), 0),
+            plan.resolved_event(Block::new(1), 0).copied(),
             Some(Event::Use {
                 variable: b,
                 value: b_old
             })
         );
         assert_eq!(
-            plan.resolved_event(Block::new(1), 1),
+            plan.resolved_event(Block::new(1), 1).copied(),
             Some(Event::Use {
                 variable: a,
                 value: a_new
