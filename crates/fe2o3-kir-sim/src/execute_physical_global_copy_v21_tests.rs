@@ -94,6 +94,7 @@ fn with_engine(test: impl FnOnce(&mut Engine<'_, NoopSimulationEventSinkV1>)) {
         conflict_incomplete: false,
         workgroup_happens_before_epoch: 0,
         unmodeled_atomic_or_fence_happens_before: false,
+        unmodeled_atomic_serialization: false,
         race_trackers: vec![],
         workgroup_allocations: vec![],
     };

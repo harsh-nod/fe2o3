@@ -40,6 +40,10 @@ use sha2::{Digest, Sha256};
 mod v12_preflight;
 use v12_preflight::reject_unsupported_v12_module;
 
+#[path = "lowering/checked_load_grouping_v1.rs"]
+mod checked_load_grouping_v1;
+pub use checked_load_grouping_v1::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_checked_load_grouping_v1;
+
 #[path = "lowering/ordered_region_v16.rs"]
 mod ordered_region_v16;
 pub use ordered_region_v16::lower_canonical_v16_compiler_module_to_gfx942_xnack_minus_llvm_ir;
@@ -1256,6 +1260,47 @@ fn lower_compiler_module_with_retained_and_debug_line_contexts(
     bf16_context: Option<&NativeBf16HelperContextV1<'_>>,
     debug_line: Option<OrderedProgramDebugLineV17<'_>>,
 ) -> Result<String, LoweringErrors> {
+    lower_compiler_module_with_checked_load_context_v1(
+        module,
+        target,
+        launch_policies,
+        semantic_anchor_identity,
+        require_kernel,
+        ordered_owner,
+        physical,
+        bf16_context,
+        debug_line,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn lower_compiler_module_with_checked_load_context_v1(
+    module: &Module,
+    target: LoweringTarget,
+    launch_policies: Option<&[Gfx942KernelLaunchPolicyV1]>,
+    semantic_anchor_identity: Option<SemanticAnchorInputV1<'_>>,
+    require_kernel: bool,
+    ordered_owner: Option<OrderedModuleOwner<'_>>,
+    physical: Option<&CompilerPhysicalLaunchV2<'_>>,
+    bf16_context: Option<&NativeBf16HelperContextV1<'_>>,
+    debug_line: Option<OrderedProgramDebugLineV17<'_>>,
+    checked_load_grouping_v1: bool,
+) -> Result<String, LoweringErrors> {
+    if checked_load_grouping_v1
+        && (target != LoweringTarget::Gfx950XnackMinusV1
+            || semantic_anchor_identity.is_some()
+            || ordered_owner.is_some()
+            || physical.is_some()
+            || bf16_context.is_some()
+            || debug_line.is_some())
+    {
+        return Err(LoweringErrors::one(
+            LoweringLocation::module(module),
+            LoweringDiagnosticCode::UnsupportedOperation,
+            "checked-load grouping requires the unanchored ordinary gfx950 module route",
+        ));
+    }
     if let Some(context) = bf16_context {
         if !std::ptr::eq(context.owner.module(), module)
             || !matches!(target, LoweringTarget::Gfx942XnackMinusV1)
@@ -1562,6 +1607,7 @@ fn lower_compiler_module_with_retained_and_debug_line_contexts(
                     *emission
                 }),
         )?;
+        lowerer.checked_load_grouping_v1 = checked_load_grouping_v1;
         lowerer.ordered_region_v16 =
             matches!(ordered_owner, Some(OrderedModuleOwner::RegionV16(_)));
         lowerer.ordered_program_v17 =
@@ -1596,6 +1642,7 @@ fn lower_compiler_module_with_retained_and_debug_line_contexts(
             &call_symbols,
             target,
         )?;
+        lowerer.checked_load_grouping_v1 = checked_load_grouping_v1;
         lowerer.ordered_composition_v1 = match ordered_owner {
             Some(OrderedModuleOwner::CompositionV1(owner)) => Some(owner),
             _ => None,
@@ -3987,6 +4034,7 @@ struct FunctionLowerer<'a> {
     control_flow: IndexedControlFlow,
     split_edges: Vec<bool>,
     semantic_anchor_emission: SemanticAnchorEmissionV1,
+    checked_load_grouping_v1: bool,
     ordered_region_v16: bool,
     ordered_program_v17: bool,
     ordered_debug_line_v17: Option<OrderedProgramDebugLineV17<'a>>,
@@ -4340,6 +4388,7 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission,
+            checked_load_grouping_v1: false,
             ordered_region_v16: false,
             ordered_program_v17: false,
             ordered_debug_line_v17: None,
@@ -4375,6 +4424,7 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission,
+            checked_load_grouping_v1: false,
             ordered_region_v16: false,
             ordered_program_v17: false,
             ordered_debug_line_v17: None,
@@ -4405,6 +4455,7 @@ impl<'a> FunctionLowerer<'a> {
             control_flow,
             split_edges,
             semantic_anchor_emission: SemanticAnchorEmissionV1::Disabled,
+            checked_load_grouping_v1: false,
             ordered_region_v16: false,
             ordered_program_v17: false,
             ordered_debug_line_v17: None,
@@ -6293,7 +6344,14 @@ impl<'a> FunctionLowerer<'a> {
         for block in &body.blocks {
             writeln!(output, "{}:", block_label(block.id)).unwrap();
             self.emit_block_parameters(output, block);
-            for (operation_index, operation) in block.operations.iter().enumerate() {
+            let mut operation_index = 0;
+            while operation_index < block.operations.len() {
+                if let Some(group) = self.checked_load_group_v1(block, operation_index) {
+                    self.emit_checked_load_group_v1(output, block, &group)?;
+                    operation_index = group.end;
+                    continue;
+                }
+                let operation = &block.operations[operation_index];
                 self.emit_semantic_anchor_v1(output, next_probe_index);
                 if matches!(
                     self.semantic_anchor_emission,
@@ -6321,6 +6379,7 @@ impl<'a> FunctionLowerer<'a> {
                     })?;
                 }
                 self.emit_operation(output, block.id, operation_index, operation)?;
+                operation_index += 1;
             }
             let terminator = block.terminator.as_ref().ok_or_else(|| {
                 LoweringErrors::one(

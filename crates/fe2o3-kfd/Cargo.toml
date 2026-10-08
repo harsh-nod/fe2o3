@@ -21,6 +21,10 @@ hardware-qualification = []
 # Process-forking hardware validation only. This is not runtime authority.
 live-validation = ["rustix/process", "rustix/runtime"]
 engineering-gfx950 = ["dep:serde", "dep:serde_json"]
+# Default-off CPU observation timing; does not change native polling policy.
+engineering-native-wait-diagnostics = ["engineering-gfx950"]
+# Default-off raw packet timestamps for the unchanged whole-program schedule.
+engineering-native-packet-diagnostics = ["engineering-native-wait-diagnostics"]
 # Development-only accounted epoch capacity; not native qualification or authority.
 scale-qualification = []
 # CPU-only receipt composition tests. No native resources or execution authority.

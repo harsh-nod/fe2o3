@@ -6,6 +6,17 @@ use fe2o3_aql::{
     AqlPreparedClosedKernelDispatchProgramV1, AqlPreparedKernelDispatchProgramV1,
 };
 
+#[cfg(feature = "engineering-native-wait-diagnostics")]
+#[path = "engineering_gfx950_native_wait_diagnostic.rs"]
+mod wait_diagnostic;
+#[cfg(feature = "engineering-native-wait-diagnostics")]
+#[path = "engineering_native_wait_observation.rs"]
+mod wait_observation;
+
+#[cfg(feature = "engineering-native-packet-diagnostics")]
+#[path = "engineering_gfx950_native_packet_diagnostic.rs"]
+mod packet_diagnostic;
+
 const PROGRAM_KERNARG: usize = 0;
 const PROGRAM_SIGNAL: usize = 1;
 const MAX_PROGRAM_KERNARG_BYTES: usize =
@@ -91,6 +102,10 @@ fn require_storage_layout(
 struct NativeProgram<'a> {
     context: &'a mut Context,
     prepared: Option<Vec<PreparedDispatch>>,
+    #[cfg(feature = "engineering-native-wait-diagnostics")]
+    wait_diagnostic: wait_diagnostic::Diagnostic,
+    #[cfg(feature = "engineering-native-packet-diagnostics")]
+    packet_diagnostic: packet_diagnostic::Diagnostic,
 }
 
 enum StagedProgram {
@@ -174,6 +189,8 @@ impl OrderedBackend for NativeProgram<'_> {
                 .collect::<Vec<_>>(),
         )?;
         self.retain_storage(&layout)?;
+        #[cfg(feature = "engineering-native-packet-diagnostics")]
+        self.packet_diagnostic.begin(self.context, &layout)?;
         let started = self.context.profile_started();
         let storage = &mut self.context.token_program_storage;
         let mut packets = Vec::with_capacity(prepared.len());
@@ -263,6 +280,8 @@ impl OrderedBackend for NativeProgram<'_> {
             StagedProgram::System(program) => expose_program(program, &mut target)?,
             StagedProgram::Boundary(program) => expose_closed_program(program, &mut target)?,
         }
+        #[cfg(feature = "engineering-native-wait-diagnostics")]
+        self.wait_diagnostic.published();
         record_elapsed(&mut self.context.counters.dispatch_publish_ns, started)?;
         if started.is_some() {
             add_counter(&mut self.context.token_program_counters.publications, 1)?;
@@ -294,12 +313,29 @@ impl OrderedBackend for NativeProgram<'_> {
             add_counter(&mut self.context.counters.completion_polls, 1)?;
         }
         let signal = &mut self.context.token_program_storage.allocations[PROGRAM_SIGNAL];
+        #[cfg(feature = "engineering-native-wait-diagnostics")]
+        let read_before = self.wait_diagnostic.stamp();
         let completion = Backend::observe_completion_signal_acquire(
             &mut signal.mapping,
             signal.requested,
             pending.count - 1,
         )
         .map_err(explain)?;
+        #[cfg(feature = "engineering-native-wait-diagnostics")]
+        let read_after = {
+            let after = self.wait_diagnostic.stamp();
+            let state = match &completion {
+                AqlCompletionObservationV1::Pending => wait_diagnostic::SignalState::Pending,
+                AqlCompletionObservationV1::Completed => wait_diagnostic::SignalState::Completed,
+                AqlCompletionObservationV1::Unexpected(_) => {
+                    wait_diagnostic::SignalState::Unexpected
+                }
+            };
+            self.wait_diagnostic
+                .observation
+                .read(read_before, after, state);
+            after
+        };
         let counters =
             Backend::observe_aql_counters(&mut self.context.internal[CONTROL].mapping, PAGE_BYTES)
                 .map_err(explain)?;
@@ -318,16 +354,36 @@ impl OrderedBackend for NativeProgram<'_> {
         )?;
         self.context.last_observed_read = counters.1;
         let now = Instant::now();
+        #[cfg(feature = "engineering-native-wait-diagnostics")]
+        let mut currentness_ns = 0;
         if now >= pending.next_currentness {
+            #[cfg(feature = "engineering-native-wait-diagnostics")]
+            let before = self.wait_diagnostic.stamp();
             self.context.check_currentness(false)?;
+            #[cfg(feature = "engineering-native-wait-diagnostics")]
+            {
+                currentness_ns = self.wait_diagnostic.stamp().saturating_sub(before);
+            }
             pending.next_currentness = now
                 .checked_add(Duration::from_millis(100))
                 .ok_or("native token program currentness deadline")?;
+        }
+        #[cfg(feature = "engineering-native-wait-diagnostics")]
+        {
+            let after = self.wait_diagnostic.stamp();
+            self.wait_diagnostic.observation.post_read(
+                read_after,
+                after,
+                currentness_ns,
+                completed,
+            );
         }
         Ok(completed)
     }
 
     fn validate_all(&mut self, pending: &Self::Pending) -> Result<()> {
+        #[cfg(feature = "engineering-native-wait-diagnostics")]
+        let before = self.wait_diagnostic.stamp();
         let signal = &mut self.context.token_program_storage.allocations[PROGRAM_SIGNAL];
         for slot in 0..pending.count {
             require_signals_complete([Backend::observe_completion_signal_acquire(
@@ -336,6 +392,11 @@ impl OrderedBackend for NativeProgram<'_> {
                 slot,
             )
             .map_err(explain)?])?;
+        }
+        #[cfg(feature = "engineering-native-wait-diagnostics")]
+        {
+            let after = self.wait_diagnostic.stamp();
+            self.wait_diagnostic.observation.retirement(before, after);
         }
         if pending.wait_started.is_some() {
             add_counter(
@@ -372,7 +433,14 @@ impl OrderedBackend for NativeProgram<'_> {
     }
 
     fn pause(&mut self) -> Result<()> {
+        #[cfg(feature = "engineering-native-wait-diagnostics")]
+        let before = self.wait_diagnostic.stamp();
         std::thread::sleep(Duration::from_micros(50));
+        #[cfg(feature = "engineering-native-wait-diagnostics")]
+        {
+            let after = self.wait_diagnostic.stamp();
+            self.wait_diagnostic.observation.pause(before, after);
+        }
         Ok(())
     }
 
@@ -444,17 +512,42 @@ impl Context {
             return Err("native token program requires its separate diagnostic entry".into());
         }
         let count = prepared.len();
+        #[cfg(feature = "engineering-native-packet-diagnostics")]
+        let packet_diagnostic = packet_diagnostic::Diagnostic::new(self, &prepared)?;
         let mut native = NativeProgram {
             context: self,
             prepared: Some(prepared),
+            #[cfg(feature = "engineering-native-wait-diagnostics")]
+            wait_diagnostic: wait_diagnostic::Diagnostic::new(),
+            #[cfg(feature = "engineering-native-packet-diagnostics")]
+            packet_diagnostic,
         };
-        run_ordered_batch_deadline_bounded(
+        let result = run_ordered_batch_deadline_bounded(
             &mut native,
             count,
             600_000,
             MAX_TOKEN_PROGRAM_DISPATCHES_V1,
             Some(deadline),
-        )?;
+        );
+        #[cfg(feature = "engineering-native-wait-diagnostics")]
+        native.wait_diagnostic.emit(
+            native.context.queue_epoch,
+            native.context.ring.write(),
+            count,
+            result.is_ok(),
+        );
+        #[cfg(feature = "engineering-native-packet-diagnostics")]
+        let result = result.and_then(|elapsed| {
+            native
+                .packet_diagnostic
+                .finish(native.context)
+                .map(|()| elapsed)
+        });
+        #[cfg(feature = "engineering-native-packet-diagnostics")]
+        if result.is_err() {
+            native.context.ordered_batch_poisoned = true;
+        }
+        result?;
         Ok(())
     }
 

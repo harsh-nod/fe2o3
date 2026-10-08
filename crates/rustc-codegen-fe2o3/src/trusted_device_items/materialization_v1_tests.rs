@@ -83,7 +83,7 @@ fn reviewed_materialization_fixture(vendored: bool) -> ProviderPackageFixture {
     let original = Path::new(super::REVIEWED_FE2O3_DEVICE_PACKAGE_ROOT);
     let mut files = Vec::new();
     super::collect_reviewed_source_files(&original.join("src"), &mut files).unwrap();
-    assert_eq!(files.len(), 34);
+    assert_eq!(files.len(), 35);
     for file in files {
         let target = fixture.root.join(file.strip_prefix(original).unwrap());
         fs::create_dir_all(target.parent().unwrap()).unwrap();
@@ -108,6 +108,71 @@ fn admit_reviewed_materialization(
     )
 }
 
+// Reconstruct the exact historical package; never admit it as a fallback.
+fn remove_fp4_materialization_delta(fixture: &ProviderPackageFixture, vendored: bool) {
+    fs::remove_file(fixture.source_root().join("fp4.rs")).unwrap();
+    let path = fixture.source_root().join("lib.rs");
+    let mut source = fs::read_to_string(&path).unwrap();
+    for addition in [
+        "pub mod fp4;\n",
+        "pub use fp4::{Fp4E2M1Error, Fp4E2M1Ocp, Fp4E2M1Ocpx8};\n",
+    ] {
+        assert_eq!(source.matches(addition).count(), 1);
+        source = source.replacen(addition, "", 1);
+    }
+    fs::write(path, source).unwrap();
+    if vendored {
+        let path = fixture.root.join("Cargo.toml");
+        let manifest = fs::read_to_string(&path).unwrap();
+        let stanza = "[[test]]\nname = \"fp4_api\"\npath = \"tests/fp4_api.rs\"\n\n";
+        assert_eq!(manifest.matches(stanza).count(), 1);
+        fs::write(path, manifest.replacen(stanza, "", 1)).unwrap();
+    }
+}
+
+#[test]
+fn fp4_refresh_replaces_both_previous_materializations_and_preserves_atomic_provider() {
+    assert_eq!(super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1.len(), 2);
+    for (vendored, previous) in [
+        (
+            false,
+            "b1f821474cc4f1dabd6735e86e152c61a72655e4dd599e881c5308599b6b031d",
+        ),
+        (
+            true,
+            "ad5a497278b75847aa48ccc7369c51e713540cb3952372bb525a5f0a019a914b",
+        ),
+    ] {
+        let fixture = reviewed_materialization_fixture(vendored);
+        let current = admit_reviewed_materialization(&fixture).unwrap().identity;
+        let atomic = reviewed_provider_source_closure_from_definition(
+            &fixture.source_root().join("atomic.rs"),
+            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+            &super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1,
+        )
+        .unwrap();
+        assert_eq!(atomic.identity, current);
+        assert!(!super::REVIEWED_SAFE_EXECUTION_SOURCE_CLOSURES_V1.contains(&digest(previous)));
+        assert!(
+            reviewed_provider_source_closure_from_definition(
+                &fixture.source_root().join("atomic.rs"),
+                WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+                &[digest(previous)],
+            )
+            .is_err()
+        );
+        remove_fp4_materialization_delta(&fixture, vendored);
+        let observed = reviewed_provider_source_closure_identity(
+            &fixture.root,
+            WORKGROUP_SYNC_PROVIDER_SOURCE_CLOSURE_DOMAIN_V1,
+        )
+        .unwrap();
+        assert_eq!(observed, digest(previous));
+        assert_ne!(observed, current);
+        assert!(admit_reviewed_materialization(&fixture).is_err());
+    }
+}
+
 #[test]
 fn execution_documentation_refresh_replaces_both_previous_materializations() {
     for (vendored, previous) in [
@@ -122,6 +187,10 @@ fn execution_documentation_refresh_replaces_both_previous_materializations() {
     ] {
         let fixture = reviewed_materialization_fixture(vendored);
         let current = admit_reviewed_materialization(&fixture).unwrap().identity;
+        // Keep the old execution-comment regression tied to its exact historical tree.
+        let current_fixture = fixture;
+        let fixture = reviewed_materialization_fixture(vendored);
+        remove_fp4_materialization_delta(&fixture, vendored);
         let source_path = fixture.source_root().join("execution.rs");
         let source = fs::read_to_string(&source_path).unwrap();
         let mut historical = source.clone();
@@ -143,8 +212,11 @@ fn execution_documentation_refresh_replaces_both_previous_materializations() {
         assert_ne!(observed, current);
         assert!(admit_reviewed_materialization(&fixture).is_err());
         fs::write(&source_path, source).unwrap();
+        assert!(admit_reviewed_materialization(&fixture).is_err());
         assert_eq!(
-            admit_reviewed_materialization(&fixture).unwrap().identity,
+            admit_reviewed_materialization(&current_fixture)
+                .unwrap()
+                .identity,
             current
         );
     }
@@ -157,7 +229,7 @@ fn canonical_and_cargo_vendor_materializations_preserve_actual_identities() {
     let manifest_sha: [u8; 32] = Sha256::digest(CARGO_VENDOR_DEVICE_MANIFEST_V1).into();
     assert_eq!(
         manifest_sha,
-        digest("a5505445b6b63f1e46b7fca58aa25450de19f3cec1c8d44ce444e64d441a22b4")
+        digest("7a4843e05c6b5bb09ad2da1a0439b4ad1fb5e7c0a17b3e07a043d366112b45bf")
     );
     let item = TrustedDeviceItem::WriteOnlyDisjointSliceLen;
     let path = exact_provider_compiler_definition_path_v1(item)
@@ -222,7 +294,7 @@ fn canonical_and_cargo_vendor_materializations_preserve_actual_identities() {
 #[test]
 fn reviewed_materializations_reject_manifest_and_source_mutations() {
     for vendored in [false, true] {
-        for mutation in 0..18 {
+        for mutation in 0..22 {
             let fixture = reviewed_materialization_fixture(vendored);
             admit_reviewed_materialization(&fixture).unwrap();
             match mutation {
@@ -297,6 +369,24 @@ fn reviewed_materializations_reject_manifest_and_source_mutations() {
                     fixture.source_root().join("context_renamed.rs"),
                 )
                 .unwrap(),
+                18 => fs::write(
+                    fixture.source_root().join("fp4.rs"),
+                    b"// substituted FP4 storage source\n",
+                )
+                .unwrap(),
+                19 => fs::remove_file(fixture.source_root().join("fp4.rs")).unwrap(),
+                20 => fs::rename(
+                    fixture.source_root().join("fp4.rs"),
+                    fixture.source_root().join("fp4_renamed.rs"),
+                )
+                .unwrap(),
+                21 => {
+                    let path = fixture.source_root().join("lib.rs");
+                    let source = fs::read_to_string(&path).unwrap();
+                    let registration = "pub mod fp4;\n";
+                    assert_eq!(source.matches(registration).count(), 1);
+                    fs::write(path, source.replacen(registration, "", 1)).unwrap();
+                }
                 _ => unreachable!(),
             }
             assert!(
