@@ -236,13 +236,9 @@ fn check_history(text: &str, root: usize, instance: usize) {
     ] {
         assert!(!step_body.contains(forbidden), "{forbidden}");
     }
-    let witness_summary = declaration(text, "invocation_source_micro_record_has_shape_v356");
-    assert_eq!(
-        witness_summary,
-        declaration(
-            SOURCE_FUNCTION_V36,
-            "invocation_source_micro_record_has_shape_v356"
-        )
+    let witness_summary = declaration(
+        SOURCE_FUNCTION_V36,
+        "invocation_source_micro_record_has_shape_v356",
     );
     assert_eq!(
         witness_summary,
@@ -374,6 +370,9 @@ fn source_micro_history_emits_unconditional_contracts_for_every_actual_instance(
                     }));
                     assert!(program.functions.iter().flatten().any(|row| row.blocks.start > 0));
                     program.emit(out)?;
+                    assert!(!out.text.contains(
+                        "proof fn invocation_source_micro_record_has_shape_v356("
+                    ));
                     for (root, instance) in coordinates {
                         check_history(&out.text, root, instance);
                     }
@@ -444,6 +443,16 @@ fn source_micro_history_survives_expanded_finish_without_another_interpreter() {
                     out,
                 )?;
                 model.emit_support(out)?;
+                let shared_shape =
+                    declaration(&out.text, "invocation_source_micro_record_has_shape_v356")
+                        .to_owned();
+                assert_eq!(
+                    shared_shape,
+                    declaration(
+                        SOURCE_FUNCTION_V36,
+                        "invocation_source_micro_record_has_shape_v356"
+                    )
+                );
                 let source = plan.source(out)?;
                 let mut proofs = Vec::new();
                 for root in 0..source.root_count(out.budget)? {
@@ -466,6 +475,10 @@ fn source_micro_history_survives_expanded_finish_without_another_interpreter() {
                 }
                 assert!(!proofs.is_empty());
                 model.finish(out)?;
+                assert_eq!(
+                    declaration(&out.text, "invocation_source_micro_record_has_shape_v356"),
+                    shared_shape
+                );
                 for (name, body) in &proofs {
                     assert_eq!(declaration(&out.text, name), body);
                 }
