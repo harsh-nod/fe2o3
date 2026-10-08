@@ -305,6 +305,30 @@ pub(crate) fn construct_production_semantic_mir_v1<'tcx>(
     construct_production_semantic_mir_with_nominal_v35(tcx, closure, debug_source_capture, false)
 }
 
+pub(crate) fn construct_production_semantic_mir_with_enrollment_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
+    nominal: bool,
+    loan: &crate::protected_compiler_execution::native_v3::ReferenceEnrollmentLoanV1<'_>,
+) -> Result<ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1> {
+    let (constructed, completion) =
+        construct_production_semantic_mir_with_policy_and_enrollment_v1(
+            tcx,
+            closure,
+            debug_source_capture,
+            nominal,
+            SourceImportPolicyV1::Singleton,
+            Some(loan),
+        )?;
+    match completion {
+        SourceImportCompletionV1::Singleton => Ok(constructed),
+        _ => Err(body_owner_table_mismatch_v1(
+            "enrolled singleton import returned a foreign completion profile",
+        )),
+    }
+}
+
 pub(crate) fn construct_production_semantic_mir_nominal_v35<'tcx>(
     tcx: TyCtxt<'tcx>,
     closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
@@ -531,6 +555,30 @@ fn construct_production_semantic_mir_with_policy_v1<'tcx>(
     ),
     ProductionSemanticImportErrorV1,
 > {
+    construct_production_semantic_mir_with_policy_and_enrollment_v1(
+        tcx,
+        closure,
+        debug_source_capture,
+        nominal,
+        ordered_policy,
+        None,
+    )
+}
+
+fn construct_production_semantic_mir_with_policy_and_enrollment_v1<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
+    nominal: bool,
+    ordered_policy: SourceImportPolicyV1,
+    loan: Option<&crate::protected_compiler_execution::native_v3::ReferenceEnrollmentLoanV1<'_>>,
+) -> Result<
+    (
+        ConstructedProductionSemanticMirV1,
+        SourceImportCompletionV1<'tcx>,
+    ),
+    ProductionSemanticImportErrorV1,
+> {
     let AuthenticatedCollectedKernelClosureV1 {
         target,
         collection,
@@ -570,7 +618,7 @@ fn construct_production_semantic_mir_with_policy_v1<'tcx>(
         .validate_for_import_v1(tcx, &collection)
         .map_err(ProductionSemanticImportErrorV1::ContextCustody)?;
     let reference_effect_bindings = closure_flow
-        .rederive_reference_bindings_v1(tcx, &collection)
+        .rederive_reference_bindings_with_enrollment_v1(tcx, &collection, loan)
         .map_err(ProductionSemanticImportErrorV1::ReferenceCustody)?;
     let (identity_inventory, closure_work) =
         build_identity_inventory_v1(tcx, &target, &collection, &roots, closure_flow)?;
