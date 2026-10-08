@@ -3,7 +3,7 @@
 2026-10-08. Ordinary developer validation only, not protected compiler admission,
 proof execution, GPU execution, M1 completion, or 47-kernel qualification.
 
-## Tested Source
+## Initial Tested Source
 
 - Commit: `a10c4b0c2711d70c6bca9304f76dc1c85d760a1d`.
 - Tree: `73b92a938a9e93c2645cc2647f2d322e9d54a42c`.
@@ -19,7 +19,7 @@ The joined source includes original-invocation enrollment loans and identity
 checks, actual rustc source resolution/custody, original CPU-origin projection,
 strict explicit-origin codecs, and the shared inert enrollment-request decoder.
 
-## Actual Results
+## Initial Results
 
 | Stage | Result |
 | --- | --- |
@@ -111,9 +111,112 @@ The isolated loan fixtures measure their real test executable, not an independen
 installed production compiler/backend. Their process-consistency successes do not
 establish protected compiler provenance or successful proof publication.
 
-An authenticated selector/Instance-to-semantic-root association must still cross
-the signed compiler handoff. Host and proof-worker consumers need original-account
-raw Subject reconstruction, complete mapping recovery, and paid decoder storage.
-Genuine signed cross-process tests, broader compiler compatibility, the protected
-default-fill path, KernelContext typed-global vecadd, and supported GPU runs remain
-open. Shared decoder values and explicit expected-origin inputs remain inert.
+The compiler capture, host intake, and mapped-consumer changes must still be
+qualified together through the actual signed handoff. Current host and worker
+call sites retain legacy recovery; neither selects the mapped path nor calls the
+shared JSON decoder yet. Any future mapping expectation must obtain its binding
+count from the original authenticated descriptor, not the mapping header itself.
+
+Protected request parsing still needs complete input/header/error-lifetime
+accounting, retained-output charge transfer, and an enforceable relation to the
+qualified actual decoder execution. Conditional serde allocation analysis is not
+installed-profile admission or a universal guarantee for external Cargo builds.
+Existing generic callback/error types and compiler diagnostic String conversion
+must not disappear from that accounting.
+
+Genuine signed cross-process tests, broader joined compiler compatibility, the
+protected default-fill path, KernelContext typed-global vecadd, and supported GPU
+runs remain open. No result here completes M1 or the 47-kernel end-to-end goal.
+
+## Later Joined CPU Checks
+
+The initial checkpoint above is preserved. Subsequent ordinary developer runs
+used the same toolchain, CPU/resource limits, committed test profile, and
+source/artifact checks. These results belong to the listed revisions, not to an
+unqualified combined total.
+
+| Revision | Change And Actual Result |
+| --- | --- |
+| `5661e49e9001b2b204ef559f00080f43a1d61c65` | Route-guard correction; 113 invocation and 133 focused compiler tests passed; broader compiler selection passed 1,031 tests |
+| `6849ca6ea395c9b8e26f1bbc7efc93e9832fec0d` | Original worker account and raw Subject join; four-library check passed; 6 worker, 24 Subject and 116 lineage tests passed |
+| `33f7e3755d9ed2642c5f9e1fb5f51c62597711bc` | Formal CPU mapping joined; five-library check passed; all 1,649 nonignored verifier library tests passed |
+| `522d4aea1fa41aa8fb07dec5d0ea9b64daead082` | One-pass enrollment decoder; all 120 invocation and 133 focused compiler tests passed |
+| `d3d380baf0c1665e93cc0f74eed491580ea9b512` | Added combined mapping resource-boundary test; six-library production check passed; all 1,650 nonignored verifier library tests passed |
+
+The latest verifier suite discovered 1,698 tests. Its 48 ignored tests were
+explicitly excluded and are not qualified. The 17 mapping component tests,
+including the new exact/storage-one-short/work-one-short case, are included in
+the 1,650 passes, not additional coverage. Likewise, the earlier focused compiler
+and mapping runs overlap their broader selections.
+
+The latest production check covers `rustc-codegen-fe2o3`,
+`fe2o3-rustc-invocation`, `fe2o3-compiler-lineage`,
+`fe2o3-artifact-transaction`, `fe2o3-proof-custodian`, and `fe2o3-verifier`.
+It passed in 66.67 seconds. The final verifier run passed in 89.32 seconds.
+The 522d focused compiler run passed in 44.72 seconds with 4,627 tests filtered;
+it explicitly validated the two existing self-exec child reports.
+
+### Implemented Boundaries
+
+The proof controller now borrows one owned resource account throughout its
+lifetime. It joins the full raw Subject to the signed carriage before semantic
+recovery and repeats the content join afterward. Existing currentness, deadline,
+acknowledgment and quarantine rules remain unchanged. Its new ordinary tests do
+not establish genuine signed cross-process execution.
+
+Formal mapping recovery projects the authenticated inventory onto reconstructed
+source and checks complete kernel membership, root order, names, bindings, and
+both CPU kernel/reference identities before formula construction. Expected
+coordinates remain inert inputs requiring independent authenticated provenance.
+Mapped sticky-denial checks occur at projection entry and after consumption,
+not at the public entry before all earlier decoding. The added boundary test
+exercises real accounting primitives with an inert drop probe, not a recovered
+native owner.
+
+The shared decoder replaces the typed-plus-generic-Value double parse with one
+fixed-schema pass. It rejects positional objects and duplicate/unknown fields,
+uses one bounded output vector and fallible selector allocations, finishes JSON
+validation before semantic refusals, and preserves strict u16 and error ordering.
+Seven new regressions cover those behaviors. The public decoder remains
+work-metered, not storage-prepaid; serde error allocations are not guaranteed to
+return an allocation error.
+
+### Additional Preserved Failures
+
+The earlier broader run at a10c completed with 1,028 passes and one failed
+production-route AST guard. The guard assumed five checks remained inline;
+production had moved them into the enrollment-aware helper. The test-only
+correction follows that delegation and checks the helper's complete ordered
+stages. New negatives first validate the unmodified baseline and require their
+specific refusal. The original failed receipt was not rewritten.
+
+The first worker test build, r1918, failed before Rust compilation because the
+offline cache lacked locked dependency `fastrand 2.5.0`. A separate r1919
+attempt enabled the locked download and passed. Source and lockfile were
+unchanged; the failed attempt remains preserved.
+
+### Followup Evidence
+
+Paths remain relative to the evidence root above.
+
+| Receipt | SHA256 |
+| --- | --- |
+| `r1911-broader-regressions-20261008-1945/rustc_codegen_fe2o3/terminal.json` | `1d8cfee881c7e00712d795faea94f38abb19ac4b2bfe1baa155c809114b83d9f` |
+| `r1915-broader-regressions-20261008-2011/rustc_codegen_fe2o3/terminal.json` | `855f4982470607f4fdffb64f301a17f97f6e96630ee7889213fa10fce6629480` |
+| `r1922-worker-focused-20261008-2039/fe2o3_proof_custodian/terminal.json` | `a0889dc8036aa5e5ca9d13e026de50f9ec119042168840284738569c7dbd820b` |
+| `r1922-worker-focused-20261008-2039/fe2o3_artifact_transaction/terminal.json` | `5aa8232004aa2190e3234422aaf1515bda7e1cd06ff2d6fe46306e5569d10f6c` |
+| `r1922-worker-focused-20261008-2039/fe2o3_compiler_lineage/terminal.json` | `c82a816248c9d3fd3b314d8d0ee9f7d11f7cb065a51db63ba4dcd687b276bd45` |
+| `r1932-closed-seed-focused-20261008-2101/fe2o3_rustc_invocation/terminal.json` | `cf2b2091c44f3370df2a158eae587dd7da95a6bca59284322f29c5ce7f98c6c0` |
+| `r1932-closed-seed-focused-20261008-2101/rustc_codegen_fe2o3/terminal.json` | `38d1bb2c7b8a886281c489bc84aa5f7cde8a9c78cc570d1fbed941eb8a174623` |
+| `r1933-joined-parser-check-20261008-2103/terminal.json` | `7c5b2c18b10be55917a6167792ed4f95c6cf9c02d433cdbe500b8477465badab` |
+| `r1936-mapped-boundary-regressions-20261008-2109/fe2o3_verifier/terminal.json` | `2796dd7d4f6b5836486d7a7145579c4d5d81dfad609513094f7ca2bc45ac56b7` |
+
+Latest tested production tree: `15180f3d341993978ef193cc6ad1876dea403f10`;
+tracked-file snapshot:
+`23eaf088e3d7ecaa5731d0db4e25a8898acc0337ce00b0926c4f71d58b4672d1`.
+Verifier executable:
+`575ce47e789629a97bf933993f417fb5874f9d5e3634221d8944a2d00e89aba6`.
+The r1932 compiler/invocation and r1936 verifier executables are preserved beside
+their receipts. All reported successful units exited with original process and
+cgroup absence checked. These are point-in-time observations, not a whole-host
+isolation guarantee.

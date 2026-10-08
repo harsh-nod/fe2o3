@@ -42,7 +42,15 @@ claim, and is not included in this test-only change.
 
 ## Qualification
 
-Source-only authored coverage. No Cargo, rustfmt, Rust compilation/test execution,
+At the owner's source handoff, this was source-only authored coverage. No Cargo,
+rustfmt, Rust compilation/test execution,
 solver, runtime, GPU or protected-service run was performed for this followup.
 Independent source review and the owner-controlled ordinary CPU qualification
-remain required; no execution result is inferred from this test's source.
+remained required; no execution result was inferred from this test's source.
+
+The later M1 integration at `d3d380baf0c1665e93cc0f74eed491580ea9b512`
+compiled and executed this test as part of 1,650 passing nonignored verifier
+library tests. The 48 ignored tests were not selected. See the exact source,
+artifact and terminal receipts in
+[the joined CPU checkpoint](issue272-m1-reference-enrollment-cpu-20261008.md#later-joined-cpu-checks).
+This ordinary component result does not qualify genuine native recovery or GPU use.
