@@ -578,3 +578,6 @@ fn actual_source_local_order_recipe_series_child_v1() {
 }
 #[path = "source_local_order_recipe_warm_controls_v1_tests.rs"]
 mod controls;
+
+#[path = "source_local_order_recipe_outcome_series_v1_tests.rs"]
+mod outcome_series;
