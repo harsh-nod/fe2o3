@@ -134,6 +134,7 @@ fn check_history(text: &str, root: usize, instance: usize) {
     let lines: Vec<_> = dispatcher.lines().collect();
     let mut cases = 0;
     for (index, line) in lines.iter().enumerate() {
+        let line = line.strip_prefix(" } else").unwrap_or(line);
         if line.starts_with(" if cursor.source.machine.pc == ") {
             let adapt = |text: &str| text.replace("cursor.", "c.").replace("little_endian", "e");
             expected_body.push_str(&format!("        {}\n", adapt(line.trim())));
