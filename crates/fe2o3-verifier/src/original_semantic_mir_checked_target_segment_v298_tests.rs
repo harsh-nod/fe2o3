@@ -164,6 +164,18 @@ fn generate(layout: Layout, work: usize, storage: usize) -> (Result<()>, usize, 
 }
 
 fn assert_composition_projections(text: &str) {
+    let count = text
+        .matches("proof fn checked_actual_source_target_step_")
+        .count();
+    assert!(count > 0);
+    assert_eq!(
+        text.matches("proof fn checked_source_projection_").count(),
+        count
+    );
+    assert_eq!(
+        text.matches("proof fn checked_target_projection_").count(),
+        count
+    );
     for tail in text
         .split("proof fn checked_actual_source_target_step_")
         .skip(1)
@@ -290,18 +302,23 @@ fn assert_composition_projections(text: &str) {
  }}
 "#
         );
-        assert_eq!(body.matches(&projected).count(), 1);
-        for call in [
-            format!(
-                "checked_add_actual_micro_step_{demand_site}_v293(s, left, right, little_endian);"
-            ),
-            format!(
-                "checked_add_actual_demanded_step_{demand_site}_v296(s, left, right, little_endian);"
-            ),
-            format!("checked_target_actual_step_{site}(t, left, right, little_endian);"),
-        ] {
-            assert_eq!(body.matches(&call).count(), 1);
-        }
+        let calls = format!(
+            " checked_source_projection_{demand_site}_v331(s, left, right, little_endian);\n checked_target_projection_{demand_site}_v331(t, left, right, little_endian);\n"
+        );
+        assert_eq!(body.matches(&calls).count(), 1);
+        assert!(!body.contains(".update("));
+        assert!(!body.contains("forall|"));
+        assert!(!body.contains(" by {"));
+        previous_body = previous_body.replacen(&calls, &projected, 1);
+        assert_independent_projection_contracts(
+            text,
+            site,
+            root,
+            instance,
+            value,
+            overflow,
+            destination,
+        );
         let legacy = format!(
             " checked_add_actual_micro_step_{demand_site}_v293(s, left, right, little_endian);\n checked_add_actual_demanded_step_{demand_site}_v296(s, left, right, little_endian);\n checked_target_actual_step_{site}(t, left, right, little_endian);\n let n = byte_micro_step_{root}_v30(t, little_endian);\n assert forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}\n     implies #[trigger] n.next.state.values[i] == t.state.values[i] by {{ }}\n"
         );
@@ -318,10 +335,143 @@ fn assert_composition_projections(text: &str) {
         assert!(!requires.contains("after_"));
         assert!(rest.contains("invocation_source_micro_step_"));
         assert!(rest.contains("byte_micro_step_"));
-        assert!(rest.contains("checked_add_actual_demanded_step_"));
-        assert!(rest.contains("checked_target_actual_step_"));
+        assert!(rest.contains("checked_source_projection_"));
+        assert!(rest.contains("checked_target_projection_"));
         assert!(!declaration.contains("assume("));
         assert!(!declaration.contains("admit("));
+    }
+}
+
+fn assert_independent_projection_contracts(
+    text: &str,
+    site: &str,
+    root: &str,
+    instance: &str,
+    value: usize,
+    overflow: usize,
+    destination: usize,
+) {
+    let coordinates = site.strip_suffix("_v298").unwrap();
+    let source_name = format!("checked_source_projection_{coordinates}_v331");
+    let target_name = format!("checked_target_projection_{coordinates}_v331");
+    let declaration = |name: &str| {
+        let marker = format!("proof fn {name}(");
+        assert_eq!(text.matches(&marker).count(), 1);
+        text.split_once(&marker)
+            .unwrap()
+            .1
+            .split_once("\nproof fn ")
+            .unwrap()
+            .0
+    };
+    let source = declaration(&source_name);
+    let target = declaration(&target_name);
+    // The source helper receives only the existing source-side input conjuncts.
+    let source_requires = text
+        .split_once(&format!("spec fn checked_actual_segment_inputs_{site}("))
+        .unwrap()
+        .1
+        .split_once(") -> bool {\n")
+        .unwrap()
+        .1
+        .split_once("\n && t.state.valid")
+        .unwrap()
+        .0
+        .trim();
+    // The target helper receives the unchanged direct target theorem premises.
+    let target_requires = text
+        .split_once(&format!("proof fn checked_target_actual_step_{site}("))
+        .unwrap()
+        .1
+        .split_once("\n requires ")
+        .unwrap()
+        .1
+        .split_once("\n ensures ")
+        .unwrap()
+        .0;
+    assert_eq!(
+        source,
+        format!(
+            r#"
+ s: InvocationSourceMicroStateV36, left: int, right: int, little_endian: bool,
+)
+ requires {source_requires},
+ ensures ({{ let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
+ a.source.machine.valid && invocation_source_active_{root}_{instance}_v36(a.source)
+ && invocation_source_byte_state_well_formed_v36(a.source)
+ && a.source.machine.pc == s.source.machine.pc
+ && a.next_statement == s.next_statement + 1
+ && a.observations.len() == s.observations.len() + 1
+ && a.observations.take(s.observations.len() as int) == s.observations
+ && a.source.machine.memory == s.source.machine.memory
+ && a.source.machine.frames == s.source.machine.frames
+ && a.source.machine.generations == s.source.machine.generations
+ && a.source.slots == s.source.slots && a.source.objects == s.source.objects
+ && a.source.logical.aggregates.contains_key({destination})
+ && a.source.logical.aggregates[{destination}].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)
+ && a.source.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})
+ && checked_prefix_demands_{coordinates}_v296(s.source, a.source, left, right) }}),
+{{
+ hide(invocation_source_micro_step_{root}_{instance}_v36);
+ hide(invocation_source_byte_state_well_formed_v36);
+ hide(invocation_source_active_{root}_{instance}_v36);
+ hide(checked_prefix_demands_{coordinates}_v296);
+ checked_add_actual_micro_step_{coordinates}_v293(s, left, right, little_endian);
+ checked_add_actual_demanded_step_{coordinates}_v296(s, left, right, little_endian);
+}}"#
+        )
+    );
+    assert_eq!(
+        target,
+        format!(
+            r#"
+ t: MemoryMicroStateV30, left: int, right: int, little_endian: bool,
+)
+ requires {target_requires}
+ ensures ({{ let n = byte_micro_step_{root}_v30(t, little_endian);
+ n.next.state.valid && n.next.state.pc == t.state.pc
+ && n.next.state.values.len() == t.state.values.len()
+ && n.next.state.values[{value}] == MemoryValueV30::Scalar((left + right) % 4294967296)
+ && n.next.state.values[{overflow}] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})
+ && (forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}
+     ==> #[trigger] n.next.state.values[i] == t.state.values[i])
+ && n.next.state.memory == t.state.memory && n.next.state.frames == t.state.frames
+ && n.next.state.generations == t.state.generations
+ && n.next.next_operation == checked_target_next_{site}()
+ && n.next.observations.len() == t.observations.len() + 1
+ && n.next.observations.take(t.observations.len() as int) == t.observations
+ && n.observation.before == t.state && n.observation.after == n.next.state
+ && n.observation.effect == MemoryOperationEffectV30::Pure }}),
+{{
+ hide(byte_micro_step_{root}_v30);
+ hide(byte_inputs_{root}_v55);
+ hide(checked_target_next_{site});
+ checked_target_actual_step_{site}(t, left, right, little_endian);
+ let n = byte_micro_step_{root}_v30(t, little_endian);
+ assert({value}int != {overflow}int);
+ assert(0 <= {value}int < t.state.values.len() && 0 <= {overflow}int < t.state.values.len());
+ assert(n.next.state.values == t.state.values.update({value}int, MemoryValueV30::Scalar((left + right) % 4294967296))
+     .update({overflow}int, MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})));
+ assert(n.next.state.values.len() == t.state.values.len());
+ assert(n.next.state.values[{value}] == MemoryValueV30::Scalar((left + right) % 4294967296));
+ assert(n.next.state.values[{overflow}] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}));
+ assert forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}
+     implies #[trigger] n.next.state.values[i] == t.state.values[i] by {{ }}
+}}"#
+        )
+    );
+    assert!(!source.contains("MemoryMicroStateV30"));
+    assert!(!source.contains("byte_micro_step_"));
+    assert!(!target.contains("InvocationSource"));
+    assert!(!target.contains("invocation_source_"));
+    assert!(!target.split_once("\n{\n").unwrap().0.contains(".update("));
+    for helper in [source, target] {
+        let requires = helper.split_once("\n ensures ").unwrap().0;
+        assert!(!requires.contains("projection_"));
+        assert!(!requires.contains("after_"));
+        assert!(!requires.contains("segment_results_"));
+        assert!(!helper.contains("assume("));
+        assert!(!helper.contains("admit("));
     }
 }
 
