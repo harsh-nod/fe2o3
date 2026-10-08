@@ -389,8 +389,8 @@ fn assert_independent_projection_contracts(
         .split_once("\n ensures ")
         .unwrap()
         .0;
-    // Only these two projections escape the proof blocks; the micro theorem's
-    // event/observation metadata must not enter the outer composition context.
+    // Reconstruct the previous scoped proof, then the original direct calls,
+    // while retaining every complete header and checking the new dispatch join.
     let source_projection = source
         .split_once(&format!(
             " ensures ({{ let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);\n"
@@ -417,15 +417,60 @@ fn assert_independent_projection_contracts(
     let direct = format!(
         " checked_add_actual_micro_step_{coordinates}_v293(s, left, right, little_endian);\n checked_add_actual_demanded_step_{coordinates}_v296(s, left, right, little_endian);\n"
     );
-    assert_eq!(source.matches(&isolated).count(), 1);
+    let mut position = coordinates.split('_');
+    assert_eq!(position.next(), Some(root));
+    assert_eq!(position.next(), Some(instance));
+    let block = position.next().unwrap();
+    let statement = position.next().unwrap();
+    assert!(position.next().is_none());
+    let dispatch_headers = format!(
+        " hide(invocation_source_byte_step_v36);\n hide(invocation_source_byte_event_{root}_{instance}_v36);\n"
+    );
+    let replayed = format!(
+        r#" let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
+ assert(a.source.machine.valid && invocation_source_active_{root}_{instance}_v36(a.source)
+ && invocation_source_byte_state_well_formed_v36(a.source)
+ && a.source.machine.pc == s.source.machine.pc
+ && a.source.machine.memory == s.source.machine.memory
+ && a.source.machine.frames == s.source.machine.frames
+ && a.source.machine.generations == s.source.machine.generations
+ && a.source.slots == s.source.slots && a.source.objects == s.source.objects
+ && checked_prefix_demands_{coordinates}_v296(s.source, a.source, left, right)) by {{
+  checked_add_actual_demanded_step_{coordinates}_v296(s, left, right, little_endian);
+ }}
+ assert(a.next_statement == s.next_statement + 1
+ && a.observations.len() == s.observations.len() + 1
+ && a.observations.take(s.observations.len() as int) == s.observations) by {{
+  invocation_source_micro_step_history_{root}_{instance}_v293(s, little_endian);
+  assert(!invocation_source_micro_refused_v36(s).source.machine.valid) by {{
+   reveal(invocation_source_micro_refused_v36);
+   reveal(invocation_source_byte_refused_v36);
+   reveal(invocation_source_refused_v36);
+  }}
+ }}
+ assert(a.source.logical.aggregates.contains_key({destination})
+ && a.source.logical.aggregates[{destination}].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)
+ && a.source.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})) by {{
+  checked_add_actual_schema_{coordinates}_v260();
+  checked_add_actual_step_{coordinates}_v260(s.source, left, right, little_endian);
+  assert(a.source == invocation_source_byte_step_v36(s.source,
+      invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian)) by {{
+   reveal(invocation_source_micro_step_{root}_{instance}_v36);
+   reveal(invocation_source_micro_record_v36);
+  }}
+ }}
+"#
+    );
+    assert_eq!(source.matches(&replayed).count(), 1);
     let source_body = source.split_once("\n{\n").unwrap().1;
-    assert!(source_body.ends_with(&format!("{isolated}}}")));
-    assert_eq!(source_body.matches(" by {").count(), 2);
+    assert!(source_body.ends_with(&format!("{replayed}}}")));
+    assert_eq!(source_body.matches(" by {").count(), 5);
+    assert_eq!(source_body.matches(" hide(").count(), 6);
     assert_eq!(
         source_body
             .matches("checked_add_actual_micro_step_")
             .count(),
-        1
+        0
     );
     assert_eq!(
         source_body
@@ -433,10 +478,21 @@ fn assert_independent_projection_contracts(
             .count(),
         1
     );
-    for unused in [".observations[", "byte_event_", ".machine.values.len()"] {
+    for name in [
+        "checked_add_actual_step_",
+        "checked_add_actual_schema_",
+        "invocation_source_micro_step_history_",
+    ] {
+        assert_eq!(source_body.matches(name).count(), 1);
+    }
+    for unused in [".observations[", ".machine.values.len()"] {
         assert!(!source_body.contains(unused));
     }
-    let previous_source = source.replacen(&isolated, &direct, 1);
+    let isolated_source = source
+        .replacen(&dispatch_headers, "", 1)
+        .replacen(&replayed, &isolated, 1);
+    assert_eq!(isolated_source.matches(&isolated).count(), 1);
+    let previous_source = isolated_source.replacen(&isolated, &direct, 1);
     assert_eq!(
         previous_source,
         format!(
