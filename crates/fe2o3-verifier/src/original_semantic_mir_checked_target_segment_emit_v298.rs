@@ -149,8 +149,27 @@ proof fn checked_source_projection_{root}_{instance}_{block}_{statement}_v331(
  hide(invocation_source_byte_state_well_formed_v36);
  hide(invocation_source_active_{root}_{instance}_v36);
  hide(checked_prefix_demands_{root}_{instance}_{block}_{statement}_v296);
- checked_add_actual_micro_step_{root}_{instance}_{block}_{statement}_v293(s, left, right, little_endian);
- checked_add_actual_demanded_step_{root}_{instance}_{block}_{statement}_v296(s, left, right, little_endian);
+ let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
+ assert(checked_prefix_demands_{root}_{instance}_{block}_{statement}_v296(s.source, a.source, left, right)) by {{
+  checked_add_actual_demanded_step_{root}_{instance}_{block}_{statement}_v296(s, left, right, little_endian);
+ }}
+ assert(
+ a.source.machine.valid && invocation_source_active_{root}_{instance}_v36(a.source)
+ && invocation_source_byte_state_well_formed_v36(a.source)
+ && a.source.machine.pc == s.source.machine.pc
+ && a.next_statement == s.next_statement + 1
+ && a.observations.len() == s.observations.len() + 1
+ && a.observations.take(s.observations.len() as int) == s.observations
+ && a.source.machine.memory == s.source.machine.memory
+ && a.source.machine.frames == s.source.machine.frames
+ && a.source.machine.generations == s.source.machine.generations
+ && a.source.slots == s.source.slots && a.source.objects == s.source.objects
+ && a.source.logical.aggregates.contains_key({destination})
+ && a.source.logical.aggregates[{destination}].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)
+ && a.source.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})
+ ) by {{
+  checked_add_actual_micro_step_{root}_{instance}_{block}_{statement}_v293(s, left, right, little_endian);
+ }}
 }}
 proof fn checked_target_projection_{root}_{instance}_{block}_{statement}_v331(
  t: MemoryMicroStateV30, left: int, right: int, little_endian: bool,

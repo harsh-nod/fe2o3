@@ -389,8 +389,56 @@ fn assert_independent_projection_contracts(
         .split_once("\n ensures ")
         .unwrap()
         .0;
+    // Only these two projections escape the proof blocks; the micro theorem's
+    // event/observation metadata must not enter the outer composition context.
+    let source_projection = source
+        .split_once(&format!(
+            " ensures ({{ let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);\n"
+        ))
+        .unwrap()
+        .1
+        .split_once(&format!(
+            "\n && checked_prefix_demands_{coordinates}_v296(s.source, a.source, left, right) }}),"
+        ))
+        .unwrap()
+        .0;
+    let isolated = format!(
+        r#" let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
+ assert(checked_prefix_demands_{coordinates}_v296(s.source, a.source, left, right)) by {{
+  checked_add_actual_demanded_step_{coordinates}_v296(s, left, right, little_endian);
+ }}
+ assert(
+{source_projection}
+ ) by {{
+  checked_add_actual_micro_step_{coordinates}_v293(s, left, right, little_endian);
+ }}
+"#
+    );
+    let direct = format!(
+        " checked_add_actual_micro_step_{coordinates}_v293(s, left, right, little_endian);\n checked_add_actual_demanded_step_{coordinates}_v296(s, left, right, little_endian);\n"
+    );
+    assert_eq!(source.matches(&isolated).count(), 1);
+    let source_body = source.split_once("\n{\n").unwrap().1;
+    assert!(source_body.ends_with(&format!("{isolated}}}")));
+    assert_eq!(source_body.matches(" by {").count(), 2);
     assert_eq!(
-        source,
+        source_body
+            .matches("checked_add_actual_micro_step_")
+            .count(),
+        1
+    );
+    assert_eq!(
+        source_body
+            .matches("checked_add_actual_demanded_step_")
+            .count(),
+        1
+    );
+    for unused in [".observations[", "byte_event_", ".machine.values.len()"] {
+        assert!(!source_body.contains(unused));
+    }
+    let previous_source = source.replacen(&isolated, &direct, 1);
+    assert_eq!(
+        previous_source,
         format!(
             r#"
  s: InvocationSourceMicroStateV36, left: int, right: int, little_endian: bool,
