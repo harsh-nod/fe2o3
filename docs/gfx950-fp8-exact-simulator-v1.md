@@ -1,7 +1,7 @@
 # Exact-domain gfx950 FP8 scaled-MFMA simulation
 
-This is a source proposal for the existing canonical simulator, not a native
-execution result or completion of M4. The existing device FP8 packers, exact
+This exact-domain implementation is CPU-qualified in the existing canonical
+simulator. It is not a native execution result or completion of M4. The existing device FP8 packers, exact
 OCP-format LLVM lowering and low-precision reference kernels remain unchanged.
 Their prior source and hardware evidence is not recreated or promoted by this
 simulator implementation.
@@ -15,7 +15,7 @@ The only new admitted operation is the existing
 64 active lanes, uniform subgroup convergence and the existing 64-bit simulator
 target. It is OCP E4M3 (bias 7), not FNUZ or E5M2. The operation has no arbitrary
 scale operands: the existing gfx950 lowering fixes both format selectors and
-all scale controls to zero. This proposal models that existing identity-scale
+all scale controls to zero. This implementation models that existing identity-scale
 meaning; it does not interpret an E8M0 byte zero as a scale value of one.
 
 A and B are finite, exactly quarter-integral OCP values with absolute value
@@ -88,7 +88,7 @@ the 16 MiB resident limit and 8,192 access-history records. Their exact complete
 schedule is 256 decisions; 255 must refuse. Numeric result checks do not claim
 complete race-history assessment when the bounded history is incomplete.
 
-## Proposed validation
+## Validation coverage
 
 Four private numerical controls cover every one of the 256 byte encodings,
 OCP/FNUZ distinction, exact descriptor admission, accumulator boundary neighbors
@@ -108,8 +108,34 @@ The existing FP4 mixed/FP8 compatibility test changes only the former
 FP8-unsupported expectation to exact-profile preflight admission. Its mixed
 refusal and all FP4 numerical checks remain.
 
-These controls are authored, not executed by the source author. Root must
-format the exact proposed leaves and run the private, canonical, full simulator
-and applicable CLI suites on a freshly qualified CPU source/tool boundary.
+The private and canonical controls passed in the complete simulator suite,
+and the canonical CLI compatibility suite passed separately. The exact CPU
+checkpoint is recorded below.
 No native/GPU launch, source-atomic lowering, arbitrary scaling, performance
 budget or whole M4 exit is established by this patch.
+
+## 2026-10-08 CPU qualification
+
+Implementation commit `40ce99c1b9f73801da185029a4ba5772fb5db4cb` is published
+to `main` in both compiler repositories. Its nine source leaves were tested
+unchanged on `mi350-2` atop `f4cb21ba50a0b4413e745aaa1cf11c9483ff41d5`.
+The pre-commit source census was 15,380 files / 221,568,223 bytes, SHA-256
+`768c827c876fa5e3fa9fd89932053f6643899fbe03eca896451a6dcca1e6ef4f`.
+This later documentation update is separate from that measured source.
+
+- Complete `fe2o3-kir-sim` suite: 607 passed across 33 groups, zero failures
+  or ignored tests; includes all 21 new FP8 controls and existing BF16/FP4 tests.
+- `fe2o3-kir-sim-cli --test canonical_v12`: nine passed, zero failures
+  or ignored tests.
+- Existing resource limits were unchanged; exact and one-short work/resident
+  boundaries and the two-wave 256/255 schedule controls passed.
+
+The normal full-suite receipt is 30,783 bytes, SHA-256
+`d10ed0e6f888a62a5a590575c8cdd8bfb81c407c895570085da3477549e6be68`;
+the CLI receipt is 30,220 bytes, SHA-256
+`f4cc4211ae2d330b50b8adf2817d5e0f40f5461790af0b9f2bfa77b1e92dbf03`.
+Both record matching source and selected inputs before and after execution.
+
+The numerical fixtures are inert canonical graphs. These results do not yet
+qualify the real Rust FP8 kernel through source export, native gfx950 execution,
+arbitrary FP8 inputs or scaling, or the complete M4 milestone.
