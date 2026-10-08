@@ -921,9 +921,60 @@ fn expanded_execution_map_support_keeps_dynamic_identity_and_history_separate() 
     ] {
         assert!(source.contains(&format!("proof fn invocation_execution_{law}_v205(")));
     }
-    assert_eq!(source.matches("proof fn ").count(), 6);
-    assert_eq!(source.matches("forall|").count(), 2);
-    assert_eq!(source.matches("#![trigger ").count(), 2);
+    let helper_name = "proof fn invocation_execution_map_source_pc_v303(";
+    assert_eq!(source.matches(helper_name).count(), 1);
+    assert_eq!(SHARED.matches(helper_name).count(), 1);
+    let helper = source
+        .split_once(helper_name)
+        .unwrap()
+        .1
+        .split_once("\nspec fn invocation_execution_mapped_v205(")
+        .unwrap()
+        .0;
+    let (header, body) = helper.split_once("\n{\n").unwrap();
+    let (requires, ensures) = header
+        .split_once("    requires ")
+        .unwrap()
+        .1
+        .split_once("    ensures ")
+        .unwrap();
+    assert_eq!(
+        requires,
+        "source.machine.valid, invocation_source_byte_state_well_formed_v36(source),\n        source.machine.pc >= 0, pc >= 0,\n        invocation_execution_map_current_v205(source, target, execution_map),\n"
+    );
+    assert_eq!(
+        ensures,
+        "invocation_execution_map_current_v205(\n        invocation_source_byte_pc_v36(source, pc), target, execution_map),"
+    );
+    for fact in [
+        "let continued = invocation_source_byte_pc_v36(source, pc);",
+        "continued.machine == (MemoryStateV30 { pc, ..source.machine })",
+        "continued.logical == source.logical && continued.slots == source.slots",
+        "continued.objects == source.objects",
+        "assert(invocation_source_byte_state_well_formed_v36(continued));",
+        "invocation_execution_map_entry_v205(source, target, identity, execution_map[identity])",
+        "invocation_execution_map_entry_v205(continued, target, identity, execution_map[identity])",
+    ] {
+        assert!(
+            body.contains(fact),
+            "missing PC-only preservation fact: {fact}"
+        );
+    }
+    for forbidden in [
+        "Map::empty()",
+        "Map::new",
+        "execution_map.insert",
+        "execution_map.remove",
+        "micro_step",
+        "micro_finish",
+        "context_issue",
+        "hide(",
+    ] {
+        assert!(!helper.contains(forbidden));
+    }
+    assert_eq!(source.matches("proof fn ").count(), 7);
+    assert_eq!(source.matches("forall|").count(), 3);
+    assert_eq!(source.matches("#![trigger ").count(), 3);
     for unsupported in [
         "assume(",
         "admit(",

@@ -137,18 +137,9 @@ proof fn invocation_context_issue_initial_map_segment_{root}_{instance}_{block}_
     assert(invocation_source_byte_state_well_formed_v36(coupled.source.source));
     assert(coupled.source.source.machine.pc == {pc});
     let continued = invocation_source_byte_pc_v36(coupled.source.source, {continuation});
-    assert(continued.machine == (MemoryStateV30 {{ pc: {continuation}, ..coupled.source.source.machine }}));
-    assert(continued.logical == coupled.source.source.logical
-        && continued.slots == coupled.source.source.slots
-        && continued.objects == coupled.source.source.objects);
-    assert forall|key: MemoryExecutionReferenceV178|
-        #![trigger coupled.execution_map[key]]
-        coupled.execution_map.contains_key(key) implies
-            invocation_execution_map_entry_v205(continued, coupled.target,
-                key, coupled.execution_map[key]) by {{
-        assert(invocation_execution_map_entry_v205(coupled.source.source, coupled.target,
-            key, coupled.execution_map[key]));
-    }}
+    invocation_execution_map_source_pc_v303(
+        coupled.source.source, coupled.target, coupled.execution_map, {continuation});
+    assert(invocation_execution_map_current_v205(continued, coupled.target, coupled.execution_map));
 }}
 "#).map_err(|_| out.error())?;
             out.budget.charge_work(1)?;
@@ -201,18 +192,9 @@ proof fn invocation_context_issue_current_map_segment_{root}_{instance}_{block}_
         ..source.source.machine }}));
     assert(coupled.source.source.machine.pc == {pc});
     let continued = invocation_source_byte_pc_v36(coupled.source.source, {continuation});
-    assert(continued.machine == (MemoryStateV30 {{ pc: {continuation}, ..coupled.source.source.machine }}));
-    assert(continued.logical == coupled.source.source.logical
-        && continued.slots == coupled.source.source.slots
-        && continued.objects == coupled.source.source.objects);
-    assert forall|key: MemoryExecutionReferenceV178|
-        #![trigger coupled.execution_map[key]]
-        coupled.execution_map.contains_key(key) implies
-            invocation_execution_map_entry_v205(continued, coupled.target,
-                key, coupled.execution_map[key]) by {{
-        assert(invocation_execution_map_entry_v205(coupled.source.source, coupled.target,
-            key, coupled.execution_map[key]));
-    }}
+    invocation_execution_map_source_pc_v303(
+        coupled.source.source, coupled.target, coupled.execution_map, {continuation});
+    assert(invocation_execution_map_current_v205(continued, coupled.target, coupled.execution_map));
 }}
 "#).map_err(|_| out.error())?;
             self.check(out)

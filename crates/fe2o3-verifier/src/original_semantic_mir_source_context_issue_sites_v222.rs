@@ -134,9 +134,58 @@ mod tests {
     use super::super::tile_fixture_tests::run_fixture_with_plan;
     use super::*;
     use fe2o3_kernel_ir::ExecutionTileLayoutV1;
+    use sha2::{Digest, Sha256};
+
+    fn check_composition_contracts() {
+        let source = include_str!("original_semantic_mir_context_issue_segment_v222.rs");
+        // The complete 188915 contracts survive the shared proof decomposition.
+        for (name, bytes, digest) in [
+            (
+                "invocation_context_issue_initial_map_segment_{root}_{instance}_{block}_v232",
+                1536,
+                "2db05d7cf86a00268d473d99b3e96e00bfaff25cb2d3e5634a6da2a732f5a245",
+            ),
+            (
+                "invocation_context_issue_current_map_segment_{root}_{instance}_{block}_v240",
+                1713,
+                "731989e952b6767209199d69f19121b136543f9c2b193f703be36430d3494727",
+            ),
+        ] {
+            let marker = format!("proof fn {name}(");
+            assert_eq!(source.matches(&marker).count(), 1);
+            let header = source
+                .split_once(&marker)
+                .unwrap()
+                .1
+                .split_once("\n{{\n")
+                .unwrap()
+                .0;
+            assert_eq!(header.len(), bytes);
+            assert_eq!(format!("{:x}", Sha256::digest(header.as_bytes())), digest);
+        }
+    }
+
+    fn check_pc_composition(generated: &str, continuation: usize) {
+        let (_, body) = generated.split_once("\n{\n").unwrap();
+        let helper = format!(
+            "invocation_execution_map_source_pc_v303(\n        coupled.source.source, coupled.target, coupled.execution_map, {continuation});"
+        );
+        assert_eq!(body.matches(&helper).count(), 1);
+        assert!(
+            body.find(
+                "assert(invocation_source_byte_state_well_formed_v36(coupled.source.source));"
+            )
+            .unwrap()
+                < body.find(&helper).unwrap()
+        );
+        assert!(body.contains("assert(invocation_execution_map_current_v205(continued, coupled.target, coupled.execution_map));"));
+        assert!(!body.contains("assert forall|key: MemoryExecutionReferenceV178|"));
+        assert!(!body.contains("hide("));
+    }
 
     #[test]
     fn context_issue_segments_keep_original_dispatch_and_target_microstep() {
+        check_composition_contracts();
         for layout in [
             ExecutionTileLayoutV1::Blocked,
             ExecutionTileLayoutV1::Striped,
@@ -191,6 +240,7 @@ mod tests {
                             let initial_marker = format!("proof fn invocation_context_issue_initial_map_segment_{root}_{instance}_{block}_v232(");
                             assert_eq!(generated.matches(&initial_marker).count(), 1);
                             let initial = generated.split(&initial_marker).nth(1).unwrap().split("// Fresh issuance with a current input witness").next().unwrap();
+                            check_pc_composition(initial, continuation);
                             let (input, output) = initial.split_once("    ensures").unwrap();
                             assert!(!input.contains("execution_map:"));
                             assert!(!input.contains("invocation_execution_map_current_v205"));
@@ -206,10 +256,11 @@ mod tests {
                             ] { assert!(initial.contains(&text), "{text}"); }
                             assert!(output.contains("original.source, actual.next.state, coupled.execution_map"));
                             assert!(output.contains("invocation_context_issue_initializes_current_map_v211("));
-                            assert!(output.contains("assert forall|key: MemoryExecutionReferenceV178|"));
+                            assert!(output.contains("invocation_execution_map_source_pc_v303("));
                             let current_marker = format!("proof fn invocation_context_issue_current_map_segment_{root}_{instance}_{block}_v240(");
                             assert_eq!(generated.matches(&current_marker).count(), 1);
                             let current = generated.split(&current_marker).nth(1).unwrap().split("// Exact endpoint replay only.").next().unwrap();
+                            check_pc_composition(current, continuation);
                             let (input, output) = current.split_once("    ensures").unwrap();
                             assert_eq!(input.matches("execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>").count(), 1);
                             assert_eq!(input.matches("invocation_execution_map_current_v205(source.source, target.state, execution_map)").count(), 1);
@@ -231,7 +282,7 @@ mod tests {
                             assert!(output.contains("invocation_context_issue_fresh_has_exact_updates_v211("));
                             assert!(output.contains("assert(coupled.source.source.machine == (MemoryStateV30 {"));
                             assert!(output.contains("original.source, actual.next.state, coupled.execution_map"));
-                            assert!(output.contains("assert forall|key: MemoryExecutionReferenceV178|"));
+                            assert!(output.contains("invocation_execution_map_source_pc_v303("));
                             expected += 1;
                         }
                     }

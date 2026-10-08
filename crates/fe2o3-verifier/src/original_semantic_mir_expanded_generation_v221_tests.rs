@@ -76,7 +76,17 @@ fn support_only(
             assert!(segment.contains("assert(coupled.source.source.machine == (MemoryStateV30 {"));
             assert!(segment.contains("..source.source.machine }));"));
             assert!(segment.contains("let continued = invocation_source_byte_pc_v36("));
-            assert!(segment.contains("assert forall|key: MemoryExecutionReferenceV178|"));
+            assert_eq!(
+                segment
+                    .matches("invocation_execution_map_source_pc_v303(")
+                    .count(),
+                1
+            );
+            assert!(
+                segment.contains("coupled.source.source, coupled.target, coupled.execution_map,")
+            );
+            assert!(segment.contains("assert(invocation_execution_map_current_v205(continued, coupled.target, coupled.execution_map));"));
+            assert!(!segment.contains("assert forall|key: MemoryExecutionReferenceV178|"));
             assert!(!segment.contains("Map::empty()"));
         }
         assert!(!generated.contains("spec fn invocation_expanded_live_values_"));

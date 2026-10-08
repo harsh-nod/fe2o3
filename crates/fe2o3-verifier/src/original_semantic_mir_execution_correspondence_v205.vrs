@@ -86,6 +86,32 @@ spec fn invocation_execution_map_current_v205(
                 && execution_map[left].frame == execution_map[right].frame ==> left == right)
 }
 
+// A control-only source update cannot change either dynamic identity domain.
+// An empty map does not establish the validity needed by the actual PC setter.
+proof fn invocation_execution_map_source_pc_v303(
+    source: InvocationSourceByteStateV36, target: MemoryStateV30,
+    execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
+    pc: int,
+)
+    requires source.machine.valid, invocation_source_byte_state_well_formed_v36(source),
+        source.machine.pc >= 0, pc >= 0,
+        invocation_execution_map_current_v205(source, target, execution_map),
+    ensures invocation_execution_map_current_v205(
+        invocation_source_byte_pc_v36(source, pc), target, execution_map),
+{
+    let continued = invocation_source_byte_pc_v36(source, pc);
+    assert(continued.machine == (MemoryStateV30 { pc, ..source.machine }));
+    assert(continued.logical == source.logical && continued.slots == source.slots
+        && continued.objects == source.objects);
+    assert(invocation_source_byte_state_well_formed_v36(continued));
+    assert forall|identity: MemoryExecutionReferenceV178|
+        #![trigger execution_map[identity]]
+        execution_map.contains_key(identity) implies
+            invocation_execution_map_entry_v205(continued, target, identity, execution_map[identity]) by {
+        assert(invocation_execution_map_entry_v205(source, target, identity, execution_map[identity]));
+    }
+}
+
 spec fn invocation_execution_mapped_v205(
     source: InvocationSourceByteStateV36, target: MemoryStateV30,
     execution_map: Map<MemoryExecutionReferenceV178, InvocationExecutionOriginV205>,
