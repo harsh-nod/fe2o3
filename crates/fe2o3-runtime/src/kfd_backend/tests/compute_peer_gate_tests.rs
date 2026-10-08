@@ -426,6 +426,7 @@ fn child_peer_gate_failed_input_waits_for_both_ordering_prefixes_not_other_input
                 backend.submissions.insert(
                     id,
                     SubmissionRecordV1 {
+                        origin: SubmissionOriginV1::Ordinary,
                         stream: owner,
                         status,
                         dependency_depth: 1,
@@ -502,6 +503,7 @@ fn child_peer_gate_pending_native_input_still_retires_its_active_ordered_prefix(
     fixture.backend.submissions.insert(
         unrelated,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream: foreign,
             status: BackendPollV1::Pending,
             dependency_depth: 1,

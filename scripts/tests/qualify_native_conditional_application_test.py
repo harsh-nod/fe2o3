@@ -103,8 +103,9 @@ class NativeQualificationTests(unittest.TestCase):
     def test_explicit_native_command_preserves_source_spelling(self):
         command = q.command_for(Path("/tools/cargo-fe2o3"), Path("/repo"), Path("/target"),
                                 "./src/lib.rs", DEVICE)
-        self.assertEqual(command[:5], ["/tools/cargo-fe2o3", "authority", "release", "run",
+        self.assertEqual(command[:6], ["/tools/cargo-fe2o3", "authority", "release", "--native", "run",
                                       "--native-application-proof-custodian"])
+        self.assertEqual(command.count("--native"), 1)
         self.assertNotIn("--application-proof-custodian", command)
         self.assertEqual(command[command.index("--bin") + 1], "native-conditional-fill")
         self.assertEqual(command[command.index("--") + 1:],
@@ -214,8 +215,9 @@ class NativeQualificationTests(unittest.TestCase):
                 with self.subTest(count=count, transport=transport):
                     command = q.command_for(Path("/cargo"), Path("/repo"), Path("/target"),
                                             "./src/lib.rs", selected, transport)
-                    self.assertEqual(command[:5], ["/cargo", "authority", "release", "run",
+                    self.assertEqual(command[:6], ["/cargo", "authority", "release", "--native", "run",
                                                   "--native-application-proof-custodian"])
+                    self.assertEqual(command.count("--native"), 1)
                     self.assertEqual(command[command.index("--bin") + 1], "native-conditional-fill-roster")
                     self.assertEqual(command[command.index("--") + 1:],
                                      ["--native-v5-roster", "--producer-source", "./src/lib.rs",

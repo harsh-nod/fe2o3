@@ -14,13 +14,47 @@ name = "native-conditional-fill-roster"
 path = "src/native_roster.rs"
 
 [[bin]]
+name = "native-conditional-fill-shards"
+path = "src/native_shards.rs"
+
+[[bin]]
+name = "native-conditional-fill-staged-ring"
+path = "src/native_staged_ring.rs"
+
+[[bin]]
 name = "native-conditional-proof-only"
 path = "src/native_proof_only.rs"
 
+[[bin]]
+name = "native-conditional-fill-registry4"
+path = "src/native_registry4.rs"
+
+[[bin]]
+name = "native-conditional-fill-registry4-repeat2"
+path = "src/native_registry4_repeat2.rs"
+
+[[bin]]
+name = "native-conditional-fill-registry16"
+path = "src/native_registry16.rs"
+
+[[bin]]
+name = "native-independent-fill-arena1024"
+path = "src/native_independent_arena.rs"
+
+[[bin]]
+name = "native-independent-fill-arena2048"
+path = "src/native_independent_arena2048.rs"
+
 [workspace]
+
+[[bin]]
+name = "native-conditional-fill-data-copy"
+path = "src/native_data_copy.rs"
+required-features = ["data-copy-observation"]
 
 [features]
 receipt-coexistence = ["fe2o3-runtime/hardware-qualification"]
+data-copy-observation = ["fe2o3-runtime/hardware-qualification"]
 
 [dependencies]
 fe2o3-device = { path = "../../../../fe2o3-device" }
@@ -33,6 +67,7 @@ fe2o3-artifact-transaction = { path = "../../../../fe2o3-artifact-transaction" }
 fe2o3-compiler-closure-capability = { path = "../../../../fe2o3-compiler-closure-capability" }
 fe2o3-compiler-execution-client = { path = "../../../../fe2o3-compiler-execution-client" }
 fe2o3-kernel-ir = { path = "../../../../fe2o3-kernel-ir" }
+fe2o3-resource-accounting = { path = "../../../../fe2o3-resource-accounting" }
 tokio = { version = "=1.47.1", default-features = false, features = ["rt", "time"] }
 
 [profile.dev]

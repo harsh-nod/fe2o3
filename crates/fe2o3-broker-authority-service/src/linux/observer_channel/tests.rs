@@ -493,4 +493,12 @@ fn issuer_helper() {
         &ed25519_dalek::SigningKey::from_bytes(&[2; 32]),
         scenario == "commit_failure",
     );
+    if scenario == "success_held" {
+        // Close the completed protocol first, retaining the actual service/profile until
+        // the root has processed that closure. Process exit is not a readiness signal.
+        drop(channel);
+        let finish_control = inherited(207);
+        assert_eq!(rustix::io::write(&finish_control, b"D").unwrap(), 1);
+        super::super::registry::tests::await_test_control(&finish_control, b'C');
+    }
 }

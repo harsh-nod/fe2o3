@@ -103,8 +103,9 @@ class ProofOnly(unittest.TestCase):
 
     def test_native_command_has_exact_source_and_no_device_or_fallback(self):
         command = cpu.command("/pinned/cargo-fe2o3", "/source", "/target", "./src/lib.rs")
-        self.assertEqual(command[:5], ["/pinned/cargo-fe2o3", "authority", "release", "run",
+        self.assertEqual(command[:6], ["/pinned/cargo-fe2o3", "authority", "release", "--native", "run",
                                        "--native-application-proof-custodian"])
+        self.assertEqual(command.count("--native"), 1)
         self.assertEqual(command[-5:], ["native-conditional-proof-only", "--",
                                         "--native-v5-proof-only", "--producer-source", "./src/lib.rs"])
         for forbidden in ["--device", "--devices", "--transport", "--application-proof-custodian"]:

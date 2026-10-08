@@ -543,6 +543,7 @@ dependencies = [
  "fe2o3-device",
  "fe2o3-host",
  "fe2o3-kernel-ir",
+ "fe2o3-resource-accounting",
  "fe2o3-runtime",
  "tokio",
 ]

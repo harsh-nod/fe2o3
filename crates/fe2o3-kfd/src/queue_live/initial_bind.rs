@@ -62,6 +62,7 @@ pub(super) struct InitialBindingCustodyV1<'a, const N: usize, I, P> {
     pub(super) prepared_generation: Option<PreparedDispatchGenerationV1>,
     pub(super) terminal_parent: Option<P>,
     started: bool,
+    native_fill_cohort: bool,
     #[cfg(test)]
     pub(super) preparation_fault: Option<(
         crate::queue::dispatch_binding::preparation::PreparationStageV1,
@@ -84,9 +85,14 @@ impl<'a, const N: usize, I, P> InitialBindingCustodyV1<'a, N, I, P> {
             prepared_generation: None,
             terminal_parent: None,
             started: false,
+            native_fill_cohort: false,
             #[cfg(test)]
             preparation_fault: None,
         })
+    }
+
+    pub(super) fn require_native_fill_cohort(&mut self) {
+        self.native_fill_cohort = true;
     }
 }
 
@@ -132,10 +138,13 @@ where
                 // Capacity was reserved before entry; no fallible step separates owners.
                 root.data.push(data);
             }
-            root.preparation = Some(FixedDispatchPreparationCustodyV1::new(
-                root.packets.take().expect("rooted initial packets"),
-                core::mem::take(&mut root.data),
-            ));
+            let packets = root.packets.take().expect("rooted initial packets");
+            let data = core::mem::take(&mut root.data);
+            root.preparation = Some(if root.native_fill_cohort {
+                FixedDispatchPreparationCustodyV1::new_native_fill_cohort(packets, data)
+            } else {
+                FixedDispatchPreparationCustodyV1::new(packets, data)
+            });
             let preparation = root
                 .preparation
                 .as_mut()
@@ -202,6 +211,8 @@ impl InitialBindingParentV1 for &mut ComputeAqlQueueSessionV1 {
             || self.sdma_allocation.is_some()
             || self.sdma_promotion.is_some()
             || self.sdma_demotion.is_some()
+            || self.detached_sdma.is_some()
+            || self.sdma_dispatch_promotion.is_some()
             || self.initialized_storage_promotion.is_some()
             || self.sdma_synchronous.is_some()
             || self.sdma_recycle.is_some()

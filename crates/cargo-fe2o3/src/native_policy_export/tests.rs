@@ -22,6 +22,7 @@ fn observations() -> OriginalObservations {
         handoff: ([1; 32], 9),
         carriage: [2; 32],
         artifact: [3; 32],
+        copy_classification: fe2o3_verifier::NativeCopyProgramClassificationV1::Unsupported,
     }
 }
 
@@ -142,6 +143,14 @@ fn native_policy_export_publishes_exact_inert_bundle_on_original_account() {
     let manifest: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     assert_eq!(manifest["grants_authority"], false);
     assert_eq!(manifest["independently_approved"], false);
+    assert_eq!(
+        manifest["final_f_copy_observation"]["classification"],
+        "unsupported"
+    );
+    assert_eq!(
+        manifest["final_f_copy_observation"]["machine_accepted"],
+        false
+    );
     assert_eq!(manifest["source_spelling"], "src/lib.rs");
     assert_eq!(
         manifest["source_packet"]["sha256"],
@@ -149,6 +158,41 @@ fn native_policy_export_publishes_exact_inert_bundle_on_original_account() {
     );
     assert_eq!(std::fs::read_dir(&request.output).unwrap().count(), 3);
     assert!(request.preflight().is_err());
+}
+
+#[test]
+fn copied_shape_diagnostic_cannot_mark_a_machine_or_policy_accepted() {
+    // Format-only observation, not a fabricated recovered compiler owner.
+    let dir = TestDirectory::new();
+    let request = request(dir.path());
+    let mut observations = observations();
+    observations.copy_classification =
+        fe2o3_verifier::NativeCopyProgramClassificationV1::GuardedU32 {
+            load: [17, 14],
+            store: [17, 15],
+        };
+    account().with_budget(|budget| {
+        budget.reserve_storage(2).unwrap();
+        request
+            .publish(
+                &request.producer().unwrap(),
+                b"s",
+                b"r",
+                observations,
+                budget,
+            )
+            .unwrap();
+    });
+    let raw = std::fs::read(Path::new(&request.output).join(NAMES[2])).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let copy = &manifest["final_f_copy_observation"];
+    assert_eq!(copy["classification"], "guarded-u32-copy-final-f-v1");
+    assert_eq!(copy["load"], serde_json::json!([17, 14]));
+    assert_eq!(copy["store"], serde_json::json!([17, 15]));
+    assert_eq!(copy["machine_accepted"], false);
+    assert_eq!(manifest["grants_authority"], false);
+    assert_eq!(manifest["independently_approved"], false);
+    assert_eq!(std::fs::read_dir(&request.output).unwrap().count(), 3);
 }
 
 #[test]

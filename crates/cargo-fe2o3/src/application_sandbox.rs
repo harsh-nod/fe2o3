@@ -3,12 +3,16 @@
 use std::fs::File;
 use std::io::{self, Write};
 use std::mem::{self, MaybeUninit};
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, RawFd};
 use std::os::unix::net::UnixDatagram;
 use std::ptr;
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+#[path = "application_sandbox/listener.rs"]
+mod listener;
+use listener::receive_listener;
 
 pub(crate) const AUDIT_ARCH_X86_64: u32 = 0xc000_003e;
 const BPF_LOAD_WORD_ABSOLUTE: u16 = 0x20;
@@ -329,7 +333,7 @@ fn supervise_exec_notifications(
     shutdown: File,
     ready: mpsc::SyncSender<Result<u32, String>>,
 ) -> Result<(), String> {
-    let (listener, child_pid) = match wait_for_listener(socket.as_raw_fd(), shutdown.as_raw_fd()) {
+    let (listener, child_pid) = match wait_for_listener(socket.as_fd(), shutdown.as_raw_fd()) {
         Ok(Some(received)) => received,
         Ok(None) => {
             let error = "seccomp exec supervisor stopped before listener delivery".to_string();
@@ -390,7 +394,7 @@ fn supervise_exec_notifications(
 }
 
 pub(crate) fn wait_for_listener(
-    socket: RawFd,
+    socket: BorrowedFd<'_>,
     shutdown: RawFd,
 ) -> Result<Option<(File, u32)>, String> {
     loop {
@@ -401,7 +405,7 @@ pub(crate) fn wait_for_listener(
                 revents: 0,
             },
             libc::pollfd {
-                fd: socket,
+                fd: socket.as_raw_fd(),
                 events: libc::POLLIN | libc::POLLERR | libc::POLLHUP,
                 revents: 0,
             },
@@ -575,62 +579,6 @@ fn send_listener(socket: RawFd, listener: RawFd) -> io::Result<()> {
     } else {
         Err(io::Error::from_raw_os_error(libc::EIO))
     }
-}
-
-fn receive_listener(socket: RawFd) -> Result<(File, u32), String> {
-    let mut message = MaybeUninit::<ListenerMessage>::zeroed();
-    let mut io_vector = libc::iovec {
-        iov_base: message.as_mut_ptr().cast(),
-        iov_len: mem::size_of::<ListenerMessage>(),
-    };
-    let mut control = [0_usize; 8];
-    let mut header = unsafe { mem::zeroed::<libc::msghdr>() };
-    header.msg_iov = &mut io_vector;
-    header.msg_iovlen = 1;
-    header.msg_control = control.as_mut_ptr().cast();
-    header.msg_controllen = unsafe { libc::CMSG_SPACE(mem::size_of::<RawFd>() as _) } as usize;
-    // SAFETY: all receive buffers are writable for their declared lengths.
-    let received = unsafe {
-        libc::recvmsg(
-            socket,
-            &mut header,
-            libc::MSG_CMSG_CLOEXEC | libc::MSG_DONTWAIT,
-        )
-    };
-    if received < 0 {
-        return Err(format!(
-            "failed to receive seccomp listener: {}",
-            io::Error::last_os_error()
-        ));
-    }
-    if received as usize != mem::size_of::<ListenerMessage>()
-        || header.msg_flags & (libc::MSG_TRUNC | libc::MSG_CTRUNC) != 0
-    {
-        return Err("seccomp listener transfer was truncated".to_string());
-    }
-    // SAFETY: recvmsg initialized the exact payload after the length check.
-    let message = unsafe { message.assume_init() };
-    if message.magic != LISTENER_MESSAGE_MAGIC || message.pid == 0 || message.reserved != 0 {
-        return Err("seccomp listener transfer header is invalid".to_string());
-    }
-    // SAFETY: recvmsg initialized the aligned ancillary buffer described by `header`.
-    let descriptor = unsafe {
-        let cmsg = libc::CMSG_FIRSTHDR(&header);
-        if cmsg.is_null()
-            || (*cmsg).cmsg_level != libc::SOL_SOCKET
-            || (*cmsg).cmsg_type != libc::SCM_RIGHTS
-            || (*cmsg).cmsg_len != libc::CMSG_LEN(mem::size_of::<RawFd>() as _) as usize
-            || !libc::CMSG_NXTHDR(&header, cmsg).is_null()
-        {
-            return Err("seccomp listener transfer descriptor is invalid".to_string());
-        }
-        ptr::read_unaligned(libc::CMSG_DATA(cmsg).cast::<RawFd>())
-    };
-    if descriptor < 0 {
-        return Err("seccomp listener transfer returned an invalid descriptor".to_string());
-    }
-    // SAFETY: SCM_RIGHTS transferred one owned descriptor with MSG_CMSG_CLOEXEC.
-    Ok((unsafe { File::from_raw_fd(descriptor) }, message.pid))
 }
 
 pub(crate) fn cloexec_pipe() -> io::Result<(File, File)> {
@@ -820,13 +768,13 @@ mod tests {
             .spawn()
             .expect_err("nested listener must fail closed");
         assert_eq!(error.raw_os_error(), Some(libc::EBUSY));
-        let (_listener, pid) = receive_listener(parent.as_raw_fd()).unwrap();
+        let (_listener, pid) = receive_listener(parent.as_fd()).unwrap();
         assert_ne!(
             pid,
             std::process::id(),
             "first listener belongs to the child"
         );
-        assert!(receive_listener(parent.as_raw_fd()).is_err());
+        assert!(receive_listener(parent.as_fd()).is_err());
     }
 
     #[test]
@@ -857,7 +805,7 @@ mod tests {
         }
         let error = command.spawn().expect_err("probe must return before exec");
         assert_eq!(error.raw_os_error(), Some(libc::ECANCELED));
-        let (_listener, pid) = receive_listener(parent.as_raw_fd()).unwrap();
+        let (_listener, pid) = receive_listener(parent.as_fd()).unwrap();
         assert_ne!(pid, std::process::id());
     }
 

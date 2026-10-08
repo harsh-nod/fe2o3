@@ -134,8 +134,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     }
 
     pub(super) fn has_unpublished_holds_v1(&self) -> bool {
-        self.streams
-            .values()
-            .any(|record| record.unpublished.is_some())
+        use super::graph::retirement_bodies::graph_retirement_runtime_expr;
+        super::graph::retirement_bodies::graph_unpublished_holds_body_v1!(
+            graph_retirement_runtime_expr,
+            self,
+            (record, values, found),
+            [],
+            [],
+            []
+        )
     }
 }

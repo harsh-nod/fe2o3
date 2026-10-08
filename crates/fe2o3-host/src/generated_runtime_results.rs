@@ -15,9 +15,13 @@ use fe2o3_runtime::Gfx942RuntimeBufferAccessV1;
 use crate::generated_argument_plan::GeneratedDeviceScalarV1;
 use crate::generated_runtime_arguments::GeneratedRuntimeArgumentErrorV1 as Error;
 
+mod arena1024;
 mod bundle_completion;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod cohort3;
 #[cfg(test)]
 mod completion_tests;
+mod registry4;
 mod staging;
 mod typed_completion;
 pub use bundle_completion::*;

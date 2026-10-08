@@ -222,13 +222,14 @@ pub use queue::{
     GFX942_COMPUTE_DEPENDENCY_PUBLISHER_FOUNDATION_MANIFEST_V1,
     GFX942_COMPUTE_EVENT_CUSTODY_MANIFEST_SHA256_V1, GFX942_COMPUTE_EVENT_CUSTODY_MANIFEST_V1,
     GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_SHA256_V1,
-    GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1,
+    GFX942_DEVICE_CONTENT_COPY_FOUNDATION_MANIFEST_V1, GFX942_INDEPENDENT_FILL_ARENA2048_SLOTS_V1,
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_SHA256_V1,
     GFX942_KFD_DISPATCH_TRANSACTION_MANIFEST_V1, GFX942_MAX_COMPUTE_DEPENDENCY_READERS_V1,
     GFX942_MAX_COMPUTE_EVENT_OCCURRENCES_V1, GFX942_MAX_FIXED_DISPATCH_DATA_V1,
     GFX942_MAX_FIXED_DISPATCH_INFLIGHT_V1, GFX942_MAX_FIXED_DISPATCH_PACKETS_V1,
-    GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1, Gfx942BarrierProbeExecutionObservationV1,
-    Gfx942BarrierProbeFailureV1, Gfx942BarrierProbePollBoundErrorV1, Gfx942BarrierProbePollBoundV1,
+    GFX942_MAX_FIXED_DISPATCH_PROGRAMS_V1, GFX942_NATIVE_FILL_ARENA_SLOTS_V1,
+    Gfx942BarrierProbeExecutionObservationV1, Gfx942BarrierProbeFailureV1,
+    Gfx942BarrierProbePollBoundErrorV1, Gfx942BarrierProbePollBoundV1,
     Gfx942BarrierProbeRingBackingV1, Gfx942BarrierProbeSuccessV1, Gfx942CompletedBatchV1,
     Gfx942CompletedComputeDependencyDispatchV1, Gfx942CompletedDispatchBatchV1,
     Gfx942CompletedDispatchReadRequestV1, Gfx942CompletedDispatchReadbackV1,
@@ -243,18 +244,40 @@ pub use queue::{
     Gfx942ComputeEventReleaseObservationV1, Gfx942ComputeXgmiProgressV1,
     Gfx942ComputeXgmiQueueCreationDispositionV1, Gfx942ComputeXgmiQueueCreationOutcomeV1,
     Gfx942ComputeXgmiQueueCreationRootV1, Gfx942ComputeXgmiQueueV1, Gfx942DetachedFixedDispatchV1,
-    Gfx942DeviceContentDescriptorErrorV1, Gfx942DeviceContentDescriptorV1,
-    Gfx942DeviceContentRoleV1, Gfx942DispatchBatchV1, Gfx942DispatchBindingErrorV1,
-    Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1, Gfx942DispatchPollWithProgressV1,
-    Gfx942DispatchProgressV1, Gfx942FixedDispatchCapacityProfileV1, Gfx942FixedDispatchCapacityV1,
+    Gfx942DetachedSdmaFailureV1, Gfx942DeviceContentDescriptorErrorV1,
+    Gfx942DeviceContentDescriptorV1, Gfx942DeviceContentRoleV1, Gfx942DispatchBatchV1,
+    Gfx942DispatchBindingErrorV1, Gfx942DispatchBufferBindingV1, Gfx942DispatchPollV1,
+    Gfx942DispatchPollWithProgressV1, Gfx942DispatchProgressV1,
+    Gfx942FixedDispatchCapacityProfileV1, Gfx942FixedDispatchCapacityV1,
     Gfx942FixedDispatchDataKindV1, Gfx942FixedDispatchDataLayoutV1, Gfx942FixedDispatchDataV1,
     Gfx942FixedDispatchPacketV1, Gfx942FixedDispatchPreallocationV1,
     Gfx942FixedDispatchRecycleFailureV1, Gfx942FixedDispatchSubmissionFailureV1,
+    Gfx942IndependentFillArena2048BatchV1, Gfx942IndependentFillArena2048CompletedV1,
+    Gfx942IndependentFillArena2048FailureV1, Gfx942IndependentFillArena2048InputsV1,
+    Gfx942IndependentFillArena2048PacketsV1, Gfx942IndependentFillArena2048PollFailureV1,
+    Gfx942IndependentFillArena2048PollV1, Gfx942IndependentFillArena2048RecycleFailureV1,
+    Gfx942IndependentFillArena2048SessionV1, Gfx942IndependentFillArena2048StorageV1,
+    Gfx942IndependentFillArenaInputsV1, Gfx942IndependentFillArenaSessionV1,
     Gfx942KfdDebugTargetDispatchErrorV2, Gfx942KfdDebugTargetDispatchResultV2,
     Gfx942KfdDispatchBufferV1, Gfx942KfdDispatchErrorV1, Gfx942KfdDispatchInspectionV1,
     Gfx942KfdDispatchPointerFixupV1, Gfx942KfdDispatchRequestErrorV1,
     Gfx942KfdDispatchRequestPartsV1, Gfx942KfdDispatchRequestV1, Gfx942KfdDispatchResultV1,
-    Gfx942KfdQueueExceptionObservationV1, Gfx942PromotedSdmaDestinationV1,
+    Gfx942KfdQueueExceptionObservationV1, Gfx942NativeFillArenaBatchV1,
+    Gfx942NativeFillArenaCompletedV1, Gfx942NativeFillArenaFailureV1,
+    Gfx942NativeFillArenaInputsV1, Gfx942NativeFillArenaPacketsV1,
+    Gfx942NativeFillArenaPollFailureV1, Gfx942NativeFillArenaPollV1,
+    Gfx942NativeFillArenaRecycleFailureV1, Gfx942NativeFillArenaSessionV1,
+    Gfx942NativeFillArenaStorageV1, Gfx942NativeFillCohortFailureV1,
+    Gfx942NativeFillCohortMemberV1, Gfx942NativeFillCohortV1, Gfx942NativeFillRegistryBatchV1,
+    Gfx942NativeFillRegistryCompletedV1, Gfx942NativeFillRegistryInputsV1,
+    Gfx942NativeFillRegistryPollFailureV1, Gfx942NativeFillRegistryPollV1,
+    Gfx942NativeFillRegistryRecycleFailureV1, Gfx942NativeFillRegistryRepeat2SessionV1,
+    Gfx942NativeFillRegistryRepeat2StorageV1, Gfx942NativeFillRegistrySessionV1,
+    Gfx942NativeFillRegistryStorageV1, Gfx942NativeFillResidentRegistryBatchV1,
+    Gfx942NativeFillResidentRegistryCompletedV1, Gfx942NativeFillResidentRegistryInputsV1,
+    Gfx942NativeFillResidentRegistryPollFailureV1, Gfx942NativeFillResidentRegistryPollV1,
+    Gfx942NativeFillResidentRegistryRecycleFailureV1, Gfx942NativeFillResidentRegistrySessionV1,
+    Gfx942NativeFillResidentRegistryStorageV1, Gfx942PromotedSdmaDestinationV1,
     Gfx942R66NativeObservationFailureV1, Gfx942RecycledDispatchResourcesV1,
     Gfx942RecycledDispatchWriteRequestV1, Gfx942RepeatedByteContentV1,
     Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1,
@@ -277,7 +300,7 @@ pub use queue::{
     QuarantinedGfx942BarrierProbeV1, execute_gfx942_kfd_debug_target_dispatch_unchecked_v1,
     execute_gfx942_kfd_debug_target_dispatch_unchecked_v2,
     execute_gfx942_kfd_dispatch_unchecked_v1, preflight_gfx942_fixed_dispatch_replacement,
-    project_gfx942_fixed_host_packet_v1,
+    project_gfx942_fixed_host_packet_v1, project_gfx942_independent_fill_host_packet_v1,
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
@@ -362,6 +385,12 @@ pub use currentness_diagnostic::{
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub use device::*;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub use retained_device::{
+    Gfx942ColdDeviceCheckV1, Gfx942ColdDeviceRefusalReasonV1, Gfx942ColdDeviceRefusalV1,
+    Gfx942ColdDeviceResetV1,
+};
 
 #[cfg(target_os = "linux")]
 pub mod gfx950_queue_outputs;

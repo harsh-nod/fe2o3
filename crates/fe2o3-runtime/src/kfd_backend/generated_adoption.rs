@@ -5,10 +5,21 @@ use crate::generated_source::GeneratedHostRosterV1;
 use generated_shells::GeneratedShellPlanV1;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+pub(super) mod arena1024;
+mod cohort3;
+mod data_copy;
+mod detached;
 mod issue;
 mod readback;
 mod receipt;
+pub(super) mod registry4;
+mod sdma_backing;
+mod selected_step;
+mod typed_receipt;
+mod unpublished;
+pub(crate) use receipt::observe_generated_retirement_v1;
 use receipt::{ReceiptV1, RetirementV1};
+use typed_receipt::NativeReceiptV1;
 #[cfg(feature = "hardware-qualification")]
 pub(super) mod qualification;
 
@@ -16,8 +27,11 @@ pub(super) mod qualification;
 enum PhaseV1 {
     Entering,
     Adopted,
+    Detached,
     Retiring,
     Retired,
+    Copying,
+    CopyRetired,
 }
 
 pub(super) struct GeneratedNativeAdoptionV1 {
@@ -25,8 +39,11 @@ pub(super) struct GeneratedNativeAdoptionV1 {
     lane: usize,
     native_lane: Option<ComputeAqlQueueLaneV1>,
     data: Vec<Gfx942FixedDispatchDataV1>,
+    detached: detached::RetainedDetachedV1<fe2o3_kfd::Gfx942DetachedFixedDispatchV1>,
     returned: ReturnedDataV1<Gfx942FixedDispatchDataV1>,
     submission: Option<issue::GeneratedSubmissionV1>,
+    sdma: sdma_backing::NativeCustody,
+    copy: Option<data_copy::backend::BackendCopyV1>,
 }
 
 // The lower consuming release owns the current item on failure. This root keeps
@@ -68,12 +85,32 @@ impl<T> ReturnedDataV1<T> {
 
 impl GeneratedNativeAdoptionV1 {
     pub(super) fn disposed_count(&self) -> Option<usize> {
-        (self.is_retired() && self.submission.is_none()).then_some(self.returned.completed)
+        if !self.is_retired() || self.submission.is_some() {
+            return None;
+        }
+        if self.phase == PhaseV1::CopyRetired {
+            self.copy
+                .as_ref()
+                .and_then(|copy| copy.physically_released_count())
+        } else {
+            Some(self.returned.completed)
+        }
     }
 
     pub(super) fn is_retired(&self) -> bool {
+        if self.phase == PhaseV1::CopyRetired {
+            return self.data.is_empty()
+                && self.detached.is_transferred()
+                && self.sdma.is_transferred()
+                && self
+                    .copy
+                    .as_ref()
+                    .is_some_and(|copy| copy.physically_released_count() == Some(1));
+        }
         self.phase == PhaseV1::Retired
+            && self.sdma.is_disposed_or_unentered()
             && self.data.is_empty()
+            && self.detached.is_disposed_or_unentered()
             && self.returned.handed_to_lower.is_none()
             && self
                 .returned
@@ -121,6 +158,14 @@ impl KfdRuntimeBackendV1 {
                 .native
                 .as_ref()
                 .is_some_and(|native| !native.is_retired())
+                || record
+                    .registry
+                    .as_ref()
+                    .is_some_and(|native| !native.is_retired())
+                || record
+                    .arena
+                    .as_ref()
+                    .is_some_and(|native| !native.is_retired())
         })
     }
 
@@ -153,6 +198,17 @@ impl KfdRuntimeBackendV1 {
         program: ValidatedKernelEnvelope<'_>,
         buffers: &[crate::Gfx942KfdDispatchBufferV1],
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.adopt_generated_data_with_storage_v1(plan, roster, program, buffers, false)
+    }
+
+    pub(crate) fn adopt_generated_data_with_storage_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        roster: &GeneratedHostRosterV1,
+        program: ValidatedKernelEnvelope<'_>,
+        buffers: &[crate::Gfx942KfdDispatchBufferV1],
+        sdma: bool,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
         if self.requires_request_witness_v1()
             && self
@@ -166,11 +222,15 @@ impl KfdRuntimeBackendV1 {
             ));
         }
         self.preflight_generated_lane_v1()?;
-        if !self.validate_generated_shell_records_v1(plan)
+        if sdma {
+            self.preflight_generated_sdma_v1(plan, buffers)?;
+        }
+        if plan.profile != crate::generated_source::GeneratedProfileV1::Singleton
+            || !self.validate_generated_shell_records_v1(plan)
             || !self.generated_shells.get(&plan.key).is_some_and(|record| {
                 record.native.is_none()
                     && record.control.is_some()
-                    && Arc::ptr_eq(&record.source_identity, &roster.source_identity)
+                    && record.source_identity.matches(&roster.source_identity)
             })
             || buffers.len() != plan.count
             || roster.count != plan.count
@@ -196,6 +256,22 @@ impl KfdRuntimeBackendV1 {
         let lane = self
             .free_compute_lane_v1()
             .ok_or_else(|| Self::capacity("generated compute lane capacity"))?;
+        let content = if sdma {
+            Some(
+                sdma_backing::content(
+                    program.identity_inputs().closure_sha256(),
+                    buffers[0].bytes(),
+                )
+                .map_err(|error| {
+                    Self::rejected(
+                        KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                        error.to_string(),
+                    )
+                })?,
+            )
+        } else {
+            None
+        };
         let current = self
             .with_retained_preparation_device_v1(plan.binding.backend_device, |device| {
                 device.model_admission()
@@ -225,8 +301,11 @@ impl KfdRuntimeBackendV1 {
             lane,
             native_lane: self.native_compute_lanes[lane],
             data,
+            detached: detached::RetainedDetachedV1::empty(),
             returned: ReturnedDataV1::empty(),
             submission: None,
+            sdma: sdma_backing::NativeCustody::empty(),
+            copy: None,
         });
         self.lease_compute_lane_v1(plan.binding.backend_stream, lane);
         let result = catch_unwind(AssertUnwindSafe(|| {
@@ -234,7 +313,11 @@ impl KfdRuntimeBackendV1 {
                 self.release_retained_persistent_control_v1()?;
             }
             self.release_compute_lane_cache_v1(lane)?;
-            self.bind_generated_data_v1(plan.key, programs, buffers)?;
+            if let Some(content) = content {
+                self.bind_generated_sdma_v1(plan.key, programs, buffers[0].bytes(), content)?;
+            } else {
+                self.bind_generated_data_v1(plan.key, programs, buffers)?;
+            }
             let current = self
                 .with_retained_preparation_device_v1(plan.binding.backend_device, |device| {
                     device.model_admission()
@@ -270,29 +353,7 @@ impl KfdRuntimeBackendV1 {
         let created = native.native_lane.is_none();
         let Some(queue) = self.queue.as_mut() else {
             assert!(self.terminal_memory.is_none());
-            let admission = self.take_rooted_backing_v1()?;
-            let device = self
-                .admitted_device
-                .take()
-                .expect("validated retained device");
-            let memory = match admission {
-                Some(native_budget::BackingAdmissionV1::Host(admission)) => device
-                    .acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(
-                        self.device_backing_budget,
-                        admission,
-                    ),
-                Some(native_budget::BackingAdmissionV1::Native(admission)) => device
-                    .acquire_shared_gtt_memory_session_with_rooted_native_backing_v1(admission),
-                Some(native_budget::BackingAdmissionV1::Composed(admission)) => {
-                    device.acquire_shared_gtt_memory_session_with_composed_backing_v1(admission)
-                }
-                None => device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
-                    self.device_backing_budget,
-                    self.host_visible_backing_budget,
-                ),
-            }
-            .map_err(|error| self.generated_native_error_v1("VM acquisition", error))?;
-            self.terminal_memory = Some(memory);
+            self.acquire_generated_vm_v1()?;
             let native = self
                 .generated_shells
                 .get_mut(&key)
@@ -406,6 +467,36 @@ impl KfdRuntimeBackendV1 {
         Ok(())
     }
 
+    fn acquire_generated_vm_v1(
+        &mut self,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let admission = self.take_rooted_backing_v1()?;
+        let device = self
+            .admitted_device
+            .take()
+            .expect("validated retained device");
+        let memory = match admission {
+            Some(native_budget::BackingAdmissionV1::Host(admission)) => device
+                .acquire_shared_gtt_memory_session_with_rooted_host_backing_v1(
+                    self.device_backing_budget,
+                    admission,
+                ),
+            Some(native_budget::BackingAdmissionV1::Native(admission)) => {
+                device.acquire_shared_gtt_memory_session_with_rooted_native_backing_v1(admission)
+            }
+            Some(native_budget::BackingAdmissionV1::Composed(admission)) => {
+                device.acquire_shared_gtt_memory_session_with_composed_backing_v1(admission)
+            }
+            None => device.acquire_shared_gtt_memory_session_with_backing_budgets_v1(
+                self.device_backing_budget,
+                self.host_visible_backing_budget,
+            ),
+        }
+        .map_err(|error| self.generated_native_error_v1("VM acquisition", error))?;
+        self.terminal_memory = Some(memory);
+        Ok(())
+    }
+
     fn observe_generated_queue_creation_v1(&mut self, lane: usize) {
         let queue = self.profile_resource_v1(
             KfdProfileResourceKindV1::NativeQueue,
@@ -440,6 +531,28 @@ impl KfdRuntimeBackendV1 {
         &mut self,
         plan: &GeneratedShellPlanV1,
     ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.retire_generated_data_with_rejection_v1(plan, None)
+    }
+
+    pub(crate) fn retire_generated_rejected_data_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        submission: u64,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        if !self.generated_rejected_publication_v1(plan, submission) {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "missing original rejected publication",
+            ));
+        }
+        self.retire_generated_data_with_rejection_v1(plan, Some(submission))
+    }
+
+    fn retire_generated_data_with_rejection_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        rejected: Option<u64>,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
         self.require_live()?;
         if !self.validate_generated_shell_records_v1(plan) {
             return Err(Self::rejected(
@@ -462,10 +575,30 @@ impl KfdRuntimeBackendV1 {
             };
         };
         let retirement = match native.submission.as_ref() {
-            Some(submission) => submission.receipt.retirement(),
-            None => Some(RetirementV1::Pristine),
+            Some(submission) if submission.receipt.profile() == plan.profile => match rejected {
+                Some(id) if id == submission.id => submission.receipt.rejected_retirement(),
+                Some(_) => None,
+                None => submission.receipt.retirement(),
+            },
+            Some(_) => None,
+            None if rejected.is_none() => Some(RetirementV1::Pristine),
+            None => None,
         };
-        if native.phase != PhaseV1::Adopted
+        let retained_completed = native.phase == PhaseV1::Detached
+            && retirement == Some(RetirementV1::Recycled)
+            && rejected.is_none()
+            && native.detached.is_held();
+        if retirement == Some(RetirementV1::Recycled)
+            && !native.submission.as_ref().is_some_and(|submission| {
+                self.generated_submission_owner_matches_v1(submission.id, plan)
+            })
+        {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::InvalidLaunch,
+                "generated retirement producer identity mismatch",
+            ));
+        }
+        if !(native.phase == PhaseV1::Adopted || retained_completed)
             || retirement.is_none()
             || !self.generated_lease_matches_v1(plan)
         {
@@ -476,6 +609,14 @@ impl KfdRuntimeBackendV1 {
         }
         let lane_index = native.lane;
         let handle = native.native_lane.expect("exact generated lane");
+        if retirement == Some(RetirementV1::Recycled) && rejected.is_none() && !retained_completed {
+            let submission = native
+                .submission
+                .as_ref()
+                .expect("recycled original submission")
+                .id;
+            self.retain_generated_completed_data_v1(plan, submission)?;
+        }
         self.generated_shells
             .get_mut(&plan.key)
             .expect("rooted shell")
@@ -500,7 +641,13 @@ impl KfdRuntimeBackendV1 {
                         RetirementV1::Pristine => lane.abort_unpublished_fixed_dispatch_v1()?,
                         RetirementV1::CancelledOnly => lane.abort_cancelled_fixed_dispatch_v1()?,
                         RetirementV1::Recycled => {
-                            lane.detach_recycled_fixed_dispatch()?.into_data()
+                            if !native.detached.is_held() {
+                                let generation = lane.recycled_fixed_dispatch_generation()?;
+                                native.retain_recycled_data_v1(plan, generation, || {
+                                    lane.detach_recycled_fixed_dispatch()
+                                })?;
+                            }
+                            native.take_retained_data_for_disposal_v1(plan)?
                         }
                     };
                     native.returned.install(data);
@@ -538,6 +685,17 @@ impl KfdRuntimeBackendV1 {
                 .expect("native entry");
             if native.returned.completed != plan.count || !native.data.is_empty() {
                 return Err(self.terminal_error("generated retirement DATA count mismatch"));
+            }
+            // The bridge is descriptive return lineage, not evidence of native
+            // release. Retire it only after the exact ordinary DATA disposal.
+            native.sdma.dispose_after_data_release();
+            if rejected.is_some() {
+                // A missing original occurrence after DATA disposal is not
+                // recoverable and must not unwind through native owner roots.
+                let Some(submission) = native.submission.as_mut() else {
+                    std::process::abort()
+                };
+                submission.receipt.mark_rejected_disposed();
             }
             native.phase = PhaseV1::Retired;
             self.release_compute_lane_lease_v1(plan.binding.backend_stream, lane_index);

@@ -403,6 +403,12 @@ impl ParentPublishedConditionalArtifact<'_, '_, '_> {
         }
         let finalized = self.publication.recovered_evidence().finalized();
         let handoff = finalized.source().recovered_handoff().handoff();
+        // Descriptive final-F classification only. It cannot accept a machine
+        // profile or replace the retained original publication/currentness.
+        let copy_classification = fe2o3_verifier::classify_native_copy_program_v1(
+            finalized.source().recovered_handoff(),
+            self.custody.readiness.budget,
+        )?;
         request.publish(
             producer,
             handoff.capsule().source_packet_bytes(),
@@ -411,6 +417,7 @@ impl ParentPublishedConditionalArtifact<'_, '_, '_> {
                 handoff: (*handoff.identity().sha256(), handoff.identity().byte_len()),
                 carriage: *self.custody.compiler_execution.identity().as_bytes(),
                 artifact: *finalized.identity(),
+                copy_classification,
             },
             self.custody.readiness.budget,
         )?;

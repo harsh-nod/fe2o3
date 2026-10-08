@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "fixed_dispatch/recipe.rs"]
+pub(super) mod recipe;
+
 include!("../queue_completion/source_rollback_body.rs");
 include!("../queue_completion/source_publish_body.rs");
 include!("dependency_source_failure_body.rs");
@@ -466,16 +469,28 @@ impl ComputeAqlQueueSessionV1 {
             AqlPreparedKernelDispatchBatchV2<N>,
         ) -> Result<u64, NativeAqlSubmissionFailureV1>,
     ) -> Result<Gfx942DispatchBatchV1<N>, FixedDispatchSubmissionFailureV1> {
+        self.submit_selected_fixed_dispatch_using(
+            mode,
+            &mut recipe::RecipeV1::Ordinary,
+            native_submit,
+        )
+    }
+
+    pub(super) fn submit_selected_fixed_dispatch_using<const N: usize>(
+        &mut self,
+        mode: FixedDispatchBindingModeV1,
+        recipe: &mut recipe::RecipeV1<'_>,
+        native_submit: impl FnOnce(
+            &mut Self,
+            AqlPreparedKernelDispatchBatchV2<N>,
+        ) -> Result<u64, NativeAqlSubmissionFailureV1>,
+    ) -> Result<Gfx942DispatchBatchV1<N>, FixedDispatchSubmissionFailureV1> {
         if self.terminal_poisoned {
             return Err(FixedDispatchSubmissionFailureV1::Terminal(
                 Gfx942DispatchBindingErrorV1::Poisoned.into(),
             ));
         }
-        let binding = self
-            .dispatch
-            .as_mut()
-            .ok_or(Gfx942DispatchBindingErrorV1::ResourcePhase)
-            .and_then(|dispatch| dispatch.bind_templates::<N>(self.key));
+        let binding = recipe.bind::<N>(self);
         let (templates, identity) = match self.classify_fixed_dispatch_binding(mode, binding) {
             Ok(binding) => binding,
             Err(error) => {
@@ -485,12 +500,7 @@ impl ComputeAqlQueueSessionV1 {
         let completion = self.submit_with_completions_classified_using(templates, native_submit);
         let completion = match completion {
             Ok(completion) => {
-                if let Err(error) = self
-                    .dispatch
-                    .as_mut()
-                    .expect("dispatch owner retained")
-                    .mark_published(identity, &completion)
-                {
+                if let Err(error) = recipe.mark_published(self, identity, &completion) {
                     Err(FixedDispatchSubmissionFailureV1::Terminal(error.into()))
                 } else {
                     Ok(completion)
@@ -499,10 +509,7 @@ impl ComputeAqlQueueSessionV1 {
             Err(error) => Err(error),
         };
         let result = finish_fixed_dispatch_submission(identity, completion, |identity| {
-            self.dispatch
-                .as_mut()
-                .expect("dispatch owner retained")
-                .cancel_binding(identity)
+            recipe.cancel(self, identity)
         });
         self.terminalize_fixed_dispatch_submission_result_v1(result)
     }

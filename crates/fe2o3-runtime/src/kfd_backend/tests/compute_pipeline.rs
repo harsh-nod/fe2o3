@@ -263,6 +263,7 @@ fn runtime_compute_failed_explicit_dependency_preserves_stream_prefix_ordering()
                     backend.submissions.insert(
                         id,
                         SubmissionRecordV1 {
+                            origin: SubmissionOriginV1::Ordinary,
                             stream: owner_stream,
                             status: BackendPollV1::Pending,
                             dependency_depth: 1,
@@ -371,6 +372,7 @@ fn runtime_compute_failed_ordered_predecessor_is_not_an_explicit_failure() {
         backend.submissions.insert(
             40,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream,
                 status: BackendPollV1::Failed { code: -9 },
                 dependency_depth: 1,

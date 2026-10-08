@@ -265,6 +265,7 @@ fn scripted_sdma_zero_deadline_wait_observes_once_and_restores_every_index() {
     backend.submissions.insert(
         dependency,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Succeeded,
             dependency_depth: 1,
@@ -353,6 +354,7 @@ fn scripted_same_device_wait_timeout_restores_pair_index_and_retains() {
     backend.submissions.insert(
         dependency,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Succeeded,
             dependency_depth: 1,

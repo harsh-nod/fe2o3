@@ -109,7 +109,8 @@ impl Drop for CarrierRetention<'_> {
             std::process::abort();
         }
         // The private authority is destroyed on effect-free preparation refusal,
-        // definite pre-adoption cancellation, or native/decoder settlement.
+        // definite pre-adoption cancellation, actual original unpublished
+        // native/Context retirement without decoding, or native/decoder settlement.
         // Cancellation does not claim a decoder result or native completion.
         self.anchor.carriers.set(count - 1);
     }

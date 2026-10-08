@@ -25,6 +25,8 @@ fn assert_ready(
         .unwrap();
     assert_eq!(backend.poll_v1(id).unwrap(), BackendPollV1::Pending);
     assert!(backend.generated_submission_can_retire_v1(id));
+    assert!(backend.generated_data_unpublished_v1(plan, Some(id)));
+    assert!(!backend.generated_data_unpublished_v1(plan, None));
     assert!(
         backend
             .record_event_v1(plan.binding.backend_stream, id)
@@ -53,6 +55,7 @@ fn complete(backend: &mut KfdMultiDeviceRuntimeBackendV1, plan: &GeneratedShellP
         );
         std::thread::yield_now();
     }
+    assert!(!backend.generated_data_unpublished_v1(plan, Some(id)));
     for result in [
         backend.poll_v1(id),
         backend.wait_v1(id, Instant::now()),
@@ -81,7 +84,7 @@ fn read_full_roster(
         .map(|(_, bytes)| (bytes.as_ptr(), bytes.capacity()))
         .collect();
     let mut foreign = roster.clone();
-    foreign.source_identity = Arc::new(());
+    foreign.source_identity = Arc::new(()).into();
     let before = destinations.clone();
     assert!(matches!(
         backend.read_generated_submission_v1(plan, id, &foreign, &mut destinations),

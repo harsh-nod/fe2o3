@@ -268,6 +268,12 @@ mod fixed_dispatch;
 mod initial_bind;
 #[path = "queue_live/model_loan.rs"]
 pub(in crate::queue) mod model_loan;
+#[path = "queue_live/native_fill_arena.rs"]
+pub(super) mod native_fill_arena;
+#[path = "queue_live/native_fill_cohort.rs"]
+mod native_fill_cohort;
+#[path = "queue_live/native_fill_registry.rs"]
+pub(super) mod native_fill_registry;
 use model_loan::execute_live_model_custody_v1;
 #[path = "queue_live/compute_xgmi.rs"]
 mod compute_xgmi;
@@ -288,10 +294,15 @@ mod pool_trim;
 #[path = "queue_live/sdma_allocation.rs"]
 mod sdma_allocation;
 pub use sdma_allocation::{Gfx942SdmaAllocationDispositionV1, Gfx942SdmaAllocationFailureV1};
+#[path = "queue_live/detached_sdma.rs"]
+pub(crate) mod detached_sdma;
 #[path = "queue_live/initialized_storage.rs"]
 mod initialized_storage;
 #[path = "queue_live/sdma_demotion.rs"]
 mod sdma_demotion;
+#[path = "queue_live/sdma_dispatch_promotion.rs"]
+mod sdma_dispatch_promotion;
+pub use detached_sdma::Gfx942DetachedSdmaFailureV1;
 #[path = "queue_live/sdma_promotion.rs"]
 mod sdma_promotion;
 #[path = "queue_live/sdma_recycle.rs"]
@@ -3797,6 +3808,8 @@ pub struct ComputeAqlQueueSessionV1 {
     sdma_allocation: Option<sdma_allocation::SdmaAllocationCustodyV1>,
     sdma_promotion: Option<crate::persistent_directional_sdma::Gfx942DirectionalPersistentSdmaPromotionTerminalCustodyV1>,
     sdma_demotion: Option<crate::persistent_directional_sdma::Gfx942DirectionalPersistentSdmaDemotionTerminalCustodyV1>,
+    detached_sdma: Option<detached_sdma::Custody>,
+    sdma_dispatch_promotion: Option<sdma_dispatch_promotion::Custody>,
     initialized_storage_promotion: Option<crate::persistent_compute::Gfx942PersistentComputeStoragePromotionTerminalCustodyV1>,
     sdma_synchronous: Option<sdma_synchronous::SdmaSynchronousCustodyV1>,
     sdma_recycle: Option<sdma_recycle::SdmaRecycleCustodyV1>,
@@ -8530,7 +8543,9 @@ impl ComputeAqlQueueSessionV1 {
     /// The complete physical extent is copied to owned host bytes and hashed
     /// before the move. Pooled buffers whose logical extent is smaller than the
     /// physical allocation are rejected because dispatch would expose the full
-    /// allocation. No allocation or device copy is performed.
+    /// allocation. No native allocation or device copy is performed.
+    /// Native read/model failures retain the original input in the terminal
+    /// queue. Borrowed admission and settled digest mismatch return the input.
     #[allow(clippy::result_large_err)]
     pub fn promote_sdma_host_buffer_to_fixed_dispatch_data(
         &mut self,
@@ -8540,81 +8555,7 @@ impl ComputeAqlQueueSessionV1 {
         (Gfx942FixedDispatchDataV1, Gfx942SdmaDispatchDataBridgeV1),
         Gfx942SdmaBufferTransitionFailureV1,
     > {
-        if !buffer.belongs_to(self.key) {
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract("foreign SDMA buffer owner"),
-                recovered: Some(buffer),
-            });
-        }
-        if let Err(error) = self.require_sdma_enabled() {
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error,
-                recovered: Some(buffer),
-            });
-        }
-        if buffer.kind() != Gfx942SdmaBufferKindV1::HostVisibleCoherent
-            || buffer.requested_bytes() != buffer.physical_bytes()
-            || content.byte_len() != buffer.physical_bytes()
-        {
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "SDMA host promotion requires one exact full physical extent",
-                ),
-                recovered: Some(buffer),
-            });
-        }
-        let observed = self.with_live_queue_memory_model(|memory| {
-            read_host_buffer(memory, &buffer, 0, buffer.physical_bytes()).map_err(Into::into)
-        });
-        let observed = match observed {
-            Ok(observed) => observed,
-            Err(error) => {
-                return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                    error,
-                    recovered: Some(buffer),
-                });
-            }
-        };
-        if !content_descriptor_matches_bytes(content, &observed) {
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "SDMA host promotion content descriptor mismatch",
-                ),
-                recovered: Some(buffer),
-            });
-        }
-        if self.sdma_outstanding_buffers == 0 {
-            self.poison_terminal();
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract("SDMA buffer ledger underflow"),
-                recovered: None,
-            });
-        }
-        let physical_bytes = buffer.physical_bytes();
-        let storage_identity = buffer.storage_identity();
-        let (storage, owner, pool_generation, logical_bytes) = buffer.into_bridge_parts();
-        let Gfx942SdmaBufferStorageV1::Host(token) = storage else {
-            self.poison_terminal();
-            return Err(Gfx942SdmaBufferTransitionFailureV1 {
-                error: ComputeAqlQueueSessionErrorV1::Contract(
-                    "SDMA host promotion storage substitution",
-                ),
-                recovered: None,
-            });
-        };
-        self.sdma_outstanding_buffers -= 1;
-        Ok((
-            Gfx942FixedDispatchDataV1::host_visible_initialized(
-                Gfx942InitializedHostVisibleMemoryV1::from_completed_dispatch(token),
-            ),
-            Gfx942SdmaDispatchDataBridgeV1 {
-                owner,
-                pool_generation,
-                logical_bytes,
-                physical_bytes,
-                storage_identity,
-            },
-        ))
+        sdma_dispatch_promotion::promote(self, buffer, content)
     }
 
     /// Promotes the exact full device destination of one completed H2D copy.
@@ -10828,6 +10769,16 @@ impl ComputeAqlQueueSessionV1 {
     }
 
     fn require_no_sdma_owner_transition_v1(&self) -> Result<(), ComputeAqlQueueSessionErrorV1> {
+        if self.sdma_dispatch_promotion.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "unfinished SDMA dispatch promotion",
+            ));
+        }
+        if self.detached_sdma.is_some() {
+            return Err(ComputeAqlQueueSessionErrorV1::Contract(
+                "unfinished detached SDMA transfer",
+            ));
+        }
         if self.initialized_storage_promotion.is_some() {
             return Err(ComputeAqlQueueSessionErrorV1::Contract(
                 "unfinished initialized storage promotion",
@@ -11911,7 +11862,9 @@ fn validate_barrier_probe_success_snapshot(
 
 impl Drop for ComputeAqlQueueSessionV1 {
     fn drop(&mut self) {
-        if self.xgmi_attachment.is_some()
+        if self.sdma_dispatch_promotion.is_some()
+            || self.detached_sdma.is_some()
+            || self.xgmi_attachment.is_some()
             || self.auxiliary_release.is_some()
             || self.sdma_pool_trim.is_some()
             || self.sdma_allocation.is_some()

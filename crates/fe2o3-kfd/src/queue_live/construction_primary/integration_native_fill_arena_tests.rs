@@ -1,0 +1,538 @@
+//! CPU-only use of the actual original-root arena construction and slot kernels.
+
+use super::*;
+use crate::queue::dispatch_binding::{
+    ArenaCapacityV1, ArenaOrderV1, GFX942_INDEPENDENT_FILL_ARENA2048_SLOTS_V1,
+    GFX942_NATIVE_FILL_ARENA_SLOTS_V1 as SLOTS, Gfx942IndependentFillArena2048InputsV1,
+    Gfx942IndependentFillArena2048PacketsV1, Gfx942IndependentFillArena2048StorageV1,
+    Gfx942IndependentFillArenaInputsV1, Gfx942NativeFillArenaInputsV1,
+    Gfx942NativeFillArenaPacketsV1, Gfx942NativeFillArenaStorageV1,
+};
+use fe2o3_resource_accounting::{ResourceCreditAccountV1, ResourceKindV1, ResourceVectorV1};
+
+type ArenaRoot<'a, const N: usize = SLOTS> = Root<(
+    Vec<ValidatedKernelEnvelope<'a>>,
+    FixedDispatchPreparationCustodyV1<N, Gfx942NativeFillArenaPacketsV1>,
+    Gfx942NativeFillArenaStorageV1,
+)>;
+
+fn packet(index: usize, offset: u64, conditional: bool) -> Gfx942FixedDispatchPacketV1 {
+    packet_with_order(index, offset, conditional, ArenaOrderV1::Ordered)
+}
+
+fn packet_with_order(
+    index: usize,
+    offset: u64,
+    conditional: bool,
+    order: ArenaOrderV1,
+) -> Gfx942FixedDispatchPacketV1 {
+    let count = 1 + (index % 3) as u64;
+    let mut bytes = vec![0; 272];
+    bytes[8..16].copy_from_slice(&count.to_le_bytes());
+    let packet = Gfx942FixedDispatchPacketV1::new_with_ordering(
+        0,
+        AqlDispatchGeometryV1::new([64, 1, 1], [64, 1, 1]).unwrap(),
+        order.packet_order(),
+        0,
+        bytes.into_boxed_slice(),
+        Box::new([Gfx942DispatchBufferBindingV1::new(0, 0, offset, count * 4)]),
+    );
+    if conditional {
+        packet.require_conditional_fill_v1()
+    } else {
+        packet
+    }
+}
+
+fn packets(
+    account: &ResourceCreditAccountV1,
+    change: Option<(u64, bool)>,
+) -> (Gfx942NativeFillArenaPacketsV1, usize) {
+    let mut end = 0;
+    let packets = Gfx942NativeFillArenaPacketsV1::try_new(account, |index| {
+        let (offset, conditional) = if index == 1 {
+            change.unwrap_or((end, true))
+        } else {
+            (end, true)
+        };
+        let packet = packet(index, offset, conditional);
+        end += (1 + (index % 3) as u64) * 4;
+        packet
+    })
+    .unwrap();
+    (packets, end as usize)
+}
+
+fn account(records: usize) -> ResourceCreditAccountV1 {
+    ResourceCreditAccountV1::new(
+        ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, 64 << 20),
+        records,
+    )
+    .unwrap()
+}
+
+fn setup(
+    bytes: &[u8],
+) -> (
+    Box<ArenaRoot<'_>>,
+    Rc<RefCell<Trace>>,
+    ResourceCreditAccountV1,
+    usize,
+) {
+    setup_with_order(bytes, ArenaOrderV1::Ordered)
+}
+
+fn setup_with_order(
+    bytes: &[u8],
+    order: ArenaOrderV1,
+) -> (
+    Box<ArenaRoot<'_>>,
+    Rc<RefCell<Trace>>,
+    ResourceCreditAccountV1,
+    usize,
+) {
+    setup_with_capacity::<SLOTS>(bytes, order, ArenaCapacityV1::Original1024)
+}
+
+fn setup_with_capacity<const N: usize>(
+    bytes: &[u8],
+    order: ArenaOrderV1,
+    capacity: ArenaCapacityV1,
+) -> (
+    Box<ArenaRoot<'_, N>>,
+    Rc<RefCell<Trace>>,
+    ResourceCreditAccountV1,
+    usize,
+) {
+    assert_eq!(N, capacity.slots());
+    let (mut memory, trace) = setup_memory();
+    let account = account(N + 4);
+    if capacity == ArenaCapacityV1::Independent2048 {
+        assert_eq!(order, ArenaOrderV1::IndependentDisjointWriteOnly);
+        let mut total = 0;
+        let packets = Gfx942IndependentFillArena2048PacketsV1::try_new(&account, |index| {
+            total += (1 + index % 3) * 4;
+            packet_with_order(index, 0, true, order)
+        })
+        .unwrap();
+        let token = memory.allocate::<HostVisibleCoherentGttV1>(total).unwrap();
+        let output =
+            Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory.map(token).unwrap());
+        let inputs = Gfx942IndependentFillArena2048InputsV1::admit_local_outputs(
+            native_fill_cohort_cases::program(bytes),
+            packets,
+            output,
+        )
+        .unwrap()
+        .0;
+        assert_eq!(inputs.order, order);
+        let storage = Gfx942IndependentFillArena2048StorageV1::preallocate(account.clone())
+            .unwrap()
+            .0;
+        return setup_inputs::<N>(memory, trace, account, inputs, storage);
+    }
+    let (packets, total) = if order == ArenaOrderV1::Ordered {
+        packets(&account, None)
+    } else {
+        let mut total = 0usize;
+        let packets = Gfx942NativeFillArenaPacketsV1::try_new(&account, |index| {
+            total += (1 + index % 3) * 4;
+            packet_with_order(index, 0, true, order)
+        })
+        .unwrap();
+        (packets, total)
+    };
+    let token = memory.allocate::<HostVisibleCoherentGttV1>(total).unwrap();
+    let output = Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory.map(token).unwrap());
+    let program = native_fill_cohort_cases::program(bytes);
+    let inputs = match order {
+        ArenaOrderV1::Ordered => {
+            Gfx942NativeFillArenaInputsV1::admit(program, packets, output).unwrap()
+        }
+        ArenaOrderV1::IndependentDisjointWriteOnly => {
+            Gfx942IndependentFillArenaInputsV1::admit_local_outputs(program, packets, output)
+                .unwrap()
+                .0
+        }
+    };
+    assert_eq!(inputs.order, order);
+    let storage = Gfx942NativeFillArenaStorageV1::preallocate(account.clone()).unwrap();
+    setup_inputs::<N>(memory, trace, account, inputs, storage)
+}
+
+fn setup_inputs<'a, const N: usize>(
+    memory: Memory,
+    trace: Rc<RefCell<Trace>>,
+    account: ResourceCreditAccountV1,
+    inputs: Gfx942NativeFillArenaInputsV1<'a>,
+    mut storage: Gfx942NativeFillArenaStorageV1,
+) -> (
+    Box<ArenaRoot<'a, N>>,
+    Rc<RefCell<Trace>>,
+    ResourceCreditAccountV1,
+    usize,
+) {
+    let Gfx942NativeFillArenaInputsV1 {
+        programs,
+        packets,
+        data,
+        order: admitted_order,
+    } = inputs;
+    let mut premises = storage.premises.take().unwrap();
+    premises.order = admitted_order;
+    let custody = FixedDispatchPreparationCustodyV1::<N, Gfx942NativeFillArenaPacketsV1>::new_native_fill_arena_capacity(packets, data, premises);
+    trace.borrow_mut().initial_data = Some(memory.observation());
+    let root = Root::new_with(memory, (programs, custody, storage));
+    let pointer = &*root as *const ArenaRoot<'_, N> as usize;
+    (root, trace, account, pointer)
+}
+
+fn originals<const N: usize>(
+    root: &ArenaRoot<'_, N>,
+    trace: &Rc<RefCell<Trace>>,
+    pointer: usize,
+    bytes: &[u8],
+) {
+    assert_common(root, pointer, trace);
+    assert_platform(root, None);
+    assert_eq!(root.preparation.0.len(), 1);
+    assert_eq!(
+        root.preparation.0[0].envelope().bytes().as_ptr(),
+        bytes.as_ptr()
+    );
+    assert_eq!(root.preparation.0[0].envelope().bytes().len(), bytes.len());
+    if let Some(owner) = root
+        .dispatch
+        .as_ref()
+        .or_else(|| root.completed.as_ref().and_then(|c| c.dispatch.as_ref()))
+    {
+        owner.require_arena_backing_v1().unwrap();
+        let identities = owner.primary_fixture_identities_v1();
+        assert_eq!(identities.len(), 3);
+        assert_partition(root, identities);
+    }
+}
+
+#[test]
+fn native_fill_arena_primary_keeps_one_original_data_and_1024_charged_slot_owners() {
+    assert!(core::mem::size_of::<ArenaRoot<'static>>() <= 65536);
+    let captured = native_fill_cohort_cases::payload();
+    let (root, trace, account, pointer) = setup(captured.exact_payload_bytes());
+    let charged = account.usage();
+    assert_eq!(charged.retained_records, SLOTS + 4);
+    let (root, result) = run_work(root, |root, entry| {
+        root.construct_native_fill_arena(entry, 65536)
+    });
+    assert!(result.is_ok(), "{result:?}");
+    originals(&root, &trace, pointer, captured.exact_payload_bytes());
+    assert_eq!(account.usage(), charged);
+    assert!(root.preparation.2.settled());
+    assert!(!trace.borrow().poison);
+}
+
+#[test]
+fn native_fill_arena_record_refusal_refunds_only_effect_free_metadata() {
+    let account = account(SLOTS + 2);
+    assert!(Gfx942NativeFillArenaStorageV1::preallocate(account.clone()).is_err());
+    assert_eq!(account.usage().used, ResourceVectorV1::ZERO);
+    assert_eq!(account.usage().retained_records, 0);
+}
+
+#[test]
+fn native_fill_arena_partition_alias_gap_and_wrong_family_return_original_data() {
+    let captured = native_fill_cohort_cases::payload();
+    for (offset, conditional) in [(0, true), (12, true), (4, false)] {
+        let (mut memory, _trace) = setup_memory();
+        let account = account(1);
+        let (packets, total) = packets(&account, Some((offset, conditional)));
+        let original_packets = packets.packets().as_ptr();
+        let charged = account.usage();
+        let token = memory.allocate::<HostVisibleCoherentGttV1>(total).unwrap();
+        let output =
+            Gfx942FixedDispatchDataV1::host_visible_uninitialized(memory.map(token).unwrap());
+        let original = output.sdma_storage_identity();
+        let failure = match Gfx942NativeFillArenaInputsV1::admit(
+            native_fill_cohort_cases::program(captured.exact_payload_bytes()),
+            packets,
+            output,
+        ) {
+            Err(failure) => failure,
+            Ok(_) => panic!("invalid arena partition admitted"),
+        };
+        let (program, packets, output, _) = failure.into_parts();
+        assert_eq!(
+            program.envelope().bytes().as_ptr(),
+            captured.exact_payload_bytes().as_ptr()
+        );
+        assert_eq!(packets.packets().len(), SLOTS);
+        assert_eq!(packets.packets().as_ptr(), original_packets);
+        assert_eq!(account.usage(), charged);
+        assert_eq!(output.sdma_storage_identity(), original);
+    }
+}
+
+#[test]
+fn native_fill_arena_small_ring_precedes_native_preparation() {
+    let captured = native_fill_cohort_cases::payload();
+    let (root, trace, account, pointer) = setup(captured.exact_payload_bytes());
+    let charged = account.usage();
+    let (root, result) = run_work(root, |root, entry| {
+        root.construct_native_fill_arena(entry, 4096)
+    });
+    assert!(result.is_err());
+    originals(&root, &trace, pointer, captured.exact_payload_bytes());
+    assert!(!trace.borrow().calls.contains(&"allocate-ring"));
+    assert_eq!(account.usage(), charged);
+}
+
+#[test]
+fn native_fill_arena_partial_error_and_panic_retain_original_root_and_all_debits() {
+    for stage in [
+        PreparationStageV1::Plan,
+        PreparationStageV1::KernargRetain,
+        PreparationStageV1::PacketResolve(517),
+        PreparationStageV1::Complete,
+    ] {
+        for panic in [false, true] {
+            let captured = native_fill_cohort_cases::payload();
+            let (mut root, trace, account, pointer) = setup(captured.exact_payload_bytes());
+            let charged = account.usage();
+            root.preparation.1.primary_inject_stage_v1(stage, panic);
+            let (root, result) = run_work(root, |root, entry| {
+                root.construct_native_fill_arena(entry, 65536)
+            });
+            assert!(result.is_err());
+            root.preparation.1.primary_assert_failed_stage_v1(stage);
+            originals(&root, &trace, pointer, captured.exact_payload_bytes());
+            assert_eq!(account.usage(), charged);
+            assert!(!trace.borrow().calls.contains(&"allocate-ring"));
+        }
+    }
+}
+
+#[test]
+fn native_fill_arena_1024_original_receipts_use_shared_cpu_publication_and_recycle() {
+    shared_cpu_publication_and_recycle(ArenaOrderV1::Ordered);
+}
+
+#[test]
+fn independent_arena_1024_original_receipts_use_same_cpu_kernels_without_common_release() {
+    shared_cpu_publication_and_recycle(ArenaOrderV1::IndependentDisjointWriteOnly);
+}
+
+struct HeaderObservation {
+    expected: u16,
+    body: bool,
+    header: bool,
+}
+
+impl fe2o3_aql::AqlPacketBatchPublicationTargetV1 for HeaderObservation {
+    type Error = core::convert::Infallible;
+
+    fn write_unpublished(
+        &mut self,
+        index: u32,
+        _: &fe2o3_aql::AqlKernelDispatchPacketV1,
+    ) -> Result<(), Self::Error> {
+        assert_eq!(index, 0);
+        assert!(!self.body && !self.header);
+        self.body = true;
+        Ok(())
+    }
+
+    fn publish_release_header(&mut self, index: u32, header: u16) -> Result<(), Self::Error> {
+        assert_eq!(index, 0);
+        assert!(self.body && !self.header);
+        assert_eq!(header, self.expected);
+        self.header = true;
+        Ok(())
+    }
+}
+
+fn shared_cpu_publication_and_recycle(order: ArenaOrderV1) {
+    shared_cpu_publication_and_recycle_with_capacity::<SLOTS>(order, ArenaCapacityV1::Original1024);
+}
+
+fn shared_cpu_publication_and_recycle_with_capacity<const N: usize>(
+    order: ArenaOrderV1,
+    capacity: ArenaCapacityV1,
+) {
+    let captured = native_fill_cohort_cases::payload();
+    let (root, trace, account, pointer) =
+        setup_with_capacity::<N>(captured.exact_payload_bytes(), order, capacity);
+    let (mut root, result) = run_work(root, |root, entry| {
+        root.construct_native_fill_arena(entry, (N * 64) as u32)
+    });
+    assert!(result.is_ok(), "{result:?}");
+    let charged = account.usage();
+    let foreign_account = ResourceCreditAccountV1::new(
+        ResourceVectorV1::ZERO.with(ResourceKindV1::ControlResidentBytes, 64 << 20),
+        N + 3,
+    )
+    .unwrap();
+    let mut foreign = match capacity {
+        ArenaCapacityV1::Original1024 => {
+            Gfx942NativeFillArenaStorageV1::preallocate(foreign_account).unwrap()
+        }
+        ArenaCapacityV1::Independent2048 => {
+            Gfx942IndependentFillArena2048StorageV1::preallocate(foreign_account)
+                .unwrap()
+                .0
+        }
+    };
+    let (last_offset, last_bytes) = match N {
+        1024 => (8184, 4),
+        2048 => (16_372, 8),
+        _ => panic!("unreviewed test roster"),
+    };
+    let completed = root.completed.as_mut().unwrap();
+    let queue = completed.engine.resources[0].key;
+    let common = completed.dispatch.take().unwrap();
+    let ((), common, poisoned, _) =
+        ComputeAqlQueueSessionV1::with_ordinary_binding_session_v1(queue, common, |session| {
+            let registry = &mut root.preparation.2;
+            let mut receipts = Vec::with_capacity(N);
+            for index in 0..N {
+                receipts.push(Some(
+                    session
+                        .submit_arena_binding_for_test(
+                            registry.recipe(index).unwrap(),
+                            |_, batch| {
+                                // Observe the actual prepared batch through its normal
+                                // serializer; this target performs no native writes.
+                                let mut target = HeaderObservation {
+                                    expected: order.packet_order().header(),
+                                    body: false,
+                                    header: false,
+                                };
+                                batch.publish_with(&mut target).unwrap();
+                                assert!(target.body && target.header);
+                                Ok(index as u64)
+                            },
+                        )
+                        .unwrap(),
+                ));
+            }
+            assert!(!registry.settled());
+            let first = receipts[0].as_ref().unwrap();
+            assert!(
+                registry
+                    .recipe(0)
+                    .unwrap()
+                    .validate_original_batch(first)
+                    .is_ok()
+            );
+            assert!(
+                registry
+                    .recipe(1)
+                    .unwrap()
+                    .validate_original_batch(first)
+                    .is_err()
+            );
+            assert!(
+                foreign
+                    .recipe(0)
+                    .unwrap()
+                    .validate_original_batch(first)
+                    .is_err()
+            );
+            assert!(
+                registry
+                    .recipe(N - 1)
+                    .unwrap()
+                    .completed_range_for_test(session.dispatch.as_ref().unwrap(), 4)
+                    .is_err()
+            );
+            // Synthetic CPU completion order is deliberately not a hardware claim.
+            for index in (0..N).rev() {
+                let completed = session
+                    .complete_arena_binding_for_test(
+                        registry.recipe(index).unwrap(),
+                        receipts[index].take().unwrap(),
+                    )
+                    .unwrap();
+                session
+                    .recycle_arena_binding_for_test(registry.recipe(index).unwrap(), completed)
+                    .unwrap();
+                if index == N - 1 {
+                    assert!(
+                        !registry.settled(),
+                        "other actual original CPU receipts remain published"
+                    );
+                    assert_eq!(
+                        registry
+                            .recipe(index)
+                            .unwrap()
+                            .completed_range_for_test(
+                                session.dispatch.as_ref().unwrap(),
+                                last_bytes
+                            )
+                            .unwrap(),
+                        (last_offset, last_bytes as u64, 1)
+                    );
+                    assert!(
+                        registry
+                            .recipe(index)
+                            .unwrap()
+                            .completed_range_for_test(
+                                session.dispatch.as_ref().unwrap(),
+                                last_bytes + 4
+                            )
+                            .is_err()
+                    );
+                    session
+                        .dispatch
+                        .as_ref()
+                        .unwrap()
+                        .require_arena_backing_v1()
+                        .unwrap();
+                }
+                assert!(
+                    session
+                        .submit_arena_binding_for_test(
+                            registry.recipe(index).unwrap(),
+                            |_, _| panic!("single-use arena slot replay")
+                        )
+                        .is_err()
+                );
+            }
+            assert!(registry.settled());
+        });
+    root.completed.as_mut().unwrap().dispatch = Some(common);
+    assert!(!poisoned);
+    originals(&root, &trace, pointer, captured.exact_payload_bytes());
+    assert_eq!(account.usage(), charged);
+}
+
+#[path = "integration_native_fill_arena2048_tests.rs"]
+mod independent2048;
+
+#[test]
+fn native_fill_arena_currentness_and_uncertain_create_keep_common_root() {
+    for panic in [false, true] {
+        let captured = native_fill_cohort_cases::payload();
+        let (root, trace, account, pointer) = setup(captured.exact_payload_bytes());
+        let charged = account.usage();
+        trace.borrow_mut().fault = Some(("currentness", 3, panic));
+        let (root, result) = run_work(root, |root, entry| {
+            root.construct_native_fill_arena(entry, 65536)
+        });
+        assert!(result.is_err());
+        originals(&root, &trace, pointer, captured.exact_payload_bytes());
+        assert_eq!(account.usage(), charged);
+    }
+    for mode in 1..=5 {
+        let captured = native_fill_cohort_cases::payload();
+        let (root, trace, account, pointer) = setup(captured.exact_payload_bytes());
+        let charged = account.usage();
+        trace.borrow_mut().create = mode;
+        let (root, result) = run_work(root, |root, entry| {
+            root.construct_native_fill_arena(entry, 65536)
+        });
+        assert!(result.is_err());
+        originals(&root, &trace, pointer, captured.exact_payload_bytes());
+        assert_eq!(account.usage(), charged);
+        assert!(trace.borrow().poison);
+        assert_eq!(trace.borrow().cleanup, 0);
+    }
+}
