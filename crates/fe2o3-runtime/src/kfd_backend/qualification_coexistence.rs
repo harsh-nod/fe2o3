@@ -773,6 +773,7 @@ mod tests {
                 fixture.backend.submissions.insert(
                     id,
                     SubmissionRecordV1 {
+                        origin: SubmissionOriginV1::Ordinary,
                         stream,
                         status,
                         dependency_depth: 1,
@@ -817,6 +818,7 @@ mod tests {
                 fixture.backend.submissions.insert(
                     ScriptedR26RosterV1::COMPUTE,
                     SubmissionRecordV1 {
+                        origin: SubmissionOriginV1::Ordinary,
                         stream: fixture.backend.active.as_ref().unwrap().stream,
                         status: BackendPollV1::Succeeded,
                         dependency_depth: 1,
@@ -924,6 +926,7 @@ mod tests {
                 fixture.backend.submissions.insert(
                     ScriptedR26RosterV1::COPY,
                     SubmissionRecordV1 {
+                        origin: SubmissionOriginV1::Ordinary,
                         stream: fixture.backend.active_sdma[&ScriptedR26RosterV1::COPY].stream,
                         status: BackendPollV1::Succeeded,
                         dependency_depth: 1,
@@ -1065,6 +1068,7 @@ mod tests {
         backend.submissions.insert(
             17,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream: 19,
                 status: BackendPollV1::Pending,
                 dependency_depth: 1,

@@ -16,6 +16,9 @@ use crate::{
     GeneratedRuntimeResultBudgetV1,
 };
 
+mod registry;
+pub(crate) use registry::GeneratedRegistryCarrierV1;
+
 pub(crate) trait GeneratedRuntimeAuthorityV1: WorkerV3Gfx942ExecutionAuthorityV1 {
     fn artifact_bytes(&self) -> &[u8];
 }

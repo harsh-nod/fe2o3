@@ -18,9 +18,9 @@ ENROLLMENT = Path("crates/fe2o3-runtime-model/src/context_version_journal/enroll
 LIVE_DEFINITIONS = V / "context_live_validation_definitions_v1.rs"
 LIVE_DECLARATIONS = Path("crates/fe2o3-runtime/src/context/versions/live_validation_declarations.rs")
 HELPERS = {
-    "check-producer-journal-observers.py": '04c33190c3adbc676955ab40ef2e84ab4904bc62022ceea3510e16bb14707e13',
-    "check-producer-input-validate.py": '0fab86ef385fbd38b10513979e86621ae3862e508e94f8c966cfb122fda76c80',
-    "check-producer-input-composition.py": '2e35f798e51d6156e4d66e781462f6cb3b345f7710eadcceedc13b8a0e81cda0',
+    "check-producer-journal-observers.py": '9d714fde955dcfb43339acf00bcad01b5d046cd7b8d3d47d9af22d3b2181c0a7',
+    "check-producer-input-validate.py": 'bcd087190a62748b76a7ea7cb90c39c5bfb5fb3bc9e188c6cfef5dff4a98a9a4',
+    "check-producer-input-composition.py": '0e04963fdd3330aeaa335045d6cd2f8daa03ea78b2bb8e757b5e8625ee5e0e16',
 }
 PROOF_SHA = "c9a45886ededd88a14c439bb346619f6826c11c22a610338c43cf730983307eb"
 LIVE_DEFINITIONS_SHA = "60726b1adde644ad2624bb947b092d5097ec79b6bd484ce81652ec8cb0347069"

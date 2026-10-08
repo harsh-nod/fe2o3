@@ -270,7 +270,26 @@ fn qualification_publication_hooks_exclude_retry_poll_and_recycle() {
         1
     );
     assert!(!progress.contains("record_generated_copy_publication_v1"));
-    assert!(publication.contains("ReceiptV1::Published(_)"));
+    assert!(publication.contains(".published()"));
+    let typed = include_str!("../typed_receipt.rs");
+    let published = typed
+        .split_once("fn published(&self) -> bool")
+        .unwrap()
+        .1
+        .split_once("fn recycled")
+        .unwrap()
+        .0;
+    assert!(published.contains("Self::Singleton(ReceiptV1::Published(_))"));
+    assert!(published.contains("Self::Cohort3(ReceiptV1::Published(_))"));
+    for excluded in [
+        "Ready",
+        "RetryReady",
+        "Completed",
+        "Recycled",
+        "HandedToLower",
+    ] {
+        assert!(!published.contains(excluded));
+    }
     assert!(
         publication
             .rfind("self.finish_generated_native_call_v1(result)?;")

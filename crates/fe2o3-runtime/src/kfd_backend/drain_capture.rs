@@ -464,6 +464,7 @@ pub(in crate::kfd_backend) mod tests {
                     backend.submissions.insert(
                         2,
                         SubmissionRecordV1 {
+                            origin: SubmissionOriginV1::Ordinary,
                             stream: 1,
                             status: BackendPollV1::Pending,
                             dependency_depth: 1,

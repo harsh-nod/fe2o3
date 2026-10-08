@@ -1,11 +1,74 @@
 {
   "artifacts": [
     {
+      "bytes": 142516895,
+      "name": "candidate-nine79-01-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "6447a6a7ff8995eb9b946ef47b84d24080fee2507d791668272ae170f36b417e"
+    },
+    {
+      "bytes": 941802,
+      "name": "native-snapshot82-detached-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "c2cfb776fea9a5e5303fed78477187bd39c1ea7df6bc86a788bf12f52b7dc738"
+    },
+    {
+      "bytes": 905241,
+      "name": "native-snapshot83-cold-device-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "72f2fe90d993ec2cf3341ab485d68bbe60b5815c99ece6b5fa6130fcde56ee43"
+    },
+    {
+      "bytes": 3928217,
+      "name": "native-copy-classifier-cpu84-evidence-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "c9a305b654ef241bc53d047b250260bd9e9611d22a1d79f96977b6cfb8d73dcc"
+    },
+    {
+      "bytes": 1176958,
+      "name": "native-snapshot85-readiness-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "f3bbd7b06a5161e1c07836b83987aee9b916e6cb863b0d623bf03524f6275b4f"
+    },
+    {
+      "bytes": 4784442,
+      "name": "arena86-88-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "9e6c5d65b9dbc810cfa47813ae9e532e92e3e77889681306c1a1ffd83539394a"
+    },
+    {
       "bytes": 8719658,
       "name": "a2-final-interrupted-before-modularization.tar.gz",
       "publicly_retrievable": false,
       "retention": "private local agent-owned qualification storage",
       "sha256": "81f0429bdecd2f17ae068fe1e33a95706b9b18d76c94919cf19676f616946ae4"
+    },
+    {
+      "bytes": 6678944,
+      "name": "a2-integration-source-controls-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "14f02f80654c5afb63043c2737f2f1494e0e3824fb1e760e2088b5a7c1fca338"
+    },
+    {
+      "bytes": 345997,
+      "name": "a2-ledger-development-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "b820397dac6fd7c7a7912af4572df76e19f221bfbcb914081dfdeb0ab7de6860"
+    },
+    {
+      "bytes": 7771585,
+      "name": "a2-live-64ba4c359-final-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "9dd04e5f145022a45e01b84b3153d9bb75a783682d4f051f56bd280708aa63ed"
     },
     {
       "bytes": 10542020,
@@ -22,11 +85,214 @@
       "sha256": "fbc8755afacea3ba070765875e55dbef9cd362a5f513abb8fc1eeecc490d13ce"
     },
     {
+      "bytes": 472740,
+      "name": "a2-retirement-development-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "e909bcef278bd3b46380825f3bd83cf71d41630bc12d19bc9364405e5f6192d8"
+    },
+    {
+      "bytes": 20127310,
+      "name": "a2-signed-49-template-retained-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "43a994012e537d03a34008b4e69e49977ba160746a6e3f4d87852fb6e40aab41"
+    },
+    {
+      "bytes": 8014,
+      "name": "a2-signed49-template-retained-semantic-audit-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "5655f0456fd1216d42161bd6a21fb44eee4a96c30a96a0a1d334451d65745627"
+    },
+    {
+      "bytes": 537079,
+      "name": "a2-source40-constructor-controls-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "d2e66caccb22151d9e35dd5d84e9dd9f452ca899b024fd22eac1f402748ecccf"
+    },
+    {
+      "bytes": 536056,
+      "name": "a2-source42-constructor-controls-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "7119517d189a1359a652dafb4a68700ef2f40993008a780b87f08c66fda6d0b2"
+    },
+    {
+      "bytes": 6695033,
+      "name": "a2-source57-controls-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "945f78dbff00ed495fded11f7708fc083fe4d8210e207131ed5cc1281ded4283"
+    },
+    {
+      "bytes": 1094967,
+      "name": "a2-successor-source38-controls-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "ceeb059562a4be0f9a75f70c9690ccba67219b545aacca87a0650719f832f65e"
+    },
+    {
+      "bytes": 136509897,
+      "name": "candidate-2653a4ead-01-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "6579fd14e5502b1946208a82c6e56479695dfbb1cf1ebfcfee2bc1a7298a5eae"
+    },
+    {
+      "bytes": 6150,
+      "name": "candidate-2653a4ead-01-hygiene-review.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "f90008841d3cea4cde6affaed004cfe34329d7411ba47579d10145856b4fb33e"
+    },
+    {
+      "bytes": 173895,
+      "name": "candidate-2653a4ead-01-independent-readback.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "52eb3e959ace28fb622bead61b1999f76e1a60f1b45c5890329fe73b4afd0c94"
+    },
+    {
+      "bytes": 118486,
+      "name": "candidate-2653a4ead-01-transport.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "88648c83628e4a4f244f0eac40a4b1b32eb369db9db6fea0f83c818a1ed66a1a"
+    },
+    {
+      "bytes": 139391901,
+      "name": "candidate-727f328-01-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "16be581e55a52fa8bcd3ba0d302be2fd2a9cbfcd35fc84eb2c163897f6b29cc5"
+    },
+    {
+      "bytes": 246018,
+      "name": "candidate-727f328-01-readback.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "98dff34c2a0bb6174f6a710258962a9ef1b50e1b937d3d4f103b447f932b77bf"
+    },
+    {
+      "bytes": 71527,
+      "name": "candidate-nine-harness-preparation-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "10eebac455a159529a1ea7588f2e438db74d7f445df064bc0044750cc87124a5"
+    },
+    {
+      "bytes": 3907,
+      "name": "candidate-remote-readiness-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "c98ffbfe6419ecd3f7e60c247e99b10e54c37338dbf374f60105ad3fc847c3f6"
+    },
+    {
+      "bytes": 27007,
+      "name": "candidate-supervisor-inert-preparation-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "37a2423f383771ecec03bdd68ed6a557b475f827cd74d8b01eb4eafeb88cc03d"
+    },
+    {
+      "bytes": 37819,
+      "name": "eight-campaign-harness-stage-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "46449d5a193ddb3b755ae2231ba1c339f0d4256ec2f20f29e26dac9d9b48ed69"
+    },
+    {
+      "bytes": 237214,
+      "name": "fe2o3-a1-cohort3-20261007-retired-source.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "4495aaffeaa21060bd950a88312ecef818441614ffc4c1049f1116f51ffa6124"
+    },
+    {
+      "bytes": 30715,
+      "name": "fe2o3-a2-ledger-refinement-20261007-retired-source.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "0be21ad99bfbf8da2a6bdc9195d4c59dd72f04b21b6fbcdf1d415cc28ffaa1dc"
+    },
+    {
+      "bytes": 57281,
+      "name": "fe2o3-ci2653-fixtures-20261007-retired-source.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "6163df1c0ba70745a1077da11650803db22ed684f9e4335587679c4fef0e4dc1"
+    },
+    {
+      "bytes": 6879345,
+      "name": "finalizer-727f328-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "88fed0b92f55e0cd17ed57a54e893eb4ad25b845b2b9e96f7b6f36c4b294c8a7"
+    },
+    {
+      "bytes": 2269,
+      "name": "finalizer-727f328-independent-audit.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "e73aa5977d9df8373b163d8dc01026ee5e9be84f67e40635e8c42e296af7fad3"
+    },
+    {
+      "bytes": 83303,
+      "name": "finalizer-ci-shards-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "5ab9ef5faacf3865fb7299d462ced7252b7e02c737e25f581ed927cd7c4c98bb"
+    },
+    {
       "bytes": 2840408,
       "name": "generic-verus-incomplete-before-modularization.tar.gz",
       "publicly_retrievable": false,
       "retention": "private local agent-owned qualification storage",
       "sha256": "45cd4c163ee46ee74814be1c27f0e8cfdf3f1dcc0336c8c0e21cca316d1b440e"
+    },
+    {
+      "bytes": 12093050,
+      "name": "generic-verus-signed49-mi350-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "2c91dd7880229078f325146330d0cb58323de8f97fedaa4704c6df36a8f0c95b"
+    },
+    {
+      "bytes": 5054587,
+      "name": "generic-verus-signed64-timeout-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "99cbd9efa1d9c715fe15675b23a2a372eb06b73cad088bb64054f72d822131fd"
+    },
+    {
+      "bytes": 531681,
+      "name": "hosted727-cpu-discovery-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "84153395c496cb35c1a5c444085b535405cfd67f181d1c3225e962acb0058f05"
+    },
+    {
+      "bytes": 987,
+      "name": "integration-staged-hygiene-02-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "2cb249f47725819aa1574ca0670b1d7f4f422ed9627db7f213d9cf1ab9e4c98b"
+    },
+    {
+      "bytes": 1164,
+      "name": "integration-staged-hygiene-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "b0342bee2060edda176cfb035dcbcda0ce048c84ce8fdddcb0df48bca04e3bdc"
+    },
+    {
+      "bytes": 5517,
+      "name": "mi350-pinned-keygen-preflight-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "235d71f16b67208ede61cc81af109020e50d55bfcb4437d566adf76a37e67576"
     },
     {
       "bytes": 678905,
@@ -85,6 +351,125 @@
       "sha256": "1004acb0295b4e1f182ebae1454b69b9b7414ac4aa96446d084084641f41afe4"
     },
     {
+      "bytes": 987029,
+      "name": "native-snapshot32-cpu-logs.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "d1261b58bb04b6e403ffd4d20c31c1dd22b2ac63d79df541452144950cb71b9f"
+    },
+    {
+      "bytes": 891503,
+      "name": "native-snapshot61-broker-helper-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "a23ab6b8ba174f758d86447467805a7723e7cf887ba520f3c7fc5f7803149d4e"
+    },
+    {
+      "bytes": 930339,
+      "name": "native-snapshot62-broker-readiness-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "67f77c580f76fed3b3cc51168f6dc72174ce7293329c1096a7e13ff96c3d5cb4"
+    },
+    {
+      "bytes": 858653,
+      "name": "native-snapshot63-replica-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "5381a2664b84dda573151b7dd9962addd2ecb1b6f6ecc550db12e26860544e41"
+    },
+    {
+      "bytes": 825323,
+      "name": "native-snapshot64-registry-bridge-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "a6f363632819c82109ded4e9e59ab865231c2f2b16ddb320d9bbb353e16a531c"
+    },
+    {
+      "bytes": 857426,
+      "name": "native-snapshot65-replica-group-discovery-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "fda673c4da227926e455be5925cef7831e4b309014d1eea09bb488a7a73c3bfd"
+    },
+    {
+      "bytes": 994322,
+      "name": "native-snapshot67-registry-fixture-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "d9bcb0b27466283989e791db71c7281374ae0fc057297307ec111030593c04b3"
+    },
+    {
+      "bytes": 823606,
+      "name": "native-snapshot68-replica-group-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "d741b1eab5ae9914df5615954c294cffccf33fabddcec8f718baa94e5b39f981"
+    },
+    {
+      "bytes": 1652302,
+      "name": "native-snapshot70-rejection-retirement-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "31200dae475cdb550bcaaab5a089aaed88992668b6f11db89040b45b8e37be73"
+    },
+    {
+      "bytes": 1330888,
+      "name": "native-snapshot71-combined-diagnostic-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "8e7d1c5805bf181c2fd0e22605d87afdeb748d98fc27f76a5ffb3b8c3fcaab54"
+    },
+    {
+      "bytes": 1201763,
+      "name": "native-snapshot72-integrated-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "e72eb3a25ce5fce77e0b1f8b5eabfa2624a472a73c0e340d0b59718bed7b5581"
+    },
+    {
+      "bytes": 1138719,
+      "name": "native-snapshot73-repeat2-compile-refusal-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "23d56ba4d7ce3ab6938b27031f53b2f64f3a13fe1c9af50388c8dcd46dcfbc83"
+    },
+    {
+      "bytes": 1378076,
+      "name": "native-snapshot74-repeat2-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "b51de2d7ba297a6a33b0bef237635dc92d1fd9afb3a62a614455621bcb5fd28c"
+    },
+    {
+      "bytes": 1091813,
+      "name": "native-snapshot75-resident-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "298b64a14104f1f923864b047092a11e432f73a08237229fe28b3612bec998d4"
+    },
+    {
+      "bytes": 1524575,
+      "name": "native-snapshot77-registry16-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "b5a105db404164a89e57545b7446c911bff784705a8aef62349fe75826862c15"
+    },
+    {
+      "bytes": 1163897,
+      "name": "native-snapshot78-frontend-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "e3cb9c1cd2abd9a45f26f29d6eb51d4a248892d42fe2168b5ae56e29c746de47"
+    },
+    {
+      "bytes": 982468,
+      "name": "native-snapshot79-bounded-roster-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "7da4104ca1ade5ed91ce955b83c1c8eacf9f5d4ea26e5ba907236b0a8ed428fc"
+    },
+    {
       "bytes": 1679952,
       "name": "native-snapshots08-10-cpu-logs.tar.gz",
       "publicly_retrievable": false,
@@ -134,11 +519,235 @@
       "sha256": "36094d1082fb4238acf00268164ab7048f5ad41bfa5868f3b702a4161886d7b0"
     },
     {
+      "bytes": 1655091,
+      "name": "native-snapshots33-34-cpu-diagnostics.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "52529d9468b0f9746fae2a2e5d197a7bea43beb829f526ce17070ec262da5adc"
+    },
+    {
+      "bytes": 5684984,
+      "name": "native-snapshots35-38-fresh-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "7213c717e711471cf18c6ccc78c7c09a86060207340f893dcff46cb94e900ed6"
+    },
+    {
+      "bytes": 1860849,
+      "name": "native-snapshots39-40-verifier-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "055dc01946ad4cb26f61b3e0281f8ed3b9c3f2fc0ec912954c4e44fc1d7ed4d6"
+    },
+    {
+      "bytes": 2003016,
+      "name": "native-snapshots41-42-candidate-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "f72ec4f60a77f428fef21f85496d3eb99c5964f965882dfde1b33ed41a5c7333"
+    },
+    {
+      "bytes": 2539085,
+      "name": "native-snapshots43-45-ledger-foundation-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "cc56872c927f3f72a06919df9412cd01a8750425562401ba2e92d90bda07ff7d"
+    },
+    {
+      "bytes": 2670645,
+      "name": "native-snapshots47-49-combined-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "4387cefbea73b8f4064106015522ba87b499387bae3fb2989cc44777007dcf65"
+    },
+    {
+      "bytes": 2658621,
+      "name": "native-snapshots50-52-ci-fixture-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "fc3c84d0badcb0d8828278c5f66b6d916cb63d1ef7392616b6d9c6caa1701514"
+    },
+    {
+      "bytes": 3023975,
+      "name": "native-snapshots53-55-registry-topology-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "e1f9db59a285d69f6a1ce50a171d2d4aaa75e199ffcc15de1577e49fb752f9cb"
+    },
+    {
+      "bytes": 1566497,
+      "name": "native-snapshots56-57-kfd-selector-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "d4a475e93454f7b6540449fcee9aedc98ceaa3f0292e3da6e334f48b817a741d"
+    },
+    {
+      "bytes": 2452340,
+      "name": "native-snapshots58-60-independent-discovery-cpu-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "a900cd1f1f7ccdb131757f6af903c30a5a5621bc5cf1cc801edab3b17acb5580"
+    },
+    {
+      "bytes": 10203924,
+      "name": "native49-live114-planner13-evidence.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "a0794e1e083570f5793f38a6e179a80c0e4e9ef7f0d996b3e40d8fec81394429"
+    },
+    {
+      "bytes": 3993,
+      "name": "native49-live114-planner13-semantic-audit.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "03b0542e499c616a97f8b0b805ab41864299665aa3e1e105e450f3608051d877"
+    },
+    {
+      "bytes": 82445,
+      "name": "oci-cold-release-controller05-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "bc9e39d2f7dade007e0349b254d1f7cb2ba89f96aa3a01568d840f2a1080bd75"
+    },
+    {
+      "bytes": 82168,
+      "name": "oci-cold-release-controller06-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "9d561f199fe8ec48893f4bb72aff4a9a054384d7e1e082b4bfc48bb9914b3f87"
+    },
+    {
+      "bytes": 668339,
+      "name": "oci-cold06-relocated-stage-plan-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "564aa465abd1e3a6ec8bb2fffa8f5f2b9df1cce820bdd3fc2710d8bce1eb90b2"
+    },
+    {
+      "bytes": 5019,
+      "name": "oci-host-readonly-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "ebdeb9e02ed71a2674c8f9c8ecb249fd2ddb47fcbb8b1c50b14aa9a92a6e0984"
+    },
+    {
+      "bytes": 205730396,
+      "name": "oci-public-cold-inputs-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "0096f87d4d39ce6fa0e6b7ada726dcf59272a31eddce2b8c8aa637ae0f5f8c34"
+    },
+    {
+      "bytes": 296406,
+      "name": "oci-public-cold-preparation-records-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "67a37d6089384ff121306a952d89b85ac75c248674df8f3c1ed5a9c08facfe64"
+    },
+    {
+      "bytes": 59416,
+      "name": "oci-runner-deployment-checkpoint03-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "fd56d0d68437af6b151499afbe2627c366db8459d52c5a4d3729f20cdb36adeb"
+    },
+    {
+      "bytes": 60882,
+      "name": "oci-runner-deployment-checkpoint04-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "b09028975aa968925c59fe044c4eda57dc7367f2da131a7a91bf29382ca4b475"
+    },
+    {
+      "bytes": 6675453,
+      "name": "oci-runner-inert-checkpoint01-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "b17cb3335913313e3e0cf03b24b50b9be199df6f207f216f4c85a7e32228ff47"
+    },
+    {
+      "bytes": 3146637,
+      "name": "official-runner-static-profile-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "e464f83a5993229fd4ea1a63848f119ac1a9cfca01aafc65cf6fadaf32c648cb"
+    },
+    {
+      "bytes": 53054588,
+      "name": "retired-cpu52-69-source-cas.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "e40567d61433bf09c877929e3d82d4a199c6dfb9ca88d7b64e03109bbd69946f"
+    },
+    {
+      "bytes": 43775391,
+      "name": "retired-cpu70-74-source-cas.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "06edd3a55b386d92760be05cb8221802c05a39181f9fc845e4cba5488712832b"
+    },
+    {
+      "bytes": 11172,
+      "name": "root-job-assignment-controls-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "8375e1b721c68742d3728aea371919b0c2a479f8097c7d5087063fd312d2e357"
+    },
+    {
+      "bytes": 4300083,
+      "name": "rustup-directory-override-preflight-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "93b3b6bb37092a412925c4cde5fa5da35790bae31183a47b856786c0eb8fafc2"
+    },
+    {
+      "bytes": 2239710,
+      "name": "source-bindings76-format-controls-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "0a79527aadd85fe11eea9c361b31bc344b81ec3290ae318ab3230e298141de18"
+    },
+    {
+      "bytes": 1807782,
+      "name": "source-bindings76-resident-controls-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "de06dce43f34df5723831b4d0db96251c0c82cca305c27e88a229668542406fb"
+    },
+    {
+      "bytes": 881146,
+      "name": "source-bindings78-controls-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "e590bb558c71c912399769e8a59ac89e88c3bd22dee1463646a7deb7874185c6"
+    },
+    {
+      "bytes": 1271,
+      "name": "staged-hygiene-review-20261007.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "9e22ccd576a14b90a388c7bb0ef09620e97eaba260dfad9842c1b3001c31fd41"
+    },
+    {
       "bytes": 271812,
       "name": "standalone-lock-audit.tar.gz",
       "publicly_retrievable": false,
       "retention": "private local agent-owned qualification storage",
       "sha256": "dc67a2e10fb2b3bcb395f0e9b28785f04d5b913a74f2a05ebe936cf7da4da633"
+    },
+    {
+      "bytes": 65507,
+      "name": "unsafe-integration72-reviewed-refresh.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "40e8b0019557ae2b966bfce9b93189aadc2ecd17328685fd2620c2448e7c7d23"
+    },
+    {
+      "bytes": 8355,
+      "name": "unsafe-runtime-kfd-successor70-review.tar.gz",
+      "publicly_retrievable": false,
+      "retention": "private local agent-owned qualification storage",
+      "sha256": "47a76bbdef5ff2c2006800388b9c40ed1ecfb2da9ed67d21f7f2f5ab67a0a7f8"
     }
   ],
   "authority": false,

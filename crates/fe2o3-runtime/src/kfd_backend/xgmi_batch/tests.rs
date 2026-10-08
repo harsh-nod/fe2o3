@@ -441,6 +441,7 @@ fn dependency_indexes_retain_and_wake_blocked_successors_exactly() {
         let completed = HashMap::from([(
             1,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream: 1,
                 status: BackendPollV1::Succeeded,
                 dependency_depth: 1,
