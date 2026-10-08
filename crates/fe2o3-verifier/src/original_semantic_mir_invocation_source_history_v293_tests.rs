@@ -16,6 +16,10 @@ fn declaration<'a>(text: &'a str, name: &str) -> &'a str {
 }
 
 fn check_history(text: &str, root: usize, instance: usize) {
+    let shape = declaration(
+        text,
+        &format!("invocation_source_micro_step_shape_{root}_{instance}_v351"),
+    );
     let step = declaration(
         text,
         &format!("invocation_source_micro_step_history_{root}_{instance}_v293"),
@@ -26,6 +30,19 @@ fn check_history(text: &str, root: usize, instance: usize) {
     );
     let (step_header, step_body) = step.split_once("\n{\n").unwrap();
     let (run_header, run_body) = run.split_once("\n{\n").unwrap();
+    let (shape_header, shape_body) = shape.split_once("\n{\n").unwrap();
+    assert_eq!(
+        shape_header,
+        format!(
+            r#"proof fn invocation_source_micro_step_shape_{root}_{instance}_v351(c: InvocationSourceMicroStateV36, e: bool)
+    ensures {{
+        let n = invocation_source_micro_step_{root}_{instance}_v36(c, e);
+        n == invocation_source_micro_refused_v36(c)
+        || exists|after: InvocationSourceByteStateV36, block: int, event: Option<InvocationSourceByteEventV36>|
+            #[trigger] invocation_source_micro_record_v36(c, after, {root}, {instance}, block, c.next_statement, event) == n
+    }},"#
+        )
+    );
     assert_eq!(
         step_header,
         format!(
@@ -68,7 +85,7 @@ fn check_history(text: &str, root: usize, instance: usize) {
     decreases f,"#
         )
     );
-    for proof in [step, run] {
+    for proof in [shape, step, run] {
         for forbidden in [
             "requires",
             "assume(",
@@ -81,7 +98,7 @@ fn check_history(text: &str, root: usize, instance: usize) {
             assert!(!proof.contains(forbidden), "{forbidden}");
         }
     }
-    assert!(step.contains(&format!(
+    assert!(shape.contains(&format!(
         "reveal(invocation_source_micro_step_{root}_{instance}_v36);"
     )));
     let mut hidden = vec![
@@ -113,14 +130,14 @@ fn check_history(text: &str, root: usize, instance: usize) {
             hidden.push(name.to_owned());
         }
     }
-    let actual_hidden: Vec<_> = step_body
+    let actual_hidden: Vec<_> = shape_body
         .lines()
         .filter_map(|line| line.trim().strip_prefix("hide(")?.strip_suffix(");"))
         .collect();
     assert_eq!(actual_hidden, hidden);
     for name in &hidden {
-        assert!(!step_body.contains(&format!("reveal({name}")));
-        assert!(!step_body.contains(&format!("reveal_with_fuel({name}")));
+        assert!(!shape_body.contains(&format!("reveal({name}")));
+        assert!(!shape_body.contains(&format!("reveal_with_fuel({name}")));
     }
     let mut expected_body = format!(
         r#"    reveal(invocation_source_micro_step_{root}_{instance}_v36);
@@ -143,9 +160,18 @@ fn check_history(text: &str, root: usize, instance: usize) {
             let record = lines[index + 2].trim();
             assert!(record.starts_with("invocation_source_micro_record_v36(cursor, after, "));
             let record = record.replace("(cursor,", "(c,");
+            let (arguments, event) = record
+                .split_once(&format!(
+                    ", invocation_source_byte_event_{root}_{instance}_v36("
+                ))
+                .unwrap();
+            let (prefix, _) = arguments.rsplit_once(", ").unwrap();
+            let event = format!(
+                "invocation_source_byte_event_{root}_{instance}_v36({}",
+                event.strip_suffix(')').unwrap()
+            );
             expected_body.push_str(&format!(
-                "            {};\n            assert(n == {record});\n        }} else",
-                record.replacen("micro_record_v36", "micro_record_history_v348", 1)
+                "            let event = {event};\n            assert(n == {prefix}, c.next_statement, event));\n        }} else"
             ));
             cases += 1;
         }
@@ -153,16 +179,41 @@ fn check_history(text: &str, root: usize, instance: usize) {
     expected_body.push_str(
         " {\n            assert(n == invocation_source_micro_refused_v36(c));\n        }\n    }\n}",
     );
-    assert_eq!(
-        step.matches("invocation_source_micro_record_history_v348(")
-            .count(),
-        cases
-    );
-    let without_hides: Vec<_> = step_body
+    assert_eq!(shape.matches("let after = ").count(), cases);
+    assert_eq!(shape.matches("let event = ").count(), cases);
+    assert!(!shape.contains("micro_record_history_v348("));
+    assert!(!shape.contains(".observations.take("));
+    let without_hides: Vec<_> = shape_body
         .lines()
         .filter(|line| !line.trim().is_empty() && !line.trim().starts_with("hide("))
         .collect();
     assert_eq!(without_hides, expected_body.lines().collect::<Vec<_>>());
+    assert_eq!(
+        step_body,
+        format!(
+            r#"    hide(invocation_source_micro_step_{root}_{instance}_v36);
+    hide(invocation_source_micro_record_v36);
+    hide(invocation_source_micro_refused_v36);
+    let n = invocation_source_micro_step_{root}_{instance}_v36(c, e);
+    invocation_source_micro_step_shape_{root}_{instance}_v351(c, e);
+    if n != invocation_source_micro_refused_v36(c) {{
+        let (after, block, event) = choose|after: InvocationSourceByteStateV36, block: int, event: Option<InvocationSourceByteEventV36>|
+            invocation_source_micro_record_v36(c, after, {root}, {instance}, block, c.next_statement, event) == n;
+        invocation_source_micro_record_history_v348(c, after, {root}, {instance}, block, c.next_statement, event);
+    }}
+}}"#
+        )
+    );
+    for forbidden in [
+        "reveal(",
+        "reveal_with_fuel(",
+        "invocation_source_scalar_",
+        "invocation_source_byte_event_",
+        "invocation_source_byte_step_",
+        "machine.pc",
+    ] {
+        assert!(!step_body.contains(forbidden), "{forbidden}");
+    }
     let record_summary = declaration(
         SOURCE_FUNCTION_V36,
         "invocation_source_micro_record_history_v348",
@@ -202,7 +253,7 @@ fn check_history(text: &str, root: usize, instance: usize) {
             "{reveal}(invocation_source_micro_step_{root}_{instance}_v36"
         )));
     }
-    assert!(!step.contains(opaque_step.as_str()));
+    assert_eq!(step_body.matches(opaque_step.as_str()).count(), 1);
     assert!(
         !declaration(
             text,
@@ -263,6 +314,7 @@ fn source_micro_history_emits_unconditional_contracts_for_every_actual_instance(
                         check_history(&out.text, root, instance);
                     }
                     for prefix in [
+                        "proof fn invocation_source_micro_step_shape_",
                         "proof fn invocation_source_micro_step_history_",
                         "proof fn invocation_source_micro_run_history_",
                         "spec fn invocation_source_micro_run_",
@@ -341,6 +393,10 @@ fn source_micro_history_survives_expanded_finish_without_another_interpreter() {
                                 proofs
                                     .push((name.clone(), declaration(&out.text, &name).to_owned()));
                             }
+                            let name = format!(
+                                "invocation_source_micro_step_shape_{root}_{instance}_v351"
+                            );
+                            proofs.push((name.clone(), declaration(&out.text, &name).to_owned()));
                         }
                     }
                 }
@@ -356,6 +412,10 @@ fn source_micro_history_survives_expanded_finish_without_another_interpreter() {
                         + out
                             .text
                             .matches("proof fn invocation_source_micro_run_history_")
+                            .count()
+                        + out
+                            .text
+                            .matches("proof fn invocation_source_micro_step_shape_")
                             .count(),
                     proofs.len()
                 );
@@ -391,6 +451,12 @@ fn source_micro_history_has_exact_and_one_short_emission_resource_bounds() {
                                 6
                             );
                         }
+                        assert_eq!(
+                            out.text
+                                .matches("proof fn invocation_source_micro_step_shape_")
+                                .count(),
+                            6
+                        );
                         Ok(())
                     })
                 },
@@ -412,5 +478,39 @@ fn source_micro_history_has_exact_and_one_short_emission_resource_bounds() {
             Err(Error::Resource(Resource::Storage(error)))
                 | Err(Error::Source(SourceError::Resource(Resource::Storage(error))))
             if error.actual() == measured.3 && error.limit() == measured.3 - 1));
+        let overflow = super::super::super::invocations::tests::run_variant(
+            usize::MAX,
+            LIMIT,
+            unit_return,
+            |plan, out| {
+                super::tests::with_slots(plan, out, |slots, out| {
+                    SourceByteProgram::derive(plan, slots, out)?.emit(out)?;
+                    out.budget.charge_work(usize::MAX - out.budget.work())?;
+                    let before = (
+                        out.text.len(),
+                        out.budget.work(),
+                        out.budget.storage(),
+                        out.budget.peak_storage(),
+                    );
+                    assert!(std::fmt::Write::write_str(out, " ").is_err());
+                    assert!(std::fmt::Write::write_str(out, " ").is_err());
+                    assert_eq!(
+                        (
+                            out.text.len(),
+                            out.budget.work(),
+                            out.budget.storage(),
+                            out.budget.peak_storage(),
+                        ),
+                        before
+                    );
+                    Err(out.error())
+                })
+            },
+        );
+        assert!(matches!(overflow.0,
+            Err(Error::Resource(Resource::Work(error)))
+                | Err(Error::Source(SourceError::Resource(Resource::Work(error))))
+            if error.actual() == usize::MAX && error.limit() == usize::MAX));
+        assert_eq!(overflow.1, usize::MAX);
     }
 }

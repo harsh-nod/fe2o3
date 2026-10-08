@@ -900,19 +900,12 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
         .map_err(|_| out.error())?;
         write!(
             out,
-            r#"proof fn invocation_source_micro_step_history_{r}_{i}_v293(c: InvocationSourceMicroStateV36, e: bool)
+            r#"proof fn invocation_source_micro_step_shape_{r}_{i}_v351(c: InvocationSourceMicroStateV36, e: bool)
     ensures {{
         let n = invocation_source_micro_step_{r}_{i}_v36(c, e);
-        let l = c.observations.len() as int;
         n == invocation_source_micro_refused_v36(c)
-        || (n.next_statement == c.next_statement + 1
-            && n.observations.len() == l + 1
-            && n.observations.take(l) == c.observations
-            && n.observations[l].root == {r}
-            && n.observations[l].instance == {i}
-            && n.observations[l].statement == c.next_statement
-            && n.observations[l].before == c.source
-            && n.observations[l].after == n.source)
+        || exists|after: InvocationSourceByteStateV36, block: int, event: Option<InvocationSourceByteEventV36>|
+            #[trigger] invocation_source_micro_record_v36(c, after, {r}, {i}, block, c.next_statement, event) == n
     }},
 {{
     hide(invocation_source_active_{r}_{i}_v36);
@@ -924,7 +917,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
 "#
         )
         .map_err(|_| out.error())?;
-        // History needs the dispatcher and record shape, not statement semantics.
+        // Shape replay needs the dispatcher, not statement or history semantics.
         for (block, row) in self.control.iter().enumerate() {
             out.budget.charge_work(1)?;
             if matches!(row.end, End::Unreachable) {
@@ -952,7 +945,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
 "#
         )
         .map_err(|_| out.error())?;
-        // Replay the same dispatch, importing only the generic record summary.
+        // Witnesses come from the actual dispatcher, including failed value producers.
         for (block, row) in self.control.iter().enumerate() {
             out.budget.charge_work(1)?;
             if matches!(row.end, End::Unreachable) {
@@ -962,7 +955,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                 out.budget.charge_work(1)?;
                 write!(out, "        if c.source.machine.pc == {} && c.next_statement == {statement} {{\n            let after = ", self.blocks.start + block).map_err(|_| out.error())?;
                 self.emit_statement_result(block, statement, "c", "e", out)?;
-                write!(out, ";\n            invocation_source_micro_record_history_v348(c, after, {r}, {i}, {block}, {statement}, invocation_source_byte_event_{r}_{i}_v36({block}, {statement}));\n            assert(n == invocation_source_micro_record_v36(c, after, {r}, {i}, {block}, {statement}, invocation_source_byte_event_{r}_{i}_v36({block}, {statement})));\n        }} else").map_err(|_| out.error())?;
+                write!(out, ";\n            let event = invocation_source_byte_event_{r}_{i}_v36({block}, {statement});\n            assert(n == invocation_source_micro_record_v36(c, after, {r}, {i}, {block}, c.next_statement, event));\n        }} else").map_err(|_| out.error())?;
             }
         }
         write!(
@@ -970,6 +963,32 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             r#" {{
             assert(n == invocation_source_micro_refused_v36(c));
         }}
+    }}
+}}
+proof fn invocation_source_micro_step_history_{r}_{i}_v293(c: InvocationSourceMicroStateV36, e: bool)
+    ensures {{
+        let n = invocation_source_micro_step_{r}_{i}_v36(c, e);
+        let l = c.observations.len() as int;
+        n == invocation_source_micro_refused_v36(c)
+        || (n.next_statement == c.next_statement + 1
+            && n.observations.len() == l + 1
+            && n.observations.take(l) == c.observations
+            && n.observations[l].root == {r}
+            && n.observations[l].instance == {i}
+            && n.observations[l].statement == c.next_statement
+            && n.observations[l].before == c.source
+            && n.observations[l].after == n.source)
+    }},
+{{
+    hide(invocation_source_micro_step_{r}_{i}_v36);
+    hide(invocation_source_micro_record_v36);
+    hide(invocation_source_micro_refused_v36);
+    let n = invocation_source_micro_step_{r}_{i}_v36(c, e);
+    invocation_source_micro_step_shape_{r}_{i}_v351(c, e);
+    if n != invocation_source_micro_refused_v36(c) {{
+        let (after, block, event) = choose|after: InvocationSourceByteStateV36, block: int, event: Option<InvocationSourceByteEventV36>|
+            invocation_source_micro_record_v36(c, after, {r}, {i}, block, c.next_statement, event) == n;
+        invocation_source_micro_record_history_v348(c, after, {r}, {i}, block, c.next_statement, event);
     }}
 }}
 proof fn invocation_source_micro_run_history_{r}_{i}_v293(c: InvocationSourceMicroStateV36, f: nat, e: bool)
