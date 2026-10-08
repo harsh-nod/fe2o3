@@ -12,6 +12,7 @@ use std::{
 type Scope<'a> = RuntimeGfx942GeneratedScopeV1<'a, 'a, KfdRuntimeBackendV1, Borrowed<'a>>;
 
 mod cooperative;
+mod retained_producer;
 mod scale;
 
 fn fixture<'a>(
@@ -19,6 +20,16 @@ fn fixture<'a>(
     decoded: &'a Cell<usize>,
     dropped: &'a Cell<usize>,
     ticks: &[usize],
+) -> (Scope<'a>, Vec<RuntimeGfx942ScopedTicketV1<'a>>) {
+    fixture_with_timeout(context, decoded, dropped, ticks, Duration::from_secs(10))
+}
+
+fn fixture_with_timeout<'a>(
+    context: &'a mut RuntimeContextV1<KfdRuntimeBackendV1>,
+    decoded: &'a Cell<usize>,
+    dropped: &'a Cell<usize>,
+    ticks: &[usize],
+    timeout: Duration,
 ) -> (Scope<'a>, Vec<RuntimeGfx942ScopedTicketV1<'a>>) {
     let device = context.devices()[0].id();
     let mut inputs = Vec::new();
@@ -41,7 +52,7 @@ fn fixture<'a>(
         copies,
         graph: None,
         capacity: ticks.len(),
-        deadline: Instant::now() + Duration::from_secs(10),
+        deadline: Instant::now() + timeout,
         identity: Rc::new(()),
         invariant: PhantomData,
         hooks: hooks(),

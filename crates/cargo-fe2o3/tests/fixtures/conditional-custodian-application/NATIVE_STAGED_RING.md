@@ -1,0 +1,11 @@
+# Native Staged Ring
+
+`native-conditional-fill-staged-ring --native-v5-staged-ring --producer-source <source> --devices <2..8 exact UIDs>` uses the genuine native bootstrap and original scalar fill factory on every device admitted by its Context. UIDs use exactly sixteen lowercase hexadecimal digits after `0x`.
+
+Each independent compute branch decodes its original output, then uses the charged result gate to encode a separately admitted complete HostVisible write. Its event releases a tracked whole-allocation replica copy on a distinct stream of the next admitted device. The graph binds that copy's source to the actual staging node's `ProducedBy` version. There is no global compute barrier, no shared-source fanout, and no synthetic allocation, receipt, or result authority.
+
+The selected backend route is bounded coherent host read/CPU staging followed by the destination child's original SDMA write path when native execution is available. This is not XGMI or direct native generated-DATA transfer. The existing lower copy custody, journal, currentness, and release gates remain authoritative. The separate retained SDMA/DATA bridge is not used.
+
+The terminal report covers every original source and its exact next destination. A failed producer prevents only its own staging/transfer descendants. Independently settled write/copy failure is distinct from cancellation and success. Unknown effects, deadline expiry, changed ownership/currentness, and invalid tickets cannot produce a partial success report. Typed outputs are checked and disposed; successful copy bytes and actual current replica references are checked after graph/epoch retirement. All allocations, streams, result credits, replica metadata, Context and native backend must close before output is printed.
+
+The caller schedules through the existing finite progress method once per caller timer wake. This makes unrelated branches progress-capable; it does not prove physical concurrency. The report always states `direct_native_data_transfer=false`, `xgmi_transfer=false`, and `measured_compute_transfer_overlap=false`. CPU fixtures and compilation are not native qualification. Actual protected source admission, all-device native execution, resource closure, and any timing/overlap measurement require separate qualification. The strict source111 scalar caller remains unchanged.

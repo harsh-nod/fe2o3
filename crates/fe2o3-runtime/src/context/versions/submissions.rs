@@ -5,6 +5,18 @@ use fe2o3_runtime_model::{
     ContextWriterReferenceV1, ContextWriterSuccessEvidenceV1,
 };
 
+mod writer_lookup;
+
+#[cfg(test)]
+pub(super) fn preflight_settlement_writer_for_test_v1(
+    submissions: &HashMap<RuntimeSubmissionIdV1, SubmissionRecordV1>,
+    versions: Option<&ContextVersionsV1>,
+    id: RuntimeSubmissionIdV1,
+    domain: SubmissionWriterDomainV1,
+) -> Result<Option<ContextWriterReferenceV1>, ContextVersionJournalErrorV1> {
+    writer_lookup::preflight_settlement_writer_v1(submissions, versions, id, domain)
+}
+
 // Context owns this root independently of a returned backend/public handle.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::context) enum SubmissionWriterDomainV1 {
@@ -861,39 +873,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         outcome: SubmissionWriterOutcomeV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
         let result = catch_unwind(AssertUnwindSafe(|| {
-            let record = self.submissions.get(&id);
-            let expected = record.and_then(|record| record.journal_writer);
-            let absent = if expected.is_some() {
-                Err(ContextVersionJournalErrorV1::InvalidReference)
-            } else {
-                Ok(())
+            let Some(writer) = writer_lookup::preflight_settlement_writer_v1(
+                &self.submissions,
+                self.versions.as_ref(),
+                id,
+                domain,
+            )?
+            else {
+                return Ok::<(), ContextVersionJournalErrorV1>(());
             };
-            let Some(versions) = self.versions.as_mut() else {
-                return absent;
-            };
-            if versions.submission_readers.contains_key(&id)
-                || versions.producer_readers.contains_key(&id)
-                || record.is_some_and(|record| record.journal_read.is_some())
-                || record.is_some_and(|record| record.journal_producer_read.is_some())
-            {
-                return Err(ContextVersionJournalErrorV1::InvalidState);
-            }
-            let Some(root) = versions.submission_writers.get(&id) else {
-                return absent;
-            };
-            let writer = root.writer;
-            if root.domain != domain {
-                return Err(ContextVersionJournalErrorV1::InvalidReference);
-            }
-            if record.is_some() && expected != Some(writer) {
-                return Err(ContextVersionJournalErrorV1::InvalidReference);
-            }
-            if writer.key.context_generation != id.context_generation
-                || writer.key.local != id.local
-                || writer.key.kind != ContextWriterKindV1::Submission
-            {
-                return Err(ContextVersionJournalErrorV1::InvalidReference);
-            }
+            let versions = self
+                .versions
+                .as_mut()
+                .ok_or(ContextVersionJournalErrorV1::InvalidReference)?;
             #[cfg(test)]
             versions.completion_boundary_for_test_v1(
                 id,

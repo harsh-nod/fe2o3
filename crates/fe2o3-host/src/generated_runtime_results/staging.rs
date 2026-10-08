@@ -6,6 +6,9 @@ use fe2o3_runtime::{
     RuntimeGeneratedCompletionReceiptV1,
 };
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod graph;
+
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum GeneratedRuntimeStagingErrorV1<E> {

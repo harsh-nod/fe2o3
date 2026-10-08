@@ -854,13 +854,13 @@ fn graph_reads_capture_version_at_issue_after_predecessor_settlement() {
         .unwrap();
     assert_eq!(
         f.context
-            .poll_with_graph_access_v1(&mut write, Some(reservation))
+            .poll_with_graph_access_v1(&mut write.original, Some(reservation))
             .unwrap(),
         RuntimePollV1::Pending
     );
     assert_eq!(
         f.context
-            .poll_with_graph_access_v1(&mut write, Some(reservation))
+            .poll_with_graph_access_v1(&mut write.original, Some(reservation))
             .unwrap(),
         RuntimePollV1::Succeeded
     );
@@ -874,7 +874,9 @@ fn graph_reads_capture_version_at_issue_after_predecessor_settlement() {
         .context
         .submit_graph_action_v1(reservation, read_action)
         .unwrap();
-    let marker = f.context.submissions[&read.id].journal_read.unwrap();
+    let marker = f.context.submissions[&read.original.id]
+        .journal_read
+        .unwrap();
     let lease = f
         .context
         .versions
@@ -887,17 +889,17 @@ fn graph_reads_capture_version_at_issue_after_predecessor_settlement() {
     assert_eq!(lease.content_lineage, after.content_lineage);
     assert_eq!(
         f.context
-            .poll_with_graph_access_v1(&mut read, Some(reservation))
+            .poll_with_graph_access_v1(&mut read.original, Some(reservation))
             .unwrap(),
         RuntimePollV1::Pending
     );
     assert_eq!(
         f.context
-            .poll_with_graph_access_v1(&mut read, Some(reservation))
+            .poll_with_graph_access_v1(&mut read.original, Some(reservation))
             .unwrap(),
         RuntimePollV1::Succeeded
     );
-    f.assert_observed(read.backend_submission, &args);
+    f.assert_observed(read.original.backend_submission, &args);
     f.context
         .release_graph_submission_v1(reservation, &read)
         .unwrap();

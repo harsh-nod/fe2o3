@@ -30,6 +30,7 @@ use crate::retained_functional_refinement_runtime_v1::{
 };
 use crate::{CanonicalGeneratedVerusProofInputV3, FunctionalRefinementVerusRuntimeLeaseV1};
 
+mod inherited;
 mod process;
 mod transport;
 use process::Peer;
@@ -837,26 +838,22 @@ fn decode_output(bytes: &[u8], limit: usize) -> Result<FunctionalRefinementRunti
 /// FDs224/225 must be exclusively owned original descriptors inherited from that wrapper after its
 /// authenticated protected-broker preparation, not caller-reconstructed descriptors or records.
 /// A matching public descriptor/hash does not establish this provenance premise.
+/// Both original slots are consumed on every return or unwind.
 pub unsafe fn admit_inherited_compiler_proof_runtime_v1(
     invocation: &RustcInvocationDescriptorV3,
     local_runtime: FunctionalRefinementVerusRuntimeLeaseV1,
     deadline: Instant,
 ) -> Result<FunctionalRefinementVerusRuntimeLeaseV1> {
-    let take = |fd| -> Result<OwnedFd> {
-        // SAFETY: caller supplies the exclusively owned original inherited descriptors.
-        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-        require(
-            rustix::io::fcntl_getfd(borrowed)? == rustix::io::FdFlags::empty(),
-            "compiler-proof input is not original inherited descriptor",
-        )?;
-        rustix::io::fcntl_setfd(borrowed, rustix::io::FdFlags::CLOEXEC)?;
-        // SAFETY: this consumes that exclusive inherited ownership after preventing further exec inheritance.
-        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    // SAFETY: the caller transfers both valid original slots exclusively. Own
+    // both before checking either, so a refused endpoint cannot leak its peer.
+    let sources = unsafe {
+        [
+            OwnedFd::from_raw_fd(COMPILER_PROOF_ENDPOINT_CHILD_FD_V1),
+            OwnedFd::from_raw_fd(COMPILER_PROOF_BROKER_CHILD_FD_V1),
+        ]
     };
-    let endpoint = Endpoint::admit(take(COMPILER_PROOF_ENDPOINT_CHILD_FD_V1)?)?;
-    let broker = Peer::admit(
-        take(COMPILER_PROOF_BROKER_CHILD_FD_V1)?,
-        endpoint.creator,
+    let (endpoint, broker) = inherited::admit_pair(
+        sources,
         invocation
             .compiler_closure()
             .cargo_fe2o3_binding_wrapper_sha256(),

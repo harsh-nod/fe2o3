@@ -32,9 +32,9 @@ PINS = {
     SOURCE: "29ee06cc894618f560cde6f1e33785c8edb4276c69526d2b544d3796633167ec",
     PREPARATION: "f255ab849bcf2e221dc85b0ae84e609c615c510db523cc5b3b69cd6279a26189",
     BODY: "974633a83f19817bcf47c50bcffcf47a07681d7e709f4ff14d1117309e4b6c8d",
-    Path("crates/fe2o3-runtime/src/context.rs"): "cf028b049d4decfa34cdfec1c8f54edd5861e8b06af1140b6ec9449eee2a30f1",
-    Path("crates/fe2o3-runtime/src/context/versions.rs"): "ce967106a3bfdbd36d5c18c7608fca42b74e45b43710ffaa2739a5de40a61bb7",
-    BODY.with_name("submissions.rs"): "97325d6fbf523de0b7638354b8c5a347cc35f58a82acafbc9cb61355e83a9857",
+    Path("crates/fe2o3-runtime/src/context.rs"): "d1534e852a29479617bab268b0c6d8208b755979eeab08a03e6fb3eb8be3e366",
+    Path("crates/fe2o3-runtime/src/context/versions.rs"): "cf9540406ce47355154d47ef573a4733b5ff4d264e1d02b794e97fb0b9815faf",
+    BODY.with_name("submissions.rs"): "f88c2f0d79714e99ad9c95328ee5d46df52546a268dde05e0f80124fc8d02804",
     BODY.with_name("readers.rs"): "21320e6bac1b0ab438e253d8180a746fa47589d537ae76ab1973b8e002af8afa",
     Path("crates/fe2o3-runtime-model/src/context_producer_reads/declarations.rs"): "e2d9c46736b06c7eddf97a911d4d98287b3d52074f106698b5fb53973dffb801",
     Path("crates/fe2o3-runtime-model/src/context_version_journal/declarations.rs"): "de362edd368eda151aa2a0a112cf113af91d42a2fb03259707db77c0581e5c16",
@@ -163,6 +163,7 @@ def source_gate(sources, proof):
     for owner, expected in {
         "RuntimeContextV1": {
             "scope_epoch": "scope_epoch::Anchor",
+            "replicas": "Option<RuntimeReplicaStorageV1>",
             "same_device_copies": "HashMap<RuntimeSubmissionIdV1,SameDeviceCopyRootV1>",
             "segmented_peer_copies": "HashMap<RuntimeSubmissionIdV1,SegmentedPeerCopyRootV1>",
             "native_pair_reservation": "Option<u64>",
@@ -195,7 +196,7 @@ def source_gate(sources, proof):
     # Each generic payload packs all and only these unread production fields.
     packings = (
         (context, "RuntimeContextV1", {"versions", "submissions"},
-         {"scope_epoch", "backend", "context_generation", "devices", "streams", "backend_streams", "allocations",
+         {"scope_epoch", "replicas", "backend", "context_generation", "devices", "streams", "backend_streams", "allocations",
           "backend_allocations", "allocation_admission", "modules", "backend_modules", "kernels", "events",
           "backend_events", "backend_submissions", "scalar_peer_copies", "producer_launches", "generated_issues",
           "same_device_copies", "segmented_peer_copies", "completion_callbacks", "completion_callback_count", "completion_callback_panic_count", "next_identity",

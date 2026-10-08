@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -18,6 +19,12 @@ COMMANDS = (
     ("check-producer-input-preflight.py", "producer-preflight", ()),
     ("check-retained-pair-routing.py", "retained-routing", ()),
     ("check-retained-credit-dispatch.py", "retained-credit", ("--campaign",)),
+    ("qualify-graph-version-ledger-v1.py", "graph-version-ledger", ()),
+    ("qualify-graph-reservation-retirement-v1.py", "graph-reservation-retirement", ()),
+)
+CONTEXT_COMMANDS = (
+    ("qualify-context-cached-poll-v1.py", "context-cached-poll", ()),
+    ("qualify-context-writer-lookup-v1.py", "context-writer-lookup", ()),
 )
 RECORDER = r'''#!/bin/bash
 set -Eeuo pipefail
@@ -29,6 +36,41 @@ count=$(wc -l < "$LOG")
 
 
 class ProductionProofPipelineTests(unittest.TestCase):
+    def test_writer_qualifier_orchestration_controls(self):
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", str(ROOT /
+             "crates/fe2o3-runtime-model/verus/test-qualify-context-writer-lookup-v1.py")],
+            cwd=ROOT, capture_output=True, text=True, check=False, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertRegex(result.stderr, r"\nRan 28 tests in [0-9.]+s\n\nOK\n\Z")
+        self.assertEqual(result.stderr.count(" ... ok\n"), 28)
+
+    def test_reviewed_host_routes_only_the_commit_without_relaxing_event_gates(self):
+        workflow = (ROOT / ".github/workflows/runtime-model-verus.yml").read_text()
+        job_marker = "  producer-live-composition:\n"
+        self.assertEqual(workflow.count(job_marker), 1)
+        header = workflow.partition(job_marker)[2].partition("    steps:\n")[0]
+        self.assertIn(
+            "    runs-on:\n"
+            "      - self-hosted\n"
+            "      - linux\n"
+            "      - x64\n"
+            "      - fe2o3-verus-reviewed-host-v1\n"
+            '      - "fe2o3-verus-commit-${{ github.sha }}"\n',
+            header,
+        )
+        self.assertEqual(header.count("    runs-on:"), 1)
+        self.assertEqual(header.count("    if:"), 1)
+        self.assertIn(
+            "    if: ${{ github.repository == 'harsh-nod/fe2o3' && "
+            "github.ref == 'refs/heads/main' && "
+            "github.event_name != 'pull_request' }}\n",
+            header,
+        )
+        self.assertIn("commit label is routing, not an authorization boundary", header)
+
     def test_workflow_and_local_policy_run_the_maintained_entrypoints(self):
         workflow = (ROOT / ".github/workflows/runtime-model-verus.yml").read_text()
         self.assertEqual(workflow.count(
@@ -46,6 +88,17 @@ class ProductionProofPipelineTests(unittest.TestCase):
             "    python3 -I -B scripts/tests/runtime-production-proof-pipeline.py\n",
             (ROOT / "scripts/ci-local.sh").read_text(),
         )
+
+    def test_workflow_retains_context_diagnostics_in_existing_upload(self):
+        workflow = (ROOT / ".github/workflows/runtime-model-verus.yml").read_text()
+        marker = "      - name: Retain complete campaign diagnostics\n"
+        self.assertEqual(workflow.count(marker), 1)
+        upload = workflow.partition(marker)[2].partition(
+            "      - name: Remove private campaign directory\n")[0]
+        for _, output, _ in CONTEXT_COMMANDS:
+            path = f"            ${{{{ env.A2_CAMPAIGN_ROOT }}}}/{output}\n"
+            self.assertEqual(workflow.count(path), 1)
+            self.assertEqual(upload.count(path), 1)
 
     def invoke(self, fail_at: int = 0, invalid: str = ""):
         with tempfile.TemporaryDirectory(prefix="fe2o3-production-proof-wiring-") as name:
@@ -99,7 +152,7 @@ class ProductionProofPipelineTests(unittest.TestCase):
             expected = [
                 (str(ROOT), "-I", "-B", f"crates/fe2o3-runtime-model/verus/{script}",
                  *options, "--verus", str(verifier), "--output", str(campaign / output))
-                for script, output, options in COMMANDS
+                for script, output, options in (*COMMANDS, *CONTEXT_COMMANDS)
             ]
             return result, rows, expected
 
@@ -109,7 +162,7 @@ class ProductionProofPipelineTests(unittest.TestCase):
         self.assertEqual(rows, expected)
 
     def test_each_campaign_failure_stops_before_the_next_campaign(self):
-        for position in range(1, len(COMMANDS) + 1):
+        for position in range(1, len(COMMANDS) + len(CONTEXT_COMMANDS) + 1):
             with self.subTest(position=position):
                 result, rows, expected = self.invoke(fail_at=position)
                 self.assertEqual(result.returncode, 37, result.stderr.decode())

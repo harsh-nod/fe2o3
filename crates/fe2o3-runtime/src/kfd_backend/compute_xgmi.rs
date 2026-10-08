@@ -780,6 +780,17 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         destination_region: BackendMemoryRegionV1,
         directed: bool,
     ) -> Result<Option<Box<Root>>, Failure> {
+        if !directed {
+            return self
+                .observe_unowned_compute_xgmi_v1(
+                    source,
+                    source_region,
+                    destination,
+                    destination_region,
+                )
+                .map(|(route, window)| Root::prepare(route, window))
+                .transpose();
+        }
         let Some(route) = self
             .compute_xgmi_routes
             .get(&(source.child, destination.child))
@@ -831,6 +842,52 @@ impl KfdMultiDeviceRuntimeBackendV1 {
             return Ok(None);
         };
         Root::prepare(route, window).map(Some)
+    }
+
+    /// Shared read-only eligibility for the non-directed path. Directed
+    /// ancestry keeps its original effectful corruption checks and precedence.
+    pub(super) fn observe_unowned_compute_xgmi_v1(
+        &self,
+        source: RoutedHandleV1,
+        source_region: BackendMemoryRegionV1,
+        destination: RoutedHandleV1,
+        destination_region: BackendMemoryRegionV1,
+    ) -> Option<(Route, Gfx942ComputeXgmiCopyWindowV1)> {
+        let route = *self
+            .compute_xgmi_routes
+            .get(&(source.child, destination.child))?;
+        for (endpoint, region) in [(source, source_region), (destination, destination_region)] {
+            let child = self.children.get(endpoint.child)?;
+            let record = child.allocations.get(&endpoint.local)?;
+            if !child.peer_visible_device_allocations
+                || !checked_region(record, region)
+                || !record.sdma_initialized
+                || !matches!(
+                    record.sdma_storage,
+                    KfdRuntimeSdmaStorageV1::Device(_)
+                        | KfdRuntimeSdmaStorageV1::H2dReady(_)
+                        | KfdRuntimeSdmaStorageV1::PersistentReplay(_)
+                        | KfdRuntimeSdmaStorageV1::InitializedStorage(_)
+                )
+            {
+                return None;
+            }
+        }
+        if source_region.byte_len != destination_region.byte_len {
+            return None;
+        }
+        let window = Gfx942ComputeXgmiCopyWindowV1::new(
+            self.children[source.child].allocations[&source.local]
+                .bytes
+                .len() as u64,
+            self.children[destination.child].allocations[&destination.local]
+                .bytes
+                .len() as u64,
+            source_region.byte_offset,
+            destination_region.byte_offset,
+            source_region.byte_len,
+        )?;
+        Some((route, window))
     }
 
     fn require_retained_directed_compute_xgmi_endpoint_v1(

@@ -5,6 +5,23 @@ use fe2o3_resource_accounting::ResourceCreditErrorV1;
 use sha2::{Digest, Sha256};
 use std::{error::Error, fmt};
 
+mod cohort3;
+pub(crate) use cohort3::RuntimeGfx942Cohort3SourceMutV1;
+pub use cohort3::RuntimeGfx942GeneratedCohort3V1;
+pub(crate) mod arena1024;
+mod registry4;
+pub use arena1024::{
+    RuntimeGfx942ArenaPreparationErrorV1, RuntimeGfx942GeneratedArena1024V1,
+    RuntimeGfx942GeneratedIndependentArena1024V1, RuntimeGfx942GeneratedIndependentArena2048V1,
+};
+pub(crate) use cohort3::combine_original_rosters;
+pub(crate) use cohort3::{GeneratedContractsV1, GeneratedProfileV1, GeneratedSourceIdentityV1};
+pub(crate) use registry4::RuntimeGfx942Registry4SourceMutV1;
+pub use registry4::{
+    RuntimeGfx942GeneratedRegistry4Repeat2V1, RuntimeGfx942GeneratedRegistry4V1,
+    RuntimeGfx942GeneratedRegistry16V1, RuntimeGfx942GeneratedResidentRegistryV1,
+};
+
 use crate::{
     GeneratedGfx942PersistentStorageV1, Gfx942RuntimeBufferAccessV1, KfdRuntimeBackendErrorV1,
     PreparedGfx942PersistentDispatchV1, RuntimeAsyncEngineCallErrorV1, RuntimeErrorV1,
@@ -235,10 +252,10 @@ impl<'a, E> RuntimeGfx942GeneratedSourceMutV1<'a, E> {
     }
 
     pub(crate) fn matches_roster(&self, expected: &GeneratedHostRosterV1) -> bool {
-        std::sync::Arc::ptr_eq(
-            self.storage.data().source_identity(),
-            &expected.source_identity,
-        ) && self.storage.control_available()
+        expected
+            .source_identity
+            .matches_single(self.storage.data().source_identity())
+            && self.storage.control_available()
             && GeneratedHostRosterV1::from_data(self.storage.data())
                 .is_ok_and(|actual| actual.matches(expected))
     }
@@ -307,17 +324,17 @@ pub(crate) struct GeneratedBufferSlotV1 {
 // Retained descriptive metadata for the next native adoption transition, not a permit.
 #[derive(Clone)]
 pub(crate) struct GeneratedHostRosterV1 {
-    pub source_identity: std::sync::Arc<()>,
+    pub source_identity: GeneratedSourceIdentityV1,
     pub buffers: [Option<GeneratedBufferSlotV1>; GFX942_MAX_FIXED_DISPATCH_DATA_V1],
     pub count: usize,
     pub readback_bytes: u64,
     pub fixup_count: usize,
-    pub dispatch_contract_sha256: [u8; 32],
+    pub dispatch_contract_sha256: GeneratedContractsV1,
 }
 
 impl GeneratedHostRosterV1 {
     pub(crate) fn matches(&self, other: &Self) -> bool {
-        std::sync::Arc::ptr_eq(&self.source_identity, &other.source_identity)
+        self.source_identity.matches(&other.source_identity)
             && self.buffers == other.buffers
             && self.count == other.count
             && self.readback_bytes == other.readback_bytes
@@ -343,13 +360,23 @@ impl GeneratedHostRosterV1 {
             return Err(Error::InvalidRoster);
         }
         let mut roster = Self {
-            source_identity: std::sync::Arc::clone(projection.source_identity()),
+            source_identity: std::sync::Arc::clone(projection.source_identity()).into(),
             buffers: [None; GFX942_MAX_FIXED_DISPATCH_DATA_V1],
             count: projection.buffers().len(),
             readback_bytes: 0,
             fixup_count: projection.pointer_fixups().len(),
-            dispatch_contract_sha256: projection.dispatch_contract_sha256(),
+            dispatch_contract_sha256: projection.dispatch_contract_sha256().into(),
         };
+        if matches!(
+            projection.invocation_binding(),
+            crate::Gfx942RuntimeInvocationBindingV1::NativeIndependentFill64V1 { .. }
+        ) {
+            roster.source_identity = GeneratedSourceIdentityV1::IndependentArenaMember(
+                std::sync::Arc::clone(projection.source_identity()),
+            );
+            roster.dispatch_contract_sha256 =
+                GeneratedContractsV1::IndependentArenaMember(projection.dispatch_contract_sha256());
+        }
         for (ordinal, buffer) in projection.buffers().iter().enumerate() {
             let bytes = u64::try_from(buffer.bytes().len()).map_err(|_| Error::InvalidRoster)?;
             let access = projection

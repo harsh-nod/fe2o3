@@ -144,3 +144,80 @@ fn readback_plan_requires_complete_cardinality_and_every_member_extent() {
     }
     backend.dispose_generated_shells_v1(&plan);
 }
+
+#[test]
+fn cohort3_readback_borrows_original_member_vectors_and_keeps_partial_failure_prefix() {
+    for fail in 0..4 {
+        let (roster, originals) = fixture();
+        let mut originals: [Vec<DestinationV1>; 3] = originals
+            .into_iter()
+            .map(|value| vec![value])
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let pointers = originals
+            .each_ref()
+            .map(|v| (v[0].1.as_ptr(), v[0].1.capacity()));
+        let [a, b, c] = originals.each_mut();
+        let mut calls = Vec::new();
+        let result = read_destinations_v1(
+            &roster,
+            &mut DestinationsV1::Cohort3([a, b, c]),
+            |index, bytes| {
+                calls.push(index);
+                bytes.fill(index as u8);
+                if index == fail { Err(index) } else { Ok(()) }
+            },
+        );
+        if fail < 3 {
+            assert_eq!(result, Err(ReadbackErrorV1::Copy(fail)));
+        } else {
+            assert_eq!(result, Ok(()));
+        }
+        assert_eq!(calls, (0..=fail.min(2)).collect::<Vec<_>>());
+        for (index, original) in originals.iter().enumerate() {
+            assert_eq!(
+                (original[0].1.as_ptr(), original[0].1.capacity()),
+                pointers[index]
+            );
+            assert!(
+                original[0]
+                    .1
+                    .iter()
+                    .all(|b| *b == if index <= fail { index as u8 } else { 0xa5 })
+            );
+        }
+    }
+}
+
+#[test]
+fn cohort3_readback_refuses_bad_last_member_before_writing_any_original() {
+    for fault in 0..4 {
+        let (mut roster, originals) = fixture();
+        let mut originals: [Vec<DestinationV1>; 3] = originals
+            .into_iter()
+            .map(|value| vec![value])
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        match fault {
+            0 => {
+                originals[2].clear();
+            }
+            1 => originals[2][0].1.reserve_exact(1),
+            2 => roster.readback_bytes += 1,
+            _ => roster.buffers[2].as_mut().unwrap().ordinal = 1,
+        }
+        let before = originals.clone();
+        let [a, b, c] = originals.each_mut();
+        assert_eq!(
+            read_destinations_v1(
+                &roster,
+                &mut DestinationsV1::Cohort3([a, b, c]),
+                |_, _| -> Result<(), ()> { panic!("complete roster before copy") }
+            ),
+            Err(ReadbackErrorV1::Roster)
+        );
+        assert_eq!(originals, before);
+    }
+}

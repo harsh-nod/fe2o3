@@ -17,6 +17,7 @@ fn unified_segments_pending_compute_writer_is_not_bypassed_by_an_exact_event() {
     backend.children[0].submissions.insert(
         gate_local,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream: gate_stream_route.local,
             status: BackendPollV1::Pending,
             dependency_depth: 1,

@@ -22,7 +22,7 @@ fn generated_native_inputs_borrow_original_program_and_complete_bytes_across_con
     .bind_kernel("vecadd")
     .unwrap()
     .reconcile_dispatch_abi(
-        expected.dispatch_contract_sha256,
+        *expected.dispatch_contract_sha256.singleton_for_test(),
         &[fe2o3_amdhsa_loader::KernelGlobalBufferAbiV1::new(
             0,
             "a_ptr",
@@ -99,11 +99,11 @@ fn generated_native_inputs_reject_every_reserved_roster_coordinate_before_callba
     for axis in 0..10 {
         let mut expected = source.validate(7).unwrap();
         match axis {
-            0 => expected.source_identity = std::sync::Arc::new(()),
+            0 => expected.source_identity = std::sync::Arc::new(()).into(),
             1 => expected.count -= 1,
             2 => expected.readback_bytes += 1,
             3 => expected.fixup_count += 1,
-            4 => expected.dispatch_contract_sha256[0] ^= 1,
+            4 => expected.dispatch_contract_sha256.singleton_mut_for_test()[0] ^= 1,
             5 => expected.buffers[0].as_mut().unwrap().ordinal = 1,
             6 => expected.buffers[1].as_mut().unwrap().bytes += 1,
             7 => {
@@ -287,8 +287,8 @@ fn generated_issue_source_rejects_substitution_before_entering_attempt() {
     for axis in 0..5 {
         let mut wrong = expected.clone();
         match axis {
-            0 => wrong.source_identity = std::sync::Arc::new(()),
-            1 => wrong.dispatch_contract_sha256[0] ^= 1,
+            0 => wrong.source_identity = std::sync::Arc::new(()).into(),
+            1 => wrong.dispatch_contract_sha256.singleton_mut_for_test()[0] ^= 1,
             2 => wrong.buffers[0].as_mut().unwrap().bytes += 1,
             3 => {
                 wrong.buffers[0].as_mut().unwrap().access =

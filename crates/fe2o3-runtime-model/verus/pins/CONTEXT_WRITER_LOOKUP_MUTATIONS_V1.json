@@ -1,0 +1,349 @@
+{
+  "accepted": false,
+  "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+  "cases": {
+    "domain_check_omitted": {
+      "accepted": false,
+      "after": "false",
+      "before": "root.domain != $domain",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2014,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "cf903ddf5272e10f84552c7bde69b4fad542cfdc15c5a6b6f36cae0db891048d",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "empty_absence_rejected": {
+      "accepted": false,
+      "after": "                Err(ContextVersionJournalErrorV1::InvalidReference)\n",
+      "before": "                Ok(None)\n",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2074,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "41a1b82cefef03a357bdffb12e43309e3075f8391ae20147dab99d31bd1be0de",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "expected_reference_ignored": {
+      "accepted": false,
+      "after": "false",
+      "before": "record.is_some() && expected != Some(writer)",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 1992,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "300f87d356d770c5204d5cbb25de17294fc6388318a8d814a8a8f4bac3424a69",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "expected_writer_erased": {
+      "accepted": false,
+      "after": "Some(_record) => None,",
+      "before": "Some(record) => record.journal_writer,",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2015,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "060d179ef08818287a2974a9707907600dd703c36e4dddcb0c9ea2ac51bec573",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "generated_hold_ignored": {
+      "accepted": false,
+      "after": "match (root.domain, $domain) {\n                (SubmissionWriterDomainV1::Generated { stream: left_stream, hold: _, shell_key: left_shell_key },\n                 SubmissionWriterDomainV1::Generated { stream: right_stream, hold: _, shell_key: right_shell_key }) => left_stream != right_stream || left_shell_key != right_shell_key,\n                _ => root.domain != $domain,\n            }",
+      "before": "root.domain != $domain",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2397,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "5caa5a29054a5ea13b1c4e9f68dc6020210e2d2b94473e5bd541ef36da2f1478",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "generated_shell_ignored": {
+      "accepted": false,
+      "after": "match (root.domain, $domain) {\n                (SubmissionWriterDomainV1::Generated { stream: left_stream, hold: left_hold, shell_key: _ },\n                 SubmissionWriterDomainV1::Generated { stream: right_stream, hold: right_hold, shell_key: _ }) => left_stream != right_stream || left_hold != right_hold,\n                _ => root.domain != $domain,\n            }",
+      "before": "root.domain != $domain",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2377,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "6a90378fa4636623b263e933f375780843eed6e125ca744ff34e0e2c4680fc9c",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "generated_stream_ignored": {
+      "accepted": false,
+      "after": "match (root.domain, $domain) {\n                (SubmissionWriterDomainV1::Generated { stream: _, hold: left_hold, shell_key: left_shell_key },\n                 SubmissionWriterDomainV1::Generated { stream: _, hold: right_hold, shell_key: right_shell_key }) => left_hold != right_hold || left_shell_key != right_shell_key,\n                _ => root.domain != $domain,\n            }",
+      "before": "root.domain != $domain",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2389,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "1937a178053f37d71e883ee1d097734ce9ee4e4f9cd5c1082a3ffe9499b14fa5",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "key_generation_ignored": {
+      "accepted": false,
+      "after": "false",
+      "before": "writer.key.context_generation != $id.context_generation",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 1981,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "34c7bec1be2f0f2139f671d39f1b60de4b89c27758aa25d316adf2d6ac4988d8",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "key_kind_ignored": {
+      "accepted": false,
+      "after": "false",
+      "before": "writer.key.kind != ContextWriterKindV1::Submission",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 1986,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "31100dc6a032c45f03923da91a564d63574d5c48822537ce0a178c9a129bd3f8",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "key_local_ignored": {
+      "accepted": false,
+      "after": "false",
+      "before": "writer.key.local != $id.local",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2007,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "f685df428f8710ec47fa2f0ae1ceceef288334c0152ec2aa11d69ea9d8b29a06",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "missing_writer_accepts_reference": {
+      "accepted": false,
+      "after": "            let Some(root) = versions.submission_writers.get(&$id) else {\n                return Ok(None);\n            };\n",
+      "before": "            let Some(root) = versions.submission_writers.get(&$id) else {\n                return absent;\n            };\n",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2033,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "9022aa1c795f5b8c087e3da94c15ff94b5a8f525d67e114748410a2a0d42a176",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "no_versions_accepts_reference": {
+      "accepted": false,
+      "after": "            let Some(versions) = $versions else {\n                return Ok(None);\n            };\n",
+      "before": "            let Some(versions) = $versions else {\n                return absent;\n            };\n",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2033,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "2a9880a67fbe7fe576ab8fce380bf76cddf5b6535d83adc4eef160d266c3c885",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "producer_reader_ignored": {
+      "accepted": false,
+      "after": "false",
+      "before": "versions.producer_readers.contains_key(&$id)",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 1992,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "fcf720e98cf232d12125c1a20393677b5d6d584ae8e8dc768241690c6bb96638",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "reader_check_after_missing_writer": {
+      "accepted": false,
+      "after": "            let Some(root) = versions.submission_writers.get(&$id) else {\n                return absent;\n            };\n            if versions.submission_readers.contains_key(&$id)\n                || versions.producer_readers.contains_key(&$id)\n                || match record {\n                    Some(record) => record.journal_read.is_some(),\n                    None => false,\n                }\n                || match record {\n                    Some(record) => record.journal_producer_read.is_some(),\n                    None => false,\n                }\n            {\n                return Err(ContextVersionJournalErrorV1::InvalidState);\n            }\n",
+      "before": "            if versions.submission_readers.contains_key(&$id)\n                || versions.producer_readers.contains_key(&$id)\n                || match record {\n                    Some(record) => record.journal_read.is_some(),\n                    None => false,\n                }\n                || match record {\n                    Some(record) => record.journal_producer_read.is_some(),\n                    None => false,\n                }\n            {\n                return Err(ContextVersionJournalErrorV1::InvalidState);\n            }\n            let Some(root) = versions.submission_writers.get(&$id) else {\n                return absent;\n            };\n",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2031,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "7842c6cd222372e51977ecf4eb3052055b22f3c3496c0860d3d6121558ac52d0",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "reader_error_is_reference": {
+      "accepted": false,
+      "after": "return Err(ContextVersionJournalErrorV1::InvalidReference);",
+      "before": "return Err(ContextVersionJournalErrorV1::InvalidState);",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2035,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "c18eb4985203f112de69532f1c26e35f5b272c098dd8fd530b2f3d63b560f8ac",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "record_producer_reader_ignored": {
+      "accepted": false,
+      "after": "Some(_record) => false,",
+      "before": "Some(record) => record.journal_producer_read.is_some(),",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 1999,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "8a2c0016e68e003c259c457bff8df6e28f4f3a2cfb6698b239badd7ace6e5ef7",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "record_reader_ignored": {
+      "accepted": false,
+      "after": "Some(_record) => false,",
+      "before": "Some(record) => record.journal_read.is_some(),",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2008,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "877a82549e4d2a160632da85a9f89bd8587f266d4ac436856e7792e5f25eec56",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "return_none_for_writer": {
+      "accepted": false,
+      "after": "Ok(None)",
+      "before": "Ok(Some(writer))",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2023,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "03b54751bbabcb15dde77c7cff6a64b9d839df5ed17a868d9f801837be897be2",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "return_slot_zero": {
+      "accepted": false,
+      "after": "Ok(Some(ContextWriterReferenceV1 { slot: 0, key: writer.key }))",
+      "before": "Ok(Some(writer))",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 2078,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "dc1489bce63f8552968444383a83837308beb8c0be8a7efa3b7050d01571a6a2",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    },
+    "submission_reader_ignored": {
+      "accepted": false,
+      "after": "false",
+      "before": "versions.submission_readers.contains_key(&$id)",
+      "body_before_sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77",
+      "bytes": 1990,
+      "compiler_validated": false,
+      "intended_declarations": [
+        "preflight_settlement_writer_v1"
+      ],
+      "macro": "completion_writer_lookup_body_v1",
+      "mode": 420,
+      "sha256": "dc23030b06d88c7e0ee5c6097f594adf52aceed94e26c612981cae7bc07bb68c",
+      "solver_ran": false,
+      "state": "NOT_RUN",
+      "unchanged_proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+    }
+  },
+  "proof_sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd",
+  "schema": "fe2o3.writer-lookup.mutation-construction.v1",
+  "state": "NOT_RUN"
+}

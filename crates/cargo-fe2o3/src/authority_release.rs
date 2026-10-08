@@ -8,9 +8,10 @@
 //! This module authenticates only launcher and handoff mechanics. It does not authenticate
 //! compiler origin, proof validity, generated artifacts, memory safety, or GPU execution.
 //!
-//! Frozen transport V3 carries a V1 client profile. The private, unselected V4
-//! launch carries only the fixed-origin V3 profile through the same validation
-//! and handshake engines. Its explicit child entry rejects every older family.
+//! The default transport V3 carries a V1 client profile. Explicit `release
+//! --native` selects the paired V4 launch and only the fixed-origin V3 profile
+//! through the same validation and handshake engines. Its child entry rejects
+//! every older family; selection does not grant compiler or runtime authority.
 
 use std::env;
 use std::ffi::{OsStr, OsString};
@@ -602,17 +603,18 @@ impl Drop for ProtectedReleaseAdmission {
 
 pub(crate) fn command(args: &[OsString]) -> ExitCode {
     if args.first().and_then(|value| value.to_str()) != Some(RELEASE_ARG) {
-        eprintln!("cargo fe2o3 authority requires: authority release <build|run|probe> [args]");
+        eprintln!(
+            "cargo fe2o3 authority requires: authority release [--native] <build|run|probe> [args]"
+        );
         return ExitCode::FAILURE;
     }
-    let child_args = &args[1..];
-    if !matches!(
-        child_args.first().and_then(|value| value.to_str()),
-        Some("build" | "run" | PROBE_ARG)
-    ) {
-        eprintln!("cargo fe2o3 authority release requires build, run, or probe");
-        return ExitCode::FAILURE;
-    }
+    let (family, child_args) = match select_release_family(&args[1..]) {
+        Ok(selection) => selection,
+        Err(error) => {
+            eprintln!("cargo fe2o3 authority release: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
     let admission_checks = crate::reject_dynamic_loader_environment()
         .and_then(|()| crate::reject_preexisting_compiler_environment())
         .and_then(|()| crate::reject_authority_environment_overrides(&child_args[1..]));
@@ -630,13 +632,39 @@ pub(crate) fn command(args: &[OsString]) -> ExitCode {
         eprintln!("cargo fe2o3 authority release: {error}");
         return ExitCode::FAILURE;
     }
-    match launch(child_args) {
+    let result = match family {
+        ReleaseFamily::LegacyV3 => launch(child_args),
+        ReleaseFamily::NativeV4 => launch_v4(child_args),
+    };
+    match result {
         Ok(status) => ExitCode::from(exit_code(status)),
         Err(error) => {
             eprintln!("cargo fe2o3 authority release: {error}");
             ExitCode::FAILURE
         }
     }
+}
+
+fn select_release_family(args: &[OsString]) -> Result<(ReleaseFamily, &[OsString]), &'static str> {
+    let (family, child_args) = if args.first().is_some_and(|argument| argument == "--native") {
+        (ReleaseFamily::NativeV4, &args[1..])
+    } else {
+        (ReleaseFamily::LegacyV3, args)
+    };
+    if !matches!(
+        child_args.first().and_then(|value| value.to_str()),
+        Some("build" | "run" | PROBE_ARG)
+    ) {
+        return Err("requires [--native] followed by build, run, or probe");
+    }
+    if child_args
+        .iter()
+        .take_while(|argument| argument.as_os_str() != "--")
+        .any(|argument| argument == "--native")
+    {
+        return Err("--native is a single release selector before build, run, or probe");
+    }
+    Ok((family, child_args))
 }
 
 pub(crate) fn run_child(args: &[OsString]) -> ExitCode {
@@ -675,9 +703,8 @@ fn launch(args: &[OsString]) -> Result<ExitStatus, String> {
     launch_for(args, ReleaseFamily::LegacyV3)
 }
 
-// Private paired migration entry. No CLI/environment selector or default switch
-// exists until the consuming original-root receiver/wrapper path is integrated.
-#[allow(dead_code)]
+// Explicit selection changes the whole paired contract/profile family; it does
+// not reinterpret the legacy child entry or decode a legacy grant as native.
 fn launch_v4(args: &[OsString]) -> Result<ExitStatus, String> {
     launch_for(args, ReleaseFamily::NativeV4)
 }
