@@ -237,6 +237,8 @@ struct ProductionSemanticIdentityInventoryV1<'tcx> {
     roots: Box<[SemanticFunctionIdV1]>,
     sha256: [u8; 32],
     canonical_transcript: Box<[u8]>,
+    original_root_associations:
+        Option<super::reference_custody_v1::RetainedOriginalRootAssociationsV1>,
 }
 
 /// Move-only rustc-produced identity-inventory evidence retained by the
@@ -244,9 +246,17 @@ struct ProductionSemanticIdentityInventoryV1<'tcx> {
 pub(crate) struct AuthenticatedRustcIdentityInventoryV3 {
     sha256: [u8; 32],
     canonical_transcript: Box<[u8]>,
+    original_root_associations:
+        Option<super::reference_custody_v1::RetainedOriginalRootAssociationsV1>,
 }
 
 impl AuthenticatedRustcIdentityInventoryV3 {
+    pub(crate) fn original_root_associations(
+        &self,
+    ) -> Option<&super::reference_custody_v1::RetainedOriginalRootAssociationsV1> {
+        self.original_root_associations.as_ref()
+    }
+
     pub(crate) const fn sha256(&self) -> [u8; 32] {
         self.sha256
     }
@@ -617,11 +627,18 @@ fn construct_production_semantic_mir_with_policy_and_enrollment_v1<'tcx>(
     let context_entries = context_entries
         .validate_for_import_v1(tcx, &collection)
         .map_err(ProductionSemanticImportErrorV1::ContextCustody)?;
-    let reference_effect_bindings = closure_flow
-        .rederive_reference_bindings_with_enrollment_v1(tcx, &collection, loan)
+    let (reference_effect_bindings, original_root_capture) = closure_flow
+        .rederive_reference_bindings_and_inventory_v1(tcx, &collection, loan)
         .map_err(ProductionSemanticImportErrorV1::ReferenceCustody)?;
-    let (identity_inventory, closure_work) =
-        build_identity_inventory_v1(tcx, &target, &collection, &roots, closure_flow)?;
+    let (identity_inventory, closure_work) = build_identity_inventory_v1(
+        tcx,
+        &target,
+        &collection,
+        &roots,
+        closure_flow,
+        original_root_capture,
+        loan,
+    )?;
     require_lineage_transcript_bound_v3(
         "rustc identity inventory",
         &identity_inventory.canonical_transcript,
@@ -632,6 +649,7 @@ fn construct_production_semantic_mir_with_policy_and_enrollment_v1<'tcx>(
         roots,
         sha256: rustc_identity_inventory_sha256,
         canonical_transcript: rustc_identity_inventory_transcript,
+        original_root_associations,
     } = identity_inventory;
     let mut plan = match build_production_semantic_preflight_plan_with_work_v1(
         tcx,
@@ -776,6 +794,7 @@ fn construct_production_semantic_mir_with_policy_and_enrollment_v1<'tcx>(
             rustc_identity_inventory: AuthenticatedRustcIdentityInventoryV3 {
                 sha256: rustc_identity_inventory_sha256,
                 canonical_transcript: rustc_identity_inventory_transcript,
+                original_root_associations,
             },
             rustc_preflight_plan: AuthenticatedRustcPreflightPlanV3 {
                 sha256: rustc_preflight_plan_sha256,
@@ -5088,6 +5107,10 @@ fn build_identity_inventory_v1<'tcx>(
     collection: &CollectionResult<'tcx>,
     roots: &[AuthenticatedProductionRootV1<'tcx>],
     closure_flow: super::closure_flow_v1::AuthenticatedClosureFlowV1<'tcx>,
+    original_root_capture: Option<
+        super::reference_custody_v1::PendingOriginalRootAssociationsV1<'tcx>,
+    >,
+    loan: Option<&crate::protected_compiler_execution::native_v3::ReferenceEnrollmentLoanV1<'_>>,
 ) -> Result<
     (
         ProductionSemanticIdentityInventoryV1<'tcx>,
@@ -5101,7 +5124,7 @@ fn build_identity_inventory_v1<'tcx>(
         HARD_MAX_FUNCTIONS_V1,
     )?;
     require_count_within_limit_v1(SemanticMirResourceV1::Roots, roots.len(), HARD_MAX_ROOTS_V1)?;
-    let closure_work = closure_flow
+    let mut closure_work = closure_flow
         .revalidate_for_import_v1(tcx, collection)
         .map_err(ProductionSemanticImportErrorV1::ClosureAdmission)?;
 
@@ -5157,18 +5180,46 @@ fn build_identity_inventory_v1<'tcx>(
         return Err(ProductionSemanticImportErrorV1::RootIdentityMismatch);
     }
 
-    let (sha256, canonical_transcript) =
-        identity_inventory_identity_and_transcript_v1(target, &functions, &canonical_roots);
+    let original_root_associations = original_root_capture
+        .map(|capture| {
+            let loan = loan.ok_or_else(|| {
+                ProductionSemanticImportErrorV1::ReferenceCustody(
+                    crate::reference_effect_v1::ReferenceBindingErrorV1::new(
+                        "root mapping original loan missing",
+                    ),
+                )
+            })?;
+            capture
+                .seal(tcx, loan, &mut closure_work, &functions, &canonical_roots)
+                .map_err(ProductionSemanticImportErrorV1::ReferenceCustody)
+        })
+        .transpose()?;
+    let (sha256, canonical_transcript) = match &original_root_associations {
+        Some(associations) => enrolled_identity_inventory_transcript_v1(
+            target,
+            &functions,
+            &canonical_roots,
+            associations,
+            loan.ok_or(ProductionSemanticImportErrorV1::RootCustodyMismatch)?,
+            &mut closure_work,
+        )?,
+        None => identity_inventory_identity_and_transcript_v1(target, &functions, &canonical_roots),
+    };
     Ok((
         ProductionSemanticIdentityInventoryV1 {
             functions: functions.into_boxed_slice(),
             roots: canonical_roots.into_boxed_slice(),
             sha256,
             canonical_transcript,
+            original_root_associations,
         },
         closure_work,
     ))
 }
+
+#[cfg(test)]
+#[path = "original_root_inventory_flow_v362_tests.rs"]
+pub(super) mod original_root_inventory_flow_v362_tests;
 
 fn identity_inventory_identity_and_transcript_v1(
     target: SemanticTargetDataLayoutV1,
@@ -5177,54 +5228,197 @@ fn identity_inventory_identity_and_transcript_v1(
 ) -> ([u8; 32], Box<[u8]>) {
     let mut digest =
         SemanticIdentityDigestV1::new_with_canonical_transcript(IDENTITY_INVENTORY_DOMAIN_V2);
-    digest.field(target.identity().as_bytes());
+    let result: Result<(), std::convert::Infallible> =
+        visit_identity_inventory_fields_v1(target, functions, roots, |field| {
+            digest.field(field);
+            Ok(())
+        });
+    match result {
+        Ok(()) => digest.finish_with_canonical_transcript(),
+        Err(never) => match never {},
+    }
+}
+
+fn visit_identity_inventory_fields_v1<E>(
+    target: SemanticTargetDataLayoutV1,
+    functions: &[RetainedSemanticFunctionProducerV1<'_>],
+    roots: &[SemanticFunctionIdV1],
+    mut field: impl FnMut(&[u8]) -> Result<(), E>,
+) -> Result<(), E> {
+    field(target.identity().as_bytes())?;
     for function in functions {
-        digest.field(function.identities.function().as_bytes());
-        digest.field(function.identities.item_definition().as_bytes());
-        digest.field(function.identities.monomorphization().as_bytes());
-        digest.field(function.identities.generic_type_arguments().as_bytes());
-        digest.field(function.identities.const_generic_arguments().as_bytes());
-        digest.field(&[function_role_tag_v1(function.role)]);
+        field(function.identities.function().as_bytes())?;
+        field(function.identities.item_definition().as_bytes())?;
+        field(function.identities.monomorphization().as_bytes())?;
+        field(function.identities.generic_type_arguments().as_bytes())?;
+        field(function.identities.const_generic_arguments().as_bytes())?;
+        field(&[function_role_tag_v1(function.role)])?;
         match &function.export_name {
             Some(symbol) => {
-                digest.field(&[1]);
-                digest.field(symbol.as_bytes());
+                field(&[1])?;
+                field(symbol.as_bytes())?;
             }
-            None => digest.field(&[0]),
+            None => field(&[0])?,
         }
         match function.kernel_binding {
             Some(binding) => {
-                digest.field(&[1]);
-                digest.field(&binding.as_bytes());
+                field(&[1])?;
+                field(&binding.as_bytes())?;
             }
-            None => digest.field(&[0]),
+            None => field(&[0])?,
         }
-        identity_inventory_generated_host_contract_v1(
-            &mut digest,
-            function.generated_host_contract_identity,
-        );
+        match function.generated_host_contract_identity {
+            Some(identity) => {
+                field(&[1])?;
+                field(&identity.as_bytes())?;
+            }
+            None => field(&[0])?,
+        }
         match &function.frontend_contract {
             Some(contract) => {
-                digest.field(&[1]);
-                digest.field(contract.canonical_bytes());
+                field(&[1])?;
+                field(contract.canonical_bytes())?;
                 if let Some(bytes) = contract.resource_canonical_bytes() {
-                    digest.field(&[1]);
-                    digest.field(bytes);
+                    field(&[1])?;
+                    field(bytes)?;
                 }
                 let reachable = contract.reachable_assembly();
-                digest.field(&reachable.blocks().to_le_bytes());
-                digest.field(&reachable.operand_bits().to_le_bytes());
-                digest.field(&reachable.option_bits().to_le_bytes());
+                field(&reachable.blocks().to_le_bytes())?;
+                field(&reachable.operand_bits().to_le_bytes())?;
+                field(&reachable.option_bits().to_le_bytes())?;
             }
-            None => digest.field(&[0]),
+            None => field(&[0])?,
         }
     }
     for root in roots {
-        digest.field(&root.index().to_le_bytes());
+        field(&root.index().to_le_bytes())?;
     }
-    digest.finish_with_canonical_transcript()
+    Ok(())
 }
 
+fn enrolled_identity_inventory_transcript_v1(
+    target: SemanticTargetDataLayoutV1,
+    functions: &[RetainedSemanticFunctionProducerV1<'_>],
+    roots: &[SemanticFunctionIdV1],
+    associations: &super::reference_custody_v1::RetainedOriginalRootAssociationsV1,
+    loan: &crate::protected_compiler_execution::native_v3::ReferenceEnrollmentLoanV1<'_>,
+    work: &mut SourceClosureWorkV1,
+) -> Result<([u8; 32], Box<[u8]>), ProductionSemanticImportErrorV1> {
+    use crate::reference_effect_v1::ReferenceBindingErrorV1 as Error;
+    use fe2o3_compiler_lineage::{
+        RUSTC_ENROLLMENT_INVENTORY_WORKING_STORAGE_V1, RustcEnrollmentInventoryInputV1,
+        RustcEnrollmentInventoryLayoutV1, encode_rustc_enrollment_inventory_v1,
+    };
+    use sha2::{Digest, Sha256};
+    let rejected = ProductionSemanticImportErrorV1::ReferenceCustody;
+    let mut legacy_len = 8 + IDENTITY_INVENTORY_DOMAIN_V2.len();
+    visit_identity_inventory_fields_v1(target, functions, roots, |field| {
+        work.charge(
+            field
+                .len()
+                .checked_add(8)
+                .ok_or_else(|| Error::new("inventory quote overflow"))?,
+        )
+        .map_err(|failure| Error::new(failure.to_string()))?;
+        legacy_len = legacy_len
+            .checked_add(8)
+            .and_then(|n| n.checked_add(field.len()))
+            .ok_or_else(|| Error::new("inventory extent overflow"))?;
+        if legacy_len > fe2o3_compiler_lineage::MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3 {
+            return Err(Error::new(
+                "legacy inventory exceeds complete wrapper ceiling",
+            ));
+        }
+        Ok(())
+    })
+    .map_err(rejected)?;
+    let layout =
+        RustcEnrollmentInventoryLayoutV1::new::<Error>(legacy_len, associations.roots().len())
+            .map_err(|failure| rejected(Error::new(format!("{failure:?}"))))?;
+    let output_quote = layout
+        .owned_storage_bytes::<Error>()
+        .map_err(|failure| rejected(Error::new(format!("{failure:?}"))))?;
+    let total_quote = legacy_len
+        .checked_add(std::mem::size_of::<Vec<u8>>())
+        .and_then(|n| n.checked_add(output_quote))
+        .and_then(|n| n.checked_add(RUSTC_ENROLLMENT_INVENTORY_WORKING_STORAGE_V1))
+        .ok_or_else(|| rejected(Error::new("inventory overlapping storage overflow")))?;
+    loan.reserve_inventory_storage(total_quote)
+        .map_err(rejected)?;
+    let mut legacy = Vec::new();
+    legacy
+        .try_reserve_exact(legacy_len)
+        .map_err(|_| rejected(Error::new("legacy inventory allocation failed")))?;
+    loan.reserve_inventory_storage(
+        legacy
+            .capacity()
+            .checked_sub(legacy_len)
+            .ok_or_else(|| rejected(Error::new("legacy inventory capacity accounting")))?,
+    )
+    .map_err(rejected)?;
+    let mut append = |field: &[u8]| -> Result<(), Error> {
+        let next = legacy
+            .len()
+            .checked_add(8)
+            .and_then(|n| n.checked_add(field.len()))
+            .ok_or_else(|| Error::new("legacy inventory append overflow"))?;
+        if next > legacy_len {
+            return Err(Error::new("legacy inventory quote changed"));
+        }
+        work.charge(8 + field.len())
+            .map_err(|failure| Error::new(failure.to_string()))?;
+        legacy.extend_from_slice(&(field.len() as u64).to_le_bytes());
+        legacy.extend_from_slice(field);
+        Ok(())
+    };
+    append(IDENTITY_INVENTORY_DOMAIN_V2).map_err(rejected)?;
+    visit_identity_inventory_fields_v1(target, functions, roots, &mut append).map_err(rejected)?;
+    drop(append);
+    if legacy.len() != legacy_len {
+        return Err(rejected(Error::new("legacy inventory length changed")));
+    }
+    let input = RustcEnrollmentInventoryInputV1 {
+        legacy_inventory: &legacy,
+        header: associations.header(),
+        roots: associations.roots(),
+    };
+    let bytes =
+        encode_rustc_enrollment_inventory_v1(input, loan.inventory_storage_limit(), |amount| {
+            work.charge(amount)
+                .map_err(|failure| Error::new(failure.to_string()))
+        })
+        .map_err(|failure| rejected(Error::new(format!("{failure:?}"))))?;
+    if bytes.len() != layout.encoded_len() || bytes.capacity() != layout.encoded_len() {
+        return Err(rejected(Error::new(
+            "enrollment wrapper capacity accounting",
+        )));
+    }
+    work.charge(bytes.len())
+        .map_err(|failure| rejected(Error::new(failure.to_string())))?;
+    // The framing trailer has its own domain: preflight binds the COMPLETE bytes.
+    let sha256 = Sha256::digest(&bytes).into();
+    let context = loan
+        .inventory_context(work)
+        .map_err(rejected)?
+        .ok_or_else(|| {
+            rejected(Error::new(
+                "enrollment wrapper original request disappeared",
+            ))
+        })?;
+    let header = associations.header();
+    if context.descriptor_bindings != header.enrollment_binding_count
+        || context.rustc_invocation_sha256 != header.invocation_identity
+        || context.native_policy_sha256 != header.native_policy_identity
+        || context.policy_generation != header.native_policy_generation
+    {
+        return Err(rejected(Error::new(
+            "enrollment wrapper original header changed",
+        )));
+    }
+    Ok((sha256, bytes.into_boxed_slice()))
+}
+
+#[cfg(test)]
 fn identity_inventory_generated_host_contract_v1(
     digest: &mut SemanticIdentityDigestV1,
     identity: Option<reserved_fe2o3_symbols::GeneratedHostContractIdV3>,

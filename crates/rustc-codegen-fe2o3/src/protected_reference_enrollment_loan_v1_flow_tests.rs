@@ -16,6 +16,45 @@ const STORAGE: usize = 4 * 1024 * 1024;
 const ONE_REQUEST: &str =
     r#"{"version":1,"bindings":[{"kernel":"fixture::kernel","reference":"fixture::reference"}]}"#;
 
+#[test]
+fn actual_mixed_instances_seal_original_wrapper_before_preflight() {
+    let request = crate::collector::reversed_original_root_inventory_request();
+    if fixture::isolated(
+        concat!(
+            module_path!(),
+            "::actual_mixed_instances_seal_original_wrapper_before_preflight"
+        ),
+        Some(&request),
+    ) {
+        return;
+    }
+    let (mut invocation, _backend) = fixture::admit();
+    let mut work = TargetWork::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    let policy = fixture::policy(&mut budget);
+    let (native, _server) = fixture::session(&policy, &mut budget);
+    crate::collector::check_original_root_inventory_flow(native, &mut invocation, true);
+}
+
+#[test]
+fn actual_no_request_instances_keep_legacy_inventory_before_preflight() {
+    if fixture::isolated(
+        concat!(
+            module_path!(),
+            "::actual_no_request_instances_keep_legacy_inventory_before_preflight"
+        ),
+        None,
+    ) {
+        return;
+    }
+    let (mut invocation, _backend) = fixture::admit();
+    let mut work = TargetWork::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    let policy = fixture::policy(&mut budget);
+    let (native, _server) = fixture::session(&policy, &mut budget);
+    crate::collector::check_original_root_inventory_flow(native, &mut invocation, false);
+}
+
 fn refused<T>(result: Result<T, SessionError>, reason: &str) {
     let Err(error) = result else {
         panic!("expected refusal: {reason}")
@@ -56,6 +95,7 @@ fn admitted_no_request_survives_fresh_loan_and_publication_preparation() {
         .with_reference_enrollment::<_, SessionError>(&mut invocation, |loan| {
             let loan = loan.unwrap();
             assert!(loan.request(&mut source)?.is_none());
+            assert!(loan.inventory_context(&mut source)?.is_none());
             loan.capture_stamp(&mut source).map_err(SessionError::from)
         })
         .unwrap();
@@ -461,4 +501,142 @@ fn no_request_empty_collector_roster_captures_and_replays_with_a_fresh_loan() {
     let policy = fixture::policy(&mut budget);
     let (native, _server) = fixture::session(&policy, &mut budget);
     crate::collector::check_empty_enrollment_replay(native, &mut invocation);
+}
+
+#[test]
+fn original_empty_request_header_does_not_query_an_ordinal() {
+    if fixture::isolated(
+        concat!(
+            module_path!(),
+            "::original_empty_request_header_does_not_query_an_ordinal"
+        ),
+        Some(r#"{"version":1,"bindings":[]}"#),
+    ) {
+        return;
+    }
+    let (mut invocation, _backend) = fixture::admit();
+    let mut work = TargetWork::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    let policy = fixture::policy(&mut budget);
+    let (native, _server) = fixture::session(&policy, &mut budget);
+    let mut source = Work::default();
+    let (native, ()) = native
+        .with_reference_enrollment::<_, SessionError>(&mut invocation, |loan| {
+            let loan = loan.unwrap();
+            assert!(loan.request(&mut source)?.unwrap().bindings().is_empty());
+            let context = loan.inventory_context(&mut source)?.unwrap();
+            assert_eq!(context.descriptor_bindings, 0);
+            assert_eq!(
+                context.rustc_invocation_sha256,
+                loan.origin.rustc_invocation_sha256
+            );
+            assert_eq!(
+                context.native_policy_sha256,
+                loan.origin.native_policy_sha256
+            );
+            assert_eq!(context.policy_generation, loan.origin.policy_generation);
+            loan.reserve_inventory_storage(0)?;
+            assert!(!loan.refused.get());
+            Ok(())
+        })
+        .unwrap();
+    drop(native);
+}
+
+#[test]
+fn actual_original_loan_keeps_multiple_inventory_debits_after_later_refusal() {
+    if fixture::isolated(
+        concat!(
+            module_path!(),
+            "::actual_original_loan_keeps_multiple_inventory_debits_after_later_refusal"
+        ),
+        Some(ONE_REQUEST),
+    ) {
+        return;
+    }
+    let (mut invocation, _backend) = fixture::admit();
+    let mut work = TargetWork::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    budget.reserve_storage(31).unwrap();
+    let ledger = budget.work_ledger_identity_v1();
+    let policy = fixture::policy(&mut budget);
+    let (native, _server) = fixture::session(&policy, &mut budget);
+    let mut source = Work::default();
+    let (native, ()) = native
+        .with_reference_enrollment::<_, SessionError>(&mut invocation, |loan| {
+            loan.unwrap().request(&mut source)?;
+            Ok(())
+        })
+        .unwrap();
+    let retained = Cell::new(None);
+    let result = native.prepare_and_acquire_with_enrollment::<(), (), (), SessionError>(
+        |preparation, budget| {
+            let before = budget.storage();
+            let result = preparation.with_invocation(&mut invocation, budget, |loan| {
+                loan.request(&mut source)?;
+                assert_eq!(
+                    loan.inventory_context(&mut source)?
+                        .unwrap()
+                        .descriptor_bindings,
+                    1
+                );
+                loan.reserve_inventory_storage(11)?;
+                loan.reserve_inventory_storage(17)?;
+                loan.reserve_inventory_storage(0)?;
+                assert!(loan.reserve_inventory_storage(usize::MAX).is_err());
+                assert!(loan.reserve_inventory_storage(0).is_err());
+                Ok::<_, SessionError>(())
+            });
+            assert!(result.is_err());
+            assert_eq!(budget.storage(), before + 28);
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(budget.failed_storage(), Some(usize::MAX));
+            retained.set(Some(budget.storage()));
+            result
+        },
+        |(), _| panic!("refused loan reached publication"),
+        |_, (), _| panic!("refused loan reached receipt"),
+    );
+    refused(result, "reference enrollment loan was refused");
+    let client_storage =
+        std::mem::size_of::<fe2o3_compiler_execution_client::CompilerExecutionClientV3<'_, '_>>();
+    assert_eq!(budget.storage(), retained.get().unwrap() - client_storage);
+    assert!(budget.work_ledger_identity_v1() == ledger);
+    assert_eq!(budget.failed_storage(), Some(usize::MAX));
+}
+
+#[test]
+fn original_inventory_reservation_reentrancy_is_sticky_without_a_debit() {
+    if fixture::isolated(
+        concat!(
+            module_path!(),
+            "::original_inventory_reservation_reentrancy_is_sticky_without_a_debit"
+        ),
+        Some(ONE_REQUEST),
+    ) {
+        return;
+    }
+    let (mut invocation, _backend) = fixture::admit();
+    let mut work = TargetWork::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, STORAGE);
+    let policy = fixture::policy(&mut budget);
+    let (native, _server) = fixture::session(&policy, &mut budget);
+    let mut source = Work::default();
+    let result = native.with_reference_enrollment::<_, SessionError>(&mut invocation, |loan| {
+        let loan = loan.unwrap();
+        loan.request(&mut source)?;
+        let active = loan.revalidate.borrow_mut();
+        assert!(
+            loan.reserve_inventory_storage(11)
+                .unwrap_err()
+                .to_string()
+                .contains("reentrant")
+        );
+        drop(active);
+        assert!(loan.inventory_context(&mut source).is_err());
+        assert!(loan.reserve_inventory_storage(0).is_err());
+        Ok(())
+    });
+    refused(result, "reference enrollment loan was refused");
+    assert_eq!(budget.failed_storage(), None);
 }

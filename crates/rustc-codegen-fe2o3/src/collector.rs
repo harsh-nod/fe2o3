@@ -55,6 +55,10 @@ mod reference_enrollment_v1;
 #[cfg(test)]
 mod reference_loan_flow_tests;
 #[cfg(test)]
+pub(crate) use production_importer_v1::original_root_inventory_flow_v362_tests::{
+    check_original_root_inventory_flow, reversed_original_root_inventory_request,
+};
+#[cfg(test)]
 pub(crate) use reference_loan_flow_tests::check_empty_enrollment_replay;
 
 #[cfg(test)]

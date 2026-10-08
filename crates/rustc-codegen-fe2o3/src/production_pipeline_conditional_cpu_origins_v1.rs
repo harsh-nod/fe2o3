@@ -1,10 +1,15 @@
 //! Ordered CPU-origin descriptions projected from the retained binding owner.
 use super::{AuthenticatedProductionBindings, Budget, Error, Resource, Root, policy_capture};
 use crate::reference_effect_v1::ReferenceBindingOriginV1 as BindingOrigin;
+use fe2o3_compiler_lineage::{
+    RustcEnrollmentInventoryHeaderV1 as InventoryHeader,
+    RustcEnrollmentInventoryRootV1 as InventoryRoot,
+};
 use fe2o3_verifier::{
     NativeConditionalCpuExpectationV1 as Expectation,
     NativeConditionalCpuOriginExpectationV1 as Origin,
 };
+use sha2::{Digest, Sha256};
 use std::mem::size_of;
 
 /// The caller retains the original source and invocation beside these inert rows.
@@ -34,6 +39,35 @@ pub(super) fn capture(
     roots: &[Root],
     budget: &mut Budget<'_>,
 ) -> Result<RetainedCpuOriginRosterV1, Error> {
+    if let Some(original) = bindings
+        .rustc_identity_inventory
+        .original_root_associations()
+    {
+        return project_enrolled(
+            original.header(),
+            original.roots(),
+            roots.iter().map(|root| {
+                (
+                    root.semantic_root().index(),
+                    root.logical_name(),
+                    *root.semantic_root_identity().as_bytes(),
+                    *root.kernel_binding(),
+                )
+            }),
+            budget,
+        );
+    }
+    budget.charge_work(bindings.reference_effect_bindings.as_slice().len())?;
+    if bindings
+        .reference_effect_bindings
+        .as_slice()
+        .iter()
+        .any(|binding| matches!(binding.origin, BindingOrigin::ReferenceEnrollment(_)))
+    {
+        return Err(Error::Mismatch(
+            "enrollment requires original root inventory",
+        ));
+    }
     project(
         roots
             .iter()
@@ -45,6 +79,92 @@ pub(super) fn capture(
             .map(|binding| (binding.logical_kernel_name.as_str(), &binding.origin)),
         budget,
     )
+}
+
+// Canonical IDs select original rows; packet order is independently preserved.
+// The full reference Instance identity stays in the retained private inventory
+// and its hashed wrapper. This origin projection does not replace that evidence.
+fn project_enrolled<'a>(
+    header: InventoryHeader,
+    original: &[InventoryRoot],
+    roots: impl ExactSizeIterator<Item = (u32, &'a str, [u8; 32], [u8; 32])>,
+    budget: &mut Budget<'_>,
+) -> Result<RetainedCpuOriginRosterV1, Error> {
+    budget.charge_work(3)?;
+    if original.is_empty()
+        || roots.len() != original.len()
+        || original.len() != header.kernel_count as usize
+        || original.len() > fe2o3_compiler_lineage::MAX_NATIVE_CONDITIONAL_POLICY_ROSTER_ROOTS_V1
+    {
+        return Err(Error::Mismatch(
+            "complete original root inventory projection",
+        ));
+    }
+    budget.charge_work(original.len())?;
+    if original
+        .windows(2)
+        .any(|pair| pair[0].semantic_root >= pair[1].semantic_root)
+    {
+        return Err(Error::Mismatch("canonical original root inventory order"));
+    }
+    let mut seen = policy_capture::vector(original.len(), budget)?;
+    seen.resize(original.len(), false);
+    let mut rows = policy_capture::vector(original.len(), budget)?;
+    let comparisons = original.len().ilog2() as usize + 2;
+    for (semantic_root, name, kernel_instance, kernel_binding) in roots {
+        budget.charge_work(
+            comparisons
+                .checked_add(name.len())
+                .and_then(|n| n.checked_add(size_of::<InventoryRoot>()))
+                .ok_or(Resource::Arithmetic)?,
+        )?;
+        let index = original
+            .binary_search_by_key(&semantic_root, |row| row.semantic_root)
+            .map_err(|_| Error::Mismatch("packet root missing from original inventory"))?;
+        let row = &original[index];
+        if seen[index]
+            || row.logical_name_len as usize != name.len()
+            || row.logical_name_sha256 != <[u8; 32]>::from(Sha256::digest(name.as_bytes()))
+            || row.kernel_instance != kernel_instance
+            || row.kernel_binding != kernel_binding
+        {
+            return Err(Error::Mismatch(
+                "packet root differs from original inventory",
+            ));
+        }
+        seen[index] = true;
+        let origin = match row.origin_tag {
+            0 if row.descriptor_ordinal == 0 => Origin::SourceRegistrationV1,
+            1 if row.descriptor_ordinal < header.enrollment_binding_count => {
+                Origin::ReferenceEnrollmentV1(
+                    fe2o3_verifier::portable_reference_v1::codec::ReferenceEnrollmentOriginV1 {
+                        rustc_invocation_sha256: header.invocation_identity,
+                        native_policy_sha256: header.native_policy_identity,
+                        policy_generation: header.native_policy_generation,
+                        mapping_ordinal: row.descriptor_ordinal,
+                    },
+                )
+            }
+            _ => {
+                return Err(Error::Mismatch(
+                    "original inventory origin or ordinal changed",
+                ));
+            }
+        };
+        budget.charge_work(size_of::<Expectation>())?;
+        rows.push(Expectation {
+            semantic_root,
+            origin,
+        });
+    }
+    let seen_storage = seen
+        .capacity()
+        .checked_mul(size_of::<bool>())
+        .and_then(|n| n.checked_add(size_of::<Vec<bool>>()))
+        .ok_or(Resource::Arithmetic)?;
+    drop(seen);
+    budget.release_storage(seen_storage)?;
+    Ok(RetainedCpuOriginRosterV1 { rows })
 }
 
 // One projection body for the authenticated adapter and inert algorithm tests.
@@ -104,6 +224,10 @@ fn select<'a>(
     }
     selected.ok_or(Error::Mismatch("missing original CPU origin binding"))
 }
+
+#[cfg(test)]
+#[path = "production_pipeline_conditional_cpu_inventory_v362_tests.rs"]
+mod inventory_tests;
 
 #[cfg(test)]
 mod tests {

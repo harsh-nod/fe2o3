@@ -18,6 +18,15 @@ pub(crate) struct RetainedReferenceEnrollmentStampV1 {
     invocation: ReferenceEnrollmentInvocationStampV1,
 }
 
+/// Descriptive header copied only after the original descriptor was checked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct OriginalEnrollmentInventoryContextV1 {
+    pub(crate) descriptor_bindings: u32,
+    pub(crate) rustc_invocation_sha256: [u8; 32],
+    pub(crate) native_policy_sha256: [u8; 32],
+    pub(crate) policy_generation: u64,
+}
+
 type Revalidate<'a> =
     dyn FnMut(Option<&ReferenceEnrollmentInvocationStampV1>) -> Result<(), Error> + 'a;
 
@@ -30,6 +39,8 @@ pub(crate) struct ReferenceEnrollmentLoanV1<'a> {
     refused: Cell<bool>,
     requested_bindings: Cell<Option<usize>>,
     origin: Origin,
+    inventory_storage_request: &'a Cell<Option<usize>>,
+    inventory_storage_limit: usize,
 }
 
 /// Borrowed only within the original client's checked preparation callback.
@@ -76,12 +87,22 @@ impl ReferenceEnrollmentPreparationV1<'_> {
             policy_generation: self.policy.policy().generation(),
             mapping_ordinal: 0,
         };
+        let inventory_storage_request = Cell::new(None);
+        let inventory_storage_limit = budget.storage_limit();
+        let mut storage_floor = budget.storage();
         let mut revalidate = |retained: Option<&ReferenceEnrollmentInvocationStampV1>| {
+            check_inventory_storage_floor(budget, self.ledger, storage_floor)?;
             self.policy
                 .revalidate(budget)
                 .map_err(|error| Error::new(error.to_string()))?;
             invocation
-                .revalidate_reference_enrollment_identity(retained.unwrap_or(&original), budget)
+                .revalidate_reference_enrollment_identity(retained.unwrap_or(&original), budget)?;
+            check_inventory_storage_floor(budget, self.ledger, storage_floor)?;
+            if let Some(bytes) = inventory_storage_request.take() {
+                reserve_inventory_storage(budget, self.ledger, &mut storage_floor, bytes)?;
+            }
+            check_inventory_storage_floor(budget, self.ledger, storage_floor)?;
+            Ok(())
         };
         let loan = ReferenceEnrollmentLoanV1 {
             descriptor: invocation.descriptor(),
@@ -91,6 +112,8 @@ impl ReferenceEnrollmentPreparationV1<'_> {
             refused: Cell::new(false),
             requested_bindings: Cell::new(None),
             origin,
+            inventory_storage_request: &inventory_storage_request,
+            inventory_storage_limit,
         };
         let result = run(&loan);
         // An ignored refusal cannot be turned into a successful preparation.
@@ -106,7 +129,82 @@ impl ReferenceEnrollmentPreparationV1<'_> {
     }
 }
 
+fn check_inventory_storage_floor(
+    budget: &Budget<'_>,
+    ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    storage_floor: usize,
+) -> Result<(), Error> {
+    if ledger != budget.work_ledger_identity_v1() || budget.storage() < storage_floor {
+        return Err(Error::new(
+            "reference enrollment original inventory account or retained storage changed",
+        ));
+    }
+    budget
+        .check_prior_denials_v1()
+        .map_err(|error| Error::new(error.to_string()))
+}
+
+fn reserve_inventory_storage(
+    budget: &mut Budget<'_>,
+    ledger: fe2o3_kernel_ir::CanonicalKernelIrWorkLedgerIdentityV1,
+    storage_floor: &mut usize,
+    bytes: usize,
+) -> Result<(), Error> {
+    check_inventory_storage_floor(budget, ledger, *storage_floor)?;
+    budget
+        .reserve_storage(bytes)
+        .map_err(|error| Error::new(error.to_string()))?;
+    *storage_floor = budget.storage();
+    check_inventory_storage_floor(budget, ledger, *storage_floor)
+}
+
 impl ReferenceEnrollmentLoanV1<'_> {
+    pub(crate) fn inventory_context(
+        &self,
+        work: &mut Work,
+    ) -> Result<Option<OriginalEnrollmentInventoryContextV1>, Error> {
+        self.charge(
+            work,
+            1 + std::mem::size_of::<OriginalEnrollmentInventoryContextV1>(),
+        )?;
+        self.current(None)?;
+        let Some(count) = self.requested_bindings.get() else {
+            return Ok(None);
+        };
+        let descriptor_bindings = self.terminal(
+            u32::try_from(count).map_err(|_| Error::new("inventory descriptor count overflow")),
+        )?;
+        Ok(Some(OriginalEnrollmentInventoryContextV1 {
+            descriptor_bindings,
+            rustc_invocation_sha256: self.origin.rustc_invocation_sha256,
+            native_policy_sha256: self.origin.native_policy_sha256,
+            policy_generation: self.origin.policy_generation,
+        }))
+    }
+
+    /// Logical allocations stay charged on opaque failure or unwind.
+    pub(crate) fn reserve_inventory_storage(&self, bytes: usize) -> Result<(), Error> {
+        if self.requested_bindings.get().is_none()
+            || self
+                .inventory_storage_request
+                .replace(Some(bytes))
+                .is_some()
+        {
+            return self.terminal(Err(Error::new(
+                "inventory storage has no checked original request",
+            )));
+        }
+        self.current(None)?;
+        if self.inventory_storage_request.get().is_some() {
+            return self.terminal(Err(Error::new("inventory storage debit was not consumed")));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn inventory_storage_limit(&self) -> usize {
+        self.inventory_storage_limit
+    }
+
     fn terminal<T>(&self, result: Result<T, Error>) -> Result<T, Error> {
         if result.is_err() {
             self.refused.set(true);
@@ -213,6 +311,73 @@ mod flow_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_reservations_protect_accumulated_original_storage() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as TargetWork;
+        for entry_floor in [0, 31] {
+            let mut work = TargetWork::new(100);
+            let mut budget = Budget::new(&mut work, entry_floor + 29);
+            budget.charge_work(7).unwrap();
+            budget.reserve_storage(entry_floor).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let mut floor = entry_floor;
+            for amount in [0, 11, 18] {
+                reserve_inventory_storage(&mut budget, ledger, &mut floor, amount).unwrap();
+                assert_eq!(floor, budget.storage());
+            }
+            assert_eq!(floor, entry_floor + 29);
+            assert_eq!(budget.work(), 7);
+            budget.release_storage(1).unwrap();
+            assert!(budget.storage() >= entry_floor);
+            assert!(check_inventory_storage_floor(&budget, ledger, floor).is_err());
+            assert!(reserve_inventory_storage(&mut budget, ledger, &mut floor, 0).is_err());
+            assert_eq!(floor, entry_floor + 29);
+        }
+    }
+
+    #[test]
+    fn inventory_one_short_and_oversized_refusals_never_refund_or_restart() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as TargetWork;
+        for failed in [19, usize::MAX] {
+            let mut work = TargetWork::new(100);
+            let mut budget = Budget::new(&mut work, 60);
+            budget.reserve_storage(31).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let mut floor = 31;
+            reserve_inventory_storage(&mut budget, ledger, &mut floor, 11).unwrap();
+            assert!(reserve_inventory_storage(&mut budget, ledger, &mut floor, failed).is_err());
+            let denial = budget.failed_storage();
+            assert_eq!(
+                (budget.storage(), floor, budget.peak_storage()),
+                (42, 42, 42)
+            );
+            assert!(reserve_inventory_storage(&mut budget, ledger, &mut floor, 0).is_err());
+            assert_eq!(budget.failed_storage(), denial);
+            assert_eq!(budget.storage(), 42);
+        }
+    }
+
+    #[test]
+    fn inventory_failed_or_unwound_callbacks_keep_successful_prefix_debits() {
+        use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as TargetWork;
+        let mut work = TargetWork::new(100);
+        let mut budget = Budget::new(&mut work, 60);
+        budget.reserve_storage(31).unwrap();
+        let ledger = budget.work_ledger_identity_v1();
+        let mut floor = 31;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reserve_inventory_storage(&mut budget, ledger, &mut floor, 11).unwrap();
+            panic!("opaque owner failure");
+        }));
+        assert!(result.is_err());
+        assert_eq!((budget.storage(), floor), (42, 42));
+        let mut other_work = TargetWork::new(100);
+        let mut other = Budget::new(&mut other_work, 60);
+        other.reserve_storage(42).unwrap();
+        assert!(reserve_inventory_storage(&mut other, ledger, &mut floor, 0).is_err());
+        assert_eq!((other.storage(), budget.storage(), floor), (42, 42, 42));
+    }
 
     #[test]
     fn every_currentness_check_visits_the_original_revalidator() {

@@ -10,6 +10,11 @@ use crate::reference_effect_v1::{
 use crate::rustc_semantic_plan_v1::SourceClosureWorkV1;
 use rustc_middle::ty::{FnSig, Instance, TyCtxt};
 
+#[path = "original_root_associations_v1.rs"]
+mod original_roots;
+pub(super) use original_roots::PendingOriginalRootAssociationsV1;
+pub(crate) use original_roots::RetainedOriginalRootAssociationsV1;
+
 struct ReferenceInputV1<'tcx> {
     function: usize,
     kernel: Instance<'tcx>,

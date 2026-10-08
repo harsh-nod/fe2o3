@@ -25,7 +25,8 @@ use crate::protected_rustc_invocation::{
 };
 use crate::reference_effect_v1::ReferenceBindingErrorV1;
 pub(crate) use reference_enrollment::{
-    ReferenceEnrollmentLoanV1, ReferenceEnrollmentPreparationV1, RetainedReferenceEnrollmentStampV1,
+    OriginalEnrollmentInventoryContextV1, ReferenceEnrollmentLoanV1,
+    ReferenceEnrollmentPreparationV1, RetainedReferenceEnrollmentStampV1,
 };
 
 /// The same exclusive account borrow covers preparation through receipt transport.

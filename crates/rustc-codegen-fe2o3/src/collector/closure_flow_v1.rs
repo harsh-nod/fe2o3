@@ -124,6 +124,28 @@ pub(super) fn authenticate_with_enrollment_v1<'tcx>(
 }
 
 impl<'tcx> AuthenticatedClosureFlowV1<'tcx> {
+    pub(super) fn rederive_reference_bindings_and_inventory_v1(
+        &mut self,
+        tcx: TyCtxt<'tcx>,
+        collection: &CollectionResult<'tcx>,
+        loan: Option<
+            &crate::protected_compiler_execution::native_v3::ReferenceEnrollmentLoanV1<'_>,
+        >,
+    ) -> Result<
+        (
+            crate::reference_effect_v1::AuthenticatedReferenceEffectBindingsV1,
+            Option<super::reference_custody_v1::PendingOriginalRootAssociationsV1<'tcx>>,
+        ),
+        crate::reference_effect_v1::ReferenceBindingErrorV1,
+    > {
+        self.references.rederive_with_inventory_capture(
+            tcx,
+            &collection.functions,
+            &mut self.work,
+            loan,
+        )
+    }
+
     pub(super) fn rederive_reference_bindings_v1(
         &mut self,
         tcx: TyCtxt<'tcx>,
