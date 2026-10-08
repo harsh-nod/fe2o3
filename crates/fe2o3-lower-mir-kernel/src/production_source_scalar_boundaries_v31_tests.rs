@@ -284,6 +284,213 @@ fn comparison_loop() -> ProductionSemanticSsaOwnerV1 {
     .unwrap()
 }
 
+fn assert_move_owner_v300(cleanup: bool) -> ProductionSemanticSsaOwnerV1 {
+    let base = comparison_loop();
+    let source = base.source_semantic();
+    let old = &source.functions()[0];
+    let mut blocks = old.blocks().to_vec();
+    let SemanticTerminatorKindV1::SwitchInt { discriminant, .. } = blocks[1].terminator().kind()
+    else {
+        unreachable!()
+    };
+    blocks[1] = SemanticBasicBlockV1::new(
+        blocks[1].identity(),
+        blocks[1].source(),
+        blocks[1].statements().to_vec(),
+        SemanticTerminatorV1::new(
+            blocks[1].source(),
+            SemanticTerminatorKindV1::Assert {
+                condition: discriminant.clone(),
+                expected: true,
+                message: SemanticAssertMessageV1::DivisionByZero(SemanticOperandV1::Move(place(
+                    2, U32,
+                ))),
+                target: SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::AssertSuccess,
+                    SemanticBlockIdV1::from_index(2),
+                ),
+                unwind: if cleanup {
+                    SemanticUnwindActionV1::Cleanup(SemanticControlFlowEdgeV1::new(
+                        SemanticEdgeRoleV1::AssertUnwind,
+                        SemanticBlockIdV1::from_index(2),
+                    ))
+                } else {
+                    SemanticUnwindActionV1::Unreachable
+                },
+            },
+        ),
+    )
+    .unwrap();
+    if cleanup {
+        // Cleanup has no failure-only SSA rollback. Redefine the moved local
+        // before either successor use so the lowerer, not SSA, selects refusal.
+        let mut statements = vec![assign(place(2, U32), SemanticRvalueKindV1::Use(literal(7)))];
+        statements.extend_from_slice(blocks[2].statements());
+        blocks[2] = SemanticBasicBlockV1::new(
+            blocks[2].identity(),
+            blocks[2].source(),
+            statements,
+            blocks[2].terminator().clone(),
+        )
+        .unwrap();
+    }
+    let mut functions = source.functions().to_vec();
+    functions[0] = rebuild_root(old, old.locals().to_vec(), blocks);
+    let admitted = InertSemanticMirRequestV1::new_with_callables(
+        source.target(),
+        source.types().to_vec(),
+        vec![],
+        vec![],
+        vec![],
+        functions,
+        source.callables().to_vec(),
+        source.roots().to_vec(),
+    )
+    .unwrap()
+    .admit_exact_v29(SemanticMirLimitsV1::default())
+    .unwrap();
+    ProductionSemanticSsaOwnerV1::try_new(
+        ProductionSemanticMirOwnerV1::try_new(admitted, ProductionSemanticMirLimitsV1::default())
+            .unwrap(),
+        ProductionSemanticSsaLimitsV1::default(),
+    )
+    .unwrap()
+}
+
+fn nonreturning_assert_move_v300() -> ProductionSemanticSsaOwnerV1 {
+    assert_move_owner_v300(false)
+}
+
+fn cleanup_assert_move_v300() -> ProductionSemanticSsaOwnerV1 {
+    assert_move_owner_v300(true)
+}
+
+#[test]
+fn source_scalar_boundaries_keep_nonreturning_assert_move_on_success_edge() {
+    use fe2o3_mir_model::SsaResolvedEventV1 as Event;
+    let reached = std::cell::Cell::new(false);
+    with_policy11(
+        nonreturning_assert_move_v300,
+        |original, optimized, budget| {
+            original.with_optimized_scalar_leaf_namespace_v18(
+                optimized,
+                0,
+                &SourceScalarNamespaceV18::PrivateSourceWritesV22,
+                budget,
+                |leaves, budget| {
+                    let owner = original.source.source_ssa(budget)?;
+                    let function = original.source.instance(0, 0, budget)?.0;
+                    let occurrences = owner.occurrences_v1().unwrap().function(function).unwrap();
+                    let block = BoundaryBlockV31::new(1);
+                    let cut = occurrences.terminal_failure_start(block).unwrap();
+                    let events = occurrences.block_events_v299(block).unwrap();
+                    assert_eq!(events.len(), cut + 2);
+                    let Some(Event::Use { variable, value }) = events[cut].resolved() else {
+                        panic!("actual assertion message use");
+                    };
+                    assert_eq!(variable.get(), 2);
+                    assert_eq!(
+                        events[cut + 1].resolved(),
+                        Some(Event::Kill {
+                            variable,
+                            previous: Some(value)
+                        })
+                    );
+                    let plan = owner.plan_for_function(function).unwrap().plan();
+                    assert_eq!(
+                        plan.resolved_event(BoundaryBlockV31::new(2), 0).copied(),
+                        Some(Event::Use { variable, value })
+                    );
+                    assert!(leaves.original.leaves.boundaries.rows.iter().any(|row| {
+                        row.instance == 0 && row.block == block && row.variable == variable
+                    }));
+                    leaves
+                        .original
+                        .leaves
+                        .check_boundary_equations_v31(budget)?;
+                    leaves
+                        .original
+                        .leaves
+                        .check_boundary_actual_v31(Some(leaves), budget)?;
+                    reached.set(true);
+                    Ok(())
+                },
+            )
+        },
+    )
+    .unwrap();
+    assert!(reached.get());
+}
+
+#[test]
+fn source_scalar_boundaries_do_not_admit_cleanup_assert_as_nonreturning() {
+    let mut work = CanonicalKernelIrWorkBudgetV1::new(OPTIMIZED_SOURCE_WORK_LIMIT_V18);
+    let mut budget = ArgumentBudgetV1::new(&mut work, MODULE_LIMIT);
+    budget.reserve_storage(MODULE_FLOOR).unwrap();
+    let reached = std::cell::Cell::new(false);
+    let result = with_pending_api_owner_v18(
+        ModuleFixture::Ordinary,
+        false,
+        &mut budget,
+        cleanup_assert_move_v300,
+        |mut owner, launch, input, _, budget| -> SourceOwnedResultV18<()> {
+            let capture = owner
+                .try_capture_occurrences_with_budget_v1(budget)
+                .unwrap();
+            budget.reserve_storage(capture.retained_storage())?;
+            let function = SemanticFunctionIdV1::from_index(0);
+            let rows = owner.occurrences_v1().unwrap().function(function).unwrap();
+            assert_eq!(rows.terminal_failure_start(BoundaryBlockV31::new(1)), None);
+            let events = rows.block_events_v299(BoundaryBlockV31::new(1)).unwrap();
+            assert!(matches!(
+                events.last().unwrap().resolved(),
+                Some(fe2o3_mir_model::SsaResolvedEventV1::Kill { variable, previous: Some(_) })
+                    if variable.get() == 2
+            ));
+            assert_eq!(
+                rows.successors()
+                    .iter()
+                    .filter(|row| row.id().source().get() == 1)
+                    .count(),
+                2
+            );
+            let fixture = OriginalKernelAbiFixtureV18::ordinary(&owner);
+            let roots = fixture.roots();
+            let prepared =
+                ProductionPendingScopedSourceOwnerV29::prepare_source_with_kernel_abi_budget_v18(
+                    owner,
+                    launch,
+                    input,
+                    ProductionKernelArgumentAbiInputV18 { roots: &roots },
+                    ProductionSemanticKirLimitsV1::default(),
+                    budget,
+                )?;
+            prepared.with_checked_source_v18(budget, |_, _| {
+                reached.set(true);
+                Ok(())
+            })
+        },
+    );
+    assert!(
+        matches!(
+            result,
+            Err(ProductionSourceOwnedViewErrorV18::Source(
+                ProductionPendingScopedSourceErrorV29::Source(
+                    ProductionSemanticKirErrorV1::Unsupported {
+                        function: 0,
+                        block: None,
+                        statement: None,
+                        detail: "source reference assertion unwind requires effect transport",
+                    }
+                )
+            ))
+        ),
+        "{result:?}"
+    );
+    assert!(!reached.get());
+    assert_eq!(budget.storage(), MODULE_FLOOR);
+}
+
 fn with_policy11(
     factory: fn() -> ProductionSemanticSsaOwnerV1,
     consume: impl for<'scope, 'work> FnOnce(
@@ -1005,6 +1212,16 @@ fn source_scalar_boundaries_derivation_and_control_frames_match_field_envelopes(
     type Derive<'a, 'w> = (
         Vec<Vec<BoundaryBlockV31>>,
         Vec<BoundaryBlockV31>,
+        Vec<fe2o3_kernel_analysis::SourceSsaBlockEventsV299>,
+        Result<Vec<fe2o3_kernel_analysis::SourceSsaBlockEventsV299>, ProductionSemanticKirErrorV1>,
+        fe2o3_kernel_analysis::SourceSsaBlockEventsV299,
+        fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'a>,
+        Option<fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'a>>,
+        Option<&'a [fe2o3_pliron::ProductionSemanticSsaEventOccurrenceV1]>,
+        Option<fe2o3_pliron::ProductionSemanticSsaOccurrenceViewV1<'a>>,
+        std::iter::Enumerate<std::slice::Iter<'a, SemanticBasicBlockV1>>,
+        Option<usize>,
+        [usize; 2],
         Shared<'a>,
         Receipt,
         Result<(Shared<'a>, Receipt), SharedError>,

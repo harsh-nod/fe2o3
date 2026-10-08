@@ -13,6 +13,148 @@ fn logarithm(count: usize) -> usize {
     (usize::BITS - count.max(1).leading_zeros()) as usize + 1
 }
 
+fn source_fixture_v299(
+    work: usize,
+    storage: usize,
+    hostile: bool,
+) -> (Result<()>, usize, usize, usize) {
+    super::super::invocations::tests::run_variant(work, storage, false, |plan, out| {
+        let source = plan.source(out)?;
+        let owner = source.source_ssa(out.budget)?;
+        let semantic = owner.source_semantic();
+        for (index, function) in semantic.functions().iter().enumerate() {
+            let id = FunctionId::from_index(index as u32);
+            let ssa = owner.plan_for_function(id).unwrap().plan();
+            let occurrences = owner.occurrences_v1().unwrap().function(id).unwrap();
+            assert_eq!(occurrences.block_count_v299(), function.blocks().len());
+            let mut events = 0usize;
+            let mut topology = vector(function.blocks().len(), out)?;
+            for (index, block) in function.blocks().iter().enumerate() {
+                let rows = occurrences
+                    .block_events_v299(Block::new(index as u32))
+                    .unwrap();
+                for (ordinal, row) in rows.iter().enumerate() {
+                    assert_eq!(row.ordinal() as usize, ordinal);
+                    assert!(std::ptr::eq(row, &occurrences.events()[events + ordinal]));
+                }
+                events += rows.len();
+                let mut edges = vector(block.terminator().kind().edge_count(), out)?;
+                block.terminator().kind().try_for_each_edge(|edge| {
+                    edges.push(Block::new(edge.target().index()));
+                    Ok::<_, Error>(())
+                })?;
+                topology.push(edges);
+            }
+            assert_eq!(events, occurrences.events().len());
+            assert!(
+                occurrences
+                    .block_events_v299(Block::new(function.blocks().len() as u32))
+                    .is_none()
+            );
+            let input = || ControlInput {
+                entry: Block::new(function.entry().index()),
+                successors: &topology,
+            };
+            let checked = Boundaries::derive_source_v299(ssa, input(), owner, id, out)?;
+            for (index, _) in function.blocks().iter().enumerate() {
+                let block = Block::new(index as u32);
+                for &variable in ssa.live_in(block).unwrap_or(&[]) {
+                    checked.value(block, variable, out)?;
+                }
+            }
+            if hostile {
+                let foreign = ssa.clone();
+                assert!(matches!(
+                    Boundaries::derive_source_v299(&foreign, input(), owner, id, out),
+                    Err(Error::Statement(
+                        "original MIR SSA boundary has a foreign plan"
+                    ))
+                ));
+                assert!(matches!(
+                    Boundaries::derive_source_v299(
+                        ssa,
+                        input(),
+                        owner,
+                        FunctionId::from_index(semantic.functions().len() as u32),
+                        out
+                    ),
+                    Err(Error::Statement(_))
+                ));
+                assert!(matches!(
+                    Boundaries::derive_source_v299(
+                        ssa,
+                        ControlInput {
+                            entry: Block::new(u32::MAX),
+                            successors: &topology,
+                        },
+                        owner,
+                        id,
+                        out
+                    ),
+                    Err(Error::Statement(_))
+                ));
+                let mut extra = topology.clone();
+                extra[0].push(Block::new(0));
+                assert!(matches!(
+                    Boundaries::derive_source_v299(
+                        ssa,
+                        ControlInput {
+                            entry: Block::new(function.entry().index()),
+                            successors: &extra,
+                        },
+                        owner,
+                        id,
+                        out
+                    ),
+                    Err(Error::Statement(_))
+                ));
+                assert!(matches!(
+                    Boundaries::derive_source_v299(
+                        ssa,
+                        ControlInput {
+                            entry: Block::new(function.entry().index()),
+                            successors: &topology[..topology.len() - 1],
+                        },
+                        owner,
+                        id,
+                        out
+                    ),
+                    Err(Error::Statement(_))
+                ));
+            }
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn original_mir_source_boundaries_authenticate_occurrence_owner_and_complete_topology() {
+    source_fixture_v299(512 << 20, 512 << 20, true).0.unwrap();
+}
+
+#[test]
+fn original_mir_source_boundaries_have_exact_work_storage_and_cleanup() {
+    use fe2o3_lower_mir_kernel::ProductionSourceOwnedViewErrorV18 as SourceError;
+    let measured = source_fixture_v299(512 << 20, 512 << 20, false);
+    measured.0.unwrap();
+    let exact = source_fixture_v299(measured.1, measured.3, false);
+    exact.0.unwrap();
+    assert_eq!(
+        (exact.1, exact.2, exact.3),
+        (measured.1, measured.2, measured.3)
+    );
+    assert!(
+        matches!(source_fixture_v299(measured.1 - 1, measured.3, false).0,
+        Err(Error::Resource(Resource::Work(e))) | Err(Error::Source(SourceError::Resource(Resource::Work(e))))
+        if e.actual() == measured.1 && e.limit() == measured.1 - 1)
+    );
+    assert!(
+        matches!(source_fixture_v299(measured.1, measured.3 - 1, false).0,
+        Err(Error::Resource(Resource::Storage(e))) | Err(Error::Source(SourceError::Resource(Resource::Storage(e))))
+        if e.actual() == measured.3 && e.limit() == measured.3 - 1)
+    );
+}
+
 fn block(events: Vec<SsaEventV1>, targets: &[u32]) -> SsaBlockInputV1 {
     SsaBlockInputV1::new(
         events,
@@ -126,6 +268,26 @@ fn original_mir_shared_boundary_adapter_frames_have_independent_field_oracles() 
             + size_of::<&mut Writer<'_, '_>>()
             + size_of::<Block>()
             + size_of::<Variable>()
+    );
+    assert_eq!(
+        source_headers_v299(),
+        size_of::<Vec<BlockEvents>>()
+            + size_of::<Result<Vec<BlockEvents>>>()
+            + size_of::<Occurrences<'_>>()
+            + size_of::<Option<Occurrences<'_>>>()
+            + size_of::<ProductionSemanticSsaOccurrenceViewV1<'_>>()
+            + size_of::<Option<ProductionSemanticSsaOccurrenceViewV1<'_>>>()
+            + size_of::<Option<&[ProductionSemanticSsaEventOccurrenceV1]>>()
+            + size_of::<std::iter::Enumerate<std::slice::Iter<'_, SemanticBasicBlockV1>>>()
+            + size_of::<(&mut usize, &mut Writer<'_, '_>, &ControlInput<'_>, &usize)>()
+            + std::mem::align_of::<(&mut usize, &mut Writer<'_, '_>, &ControlInput<'_>, &usize)>()
+            + size_of::<BlockEvents>()
+            + size_of::<Option<BlockEvents>>()
+            + size_of::<FunctionId>()
+            + size_of::<&Owner>()
+            + 6 * size_of::<usize>()
+            + 6 * size_of::<&()>()
+            + size_of::<Result<()>>()
     );
     assert!(matches!(
         error(BoundaryError::Resource(Resource::Accounting)),

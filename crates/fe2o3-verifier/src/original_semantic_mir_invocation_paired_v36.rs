@@ -300,12 +300,14 @@ impl<'slots, 'view, 'source> PairedInvocations<'slots, 'view, 'source> {
                     })?;
                     successors.push(edges);
                 }
-                let boundaries = Boundaries::derive(
+                let boundaries = Boundaries::derive_source_v299(
                     ssa,
                     ControlInput {
                         entry: Block::new(function.entry().index()),
                         successors: &successors,
                     },
+                    archive,
+                    row.function,
                     out,
                 )?;
                 let mut owners = vector(instance.checked_add(1).ok_or(Resource::Arithmetic)?, out)?;
