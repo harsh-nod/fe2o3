@@ -73,7 +73,9 @@ fn with_source(check: for<'tcx> fn(TyCtxt<'tcx>)) {
         format!("--crate-name={CRATE}"),
         "--crate-type=lib".into(),
         "--edition=2024".into(),
-        "--emit=metadata".into(),
+        // Metadata-only compilation omits reachable concrete CGU instances.
+        // The after-analysis callback still stops before object emission.
+        "--emit=obj".into(),
         "-Zmir-opt-level=0".into(),
         "-Copt-level=0".into(),
         "-Ccodegen-units=2".into(),
@@ -82,12 +84,13 @@ fn with_source(check: for<'tcx> fn(TyCtxt<'tcx>)) {
         "--sysroot".into(),
         sysroot.trim().into(),
         "-o".into(),
-        directory.path().join("fixture.rmeta").display().to_string(),
+        directory.path().join("fixture.o").display().to_string(),
         source.display().to_string(),
     ];
     let mut callbacks = CheckCallbacks(check, false);
     rustc_driver::run_compiler(&args, &mut callbacks);
     assert!(callbacks.1, "source enrollment callback did not run");
+    assert!(!directory.path().join("fixture.o").exists());
 }
 
 fn definition(tcx: TyCtxt<'_>, name: &str) -> rustc_hir::def_id::DefId {
