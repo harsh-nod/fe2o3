@@ -50,7 +50,7 @@ fn commitment() -> Commitment {
         toolchain: [[4; 32]; 5],
     }
 }
-fn fixture<R>(
+pub(super) fn fixture<R>(
     run: impl FnOnce(
         NativeConditionalSourcePacketInputV2<'_>,
         &[NativeConditionalRootPolicyV2<'_>],

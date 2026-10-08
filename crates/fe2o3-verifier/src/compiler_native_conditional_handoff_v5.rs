@@ -9,6 +9,7 @@ use crate::compiler_native_conditional_source_proof_v2::final_replay::{
     account::{self, Account},
     validate_native_conditional_source_through_f_using_original_account_v2,
     validate_native_conditional_source_through_f_using_v2,
+    validate_native_conditional_source_through_f_with_cpu_mapping_using_v2,
     validate_native_conditional_source_through_f_with_cpu_origins_using_original_account_v2,
     validate_native_conditional_source_through_f_with_cpu_origins_using_v2,
 };
@@ -17,10 +18,14 @@ use crate::{
     NativeConditionalFinalInputsV2, NativeConditionalRootPolicyV2,
     NativeConditionalSourceProofErrorV2, ReplayedNativeConditionalSourceV2,
 };
+use crate::{NativeConditionalCpuMappingContextV1, NativeConditionalCpuMappingExpectationV1};
 use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
 use fe2o3_compiler_ffi::{
     INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V5 as METADATA,
     InertSemanticCompilerModuleHandoffV5 as Handoff,
+};
+use fe2o3_compiler_lineage::{
+    RUSTC_ENROLLMENT_INVENTORY_WORKING_STORAGE_V1, read_rustc_enrollment_inventory_v1,
 };
 use fe2o3_kernel_descriptor::{
     DESCRIPTOR_READER_SCRATCH_STORAGE_V5, DESCRIPTOR_TABLE_VIEW_STORAGE_V5,
@@ -179,6 +184,34 @@ const WORKING: usize = size_of::<Account>()
 
 type CpuOrigins<'a> = Option<&'a [NativeConditionalCpuExpectationV1]>;
 
+#[derive(Clone, Copy)]
+enum CpuSelection<'a> {
+    Legacy(CpuOrigins<'a>),
+    Mapping(&'a NativeConditionalCpuMappingExpectationV1),
+}
+impl<'a> From<CpuOrigins<'a>> for CpuSelection<'a> {
+    fn from(value: CpuOrigins<'a>) -> Self {
+        Self::Legacy(value)
+    }
+}
+fn selection_backing(selection: CpuSelection<'_>) -> usize {
+    match selection {
+        CpuSelection::Legacy(origins) => origin_backing(origins),
+        CpuSelection::Mapping(_) => size_of::<NativeConditionalCpuMappingExpectationV1>(),
+    }
+}
+fn selection_working(selection: CpuSelection<'_>) -> usize {
+    match selection {
+        CpuSelection::Legacy(origins) => origin_working(origins),
+        CpuSelection::Mapping(_) => {
+            RUSTC_ENROLLMENT_INVENTORY_WORKING_STORAGE_V1
+                + size_of::<NativeConditionalCpuMappingContextV1<'_>>()
+                + size_of::<CpuSelection<'_>>()
+                + 2 * size_of::<usize>()
+        }
+    }
+}
+
 fn origin_backing(origins: CpuOrigins<'_>) -> usize {
     origins.map_or(0, std::mem::size_of_val)
 }
@@ -221,7 +254,7 @@ pub fn recover_compiler_conditional_native_semantic_handoff_v5(
     recover_using(
         handoff,
         accepted,
-        None,
+        CpuSelection::Legacy(None),
         expected_limits,
         profile,
         &entry,
@@ -255,7 +288,7 @@ pub fn recover_compiler_conditional_native_semantic_handoff_in_original_account_
         recover_using(
             handoff,
             accepted,
-            None,
+            CpuSelection::Legacy(None),
             expected_limits,
             profile,
             &entry,
@@ -282,7 +315,7 @@ pub fn recover_compiler_conditional_native_semantic_handoff_with_cpu_origins_v5(
     recover_using(
         handoff,
         accepted,
-        origins,
+        origins.into(),
         expected_limits,
         profile,
         &entry,
@@ -318,7 +351,7 @@ pub fn recover_compiler_conditional_native_semantic_handoff_with_cpu_origins_in_
         recover_using(
             handoff,
             accepted,
-            origins,
+            origins.into(),
             expected_limits,
             profile,
             &entry,
@@ -352,7 +385,7 @@ fn original_recovery<T>(
 fn recover_using(
     handoff: Handoff,
     accepted: &[NativeConditionalRootPolicyV2<'_>],
-    origins: CpuOrigins<'_>,
+    origins: CpuSelection<'_>,
     expected_limits: Limits,
     profile: Profile,
     entry: &Account,
@@ -369,10 +402,10 @@ fn recover_using(
         original,
         budget,
     );
-    let (parts, retained) = if origins.is_some() {
-        finish_with_origin_working(entry, origin_working(origins), budget, result)
-    } else {
+    let (parts, retained) = if matches!(origins, CpuSelection::Legacy(None)) {
         finish(entry, budget, result)
+    } else {
+        finish_with_origin_working(entry, selection_working(origins), budget, result)
     }?;
     let storage = RecoveredCompilerConditionalNativeSemanticHandoffStorageV5(retained);
     Ok((
@@ -428,11 +461,19 @@ fn begin_after_entry_with_origins(
     origins: CpuOrigins<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<Account, Error> {
+    begin_selected(backing_capacity, origins.into(), budget)
+}
+
+fn begin_selected(
+    backing_capacity: usize,
+    origins: CpuSelection<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<Account, Error> {
     let entry = Account::capture(budget);
-    if budget.storage() < sum(&[backing_capacity, METADATA, origin_backing(origins)])? {
+    if budget.storage() < sum(&[backing_capacity, METADATA, selection_backing(origins)])? {
         return Err(Resource::Accounting.into());
     }
-    budget.reserve_storage(sum(&[HEADER, WORKING, origin_working(origins)])?)?;
+    budget.reserve_storage(sum(&[HEADER, WORKING, selection_working(origins)])?)?;
     Ok(entry)
 }
 
@@ -470,7 +511,7 @@ fn finish_with_origin_working<T>(
 fn replay(
     handoff: &Handoff,
     accepted: &[NativeConditionalRootPolicyV2<'_>],
-    origins: CpuOrigins<'_>,
+    origins: CpuSelection<'_>,
     expected_limits: Limits,
     profile: Profile,
     entry: &Account,
@@ -517,7 +558,31 @@ fn replay(
         descriptors: &table,
         final_llvm,
     };
-    let (source, receipt) = if let Some(expected_cpu) = origins {
+    let (source, receipt) = if let CpuSelection::Mapping(expected) = origins {
+        // Decode the actual retained signed-metadata field, never an alternate
+        // external view with merely equal invocation/policy header claims.
+        let inventory = read_rustc_enrollment_inventory_v1(
+            capsule.rustc_identity_inventory().canonical_preimage(),
+            MAX_STORAGE,
+            |work| budget.charge_work(work),
+        )
+        .map_err(|error| Error(Cause::Inventory(error)))?;
+        let mapping = NativeConditionalCpuMappingContextV1 {
+            inventory: &inventory,
+            expected,
+        };
+        let result = validate_native_conditional_source_through_f_with_cpu_mapping_using_v2(
+            capsule.source_packet_bytes(),
+            accepted,
+            &mapping,
+            inputs,
+            budget,
+            original,
+            |source, _, relation, budget| joins::check(handoff, source, relation, budget),
+        );
+        drop(inventory);
+        result
+    } else if let CpuSelection::Legacy(Some(expected_cpu)) = origins {
         if original {
             validate_native_conditional_source_through_f_with_cpu_origins_using_original_account_v2(
                 capsule.source_packet_bytes(),
@@ -563,7 +628,7 @@ fn replay(
         sum(&[
             HEADER,
             WORKING,
-            origin_working(origins),
+            selection_working(origins),
             frame_storage,
             history_storage,
             catalog_storage,
@@ -602,3 +667,77 @@ fn replay(
 #[cfg(test)]
 #[path = "compiler_native_conditional_handoff_v5/tests.rs"]
 mod tests;
+
+/// Explicit mapped recovery. Independent coordinates select the new inventory
+/// route; malformed or legacy inventory never falls back. Only the actual
+/// retained capsule inventory is decoded. This remains content recovery, not
+/// installed-policy, authenticated-carriage, original-source or currentness authority.
+/// Prepay handoff capacity/metadata and the expectation on the original account.
+///
+/// ```compile_fail
+/// use fe2o3_compiler_lineage::RustcEnrollmentInventoryRefV1;
+/// use fe2o3_verifier::*;
+/// fn substitute(policy: &[u8], handoff: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5,
+///     alternate: &RustcEnrollmentInventoryRefV1<'_>, budget: &mut fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1<'_>) {
+///     recover_native_conditional_handoff_under_policy_file_with_cpu_mapping_v1(policy, handoff, alternate, budget);
+/// }
+/// ```
+pub fn recover_compiler_conditional_native_semantic_handoff_with_cpu_mapping_v5(
+    handoff: Handoff,
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    expected: &NativeConditionalCpuMappingExpectationV1,
+    expected_limits: Limits,
+    profile: Profile,
+    budget: &mut Budget<'_>,
+) -> Result<Output, Error> {
+    budget.charge_work(10)?;
+    if budget.storage_limit() > MAX_STORAGE {
+        return Err(Error::mismatch("bounded conditional native storage cap"));
+    }
+    let selection = CpuSelection::Mapping(expected);
+    let entry = begin_selected(handoff.backing_capacity(), selection, budget)?;
+    recover_using(
+        handoff,
+        accepted,
+        selection,
+        expected_limits,
+        profile,
+        &entry,
+        false,
+        budget,
+    )
+}
+
+/// The mapped route with the existing original-account overlap/window protocol.
+/// Complete actual input capacities count again; all failures remain terminal.
+pub fn recover_compiler_conditional_native_semantic_handoff_with_cpu_mapping_in_original_account_v5(
+    handoff: Handoff,
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    expected: &NativeConditionalCpuMappingExpectationV1,
+    expected_limits: Limits,
+    profile: Profile,
+    budget: &mut Budget<'_>,
+) -> Result<Output, Error> {
+    let selection = CpuSelection::Mapping(expected);
+    let policy = crate::compiler_native_conditional_policy_roster_v1::native_conditional_root_policy_input_storage_v2(accepted, budget)?;
+    let inputs = sum(&[
+        handoff.backing_capacity(),
+        METADATA,
+        policy,
+        selection_backing(selection),
+    ])?;
+    original_recovery(inputs, budget, |b| {
+        b.charge_work(10)?;
+        let entry = begin_selected(handoff.backing_capacity(), selection, b)?;
+        recover_using(
+            handoff,
+            accepted,
+            selection,
+            expected_limits,
+            profile,
+            &entry,
+            true,
+            b,
+        )
+    })
+}

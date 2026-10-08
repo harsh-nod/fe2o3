@@ -22,6 +22,11 @@ mod account;
 #[path = "compiler_native_conditional_source_proof_v2/cpu_origin.rs"]
 mod cpu_origin;
 pub use cpu_origin::{NativeConditionalCpuExpectationV1, NativeConditionalCpuOriginExpectationV1};
+#[path = "compiler_native_conditional_source_proof_v2/cpu_mapping.rs"]
+pub(crate) mod cpu_mapping;
+pub use cpu_mapping::{
+    NativeConditionalCpuMappingContextV1, NativeConditionalCpuMappingExpectationV1,
+};
 #[path = "compiler_native_conditional_source_proof_v2/error.rs"]
 mod error;
 #[path = "compiler_native_conditional_final_v2.rs"]
@@ -173,3 +178,29 @@ pub fn validate_native_conditional_source_packet_with_cpu_origins_v2(
 #[cfg(test)]
 #[path = "compiler_native_conditional_source_proof_v2/tests.rs"]
 mod tests;
+
+/// Replays a complete inventory projection against the actual reconstructed source.
+/// This lower content API does not authenticate externally supplied inventory or
+/// expectations. Caller prepays their actual backing and view headers. The
+/// original registration-only and origin-only entrypoints remain unchanged.
+pub fn validate_native_conditional_source_packet_with_cpu_mapping_v2(
+    bytes: &[u8],
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    mapping: &NativeConditionalCpuMappingContextV1<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        ReplayedNativeConditionalSourceV2,
+        NativeConditionalSourceStorageV2,
+    ),
+    E,
+> {
+    let selection = cpu_mapping::ReplaySelection::Mapping(mapping);
+    account::transfer(budget, |budget| {
+        selection.require_backing(budget)?;
+        with_decoded_native_conditional_source_packet_v2(bytes, budget, |packet, budget| {
+            reconstruct::reconstruct_selected(packet, accepted, selection, budget)
+        })
+        .map_err(|error| E(Cause::Packet(error)))?
+    })
+}

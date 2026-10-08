@@ -5,6 +5,9 @@
     reason = "typed terminal errors without an uncharged allocation"
 )]
 use super::NativeConditionalCpuExpectationV1;
+use super::cpu_mapping::{
+    NativeConditionalCpuMappingContextV1, ProjectedSelection, ReplaySelection,
+};
 use super::cpu_origin::{CpuReplayMode, DecodedCpu};
 use super::{
     Budget, E as SourceError, NativeConditionalRootPolicyV2, NativeConditionalSourcePacketInputV2,
@@ -111,7 +114,7 @@ pub fn validate_native_conditional_source_through_f_with_cpu_origins_v2(
     validate_using(
         packet_bytes,
         accepted,
-        CpuReplayMode::Expected(expected_cpu),
+        CpuReplayMode::Expected(expected_cpu).into(),
         inputs,
         budget,
         false,
@@ -147,7 +150,7 @@ where
     validate_using(
         packet_bytes,
         accepted,
-        CpuReplayMode::RegistrationOnly,
+        CpuReplayMode::RegistrationOnly.into(),
         inputs,
         budget,
         false,
@@ -176,7 +179,7 @@ where
     validate_using(
         packet_bytes,
         accepted,
-        CpuReplayMode::RegistrationOnly,
+        CpuReplayMode::RegistrationOnly.into(),
         inputs,
         budget,
         true,
@@ -203,7 +206,7 @@ where
     validate_using(
         packet_bytes,
         accepted,
-        CpuReplayMode::Expected(expected_cpu),
+        CpuReplayMode::Expected(expected_cpu).into(),
         inputs,
         budget,
         false,
@@ -232,7 +235,7 @@ where
     validate_using(
         packet_bytes,
         accepted,
-        CpuReplayMode::Expected(expected_cpu),
+        CpuReplayMode::Expected(expected_cpu).into(),
         inputs,
         budget,
         true,
@@ -243,7 +246,7 @@ where
 fn validate_using<Failure>(
     packet_bytes: &[u8],
     accepted: &[NativeConditionalRootPolicyV2<'_>],
-    origins: CpuReplayMode<'_>,
+    origins: ReplaySelection<'_>,
     inputs: Inputs<'_, '_, '_>,
     budget: &mut Budget<'_>,
     original_history: bool,
@@ -257,10 +260,7 @@ fn validate_using<Failure>(
 where
     Failure: From<Error> + From<SourceError> + From<Resource>,
 {
-    let origin_header = match origins {
-        CpuReplayMode::RegistrationOnly => 0,
-        CpuReplayMode::Expected(_) => size_of::<CpuReplayMode<'_>>(),
-    };
+    let origin_header = origins.working_header();
     let header = header::<Failure>(std::mem::size_of_val(&join))?
         .checked_add(origin_header)
         .ok_or(Resource::Arithmetic)?;
@@ -293,9 +293,16 @@ where
                             accepted,
                             budget,
                             |source, packet, roots, retained, budget| {
-                                check_source(
-                                    source, packet, accepted, origins, roots, retained, &inputs,
-                                    &history, budget, join,
+                                origins.with_projection(
+                                    source,
+                                    packet,
+                                    budget,
+                                    |origins, budget| {
+                                        check_source(
+                                            source, packet, accepted, origins, roots, retained,
+                                            &inputs, &history, budget, join,
+                                        )
+                                    },
                                 )
                             },
                         )
@@ -353,7 +360,7 @@ fn check_source<Failure>(
     source: &ReplayedNativeSourceV1,
     packet: &NativeConditionalSourcePacketInputV2<'_>,
     accepted: &[NativeConditionalRootPolicyV2<'_>],
-    origins: CpuReplayMode<'_>,
+    origins: ProjectedSelection<'_>,
     roots: &mut Vec<ReplayedRoot>,
     retained: &mut usize,
     inputs: &Inputs<'_, '_, '_>,
@@ -469,3 +476,51 @@ where
 #[cfg(test)]
 #[path = "compiler_native_conditional_final_v2/tests.rs"]
 mod tests;
+
+/// Mapped counterpart over a caller-owned inert inventory. Original capture and
+/// admission are external duties; native recovery binds the actual capsule field.
+pub fn validate_native_conditional_source_through_f_with_cpu_mapping_v2(
+    packet_bytes: &[u8],
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    mapping: &NativeConditionalCpuMappingContextV1<'_>,
+    inputs: Inputs<'_, '_, '_>,
+    budget: &mut Budget<'_>,
+) -> Result<Output, Error> {
+    validate_using(
+        packet_bytes,
+        accepted,
+        ReplaySelection::Mapping(mapping),
+        inputs,
+        budget,
+        false,
+        |_, _, _, _| Ok(()),
+    )
+}
+
+pub(crate) fn validate_native_conditional_source_through_f_with_cpu_mapping_using_v2<Failure>(
+    packet_bytes: &[u8],
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    mapping: &NativeConditionalCpuMappingContextV1<'_>,
+    inputs: Inputs<'_, '_, '_>,
+    budget: &mut Budget<'_>,
+    original_history: bool,
+    join: impl FnOnce(
+        &ReplayedNativeSourceV1,
+        &DecodedHistory<'_, '_>,
+        &Relation<'_, '_, '_, '_, '_>,
+        &mut Budget<'_>,
+    ) -> Result<(), Failure>,
+) -> Result<Output, Failure>
+where
+    Failure: From<Error> + From<SourceError> + From<Resource>,
+{
+    validate_using(
+        packet_bytes,
+        accepted,
+        ReplaySelection::Mapping(mapping),
+        inputs,
+        budget,
+        original_history,
+        join,
+    )
+}

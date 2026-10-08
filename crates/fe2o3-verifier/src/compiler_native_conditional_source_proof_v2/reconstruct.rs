@@ -78,24 +78,41 @@ pub(super) fn reconstruct_with_origins(
     ),
     E,
 > {
+    reconstruct_selected(packet, accepted, origins.into(), budget)
+}
+
+pub(super) fn reconstruct_selected(
+    packet: NativeConditionalSourcePacketInputV2<'_>,
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    origins: cpu_mapping::ReplaySelection<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        ReplayedNativeConditionalSourceV2,
+        NativeConditionalSourceStorageV2,
+    ),
+    E,
+> {
     origins.require_roster(packet.roots, accepted, budget)?;
     reconstruct_using(
         packet,
         accepted,
         budget,
         |source, packet, roots, retained, budget| {
-            reconstruct_roots(
-                source,
-                packet,
-                accepted,
-                roots,
-                retained,
-                budget,
-                |ordinal, source, row, policy, _, budget| {
-                    let origin = origins.at(ordinal, row.semantic_root, budget)?;
-                    root::reconstruct_root(source, row, policy, origin, budget)
-                },
-            )
+            origins.with_projection(source, packet, budget, |origins, budget| {
+                reconstruct_roots(
+                    source,
+                    packet,
+                    accepted,
+                    roots,
+                    retained,
+                    budget,
+                    |ordinal, source, row, policy, _, budget| {
+                        let origin = origins.at(ordinal, row.semantic_root, budget)?;
+                        root::reconstruct_root(source, row, policy, origin, budget)
+                    },
+                )
+            })
         },
     )
 }

@@ -200,7 +200,30 @@ fn recover_under_policy_file_using(
     crate::RecoveredCompilerConditionalNativeSemanticHandoffV5,
     crate::RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
 )> {
-    if let Some(expected) = expected_cpu {
+    recover_under_policy_file_selected(
+        policy_bytes,
+        handoff,
+        PolicyCpuSelection::Legacy(expected_cpu),
+        budget,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum PolicyCpuSelection<'a> {
+    Legacy(Option<&'a [crate::NativeConditionalCpuExpectationV1]>),
+    Mapping(&'a crate::NativeConditionalCpuMappingExpectationV1),
+}
+
+fn recover_under_policy_file_selected(
+    policy_bytes: &[u8],
+    handoff: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5,
+    expected_cpu: PolicyCpuSelection<'_>,
+    budget: &mut Budget<'_>,
+) -> io::Result<(
+    crate::RecoveredCompilerConditionalNativeSemanticHandoffV5,
+    crate::RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
+)> {
+    if let PolicyCpuSelection::Legacy(Some(expected)) = expected_cpu {
         require_cpu_origin_backing(
             policy_bytes.len(),
             handoff.backing_capacity(),
@@ -208,10 +231,27 @@ fn recover_under_policy_file_using(
             budget,
         )?;
     }
-    let selection_storage = if expected_cpu.is_some() {
-        size_of::<Option<&[crate::NativeConditionalCpuExpectationV1]>>() + size_of::<usize>()
-    } else {
-        0
+    if let PolicyCpuSelection::Mapping(_) = expected_cpu {
+        budget.charge_work(5).map_err(other)?;
+        let minimum = [
+            policy_bytes.len(),
+            handoff.backing_capacity(),
+            fe2o3_compiler_ffi::INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V5,
+            size_of::<crate::NativeConditionalCpuMappingExpectationV1>(),
+        ]
+        .into_iter()
+        .try_fold(0usize, |n, v| n.checked_add(v))
+        .ok_or_else(|| other(ResourceError::Arithmetic))?;
+        if budget.storage() < minimum {
+            return Err(other(ResourceError::Accounting));
+        }
+    }
+    let selection_storage = match expected_cpu {
+        PolicyCpuSelection::Legacy(Some(_)) => {
+            size_of::<Option<&[crate::NativeConditionalCpuExpectationV1]>>() + size_of::<usize>()
+        }
+        PolicyCpuSelection::Legacy(None) => 0,
+        PolicyCpuSelection::Mapping(_) => size_of::<PolicyCpuSelection<'_>>() + size_of::<usize>(),
     };
     if selection_storage != 0 {
         budget.reserve_storage(selection_storage).map_err(other)?;
@@ -248,11 +288,14 @@ fn recover_under_policy_file_using(
             let limits = fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1::production_v1();
             let profile = fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942;
             match expected_cpu {
-                Some(expected) => crate::recover_compiler_conditional_native_semantic_handoff_with_cpu_origins_in_original_account_v5(
+                PolicyCpuSelection::Legacy(Some(expected)) => crate::recover_compiler_conditional_native_semantic_handoff_with_cpu_origins_in_original_account_v5(
                     handoff, roots, expected, limits, profile, b,
                 ),
-                None => crate::recover_compiler_conditional_native_semantic_handoff_in_original_account_v5(
+                PolicyCpuSelection::Legacy(None) => crate::recover_compiler_conditional_native_semantic_handoff_in_original_account_v5(
                     handoff, roots, limits, profile, b,
+                ),
+                PolicyCpuSelection::Mapping(expected) => crate::recover_compiler_conditional_native_semantic_handoff_with_cpu_mapping_in_original_account_v5(
+                    handoff, roots, expected, limits, profile, b,
                 ),
             }
             .map_err(|_| io::Error::other("independent native V5 recovery refused"))
@@ -272,6 +315,28 @@ fn recover_under_policy_file_using(
 
 fn other(error: impl std::error::Error + Send + Sync + 'static) -> io::Error {
     io::Error::other(error)
+}
+
+/// Keeps the exact installed-policy content checks and fixed gfx942 profile,
+/// then decodes mapping only from the handoff's actual retained inventory.
+/// Independent invocation/policy coordinates remain external acceptance duties;
+/// the native-policy identity is not this semantic policy file's hash. Input
+/// backing and expectation are prepaid; errors and unwinds remain terminal.
+pub fn recover_native_conditional_handoff_under_policy_file_with_cpu_mapping_v1(
+    policy_bytes: &[u8],
+    handoff: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5,
+    expected: &crate::NativeConditionalCpuMappingExpectationV1,
+    budget: &mut Budget<'_>,
+) -> io::Result<(
+    crate::RecoveredCompilerConditionalNativeSemanticHandoffV5,
+    crate::RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
+)> {
+    recover_under_policy_file_selected(
+        policy_bytes,
+        handoff,
+        PolicyCpuSelection::Mapping(expected),
+        budget,
+    )
 }
 fn require(condition: bool, reason: &'static str) -> io::Result<()> {
     if condition {
