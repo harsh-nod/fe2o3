@@ -369,10 +369,33 @@ fn scalar_plain_return_summary_rejects_missing_foreign_and_unsupported_coordinat
                 .returned
                 .destination = old;
             let other_routes = scan(&paired, 0, out)?;
+            // Same-account coordinate refusals still authenticate the retained model.
+            let validation_before = (
+                out.budget.work(),
+                out.budget.storage(),
+                out.budget.peak_storage(),
+                out.text.len(),
+            );
+            paired.check(out)?;
+            let validation_work = out.budget.work() - validation_before.0;
+            assert!(validation_work > 0);
+            assert_eq!(
+                (
+                    out.budget.storage(),
+                    out.budget.peak_storage(),
+                    out.text.len()
+                ),
+                (
+                    validation_before.1,
+                    validation_before.2,
+                    validation_before.3
+                )
+            );
             let before = (
                 out.budget.work(),
                 out.budget.storage(),
                 out.budget.peak_storage(),
+                out.text.len(),
             );
             assert!(matches!(
                 derive(&paired, &allocation, &other_routes, root, block, &hint, out),
@@ -382,15 +405,17 @@ fn scalar_plain_return_summary_rejects_missing_foreign_and_unsupported_coordinat
                 (
                     out.budget.work(),
                     out.budget.storage(),
-                    out.budget.peak_storage()
+                    out.budget.peak_storage(),
+                    out.text.len(),
                 ),
-                before
+                (before.0 + validation_work, before.1, before.2, before.3)
             );
             let other_allocation = root_returns::scan(&paired, 0, out)?;
             let before = (
                 out.budget.work(),
                 out.budget.storage(),
                 out.budget.peak_storage(),
+                out.text.len(),
             );
             assert!(matches!(
                 derive(&paired, &other_allocation, &routes, root, block, &hint, out),
@@ -400,9 +425,10 @@ fn scalar_plain_return_summary_rejects_missing_foreign_and_unsupported_coordinat
                 (
                     out.budget.work(),
                     out.budget.storage(),
-                    out.budget.peak_storage()
+                    out.budget.peak_storage(),
+                    out.text.len(),
                 ),
-                before
+                (before.0 + 2 * validation_work, before.1, before.2, before.3)
             );
             assert!(out.text.is_empty());
             Ok(())
@@ -546,6 +572,7 @@ fn scalar_plain_return_summary_exact_and_one_short_accounts_include_full_output(
 
 #[test]
 fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_coordinates() {
+    let mut coverage = Vec::new();
     for layout in [Layout::Blocked, Layout::Striped] {
         for nested in [false, true] {
             fixtures::run_callable_transform(LIMIT, LIMIT,
@@ -553,14 +580,57 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                 |plan, out| with_tile_slots(plan, layout, out, |slots, out| {
                     let mut program = SourceByteProgram::derive(plan, slots, out)?;
                     let paired = PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
+                    let inventory = paired.slots.correspondence(out)?.inventory(out.budget)?;
                     let (mut scalar_count, mut empty_count) = (0, 0);
+                    let source_hint_count: usize = paired.roots.iter().map(|row|
+                        row.step_hints.as_ref().unwrap().cuts.iter()
+                            .filter(|hint| hint.scalar_return_v325.is_some()).count()).sum();
+                    let mut joined_hint_count = 0;
+                    let mut coordinates = Vec::new();
                     for (root, row) in paired.roots.iter().enumerate() {
                         let allocation = root_returns::scan(&paired, root, out)?;
                         let routes = scan(&paired, root, out)?;
+                        let allocation_free = allocation.allocation_free(&paired, root, out)?;
                         for (block, cut) in row.cuts.iter().enumerate() {
                             let Some(cut) = cut else { continue };
                             let hint = row.step_hints.as_ref().unwrap().cuts.iter().find(|hint| hint.pc == cut.source).unwrap();
-                            let Some(summary) = derive(&paired, &allocation, &routes, root, block, hint, out)? else { continue };
+                            let summary = derive(&paired, &allocation, &routes, root, block, hint, out)?;
+                            let candidate = hint.scalar_return_v325.as_ref().map(|source| source.statements.len());
+                            joined_hint_count += usize::from(candidate.is_some());
+                            assert!(coordinates.len() < 64, "bounded fixture coordinate census");
+                            coordinates.push((root, hint.instance, hint.pc, row.blocks.start + block, candidate, summary.is_some()));
+                            if let Some(source) = &hint.scalar_return_v325 {
+                                let first = &inventory.blocks()[row.blocks.start + block];
+                                let owner = paired.instances[cut.instance].as_ref().unwrap();
+                                let binding = owner.returned.map(|binding| (
+                                    binding.frame, binding.definition,
+                                    match binding.source { SourceValue::Local(local) => Some(local), _ => None },
+                                    matches!(binding.logical, LogicalBinding::Plain),
+                                    binding.definition.map(|id| inventory.definitions()[id].ty.as_scalar()),
+                                ));
+                                let edge = inventory.edges().get(first.edges.start).filter(|_| !first.edges.is_empty());
+                                let transfer = edge.and_then(|edge| inventory.edge_arguments().get(edge.bindings.start)
+                                    .filter(|_| !edge.bindings.is_empty())).map(|binding| (
+                                        binding.incoming_definition, binding.target_definition,
+                                        inventory.definitions()[binding.incoming_definition].ty.as_scalar(),
+                                        inventory.definitions()[binding.target_definition].ty.as_scalar(),
+                                    ));
+                                let route = edge.and_then(|edge| routes.rows.get(edge.target.block as usize)).copied();
+                                let continuation = match route {
+                                    Some(Route::Cut { block, .. }) => row.cuts[block].as_ref().map(|next| {
+                                        let parent = paired.instances[next.instance].as_ref().unwrap();
+                                        (next.source, parent.owners.len(), parent.owners.as_slice()
+                                            == &owner.owners[..owner.owners.len() - 1])
+                                    }),
+                                    _ => None,
+                                };
+                                eprintln!("V328_SCALAR_RETURN_TARGET layout={layout:?} nested={nested} root={root} instance={} source_pc={} target_block={} allocation_free={allocation_free} ops={} edges={} branch={} binding(frame,definition,source_local,plain,scalar_type)={binding:?} edge(function,block,bindings)={:?} transfer(incoming,result,incoming_scalar,result_scalar)={transfer:?} route={route:?} continuation(pc,depth,owner_prefix)={continuation:?} source(destination,continuation,depth,bits)={:?}",
+                                    hint.instance, hint.pc, row.blocks.start + block, first.operations.len(), first.edges.len(),
+                                    matches!(first.terminator, KirTerminator::Branch { .. }),
+                                    edge.map(|edge| (edge.target.function, edge.target.block, edge.bindings.len())),
+                                    (source.returned.destination, source.returned.continuation, source.returned.depth, source.returned.bits));
+                            }
+                            let Some(summary) = summary else { continue };
                             if summary.source.statements.is_empty() {
                                 assert!(nested);
                                 assert_eq!(summary.source.returned.depth, 2);
@@ -575,11 +645,12 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                             }
                         }
                     }
-                    assert!(scalar_count >= 4);
-                    assert_eq!(empty_count > 0, nested);
+                    eprintln!("V328_SCALAR_RETURN_SELECTION layout={layout:?} nested={nested} source_hints={source_hint_count} joined_hints={joined_hint_count} scalar={scalar_count} empty={empty_count} coordinates(root,instance,source_pc,target_block,candidate_statements,selected)={coordinates:?}");
                     program.emit(out)?;
                     paired.emit(out)?;
-                    assert!(out.text.contains("let value_2 = MemoryValueV30::Scalar(original_invocation_source_scalar_trace_"));
+                    let emitted_values = out.text.contains("let value_2 = MemoryValueV30::Scalar(original_invocation_source_scalar_trace_");
+                    assert!(coverage.len() < 4, "bounded fixture layout census");
+                    coverage.push((layout, nested, scalar_count, empty_count, emitted_values));
                     Ok(())
                 })).0.unwrap();
         }
@@ -608,6 +679,15 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
         )
         .0
         .unwrap();
+    }
+    assert_eq!(coverage.len(), 4);
+    for (layout, nested, scalar_count, empty_count, emitted_values) in coverage {
+        assert!(
+            scalar_count >= 4,
+            "layout={layout:?} nested={nested} scalar={scalar_count}"
+        );
+        assert_eq!(empty_count > 0, nested, "layout={layout:?} nested={nested}");
+        assert!(emitted_values, "layout={layout:?} nested={nested}");
     }
 }
 
