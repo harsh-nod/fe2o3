@@ -5,7 +5,11 @@
 #![feature(rustc_private)]
 #![forbid(unsafe_code)]
 #[cfg(target_os = "linux")]
+#[path = "source_local_order_recipe_report_v1/mod.rs"]
+mod report_v1;
+#[cfg(target_os = "linux")]
 mod linux {
+    use super::report_v1 as report;
     use rustc_codegen_fe2o3::{
         SourceLocalOrderOrderV1 as Order, SourceLocalOrderRecipeRequestV1 as Request,
         SourceLocalOrderRelationV1 as Relation, SourceLocalOrderSourceBindingModeV1 as Binding,
@@ -169,8 +173,10 @@ mod linux {
         let (options, rest) = args.split_at(split);
         let rustc = &rest[1..];
         let mut retained = None;
-        let (request, recipe_output, llvm_output) = match options.first().map(String::as_str) {
-            Some("create") if options.len() == 9 => {
+        let selected = report::command(options.first().map(String::as_str));
+        let json = selected.is_some_and(|(_, format)| format == report::Format::Json);
+        let (request, recipe_output, llvm_output) = match selected.map(|(action, _)| action) {
+            Some(report::Action::Create) if options.len() == 9 => {
                 let preference = match options[3].as_str() {
                     "source-order" => Order::SourceOrder,
                     "reverse-ready" => Order::ReverseReady,
@@ -204,7 +210,7 @@ mod linux {
                     absolute(&options[8])?,
                 )
             }
-            Some("replay") if options.len() == 6 => {
+            Some(report::Action::Replay) if options.len() == 6 => {
                 let current = RetainedRecipe::open(&options[3], hash(&options[4])?)?;
                 let request = Request::replay(&options[1], hash(&options[2])?, &current.bytes)?;
                 retained = Some(current);
@@ -212,7 +218,7 @@ mod linux {
             }
             _ => {
                 return Err(fail(
-                    "usage: create SOURCE_REL SHA ORDER RELATION STRENGTH BINDING RECIPE_OUT LLVM_OUT -- RUSTC_ARGV... | replay SOURCE_REL SHA RECIPE_IN RECIPE_SHA LLVM_OUT -- RUSTC_ARGV...",
+                    "usage: create SOURCE_REL SHA ORDER RELATION STRENGTH BINDING RECIPE_OUT LLVM_OUT -- RUSTC_ARGV... | replay SOURCE_REL SHA RECIPE_IN RECIPE_SHA LLVM_OUT -- RUSTC_ARGV...; create-json/replay-json use the same arguments and emit diagnostic JSON",
                 ));
             }
         };
@@ -230,7 +236,15 @@ mod linux {
         if let Some(file) = retained.as_mut() {
             file.recheck()?;
         }
-        let output = attempt.result().map_err(|error| fail(error.diagnostic()))?;
+        let output = match attempt.result() {
+            Ok(output) => output,
+            Err(error) => {
+                if json {
+                    report::emit(&attempt, report::Publication::NotAttempted)?;
+                }
+                return Err(fail(error.diagnostic()));
+            }
+        };
         if let Some(path) = recipe_output {
             publish(
                 &path,
@@ -242,11 +256,15 @@ mod linux {
             return Err(fail("Replay unexpectedly regenerated a recipe"));
         }
         publish(&llvm_output, output.llvm_ir().as_bytes())?;
-        println!(
-            "checked canonical {:?}; constraint {:?}; LLVM from actual current L; no native/proof/launch authority",
-            output.evidence().actual_relation(),
-            output.evidence().constraint_outcome()
-        );
+        if json {
+            report::emit(&attempt, report::Publication::Completed)?;
+        } else {
+            println!(
+                "checked canonical {:?}; constraint {:?}; LLVM from actual current L; no native/proof/launch authority",
+                output.evidence().actual_relation(),
+                output.evidence().constraint_outcome()
+            );
+        }
         Ok(())
     }
 }
