@@ -9,6 +9,9 @@ use std::{
 
 const CAPACITY: usize = 127;
 const FLOOR: usize = METADATA + CAPACITY + 19;
+
+#[path = "cpu_origins_tests.rs"]
+mod cpu_origins;
 struct Dropped<'a>(&'a Cell<usize>);
 impl Drop for Dropped<'_> {
     fn drop(&mut self) {

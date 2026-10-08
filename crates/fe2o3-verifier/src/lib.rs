@@ -30,6 +30,8 @@ pub use compiler_native_conditional_handoff_v5::{
     RecoveredCompilerConditionalNativeSemanticHandoffV5,
     recover_compiler_conditional_native_semantic_handoff_in_original_account_v5,
     recover_compiler_conditional_native_semantic_handoff_v5,
+    recover_compiler_conditional_native_semantic_handoff_with_cpu_origins_in_original_account_v5,
+    recover_compiler_conditional_native_semantic_handoff_with_cpu_origins_v5,
 };
 pub use compiler_native_conditional_policy_roster_v1::{
     InertNativeConditionalPolicyRosterV1, NativeConditionalPolicyReconstructionErrorV1,
@@ -41,6 +43,7 @@ pub use native_conditional_root_policy_file_v1::{
     MAX_NATIVE_CONDITIONAL_ROOT_POLICY_FILE_BYTES_V1,
     encode_native_conditional_root_policy_file_v1,
     recover_native_conditional_handoff_under_policy_file_v1,
+    recover_native_conditional_handoff_under_policy_file_with_cpu_origins_v1,
     validate_native_conditional_root_policy_file_v1,
 };
 pub mod compiler_native_conditional_source_packet_v2;

@@ -9,9 +9,12 @@ use crate::compiler_native_conditional_source_proof_v2::final_replay::{
     account::{self, Account},
     validate_native_conditional_source_through_f_using_original_account_v2,
     validate_native_conditional_source_through_f_using_v2,
+    validate_native_conditional_source_through_f_with_cpu_origins_using_original_account_v2,
+    validate_native_conditional_source_through_f_with_cpu_origins_using_v2,
 };
 use crate::{
-    NativeConditionalFinalErrorV2, NativeConditionalFinalInputsV2, NativeConditionalRootPolicyV2,
+    NativeConditionalCpuExpectationV1, NativeConditionalFinalErrorV2,
+    NativeConditionalFinalInputsV2, NativeConditionalRootPolicyV2,
     NativeConditionalSourceProofErrorV2, ReplayedNativeConditionalSourceV2,
 };
 use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
@@ -174,6 +177,20 @@ const WORKING: usize = size_of::<Account>()
     + size_of::<Result<Output, Error>>()
     + size_of::<[usize; 8]>();
 
+type CpuOrigins<'a> = Option<&'a [NativeConditionalCpuExpectationV1]>;
+
+fn origin_backing(origins: CpuOrigins<'_>) -> usize {
+    origins.map_or(0, std::mem::size_of_val)
+}
+
+fn origin_working(origins: CpuOrigins<'_>) -> usize {
+    if origins.is_some() {
+        size_of::<CpuOrigins<'_>>() + size_of::<usize>()
+    } else {
+        0
+    }
+}
+
 fn sum(values: &[usize]) -> Result<usize, Error> {
     values
         .iter()
@@ -204,6 +221,7 @@ pub fn recover_compiler_conditional_native_semantic_handoff_v5(
     recover_using(
         handoff,
         accepted,
+        None,
         expected_limits,
         profile,
         &entry,
@@ -234,7 +252,79 @@ pub fn recover_compiler_conditional_native_semantic_handoff_in_original_account_
     let inputs = sum(&[handoff.backing_capacity(), METADATA, policy])?;
     original_recovery(inputs, budget, |b| {
         let entry = begin_bounded(handoff.backing_capacity(), b)?;
-        recover_using(handoff, accepted, expected_limits, profile, &entry, true, b)
+        recover_using(
+            handoff,
+            accepted,
+            None,
+            expected_limits,
+            profile,
+            &entry,
+            true,
+            b,
+        )
+    })
+}
+
+/// Explicit per-root CPU codec selection; existing recovery remains V1-only.
+/// The independently retained expectation roster and full handoff/metadata
+/// backing must be prepaid together. Expectations are inert, not Loan custody.
+/// This returns the same content-only owner and preserves terminal failures.
+pub fn recover_compiler_conditional_native_semantic_handoff_with_cpu_origins_v5(
+    handoff: Handoff,
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    expected_cpu: &[NativeConditionalCpuExpectationV1],
+    expected_limits: Limits,
+    profile: Profile,
+    budget: &mut Budget<'_>,
+) -> Result<Output, Error> {
+    let origins = Some(expected_cpu);
+    let entry = begin_with_origins(handoff.backing_capacity(), expected_cpu, budget)?;
+    recover_using(
+        handoff,
+        accepted,
+        origins,
+        expected_limits,
+        profile,
+        &entry,
+        false,
+        budget,
+    )
+}
+
+/// Origin-selected recovery in the same original-account storage window.
+/// Complete handoff, metadata, borrowed policy and expectation backing count
+/// again under the existing additional <=256 MiB ceiling. No new account or
+/// enrollment authority is created; errors and unwinds retain reservations.
+pub fn recover_compiler_conditional_native_semantic_handoff_with_cpu_origins_in_original_account_v5(
+    handoff: Handoff,
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    expected_cpu: &[NativeConditionalCpuExpectationV1],
+    expected_limits: Limits,
+    profile: Profile,
+    budget: &mut Budget<'_>,
+) -> Result<Output, Error> {
+    let origins = Some(expected_cpu);
+    let policy = crate::compiler_native_conditional_policy_roster_v1::native_conditional_root_policy_input_storage_v2(
+        accepted, budget,
+    )?;
+    let inputs = sum(&[
+        handoff.backing_capacity(),
+        METADATA,
+        policy,
+        origin_backing(origins),
+    ])?;
+    original_recovery(inputs, budget, |b| {
+        let entry = begin_bounded_with_origins(handoff.backing_capacity(), expected_cpu, b)?;
+        recover_using(
+            handoff,
+            accepted,
+            origins,
+            expected_limits,
+            profile,
+            &entry,
+            true,
+            b,
+        )
     })
 }
 
@@ -262,6 +352,7 @@ fn original_recovery<T>(
 fn recover_using(
     handoff: Handoff,
     accepted: &[NativeConditionalRootPolicyV2<'_>],
+    origins: CpuOrigins<'_>,
     expected_limits: Limits,
     profile: Profile,
     entry: &Account,
@@ -271,13 +362,18 @@ fn recover_using(
     let result = replay(
         &handoff,
         accepted,
+        origins,
         expected_limits,
         profile,
         entry,
         original,
         budget,
     );
-    let (parts, retained) = finish(entry, budget, result)?;
+    let (parts, retained) = if origins.is_some() {
+        finish_with_origin_working(entry, origin_working(origins), budget, result)
+    } else {
+        finish(entry, budget, result)
+    }?;
     let storage = RecoveredCompilerConditionalNativeSemanticHandoffStorageV5(retained);
     Ok((
         RecoveredCompilerConditionalNativeSemanticHandoffV5 {
@@ -302,12 +398,41 @@ fn begin_bounded(backing_capacity: usize, budget: &mut Budget<'_>) -> Result<Acc
     begin_after_entry(backing_capacity, budget)
 }
 
+fn begin_with_origins(
+    backing_capacity: usize,
+    expected: &[NativeConditionalCpuExpectationV1],
+    budget: &mut Budget<'_>,
+) -> Result<Account, Error> {
+    budget.charge_work(10)?;
+    if budget.storage_limit() > MAX_STORAGE {
+        return Err(Error::mismatch("bounded conditional native storage cap"));
+    }
+    begin_after_entry_with_origins(backing_capacity, Some(expected), budget)
+}
+
+fn begin_bounded_with_origins(
+    backing_capacity: usize,
+    expected: &[NativeConditionalCpuExpectationV1],
+    budget: &mut Budget<'_>,
+) -> Result<Account, Error> {
+    budget.charge_work(10)?;
+    begin_after_entry_with_origins(backing_capacity, Some(expected), budget)
+}
+
 fn begin_after_entry(backing_capacity: usize, budget: &mut Budget<'_>) -> Result<Account, Error> {
+    begin_after_entry_with_origins(backing_capacity, None, budget)
+}
+
+fn begin_after_entry_with_origins(
+    backing_capacity: usize,
+    origins: CpuOrigins<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<Account, Error> {
     let entry = Account::capture(budget);
-    if budget.storage() < sum(&[backing_capacity, METADATA])? {
+    if budget.storage() < sum(&[backing_capacity, METADATA, origin_backing(origins)])? {
         return Err(Resource::Accounting.into());
     }
-    budget.reserve_storage(HEADER + WORKING)?;
+    budget.reserve_storage(sum(&[HEADER, WORKING, origin_working(origins)])?)?;
     Ok(entry)
 }
 
@@ -317,24 +442,35 @@ fn finish<T>(
     budget: &mut Budget<'_>,
     result: Result<(T, usize), Error>,
 ) -> Result<(T, usize), Error> {
-    if let Err(error) = entry.require(budget, HEADER + WORKING) {
+    finish_with_origin_working(entry, 0, budget, result)
+}
+
+fn finish_with_origin_working<T>(
+    entry: &Account,
+    origin_working: usize,
+    budget: &mut Budget<'_>,
+    result: Result<(T, usize), Error>,
+) -> Result<(T, usize), Error> {
+    let working = sum(&[WORKING, origin_working])?;
+    if let Err(error) = entry.require(budget, sum(&[HEADER, working])?) {
         drop(result);
         return Err(error.into());
     }
     let (parts, retained) = result?;
-    if let Err(error) = entry.require_exact(budget, sum(&[retained, WORKING])?) {
+    if let Err(error) = entry.require_exact(budget, sum(&[retained, working])?) {
         drop(parts);
         return Err(error.into());
     }
     // This known success-only transfer is the sole unreservation of live custody.
     // All retired temporary owners dropped inside replay before their releases.
-    budget.release_storage(sum(&[retained, WORKING])?)?;
+    budget.release_storage(sum(&[retained, working])?)?;
     Ok((parts, retained))
 }
 
 fn replay(
     handoff: &Handoff,
     accepted: &[NativeConditionalRootPolicyV2<'_>],
+    origins: CpuOrigins<'_>,
     expected_limits: Limits,
     profile: Profile,
     entry: &Account,
@@ -381,7 +517,27 @@ fn replay(
         descriptors: &table,
         final_llvm,
     };
-    let (source, receipt) = if original {
+    let (source, receipt) = if let Some(expected_cpu) = origins {
+        if original {
+            validate_native_conditional_source_through_f_with_cpu_origins_using_original_account_v2(
+                capsule.source_packet_bytes(),
+                accepted,
+                expected_cpu,
+                inputs,
+                budget,
+                |source, _, relation, budget| joins::check(handoff, source, relation, budget),
+            )
+        } else {
+            validate_native_conditional_source_through_f_with_cpu_origins_using_v2(
+                capsule.source_packet_bytes(),
+                accepted,
+                expected_cpu,
+                inputs,
+                budget,
+                |source, _, relation, budget| joins::check(handoff, source, relation, budget),
+            )
+        }
+    } else if original {
         validate_native_conditional_source_through_f_using_original_account_v2(
             capsule.source_packet_bytes(),
             accepted,
@@ -407,6 +563,7 @@ fn replay(
         sum(&[
             HEADER,
             WORKING,
+            origin_working(origins),
             frame_storage,
             history_storage,
             catalog_storage,

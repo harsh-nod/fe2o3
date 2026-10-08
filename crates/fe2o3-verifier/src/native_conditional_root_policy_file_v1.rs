@@ -148,6 +148,74 @@ pub fn recover_native_conditional_handoff_under_policy_file_v1(
     crate::RecoveredCompilerConditionalNativeSemanticHandoffV5,
     crate::RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
 )> {
+    recover_under_policy_file_using(policy_bytes, handoff, None, budget)
+}
+
+/// Same exact policy-file/source/roster checks with independently retained CPU
+/// expectations. This does not authenticate that roster's enrollment provenance.
+/// The file's existing gfx942-only profile and bytes are unchanged. In particular,
+/// enrollment native_policy_sha256 is not equated with this policy-file hash.
+/// Policy, handoff, metadata and expectations must be prepaid together; failures
+/// remain terminal, and no blanket refund scope encloses native recovery.
+pub fn recover_native_conditional_handoff_under_policy_file_with_cpu_origins_v1(
+    policy_bytes: &[u8],
+    handoff: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5,
+    expected_cpu: &[crate::NativeConditionalCpuExpectationV1],
+    budget: &mut Budget<'_>,
+) -> io::Result<(
+    crate::RecoveredCompilerConditionalNativeSemanticHandoffV5,
+    crate::RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
+)> {
+    recover_under_policy_file_using(policy_bytes, handoff, Some(expected_cpu), budget)
+}
+
+fn require_cpu_origin_backing(
+    policy_bytes: usize,
+    handoff_backing: usize,
+    expected_cpu: &[crate::NativeConditionalCpuExpectationV1],
+    budget: &mut Budget<'_>,
+) -> io::Result<()> {
+    budget.charge_work(5).map_err(other)?;
+    let minimum = [
+        policy_bytes,
+        handoff_backing,
+        fe2o3_compiler_ffi::INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V5,
+        std::mem::size_of_val(expected_cpu),
+    ]
+    .into_iter()
+    .try_fold(0usize, |n, v| n.checked_add(v))
+    .ok_or_else(|| other(ResourceError::Arithmetic))?;
+    if budget.storage() < minimum {
+        return Err(other(ResourceError::Accounting));
+    }
+    Ok(())
+}
+
+fn recover_under_policy_file_using(
+    policy_bytes: &[u8],
+    handoff: fe2o3_compiler_ffi::InertSemanticCompilerModuleHandoffV5,
+    expected_cpu: Option<&[crate::NativeConditionalCpuExpectationV1]>,
+    budget: &mut Budget<'_>,
+) -> io::Result<(
+    crate::RecoveredCompilerConditionalNativeSemanticHandoffV5,
+    crate::RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
+)> {
+    if let Some(expected) = expected_cpu {
+        require_cpu_origin_backing(
+            policy_bytes.len(),
+            handoff.backing_capacity(),
+            expected,
+            budget,
+        )?;
+    }
+    let selection_storage = if expected_cpu.is_some() {
+        size_of::<Option<&[crate::NativeConditionalCpuExpectationV1]>>() + size_of::<usize>()
+    } else {
+        0
+    };
+    if selection_storage != 0 {
+        budget.reserve_storage(selection_storage).map_err(other)?;
+    }
     budget
         .reserve_storage(size_of::<View<'_>>())
         .map_err(other)?;
@@ -177,19 +245,27 @@ pub fn recover_native_conditional_handoff_under_policy_file_v1(
         .map_err(other)?;
     let result = roster
         .with_root_policies(budget, |roots, b| {
-            crate::recover_compiler_conditional_native_semantic_handoff_in_original_account_v5(
-                handoff,
-                roots,
-                fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1::production_v1(),
-                fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
-                b,
-            )
+            let limits = fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1::production_v1();
+            let profile = fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942;
+            match expected_cpu {
+                Some(expected) => crate::recover_compiler_conditional_native_semantic_handoff_with_cpu_origins_in_original_account_v5(
+                    handoff, roots, expected, limits, profile, b,
+                ),
+                None => crate::recover_compiler_conditional_native_semantic_handoff_in_original_account_v5(
+                    handoff, roots, limits, profile, b,
+                ),
+            }
             .map_err(|_| io::Error::other("independent native V5 recovery refused"))
         })
         .map_err(other)??;
     drop(roster);
     budget
-        .release_storage(storage.retained_storage())
+        .release_storage(
+            storage
+                .retained_storage()
+                .checked_add(selection_storage)
+                .ok_or_else(|| other(ResourceError::Arithmetic))?,
+        )
         .map_err(other)?;
     Ok(result)
 }
@@ -236,6 +312,63 @@ mod tests {
         encode_native_conditional_policy_roster_v1,
     };
     use fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1 as Work;
+
+    #[test]
+    fn origin_selected_policy_input_backing_is_additive_exact_and_one_short() {
+        let expected = [crate::NativeConditionalCpuExpectationV1 {
+            semantic_root: 9,
+            origin: crate::NativeConditionalCpuOriginExpectationV1::SourceRegistrationV1,
+        }];
+        let old_inputs = 17
+            + 127
+            + fe2o3_compiler_ffi::INERT_SEMANTIC_COMPILER_MODULE_HANDOFF_DECODE_METADATA_STORAGE_V5;
+        let required = old_inputs + std::mem::size_of_val(&expected);
+        for paid in [old_inputs, required - 1, required] {
+            let mut work = Work::new(5);
+            let mut b = Budget::new(&mut work, required);
+            b.reserve_storage(paid).unwrap();
+            let ledger = b.work_ledger_identity_v1();
+            let result = require_cpu_origin_backing(17, 127, &expected, &mut b);
+            assert_eq!(result.is_ok(), paid == required);
+            if let Err(error) = result {
+                assert!(matches!(
+                    error
+                        .get_ref()
+                        .and_then(|e| e.downcast_ref::<ResourceError>()),
+                    Some(ResourceError::Accounting)
+                ));
+            }
+            assert_eq!(b.storage(), paid);
+            assert_eq!(b.work(), 5);
+            assert!(b.work_ledger_identity_v1() == ledger);
+        }
+    }
+
+    #[test]
+    fn origin_selected_policy_backing_denies_work_and_arithmetic_without_refund() {
+        let expected = [crate::NativeConditionalCpuExpectationV1 {
+            semantic_root: 9,
+            origin: crate::NativeConditionalCpuOriginExpectationV1::SourceRegistrationV1,
+        }];
+        for work_limit in [4, 5] {
+            let mut work = Work::new(work_limit);
+            let mut b = Budget::new(&mut work, 19);
+            b.reserve_storage(19).unwrap();
+            let error = require_cpu_origin_backing(usize::MAX, 1, &expected, &mut b).unwrap_err();
+            let resource = error
+                .get_ref()
+                .and_then(|e| e.downcast_ref::<ResourceError>())
+                .unwrap();
+            if work_limit == 4 {
+                assert!(matches!(resource, ResourceError::Work(_)));
+            } else {
+                assert!(matches!(resource, ResourceError::Arithmetic));
+            }
+            assert_eq!(b.storage(), 19);
+            assert_eq!(b.work(), if work_limit == 4 { 0 } else { 5 });
+            assert_eq!(b.failed_work().is_some(), work_limit == 4);
+        }
+    }
     pub(super) fn roster(count: usize) -> Vec<u8> {
         let signers = [[1; 32]];
         let roots: Vec<_> = (0..count)

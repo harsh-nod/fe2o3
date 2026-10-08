@@ -184,6 +184,62 @@ where
     )
 }
 
+pub(crate) fn validate_native_conditional_source_through_f_with_cpu_origins_using_v2<Failure>(
+    packet_bytes: &[u8],
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    expected_cpu: &[NativeConditionalCpuExpectationV1],
+    inputs: Inputs<'_, '_, '_>,
+    budget: &mut Budget<'_>,
+    join: impl FnOnce(
+        &ReplayedNativeSourceV1,
+        &DecodedHistory<'_, '_>,
+        &Relation<'_, '_, '_, '_, '_>,
+        &mut Budget<'_>,
+    ) -> Result<(), Failure>,
+) -> Result<Output, Failure>
+where
+    Failure: From<Error> + From<SourceError> + From<Resource>,
+{
+    validate_using(
+        packet_bytes,
+        accepted,
+        CpuReplayMode::Expected(expected_cpu),
+        inputs,
+        budget,
+        false,
+        join,
+    )
+}
+
+pub(crate) fn validate_native_conditional_source_through_f_with_cpu_origins_using_original_account_v2<
+    Failure,
+>(
+    packet_bytes: &[u8],
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    expected_cpu: &[NativeConditionalCpuExpectationV1],
+    inputs: Inputs<'_, '_, '_>,
+    budget: &mut Budget<'_>,
+    join: impl FnOnce(
+        &ReplayedNativeSourceV1,
+        &DecodedHistory<'_, '_>,
+        &Relation<'_, '_, '_, '_, '_>,
+        &mut Budget<'_>,
+    ) -> Result<(), Failure>,
+) -> Result<Output, Failure>
+where
+    Failure: From<Error> + From<SourceError> + From<Resource>,
+{
+    validate_using(
+        packet_bytes,
+        accepted,
+        CpuReplayMode::Expected(expected_cpu),
+        inputs,
+        budget,
+        true,
+        join,
+    )
+}
+
 fn validate_using<Failure>(
     packet_bytes: &[u8],
     accepted: &[NativeConditionalRootPolicyV2<'_>],
