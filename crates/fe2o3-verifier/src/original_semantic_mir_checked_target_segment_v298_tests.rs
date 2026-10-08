@@ -510,7 +510,7 @@ fn actual_checked_target_segment_copied_operand_alias_is_retained() {
                 SemanticStatementKindV1::Assign(SemanticAssignmentV1::new(
                     assignment.destination().clone(),
                     SemanticRvalueV1::new(
-                        assignment.value().ty(),
+                        assignment.value().result_type(),
                         SemanticRvalueKindV1::CheckedBinary(SemanticCheckedBinaryRvalueV1::new(
                             SourceOp::Add,
                             checked.left().clone(),
