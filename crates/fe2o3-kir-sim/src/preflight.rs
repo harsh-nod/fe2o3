@@ -667,6 +667,13 @@ pub(crate) fn preflight(
         limits,
         reserved_call_depth,
         reachable_ssa_values,
+        crate::execute::incoming_value_capacity(module, &reachable_function_indices).ok_or(
+            SimulationPreflightErrorV1::ResourceLimit {
+                resource: "incoming value capacity",
+                actual: u64::MAX,
+                limit: limits.max_resident_bytes as u64,
+            },
+        )?,
         kernel_identity_bytes,
         reachable_function_indices.capacity(),
         execution_index_resident_bytes,
@@ -722,6 +729,38 @@ pub(crate) fn preflight(
             }
             .ok_or(SimulationPreflightErrorV1::ResourceLimit {
                 resource: "matrix scratch bytes",
+                actual: u64::MAX,
+                limit: limits.max_resident_bytes as u64,
+            })?,
+        )
+        .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+            resource: "resident bytes",
+            actual: u64::MAX,
+            limit: limits.max_resident_bytes as u64,
+        })?;
+    let has_exact_fp4_matrix = reachable_function_indices.iter().any(|index| {
+        module
+            .functions
+            .get(*index)
+            .and_then(|f| f.body.as_ref())
+            .is_some_and(|body| {
+                body.blocks.iter().any(|block| {
+                    block.operations.iter().any(|operation| {
+                        matches!(&operation.kind, OperationKind::Matrix(matrix)
+                    if crate::matrix_fp4_exact_v1::supported(matrix))
+                    })
+                })
+            })
+    });
+    let execution_peak = execution_peak
+        .checked_add(
+            if has_exact_fp4_matrix {
+                crate::execute::matrix_fp4_exact_resident_bytes()
+            } else {
+                Some(0)
+            }
+            .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+                resource: "FP4 matrix scratch bytes",
                 actual: u64::MAX,
                 limit: limits.max_resident_bytes as u64,
             })?,
@@ -2061,6 +2100,9 @@ fn scan_operation(
             fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate { .. }
                 if target.index_width() == crate::IndexWidthV1::Bits64
                     && crate::matrix_bf16_exact_v1::supported(matrix) => {}
+            fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate { .. }
+                if target.index_width() == crate::IndexWidthV1::Bits64
+                    && crate::matrix_fp4_exact_v1::supported(matrix) => {}
             fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate { .. }
             | fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
                 reject!(UnsupportedFeatureV1::UnsupportedNumericalContract)

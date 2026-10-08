@@ -108,10 +108,17 @@ These are target shapes, not authorization to reuse expired runners or a
 complete tool/target/env/resource binding. The full device suite is recorded above; broader canonical-source
 regressions and existing source-provider identity checks remain separate.
 
-Remaining M4 exits include ordinary genuine source-to-matrix admission,
-per-target instruction/encoding negatives, numerical policy at actual MFMA
-accumulation, emitted matrix/lane-layout/register/resource inspection, and
-target-qualified execution where admitted. BF16 engineering evidence and
-#288's private source/proof/runtime work are separate; neither is promoted by
-this helper. No tutorial, production, formal, native or hardware milestone is
-closed by the representation tests.
+The ordinary genuine gfx950 source-to-matrix route already exists, including
+the FP4/FP8 GEMM and attention examples and their historical four-kernel
+hardware qualification in `examples/gfx950_low_precision/README.md`.
+Those exact historical profiles are not new results of these representation
+tests. The closed identity-scale FP4 numerical simulator is described in
+[gfx950-fp4-exact-simulator-v1.md](gfx950-fp4-exact-simulator-v1.md); it does
+not generalize to arbitrary scales or mixed/FP8 accumulation.
+
+Remaining M4 evidence must connect applicable numerical, per-target negative,
+emitted layout/register/resource and currentness checks to the intended
+common artifact/generated-host route. Historical external-tool/HSA runs
+and private BF16 engineering observations keep their original scope.
+No tutorial, production, formal, native or hardware milestone is closed
+by the representation tests or the inert simulator fixtures.
