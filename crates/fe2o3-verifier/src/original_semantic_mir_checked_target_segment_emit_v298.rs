@@ -117,6 +117,47 @@ spec fn checked_actual_segment_results_{root}_{instance}_{block}_{statement}_v29
  && after_target.observation.before == before_target.state && after_target.observation.after == after_target.next.state
  && after_target.observation.effect == MemoryOperationEffectV30::Pure
 }}
+proof fn checked_source_history_{root}_{instance}_{block}_{statement}_v337(
+ s: InvocationSourceMicroStateV36, little_endian: bool,
+)
+ requires invocation_source_micro_step_{root}_{instance}_v36(s, little_endian).source.machine.valid,
+ ensures ({{ let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
+ a.next_statement == s.next_statement + 1
+ && a.observations.len() == s.observations.len() + 1
+ && a.observations.take(s.observations.len() as int) == s.observations }}),
+{{
+ hide(invocation_source_micro_step_{root}_{instance}_v36);
+ invocation_source_micro_step_history_{root}_{instance}_v293(s, little_endian);
+ assert(!invocation_source_micro_refused_v36(s).source.machine.valid) by {{
+  reveal(invocation_source_micro_refused_v36);
+  reveal(invocation_source_byte_refused_v36);
+  reveal(invocation_source_refused_v36);
+ }}
+}}
+proof fn checked_source_aggregate_{root}_{instance}_{block}_{statement}_v337(
+ s: InvocationSourceMicroStateV36, left: int, right: int, little_endian: bool,
+)
+ requires invocation_source_active_{root}_{instance}_v36(s.source)
+ && invocation_source_byte_state_well_formed_v36(s.source) && s.source.machine.valid
+ && s.source.machine.pc == {source_pc} && s.next_statement == {statement}
+ && s.next_statement == s.observations.len()
+ && 0 <= {destination} < s.source.machine.values.len() && !s.source.objects.contains_key({destination})
+ && 0 <= {source_left} < s.source.machine.values.len() && 0 <= {source_right} < s.source.machine.values.len()
+ && s.source.machine.values[{source_left}] == MemoryValueV30::Scalar(left)
+ && s.source.machine.values[{source_right}] == MemoryValueV30::Scalar(right)
+ && 0 <= left < 4294967296 && 0 <= right < 4294967296,
+ ensures ({{ let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
+ a.source.logical.aggregates.contains_key({destination})
+ && a.source.logical.aggregates[{destination}].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)
+ && a.source.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}) }}),
+{{
+ hide(invocation_source_micro_step_{root}_{instance}_v36);
+ hide(invocation_source_byte_state_well_formed_v36);
+ hide(invocation_source_active_{root}_{instance}_v36);
+ hide(invocation_source_byte_step_v36);
+ hide(invocation_source_byte_event_{root}_{instance}_v36);
+ checked_add_actual_micro_step_{root}_{instance}_{block}_{statement}_v293(s, left, right, little_endian);
+}}
 proof fn checked_source_projection_{root}_{instance}_{block}_{statement}_v331(
  s: InvocationSourceMicroStateV36, left: int, right: int, little_endian: bool,
 )
@@ -151,38 +192,9 @@ proof fn checked_source_projection_{root}_{instance}_{block}_{statement}_v331(
  hide(checked_prefix_demands_{root}_{instance}_{block}_{statement}_v296);
  hide(invocation_source_byte_step_v36);
  hide(invocation_source_byte_event_{root}_{instance}_v36);
- let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
- assert(a.source.machine.valid && invocation_source_active_{root}_{instance}_v36(a.source)
- && invocation_source_byte_state_well_formed_v36(a.source)
- && a.source.machine.pc == s.source.machine.pc
- && a.source.machine.memory == s.source.machine.memory
- && a.source.machine.frames == s.source.machine.frames
- && a.source.machine.generations == s.source.machine.generations
- && a.source.slots == s.source.slots && a.source.objects == s.source.objects
- && checked_prefix_demands_{root}_{instance}_{block}_{statement}_v296(s.source, a.source, left, right)) by {{
-  checked_add_actual_demanded_step_{root}_{instance}_{block}_{statement}_v296(s, left, right, little_endian);
- }}
- assert(a.next_statement == s.next_statement + 1
- && a.observations.len() == s.observations.len() + 1
- && a.observations.take(s.observations.len() as int) == s.observations) by {{
-  invocation_source_micro_step_history_{root}_{instance}_v293(s, little_endian);
-  assert(!invocation_source_micro_refused_v36(s).source.machine.valid) by {{
-   reveal(invocation_source_micro_refused_v36);
-   reveal(invocation_source_byte_refused_v36);
-   reveal(invocation_source_refused_v36);
-  }}
- }}
- assert(a.source.logical.aggregates.contains_key({destination})
- && a.source.logical.aggregates[{destination}].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)
- && a.source.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})) by {{
-  checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
-  checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260(s.source, left, right, little_endian);
-  assert(a.source == invocation_source_byte_step_v36(s.source,
-      invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian)) by {{
-   reveal(invocation_source_micro_step_{root}_{instance}_v36);
-   reveal(invocation_source_micro_record_v36);
-  }}
- }}
+ checked_add_actual_demanded_step_{root}_{instance}_{block}_{statement}_v296(s, left, right, little_endian);
+ checked_source_history_{root}_{instance}_{block}_{statement}_v337(s, little_endian);
+ checked_source_aggregate_{root}_{instance}_{block}_{statement}_v337(s, left, right, little_endian);
 }}
 proof fn checked_target_projection_{root}_{instance}_{block}_{statement}_v331(
  t: MemoryMicroStateV30, left: int, right: int, little_endian: bool,

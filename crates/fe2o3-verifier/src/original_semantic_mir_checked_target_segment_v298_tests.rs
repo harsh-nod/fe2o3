@@ -176,6 +176,9 @@ fn assert_composition_projections(text: &str) {
         text.matches("proof fn checked_target_projection_").count(),
         count
     );
+    for prefix in ["checked_source_history_", "checked_source_aggregate_"] {
+        assert_eq!(text.matches(&format!("proof fn {prefix}")).count(), count);
+    }
     for tail in text
         .split("proof fn checked_actual_source_target_step_")
         .skip(1)
@@ -366,6 +369,8 @@ fn assert_independent_projection_contracts(
     };
     let source = declaration(&source_name);
     let target = declaration(&target_name);
+    let history = declaration(&format!("checked_source_history_{coordinates}_v337"));
+    let aggregate = declaration(&format!("checked_source_aggregate_{coordinates}_v337"));
     // The source helper receives only the existing source-side input conjuncts.
     let source_requires = text
         .split_once(&format!("spec fn checked_actual_segment_inputs_{site}("))
@@ -389,8 +394,67 @@ fn assert_independent_projection_contracts(
         .split_once("\n ensures ")
         .unwrap()
         .0;
-    // Reconstruct the previous scoped proof, then the original direct calls,
-    // while retaining every complete header and checking the new dispatch join.
+    // Check the narrow helper contracts independently, then restore the old
+    // dispatcher proof and previous scoped/direct bodies without header edits.
+    assert_eq!(
+        history,
+        format!(
+            r#"
+ s: InvocationSourceMicroStateV36, little_endian: bool,
+)
+ requires invocation_source_micro_step_{root}_{instance}_v36(s, little_endian).source.machine.valid,
+ ensures ({{ let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
+ a.next_statement == s.next_statement + 1
+ && a.observations.len() == s.observations.len() + 1
+ && a.observations.take(s.observations.len() as int) == s.observations }}),
+{{
+ hide(invocation_source_micro_step_{root}_{instance}_v36);
+ invocation_source_micro_step_history_{root}_{instance}_v293(s, little_endian);
+ assert(!invocation_source_micro_refused_v36(s).source.machine.valid) by {{
+  reveal(invocation_source_micro_refused_v36);
+  reveal(invocation_source_byte_refused_v36);
+  reveal(invocation_source_refused_v36);
+ }}
+}}"#
+        )
+    );
+    assert_eq!(
+        aggregate,
+        format!(
+            r#"
+ s: InvocationSourceMicroStateV36, left: int, right: int, little_endian: bool,
+)
+ requires {source_requires},
+ ensures ({{ let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
+ a.source.logical.aggregates.contains_key({destination})
+ && a.source.logical.aggregates[{destination}].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)
+ && a.source.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}) }}),
+{{
+ hide(invocation_source_micro_step_{root}_{instance}_v36);
+ hide(invocation_source_byte_state_well_formed_v36);
+ hide(invocation_source_active_{root}_{instance}_v36);
+ hide(invocation_source_byte_step_v36);
+ hide(invocation_source_byte_event_{root}_{instance}_v36);
+ checked_add_actual_micro_step_{coordinates}_v293(s, left, right, little_endian);
+}}"#
+        )
+    );
+    let aggregate_ensures = aggregate
+        .split_once("\n ensures ")
+        .unwrap()
+        .1
+        .split_once("\n{\n")
+        .unwrap()
+        .0;
+    assert_eq!(aggregate_ensures.matches(" && ").count(), 2);
+    for unused in [
+        "observations",
+        "checked_prefix_demands",
+        ".machine.",
+        "event_",
+    ] {
+        assert!(!aggregate_ensures.contains(unused));
+    }
     let source_projection = source
         .split_once(&format!(
             " ensures ({{ let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);\n"
@@ -461,10 +525,13 @@ fn assert_independent_projection_contracts(
  }}
 "#
     );
-    assert_eq!(source.matches(&replayed).count(), 1);
+    let summary_calls = format!(
+        " checked_add_actual_demanded_step_{coordinates}_v296(s, left, right, little_endian);\n checked_source_history_{coordinates}_v337(s, little_endian);\n checked_source_aggregate_{coordinates}_v337(s, left, right, little_endian);\n"
+    );
+    assert_eq!(source.matches(&summary_calls).count(), 1);
     let source_body = source.split_once("\n{\n").unwrap().1;
-    assert!(source_body.ends_with(&format!("{replayed}}}")));
-    assert_eq!(source_body.matches(" by {").count(), 5);
+    assert!(source_body.ends_with(&format!("{summary_calls}}}")));
+    assert_eq!(source_body.matches(" by {").count(), 0);
     assert_eq!(source_body.matches(" hide(").count(), 6);
     assert_eq!(
         source_body
@@ -483,12 +550,24 @@ fn assert_independent_projection_contracts(
         "checked_add_actual_schema_",
         "invocation_source_micro_step_history_",
     ] {
-        assert_eq!(source_body.matches(name).count(), 1);
+        assert_eq!(source_body.matches(name).count(), 0);
     }
-    for unused in [".observations[", ".machine.values.len()"] {
+    for unused in [
+        ".observations[",
+        ".machine.values.len()",
+        "reveal(",
+        "micro_record",
+        "micro_refused",
+        "Some(",
+        "unwrap()",
+        ".leaves[",
+        " assert(",
+    ] {
         assert!(!source_body.contains(unused));
     }
-    let isolated_source = source
+    let prior_source = source.replacen(&summary_calls, &replayed, 1);
+    assert_eq!(prior_source.matches(&replayed).count(), 1);
+    let isolated_source = prior_source
         .replacen(&dispatch_headers, "", 1)
         .replacen(&replayed, &isolated, 1);
     assert_eq!(isolated_source.matches(&isolated).count(), 1);
@@ -569,7 +648,7 @@ fn assert_independent_projection_contracts(
     assert!(!target.contains("InvocationSource"));
     assert!(!target.contains("invocation_source_"));
     assert!(!target.split_once("\n{\n").unwrap().0.contains(".update("));
-    for helper in [source, target] {
+    for helper in [source, target, history, aggregate] {
         let requires = helper.split_once("\n ensures ").unwrap().0;
         assert!(!requires.contains("projection_"));
         assert!(!requires.contains("after_"));
