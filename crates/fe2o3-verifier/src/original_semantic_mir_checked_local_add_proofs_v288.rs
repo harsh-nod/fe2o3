@@ -58,7 +58,7 @@ impl Checked {
             .map_err(|_| out.error())?;
             self.emit(out)?;
             writeln!(out, "),\n{{ }}").map_err(|_| out.error())?;
-            writeln!(out, r#"proof fn checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260(
+            write!(out, r#"proof fn checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260(
  source: InvocationSourceByteStateV36, left: int, right: int, little_endian: bool,
 )
  requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
@@ -81,7 +81,22 @@ impl Checked {
  hide(invocation_source_aggregate_leaf_bits_v42);
  hide(invocation_source_byte_step_v36);
  hide(invocation_source_byte_event_{root}_{instance}_v36);
- checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
+ let canonical_event = "#).map_err(|_| out.error())?;
+            self.emit(out)?;
+            writeln!(out, r#";
+ let canonical_after = invocation_source_byte_step_v36(source, canonical_event, {root}, {instance}, little_endian);
+ assert(invocation_source_byte_step_v36(source,
+     invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian)
+     == canonical_after) by {{
+  checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
+ }}
+ assert(invocation_source_aggregate_leaf_count_v42({ty}) == 2
+     && invocation_source_aggregate_leaf_path_v42({ty}, 0) == seq![0int]
+     && invocation_source_aggregate_leaf_path_v42({ty}, 1) == seq![1int]
+     && invocation_source_aggregate_leaf_bits_v42({ty}, 0) == 32
+     && invocation_source_aggregate_leaf_bits_v42({ty}, 1) == 1) by {{
+  checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
+ }}
  invocation_source_checked_add_local_step_v266(source, {destination}, {ty},
  {left}, {right}, left, right, {root}, {instance}, little_endian);
 }}
@@ -383,7 +398,7 @@ mod tests {
                 );
                 assert_eq!(
                     body,
-                    " hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_aggregate_leaf_count_v42);\n hide(invocation_source_aggregate_leaf_path_v42);\n hide(invocation_source_aggregate_leaf_bits_v42);\n hide(invocation_source_byte_step_v36);\n hide(invocation_source_byte_event_2_4_v36);\n checked_add_actual_schema_2_4_6_8_v260();\n invocation_source_checked_add_local_step_v266(source, 3, 9,\n 5, 7, left, right, 2, 4, little_endian);\n}\n\n"
+                    " hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_aggregate_leaf_count_v42);\n hide(invocation_source_aggregate_leaf_path_v42);\n hide(invocation_source_aggregate_leaf_bits_v42);\n hide(invocation_source_byte_step_v36);\n hide(invocation_source_byte_event_2_4_v36);\n let canonical_event = InvocationSourceByteEventV36::Checked { destination: 3int, source_type: 9int, operation: 0int, bits: 32int, signed: false, left: InvocationSourceByteValueV36::Local { local: 5int, moved: false }, right: InvocationSourceByteValueV36::Local { local: 7int, moved: false } };\n let canonical_after = invocation_source_byte_step_v36(source, canonical_event, 2, 4, little_endian);\n assert(invocation_source_byte_step_v36(source,\n     invocation_source_byte_event_2_4_v36(6, 8).unwrap(), 2, 4, little_endian)\n     == canonical_after) by {\n  checked_add_actual_schema_2_4_6_8_v260();\n }\n assert(invocation_source_aggregate_leaf_count_v42(9) == 2\n     && invocation_source_aggregate_leaf_path_v42(9, 0) == seq![0int]\n     && invocation_source_aggregate_leaf_path_v42(9, 1) == seq![1int]\n     && invocation_source_aggregate_leaf_bits_v42(9, 0) == 32\n     && invocation_source_aggregate_leaf_bits_v42(9, 1) == 1) by {\n  checked_add_actual_schema_2_4_6_8_v260();\n }\n invocation_source_checked_add_local_step_v266(source, 3, 9,\n 5, 7, left, right, 2, 4, little_endian);\n}\n\n"
                 );
                 assert!(
                     out.text
@@ -429,5 +444,52 @@ mod tests {
         assert!(out.text.contains("proof fn checked_add_actual_step_"));
         assert!(!out.text.contains("proof fn checked_add_actual_micro_step_"));
         assert!(!out.text.contains("proof fn checked_add_actual_prefix_"));
+        for (destination, left, right) in [(3, 5, 5), (5, 5, 7), (5, 5, 5), (91, 42, 17)] {
+            let mut work = Work::new(1_000_000);
+            let mut budget = Budget::new(&mut work, SOURCE_LIMIT + 1_000_000);
+            budget.reserve_storage(SOURCE_LIMIT).unwrap();
+            let mut out = Writer::new(&mut budget).unwrap();
+            let event = Checked {
+                destination: CheckedDestination::Local(destination),
+                left: Value::Local {
+                    local: left,
+                    moved: false,
+                },
+                right: Value::Local {
+                    local: right,
+                    moved: false,
+                },
+                ..base
+            };
+            assert!(
+                event
+                    .emit_local_add_proofs_v288(7, 2, 9, 4, None, &mut out)
+                    .unwrap()
+            );
+            let schema = out
+                .text
+                .split_once(" == Some(")
+                .unwrap()
+                .1
+                .split_once("),\n{ }")
+                .unwrap()
+                .0;
+            assert!(
+                out.text
+                    .contains(&format!(" let canonical_event = {schema};\n"))
+            );
+            assert!(out.text.contains(&format!(
+                "invocation_source_checked_add_local_step_v266(source, {destination}, 9,\n {left}, {right}, left, right, 7, 2, little_endian);"
+            )));
+            assert_eq!(out.text.matches("proof fn ").count(), 2);
+            assert_eq!(
+                out.text
+                    .matches("checked_add_actual_schema_7_2_9_4_v260();")
+                    .count(),
+                2
+            );
+            assert!(!out.text.contains("assume("));
+            assert!(!out.text.contains("admit("));
+        }
     }
 }

@@ -280,6 +280,46 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
             let declaration = step.split("\nproof fn ").next().unwrap();
             let (contract, body) = declaration.split_once("\n{\n").unwrap();
             let site = contract.split_once("_v260(").unwrap().0;
+            let coordinates = site.split('_').collect::<Vec<_>>();
+            let [root, instance, block, statement] = coordinates.as_slice() else {
+                panic!("unexpected Checked site: {site}");
+            };
+            let schema = model
+                .split_once(&format!("proof fn checked_add_actual_schema_{site}_v260()"))
+                .unwrap()
+                .1
+                .split_once("\n{ }")
+                .unwrap()
+                .0;
+            let event = schema
+                .split_once(" == Some(")
+                .unwrap()
+                .1
+                .strip_suffix("),")
+                .unwrap();
+            let ty = event
+                .split_once("source_type: ")
+                .unwrap()
+                .1
+                .split_once("int,")
+                .unwrap()
+                .0;
+            let congruence = format!(
+                " assert(invocation_source_byte_step_v36(source,\n     invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian)\n     == canonical_after) by {{\n  checked_add_actual_schema_{site}_v260();\n }}\n"
+            );
+            let scalar_schema = format!(
+                " assert(invocation_source_aggregate_leaf_count_v42({ty}) == 2\n     && invocation_source_aggregate_leaf_path_v42({ty}, 0) == seq![0int]\n     && invocation_source_aggregate_leaf_path_v42({ty}, 1) == seq![1int]\n     && invocation_source_aggregate_leaf_bits_v42({ty}, 0) == 32\n     && invocation_source_aggregate_leaf_bits_v42({ty}, 1) == 1) by {{\n  checked_add_actual_schema_{site}_v260();\n }}\n"
+            );
+            assert_eq!(body.matches(&congruence).count(), 1);
+            assert_eq!(body.matches(&scalar_schema).count(), 1);
+            assert!(body.contains(&format!(" let canonical_event = {event};\n")));
+            assert!(body.contains(&format!(
+                " let canonical_after = invocation_source_byte_step_v36(source, canonical_event, {root}, {instance}, little_endian);\n"
+            )));
+            let outer = body.replace(&congruence, "").replace(&scalar_schema, "");
+            assert!(!outer.contains("checked_add_actual_schema_"));
+            assert!(!outer.contains("Some("));
+            assert!(!outer.contains("assert("));
             assert!(body.contains("hide(invocation_source_byte_event_"));
             assert_eq!(
                 body.matches("invocation_source_checked_add_local_step_v266(source,")
@@ -289,10 +329,9 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
             assert_eq!(
                 body.matches(&format!("checked_add_actual_schema_{site}_v260();"))
                     .count(),
-                1
+                2
             );
             assert!(!body.contains("checked_event"));
-            assert!(!body.contains("assert("));
             assert!(!body.contains("reveal(invocation_source_byte_step_v36);"));
             assert!(!body.contains("hide(invocation_source_byte_evaluate_v36);"));
             assert!(!body.contains("invocation_source_local_evaluates_v265(source,"));
