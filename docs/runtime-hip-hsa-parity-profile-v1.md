@@ -309,6 +309,41 @@ persistent compute/XGMI storage, background native progress, hardware
 correctness, and matched performance evidence remain open. It therefore does
 not satisfy this parity profile.
 
+## Scoped Generated DATA-Copy Candidate
+
+`RuntimeGfx942GeneratedScopeV1::copy_generated_output_to_v1` attaches an
+original generated producer's DATA-to-SDMA copy before producer adoption. It
+requires explicit Singleton SDMA storage on the primary KFD backend, a whole
+ordinary DeviceLocal destination with write access, and a distinct transfer
+stream on the same admitted device. Active graphs, generated consumers,
+multi-device transfers, partial destinations, and non-SDMA producers are not
+supported by this addition. It does not manufacture an ordinary source
+allocation from generated metadata or supply missing application authority.
+
+The original DATA owner and promotion bridge remain retained through copy
+submission, completion, frontier retirement, and physical source release.
+Destination restoration and the original source's closing currentness check
+precede Context polling and destination version settlement. Copy submission
+release, producer settlement, and decoding follow that ordering. A recorded
+backend success alone cannot substitute for the original physical-release
+receipt. Transfer of custody does not count as physical disposal.
+
+Cancellation remains available only before adoption. Once copying begins,
+dropping an observer does not cancel it, and errors or unwinds retain uncertain
+owners without retry or decoding. Unsettled requests, including Unknown,
+continue to block conflicting destination or stream reuse. Settled requests
+and requests cancelled before adoption do not leave stale metadata conflicts
+for a later producer in the same scope.
+
+CPU controls cover ownership retention, registration refusal, lifecycle
+ordering, actual Context destination-writer settlement, metadata-only release
+refusal, and within-scope reuse. They do not establish native DMA visibility,
+hardware overlap, bounded multi-device performance, or an executable
+refinement theorem for the new DATA-copy composition. Existing shared journal
+and graph proofs retain their stated conditional scope; refreshing source
+capture hashes does not extend those theorems to this path. Full issue #182 A2,
+production application admission, and HIP/HSA parity remain open.
+
 ## Required Gates
 
 ### G1: API and ownership

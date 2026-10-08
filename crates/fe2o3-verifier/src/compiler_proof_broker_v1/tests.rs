@@ -1,5 +1,41 @@
 use super::*;
 
+pub(super) fn isolated_process_case(name: &str, run: impl FnOnce()) {
+    const CASE_ENV: &str = "FE2O3_COMPILER_PROOF_TEST_CASE_V1";
+    let marker = format!("FE2O3_COMPILER_PROOF_TEST_COMPLETED_V1:{name}");
+    if let Some(selected) = std::env::var_os(CASE_ENV) {
+        assert_eq!(selected, std::ffi::OsStr::new(name));
+        run();
+        println!("\n{marker}");
+        return;
+    }
+    // Create the checked descriptors only after exec, away from unrelated test
+    // forks that can temporarily retain even CLOEXEC aliases.
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        .env(CASE_ENV, name)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = crate::executor::spawn_artifact_coordinated_child(&mut command).unwrap();
+    let output = crate::executor::supervise_child(
+        child,
+        20,
+        crate::executor::ExecutionLimits::new(16 * 1024, 16 * 1024).unwrap(),
+    )
+    .unwrap();
+    // A misspelled exact filter must not pass by running zero tests.
+    assert_eq!(
+        std::str::from_utf8(output.stdout())
+            .unwrap()
+            .lines()
+            .filter(|line| *line == marker)
+            .count(),
+        1
+    );
+}
+
 #[test]
 fn session_cancellation_is_terminal_and_does_not_revoke_other_sessions() {
     let first = Arc::new(AtomicBool::new(false));
@@ -216,6 +252,13 @@ fn child_descriptor_installation_rejects_occupied_reserved_slots() {
 
 #[test]
 fn child_command_drop_releases_all_captured_endpoint_aliases() {
+    isolated_process_case(
+        "compiler_proof_broker_v1::tests::child_command_drop_releases_all_captured_endpoint_aliases",
+        child_command_drop_endpoint_aliases_case,
+    );
+}
+
+fn child_command_drop_endpoint_aliases_case() {
     let (server, client) = transport::pair().unwrap();
     let server = Endpoint::admit(server).unwrap();
     let client = rustix::io::fcntl_dupfd_cloexec(client, DESCRIPTOR_FLOOR).unwrap();
@@ -291,5 +334,5 @@ fn low_descriptor_limit_child() {
     let _capabilities = (0..5)
         .map(|_| rustix::io::fcntl_dupfd_cloexec(&source, DESCRIPTOR_FLOOR).unwrap())
         .collect::<Vec<_>>();
-    child_command_drop_releases_all_captured_endpoint_aliases();
+    child_command_drop_endpoint_aliases_case();
 }

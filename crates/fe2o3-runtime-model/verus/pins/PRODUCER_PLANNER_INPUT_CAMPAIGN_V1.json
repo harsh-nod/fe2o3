@@ -203,7 +203,7 @@
       "crates/fe2o3-runtime-model/verus/producer_input_runtime_declarations_v1.rs": "1c2dd60498287eedb995425e5b0b7eb1233aa8e7a0ae1c52909618e73a320810",
       "crates/fe2o3-runtime-model/verus/producer_planner_input_composition_v1.rs": "edbae6b2a49e77984941320b8836a176da0df88aa9cab00418704a6e717904ff",
       "crates/fe2o3-runtime/src/context/completion_reconciliation_body.rs": "5fac23dff220f57827c4ab919ee0bd92aa52ec88f72877af03730fd2e0b48048",
-      "crates/fe2o3-runtime/src/context/versions.rs": "ce967106a3bfdbd36d5c18c7608fca42b74e45b43710ffaa2739a5de40a61bb7",
+      "crates/fe2o3-runtime/src/context/versions.rs": "cf9540406ce47355154d47ef573a4733b5ff4d264e1d02b794e97fb0b9815faf",
       "crates/fe2o3-runtime/src/context/versions/live_validation_bodies.rs": "045fd197e3521f55f038fbe4ac2f5db9a1348e6d3f4c577282ef4e69d65c356c",
       "crates/fe2o3-runtime/src/context/versions/live_validation_declarations.rs": "9298fbc428ce1da7be6a7f44e9aed7a0904538612c91a850e6e3ad104eaf7779",
       "crates/fe2o3-runtime/src/context/versions/producer_input_fold_body.rs": "701824a7cf27d45d9ec93e36401bffd988e2d6e8e27da281868507a51f74f158",
@@ -214,7 +214,7 @@
   },
   "support": {
     "check-journal-issuance.py": "36d5e0641300bf2568884ec4c440c668477a4b24a07ee95273a91eab34659480",
-    "check-producer-planner-input-composition.py": "aa15d8d33c076e3e39dc3597aecb9538e26e9291d3157f3b20d5a78fcae70ed0",
+    "check-producer-planner-input-composition.py": "739c2190c4d82bb19cb02a44a39dd28e43ba2215fe8f015a1534dbf405b42e21",
     "producer-input-diagnostics-v1.py": "318a29f9067618c2168a8e1d3585b1e8e3f8c78abe40359d52b0a20458238be4",
     "producer-journal-composition-diagnostics-v1.py": "681cbc9b935eacbe10a24112818e5640631bfa1300d0dd4f51c0c8fa0780ec03",
     "producer-planner-input-mutations-v1.py": "6593eb1cf2be7f2c9da6eaa45fb37a28314dad65ac1bc5201d8fd4feee9de7bc",
