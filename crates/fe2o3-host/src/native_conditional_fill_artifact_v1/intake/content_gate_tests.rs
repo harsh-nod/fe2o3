@@ -394,11 +394,11 @@ fn raw_claim_wire(handoff: &Handoff, generation: u64) -> [u8; 690] {
     budget
         .reserve_storage(handoff.backing_capacity() + METADATA + raw_coordinates_storage())
         .unwrap();
-    let attempt = BuildAttempt::new(
-        generation,
+    let attempt = BuildAttempt::from_env_value(&format!(
+        "{generation}:{}:{}",
         BuildSession::from_bytes([0x26; 16]),
         BuildInvocation::from_bytes([0x27; 32]),
-    )
+    ))
     .unwrap();
     let (subject, charge) = Subject::from_replay_evidence(
         attempt,
