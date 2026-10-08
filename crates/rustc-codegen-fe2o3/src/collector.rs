@@ -3206,13 +3206,16 @@ impl<'tcx> DeviceCollector<'tcx> {
                             source,
                             &self.expected_target,
                         )
-                        .map_err(|detail| inlined_source_safety_v1::AuditError::Origin {
-                            instance: source,
-                            source,
-                            callsite,
-                            reason: inlined_source_safety_v1::OriginRefusal::ExternalAuthentication(
-                                detail,
-                            ),
+                        .map_err(|detail| {
+                            inlined_source_safety_v1::AuditError::Origin {
+                                instance: source,
+                                source,
+                                callsite,
+                                reason:
+                                    inlined_source_safety_v1::OriginRefusal::ExternalAuthentication(
+                                        detail,
+                                    ),
+                            }
                         })
                     },
                 )
