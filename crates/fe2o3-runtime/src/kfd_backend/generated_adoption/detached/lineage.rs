@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) struct ProducerLineageV1 {
+pub(in crate::kfd_backend::generated_adoption) struct ProducerLineageV1 {
     plan: GeneratedShellPlanV1,
     submission: u64,
     generation: u64,
@@ -11,6 +11,15 @@ pub(super) struct ProducerLineageV1 {
 }
 
 impl ProducerLineageV1 {
+    #[cfg(test)]
+    pub(in crate::kfd_backend::generated_adoption) fn for_release_index_metadata_test(
+        plan: &GeneratedShellPlanV1,
+        submission: &issue::GeneratedSubmissionV1,
+    ) -> Option<Self> {
+        // Scripted correspondence only; this does not construct a lower owner.
+        Self::new(plan, submission, 1)
+    }
+
     fn new(
         plan: &GeneratedShellPlanV1,
         submission: &issue::GeneratedSubmissionV1,
@@ -48,7 +57,7 @@ impl ProducerLineageV1 {
         })
     }
 
-    fn matches(
+    pub(in crate::kfd_backend::generated_adoption) fn matches(
         &self,
         plan: &GeneratedShellPlanV1,
         submission: &issue::GeneratedSubmissionV1,
@@ -66,6 +75,23 @@ impl ProducerLineageV1 {
 }
 
 impl<T> RetainedDetachedV1<T> {
+    pub(in crate::kfd_backend::generated_adoption) fn take_producer_for_copy(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        submission: &issue::GeneratedSubmissionV1,
+        observation: impl FnOnce(&T) -> (u64, usize),
+    ) -> Option<(T, ProducerLineageV1)> {
+        if !self.matches_producer(plan, submission, observation) {
+            return None;
+        }
+        let owner = self.take_checked(|_| true)?;
+        let Some(lineage) = self.producer.take() else {
+            std::process::abort()
+        };
+        self.phase = DetachedPhaseV1::Transferred;
+        Some((owner, lineage))
+    }
+
     pub(super) fn capture_producer<E>(
         &mut self,
         plan: &GeneratedShellPlanV1,
@@ -84,7 +110,7 @@ impl<T> RetainedDetachedV1<T> {
         self.capture(capture)
     }
 
-    pub(super) fn matches_producer(
+    pub(in crate::kfd_backend::generated_adoption) fn matches_producer(
         &self,
         plan: &GeneratedShellPlanV1,
         submission: &issue::GeneratedSubmissionV1,

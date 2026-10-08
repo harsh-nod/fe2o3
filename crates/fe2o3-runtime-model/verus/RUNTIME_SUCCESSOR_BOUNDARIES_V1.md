@@ -144,8 +144,8 @@ execution are required before describing the successor campaigns as qualified.
 The opt-in generated SDMA backing path admits one DATA extent on the original
 primary queue. Its sidecar retains the original allocation and promotion bridge
 through preparation and binding. Ordinary retirement still requires physical
-DATA disposal before bridge metadata retirement. This does not admit a generated
-input-consuming kernel, transfer the DATA owner to a copy, or establish a copy
+DATA disposal before bridge metadata retirement. Backing admission alone does not
+admit a generated input-consuming kernel, transfer DATA to a copy, or establish a copy
 destination version. The allocation, write, promotion, unwind and disposal joins
 are adapter boundaries, not conclusions of the unchanged retained-credit proof.
 
@@ -171,3 +171,21 @@ The source capture includes these callers and runtime adapters without importing
 historical CPU, hardware or solver results. Compiler/provider admission, actual
 multi-device execution, failure injection and fresh maintained proof campaigns
 remain independent qualification requirements.
+
+## Original DATA Copy Adapter
+
+The explicit singleton DATA-copy adapter is separate from HostStaging. It
+requires the original completed generated DATA owner and the original
+SDMA-promotion bridge, retains the destination and actual copy frontier,
+and publishes destination success only after original backend retirement.
+The original source remains rooted across destination/frontier retirement;
+unknown submission, progress or retirement retains the original custody.
+Settled and pristine-cancelled registrations can release their local conflict
+claim, while pending and unknown registrations continue to conflict.
+
+These checked custody, journal, decoder and scope joins are included in the
+628-file runtime capture, not added to any executable proof premise. The
+unchanged shared-body theorems do not prove the adapter, a generated
+input-consuming successor, multi-device execution, native overlap, replay
+safety or performance. Source controls and prior signed campaigns do not
+qualify this successor; it requires its own maintained signed replay.

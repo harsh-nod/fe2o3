@@ -14,6 +14,7 @@ use lifecycle::{Lifecycle, Phase};
 mod futures;
 pub use futures::RuntimeGfx942ScopedCompletionFutureV1;
 mod copies;
+mod data_copy;
 pub use copies::{RuntimeGfx942ScopedCopyFutureV1, RuntimeGfx942ScopedCopyTicketV1};
 mod graph;
 pub use graph::{
@@ -110,6 +111,7 @@ pub struct RuntimeGfx942ScopedTicketV1<'scope> {
 
 struct Slot<P> {
     sdma_backed: bool,
+    data_copy: Option<data_copy::Request>,
     lifecycle: Lifecycle<RuntimeGfx942PreparedV1<P>, Outcome>,
     roster: GeneratedHostRosterV1,
     hold: ContextUnpublishedHoldV1,
@@ -232,6 +234,7 @@ struct Hooks<B: RuntimeBackendV1, P> {
     ready: fn(&RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
     adopt: Step<B, P>,
     sdma_adoption: Option<Adoption<B, P>>,
+    data_copy: Option<data_copy::Step<B, P>>,
     cold: Option<(ColdCheck<B, P>, ColdSettle<B, P>)>,
     progress: Progress<B, P>,
     rejected: fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
@@ -361,6 +364,7 @@ where
         let index = self.slots.len();
         self.slots.push(Slot {
             sdma_backed,
+            data_copy: None,
             lifecycle: Lifecycle::new(prepared),
             roster,
             hold,
@@ -423,9 +427,28 @@ where
             let hooks = &self.hooks;
             let before = slot.lifecycle.phase;
             let mut cold_failure = None;
-            let mut changed = slot
-                .lifecycle
-                .advance(
+            let mut changed = if matches!(before, Phase::RetainedProducer | Phase::Copying)
+                && let Some(request) = slot.data_copy.as_mut()
+            {
+                let Some(step) = hooks.data_copy else {
+                    std::process::abort()
+                };
+                slot.lifecycle.advance_copy(
+                    |prepared| {
+                        step(
+                            context,
+                            prepared,
+                            &slot.roster,
+                            &slot.hold,
+                            request.stream,
+                            request.destination,
+                            &mut request.submission,
+                        )
+                    },
+                    hooks.decode,
+                )
+            } else {
+                slot.lifecycle.advance(
                     |phase, prepared| match phase {
                         Phase::Adopting => {
                             if let Some((check, _)) = hooks.cold {
@@ -455,7 +478,8 @@ where
                     },
                     hooks.decode,
                 )
-                .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
+            }
+            .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
             if let Some(failure) = cold_failure {
                 let Some((_, settle)) = hooks.cold else {
                     std::process::abort()
@@ -771,6 +795,7 @@ macro_rules! impl_scoped_generated {
                         ready: Self::gfx942_adoption_ready_v1,
                         adopt: Self::adopt_gfx942_prepared_v1::<P>,
                         sdma_adoption: Some((Self::gfx942_sdma_adoption_ready_v1, Self::adopt_gfx942_sdma_prepared_v1::<P>)),
+                        data_copy: Self::generated_data_copy_hook_v1::<P>(),
                         cold: Some((Self::check_gfx942_cold_device_v1::<P>, Self::settle_gfx942_cold_device_v1::<P>)),
                         progress: Self::progress_gfx942_issue_preserving_rejection_v1::<P>,
                         rejected: Self::gfx942_issue_rejected_v1,

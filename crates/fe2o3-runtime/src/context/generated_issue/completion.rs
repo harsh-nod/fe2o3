@@ -3,6 +3,7 @@
 use super::*;
 use crate::{RuntimeGfx942GeneratedCompletionCarrierV1, RuntimeGfx942GeneratedCompletionViewV1};
 mod cohort3;
+mod data_copy;
 mod retained_producer;
 use retained_producer::{CompletionDispositionV1, RetainedProducerV1};
 

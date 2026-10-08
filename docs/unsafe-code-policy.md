@@ -41,6 +41,30 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+### Native Timestamp Inventory Review (2026-10-08)
+
+Two reviewers examined the three timestamp-diagnostic files omitted from the
+inventory at `32d7d27c496e6979e0e4c3b5a56d73ffe3fae724`. This adds exactly four
+blocks for `engineering_gfx950_native_packet_diagnostic.rs`, three blocks and
+two functions for `memory_linux_program_timestamps.rs`, and seven test blocks
+for `memory_linux_program_timestamps_tests.rs`. Their implementations are
+unchanged; no unrelated allowance or inventory gate changes.
+
+The private clear/observe operations require the original retained signal arena.
+Checked count, page-rounded extent, active accessible mapping, slot bounds and
+64-byte alignment precede access to the aligned timestamp words. Clearing
+requires idle exclusive ownership before publication. Observation requires the
+original signal kind and an Acquire-loaded completed value before volatile
+reads. The caller binds device, queue and frontier identity, checks currentness
+and idleness, and restores profiling properties only after all original signals
+retire and closing checks pass. Failure poisons the diagnostic path instead of
+reusing its queue or arena. Test blocks use owned aligned inert storage; invalid
+extents and misalignment refuse before dereference or mutation.
+
+Volatile access and CPU tests do not prove the firmware signal ABI, device
+coherence, immutable currentness, or native qualification. The maintained
+tokenizing inventory and affected tests must pass on the integrated successor.
+
 ### A1-A3 Integration Review (2026-10-07)
 
 The runtime integration review reconciles the 129 source entries reported by

@@ -926,8 +926,21 @@ impl KfdRuntimeSdmaStorageV1 {
     }
 }
 
+// Private immutable routing metadata, never physical completion authority.
+// Only generated DATA-copy admission constructs the keyed variant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SubmissionOriginV1 {
+    Ordinary,
+    GeneratedDataCopy {
+        shell: u64,
+        producer: u64,
+        destination: u64,
+    },
+}
+
 #[derive(Clone, Copy, Debug)]
 struct SubmissionRecordV1 {
+    origin: SubmissionOriginV1,
     stream: u64,
     status: BackendPollV1,
     dependency_depth: usize,
@@ -6832,6 +6845,12 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         if self.generated_submissions.contains_key(&submission) {
             return self.release_generated_submission_v1(submission);
         }
+        if self.generated_copy_release_blocked_v1(submission)? {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "generated DATA copy retains original native custody",
+            ));
+        }
         if self.active_compute_lane_v1(submission).is_some() {
             return Err(Self::rejected(
                 KfdRuntimeBackendErrorKindV1::Busy,
@@ -7642,6 +7661,7 @@ fn settle_xgmi_submission_record_v1(
     submissions.insert(
         active.id,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream: active.stream,
             status,
             dependency_depth: 1,

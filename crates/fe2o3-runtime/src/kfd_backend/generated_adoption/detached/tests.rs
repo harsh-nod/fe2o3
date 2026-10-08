@@ -165,6 +165,7 @@ fn metadata_native(phase: PhaseV1) -> GeneratedNativeAdoptionV1 {
         returned: ReturnedDataV1::empty(),
         submission: None,
         sdma: super::super::sdma_backing::NativeCustody::empty(),
+        copy: None,
     }
 }
 

@@ -295,6 +295,7 @@ impl Driver for Rig {
                 (
                     *id,
                     SubmissionRecordV1 {
+                        origin: SubmissionOriginV1::Ordinary,
                         stream: *id + 1000,
                         status: *status,
                         dependency_depth: 1,

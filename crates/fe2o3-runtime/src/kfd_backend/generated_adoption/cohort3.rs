@@ -99,6 +99,7 @@ impl KfdRuntimeBackendV1 {
             returned: ReturnedDataV1::empty(),
             submission: None,
             sdma: sdma_backing::NativeCustody::empty(),
+            copy: None,
         });
         self.lease_compute_lane_v1(plan.binding.backend_stream, 0);
         let result = catch_unwind(AssertUnwindSafe(|| {

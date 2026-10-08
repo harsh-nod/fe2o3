@@ -34,6 +34,11 @@ PROFILE_LINES = (
     "      CARGO_PROFILE_TEST_DEBUG: '1'",
     "      CARGO_INCREMENTAL: '0'",
 )
+ROW_PROFILE_LINES = (
+    "      CARGO_PROFILE_DEV_DEBUG: '0'",
+    "      CARGO_PROFILE_TEST_DEBUG: '0'",
+    "      CARGO_INCREMENTAL: '0'",
+)
 
 
 def job(source: str, name: str) -> str:
@@ -63,12 +68,12 @@ def prepare_script(source: str) -> str:
     return "\n".join(line[10:] for line in lines) + "\n"
 
 
-def profiles(owner: str) -> None:
-    for line in PROFILE_LINES:
+def profiles(owner: str, expected: tuple[str, ...] = PROFILE_LINES) -> None:
+    for line in expected:
         if owner.splitlines().count(line) != 1:
             raise ValueError(f"missing, duplicate, or changed resource setting: {line}")
     settings = re.findall(r"(?m)^      CARGO_(?:PROFILE_|INCREMENTAL:).*$", owner)
-    if settings != list(PROFILE_LINES):
+    if settings != list(expected):
         raise ValueError("unexpected extra Cargo profile setting")
 
 
@@ -102,7 +107,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_resource_profiles_are_scoped_to_host_jobs(self) -> None:
         profiles(job(self.ci, "generic-core"))
-        profiles(job(self.row, "host-contract"))
+        profiles(job(self.row, "host-contract"), ROW_PROFILE_LINES)
         for source, name in (
             (self.ci, "parity-policy"),
             (self.ci, "rustc-codegen-shards"),
@@ -118,14 +123,26 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertLess(host.index(command), host.index("Build binding-aware Cargo driver"))
 
     def test_profile_mutations_fail_instead_of_silently_widening(self) -> None:
-        owner = job(self.ci, "generic-core")
-        for old in PROFILE_LINES:
-            for replacement in ("", old + "\n" + old, old.replace("'1'", "'0'") if "'1'" in old else old.replace("'0'", "'1'")):
-                with self.subTest(old=old, replacement=replacement):
+        for source, name, expected in (
+            (self.ci, "generic-core", PROFILE_LINES),
+            (self.row, "host-contract", ROW_PROFILE_LINES),
+        ):
+            owner = job(source, name)
+            for old in expected:
+                changed_value = old.replace("'1'", "'0'") if "'1'" in old else old.replace("'0'", "'1'")
+                for replacement in ("", old + "\n" + old, changed_value):
+                    with self.subTest(job=name, old=old, replacement=replacement):
+                        with self.assertRaises(ValueError):
+                            profiles(owner.replace(old, replacement, 1), expected)
+            for setting in (
+                "CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: 'false'",
+                "CARGO_PROFILE_DEV_OPT_LEVEL: '1'",
+                "CARGO_PROFILE_TEST_OPT_LEVEL: '1'",
+                "CARGO_PROFILE_TEST_OVERFLOW_CHECKS: 'false'",
+            ):
+                with self.subTest(job=name, setting=setting):
                     with self.assertRaises(ValueError):
-                        profiles(owner.replace(old, replacement, 1))
-        with self.assertRaises(ValueError):
-            profiles(owner + "\n      CARGO_PROFILE_TEST_DEBUG_ASSERTIONS: 'false'\n")
+                        profiles(owner + f"\n      {setting}\n", expected)
 
     def test_existing_mandatory_commands_and_limits_remain(self) -> None:
         generic = job(self.ci, "generic-core")

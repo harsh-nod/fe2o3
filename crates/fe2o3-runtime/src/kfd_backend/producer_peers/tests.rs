@@ -312,6 +312,7 @@ fn flush_retires_only_the_matching_conclusive_native_consumers() {
         backend.children[0].submissions.insert(
             id,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream: local,
                 status,
                 dependency_depth: 1,

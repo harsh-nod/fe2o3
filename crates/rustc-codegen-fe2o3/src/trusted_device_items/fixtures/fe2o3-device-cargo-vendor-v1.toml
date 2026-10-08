@@ -43,6 +43,10 @@ name = "device_ffi_ui"
 path = "tests/device_ffi_ui.rs"
 
 [[test]]
+name = "fp4_api"
+path = "tests/fp4_api.rs"
+
+[[test]]
 name = "fp8_api"
 path = "tests/fp8_api.rs"
 

@@ -15,7 +15,7 @@ fn singleton_roster(
     Ok(roster)
 }
 
-fn fixture<'a>(
+pub(super) fn fixture<'a>(
     context: &'a mut RuntimeContextV1<KfdRuntimeBackendV1>,
     decoded: &'a Cell<usize>,
     dropped: &'a Cell<usize>,

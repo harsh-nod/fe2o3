@@ -6,6 +6,7 @@ pub(super) enum Phase {
     Issuing,
     Completing,
     RetainedProducer,
+    Copying,
     Settled,
     Cancelled,
     CancelledUnpublished,
@@ -70,6 +71,7 @@ impl<T, O> Lifecycle<T, O> {
                 | Phase::FailedUnpublished
                 | Phase::ColdDeviceFailed { .. }
                 | Phase::Unknown
+                | Phase::Copying
         ) {
             return Ok(false);
         }
@@ -93,6 +95,27 @@ impl<T, O> Lifecycle<T, O> {
             self.outcome = Some(decode(self.value.take().expect("settled scoped owner")));
         }
         Ok(advanced || self.phase == Phase::RetainedProducer)
+    }
+
+    pub fn advance_copy<E>(
+        &mut self,
+        perform: impl FnOnce(&mut T) -> Result<bool, E>,
+        decode: impl FnOnce(T) -> O,
+    ) -> Result<bool, E> {
+        if !matches!(self.phase, Phase::RetainedProducer | Phase::Copying) {
+            return Ok(false);
+        }
+        self.phase = Phase::Unknown;
+        let settled = perform(self.value.as_mut().expect("retained copy producer"))?;
+        self.phase = if settled {
+            Phase::Settled
+        } else {
+            Phase::Copying
+        };
+        if settled {
+            self.outcome = Some(decode(self.value.take().expect("settled copy producer")));
+        }
+        Ok(settled)
     }
 
     pub fn cancel_unpublished<C, E>(
@@ -166,6 +189,10 @@ impl<T, O> Lifecycle<T, O> {
         Ok(true)
     }
 }
+
+#[cfg(test)]
+#[path = "lifecycle/copy_tests.rs"]
+mod copy_tests;
 
 #[cfg(test)]
 mod tests {

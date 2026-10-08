@@ -214,7 +214,7 @@
   },
   "support": {
     "check-journal-issuance.py": "36d5e0641300bf2568884ec4c440c668477a4b24a07ee95273a91eab34659480",
-    "check-producer-planner-input-composition.py": "15c4163fe4665a2c61e93f458ab867db58d782c801ef2afb1877233f114159d7",
+    "check-producer-planner-input-composition.py": "c9314ea706233f22e9d1dedc58118b72d06e37beaed04cbae4b67c3b511e536d",
     "producer-input-diagnostics-v1.py": "318a29f9067618c2168a8e1d3585b1e8e3f8c78abe40359d52b0a20458238be4",
     "producer-journal-composition-diagnostics-v1.py": "681cbc9b935eacbe10a24112818e5640631bfa1300d0dd4f51c0c8fa0780ec03",
     "producer-planner-input-mutations-v1.py": "6593eb1cf2be7f2c9da6eaa45fb37a28314dad65ac1bc5201d8fd4feee9de7bc",

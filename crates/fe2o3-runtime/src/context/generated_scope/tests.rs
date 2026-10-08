@@ -9,6 +9,7 @@ mod async_lending;
 mod cancellation;
 mod cold_device;
 mod copies;
+mod data_copy;
 mod futures;
 mod graph;
 mod rejected;
@@ -96,6 +97,7 @@ where
         ready: |_, _| Ok(true),
         adopt: |_, _, _, _| Ok(()),
         sdma_adoption: None,
+        data_copy: None,
         cold: None,
         progress: |_, prepared, _, _| {
             let ticks = &prepared.value().ticks;

@@ -15,6 +15,7 @@ pub(super) enum Custody<B, D, R> {
     Promoting,
     Output(D, R),
     Bound(R),
+    Transferred,
     Disposed,
 }
 
@@ -41,6 +42,26 @@ impl<B, D, R> Custody<B, D, R> {
 
     pub(super) fn is_disposed_or_unentered(&self) -> bool {
         matches!(self, Self::Empty | Self::Disposed)
+    }
+
+    pub(super) fn is_bound(&self) -> bool {
+        matches!(self, Self::Bound(_))
+    }
+
+    pub(super) fn is_transferred(&self) -> bool {
+        matches!(self, Self::Transferred)
+    }
+
+    pub(super) fn take_bridge_for_copy(&mut self) -> Option<R> {
+        if !self.is_bound() {
+            return None;
+        }
+        let Self::Bound(bridge) = core::mem::replace(self, Self::Transferred) else {
+            std::process::abort()
+        };
+        // Transferred is deliberately not Disposed. Only the exact copy's
+        // physical source release can retire this remaining shell obligation.
+        Some(bridge)
     }
 
     fn prepare<O: Operations<Buffer = B, Data = D, Bridge = R>>(

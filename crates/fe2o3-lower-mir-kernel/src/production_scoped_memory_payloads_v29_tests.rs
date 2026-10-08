@@ -238,6 +238,9 @@ fn inspect_mutation(
         unreachable!();
     };
     match payload {
+        ScopedMemoryPayloadV29::AtomicRmw { .. } => {
+            panic!("ordinary payload mutation fixture has no atomics");
+        }
         ScopedMemoryPayloadV29::IndexLoad { .. } => {
             panic!("ordinary payload mutation fixture has no projection index loads");
         }

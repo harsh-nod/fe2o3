@@ -75,6 +75,8 @@ struct SourcePhysicalAccessV18<'a> {
 
 // A checked projection of an original capture, not an expression/currentness
 // proof. The consuming relation must still check the exact source payload arm.
+// For AtomicRmw, value is the old-value result and store_use is the exact RMW
+// input occurrence. Neither field alone is an atomic source/optimized proof.
 struct SourcePhysicalPayloadV18<'a> {
     source: &'a ScopedMemoryPayloadV29,
     value: ValueId,
@@ -1128,6 +1130,39 @@ impl ProductionSourceCorrespondenceV18<'_> {
                     "scalar payload actual operation",
                 ))?;
             match source {
+                ScopedMemoryPayloadV29::AtomicRmw { effect, .. } => {
+                    let result = self.attachment_value(root, load, budget)?;
+                    let value = self.attachment_value(root, store, budget)?;
+                    let [pointer_row] = self.attachment_range(
+                        TileAttachmentKeyV29 {
+                            field: Field::MemoryPointer,
+                            ..key
+                        },
+                        budget,
+                    )?
+                    else {
+                        return self.source.missing("atomic payload pointer census");
+                    };
+                    let pointer = self.attachment_value(root, pointer_row.location, budget)?;
+                    let operand = tile_atomic_payload_operand_v1(
+                        actual, pointer, value, result, *effect, budget,
+                    )
+                    .map_err(source_attachment_error_v18)?;
+                    let expected = fe2o3_kernel_ir::CanonicalKirUseCoordinateV1::OperationOperand {
+                        operation,
+                        operand,
+                    };
+                    if store_use != TileAttachmentLocationV29::Use(expected) {
+                        return self
+                            .source
+                            .missing("atomic payload is not its exact actual RHS use");
+                    }
+                    Ok(Some(SourcePhysicalPayloadV18 {
+                        source,
+                        value: result,
+                        store_use: Some(expected),
+                    }))
+                }
                 ScopedMemoryPayloadV29::Load { .. } | ScopedMemoryPayloadV29::IndexLoad { .. } => {
                     if store != TileAttachmentLocationV29::NoOutput
                         || store_use != TileAttachmentLocationV29::NoOutput

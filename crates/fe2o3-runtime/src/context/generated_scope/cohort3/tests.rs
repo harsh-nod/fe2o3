@@ -46,6 +46,7 @@ fn cpu_scope<'scope, 'env, 'owners>(
             ready: |_, _| Ok(true),
             adopt: |_, _, _, _| Ok(()),
             sdma_adoption: None,
+            data_copy: None,
             cold: None,
             progress: |_, prepared, _, _| {
                 let members = &prepared.value().members;

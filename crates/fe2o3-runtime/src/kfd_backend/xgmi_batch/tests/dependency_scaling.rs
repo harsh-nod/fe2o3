@@ -65,6 +65,7 @@ fn snapshot(fixture: &Fixture) -> Snapshot {
 
 fn succeeded(id: u64) -> SubmissionRecordV1 {
     SubmissionRecordV1 {
+        origin: SubmissionOriginV1::Ordinary,
         stream: id,
         status: BackendPollV1::Succeeded,
         dependency_depth: 1,

@@ -7,6 +7,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 pub(super) mod arena1024;
 mod cohort3;
+mod data_copy;
 mod detached;
 mod issue;
 mod readback;
@@ -29,6 +30,8 @@ enum PhaseV1 {
     Detached,
     Retiring,
     Retired,
+    Copying,
+    CopyRetired,
 }
 
 pub(super) struct GeneratedNativeAdoptionV1 {
@@ -40,6 +43,7 @@ pub(super) struct GeneratedNativeAdoptionV1 {
     returned: ReturnedDataV1<Gfx942FixedDispatchDataV1>,
     submission: Option<issue::GeneratedSubmissionV1>,
     sdma: sdma_backing::NativeCustody,
+    copy: Option<data_copy::backend::BackendCopyV1>,
 }
 
 // The lower consuming release owns the current item on failure. This root keeps
@@ -81,10 +85,28 @@ impl<T> ReturnedDataV1<T> {
 
 impl GeneratedNativeAdoptionV1 {
     pub(super) fn disposed_count(&self) -> Option<usize> {
-        (self.is_retired() && self.submission.is_none()).then_some(self.returned.completed)
+        if !self.is_retired() || self.submission.is_some() {
+            return None;
+        }
+        if self.phase == PhaseV1::CopyRetired {
+            self.copy
+                .as_ref()
+                .and_then(|copy| copy.physically_released_count())
+        } else {
+            Some(self.returned.completed)
+        }
     }
 
     pub(super) fn is_retired(&self) -> bool {
+        if self.phase == PhaseV1::CopyRetired {
+            return self.data.is_empty()
+                && self.detached.is_transferred()
+                && self.sdma.is_transferred()
+                && self
+                    .copy
+                    .as_ref()
+                    .is_some_and(|copy| copy.physically_released_count() == Some(1));
+        }
         self.phase == PhaseV1::Retired
             && self.sdma.is_disposed_or_unentered()
             && self.data.is_empty()
@@ -283,6 +305,7 @@ impl KfdRuntimeBackendV1 {
             returned: ReturnedDataV1::empty(),
             submission: None,
             sdma: sdma_backing::NativeCustody::empty(),
+            copy: None,
         });
         self.lease_compute_lane_v1(plan.binding.backend_stream, lane);
         let result = catch_unwind(AssertUnwindSafe(|| {

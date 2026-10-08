@@ -189,6 +189,10 @@ fn check_source_scalar_loan_holder_v29(
             .ok_or_else(source_raw_physical_error_v29)?
             .declaration();
         let (site, role, prefix, access) = match payload {
+            ScopedMemoryPayloadV29::AtomicRmw { .. } => {
+                // No Read/Write reinterpretation before atomic loan admission.
+                return Err(source_raw_physical_error_v29());
+            }
             ScopedMemoryPayloadV29::Load { read, .. } if read.prefix > 1 => (
                 read.site,
                 read.role,

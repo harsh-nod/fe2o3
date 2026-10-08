@@ -150,6 +150,7 @@ impl RuntimeContextV1<KfdRuntimeBackendV1> {
                 ready: Self::gfx942_adoption_ready_v1,
                 adopt: Self::adopt_gfx942_cohort3_v1::<P>,
                 sdma_adoption: None,
+                data_copy: None,
                 cold: None,
                 progress: Self::progress_gfx942_cohort3_issue_v1::<P>,
                 rejected: |_, _| Ok(false),

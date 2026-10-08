@@ -1,5 +1,9 @@
 # Reviewed Cargo Vendor Manifest
 
+The opening producer facts below describe the retained pre-FP4 manifest. The
+current FP4 normalization update and its pending execution duties are documented
+in the final section; it is not represented as a newly observed Cargo output.
+
 `fe2o3-device-cargo-vendor-v1.toml` contains the exact unmodified Cargo-produced
 manifest for fe2o3-device from revision
 `c4c5cdd0f69f3844386440a5addb4d4c3dce0e4b`. The device package is unchanged at
@@ -269,3 +273,38 @@ device provider. A regression reconstructs each exact preceding package by
 removing only those comments, checks its historical digest, requires rejection,
 and restores the current bytes to require admission. The pin update itself is
 not proof, native-service, tutorial or GPU qualification.
+
+## 2026-10-07 FP4 storage source refresh
+
+The reviewed FP4 storage addition changes src/lib.rs and adds src/fp4.rs.
+The device package now contains 35 regular source leaves plus its unchanged
+canonical manifest (36 hashed files, 458991 bytes), with no build.rs. The
+baseline canonical and vendored pins above exactly match the pre-FP4 tree.
+Leaving those pins unchanged correctly caused the first genuine atomic
+extraction to refuse the current provider; atomic.rs itself was unchanged.
+
+The replacement canonical closure is
+cc33bc488a6f9db3d07e2078d4026ef57c8190466f9a8bc508ba983bb4238352;
+the replacement Cargo-vendor closure is
+ab247e81428067d8567b9f69eca5ec4967a4bab8b359a5416ab066034486f24d.
+Only these two complete images are admitted. Prior images remain historical,
+not fallback entries. The complete-file reader, symlink refusals, raw bytes,
+sorted relative paths, length framing, compiler source/definition identity,
+crate observation, diagnostic item and ABI validation are unchanged.
+
+The vendor manifest adds exactly the sorted fp4_api target stanza:
+name = "fp4_api" and path = "tests/fp4_api.rs".
+Its proposed bytes are 1975, SHA-256
+7a4843e05c6b5bb09ad2da1a0439b4ad1fb5e7c0a17b3e07a043d366112b45bf.
+This is an explicit mechanical update to the retained normalized fixture, not
+a claimed new Cargo producer run. The existing actual Cargo metadata test
+must confirm the complete current target roster, including missing/duplicate
+stanza negatives, before publication. A fresh normalized producer observation
+is a separate execution duty if claiming fresh Cargo-produced provenance.
+
+Controls reconstruct and reject both exact pre-FP4 packages, retain the exact
+older execution-comment historical hashes, check atomic source membership in
+both current images, and mutate/remove/rename the FP4 leaf or its registration.
+All previous negative provider controls remain. Fresh matching backend tests
+and genuine source extraction are required; a pin refresh is not successful
+compiler, simulator, physical-device, artifact, or native qualification.

@@ -1172,6 +1172,9 @@
     "block": 5,
     "function": 1
   },
+  "crates/fe2o3-kfd/src/engineering_gfx950_native_packet_diagnostic.rs": {
+    "block": 4
+  },
   "crates/fe2o3-kfd/src/engineering_gfx950_ordered_batch.rs": {
     "block": 2,
     "function": 3
@@ -1204,6 +1207,13 @@
   },
   "crates/fe2o3-kfd/src/memory_linux_dispatch_timestamps_tests.rs": {
     "block": 10
+  },
+  "crates/fe2o3-kfd/src/memory_linux_program_timestamps.rs": {
+    "block": 3,
+    "function": 2
+  },
+  "crates/fe2o3-kfd/src/memory_linux_program_timestamps_tests.rs": {
+    "block": 7
   },
   "crates/fe2o3-kfd/src/queue_completion.rs": {
     "block": 1

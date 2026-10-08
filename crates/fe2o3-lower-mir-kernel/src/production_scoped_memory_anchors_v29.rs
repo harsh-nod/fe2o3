@@ -334,17 +334,31 @@ fn check_scoped_memory_anchors_v29(
                 )?;
                 if let ScopedMemoryAnchorKindV29::Access {
                     payload:
-                        Some(ScopedMemoryPayloadV29::Store {
-                            value,
-                            source:
-                                ScopedMemoryStoreSourceV29::Operand {
-                                    site,
-                                    role,
-                                    ty,
-                                    source:
-                                        ScopedMemoryOperandSourceV29::Memory { occurrence, access },
-                                },
-                        }),
+                        Some(
+                            ScopedMemoryPayloadV29::Store {
+                                value,
+                                source:
+                                    ScopedMemoryStoreSourceV29::Operand {
+                                        site,
+                                        role,
+                                        ty,
+                                        source:
+                                            ScopedMemoryOperandSourceV29::Memory { occurrence, access },
+                                    },
+                            }
+                            | ScopedMemoryPayloadV29::AtomicRmw {
+                                value,
+                                source:
+                                    ScopedMemoryStoreSourceV29::Operand {
+                                        site,
+                                        role,
+                                        ty,
+                                        source:
+                                            ScopedMemoryOperandSourceV29::Memory { occurrence, access },
+                                    },
+                                ..
+                            },
+                        ),
                     ..
                 } = row.kind
                 {
@@ -722,6 +736,7 @@ fn scoped_memory_pointer_v29(kind: &OperationKind) -> Option<ValueId> {
         | OperationKind::GuardedLoad { pointer, .. }
         | OperationKind::Store { pointer, .. }
         | OperationKind::GuardedStore { pointer, .. } => Some(*pointer),
+        OperationKind::Atomic(atomic) => Some(atomic.pointer),
         _ => None,
     }
 }

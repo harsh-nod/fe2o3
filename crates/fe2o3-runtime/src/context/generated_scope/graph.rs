@@ -699,6 +699,7 @@ where
     // No fallible operation lies between this original hold and slot rooting.
     scope.slots.push(Slot {
         sdma_backed: false,
+        data_copy: None,
         lifecycle: Lifecycle::new(owner.prepared),
         roster: owner.roster,
         hold,

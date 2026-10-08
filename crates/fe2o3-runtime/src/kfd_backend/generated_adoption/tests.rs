@@ -45,6 +45,7 @@ fn native_state(phase: PhaseV1, lane: usize) -> GeneratedNativeAdoptionV1 {
         returned: ReturnedDataV1::empty(),
         submission: None,
         sdma: sdma_backing::NativeCustody::empty(),
+        copy: None,
     }
 }
 

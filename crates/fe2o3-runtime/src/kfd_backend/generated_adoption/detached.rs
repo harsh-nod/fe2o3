@@ -5,7 +5,7 @@
 
 use super::*;
 
-mod lineage;
+pub(super) mod lineage;
 use lineage::ProducerLineageV1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,6 +14,7 @@ enum DetachedPhaseV1 {
     InLower,
     Held,
     Consumed,
+    Transferred,
 }
 
 pub(super) struct RetainedDetachedV1<T> {
@@ -41,6 +42,12 @@ impl<T> RetainedDetachedV1<T> {
 
     pub(super) fn is_held(&self) -> bool {
         self.phase == DetachedPhaseV1::Held && self.owner.is_some()
+    }
+
+    pub(super) fn is_transferred(&self) -> bool {
+        self.phase == DetachedPhaseV1::Transferred
+            && self.owner.is_none()
+            && self.producer.is_none()
     }
 
     fn matches(&self, check: impl FnOnce(&T) -> bool) -> bool {
