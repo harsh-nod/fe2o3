@@ -23,7 +23,7 @@ strict explicit-origin codecs, and the shared inert enrollment-request decoder.
 
 | Stage | Result |
 | --- | --- |
-| Default test-binary build, both libraries | PASS, 1.10 seconds, no CLI profile override |
+| Default test-binary build, both libraries | PASS, 1.10 seconds, cached artifacts, no CLI profile override |
 | All `fe2o3-rustc-invocation` library tests | 108 passed, 0 failed, 0 ignored |
 | Focused `rustc-codegen-fe2o3` tests | 129 passed, 0 failed, 0 ignored, 4629 filtered |
 | Non-test production-library check, both libraries | PASS, 45.99 seconds |
@@ -48,6 +48,12 @@ only `sha2@0.11.0`; debug assertions and overflow checks remain enabled.
 Production profiles and the 60-second fixture / 120-second native deadlines
 were not changed.
 
+Here "default" means the committed profile without a CLI optimization override,
+not a pristine Cargo environment: the builds retained `CARGO_PROFILE_DEV_DEBUG=0`,
+`CARGO_PROFILE_TEST_DEBUG=0`, `CARGO_INCREMENTAL=0`, and `CARGO_BUILD_JOBS=1`.
+The ordinary production check used the dev profile, where SHA remained opt-level 0;
+it does not prove an unoptimized production backend meets admission deadlines.
+
 ## Preserved Failures
 
 The preceding `60c2e5bc52e10e8cefe4c5d077d0cef78d76681e` run completed with
@@ -71,6 +77,11 @@ The initial JSON-only result parser rejected that mixed stream. The supplemental
 readback retains those lines and all 123 original parent results. Later reports
 explicitly validate the known child diagnostics and exact parent test-name sets;
 no failing run was relabeled as passing.
+
+The immutable supplemental report's explanation says it ignores only blank lines.
+That wording is inaccurate: its separately retained `bad` list also contains the
+six human-format child-report lines. Its parent results and failed-suite counts
+were independently checked against the original raw stream.
 
 ## Evidence
 
@@ -106,4 +117,3 @@ raw Subject reconstruction, complete mapping recovery, and paid decoder storage.
 Genuine signed cross-process tests, broader compiler compatibility, the protected
 default-fill path, KernelContext typed-global vecadd, and supported GPU runs remain
 open. Shared decoder values and explicit expected-origin inputs remain inert.
-
