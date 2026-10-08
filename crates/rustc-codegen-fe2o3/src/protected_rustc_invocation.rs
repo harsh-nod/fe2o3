@@ -702,5 +702,9 @@ fn measure_image_with_budget(
 mod tests;
 
 #[cfg(test)]
+#[path = "protected_reference_publication_owner_tests.rs"]
+mod reference_publication_owner_tests;
+
+#[cfg(test)]
 #[path = "protected_rustc_invocation/image_budget_tests.rs"]
 mod image_budget_tests;

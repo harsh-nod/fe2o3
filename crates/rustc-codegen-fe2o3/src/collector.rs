@@ -53,6 +53,11 @@ mod reference_custody_v1;
 mod reference_enrollment_v1;
 
 #[cfg(test)]
+mod reference_loan_flow_tests;
+#[cfg(test)]
+pub(crate) use reference_loan_flow_tests::check_empty_enrollment_replay;
+
+#[cfg(test)]
 pub(crate) use production_importer_v1::check_wave64_descriptor_mutations_v1;
 #[cfg(test)]
 pub(crate) mod semantic_import_observation_v1_tests;

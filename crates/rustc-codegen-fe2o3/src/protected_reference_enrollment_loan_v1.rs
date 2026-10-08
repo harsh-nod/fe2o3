@@ -207,6 +207,10 @@ fn revalidate_live(
 }
 
 #[cfg(test)]
+#[path = "protected_reference_enrollment_loan_v1_flow_tests.rs"]
+mod flow_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
