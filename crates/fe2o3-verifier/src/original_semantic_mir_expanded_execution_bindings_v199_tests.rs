@@ -382,6 +382,35 @@ fn exercise(
 fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
     let source = include_str!("original_semantic_mir_expanded_transition_v259.vrs");
     assert_eq!(source.matches("proof fn ").count(), 20);
+    let checked_add = source
+        .split_once("proof fn invocation_reconstructed_checked_add_u32_v259(")
+        .unwrap()
+        .1;
+    let (checked_add_header, checked_add_body) = checked_add.split_once("\n{\n").unwrap();
+    assert_eq!(
+        checked_add_header,
+        "left: int, right: int)\n    requires 0 <= left < 4294967296, 0 <= right < 4294967296,\n    ensures invocation_source_checked_pair_v44(\n        MemoryValueV30::Scalar(left), MemoryValueV30::Scalar(right), 0, 32, false)\n        == Some((MemoryValueV30::Scalar((left + right) % 4294967296),\n            MemoryValueV30::Scalar(if left + right >= 4294967296 { 1int } else { 0int }))),"
+    );
+    let checked_add_body = checked_add_body.split_once("\n}\n").unwrap().0;
+    for exact in [
+        "reveal(invocation_source_checked_pair_v44);",
+        "reveal(invocation_source_byte_value_typed_v36);",
+        "reveal(memory_value_modulus_v30);",
+        "assert(memory_value_modulus_v30(32 / 8) == 4294967296);",
+        "assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(left), 32));",
+        "assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(right), 32));",
+        "let sum = left + right;",
+        "let residue = sum % 4294967296;",
+        "assert(0 <= sum);",
+        "assert(0 <= (left + right) % 4294967296 < 4294967296);",
+        "vstd::arithmetic::div_mod::lemma_mod_add_multiples_vanish(residue, 4294967296);",
+        "vstd::arithmetic::div_mod::lemma_mod_twice(sum, 4294967296);",
+        "assert((residue + 4294967296) % 4294967296 == residue);",
+    ] {
+        assert_eq!(checked_add_body.matches(exact).count(), 1, "{exact}");
+    }
+    assert!(!checked_add_body.contains("assume("));
+    assert!(!checked_add_body.contains("admit("));
     let logical_projection = source
         .split_once("proof fn invocation_source_logical_write_aggregates_v268(")
         .unwrap()

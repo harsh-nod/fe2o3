@@ -504,7 +504,19 @@ proof fn invocation_reconstructed_checked_add_u32_v259(left: int, right: int)
         == Some((MemoryValueV30::Scalar((left + right) % 4294967296),
             MemoryValueV30::Scalar(if left + right >= 4294967296 { 1int } else { 0int }))),
 {
+    reveal(invocation_source_checked_pair_v44);
+    reveal(invocation_source_byte_value_typed_v36);
+    reveal(memory_value_modulus_v30);
+    assert(memory_value_modulus_v30(32 / 8) == 4294967296);
+    assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(left), 32));
+    assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(right), 32));
+    let sum = left + right;
+    let residue = sum % 4294967296;
+    assert(0 <= sum);
     assert(0 <= (left + right) % 4294967296 < 4294967296);
+    vstd::arithmetic::div_mod::lemma_mod_add_multiples_vanish(residue, 4294967296);
+    vstd::arithmetic::div_mod::lemma_mod_twice(sum, 4294967296);
+    assert((residue + 4294967296) % 4294967296 == residue);
 }
 
 // Dispatch transports the actual pair result without assuming installation succeeds.
