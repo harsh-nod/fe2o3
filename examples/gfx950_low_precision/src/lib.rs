@@ -12,6 +12,7 @@
     not(any(
         feature = "kernel-fp4-gemm",
         feature = "kernel-fp8-gemm",
+        feature = "kernel-mixed-fp4-fp8-gemm",
         feature = "kernel-fp4-attention",
         feature = "kernel-fp8-attention",
     ))
@@ -27,6 +28,16 @@ compile_error!("an AMDGPU build must select exactly one gfx950 kernel feature");
         all(feature = "kernel-fp8-gemm", feature = "kernel-fp4-attention"),
         all(feature = "kernel-fp8-gemm", feature = "kernel-fp8-attention"),
         all(feature = "kernel-fp4-attention", feature = "kernel-fp8-attention"),
+        all(feature = "kernel-mixed-fp4-fp8-gemm", feature = "kernel-fp4-gemm"),
+        all(feature = "kernel-mixed-fp4-fp8-gemm", feature = "kernel-fp8-gemm"),
+        all(
+            feature = "kernel-mixed-fp4-fp8-gemm",
+            feature = "kernel-fp4-attention"
+        ),
+        all(
+            feature = "kernel-mixed-fp4-fp8-gemm",
+            feature = "kernel-fp8-attention"
+        ),
     )
 ))]
 compile_error!("an AMDGPU build must not select more than one gfx950 kernel feature");
@@ -39,7 +50,8 @@ pub mod reference;
 /// The ordinary Rust kernel source exists and is checked by host compilation.
 pub const GFX950_RUST_KERNEL_SOURCE_PRESENT_V1: bool = true;
 
-/// The production extractor and exact ROCm closure lower all four kernels.
+/// Historical production lowering claim for the four original pure-format kernels.
+/// This does not qualify the separately named mixed FP4-A/FP8-B CPU example.
 pub const GFX950_RUST_TO_HSACO_LOWERING_SUPPORTED_V1: bool = true;
 
 /// Exact production finalization contract used by the runnable examples.

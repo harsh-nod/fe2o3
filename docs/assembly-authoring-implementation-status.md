@@ -3665,3 +3665,75 @@ exit or the required dual-target end-to-end result. Atomic diagnostic export
 is a separate unpublished candidate: its genuine retry still refuses with
 `source reference dereference has no checked origin`. That refusal is not a
 working source-to-simulator atomic path.
+
+## R88/R89 ordinary mixed Rust source-to-CPU regression (2026-10-08)
+
+The R87 canonical-only mixed result above is historical. The new separately
+named `gfx950_mixed_fp4_fp8_gemm_rust` now has an actual ordinary Rust
+export-to-simulator regression, selected by `kernel-mixed-fp4-fp8-gemm` in
+`examples/gfx950_low_precision`. It uses the existing typed FP4 A and FP8 B
+loaders and mixed MFMA API; no new lowering rule, schema or simulator cap is
+introduced.
+
+Thirteen ordinary controls and one explicitly selected genuine test passed.
+The original exported Bundle V6 / KIR V11, without graph substitution, matches
+an independent scalar-coordinate f64 oracle for all 16 tiles / 4,096 F32
+outputs and four tail canaries. Both complete inputs remain unchanged.
+A wrong expected canary mismatches; actual late FP4 negative zero and FP8
+NaN/off-quarter inputs refuse at lane 63/component 31; damaged bundle bytes
+also refuse. The exact finite input domain makes the oracle's final F32
+conversion exact. See the [mixed guide](gfx950-mixed-fp4-fp8-exact-simulator-v1.md).
+The final merged-source mixed qualification on 2026-10-08 passed all 13
+ordinary controls and the explicitly selected genuine test (45.06 seconds).
+It ran on public base
+`e1e62154d5e87eeae4f461c6846c6786d5aaca27` plus the seven source/test/guide
+leaves, before the final receipt documentation. The normal receipt is 76,155
+bytes, SHA-256
+`3d4ff4fd4cd9044533407e887a067c6914bdb45c9854d2ef0ea9f48037d7322c`;
+the run finished at 13:37:53 UTC. The actual same-module KIR V11 is 43,126 bytes,
+`90932d2975183d69398759b911702db0d4f9782784eb26205f5682fc1c711036`,
+and contains one mixed matrix operation. Its result is CPU simulation only.
+
+The documented public host route also passed on that exact merged source:
+`bash scripts/quickstart.sh source-check examples/gfx950_low_precision/Cargo.toml`.
+It checks the package through the normal frontend and runs all host targets:
+9 library tests and 3 source-contract integration tests passed.
+Receipt: 99,191 bytes,
+`045b7687b7e9f4b09ddcc3958d44d38521cc89aae87126a7060d63c19bbffb16`;
+finished at 13:31:24 UTC. No internal macro bypass was used.
+
+The unchanged pure-FP8 source regression then passed on the same merged
+source: 11 ordinary controls (including the three added shared reference
+tests) and its genuine test (43.47 seconds). Receipt: 83,619 bytes,
+`8bdc5bf97c1514a19bd6a5065ef20c70f14c5e87d35e9c9142dc9937cbda436c`;
+finished at 14:04:37 UTC under the fresh R89 window with unchanged limits.
+Its original feature, kernel body, inputs, two typed-domain refusals,
+canary mismatch and damaged-bundle control were not replaced by the mixed case.
+The pure-FP8 KIR V11 remains 42,407 bytes,
+`1dc71f554f2399f3a056cc4d9809f193b5e964c13efd4863fc8c1e1aef828c46`.
+Its source census matches the host and mixed runs below exactly.
+
+The merged host and mixed runs retained identical before/after source census:
+15,415 files / 222,198,746 bytes,
+`4be88999e91f8520815c04482a64a4a245eb0c7e790a476642aab02eba126fc5`,
+with selected tool/input pins unchanged. The receipts do not authenticate
+every transitive tool or grant compiler, proof, artifact, load or launch
+authority. Neither run accessed a GPU.
+
+Earlier mixed and FP8 runs on base `2f119c4` also passed (13+1 and 11+1),
+but are historical, not merged-source evidence. Two host attempts failed:
+plain Cargo correctly rejected device-only kernel macros; the first public
+source-check then passed 9 library tests but failed one stale integration
+assertion that expected dimension literals in the source file. The correction
+checks the compiled public constants and preserves all kernel safety and
+export-count assertions. Those failed receipts remain failures:
+`7c7b540ca999d54ccb92bcbfc558411ec2f360160ca3f3780146bcfe89e496d2`
+and
+`72236057fd955ccb54068fe2ddc4d1d018a3b7cbd99ac60da53f897b970bae88`.
+
+The existing expert-rank MoE kernel remains unchanged and refuses the
+unsupported Exp/SiLU graph. This gfx950 CPU result does not supply a gfx942
+counterpart, either target's native/GPU correctness, SIMT/tile pairing,
+performance prediction or full M3/M4 completion. Atomic source export remains
+a separate unpublished failing diagnostic; pointer-origin checks are not
+relaxed by this change.

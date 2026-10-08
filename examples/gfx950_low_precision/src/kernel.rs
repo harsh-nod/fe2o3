@@ -173,6 +173,74 @@ pub fn gfx950_fp8_gemm_rust(
     Ok(())
 }
 
+#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-mixed-fp4-fp8-gemm"))]
+#[kernel(
+    typed,
+    launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1])
+)]
+/// Computes 16 independent 16x16x128 FP4-A x FP8-B GEMM tiles.
+/// This new ordinary-source example is not a native or MoE qualification.
+pub fn gfx950_mixed_fp4_fp8_gemm_rust(
+    lhs: &[u8],
+    rhs: &[u8],
+    mut output: DisjointSlice<f32, Blocked<Index1D, 16, 4>>,
+) -> KernelResult {
+    // Validate the launch-wide storage contract before entering MFMA code.
+    if lhs.len() < GFX950_BATCHES * GEMM_M * GEMM_K
+        || rhs.len() < GFX950_BATCHES * GEMM_K * GEMM_N
+        || output.len() < GFX950_BATCHES * GEMM_M * GEMM_N
+    {
+        return Err(KernelError::InvalidArgument);
+    }
+    // A global Wave64 index selects one of the 16 independent output tiles.
+    let index = thread::index_1d();
+    let batch = index.get() / 64;
+    let lane = WaveLane::<Wave64>::current();
+    // The existing typed loaders pack low-nibble E2M1 A and split-K E4M3 B.
+    let Ok(lhs_matrix) = Gfx950Fp4MfmaAMatrix::row_major(
+        lhs,
+        batch.wrapping_mul(GEMM_M * GEMM_K),
+        GEMM_M,
+        GEMM_K,
+        GEMM_K,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let lhs = lhs_matrix.load_m16k128(&lane, 0, 0);
+    let Ok(rhs_matrix) = Gfx950Fp8MfmaBMatrix::row_major(
+        rhs,
+        batch.wrapping_mul(GEMM_K * GEMM_N),
+        GEMM_K,
+        GEMM_N,
+        GEMM_N,
+    ) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let rhs = rhs_matrix.load_k128n16(&lane, 0, 0);
+    // Accumulate the unified low-precision MFMA result in FP32.
+    let accumulator = Gfx950F32AccumulatorFragment::<Gfx950Fp4E2M1>::zero(&lane);
+    let values = Gfx950Matrix::current()
+        .multiply_accumulate_fp4_fp8(lhs, rhs, accumulator)
+        .into_values();
+    // Convert lane-local accumulator ownership into four proven-disjoint stores.
+    let Some(output_block) = index.checked_block::<16, 4>() else {
+        return Err(KernelError::OutOfBounds);
+    };
+    if let Some(element) = output.get_block_mut(&output_block, 0) {
+        *element = values[0];
+    }
+    if let Some(element) = output.get_block_mut(&output_block, 1) {
+        *element = values[1];
+    }
+    if let Some(element) = output.get_block_mut(&output_block, 2) {
+        *element = values[2];
+    }
+    if let Some(element) = output.get_block_mut(&output_block, 3) {
+        *element = values[3];
+    }
+    Ok(())
+}
+
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-fp4-attention"))]
 #[kernel(
     typed,

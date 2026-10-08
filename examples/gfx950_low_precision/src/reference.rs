@@ -363,3 +363,98 @@ mod tests {
         }
     }
 }
+
+/// Independent fixed sixteen-tile FP4-A x FP8-B host oracle.
+///
+/// This uses scalar coordinates and reference decoders, not simulator integer
+/// codecs or lane/fragment mapping. For the diagnostic's finite subset, each
+/// product is an exact eighth and each partial sum has magnitude at most 12,288;
+/// f64 accumulation and the final f32 conversion are therefore exact. Inputs
+/// outside that subset are decoded as ordinary format values. This function is
+/// not a simulator-admission predicate.
+pub fn mixed_gemm_reference(lhs: &[u8], rhs: &[u8]) -> Result<Vec<f32>, ReferenceShapeError> {
+    const BATCHES: usize = super::dimensions::GFX950_BATCHES;
+    const A_TILE: usize = GEMM_M * GEMM_K;
+    const B_TILE: usize = GEMM_K * GEMM_N;
+    require_length("lhs", lhs.len(), BATCHES * A_TILE)?;
+    require_length("rhs", rhs.len(), BATCHES * B_TILE)?;
+    let mut output = vec![0.0; BATCHES * GEMM_M * GEMM_N];
+    for batch in 0..BATCHES {
+        for row in 0..GEMM_M {
+            for column in 0..GEMM_N {
+                let mut accumulator = 0.0_f64;
+                for k in 0..GEMM_K {
+                    let a = f64::from(decode_fp4_e2m1(lhs[batch * A_TILE + row * GEMM_K + k]));
+                    let b = f64::from(decode_fp8_e4m3(rhs[batch * B_TILE + k * GEMM_N + column]));
+                    accumulator += a * b;
+                }
+                output[batch * GEMM_M * GEMM_N + row * GEMM_N + column] = accumulator as f32;
+            }
+        }
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+mod mixed_reference_tests {
+    use super::*;
+
+    #[test]
+    fn mixed_reference_signed_extremes_fraction_and_positive_zero() {
+        let mut a = vec![0x07; 32768];
+        let mut b = vec![0x58; 32768];
+        assert!(
+            mixed_gemm_reference(&a, &b)
+                .unwrap()
+                .iter()
+                .all(|v| v.to_bits() == 12288.0_f32.to_bits())
+        );
+        a.fill(0x0f);
+        assert!(
+            mixed_gemm_reference(&a, &b)
+                .unwrap()
+                .iter()
+                .all(|v| v.to_bits() == (-12288.0_f32).to_bits())
+        );
+        a.fill(0x01);
+        b.fill(0x28);
+        assert!(
+            mixed_gemm_reference(&a, &b)
+                .unwrap()
+                .iter()
+                .all(|v| v.to_bits() == 16.0_f32.to_bits())
+        );
+        b.fill(0);
+        assert!(
+            mixed_gemm_reference(&a, &b)
+                .unwrap()
+                .iter()
+                .all(|v| v.to_bits() == 0)
+        );
+    }
+
+    #[test]
+    fn mixed_reference_checks_both_complete_shapes() {
+        let a = vec![0; 32768];
+        assert_eq!(
+            mixed_gemm_reference(&a[..32767], &a).unwrap_err().tensor(),
+            "lhs"
+        );
+        assert_eq!(
+            mixed_gemm_reference(&a, &a[..32767]).unwrap_err().tensor(),
+            "rhs"
+        );
+        assert!(mixed_gemm_reference(&[0; 32769], &a).is_err());
+    }
+
+    #[test]
+    fn mixed_reference_distinguishes_formats_and_last_k_coordinate() {
+        let mut a = vec![0; 32768];
+        let mut b = vec![0; 32768];
+        a[15 * 128 + 127] = 0x03; // FP4 1.5, not FP8 subnormal.
+        b[127 * 16 + 15] = 0x28; // FP8 0.25, not FP4 negative zero.
+        let output = mixed_gemm_reference(&a, &b).unwrap();
+        assert_eq!(output[255].to_bits(), 0.375_f32.to_bits());
+        assert_eq!(output.iter().filter(|value| **value != 0.0).count(), 1);
+    }
+}

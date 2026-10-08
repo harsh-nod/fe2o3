@@ -10,6 +10,7 @@ publish = false
 [features]
 kernel-fp4-gemm = []
 kernel-fp8-gemm = []
+kernel-mixed-fp4-fp8-gemm = []
 kernel-fp4-attention = []
 kernel-fp8-attention = []
 

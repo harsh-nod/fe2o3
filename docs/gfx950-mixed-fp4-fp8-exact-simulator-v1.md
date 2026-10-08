@@ -95,3 +95,90 @@ KFD dispatch, source execution authentication, performance prediction or full
 race-history coverage follows. Required dual-target source-to-GPU correctness
 remains open. The pure FP8 source-to-CPU result has its separate scope and
 receipts in the [implementation status](assembly-authoring-implementation-status.md).
+
+## Ordinary mixed Rust GEMM CPU regression
+
+A separately named ordinary Rust example, `gfx950_mixed_fp4_fp8_gemm_rust`,
+is selected by the `kernel-mixed-fp4-fp8-gemm` feature in
+`examples/gfx950_low_precision`. It retains sixteen M16×N16×K128 tiles,
+four workgroups of 256, typed low-nibble FP4 A loading, split-K FP8 B loading,
+and four disjoint output stores per lane. No new device API or simulator cap
+is introduced. The existing four pure-format features and their historical
+lowering claims remain separate.
+
+The Linux integration target
+`production_mixed_fp4_fp8_source_simulation_v1` contains ordinary controls and
+an ignored genuine exporter test. That test invokes the existing
+`fe2o3-export-sim --crate fe2o3_gfx950_low_precision --target gfx950
+--bundle-version 6 --output <fresh>/kernel.fe2sim --target-dir <fresh> --
+--manifest-path examples/gfx950_low_precision/Cargo.toml
+--features kernel-mixed-fp4-fp8-gemm --lib --offline`.
+Its fresh paths, matching toolchain/loader environment, source/dependency
+bindings and complete child-process containment must be supplied by a bounded
+qualification owner. This document does not authorize or attest an execution.
+
+The test consumes the exact exported Bundle V6 / KIR V11 through the existing
+strict CLI admission. It compares all 4,096 F32 outputs, four tail canaries and
+unchanged A/B buffers against a scalar-coordinate f64 host reference using
+independent format decoders. The chosen finite inputs have exact eighth-grid
+products and |partial sum| ≤ 12,288, making the final f32 conversion exact.
+Wrong expected canaries, genuine late FP4 negative zero, FP8 NaN/off-quarter
+inputs and damaged bundle bytes are negative controls; no KIR is constructed,
+repaired or substituted. Original CLI limits remain 2^27 steps, 256 MiB
+resident memory and 65,536 memory-access records. The normally ignored source
+test was explicitly selected under the bounded owner described below; failures
+remain failures, not accepted fallbacks.
+The final merged-source mixed qualification on 2026-10-08 passed all 13
+ordinary controls and the explicitly selected genuine test (45.06 seconds).
+It ran on public base
+`e1e62154d5e87eeae4f461c6846c6786d5aaca27` plus the seven source/test/guide
+leaves, before the final receipt documentation. The normal receipt is 76,155
+bytes, SHA-256
+`3d4ff4fd4cd9044533407e887a067c6914bdb45c9854d2ef0ea9f48037d7322c`;
+the run finished at 13:37:53 UTC. The actual same-module KIR V11 is 43,126 bytes,
+`90932d2975183d69398759b911702db0d4f9782784eb26205f5682fc1c711036`,
+and contains one mixed matrix operation. Its result is CPU simulation only.
+
+The documented public host route also passed on that exact merged source:
+`bash scripts/quickstart.sh source-check examples/gfx950_low_precision/Cargo.toml`.
+It checks the package through the normal frontend and runs all host targets:
+9 library tests and 3 source-contract integration tests passed.
+Receipt: 99,191 bytes,
+`045b7687b7e9f4b09ddcc3958d44d38521cc89aae87126a7060d63c19bbffb16`;
+finished at 13:31:24 UTC. No internal macro bypass was used.
+
+The unchanged pure-FP8 source regression then passed on the same merged
+source: 11 ordinary controls (including the three added shared reference
+tests) and its genuine test (43.47 seconds). Receipt: 83,619 bytes,
+`8bdc5bf97c1514a19bd6a5065ef20c70f14c5e87d35e9c9142dc9937cbda436c`;
+finished at 14:04:37 UTC under the fresh R89 window with unchanged limits.
+Its original feature, kernel body, inputs, two typed-domain refusals,
+canary mismatch and damaged-bundle control were not replaced by the mixed case.
+The pure-FP8 KIR V11 remains 42,407 bytes,
+`1dc71f554f2399f3a056cc4d9809f193b5e964c13efd4863fc8c1e1aef828c46`.
+Its source census matches the host and mixed runs below exactly.
+
+The merged host and mixed runs retained identical before/after source census:
+15,415 files / 222,198,746 bytes,
+`4be88999e91f8520815c04482a64a4a245eb0c7e790a476642aab02eba126fc5`,
+with selected tool/input pins unchanged. The receipts do not authenticate
+every transitive tool or grant compiler, proof, artifact, load or launch
+authority. Neither run accessed a GPU.
+
+Earlier mixed and FP8 runs on base `2f119c4` also passed (13+1 and 11+1),
+but are historical, not merged-source evidence. Two host attempts failed:
+plain Cargo correctly rejected device-only kernel macros; the first public
+source-check then passed 9 library tests but failed one stale integration
+assertion that expected dimension literals in the source file. The correction
+checks the compiled public constants and preserves all kernel safety and
+export-count assertions. Those failed receipts remain failures:
+`7c7b540ca999d54ccb92bcbfc558411ec2f360160ca3f3780146bcfe89e496d2`
+and
+`72236057fd955ccb54068fe2ddc4d1d018a3b7cbd99ac60da53f897b970bae88`.
+
+This new GEMM does **not** establish that the existing
+`gfx950_moe_expert_rank_fp4_fp8_v1` example works in the simulator.
+That complete ordinary source also computes SiLU through `exp_f32`;
+the current closed scalar simulator contract refuses Exp before execution.
+The MoE source is unchanged. No exp approximation, branch-based waiver,
+gfx942 counterpart, hardware correctness or full M3/M4 completion is claimed.
