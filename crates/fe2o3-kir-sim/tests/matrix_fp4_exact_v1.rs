@@ -481,7 +481,7 @@ fn exact_profile_does_not_admit_a_32_bit_target_layout() {
 }
 
 #[test]
-fn mixed_and_fp8_layouts_remain_explicitly_unsupported() {
+fn mixed_layout_refuses_while_exact_fp8_profile_admits() {
     for layout in [
         TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64(),
         TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64(),
@@ -506,6 +506,17 @@ fn mixed_and_fp8_layouts_remain_explicitly_unsupported() {
         graph.kernels[0].required_capabilities = caps.clone();
         graph.required_capabilities = caps;
         let sim = admit(graph);
+        if layout == TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64() {
+            assert!(
+                sim.preflight(
+                    &request(&[1; 2048], &[1; 2048], &[0; 256], 1, 64),
+                    TARGET,
+                    limits(),
+                )
+                .is_ok()
+            );
+            continue;
+        }
         let err = sim
             .preflight(
                 &request(&[1; 2048], &[1; 2048], &[0; 256], 1, 64),
