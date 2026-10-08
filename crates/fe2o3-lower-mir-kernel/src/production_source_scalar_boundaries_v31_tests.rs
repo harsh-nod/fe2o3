@@ -471,19 +471,22 @@ fn source_scalar_boundaries_do_not_admit_cleanup_assert_as_nonreturning() {
             })
         },
     );
-    assert!(matches!(
-        result,
-        Err(ProductionSourceOwnedViewErrorV18::Source(
-            ProductionPendingScopedSourceErrorV29::Source(
-                ProductionSemanticKirErrorV1::Unsupported {
-                    function: 0,
-                    block: Some(1),
-                    statement: None,
-                    detail: "semantic assert has a cleanup unwind edge",
-                }
-            )
-        ))
-    ));
+    assert!(
+        matches!(
+            result,
+            Err(ProductionSourceOwnedViewErrorV18::Source(
+                ProductionPendingScopedSourceErrorV29::Source(
+                    ProductionSemanticKirErrorV1::Unsupported {
+                        function: 0,
+                        block: Some(1),
+                        statement: None,
+                        detail: "semantic assert has a cleanup unwind edge",
+                    }
+                )
+            ))
+        ),
+        "{result:?}"
+    );
     assert!(!reached.get());
     assert_eq!(budget.storage(), MODULE_FLOOR);
 }
