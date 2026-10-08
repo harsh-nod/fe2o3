@@ -28,6 +28,208 @@ struct RootsCallbacks {
     result: Option<Result<RootsObservation, String>>,
 }
 
+const HELPER_INSTANCE_LIMIT: usize = 256;
+
+struct HelperSubtreeScratch {
+    first_child: [Option<usize>; HELPER_INSTANCE_LIMIT],
+    next_sibling: [Option<usize>; HELPER_INSTANCE_LIMIT],
+    active: [bool; HELPER_INSTANCE_LIMIT],
+    visited: [bool; HELPER_INSTANCE_LIMIT],
+    pending: [(usize, bool); HELPER_INSTANCE_LIMIT],
+}
+
+fn visit_helper_subtree(
+    count: usize,
+    helper: usize,
+    budget: &mut Budget<'_>,
+    mut parent: impl FnMut(usize, &mut Budget<'_>) -> Result<Option<Option<usize>>, SourceError>,
+    mut visit: impl FnMut(usize, &mut Budget<'_>) -> Result<(), SourceError>,
+) -> Result<(), SourceError> {
+    assert!(count > 0 && count < HELPER_INSTANCE_LIMIT && helper < count);
+    let scratch = std::mem::size_of::<HelperSubtreeScratch>()
+        + std::mem::size_of_val(&parent)
+        + std::mem::size_of_val(&visit);
+    budget.reserve_storage(scratch)?;
+    let result = (|| {
+        budget.charge_work(5 * HELPER_INSTANCE_LIMIT)?;
+        let mut rows = HelperSubtreeScratch {
+            first_child: [None; HELPER_INSTANCE_LIMIT],
+            next_sibling: [None; HELPER_INSTANCE_LIMIT],
+            active: [false; HELPER_INSTANCE_LIMIT],
+            visited: [false; HELPER_INSTANCE_LIMIT],
+            pending: [(0, false); HELPER_INSTANCE_LIMIT],
+        };
+        let mut root = None;
+        for instance in 0..count {
+            budget.charge_work(1)?;
+            let Some(caller) = parent(instance, budget)? else {
+                continue;
+            };
+            rows.active[instance] = true;
+            if let Some(caller) = caller {
+                assert!(caller < count && caller != instance);
+                rows.next_sibling[instance] = rows.first_child[caller];
+                rows.first_child[caller] = Some(instance);
+            } else {
+                assert!(root.replace(instance).is_none(), "one active root owner");
+            }
+        }
+        assert!(rows.active[helper]);
+        rows.pending[0] = (root.expect("active root owner"), false);
+        let mut pending = 1;
+        while pending > 0 {
+            budget.charge_work(1)?;
+            pending -= 1;
+            let (instance, inherited) = rows.pending[pending];
+            assert!(rows.active[instance] && !rows.visited[instance]);
+            rows.visited[instance] = true;
+            let selected = inherited || instance == helper;
+            if selected {
+                visit(instance, budget)?;
+            }
+            let mut child = rows.first_child[instance];
+            while let Some(instance) = child {
+                budget.charge_work(1)?;
+                assert!(pending < count);
+                rows.pending[pending] = (instance, selected);
+                pending += 1;
+                child = rows.next_sibling[instance];
+            }
+        }
+        budget.charge_work(count)?;
+        assert_eq!(
+            rows.visited[..count],
+            rows.active[..count],
+            "every active instance reaches the root without a cycle"
+        );
+        Ok(())
+    })();
+    budget.release_storage(scratch)?;
+    result
+}
+
+#[test]
+fn helper_subtree_selects_descendants_and_refuses_disconnected_or_foreign_edges() {
+    let valid = [
+        Some(None),
+        Some(Some(0)),
+        Some(Some(0)),
+        Some(Some(1)),
+        Some(Some(3)),
+        None,
+    ];
+    let non_topological = [
+        Some(Some(4)),
+        Some(Some(0)),
+        Some(Some(3)),
+        Some(None),
+        Some(Some(3)),
+        None,
+    ];
+    for (parents, selections) in [
+        (valid, [(1, 0b011010u8), (2, 0b000100u8), (0, 0b011111u8)]),
+        (
+            non_topological,
+            [(4, 0b010011u8), (2, 0b000100u8), (3, 0b011111u8)],
+        ),
+    ] {
+        for (helper, expected) in selections {
+            let mut seen = 0u8;
+            let mut work = Work::new(10_000);
+            let mut budget = Budget::new(&mut work, 100_000);
+            visit_helper_subtree(
+                parents.len(),
+                helper,
+                &mut budget,
+                |index, _| Ok(parents[index]),
+                |index, _| {
+                    seen |= 1 << index;
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(seen, expected);
+            assert_eq!(budget.storage(), 0);
+        }
+    }
+    for parents in [
+        [Some(None), Some(Some(2)), Some(Some(1)), None, None, None],
+        [Some(None), Some(Some(6)), None, None, None, None],
+        [Some(None), Some(Some(5)), None, None, None, None],
+        [Some(None), Some(None), None, None, None, None],
+        [Some(None), Some(Some(1)), None, None, None, None],
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| {
+                let mut work = Work::new(10_000);
+                let mut budget = Budget::new(&mut work, 100_000);
+                visit_helper_subtree(
+                    parents.len(),
+                    1,
+                    &mut budget,
+                    |index, _| Ok(parents[index]),
+                    |_, _| Ok(()),
+                )
+                .unwrap();
+            })
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn helper_subtree_pays_exact_scratch_and_releases_on_refusal() {
+    let parents = [Some(None), Some(Some(0)), Some(Some(1))];
+    let mut seen = 0u8;
+    let parent = |index: usize, _: &mut Budget<'_>| Ok(parents[index]);
+    let visit = |index: usize, _: &mut Budget<'_>| {
+        seen |= 1 << index;
+        Ok(())
+    };
+    let scratch = 2 * std::mem::size_of::<[Option<usize>; 256]>()
+        + 2 * std::mem::size_of::<[bool; 256]>()
+        + std::mem::size_of::<[(usize, bool); 256]>()
+        + std::mem::size_of_val(&parent)
+        + std::mem::size_of_val(&visit);
+    let mut work = Work::new(5 * 256 + 3 + 3 + 2 + 3);
+    let mut budget = Budget::new(&mut work, scratch);
+    visit_helper_subtree(3, 1, &mut budget, parent, visit).unwrap();
+    assert_eq!(seen, 0b110);
+    assert_eq!(budget.storage(), 0);
+    let mut work = Work::new(5 * 256 + 3 + 3 + 2 + 3 - 1);
+    let mut budget = Budget::new(&mut work, 100_000);
+    assert!(matches!(
+        visit_helper_subtree(
+            3,
+            1,
+            &mut budget,
+            |index, _| Ok(parents[index]),
+            |_, _| Ok(())
+        ),
+        Err(SourceError::Resource(
+            fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(_)
+        ))
+    ));
+    assert_eq!(budget.storage(), 0);
+    let parent = |index: usize, _: &mut Budget<'_>| Ok(parents[index]);
+    let visit =
+        |_: usize, _: &mut Budget<'_>| Err(SourceError::Unsupported("selected helper refusal"));
+    let scratch = std::mem::size_of::<HelperSubtreeScratch>()
+        + std::mem::size_of_val(&parent)
+        + std::mem::size_of_val(&visit);
+    let mut work = Work::new(10_000);
+    let mut budget = Budget::new(&mut work, scratch - 1);
+    assert!(visit_helper_subtree(3, 1, &mut budget, parent, visit).is_err());
+    assert_eq!(budget.storage(), 0);
+    let mut work = Work::new(10_000);
+    let mut budget = Budget::new(&mut work, scratch);
+    assert!(matches!(
+        visit_helper_subtree(3, 1, &mut budget, parent, visit),
+        Err(SourceError::Unsupported("selected helper refusal"))
+    ));
+    assert_eq!(budget.storage(), 0);
+}
+
 pub(super) fn original_helper_instances(
     source: &ProductionSourceOwnedViewV18<'_>,
     original: &ProductionSourceCorrespondenceV18<'_>,
@@ -122,43 +324,87 @@ pub(super) fn original_helper_instances(
         assert!(reached_root, "helper caller chain reaches the actual root");
         assert!(source.invocation_entry(root, instance, budget)?.is_none());
         let root_function = source.root(root, budget)?.1;
-        for (block, source_block) in function.blocks().iter().enumerate() {
-            assert!(source_block.statements().len() < 512);
-            let block = SemanticBlockIdV1::from_index(block.try_into().unwrap());
-            for statement in (0..source_block.statements().len())
-                .map(|i| Some(i as u32))
-                .chain(std::iter::once(None))
-            {
-                original.visit_source_operations(
-                    root,
-                    instance,
-                    block,
-                    statement,
-                    budget,
-                    |operation, budget| {
-                        budget.charge_work(1)?;
-                        if let ProductionSourceOperationV18::Operation(coordinate) = operation {
-                            assert_eq!(coordinate.block.function.0 as usize, root_function);
-                            let body = canonical.module().functions[root_function]
-                                .body
-                                .as_ref()
-                                .unwrap();
-                            assert!(
-                                body.blocks[coordinate.block.block as usize]
-                                    .operations
-                                    .get(coordinate.operation as usize)
-                                    .is_some()
-                            );
-                            mapped_operations[root] += 1;
-                        }
-                        Ok(())
-                    },
-                )?;
-            }
-        }
+        // A call-only helper can delegate its operations to defined descendants.
+        // Authenticate the root-local call tree before counting that subtree.
+        visit_helper_subtree(
+            count,
+            instance,
+            budget,
+            |candidate, budget| {
+                if !source.instance_active(root, candidate, budget)? {
+                    return Ok(None);
+                }
+                let (function, incoming) = source.instance(root, candidate, budget)?;
+                match incoming {
+                    Some((caller, call_block)) => {
+                        assert!(caller < count && caller != candidate);
+                        assert!(source.instance_active(root, caller, budget)?);
+                        assert_eq!(
+                            original.defined_call_instance(root, caller, call_block, budget)?,
+                            candidate
+                        );
+                        Ok(Some(Some(caller)))
+                    }
+                    None => {
+                        assert_eq!(function, source.root(root, budget)?.0);
+                        Ok(Some(None))
+                    }
+                }
+            },
+            |candidate, budget| {
+                let (actual, incoming) = source.instance(root, candidate, budget)?;
+                if candidate == instance {
+                    assert_eq!(actual, helper);
+                }
+                let function = &semantic.functions()[actual.index() as usize];
+                assert!(!function.blocks().is_empty() && function.blocks().len() < 256);
+                let before = mapped_operations[root];
+                for (block, source_block) in function.blocks().iter().enumerate() {
+                    assert!(source_block.statements().len() < 512);
+                    let block = SemanticBlockIdV1::from_index(block.try_into().unwrap());
+                    for statement in (0..source_block.statements().len())
+                        .map(|i| Some(i as u32))
+                        .chain(std::iter::once(None))
+                    {
+                        original.visit_source_operations(
+                            root,
+                            candidate,
+                            block,
+                            statement,
+                            budget,
+                            |operation, budget| {
+                                budget.charge_work(1)?;
+                                if let ProductionSourceOperationV18::Operation(coordinate) =
+                                    operation
+                                {
+                                    assert_eq!(coordinate.block.function.0 as usize, root_function);
+                                    let body = canonical.module().functions[root_function]
+                                        .body
+                                        .as_ref()
+                                        .unwrap();
+                                    assert!(
+                                        body.blocks[coordinate.block.block as usize]
+                                            .operations
+                                            .get(coordinate.operation as usize)
+                                            .is_some()
+                                    );
+                                    mapped_operations[root] += 1;
+                                }
+                                Ok(())
+                            },
+                        )?;
+                    }
+                }
+                eprintln!(
+                    "HELPER_SUBTREE_V334 root={root} helper={instance} instance={candidate} function={actual:?} incoming={incoming:?} mapped={}",
+                    mapped_operations[root] - before
+                );
+                Ok(())
+            },
+        )?;
         assert!(
             mapped_operations[root] > 0,
-            "helper has genuine flattened operations"
+            "helper subtree has genuine flattened operations"
         );
     }
     // Numeric instance ordinals are root-local; the two distinct root owners
