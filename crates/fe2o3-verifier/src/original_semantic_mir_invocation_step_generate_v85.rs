@@ -157,7 +157,9 @@ pub(super) fn emit(
                     Goal::Heap if root_return.is_some() => {
                         root_returns::emit(root, root_return.as_ref().ok_or_else(mismatch)?, out)?;
                     }
-                    Goal::Heap | Goal::Control | Goal::Halted if scalar_return.is_some() => {
+                    Goal::Heap | Goal::Control | Goal::Halted | Goal::Observations
+                        if scalar_return.is_some() =>
+                    {
                         scalar_returns::emit(
                             model,
                             root,
