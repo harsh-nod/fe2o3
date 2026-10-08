@@ -908,6 +908,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             #[trigger] invocation_source_micro_record_v36(c, after, {r}, {i}, block, c.next_statement, event) == n
     }},
 {{
+    hide(invocation_source_micro_step_{r}_{i}_v36);
     hide(invocation_source_active_{r}_{i}_v36);
     hide(invocation_source_byte_event_{r}_{i}_v36);
     hide(invocation_source_byte_step_v36);
@@ -937,10 +938,11 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
         write!(
             out,
             r#"
-    reveal(invocation_source_micro_step_{r}_{i}_v36);
     let n = invocation_source_micro_step_{r}_{i}_v36(c, e);
     if !invocation_source_active_{r}_{i}_v36(c.source) || c.next_statement < 0 || c.next_statement != c.observations.len() {{
-        assert(n == invocation_source_micro_refused_v36(c));
+        assert(n == invocation_source_micro_refused_v36(c)) by {{
+            reveal(invocation_source_micro_step_{r}_{i}_v36);
+        }}
     }} else {{
 "#
         )
@@ -955,13 +957,15 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                 out.budget.charge_work(1)?;
                 write!(out, "        if c.source.machine.pc == {} && c.next_statement == {statement} {{\n            let after = ", self.blocks.start + block).map_err(|_| out.error())?;
                 self.emit_statement_result(block, statement, "c", "e", out)?;
-                write!(out, ";\n            let event = invocation_source_byte_event_{r}_{i}_v36({block}, {statement});\n            assert(n == invocation_source_micro_record_v36(c, after, {r}, {i}, {block}, c.next_statement, event));\n        }} else").map_err(|_| out.error())?;
+                write!(out, ";\n            let event = invocation_source_byte_event_{r}_{i}_v36({block}, {statement});\n            assert(n == invocation_source_micro_record_v36(c, after, {r}, {i}, {block}, c.next_statement, event)) by {{\n                reveal(invocation_source_micro_step_{r}_{i}_v36);\n            }}\n            assert(exists|witness_after: InvocationSourceByteStateV36, witness_block: int, witness_event: Option<InvocationSourceByteEventV36>|\n                #[trigger] invocation_source_micro_record_v36(c, witness_after, {r}, {i}, witness_block, c.next_statement, witness_event) == n) by {{\n                assert(invocation_source_micro_record_v36(c, after, {r}, {i}, {block}, c.next_statement, event) == n);\n            }}\n        }} else").map_err(|_| out.error())?;
             }
         }
         write!(
             out,
             r#" {{
-            assert(n == invocation_source_micro_refused_v36(c));
+            assert(n == invocation_source_micro_refused_v36(c)) by {{
+                reveal(invocation_source_micro_step_{r}_{i}_v36);
+            }}
         }}
     }}
 }}

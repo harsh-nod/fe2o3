@@ -102,6 +102,7 @@ fn check_history(text: &str, root: usize, instance: usize) {
         "reveal(invocation_source_micro_step_{root}_{instance}_v36);"
     )));
     let mut hidden = vec![
+        format!("invocation_source_micro_step_{root}_{instance}_v36"),
         format!("invocation_source_active_{root}_{instance}_v36"),
         format!("invocation_source_byte_event_{root}_{instance}_v36"),
         "invocation_source_byte_step_v36".to_owned(),
@@ -135,15 +136,16 @@ fn check_history(text: &str, root: usize, instance: usize) {
         .filter_map(|line| line.trim().strip_prefix("hide(")?.strip_suffix(");"))
         .collect();
     assert_eq!(actual_hidden, hidden);
-    for name in &hidden {
+    for name in &hidden[1..] {
         assert!(!shape_body.contains(&format!("reveal({name}")));
         assert!(!shape_body.contains(&format!("reveal_with_fuel({name}")));
     }
     let mut expected_body = format!(
-        r#"    reveal(invocation_source_micro_step_{root}_{instance}_v36);
-    let n = invocation_source_micro_step_{root}_{instance}_v36(c, e);
+        r#"    let n = invocation_source_micro_step_{root}_{instance}_v36(c, e);
     if !invocation_source_active_{root}_{instance}_v36(c.source) || c.next_statement < 0 || c.next_statement != c.observations.len() {{
-        assert(n == invocation_source_micro_refused_v36(c));
+        assert(n == invocation_source_micro_refused_v36(c)) by {{
+            reveal(invocation_source_micro_step_{root}_{instance}_v36);
+        }}
     }} else {{
 "#
     );
@@ -171,16 +173,25 @@ fn check_history(text: &str, root: usize, instance: usize) {
                 event.strip_suffix(')').unwrap()
             );
             expected_body.push_str(&format!(
-                "            let event = {event};\n            assert(n == {prefix}, c.next_statement, event));\n        }} else"
+                "            let event = {event};\n            assert(n == {prefix}, c.next_statement, event)) by {{\n                reveal(invocation_source_micro_step_{root}_{instance}_v36);\n            }}\n            assert(exists|witness_after: InvocationSourceByteStateV36, witness_block: int, witness_event: Option<InvocationSourceByteEventV36>|\n                #[trigger] invocation_source_micro_record_v36(c, witness_after, {root}, {instance}, witness_block, c.next_statement, witness_event) == n) by {{\n                assert({prefix}, c.next_statement, event) == n);\n            }}\n        }} else"
             ));
             cases += 1;
         }
     }
-    expected_body.push_str(
-        " {\n            assert(n == invocation_source_micro_refused_v36(c));\n        }\n    }\n}",
-    );
+    expected_body.push_str(&format!(
+        " {{\n            assert(n == invocation_source_micro_refused_v36(c)) by {{\n                reveal(invocation_source_micro_step_{root}_{instance}_v36);\n            }}\n        }}\n    }}\n}}",
+    ));
     assert_eq!(shape.matches("let after = ").count(), cases);
     assert_eq!(shape.matches("let event = ").count(), cases);
+    assert_eq!(shape.matches("assert(exists|witness_after:").count(), cases);
+    assert_eq!(
+        shape
+            .matches(&format!(
+                "reveal(invocation_source_micro_step_{root}_{instance}_v36);"
+            ))
+            .count(),
+        cases + 2
+    );
     assert!(!shape.contains("micro_record_history_v348("));
     assert!(!shape.contains(".observations.take("));
     let without_hides: Vec<_> = shape_body
