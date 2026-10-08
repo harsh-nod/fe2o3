@@ -957,7 +957,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
                 out.budget.charge_work(1)?;
                 write!(out, "        if c.source.machine.pc == {} && c.next_statement == {statement} {{\n            let after = ", self.blocks.start + block).map_err(|_| out.error())?;
                 self.emit_statement_result(block, statement, "c", "e", out)?;
-                write!(out, ";\n            let event = invocation_source_byte_event_{r}_{i}_v36({block}, {statement});\n            assert(n == invocation_source_micro_record_v36(c, after, {r}, {i}, {block}, c.next_statement, event)) by {{\n                reveal(invocation_source_micro_step_{r}_{i}_v36);\n            }}\n            assert(exists|witness_after: InvocationSourceByteStateV36, witness_block: int, witness_event: Option<InvocationSourceByteEventV36>|\n                #[trigger] invocation_source_micro_record_v36(c, witness_after, {r}, {i}, witness_block, c.next_statement, witness_event) == n) by {{\n                assert(invocation_source_micro_record_v36(c, after, {r}, {i}, {block}, c.next_statement, event) == n);\n            }}\n        }} else").map_err(|_| out.error())?;
+                write!(out, ";\n            let event = invocation_source_byte_event_{r}_{i}_v36({block}, {statement});\n            assert(n == invocation_source_micro_record_v36(c, after, {r}, {i}, {block}, c.next_statement, event)) by {{\n                reveal(invocation_source_micro_step_{r}_{i}_v36);\n            }}\n            invocation_source_micro_record_has_shape_v356(c, after, {r}, {i}, {block}, c.next_statement, event);\n        }} else").map_err(|_| out.error())?;
             }
         }
         write!(
@@ -1205,6 +1205,23 @@ proof fn invocation_source_micro_record_history_v348(cursor: InvocationSourceMic
     reveal(invocation_source_micro_record_v36);
     let n = invocation_source_micro_record_v36(cursor, after, root, instance, block, statement, event);
     assert(n.observations.take(cursor.observations.len() as int) =~= cursor.observations);
+}
+proof fn invocation_source_micro_record_has_shape_v356(cursor: InvocationSourceMicroStateV36,
+    after: InvocationSourceByteStateV36, root: int, instance: int, block: int, statement: int,
+    event: Option<InvocationSourceByteEventV36>,
+)
+    ensures {
+        let n = invocation_source_micro_record_v36(cursor, after, root, instance, block, statement, event);
+        exists|witness_after: InvocationSourceByteStateV36, witness_block: int, witness_event: Option<InvocationSourceByteEventV36>|
+            #[trigger] invocation_source_micro_record_v36(cursor, witness_after, root, instance, witness_block, statement, witness_event) == n
+    },
+{
+    hide(invocation_source_micro_record_v36);
+    let n = invocation_source_micro_record_v36(cursor, after, root, instance, block, statement, event);
+    assert(exists|witness_after: InvocationSourceByteStateV36, witness_block: int, witness_event: Option<InvocationSourceByteEventV36>|
+        #[trigger] invocation_source_micro_record_v36(cursor, witness_after, root, instance, witness_block, statement, witness_event) == n) by {
+        assert(invocation_source_micro_record_v36(cursor, after, root, instance, block, statement, event) == n);
+    }
 }
 spec fn invocation_source_block_refused_v36(cursor: InvocationSourceMicroStateV36) -> InvocationSourceBlockResultV36 {
     InvocationSourceBlockResultV36 { source: invocation_source_byte_refused_v36(cursor.source),

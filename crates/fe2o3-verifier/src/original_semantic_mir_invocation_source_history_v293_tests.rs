@@ -172,8 +172,13 @@ fn check_history(text: &str, root: usize, instance: usize) {
                 "invocation_source_byte_event_{root}_{instance}_v36({}",
                 event.strip_suffix(')').unwrap()
             );
+            let witness = prefix.replacen(
+                "invocation_source_micro_record_v36",
+                "invocation_source_micro_record_has_shape_v356",
+                1,
+            );
             expected_body.push_str(&format!(
-                "            let event = {event};\n            assert(n == {prefix}, c.next_statement, event)) by {{\n                reveal(invocation_source_micro_step_{root}_{instance}_v36);\n            }}\n            assert(exists|witness_after: InvocationSourceByteStateV36, witness_block: int, witness_event: Option<InvocationSourceByteEventV36>|\n                #[trigger] invocation_source_micro_record_v36(c, witness_after, {root}, {instance}, witness_block, c.next_statement, witness_event) == n) by {{\n                assert({prefix}, c.next_statement, event) == n);\n            }}\n        }} else"
+                "            let event = {event};\n            assert(n == {prefix}, c.next_statement, event)) by {{\n                reveal(invocation_source_micro_step_{root}_{instance}_v36);\n            }}\n            {witness}, c.next_statement, event);\n        }} else"
             ));
             cases += 1;
         }
@@ -183,7 +188,13 @@ fn check_history(text: &str, root: usize, instance: usize) {
     ));
     assert_eq!(shape.matches("let after = ").count(), cases);
     assert_eq!(shape.matches("let event = ").count(), cases);
-    assert_eq!(shape.matches("assert(exists|witness_after:").count(), cases);
+    assert!(!shape_body.contains("assert(exists|"));
+    assert_eq!(
+        shape
+            .matches("invocation_source_micro_record_has_shape_v356(")
+            .count(),
+        cases
+    );
     assert_eq!(
         shape
             .matches(&format!(
@@ -224,6 +235,48 @@ fn check_history(text: &str, root: usize, instance: usize) {
         "machine.pc",
     ] {
         assert!(!step_body.contains(forbidden), "{forbidden}");
+    }
+    let witness_summary = declaration(text, "invocation_source_micro_record_has_shape_v356");
+    assert_eq!(
+        witness_summary,
+        declaration(
+            SOURCE_FUNCTION_V36,
+            "invocation_source_micro_record_has_shape_v356"
+        )
+    );
+    assert_eq!(
+        witness_summary,
+        r#"proof fn invocation_source_micro_record_has_shape_v356(cursor: InvocationSourceMicroStateV36,
+    after: InvocationSourceByteStateV36, root: int, instance: int, block: int, statement: int,
+    event: Option<InvocationSourceByteEventV36>,
+)
+    ensures {
+        let n = invocation_source_micro_record_v36(cursor, after, root, instance, block, statement, event);
+        exists|witness_after: InvocationSourceByteStateV36, witness_block: int, witness_event: Option<InvocationSourceByteEventV36>|
+            #[trigger] invocation_source_micro_record_v36(cursor, witness_after, root, instance, witness_block, statement, witness_event) == n
+    },
+{
+    hide(invocation_source_micro_record_v36);
+    let n = invocation_source_micro_record_v36(cursor, after, root, instance, block, statement, event);
+    assert(exists|witness_after: InvocationSourceByteStateV36, witness_block: int, witness_event: Option<InvocationSourceByteEventV36>|
+        #[trigger] invocation_source_micro_record_v36(cursor, witness_after, root, instance, witness_block, statement, witness_event) == n) by {
+        assert(invocation_source_micro_record_v36(cursor, after, root, instance, block, statement, event) == n);
+    }
+}"#
+    );
+    for forbidden in [
+        "requires",
+        "assume(",
+        "admit(",
+        "external_body",
+        "reveal(",
+        "reveal_with_fuel(",
+        "well_formed",
+        "machine.valid",
+        "byte_step",
+        "micro_step",
+    ] {
+        assert!(!witness_summary.contains(forbidden), "{forbidden}");
     }
     let record_summary = declaration(
         SOURCE_FUNCTION_V36,
