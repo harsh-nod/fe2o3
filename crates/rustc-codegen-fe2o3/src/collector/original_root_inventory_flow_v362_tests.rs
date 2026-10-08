@@ -14,18 +14,27 @@ use rustc_interface::interface::Compiler;
 use rustc_middle::mir::mono::MonoItem;
 use sha2::{Digest, Sha256};
 
-// Distinct substitutions test instance identity, not const-generic MIR lowering.
+// The GPU FnAbi query needs the real AMD target. This no-core identity fixture
+// does not replace authentic device dependencies or production source admission.
 const SOURCE: &str = r#"
-#![allow(dead_code)]
+#![feature(no_core, lang_items)]
+#![no_core]
+#![allow(dead_code, internal_features)]
+#[lang = "pointee_sized"]
+trait PointeeSized {}
+#[lang = "meta_sized"]
+trait MetaSized: PointeeSized {}
+#[lang = "sized"]
+trait Sized: MetaSized {}
 #[inline(never)]
-pub fn generic_kernel<const N: u32>(value: u32) { let _v = value ^ 7; }
+pub fn generic_kernel<const N: u32>() {}
 #[inline(never)]
-pub fn generic_reference<const N: u32>(value: u32) { let _v = value ^ 7; }
-pub fn anchor(value: u32) {
-    generic_kernel::<3>(value);
-    generic_kernel::<5>(value);
-    generic_reference::<3>(value);
-    generic_reference::<5>(value);
+pub fn generic_reference<const N: u32>() {}
+pub fn anchor() {
+    generic_kernel::<3>();
+    generic_kernel::<5>();
+    generic_reference::<3>();
+    generic_reference::<5>();
 }
 "#;
 
@@ -47,9 +56,7 @@ fn with_source(check: impl for<'tcx> FnMut(TyCtxt<'tcx>) + Send) {
     let mut source_text = SOURCE.to_owned();
     for index in 0..16 {
         for prefix in ["kernel", "reference"] {
-            source_text.push_str(&format!(
-                "\npub fn {prefix}_{index:02}(value: u32) {{ let _v = value ^ {index}; }}\n"
-            ));
+            source_text.push_str(&format!("\npub fn {prefix}_{index:02}() {{}}\n"));
         }
     }
     std::fs::write(&source, source_text).unwrap();
@@ -65,7 +72,11 @@ fn with_source(check: impl for<'tcx> FnMut(TyCtxt<'tcx>) + Send) {
         "--crate-name=fe2o3_original_root_inventory".into(),
         "--crate-type=lib".into(),
         "--edition=2024".into(),
+        "--target=amdgcn-amd-amdhsa".into(),
+        "-Ctarget-cpu=gfx942".into(),
+        "-Ctarget-feature=-xnack,+wavefrontsize64,-wavefrontsize32".into(),
         "--emit=obj".into(),
+        "-Ccodegen-units=1".into(),
         "-Zmir-opt-level=0".into(),
         "-Copt-level=0".into(),
         "-Coverflow-checks=off".into(),
