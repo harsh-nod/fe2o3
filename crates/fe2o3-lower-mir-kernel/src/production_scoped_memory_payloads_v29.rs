@@ -1,9 +1,16 @@
 // Payloads bind the existing access row to its actual value producer. They do
 // not replace pointer read-from, initialization, lifetime or expression proofs.
 include!("production_scoped_write_payload_v84.rs");
+include!("production_scoped_atomic_payload_v1.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ScopedMemoryPayloadV29 {
+    AtomicRmw {
+        result: ValueId,
+        value: ValueId,
+        source: ScopedMemoryStoreSourceV29,
+        effect: ScopedAtomicEffectV1,
+    },
     Load {
         result: ValueId,
         read: ScopedMemoryReadV29,
@@ -569,6 +576,17 @@ impl SemanticFunctionLoweringV1<'_, '_> {
                                         ty,
                                         source,
                                     },
+                            }
+                            | ScopedMemoryPayloadV29::AtomicRmw {
+                                value,
+                                source:
+                                    ScopedMemoryStoreSourceV29::Operand {
+                                        site,
+                                        role,
+                                        ty,
+                                        source,
+                                    },
+                                ..
                             } = payload
                             {
                                 match source {
@@ -1011,6 +1029,9 @@ fn scoped_recorded_payload_v29(
 ) -> Result<Option<ScopedMemoryPayloadV29>, ProductionSemanticKirErrorV1> {
     budget.charge_work(5)?;
     match kind {
+        OperationKind::Atomic(atomic) => {
+            scoped_recorded_atomic_payload_v1(recorder, types, function, atomic, results, budget)
+        }
         OperationKind::Load { .. } | OperationKind::GuardedLoad { .. } => {
             if let Some(read) = recorder.index_payload {
                 let [result] = results else {
@@ -1390,6 +1411,10 @@ fn check_scoped_payload_effect_v29(
     let header = argument_sum_v1(&[
         std::mem::size_of::<ScopedMemoryAnchorKindV29>(),
         std::mem::size_of::<ScopedMemoryStoreSourceV29>(),
+        std::mem::size_of::<ScopedAtomicEffectV1>(),
+        3 * std::mem::size_of::<ValueId>(),
+        std::mem::size_of::<Option<ScopedMemoryFrameV29>>(),
+        std::mem::size_of::<&SemanticAtomicRmwV1>(),
         std::mem::size_of::<ScopedMemoryReadV29>(),
         std::mem::size_of::<Option<&SemanticStatementKindV1>>(),
         std::mem::size_of::<&fe2o3_mir_model::semantic_mir_v1::SemanticMemoryStoreV1>(),
@@ -1413,6 +1438,21 @@ fn check_scoped_payload_effect_v29(
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         budget.charge_work(3)?;
         match (row.kind, &operation.kind) {
+            (
+                ScopedMemoryAnchorKindV29::Access {
+                    payload:
+                        Some(ScopedMemoryPayloadV29::AtomicRmw {
+                            result,
+                            value,
+                            source,
+                            effect,
+                        }),
+                    ..
+                },
+                OperationKind::Atomic(_),
+            ) => check_scoped_atomic_effect_v1(
+                function, row, operation, result, value, source, effect, budget,
+            ),
             (
                 ScopedMemoryAnchorKindV29::Access {
                     payload: Some(ScopedMemoryPayloadV29::Store { source, .. }),
@@ -1456,7 +1496,12 @@ fn check_scoped_payload_v29(
         ..
     } = row.kind
     else {
-        return Ok(());
+        // Atomic effects never inherit the legacy payload-absent access path.
+        return if matches!(operation.kind, OperationKind::Atomic(_)) {
+            Err(scoped_memory_error_v29())
+        } else {
+            Ok(())
+        };
     };
     budget.charge_work(8)?;
     if !occurrences
@@ -1469,6 +1514,22 @@ fn check_scoped_payload_v29(
         return Err(scoped_memory_error_v29());
     }
     match payload {
+        ScopedMemoryPayloadV29::AtomicRmw {
+            result,
+            value,
+            source,
+            effect,
+        } => check_scoped_atomic_payload_v1(
+            function,
+            occurrences,
+            row,
+            operation,
+            result,
+            value,
+            source,
+            effect,
+            budget,
+        ),
         ScopedMemoryPayloadV29::IndexLoad { result, read } => check_scoped_index_payload_v29(
             function,
             occurrences,

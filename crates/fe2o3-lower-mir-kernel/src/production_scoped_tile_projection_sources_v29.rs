@@ -692,7 +692,8 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                                 payload:
                                     Some(
                                         ScopedMemoryPayloadV29::Load { result, read: _ }
-                                        | ScopedMemoryPayloadV29::IndexLoad { result, read: _ },
+                                        | ScopedMemoryPayloadV29::IndexLoad { result, read: _ }
+                                        | ScopedMemoryPayloadV29::AtomicRmw { result, .. },
                                     ),
                                 ..
                             },
@@ -700,7 +701,11 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                         (
                             Field::MemoryStoreValue,
                             ScopedMemoryAnchorKindV29::Access {
-                                payload: Some(ScopedMemoryPayloadV29::Store { value, source: _ }),
+                                payload:
+                                    Some(
+                                        ScopedMemoryPayloadV29::Store { value, source: _ }
+                                        | ScopedMemoryPayloadV29::AtomicRmw { value, .. },
+                                    ),
                                 ..
                             },
                         ) => self.definition(key, value)?,
@@ -717,6 +722,28 @@ impl TileAttachmentWalkV29<'_, '_, '_, '_> {
                             tile_attachment_u32_v29(position)?,
                             pointer,
                             value,
+                        )?,
+                        (
+                            Field::MemoryStoreUse,
+                            ScopedMemoryAnchorKindV29::Access {
+                                pointer,
+                                payload:
+                                    Some(ScopedMemoryPayloadV29::AtomicRmw {
+                                        value,
+                                        result,
+                                        effect,
+                                        ..
+                                    }),
+                            },
+                        ) => self.emitted_atomic_payload_use_v1(
+                            key,
+                            instance,
+                            block,
+                            tile_attachment_u32_v29(position)?,
+                            pointer,
+                            value,
+                            result,
+                            effect,
                         )?,
                         _ => self.emit(key, TileAttachmentLocationV29::NoOutput)?,
                     }

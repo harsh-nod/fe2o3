@@ -5,6 +5,10 @@ mod payload_tests {
     include!("production_scoped_memory_payloads_v29_tests.rs");
 }
 
+mod atomic_payload_tests {
+    include!("production_scoped_atomic_payload_v1_tests.rs");
+}
+
 mod object_payload_tests {
     include!("production_source_object_payloads_v29_tests.rs");
     mod resources {

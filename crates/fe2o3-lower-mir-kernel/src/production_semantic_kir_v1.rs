@@ -14873,19 +14873,25 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         atomic: &SemanticAtomicRmwV1,
         operations: &mut Vec<Operation>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        let address = if atomic.address().projections().is_empty()
-            && self
-                .legacy_retained_slot_v29(atomic.address().local())?
-                .is_some()
-        {
-            self.retained_local_pointer_binding_v1(
-                atomic.address().local(),
-                AccessMode::ReadWrite,
-                operations,
-            )?
-        } else {
-            self.resolve_place(block, statement, atomic.address(), operations)?
-        };
+        let site = execution_site_v29(block, statement);
+        let address = self.with_scoped_source_memory_frame_v29(
+            ScopedMemoryFrameV29::operand(site, Some(ExecutionOperandV29::AtomicAddress)),
+            |this| {
+                if atomic.address().projections().is_empty()
+                    && this
+                        .legacy_retained_slot_v29(atomic.address().local())?
+                        .is_some()
+                {
+                    this.retained_local_pointer_binding_v1(
+                        atomic.address().local(),
+                        AccessMode::ReadWrite,
+                        operations,
+                    )
+                } else {
+                    this.resolve_place(block, statement, atomic.address(), operations)
+                }
+            },
+        )?;
         let (pointer, pointer_ty) = address
             .value()
             .map_err(|detail| unsupported(0, Some(block.index()), statement, detail))?;
@@ -14930,6 +14936,11 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 "semantic atomic scope has no exact Kernel IR scope",
             )
         })?;
+        let source = self.prepare_scoped_operand_payload_v29(
+            site,
+            ExecutionOperandV29::AtomicValue,
+            atomic.value(),
+        )?;
         let value = self.lower_source_operand_v29(
             block,
             statement,
@@ -14952,19 +14963,33 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         }
         let access =
             memory_access_for_type(self.types, atomic.address().ty(), pointer_ty.address_space)?;
-        let result = self.emit(
-            operations,
-            pointee,
-            OperationKind::Atomic(Atomic {
-                kind,
-                pointer,
-                value: Some(value),
-                compare: None,
-                access,
-                scope,
-                ordering: lower_atomic_ordering(atomic.access().ordering()),
-                failure_ordering: None,
-            }),
+        let result = self.with_scoped_store_payload_v29(
+            source,
+            SemanticValueBindingV1::Value {
+                id: value,
+                ty: pointee.clone(),
+            },
+            |this, _| {
+                this.with_scoped_memory_frame_v29(
+                    ScopedMemoryFrameV29::operand(site, Some(ExecutionOperandV29::AtomicAddress)),
+                    |this| {
+                        this.emit(
+                            operations,
+                            pointee,
+                            OperationKind::Atomic(Atomic {
+                                kind,
+                                pointer,
+                                value: Some(value),
+                                compare: None,
+                                access,
+                                scope,
+                                ordering: lower_atomic_ordering(atomic.access().ordering()),
+                                failure_ordering: None,
+                            }),
+                        )
+                    },
+                )
+            },
         )?;
         self.assign_place(
             block,
