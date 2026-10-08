@@ -1598,6 +1598,12 @@ run_rocm_compile() {
         --test production_extraction_driver_v1 \
         production_collector_rejects_reachable_unsafe_rust_with_rooted_diagnostics -- \
         --ignored --exact
+  run_step rocm-production-extraction-inline-source-safety \
+    env "${loader_environment_removals[@]}" \
+      cargo test --locked -p rustc-codegen-fe2o3 \
+        --test production_extraction_driver_v1 \
+        inlined_source_safety_v1::ordinary_inline_helper_collection_rejects_erased_empty_unsafe_blocks -- \
+        --ignored --exact
   run_step rocm-production-general-matrix \
     env "${loader_environment_removals[@]}" \
       cargo test --locked -p rustc-codegen-fe2o3 \

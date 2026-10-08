@@ -1451,6 +1451,7 @@ assert_equals \
 for production_step in \
   rocm-production-extraction-safe-kernel \
   rocm-production-extraction-unsafe-rejection \
+  rocm-production-extraction-inline-source-safety \
   rocm-production-general-matrix \
   rocm-production-general-attention \
   rocm-production-transaction \
@@ -1485,6 +1486,10 @@ for production_step in \
     exit 1
   fi
 done
+assert_equals \
+  'env cargo test --locked -p rustc-codegen-fe2o3 --test production_extraction_driver_v1 inlined_source_safety_v1::ordinary_inline_helper_collection_rejects_erased_empty_unsafe_blocks -- --ignored --exact' \
+  "$(step_command rocm-production-extraction-inline-source-safety)" \
+  'ROCm compile omitted the exact inline source-safety regression'
 assert_equals \
   'env cargo fetch --locked --manifest-path crates/rustc-codegen-fe2o3/tests/fixtures/production-explicit-bin-device/Cargo.toml' \
   "$(step_command rocm-production-explicit-bin-source-dependencies)" \

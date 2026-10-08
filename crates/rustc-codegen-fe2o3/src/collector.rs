@@ -44,6 +44,7 @@ pub(crate) use kernel_context_auth_v1::{
     RetainedContextEntryV29, RetainedExecutionSourceV29, capture_context_producers_v1,
 };
 mod closure_flow_v1;
+mod inlined_source_safety_v1;
 mod kernel_context_frontend_v1;
 #[cfg(test)]
 pub(crate) mod primitive_from_stage_tests;
@@ -3120,7 +3121,7 @@ impl<'tcx> DeviceCollector<'tcx> {
         Ok(())
     }
 
-    fn authenticate_production_kernel_source_safety(&self) -> Result<(), CollectError> {
+    fn authenticate_production_kernel_source_safety(&mut self) -> Result<(), CollectError> {
         let functions = self
             .result
             .iter()
@@ -3193,6 +3194,35 @@ impl<'tcx> DeviceCollector<'tcx> {
                     });
                 }
 
+                inlined_source_safety_v1::audit(
+                    self.tcx,
+                    function.instance,
+                    self.tcx.instance_mir(function.instance.def),
+                    &mut self.closure_work,
+                    |source, callsite, work| {
+                        work.charge(1)?;
+                        inlined_source_safety_v1::reviewed_external_source(
+                            self.tcx,
+                            source,
+                            &self.expected_target,
+                        )
+                        .map_err(|detail| inlined_source_safety_v1::AuditError::Origin {
+                            instance: source,
+                            source,
+                            callsite,
+                            reason: inlined_source_safety_v1::OriginRefusal::ExternalAuthentication(
+                                detail,
+                            ),
+                        })
+                    },
+                )
+                .map_err(|error| CollectError {
+                    message: format!(
+                        "ordinary production kernel `{logical_name}` {}; reachable call chain: {}",
+                        error.describe(self.tcx),
+                        chain(),
+                    ),
+                })?;
                 if crate::trusted_device_items::classify(self.tcx, function.instance.def_id())
                     .is_some_and(
                         crate::production_semantic_terminal_v1::is_traversed_reviewed_helper_v1,
@@ -3215,51 +3245,10 @@ impl<'tcx> DeviceCollector<'tcx> {
                     continue;
                 }
                 let Some(local_def_id) = function.instance.def_id().as_local() else {
-                    if crate::trusted_device_items::authenticate_reviewed_safe_core_slice_metadata_helper_v1(
+                    match inlined_source_safety_v1::reviewed_external_source(
                         self.tcx,
                         function.instance,
-                    ) {
-                        continue;
-                    }
-                    if crate::trusted_device_items::authenticate_reviewed_safe_core_scalar_bitcast_helper_v1(
-                        self.tcx,
-                        function.instance,
-                    ) {
-                        continue;
-                    }
-                    if crate::trusted_device_items::authenticate_reviewed_safe_core_fabs_f32_helper_v1(
-                        self.tcx,
-                        function.instance,
-                    ) {
-                        continue;
-                    }
-                    if crate::trusted_device_items::authenticate_reviewed_safe_core_wrapping_integer_helper_v1(
-                        self.tcx,
-                        function.instance,
-                    ) {
-                        continue;
-                    }
-                    if crate::trusted_device_items::authenticate_reviewed_safe_core_saturating_integer_helper_v1(
-                        self.tcx,
-                        function.instance,
-                    ) {
-                        continue;
-                    }
-                    if crate::trusted_device_items::authenticate_reviewed_safe_core_f32_is_finite_helper_v1(
-                        self.tcx,
-                        function.instance,
-                    ) {
-                        continue;
-                    }
-                    if crate::production_rustc_intrinsic_v1::is_reviewed_core_atomic_function_v1(
-                        self.tcx,
-                        function.instance,
-                    ) {
-                        continue;
-                    }
-                    match crate::trusted_device_items::authenticate_reviewed_safe_external_helper_v1(
-                        self.tcx,
-                        function.instance.def_id(),
+                        &self.expected_target,
                     ) {
                         Ok(true) => continue,
                         Ok(false) => {}
