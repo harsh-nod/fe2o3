@@ -877,6 +877,13 @@ fn production_worker_v3_verifier_is_sealed_and_synthetic_authority_is_test_only(
 
 fn require_fixed_production_plan_fields(source: &str) -> Result<(), String> {
     let file = syn::parse_file(source).map_err(|error| error.to_string())?;
+    if file
+        .items
+        .iter()
+        .any(|item| matches!(item, syn::Item::Enum(item) if item.ident == "Pipeline"))
+    {
+        return Err("production plan must not declare an alternate Pipeline".into());
+    }
     let plans: Vec<_> = file
         .items
         .iter()
@@ -901,7 +908,8 @@ fn require_fixed_production_plan_fields(source: &str) -> Result<(), String> {
         let syn::Type::Path(path) = &field.ty else {
             return Err("production phases must use the fixed CargoPhase type".into());
         };
-        if field.ident.as_ref().is_none_or(|name| name != expected)
+        if !field.attrs.is_empty()
+            || field.ident.as_ref().is_none_or(|name| name != expected)
             || !matches!(&field.vis, syn::Visibility::Inherited)
             || path.qself.is_some()
             || !wrapper_path_is(&path.path, "CargoPhase")
@@ -922,7 +930,6 @@ fn production_build_has_one_fixed_device_then_host_plan() {
     assert!(plan.contains("command: \"build\""));
     assert!(plan.contains("PRODUCTION_GFX942_RUSTC_TARGET_V1"));
     assert!(plan.contains("reject_caller_target"));
-    assert!(!plan.contains("enum Pipeline"));
     require_fixed_production_plan_fields(plan).expect("fixed device/host production plan");
 }
 
@@ -950,6 +957,37 @@ fn production_plan_shape_rejects_route_fields_without_banning_host_selector_chec
         assert!(
             require_fixed_production_plan_fields(changed).is_err(),
             "{changed}"
+        );
+    }
+}
+
+#[test]
+fn production_phase_shape_ignores_local_cargo_target_selection() {
+    require_fixed_production_plan_fields(
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }
+         fn device_library_args() { for selector in [\"--lib\", \"--bins\"] {} }",
+    )
+    .unwrap();
+}
+
+#[test]
+fn production_phase_shape_rejects_alternate_pipeline_storage() {
+    for source in [
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase, selector: Pipeline }",
+        "struct ProductionCargoPlan { device: Pipeline, host: CargoPhase }",
+        "struct ProductionCargoPlan { device: CargoPhase, host: Option<CargoPhase> }",
+        "struct ProductionCargoPlan { #[cfg(feature = \"device\")] device: CargoPhase, host: CargoPhase }",
+        "struct ProductionCargoPlan<T> { device: CargoPhase, host: T }",
+        "struct ProductionCargoPlan(CargoPhase, CargoPhase);",
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }
+         enum Pipeline { Production, Other }",
+        "struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }
+         struct ProductionCargoPlan { device: CargoPhase, host: CargoPhase }",
+        "struct DifferentPlan { device: CargoPhase, host: CargoPhase }",
+    ] {
+        assert!(
+            require_fixed_production_plan_fields(source).is_err(),
+            "{source}"
         );
     }
 }

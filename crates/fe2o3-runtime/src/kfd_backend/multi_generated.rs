@@ -6,6 +6,9 @@ use generated_shells::{GeneratedShellCommitPlanV1, GeneratedShellPlanV1};
 
 mod issue;
 pub(super) use issue::MultiGeneratedSubmissionV1;
+mod cold_device;
+pub(super) use cold_device::DeviceCustodyV1;
+pub(crate) use cold_device::GeneratedColdDeviceFailureV1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct GeneratedAdoptionScopeV1 {
@@ -90,6 +93,15 @@ impl KfdRuntimeBackendV1 {
         self.quarantine_generated_adoption_v1();
     }
 
+    pub(crate) fn generated_sdma_ready_for_stream_v1(
+        &self,
+        device: u64,
+        stream: u64,
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        self.generated_adoption_scope_v1(device, stream)?;
+        self.generated_sdma_lane_ready_v1()
+    }
+
     pub(crate) fn resume_generated_scope_panic_v1(
         &mut self,
         _: GeneratedAdoptionScopeV1,
@@ -161,6 +173,19 @@ impl KfdMultiDeviceRuntimeBackendV1 {
                 child.quarantine_generated_adoption_v1();
             }
         }
+    }
+
+    pub(crate) fn generated_sdma_ready_for_stream_v1(
+        &self,
+        device: u64,
+        stream: u64,
+    ) -> Result<bool, RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let scope = self.generated_adoption_scope_v1(device, stream)?;
+        let child = scope.child.expect("multi-device scope");
+        if self.compute_xgmi_child_occupied_v1(child) {
+            return Ok(false);
+        }
+        self.children[child].generated_sdma_lane_ready_v1()
     }
 
     pub(crate) fn resume_generated_scope_panic_v1(
@@ -487,6 +512,20 @@ impl KfdMultiDeviceRuntimeBackendV1 {
         let route = self.checked_generated_route_v1(plan)?;
         self.with_preparation_child_v1(route.scope.device, |child| {
             child.retire_generated_data_v1(&route.local)
+        })
+    }
+
+    pub(crate) fn adopt_generated_data_with_storage_v1(
+        &mut self,
+        plan: &GeneratedShellPlanV1,
+        roster: &GeneratedHostRosterV1,
+        program: ValidatedKernelEnvelope<'_>,
+        buffers: &[crate::Gfx942KfdDispatchBufferV1],
+        sdma: bool,
+    ) -> Result<(), RuntimeBackendFailureV1<KfdRuntimeBackendErrorV1>> {
+        let route = self.checked_generated_route_v1(plan)?;
+        self.with_preparation_child_v1(route.scope.device, |child| {
+            child.adopt_generated_data_with_storage_v1(&route.local, roster, program, buffers, sdma)
         })
     }
 }

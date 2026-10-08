@@ -843,6 +843,28 @@ impl Gfx942SdmaBufferV1 {
         }
     }
 
+    pub(crate) fn from_completed_detached_dispatch_v1(
+        completed: crate::queue::CompletedDetachedSdmaV1,
+    ) -> Self {
+        let (data, owner, generation, logical_bytes) = completed.into_parts();
+        let initialized = data.is_fully_initialized();
+        let mut buffer =
+            Self::from_bridge_parts(data.into_sdma_storage(), owner, generation, logical_bytes);
+        // Only initializedness survives compute. A prior host-content digest
+        // cannot certify the bytes produced by the completed dispatch.
+        buffer.record_initialized_write(0, logical_bytes, initialized);
+        buffer
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_stale_detached_content_for_test_v1(&mut self, generation: u64) {
+        self.certify_full_host_content([77; 32]);
+        self.host_content_certificate
+            .as_mut()
+            .unwrap()
+            .pool_generation = generation;
+    }
+
     pub(crate) fn from_bridge_parts(
         storage: Gfx942SdmaBufferStorageV1,
         owner: QueueKeyV1,

@@ -25,6 +25,7 @@ mod generated;
 mod live_validation_tests;
 mod producer_readers;
 mod readers;
+mod replicas;
 mod submission_disposal;
 mod submissions;
 mod writers;

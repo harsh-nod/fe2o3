@@ -15,6 +15,7 @@ mod no_effect;
 mod packetized;
 #[path = "../peer_readback/tests.rs"]
 mod peer_readback;
+mod placement;
 #[path = "../progress_quantum_tests.rs"]
 mod progress_quantum;
 mod queued_consumer;
@@ -258,6 +259,7 @@ impl Fixture {
         self.backend.children[child].submissions.insert(
             local,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream: stream_route.local,
                 status,
                 dependency_depth: 1,

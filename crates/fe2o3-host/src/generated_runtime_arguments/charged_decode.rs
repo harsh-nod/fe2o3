@@ -28,13 +28,23 @@ impl ChargedBufferOwnerV1 {
 }
 
 // Declaration order also applies on validation failure and decoder unwind.
-struct DecodeTransaction {
+pub(super) struct DecodeTransaction {
     buffers: ChargedBufferOwnerV1,
     decoder: GeneratedRuntimeOutputDecoderV1,
 }
 
 impl DecodeTransaction {
-    fn decode_with(mut self, after_output: impl Fn(usize)) -> Result<(), Error> {
+    pub(super) fn reserved(
+        owner: GeneratedRuntimeReadbackOwnerV1,
+        decoder: GeneratedRuntimeOutputDecoderV1,
+    ) -> Self {
+        Self {
+            buffers: ChargedBufferOwnerV1::Reserved(owner),
+            decoder,
+        }
+    }
+
+    pub(super) fn decode_with(mut self, after_output: impl Fn(usize)) -> Result<(), Error> {
         let gate = self
             .decoder
             .result_gate

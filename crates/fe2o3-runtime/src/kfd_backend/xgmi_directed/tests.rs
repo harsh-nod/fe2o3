@@ -124,6 +124,7 @@ impl Rig {
         self.completed.insert(
             id,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream: record.stream,
                 status,
                 dependency_depth: 1,
@@ -666,6 +667,7 @@ fn unknown_legacy_and_inconsistent_retained_records_are_distinct() {
     rig.completed.insert(
         id,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream: 11,
             status: BackendPollV1::Succeeded,
             dependency_depth: 1,

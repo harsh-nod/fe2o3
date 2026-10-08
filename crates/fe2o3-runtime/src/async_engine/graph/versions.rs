@@ -7,6 +7,17 @@ use fe2o3_runtime_model::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
+macro_rules! graph_version_runtime_expr {
+    ($expression:expr) => {
+        $expression
+    };
+}
+include!("versions/transition_bodies.rs");
+
+#[cfg(test)]
+#[path = "versions/transition_tests.rs"]
+mod transition_tests;
+
 pub use fe2o3_runtime_model::R65GraphVersionStateV1 as RuntimeGraphVersionStateV1;
 
 pub const MAX_RUNTIME_GRAPH_VERSION_REFERENCES_V1: usize = 16_384;
@@ -248,10 +259,13 @@ impl VersionLedger {
                         add(binding.region);
                     }
                 }
-                Action::Copy(source, destination) => {
+                Action::Copy(source, destination)
+                | Action::PeerCopy(source, destination)
+                | Action::ReplicaCopy(source, destination) => {
                     add(*source);
                     add(*destination);
                 }
+                Action::HostStaging(staging) => add(staging.destination),
             }
         }
         for &(node, allocation, offset, len) in request.version_inputs.keys() {
@@ -367,62 +381,31 @@ impl VersionLedger {
     }
 
     pub(super) fn begin(&mut self, node: usize) -> bool {
-        // Check every input/output before changing any pointer, including equal aliases.
-        if self.uses[node].iter().any(|usage| {
-            usage.input.is_some_and(|input| {
-                !r65_version_input_ready_v1(
-                    self.current[usage.segment],
-                    input,
-                    self.records[input].state,
-                )
-            }) || usage.output.is_some_and(|output| {
-                self.records[output].predecessor.is_none_or(|prior| {
-                    !r65_version_begin_write_v1(
-                        self.records[output].state,
-                        self.pending[usage.segment],
-                        self.current[usage.segment],
-                        prior,
-                    )
-                })
-            })
-        }) {
-            return false;
-        }
-        if self.started[node] {
-            return false;
-        }
-        self.started[node] = true;
-        for usage in &self.uses[node] {
-            if let Some(output) = usage.output {
-                self.current[usage.segment] = None;
-                self.pending[usage.segment] = Some(output);
-                self.records[output].state = RuntimeGraphVersionStateV1::InFlight;
-            }
-        }
-        true
+        graph_version_begin_body_v1!(
+            graph_version_runtime_expr,
+            self,
+            node,
+            (check, write, count),
+            [],
+            [],
+            [],
+            [],
+            []
+        )
     }
 
     pub(super) fn commit(&mut self, node: usize) -> bool {
-        if self.uses[node].iter().any(|usage| {
-            usage.output.is_some_and(|output| {
-                !r65_version_commit_write_v1(
-                    self.records[output].state,
-                    self.pending[usage.segment],
-                    output,
-                    self.current[usage.segment],
-                )
-            })
-        }) {
-            return false;
-        }
-        for usage in &self.uses[node] {
-            if let Some(output) = usage.output {
-                self.records[output].state = RuntimeGraphVersionStateV1::Committed;
-                self.current[usage.segment] = Some(output);
-                self.pending[usage.segment] = None;
-            }
-        }
-        true
+        graph_version_commit_body_v1!(
+            graph_version_runtime_expr,
+            self,
+            node,
+            (check, write, count),
+            [],
+            [],
+            [],
+            [],
+            []
+        )
     }
 
     pub(super) fn fail(&mut self, node: usize) {

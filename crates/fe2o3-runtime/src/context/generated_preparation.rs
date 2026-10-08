@@ -9,6 +9,11 @@ use super::*;
 use crate::{KfdMultiDeviceRuntimeBackendV1, KfdRuntimeBackendErrorV1, KfdRuntimeBackendV1};
 
 mod adoption;
+mod arena1024;
+mod cold_device;
+pub(super) use cold_device::ContextColdDeviceFailureV1;
+mod cohort3;
+mod registry4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PreparationBindingV1 {

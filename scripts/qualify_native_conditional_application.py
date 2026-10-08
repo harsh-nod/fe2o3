@@ -275,7 +275,7 @@ def command_for(cargo, root, target, producer_source, selected, transport=None):
         binary = "native-conditional-fill-roster"
         application = ["--native-v5-roster", "--producer-source", producer_source,
                        "--transport", transport, "--devices", *selected]
-    return [str(cargo), "authority", "release", "run", "--native-application-proof-custodian",
+    return [str(cargo), "authority", "release", "--native", "run", "--native-application-proof-custodian",
             "--manifest-path", str(root / FIXTURE / "Cargo.toml"), "--target-dir", str(target),
             "--offline", "--frozen", "--bin", binary, "--", *application]
 

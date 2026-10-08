@@ -379,7 +379,7 @@ impl KfdRuntimeBackendV1 {
         {
             return Err(Failure::UnsupportedCompute);
         }
-        let ReceiptV1::Published(batch) = &owner.receipt else {
+        let NativeReceiptV1::Singleton(ReceiptV1::Published(batch)) = &owner.receipt else {
             return Err(Failure::NativeComputeReceipt);
         };
         let identity = self
@@ -390,7 +390,10 @@ impl KfdRuntimeBackendV1 {
         let mut hash = Sha256::new();
         hash.update(b"fe2o3.generated-copy-coexistence-membership.v1\0");
         hash.update(identity);
-        hash.update(owner.roster.dispatch_contract_sha256);
+        owner
+            .roster
+            .dispatch_contract_sha256
+            .update_qualification_hash(&mut hash);
         for value in [
             plan.binding.context_generation,
             plan.binding.hold,
@@ -496,7 +499,7 @@ impl KfdRuntimeBackendV1 {
             .as_ref()
             .ok_or(Failure::GeneratedLease)?;
         let lane = generated.native_lane.ok_or(Failure::GeneratedLease)?;
-        let ReceiptV1::Published(batch) = &generated
+        let NativeReceiptV1::Singleton(ReceiptV1::Published(batch)) = &generated
             .submission
             .as_ref()
             .ok_or(Failure::GeneratedSource)?

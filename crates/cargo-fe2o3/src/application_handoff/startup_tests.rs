@@ -194,6 +194,7 @@ fn assert_original(cleanup: &ApplicationCleanup, child: &Child, descriptor: RawF
 
 #[test]
 fn startup_releases_ack_writers_before_service_wait() {
+    let _fixture = super::tests::serial_reaper_fixture();
     let child = exited_child();
     let mut pending = pending(&child);
     queue_ack(&mut pending);
@@ -271,6 +272,7 @@ fn startup_releases_ack_writers_before_service_wait() {
 
 #[test]
 fn fast_ack_and_exit_retains_original_pidfd_through_active_handoff() {
+    let _fixture = super::tests::serial_reaper_fixture();
     let child = exited_child();
     let mut pending = pending(&child);
     queue_ack(&mut pending);
@@ -344,6 +346,7 @@ fn fast_exit_before_required_service_retains_original_cleanup() {
 
 #[test]
 fn registration_transfer_is_single_use_and_preserves_cleanup() {
+    let _fixture = super::tests::serial_reaper_fixture();
     let child = exited_child();
     let mut spawned = spawned(pending(&child), &child);
     let original_fd = spawned.retained_child().test_child_pidfd().as_raw_fd();
@@ -380,6 +383,7 @@ fn registration_transfer_is_single_use_and_preserves_cleanup() {
 
 #[test]
 fn expired_startup_cannot_accept_a_buffered_ack_or_start_registration() {
+    let _fixture = super::tests::serial_reaper_fixture();
     let child = exited_child();
     let mut pending = pending(&child);
     queue_ack(&mut pending);
@@ -398,6 +402,7 @@ fn expired_startup_cannot_accept_a_buffered_ack_or_start_registration() {
 
 #[test]
 fn custodian_selection_survives_spawn_and_single_use_registration() {
+    let _fixture = super::tests::serial_reaper_fixture();
     let child = exited_child();
     let pending = pending_with_service(
         &child,
@@ -436,6 +441,7 @@ fn proof_custody_requires_the_matching_slot_profile() {
 
 #[test]
 fn missing_or_substituted_ack_keeps_original_cleanup_custody() {
+    let _fixture = super::tests::serial_reaper_fixture();
     for changed in [false, true] {
         let child = exited_child();
         let mut pending = pending(&child);
@@ -479,6 +485,7 @@ fn missing_or_substituted_ack_keeps_original_cleanup_custody() {
 
 #[test]
 fn substituted_child_rejects_without_losing_original_owner() {
+    let _fixture = super::tests::serial_reaper_fixture();
     let child = exited_child();
     let other = exited_child();
     let spawned = spawned(pending(&child), &child);
@@ -508,6 +515,7 @@ fn spawned_for_cleanup(child: &Child) -> ApplicationCleanup {
 
 #[test]
 fn sandbox_admission_failure_retains_captured_original_process() {
+    let _fixture = super::tests::serial_reaper_fixture();
     let child = exited_child();
     let mut pending = pending(&child);
     pending.sandbox = Some(PendingApplicationSandbox::test_reported_admission(Err(

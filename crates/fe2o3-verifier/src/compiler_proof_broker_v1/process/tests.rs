@@ -1,7 +1,7 @@
 use super::*;
 use std::{
     io::Write,
-    os::unix::fs::PermissionsExt,
+    os::unix::{fs::PermissionsExt, process::CommandExt},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
@@ -29,14 +29,56 @@ fn sealed_child(image: &str, args: &[&str]) -> (File, TestChild, [u8; 32]) {
     rustix::fs::fcntl_add_seals(&sealed, EXACT_IMMUTABLE_MEMFD_SEALS_V1).unwrap();
     let path = format!("/proc/self/fd/{}", sealed.as_raw_fd());
     let digest = measure_executable_sha256_v3(Path::new(&path)).unwrap();
-    let child = Command::new(path)
+    let parent = std::process::id() as libc::pid_t;
+    let mut command = Command::new(path);
+    command
         .args(args)
+        .env_clear()
         .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // SAFETY: only async-signal-safe syscalls run after fork. The parent check
+    // closes the setup race; an outer fixture timeout cannot leave this child.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::getppid() != parent {
+                return Err(io::Error::from_raw_os_error(libc::ECHILD));
+            }
+            Ok(())
+        });
+    }
+    let child = crate::executor::spawn_artifact_coordinated_child(&mut command).unwrap();
     (sealed, TestChild(child), digest)
+}
+
+fn await_exec_ready(child: &mut TestChild) {
+    let stdout = child.0.stdout.take().unwrap();
+    let flags = rustix::fs::fcntl_getfl(&stdout).unwrap();
+    rustix::fs::fcntl_setfl(&stdout, flags | rustix::fs::OFlags::NONBLOCK).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut ready = [0_u8; 6];
+    let mut used = 0;
+    while used < ready.len() {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("exec fixture readiness deadline");
+        let timeout = rustix::event::Timespec {
+            tv_sec: remaining.as_secs().try_into().unwrap(),
+            tv_nsec: remaining.subsec_nanos().into(),
+        };
+        let mut poll = [rustix::event::PollFd::new(
+            &stdout,
+            rustix::event::PollFlags::IN,
+        )];
+        assert_eq!(rustix::event::poll(&mut poll, Some(&timeout)).unwrap(), 1);
+        let count = rustix::io::read(&stdout, &mut ready[used..]).unwrap();
+        assert!(count > 0, "exec fixture exited before readiness");
+        used += count;
+    }
+    assert_eq!(&ready, b"ready\n");
 }
 
 fn pidfd(child: &TestChild) -> OwnedFd {
@@ -77,9 +119,31 @@ fn original_peer_requires_exact_image_process_and_generation() {
 
 #[test]
 fn same_pid_exec_invalidates_retained_image() {
-    let (_image, mut child, digest) =
-        sealed_child("/bin/sh", &["-c", "read line; exec /bin/sleep 30"]);
-    let peer = Peer::admit(pidfd(&child), credentials(&child), digest).unwrap();
+    super::super::tests::isolated_process_case(
+        "compiler_proof_broker_v1::process::tests::same_pid_exec_invalidates_retained_image",
+        same_pid_exec_case,
+    );
+}
+
+fn same_pid_exec_case() {
+    let (_image, mut child, digest) = sealed_child(
+        "/bin/sh",
+        &[
+            "-c",
+            "printf 'ready\\n'; IFS= read -r line && test \"$line\" = continue && exec /bin/sleep 30",
+        ],
+    );
+    await_exec_ready(&mut child);
+    let peer = Peer::admit(pidfd(&child), credentials(&child), digest).unwrap_or_else(|error| {
+        let path = format!("/proc/{}/exe", child.0.id());
+        let image = File::open(&path);
+        panic!(
+            "initial sealed peer admission failed: {error}; executable={:?}; metadata={:?}; seals={:?}",
+            std::fs::read_link(&path),
+            image.as_ref().map(|file| file.metadata()),
+            image.as_ref().map(|file| rustix::fs::fcntl_get_seals(file)),
+        );
+    });
     child
         .0
         .stdin

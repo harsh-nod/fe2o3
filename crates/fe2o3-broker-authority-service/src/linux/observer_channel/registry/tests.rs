@@ -6,6 +6,9 @@ use fe2o3_compiler_execution_protocol::CompilerExecutionClientProcessIdentityV1;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
+mod control;
+pub(crate) use control::await_test_control;
+
 fn packet(kind: RegistryKind) -> RegistryPacket {
     RegistryPacket {
         kind,
@@ -869,6 +872,8 @@ fn exercise_registry_inner(
     if production {
         descriptors.push(profile_writer);
     }
+    let (drain_control, supervisor_drain_control) = observer_pair().unwrap();
+    descriptors.push(supervisor_drain_control);
     let mut supervisor = spawn_helper(
         "linux::observer_channel::registry::tests::registry_supervisor_helper",
         &descriptors,
@@ -904,6 +909,9 @@ fn exercise_registry_inner(
     let mut active = false;
     let mut rejected = false;
     let mut expired = false;
+    let mut supervisor_done = false;
+    let mut drained = false;
+    let mut finished_issuer = None;
     loop {
         let result = registry.step(|error| panic!("unexpected session failure: {error}"));
         match result {
@@ -946,6 +954,33 @@ fn exercise_registry_inner(
             active = true;
             while_active();
         }
+        if let Some(pid) = finished_issuer.take() {
+            // The issuer has dropped its channel but still retains its service/profile.
+            // This step therefore observes channel closure before permitting process exit.
+            assert!(
+                registry
+                    .sessions
+                    .iter()
+                    .any(|session| matches!(session, Session::Bound(observer)
+                    if observer.issuer_identity().0 == pid && !observer.has_active_occurrence()))
+            );
+            assert_eq!(rustix::io::write(&drain_control, b"C").unwrap(), 1);
+        }
+        if !supervisor_done {
+            let mut message = [0; 6];
+            match rustix::io::read(&drain_control, &mut message) {
+                Ok(1) if message[0] == b'D' => supervisor_done = true,
+                Ok(5) if message[0] == b'F' => {
+                    finished_issuer = Some(u32::from_le_bytes(message[1..5].try_into().unwrap()));
+                }
+                Err(rustix::io::Errno::AGAIN) => {}
+                other => panic!("supervisor completion handshake failed: {other:?}"),
+            }
+        }
+        if supervisor_done && !drained && registry.is_drained() {
+            assert_eq!(rustix::io::write(&drain_control, b"C").unwrap(), 1);
+            drained = true;
+        }
         if supervisor.0.try_wait().unwrap().is_some() {
             registry.cancel_all();
             if registry.is_drained() {
@@ -958,6 +993,7 @@ fn exercise_registry_inner(
         );
         std::thread::sleep(Duration::from_millis(1));
     }
+    assert!(supervisor_done && drained);
     assert!(supervisor.0.wait().unwrap().success());
     if matches!(scenario, "success" | "concurrent") {
         assert!(active);
@@ -973,6 +1009,16 @@ fn exercise_registry_inner(
 #[ignore = "private registry supervisor helper with original compiler descriptors"]
 fn registry_supervisor_helper() {
     let production = restore_test_profile();
+    let drain_control = inherited(if production { 208 } else { 207 });
+    let idle = registry_supervisor_scenario(production, &drain_control);
+    // Keep the supervisor's namespaces live until the root observes actual issuer
+    // exit and drains every session. A timer is never a substitute for that join.
+    assert_eq!(rustix::io::write(&drain_control, b"D").unwrap(), 1);
+    await_test_control(&drain_control, b'C');
+    drop(idle);
+}
+
+fn registry_supervisor_scenario(production: bool, drain_control: &OwnedFd) -> Option<ChildOwner> {
     let peer = inherited(200);
     let root_pidfd = inherited(201);
     let service_root = inherited(202);
@@ -1013,12 +1059,12 @@ fn registry_supervisor_helper() {
                 .register(&launch, client_peer.as_fd(), client_pidfd.as_fd())
                 .is_err()
         );
-        return;
+        return None;
     }
     let registered = registry.register(&launch, client_peer.as_fd(), client_pidfd.as_fd());
     if scenario == "expiry" {
         assert!(registered.is_err());
-        return;
+        return None;
     }
     let mut registered = Some(registered.unwrap());
     let mut idle = None;
@@ -1043,6 +1089,7 @@ fn registry_supervisor_helper() {
         if scenario == "registry_loss" {
             descriptors.push(holding_writer);
         }
+        let (finish_control, issuer_finish_control) = observer_pair().unwrap();
         let issuer_scenario = if (scenario == "concurrent" && index == 0)
             || matches!(scenario.as_str(), "rebind" | "wrong_pidfd")
         {
@@ -1050,7 +1097,8 @@ fn registry_supervisor_helper() {
         } else if scenario == "registry_loss" {
             "holding"
         } else {
-            "success"
+            descriptors.push(issuer_finish_control);
+            "success_held"
         };
         let mut issuer = spawn_helper(
             "linux::observer_channel::issuer::tests::issuer_helper",
@@ -1076,7 +1124,7 @@ fn registry_supervisor_helper() {
                     )
                     .is_err()
             );
-            return;
+            return Some(issuer);
         }
         registry
             .bind_issuer(
@@ -1097,7 +1145,7 @@ fn registry_supervisor_helper() {
                     )
                     .is_err()
             );
-            return;
+            return Some(issuer);
         }
         drop(registered);
         if scenario == "registry_loss" {
@@ -1107,15 +1155,24 @@ fn registry_supervisor_helper() {
             drop(registry);
             use std::os::unix::process::ExitStatusExt;
             assert_eq!(issuer.0.wait().unwrap().signal(), Some(libc::SIGKILL));
-            return;
+            return None;
         }
         if issuer_scenario == "idle" {
             idle = Some(issuer);
         } else {
+            await_test_control(&finish_control, b'D');
+            let mut finished = [b'F', 0, 0, 0, 0];
+            finished[1..].copy_from_slice(&issuer.0.id().to_le_bytes());
+            assert_eq!(
+                rustix::io::write(drain_control, &finished).unwrap(),
+                finished.len()
+            );
+            await_test_control(drain_control, b'C');
+            assert_eq!(rustix::io::write(&finish_control, b"C").unwrap(), 1);
             assert!(issuer.0.wait().unwrap().success());
         }
     }
-    drop(idle);
+    idle
 }
 
 pub(crate) fn restore_test_profile() -> bool {

@@ -269,6 +269,8 @@ impl CompletedPrimaryV1<LinuxPrimaryEnvironmentV1> {
             sdma_allocation: None,
             sdma_promotion: None,
             sdma_demotion: None,
+            detached_sdma: None,
+            sdma_dispatch_promotion: None,
             initialized_storage_promotion: None,
             sdma_synchronous: None,
             sdma_recycle: None,

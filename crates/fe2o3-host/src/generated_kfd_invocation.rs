@@ -1157,7 +1157,8 @@ fn require_ordinary_runtime_family(
         fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::OrdinaryV1 => Ok(()),
         fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalNominalV4 { .. }
         | fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::ConditionalMixedV26 { .. }
-        | fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::NativeConditionalFill64V1 { .. } => {
+        | fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::NativeConditionalFill64V1 { .. }
+        | fe2o3_runtime::Gfx942RuntimeInvocationBindingV1::NativeIndependentFill64V1 { .. } => {
             Err(GeneratedWorkerV3KfdInvocationError::ConditionalAdmissionUnavailable)
         }
     }
@@ -1312,6 +1313,13 @@ mod tests {
         ));
         assert!(matches!(
             super::require_ordinary_runtime_family(Binding::NativeConditionalFill64V1 {
+                contract_identity: [1; 32],
+                premise_identity: [2; 32],
+            }),
+            Err(super::GeneratedWorkerV3KfdInvocationError::ConditionalAdmissionUnavailable)
+        ));
+        assert!(matches!(
+            super::require_ordinary_runtime_family(Binding::NativeIndependentFill64V1 {
                 contract_identity: [1; 32],
                 premise_identity: [2; 32],
             }),

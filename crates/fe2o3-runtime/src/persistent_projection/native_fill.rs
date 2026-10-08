@@ -3,12 +3,25 @@
 use super::*;
 use fe2o3_kfd::NativeConditionalFill64PremisesV1;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NativeFillOrderV1 {
+    Ordered,
+    Independent,
+}
+
 pub(super) fn binding(
     premises: Option<&NativeConditionalFill64PremisesV1>,
+    order: NativeFillOrderV1,
 ) -> Gfx942RuntimeInvocationBindingV1 {
     match premises {
         None => Gfx942RuntimeInvocationBindingV1::OrdinaryV1,
-        Some(p) => Gfx942RuntimeInvocationBindingV1::NativeConditionalFill64V1 {
+        Some(p) if order == NativeFillOrderV1::Ordered => {
+            Gfx942RuntimeInvocationBindingV1::NativeConditionalFill64V1 {
+                contract_identity: *p.contract_identity(),
+                premise_identity: *p.identity(),
+            }
+        }
+        Some(p) => Gfx942RuntimeInvocationBindingV1::NativeIndependentFill64V1 {
             contract_identity: *p.contract_identity(),
             premise_identity: *p.identity(),
         },
@@ -27,6 +40,26 @@ impl PreparedGfx942RuntimeDispatchV1 {
         self,
         hsaco: &[u8],
         premises: NativeConditionalFill64PremisesV1,
+    ) -> Result<PreparedGfx942PersistentDispatchV1, Gfx942RuntimeProjectionErrorV1> {
+        self.project_native_fill_with_order(hsaco, premises, NativeFillOrderV1::Ordered)
+    }
+
+    /// Distinct inert independent-fill member. It is not scalar admission: only
+    /// the checked disjoint-WO aggregate may retain it for native execution.
+    /// Actual native source/proof/currentness authority remains separately owned.
+    pub fn into_native_independent_fill64_projection_v1(
+        self,
+        hsaco: &[u8],
+        premises: NativeConditionalFill64PremisesV1,
+    ) -> Result<PreparedGfx942PersistentDispatchV1, Gfx942RuntimeProjectionErrorV1> {
+        self.project_native_fill_with_order(hsaco, premises, NativeFillOrderV1::Independent)
+    }
+
+    fn project_native_fill_with_order(
+        self,
+        hsaco: &[u8],
+        premises: NativeConditionalFill64PremisesV1,
+        order: NativeFillOrderV1,
     ) -> Result<PreparedGfx942PersistentDispatchV1, Gfx942RuntimeProjectionErrorV1> {
         use Gfx942RuntimeProjectionErrorV1 as Error;
         if self.invocation_binding() != Gfx942RuntimeInvocationBindingV1::OrdinaryV1
@@ -75,13 +108,18 @@ impl PreparedGfx942RuntimeDispatchV1 {
                 buffer.bytes().len() as u64,
             )
             .map_err(|_| Error::Mismatch("native fill numeric premises"))?;
-        self.project_persistent_v1(hsaco, Some(premises))
+        self.project_persistent_v1(hsaco, Some(premises), order)
     }
 }
 
 impl PersistentDispatchDataV1 {
     pub(crate) fn validate_native_fill_v1(&self) -> Result<(), Gfx942RuntimeProjectionErrorV1> {
         let Some(premises) = self.native_fill.as_ref() else {
+            if self.native_order == NativeFillOrderV1::Independent {
+                return Err(Gfx942RuntimeProjectionErrorV1::Mismatch(
+                    "independent member lacks native fill premises",
+                ));
+            }
             return Ok(());
         };
         let [buffer] = self.buffers.as_slice() else {
@@ -189,7 +227,7 @@ mod tests {
         let image = prepared.request.inspection_v1().executable_image.as_ptr();
         let output = prepared.request.inspection_v1().buffers[0].bytes().as_ptr();
         let p = NativeConditionalFill64PremisesV1::new([1; 32], 65, 128).unwrap();
-        let binding = binding(Some(&p));
+        let binding = binding(Some(&p), NativeFillOrderV1::Ordered);
         let projection = prepared
             .into_native_conditional_fill64_projection_v1(hsaco(), p)
             .unwrap();

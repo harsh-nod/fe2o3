@@ -22,18 +22,18 @@ struct RosterSnapshot {
 
 fn roster_snapshot(roster: &GeneratedHostRosterV1) -> RosterSnapshot {
     RosterSnapshot {
-        identity: Arc::as_ptr(&roster.source_identity),
+        identity: Arc::as_ptr(roster.source_identity.singleton_for_test()),
         buffers: roster.buffers,
         count: roster.count,
         readback_bytes: roster.readback_bytes,
         fixup_count: roster.fixup_count,
-        dispatch: roster.dispatch_contract_sha256,
+        dispatch: *roster.dispatch_contract_sha256.singleton_for_test(),
     }
 }
 
 fn copy_roster(roster: &GeneratedHostRosterV1) -> GeneratedHostRosterV1 {
     GeneratedHostRosterV1 {
-        source_identity: Arc::clone(&roster.source_identity),
+        source_identity: roster.source_identity.clone(),
         buffers: roster.buffers,
         count: roster.count,
         readback_bytes: roster.readback_bytes,
@@ -172,10 +172,7 @@ impl Transferred {
         )
         .validate(7)
         .unwrap();
-        assert!(Arc::ptr_eq(
-            &actual.source_identity,
-            &self.roster.source_identity
-        ));
+        assert!(actual.source_identity.matches(&self.roster.source_identity));
         assert_eq!(roster_snapshot(&actual), roster_snapshot(&self.roster));
         assert!(actual.matches(&self.roster));
         assert!(self.roster.matches(&actual));
@@ -221,13 +218,14 @@ fn generated_descriptor_matches_bind_every_coordinate_bidirectionally() {
     }
     assert!(expected.buffers[3..].iter().all(Option::is_none));
     assert_eq!(
-        expected.dispatch_contract_sha256,
+        *expected.dispatch_contract_sha256.singleton_for_test(),
         projection.dispatch_contract_sha256()
     );
-    assert!(Arc::ptr_eq(
-        &expected.source_identity,
-        projection.data().source_identity()
-    ));
+    assert!(
+        expected
+            .source_identity
+            .matches_single(projection.data().source_identity())
+    );
     let original = roster_snapshot(&expected);
     let original_host = host_snapshot(projection.data());
     let mut storage = projection.into_generated_storage_v1();
@@ -258,7 +256,7 @@ fn generated_descriptor_matches_bind_every_coordinate_bidirectionally() {
     for case in cases {
         let mut changed = copy_roster(&expected);
         match case {
-            Coordinate::SourceIdentity => changed.source_identity = Arc::new(()),
+            Coordinate::SourceIdentity => changed.source_identity = Arc::new(()).into(),
             Coordinate::Ordinal(index) => changed.buffers[index].as_mut().unwrap().ordinal += 1,
             Coordinate::Bytes(index) => changed.buffers[index].as_mut().unwrap().bytes += 1,
             Coordinate::Access(index, access) => {
@@ -275,7 +273,9 @@ fn generated_descriptor_matches_bind_every_coordinate_bidirectionally() {
             Coordinate::Count => changed.count += 1,
             Coordinate::Readback => changed.readback_bytes += 1,
             Coordinate::Fixups => changed.fixup_count += 1,
-            Coordinate::Dispatch => changed.dispatch_contract_sha256[0] ^= 1,
+            Coordinate::Dispatch => {
+                changed.dispatch_contract_sha256.singleton_mut_for_test()[0] ^= 1
+            }
         }
         let substituted = roster_snapshot(&changed);
         assert_ne!(substituted, original, "nontrivial substitution: {case:?}");
@@ -307,12 +307,9 @@ fn generated_identity_survives_transfer_and_rejects_identical_replacement() {
     assert_eq!(replacement.hsaco, original.hsaco);
     let actual = original.validate_original();
     let other = replacement.validate_original();
-    assert!(!Arc::ptr_eq(
-        &actual.source_identity,
-        &other.source_identity
-    ));
+    assert!(!actual.source_identity.matches(&other.source_identity));
     let mut other_fields = roster_snapshot(&other);
-    other_fields.identity = Arc::as_ptr(&actual.source_identity);
+    other_fields.identity = Arc::as_ptr(actual.source_identity.singleton_for_test());
     assert_eq!(other_fields, roster_snapshot(&actual));
     assert!(
         !actual.matches(&other),

@@ -16,6 +16,10 @@ pub(crate) struct Reply<R> {
 }
 
 impl<R> Reply<R> {
+    pub(crate) const fn payload_bytes_v1() -> usize {
+        core::mem::size_of::<Mutex<ReplyState<R>>>()
+    }
+
     pub(crate) fn pair() -> (Self, RuntimeAsyncCommandFutureV1<R>) {
         Self::with_permit(None)
     }

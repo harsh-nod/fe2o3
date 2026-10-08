@@ -3,6 +3,11 @@
 use super::*;
 use fe2o3_completion::{ContextIdentityV1, DeviceIdentityV1, StreamIdentityV1};
 
+mod group;
+mod peer_copy;
+pub(super) mod retirement_bodies;
+pub use group::{RuntimeGraphDeviceCoverageV1, RuntimeGraphGroupV1};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ContextGraphReservationV1 {
     context_generation: u64,
@@ -28,6 +33,27 @@ pub(crate) struct PreparedContextCopyV1 {
 pub(crate) enum PreparedContextGraphActionV1 {
     Launch(PreparedContextLaunchV1),
     Copy(PreparedContextCopyV1),
+    PeerCopy(peer_copy::PreparedGraphPeerCopyV1),
+    ReplicaCopy {
+        prepared: Box<PreparedContextGraphActionV1>,
+        source: RuntimeMemoryRegionV1,
+        destination: RuntimeMemoryRegionV1,
+    },
+}
+
+/// The original submission plus an optional Context-owned tracked-copy slot.
+/// Only actual Context admission constructs this wrapper; neither field is a
+/// reconstructed completion or a caller-supplied replica promise.
+pub(crate) struct ContextGraphSubmissionV1 {
+    pub(crate) original: RuntimeSubmissionV1<()>,
+    pub(super) replica: Option<RuntimeReplicaReferenceV1>,
+}
+
+impl std::fmt::Debug for ContextGraphSubmissionV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContextGraphSubmissionV1")
+            .finish_non_exhaustive()
+    }
 }
 
 fn identity_bytes(domain: &[u8; 16], generation: u64, local: u64) -> [u8; 32] {
@@ -121,26 +147,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         token: ContextGraphReservationV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
         self.require_graph_access(Some(token))?;
-        if !fe2o3_runtime_model::r63_graph_can_release_v1(
-            self.terminal,
-            self.graph_reservation == Some(token),
-            self.graph_issue_closed,
-            self.submissions.len(),
-            self.events.len(),
-        ) || self.has_unpublished_holds_v1()
-            || !self.generated_issues.is_empty()
-            || self
-                .streams
-                .values()
-                .any(|stream| stream.generated.is_some())
-            || self.completion_callback_count != 0
-            || !self.backend_submissions.is_empty()
-            || !self.backend_events.is_empty()
-        {
-            return Err(RuntimeValidationErrorV1::SubmissionPending);
-        }
-        self.graph_reservation = None;
-        Ok(())
+        use retirement_bodies::graph_retirement_runtime_expr;
+        retirement_bodies::graph_reservation_retirement_body_v1!(
+            graph_retirement_runtime_expr,
+            self,
+            token,
+            (stream, values, found),
+            [],
+            [],
+            []
+        )
     }
 
     pub(crate) fn prepare_graph_launch_v1<A: RuntimeArgumentsV1>(
@@ -175,11 +191,37 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             .map(PreparedContextGraphActionV1::Copy)
     }
 
+    pub(crate) fn prepare_graph_host_staging_v1(
+        &self,
+        stream: RuntimeStreamIdV1,
+        destination: RuntimeMemoryRegionV1,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        self.require_live()?;
+        let record = self
+            .allocations
+            .get(&destination.allocation)
+            .ok_or(RuntimeValidationErrorV1::UnknownAllocation)?;
+        if record.kind != RuntimeMemoryKindV1::HostVisible {
+            return Err(RuntimeValidationErrorV1::Unsupported.into());
+        }
+        if destination.access != RuntimeAccessV1::Write
+            || destination.byte_offset != 0
+            || destination.byte_len == 0
+            || destination.byte_len != record.byte_len
+        {
+            return Err(RuntimeValidationErrorV1::InvalidRange.into());
+        }
+        if self.unheld_stream_v1(stream)?.device != record.device {
+            return Err(RuntimeValidationErrorV1::WrongDevice.into());
+        }
+        Ok(())
+    }
+
     pub(crate) fn submit_graph_action_v1(
         &mut self,
         token: ContextGraphReservationV1,
         action: PreparedContextGraphActionV1,
-    ) -> Result<RuntimeSubmissionV1<()>, RuntimeErrorV1<B::Error>>
+    ) -> Result<ContextGraphSubmissionV1, RuntimeErrorV1<B::Error>>
     where
         B: RuntimeAsyncCopyBackendV1,
     {
@@ -191,6 +233,30 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             return Err(RuntimeValidationErrorV1::ContextReserved.into());
         }
         match action {
+            PreparedContextGraphActionV1::ReplicaCopy {
+                prepared,
+                source,
+                destination,
+            } => self.submit_graph_replica_copy_v1(token, *prepared, source, destination),
+            ordinary => self
+                .submit_graph_plain_action_v1(token, ordinary)
+                .map(|original| ContextGraphSubmissionV1 {
+                    original,
+                    replica: None,
+                }),
+        }
+    }
+
+    pub(super) fn submit_graph_plain_action_v1(
+        &mut self,
+        token: ContextGraphReservationV1,
+        action: PreparedContextGraphActionV1,
+    ) -> Result<RuntimeSubmissionV1<()>, RuntimeErrorV1<B::Error>>
+    where
+        B: RuntimeAsyncCopyBackendV1,
+    {
+        self.require_graph_access(Some(token))?;
+        match action {
             PreparedContextGraphActionV1::Launch(launch) => {
                 self.submit_prepared_launch_v1(launch, Some(token), |backend, launch| {
                     backend.submit_v1(launch)
@@ -199,14 +265,25 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             PreparedContextGraphActionV1::Copy(copy) => {
                 self.submit_prepared_copy_v1(copy, Some(token))
             }
+            PreparedContextGraphActionV1::PeerCopy(copy) => {
+                self.submit_graph_peer_copy_v1(token, copy)
+            }
+            PreparedContextGraphActionV1::ReplicaCopy { .. } => {
+                Err(RuntimeValidationErrorV1::InvalidBackendDescription.into())
+            }
         }
     }
 
     pub(crate) fn release_graph_submission_v1(
         &mut self,
         token: ContextGraphReservationV1,
-        submission: &RuntimeSubmissionV1<()>,
+        submission: &ContextGraphSubmissionV1,
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
-        self.release_submission_ref(submission, Some(token))
+        match submission.replica {
+            Some(reference) => {
+                self.release_graph_replica_copy_v1(token, &submission.original, reference)
+            }
+            None => self.release_submission_ref(&submission.original, Some(token)),
+        }
     }
 }
