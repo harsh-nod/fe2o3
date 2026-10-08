@@ -10,8 +10,9 @@ use crate::functional_refinement_receipt_v2::{
 use crate::portable_reference_v1::{
     ReferenceReplayInputV1,
     codec::{
-        DecodedNativeCpuInputV1, NativeCpuCodecErrorV1, NativeCpuInputV1, NativeCpuPolicyInputV2,
-        with_encoded_native_cpu_input_v1, with_encoded_native_cpu_policy_input_v2,
+        DecodedNativeCpuInputV1, DecodedNativeCpuPolicyInputV2, NativeCpuCodecErrorV1,
+        NativeCpuInputV1, NativeCpuPolicyInputV2, with_encoded_native_cpu_input_v1,
+        with_encoded_native_cpu_policy_input_v2,
     },
 };
 
@@ -219,7 +220,39 @@ pub fn import_and_retain_conditional_ranked_formula_v2(
 ) -> Result<RetainedProductionConditionalFormulaV2, Error> {
     import_and_retain_using(
         request,
-        input,
+        DecodedCpuInput::Registration(input),
+        signature,
+        accepted,
+        budget,
+        |owner, _, _| Ok(owner),
+    )
+}
+
+/// Imports actual signed bytes using this same decoded policy-origin owner.
+/// Neither the embedded receipt key nor the inert origin selects accepted
+/// authority. Original policy/source custody and outer postchecks stay external.
+///
+/// ```compile_fail
+/// use fe2o3_verifier::{import_and_retain_conditional_ranked_formula_policy_v2 as import, InertFunctionalRefinementReceiptSignatureV2 as Signature};
+/// use fe2o3_verifier::portable_reference_v1::codec::DecodedNativeCpuInputV1;
+/// use fe2o3_functional_proof::FunctionalRefinementImportPolicyV2 as Policy;
+/// use fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1 as Request;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn wrong_origin(r: &Request<'_>, input: &DecodedNativeCpuInputV1,
+///     signature: &Signature, policy: &Policy, budget: &mut Budget<'_>) {
+///     let _ = import(r, input, signature, policy, budget);
+/// }
+/// ```
+pub fn import_and_retain_conditional_ranked_formula_policy_v2(
+    request: &Request<'_>,
+    input: &DecodedNativeCpuPolicyInputV2,
+    signature: &InertFunctionalRefinementReceiptSignatureV2,
+    accepted: &FunctionalRefinementImportPolicyV2,
+    budget: &mut Budget<'_>,
+) -> Result<RetainedProductionConditionalFormulaV2, Error> {
+    import_and_retain_using(
+        request,
+        DecodedCpuInput::Policy(input),
         signature,
         accepted,
         budget,
@@ -252,6 +285,55 @@ impl std::error::Error for ConditionalFormulaImportCheckErrorV2 {}
 pub(crate) fn import_and_check_conditional_ranked_formula_v2<E>(
     request: &Request<'_>,
     input: &DecodedNativeCpuInputV1,
+    signature: &InertFunctionalRefinementReceiptSignatureV2,
+    accepted: &FunctionalRefinementImportPolicyV2,
+    budget: &mut Budget<'_>,
+    check: impl for<'proof> FnOnce(
+        &'proof ProductionConditionalFormulaExecutionV2,
+        &mut Budget<'_>,
+    ) -> Result<(), E>,
+) -> Result<Result<RetainedProductionConditionalFormulaV2, E>, ConditionalFormulaImportCheckErrorV2>
+{
+    import_and_check_using(
+        request,
+        DecodedCpuInput::Registration(input),
+        signature,
+        accepted,
+        budget,
+        check,
+    )
+}
+
+/// The policy decoder uses the identical nonrefundable same-visit continuation.
+#[allow(
+    dead_code,
+    reason = "private policy source/final recovery prerequisite"
+)]
+pub(crate) fn import_and_check_conditional_ranked_formula_policy_v2<E>(
+    request: &Request<'_>,
+    input: &DecodedNativeCpuPolicyInputV2,
+    signature: &InertFunctionalRefinementReceiptSignatureV2,
+    accepted: &FunctionalRefinementImportPolicyV2,
+    budget: &mut Budget<'_>,
+    check: impl for<'proof> FnOnce(
+        &'proof ProductionConditionalFormulaExecutionV2,
+        &mut Budget<'_>,
+    ) -> Result<(), E>,
+) -> Result<Result<RetainedProductionConditionalFormulaV2, E>, ConditionalFormulaImportCheckErrorV2>
+{
+    import_and_check_using(
+        request,
+        DecodedCpuInput::Policy(input),
+        signature,
+        accepted,
+        budget,
+        check,
+    )
+}
+
+fn import_and_check_using<E>(
+    request: &Request<'_>,
+    input: DecodedCpuInput<'_>,
     signature: &InertFunctionalRefinementReceiptSignatureV2,
     accepted: &FunctionalRefinementImportPolicyV2,
     budget: &mut Budget<'_>,
@@ -339,7 +421,7 @@ fn check_imported_owner<T, E>(
 
 fn import_and_retain_using<R>(
     request: &Request<'_>,
-    input: &DecodedNativeCpuInputV1,
+    input: DecodedCpuInput<'_>,
     signature: &InertFunctionalRefinementReceiptSignatureV2,
     accepted: &FunctionalRefinementImportPolicyV2,
     budget: &mut Budget<'_>,
@@ -350,7 +432,7 @@ fn import_and_retain_using<R>(
     ) -> Result<R, Error>,
 ) -> Result<R, Error> {
     retention::retain_reservation_using(budget, RETAINED_STORAGE, |budget| {
-        with_decoded_cpu(request, input, budget, |request, cpu_input, budget| {
+        with_decoded_cpu_input(request, input, budget, |request, cpu_input, budget| {
             with_scratch_using(budget, retention::PREPARATION_STORAGE, |budget| {
                 let prepared = prepare_v2(request, cpu_input, budget)?;
                 require_policy(request, accepted, budget)?;
@@ -466,6 +548,35 @@ impl RetainedProductionConditionalFormulaV2 {
     ) -> Result<R, Error> {
         self.require_reservation(budget)?;
         with_decoded_cpu(request, input, budget, |request, cpu_input, budget| {
+            self.replay_checked(request, cpu_input, budget, consume)
+        })
+    }
+
+    /// Borrows the policy input and commitment from one scoped decoded owner.
+    /// The original enrollment and source owners must remain current externally.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_verifier::{RetainedProductionConditionalFormulaV2, ProductionConditionalFormulaExecutionV2};
+    /// use fe2o3_verifier::portable_reference_v1::codec::DecodedNativeCpuPolicyInputV2;
+    /// use fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1 as Request;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn escape<'a>(p: &RetainedProductionConditionalFormulaV2, r: &Request<'_>,
+    ///     input: &DecodedNativeCpuPolicyInputV2, b: &mut Budget<'_>) -> &'a ProductionConditionalFormulaExecutionV2 {
+    ///     p.with_replayed_decoded_policy_request_v2(r, input, b, |proof, _| Ok(proof)).unwrap()
+    /// }
+    /// ```
+    pub fn with_replayed_decoded_policy_request_v2<R>(
+        &self,
+        request: &Request<'_>,
+        input: &DecodedNativeCpuPolicyInputV2,
+        budget: &mut Budget<'_>,
+        consume: impl for<'proof> FnOnce(
+            &'proof ProductionConditionalFormulaExecutionV2,
+            &mut Budget<'_>,
+        ) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        self.require_reservation(budget)?;
+        with_decoded_policy_cpu(request, input, budget, |request, cpu_input, budget| {
             self.replay_checked(request, cpu_input, budget, consume)
         })
     }
@@ -627,6 +738,38 @@ fn with_live_cpu_input<R>(
         LiveCpuInput::Registration(input) => with_live_cpu(request, input, budget, run),
         LiveCpuInput::Policy(input) => with_live_policy_cpu(request, input, budget, run),
     }
+}
+
+enum DecodedCpuInput<'a> {
+    Registration(&'a DecodedNativeCpuInputV1),
+    Policy(&'a DecodedNativeCpuPolicyInputV2),
+}
+
+fn with_decoded_cpu_input<R>(
+    request: &Request<'_>,
+    input: DecodedCpuInput<'_>,
+    budget: &mut Budget<'_>,
+    run: impl FnOnce(&Request<'_>, DigestV1, &mut Budget<'_>) -> Result<R, Error>,
+) -> Result<R, Error> {
+    match input {
+        DecodedCpuInput::Registration(input) => with_decoded_cpu(request, input, budget, run),
+        DecodedCpuInput::Policy(input) => with_decoded_policy_cpu(request, input, budget, run),
+    }
+}
+
+fn with_decoded_policy_cpu<R>(
+    request: &Request<'_>,
+    input: &DecodedNativeCpuPolicyInputV2,
+    budget: &mut Budget<'_>,
+    run: impl FnOnce(&Request<'_>, DigestV1, &mut Budget<'_>) -> Result<R, Error>,
+) -> Result<R, Error> {
+    with_cpu(
+        request,
+        CpuCorrespondenceInput::from(input.input_v2()),
+        input.commitment_v2(),
+        budget,
+        run,
+    )
 }
 
 fn with_decoded_cpu<R>(

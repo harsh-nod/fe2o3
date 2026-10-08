@@ -280,3 +280,105 @@ fn policy_replay_call_shape<'request, 'binding, 'work>(
 ) -> Result<Box<u8>, Error> {
     retained.with_replayed_policy_request_v2(request, input, budget, move |_, _| Ok(owned_capture))
 }
+
+#[test]
+fn decoded_policy_owner_lends_the_same_subject_and_commitment() {
+    let fixture = Fixture::new();
+    let mut work = Work::new(usize::MAX);
+    let mut budget = Budget::new(&mut work, usize::MAX);
+    budget.reserve_storage(31).unwrap();
+    let account = budget.work_ledger_identity_v1();
+    with_encoded_native_cpu_policy_input_v2(
+        policy_input(&fixture),
+        &mut budget,
+        |bytes, hash, budget| {
+            with_decoded_native_cpu_policy_input_v2(bytes, budget, |decoded, budget| {
+                let input = decoded.input_v2();
+                let subject = CpuCorrespondenceInput::from(decoded.input_v2());
+                assert_eq!(
+                    subject.semantic_mir_sha256,
+                    input.association.semantic_mir_sha256
+                );
+                assert_eq!(subject.semantic_root, input.association.semantic_root);
+                assert!(std::ptr::eq(subject.reference.kernel, input.kernel));
+                assert!(std::ptr::eq(subject.reference.reference, input.reference));
+                assert!(std::ptr::eq(
+                    subject.reference.replay.signature_preimage,
+                    input.replay.signature_preimage
+                ));
+                assert!(std::ptr::eq(
+                    subject.reference.replay.effect_ir,
+                    input.replay.effect_ir
+                ));
+                assert!(std::ptr::eq(
+                    subject.reference.replay.observable_output_writes,
+                    input.replay.observable_output_writes
+                ));
+                assert_eq!(
+                    subject.reference.replay.effect_ir_sha256,
+                    input.replay.effect_ir_sha256
+                );
+                let reencoded = with_encoded_native_cpu_policy_input_v2(
+                    reborrow_policy(&input),
+                    budget,
+                    |_, commitment, _| commitment,
+                )
+                .unwrap();
+                assert_eq!(hash, decoded.commitment_v2());
+                assert_eq!(hash, reencoded);
+            })
+            .unwrap();
+        },
+    )
+    .unwrap();
+    assert_eq!(budget.storage(), 31);
+    assert!(budget.work_ledger_identity_v1() == account);
+}
+
+#[allow(dead_code)]
+fn policy_decoded_import_call_shape<'request, 'work>(
+    request: &Request<'request>,
+    input: &DecodedNativeCpuPolicyInputV2,
+    signature: &InertFunctionalRefinementReceiptSignatureV2,
+    accepted: &FunctionalRefinementImportPolicyV2,
+    budget: &mut Budget<'work>,
+) -> Result<RetainedProductionConditionalFormulaV2, Error> {
+    crate::import_and_retain_conditional_ranked_formula_policy_v2(
+        request, input, signature, accepted, budget,
+    )
+}
+
+#[allow(dead_code)]
+fn policy_decoded_replay_call_shape<'request, 'work>(
+    retained: &RetainedProductionConditionalFormulaV2,
+    request: &Request<'request>,
+    input: &DecodedNativeCpuPolicyInputV2,
+    budget: &mut Budget<'work>,
+    owned_capture: Box<u8>,
+) -> Result<Box<u8>, Error> {
+    retained.with_replayed_decoded_policy_request_v2(request, input, budget, move |_, _| {
+        Ok(owned_capture)
+    })
+}
+
+#[allow(dead_code)]
+fn policy_same_visit_import_check_call_shape<'request, 'work>(
+    request: &Request<'request>,
+    input: &DecodedNativeCpuPolicyInputV2,
+    signature: &InertFunctionalRefinementReceiptSignatureV2,
+    accepted: &FunctionalRefinementImportPolicyV2,
+    budget: &mut Budget<'work>,
+    owned_refusal: Box<u8>,
+) -> Result<
+    Result<RetainedProductionConditionalFormulaV2, Box<u8>>,
+    ConditionalFormulaImportCheckErrorV2,
+> {
+    import_and_check_conditional_ranked_formula_policy_v2(
+        request,
+        input,
+        signature,
+        accepted,
+        budget,
+        move |_, _| Err(owned_refusal),
+    )
+}

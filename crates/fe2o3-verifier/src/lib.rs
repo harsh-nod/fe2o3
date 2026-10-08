@@ -196,6 +196,7 @@ pub use conditional_ranked_formulas_v1::{
     execute_and_retain_conditional_ranked_formula_policy_v2,
     execute_and_retain_conditional_ranked_formula_v1,
     execute_and_retain_conditional_ranked_formula_v2,
+    import_and_retain_conditional_ranked_formula_policy_v2,
     import_and_retain_conditional_ranked_formula_v2, with_conditional_ranked_formula_execution_v1,
 };
 // Deprecated compatibility exports. Despite their Verus-oriented names, these
