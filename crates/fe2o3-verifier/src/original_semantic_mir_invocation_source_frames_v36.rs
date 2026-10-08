@@ -55,7 +55,73 @@ fn mismatch() -> Error {
     Error::Statement("original MIR byte frame return differs from its exact invocation")
 }
 
+fn root_destination_free(present: [bool; 5]) -> bool {
+    present == [false; 5]
+}
+
+fn root_return_pc(returns: &[usize], pc: usize, out: &mut Writer<'_, '_>) -> Result<bool> {
+    // `returns` is private and constructed in strictly increasing block order.
+    let (mut begin, mut end) = (0, returns.len());
+    while begin < end {
+        out.budget.charge_work(1)?;
+        let middle = begin + (end - begin) / 2;
+        match returns[middle].cmp(&pc) {
+            std::cmp::Ordering::Less => begin = middle + 1,
+            std::cmp::Ordering::Equal => return Ok(true),
+            std::cmp::Ordering::Greater => end = middle,
+        }
+    }
+    Ok(false)
+}
+
+fn root_unit_headers() -> usize {
+    size_of::<(u32, Range<usize>)>()
+        + size_of::<Option<(u32, Range<usize>)>>()
+        + size_of::<Result<Option<(u32, Range<usize>)>>>()
+        + size_of::<std::cmp::Ordering>()
+        + 2 * size_of::<[bool; 5]>()
+        + 7 * size_of::<usize>()
+        + 3 * size_of::<&()>()
+}
+
 impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
+    pub(super) fn root_unit_coordinates_v313(
+        &self,
+        root: usize,
+        instance: usize,
+        pc: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<(u32, Range<usize>)>> {
+        let source = self.slots.correspondence(out)?.source(out.budget)?;
+        if out.budget.storage() < self.required {
+            return Err(source
+                .retain_query_resource_error_v18(Resource::Accounting)
+                .into());
+        }
+        out.budget.reserve_storage(root_unit_headers())?;
+        out.budget.charge_work(10)?;
+        if self.root != root || self.instance != instance {
+            return Err(mismatch());
+        }
+        if instance != 0
+            || self.class != ReturnClass::Unit
+            || self.owners.len() != 1
+            || !root_destination_free([
+                self.destination.is_some(),
+                self.destination_component.is_some(),
+                self.destination_memory.is_some(),
+                self.descriptor_destination.is_some(),
+                self.continuation.is_some(),
+            ])
+        {
+            return Ok(None);
+        }
+        if root_return_pc(&self.returns, pc, out)? {
+            return Ok(Some((self.owners[0], self.locals.clone())));
+        }
+        Ok(None)
+    }
+
     pub(super) fn heap_conservation_shape(&self, out: &mut Writer<'_, '_>) -> Result<bool> {
         let source = self.slots.correspondence(out)?.source(out.budget)?;
         if out.budget.storage() < self.required {
@@ -1076,6 +1142,74 @@ mod tests {
     }
 
     #[test]
+    fn root_unit_return_query_authenticates_owner_return_pc_and_destination_absence() {
+        run(LIMIT, LIMIT, |plan, slots, out| {
+            for root in 0..2 {
+                let mut frame = SourceFrameReturn::derive(plan, slots, root, 0, out)?;
+                let pc = *frame.returns.first().unwrap();
+                let expected = Some((frame.owners[0], frame.locals.clone()));
+                assert_eq!(
+                    frame.root_unit_coordinates_v313(root, 0, pc, out)?,
+                    expected
+                );
+                assert!(matches!(
+                    frame.root_unit_coordinates_v313(root + 2, 0, pc, out),
+                    Err(Error::Statement(_))
+                ));
+                assert!(matches!(
+                    frame.root_unit_coordinates_v313(root, 1, pc, out),
+                    Err(Error::Statement(_))
+                ));
+                assert_eq!(
+                    frame.root_unit_coordinates_v313(root, 0, usize::MAX, out)?,
+                    None
+                );
+                frame.class = ReturnClass::Scalar(32);
+                assert_eq!(frame.root_unit_coordinates_v313(root, 0, pc, out)?, None);
+                frame.class = ReturnClass::Unit;
+                let owner = frame.owners.pop().unwrap();
+                assert_eq!(frame.root_unit_coordinates_v313(root, 0, pc, out)?, None);
+                frame.owners.push(owner);
+                frame.destination = Some(0);
+                assert_eq!(frame.root_unit_coordinates_v313(root, 0, pc, out)?, None);
+                frame.destination = None;
+                frame.continuation = Some(0);
+                assert_eq!(frame.root_unit_coordinates_v313(root, 0, pc, out)?, None);
+                frame.continuation = None;
+                assert_eq!(
+                    frame.root_unit_coordinates_v313(root, 0, pc, out)?,
+                    expected
+                );
+                let child = SourceFrameReturn::derive(plan, slots, root, 1, out)?;
+                assert_eq!(
+                    child.root_unit_coordinates_v313(root, 1, child.returns[0], out)?,
+                    None
+                );
+            }
+            assert!(root_destination_free([false; 5]));
+            for field in 0..5 {
+                let mut present = [false; 5];
+                present[field] = true;
+                assert!(!root_destination_free(present));
+            }
+            // The private constructor uses this same increasing coordinate order.
+            let returns: Vec<_> = (0..4096).map(|index| 3 + index * 2).collect();
+            for pc in [0, 2, 3, 4, 4099, 8193, 8194, 8195, usize::MAX] {
+                let before = out.budget.work();
+                assert_eq!(root_return_pc(&returns, pc, out)?, returns.contains(&pc));
+                assert!((1..=13).contains(&(out.budget.work() - before)));
+            }
+            let before = out.budget.work();
+            assert!(!root_return_pc(&[], 0, out)?);
+            assert_eq!(out.budget.work(), before);
+            assert!(out.text.is_empty());
+            Ok(())
+        })
+        .0
+        .unwrap();
+    }
+
+    #[test]
     fn original_mir_byte_return_headers_have_independent_field_envelope() {
         type Fields<'a, 'v, 's> = (
             &'a SourceSlots<'v, 's>,
@@ -1117,6 +1251,16 @@ mod tests {
                 + h::<Option<usize>>()
                 + 24 * size_of::<usize>()
                 + 24 * size_of::<&()>()
+        );
+        assert_eq!(
+            root_unit_headers(),
+            size_of::<(u32, Range<usize>)>()
+                + size_of::<Option<(u32, Range<usize>)>>()
+                + size_of::<Result<Option<(u32, Range<usize>)>>>()
+                + size_of::<std::cmp::Ordering>()
+                + 2 * size_of::<[bool; 5]>()
+                + 7 * size_of::<usize>()
+                + 3 * size_of::<&()>()
         );
     }
 }

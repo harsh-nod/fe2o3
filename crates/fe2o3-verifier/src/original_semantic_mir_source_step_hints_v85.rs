@@ -94,6 +94,20 @@ pub(super) fn derive(
                 frame_preserving: !conserves_heap && cut_frames::supports(function, block, out)?,
                 needs_scalar_store_facts: !conserves_heap
                     && cut_may_store(function, functions, block, out)?,
+                root_unit_return_v313: if row.statements == 0 && matches!(row.end, End::Return) {
+                    function.returned.root_unit_coordinates_v313(
+                        root,
+                        instance,
+                        function
+                            .blocks
+                            .start
+                            .checked_add(block)
+                            .ok_or(Resource::Arithmetic)?,
+                        out,
+                    )?
+                } else {
+                    None
+                },
                 descriptor_wf: if !conserves_heap && source_wf::supports(function, block, out)? {
                     match row.end {
                         End::Descriptor(call) => Some((block, call)),
@@ -181,6 +195,7 @@ fn headers() -> usize {
         + h::<SourceCutHintsV85>()
         + h::<Option<thread_write::ThreadWriteCall>>()
         + h::<Option<(usize, u32)>>()
+        + h::<Option<(u32, Range<usize>)>>()
         + h::<SourceEntryHintsV85>()
         + h::<SourceCallHintsV85>()
         + h::<(usize, bool, u32)>()
