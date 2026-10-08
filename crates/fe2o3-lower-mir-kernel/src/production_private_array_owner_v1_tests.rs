@@ -406,6 +406,9 @@ fn array_owner_with_cfg(
 #[path = "production_private_array_cfg_source_v2_tests.rs"]
 mod cfg_source_tests;
 
+#[path = "production_private_array_literal_index_v1_tests.rs"]
+mod literal_index_tests;
+
 fn query(
     owner: &ProductionPreRankedKirOwnerV1,
     block: u32,
@@ -506,7 +509,7 @@ fn private_array_required_missing_instance_and_slot_are_not_false() {
 }
 
 #[test]
-fn private_array_promoted_fixed_read_is_false_but_local_index_absence_is_incomplete() {
+fn private_array_promoted_fixed_and_original_literal_reads_are_supported_absence() {
     let owner = array_owner(ArrayCase::ValueRead { local_index: false });
     assert!(!owner.correspondence.private_arrays.active);
     assert!(
@@ -522,12 +525,8 @@ fn private_array_promoted_fixed_read_is_false_but_local_index_absence_is_incompl
     assert_eq!(query(&owner, 0, 2, Role::RvalueOperand(0)), Ok(false));
     let owner = array_owner(ArrayCase::ValueRead { local_index: true });
     assert!(!owner.correspondence.private_arrays.active);
-    assert_eq!(
-        query(&owner, 0, 2, Role::RvalueOperand(0)),
-        Err(SemanticKirPrivateArrayQueryErrorV1::Incomplete(
-            "unretained array index lacks a bounded constant-index witness",
-        ))
-    );
+    // This exact fixture assigns the sole original index temporary literal zero.
+    assert_eq!(query(&owner, 0, 2, Role::RvalueOperand(0)), Ok(false));
 }
 
 #[test]
@@ -664,7 +663,14 @@ fn private_array_actual_query_has_independently_derived_exact_and_one_under_work
             (accepted, floor, floor)
         );
     }
-    for (remove_instance, expected) in [(true, 116), (false, 127)] {
+    // Source-derived before the instance lookup: 3 + 5 + 5 + 1 + 46 + 3
+    // + 2 + 2 + 4 + 1 + 24 + 2 + 2 + 12 + 1 + 1 = 114.
+    // Empty instance search adds 1. A present instance adds 6 + 1, its
+    // coordinates add 4, and empty slot search adds 1: prefixes 115 / 126.
+    // The Index absent-owned branch prepays 4 before the same required-slot
+    // refusal (formerly the generic absent branch prepaid 1). No literal
+    // proof is reached. Exact totals are 119 / 130, not measured estimates.
+    for (remove_instance, prefix, expected) in [(true, 115, 119), (false, 126, 130)] {
         let mut owner = array_owner(ArrayCase::Write { sparse: false });
         if remove_instance {
             owner.correspondence.private_arrays.instances.clear();
@@ -672,25 +678,43 @@ fn private_array_actual_query_has_independently_derived_exact_and_one_under_work
             owner.correspondence.private_arrays.slots.clear();
             owner.correspondence.private_arrays.instances[0].slot_end = 0;
         }
-        let mut work = CanonicalKernelIrWorkBudgetV1::new(expected);
-        let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, STORAGE);
-        budget.reserve_storage(retained(&owner)).unwrap();
-        assert_eq!(
-            owner.has_materialized_private_array_access(
+        for (limit, accepted, reaches_refusal) in
+            [(expected, expected, true), (expected - 1, prefix, false)]
+        {
+            let mut work = CanonicalKernelIrWorkBudgetV1::new(limit);
+            let mut budget = CanonicalKernelIrVerificationResourceBudgetV1::new(&mut work, STORAGE);
+            let floor = retained(&owner);
+            budget.reserve_storage(floor).unwrap();
+            let result = owner.has_materialized_private_array_access(
                 ARRAY_ROOT,
                 ARRAY_ROOT,
                 Site::Statement {
                     block: SsaBlockIdV1::new(0),
-                    statement: 1
+                    statement: 1,
                 },
                 Role::Destination,
-                &mut budget
-            ),
-            Err(SemanticKirPrivateArrayQueryErrorV1::Mismatch(
-                "required retained array instance or slot is absent"
-            ))
-        );
-        assert_eq!(budget.work(), expected);
+                &mut budget,
+            );
+            if reaches_refusal {
+                assert_eq!(
+                    result,
+                    Err(SemanticKirPrivateArrayQueryErrorV1::Mismatch(
+                        "required retained array instance or slot is absent"
+                    ))
+                );
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(SemanticKirPrivateArrayQueryErrorV1::Resource(
+                        fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceErrorV1::Work(error)
+                    )) if error.actual() == expected && error.limit() == limit
+                ));
+            }
+            assert_eq!(
+                (budget.work(), budget.storage(), budget.peak_storage()),
+                (accepted, floor, floor)
+            );
+        }
     }
 }
 
@@ -748,16 +772,9 @@ fn private_array_constant_index_query_preserves_supported_absence_and_errors() {
             Role::RvalueOperand(0),
             &mut budget,
         );
-        if local_index {
-            assert_eq!(
-                result,
-                Err(SemanticKirPrivateArrayQueryErrorV1::Incomplete(
-                    "unretained array index lacks a bounded constant-index witness",
-                ))
-            );
-        } else {
-            assert_eq!(result, Ok(None));
-        }
+        // Both explicit ConstantIndex and the original single literal temporary
+        // prove supported absence, never a retained slot.
+        assert_eq!(result, Ok(None));
         assert_eq!((budget.storage(), budget.peak_storage()), (floor, floor));
     }
 }

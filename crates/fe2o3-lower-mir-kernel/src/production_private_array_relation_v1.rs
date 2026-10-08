@@ -842,6 +842,64 @@ fn private_array_absent_query_v1(
 }
 
 impl ProductionPreRankedKirOwnerV1 {
+    fn private_array_absent_owned_query_v1(
+        &self,
+        function: SemanticFunctionIdV1,
+        site: fe2o3_pliron::ProductionSemanticSsaOccurrenceSiteV1,
+        role: fe2o3_pliron::ProductionSemanticSsaOperandRoleV1,
+        access: PrivateArraySourceAccessV1<'_>,
+        promoted: bool,
+        requires_slot: bool,
+        projection: SemanticProjectionKindV1,
+        length: u64,
+        work: &mut PrivateArrayQueryWorkV1<'_, '_>,
+    ) -> Result<Option<u64>, SemanticKirPrivateArrayQueryErrorV1> {
+        use SemanticKirPrivateArrayQueryErrorV1::{Incomplete, InvalidSource, Mismatch, Resource};
+        if let SemanticProjectionKindV1::Index(index) = projection {
+            work.charge_private_array_work(4)?;
+            if requires_slot {
+                return Err(Mismatch(
+                    "required retained array instance or slot is absent",
+                ));
+            }
+            if !promoted || access.access != PrivateArrayAccessV1::Read {
+                return Err(Incomplete(
+                    "unretained array selection is not locally established",
+                ));
+            }
+            let value = self
+                .semantic_ssa
+                .original_unsigned_literal_index_v1(
+                    function,
+                    site,
+                    role,
+                    access.place.local(),
+                    index,
+                    work.budget,
+                )
+                .map_err(|error| match error {
+                    fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1::Resource(error) => {
+                        Resource(error)
+                    }
+                    _ => Mismatch("unretained array original literal/SSA relation changed"),
+                })?
+                .ok_or(Incomplete(
+                    "unretained array index lacks a bounded constant-index witness",
+                ))?;
+            work.charge_private_array_work(1)?;
+            if value >= length {
+                return Err(InvalidSource(
+                    "unretained array index exceeds its exact extent",
+                ));
+            }
+            // This establishes supported absence only. No retained slot, memory
+            // effect, or source-value refinement is constructed from the integer.
+            return Ok(None);
+        }
+        private_array_absent_query_v1(promoted, requires_slot, projection, length, work)
+            .map(|_| None)
+    }
+
     /// Checks one original indexed private-array access against this owner's
     /// actual counted allocation, source index, GEP and ordinary memory effect.
     ///
@@ -1050,14 +1108,17 @@ impl ProductionPreRankedKirOwnerV1 {
         let Some(instance) =
             private_array_instance_v1(rows, selected_root, entry.semantic_function, &mut work)?
         else {
-            return private_array_absent_query_v1(
+            return self.private_array_absent_owned_query_v1(
+                entry.semantic_function,
+                site,
+                role,
+                access,
                 promoted,
                 requires_slot,
                 projection.kind(),
                 facts.length,
                 &mut work,
-            )
-            .map(|_| None);
+            );
         };
         work.charge_private_array_work(4)?;
         if instance.lowered_function_ordinal != root || instance.module_function_ordinal != root {
@@ -1081,14 +1142,17 @@ impl ProductionPreRankedKirOwnerV1 {
             &mut work,
         )?
         else {
-            return private_array_absent_query_v1(
+            return self.private_array_absent_owned_query_v1(
+                entry.semantic_function,
+                site,
+                role,
+                access,
                 promoted,
                 requires_slot,
                 projection.kind(),
                 facts.length,
                 &mut work,
-            )
-            .map(|_| None);
+            );
         };
         work.charge_private_array_work(1)?;
         if promoted {

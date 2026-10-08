@@ -1015,6 +1015,7 @@ pub use shared_primitive_reads_v1::{
     ProductionSemanticSharedReadsV1,
 };
 mod occurrences_v1;
+mod original_literal_index_v1;
 mod partial_moves;
 
 pub use occurrences_v1::{
