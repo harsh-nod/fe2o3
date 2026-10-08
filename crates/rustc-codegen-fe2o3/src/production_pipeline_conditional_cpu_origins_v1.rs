@@ -34,9 +34,28 @@ pub(super) fn capture(
     roots: &[Root],
     budget: &mut Budget<'_>,
 ) -> Result<RetainedCpuOriginRosterV1, Error> {
-    let references = bindings.reference_effect_bindings.as_slice();
+    project(
+        roots
+            .iter()
+            .map(|root| (root.semantic_root().index(), root.logical_name())),
+        bindings
+            .reference_effect_bindings
+            .as_slice()
+            .iter()
+            .map(|binding| (binding.logical_kernel_name.as_str(), &binding.origin)),
+        budget,
+    )
+}
+
+// One projection body for the authenticated adapter and inert algorithm tests.
+// Borrowed iterators add no root vector/index or independent authority surface.
+fn project<'a>(
+    roots: impl ExactSizeIterator<Item = (u32, &'a str)>,
+    references: impl ExactSizeIterator<Item = (&'a str, &'a BindingOrigin)> + Clone,
+    budget: &mut Budget<'_>,
+) -> Result<RetainedCpuOriginRosterV1, Error> {
     budget.charge_work(3)?;
-    if roots.is_empty()
+    if roots.len() == 0
         || roots.len() > fe2o3_compiler_lineage::MAX_NATIVE_CONDITIONAL_POLICY_ROSTER_ROOTS_V1
         || roots.len() != references.len()
     {
@@ -45,17 +64,11 @@ pub(super) fn capture(
         ));
     }
     let mut rows = policy_capture::vector(roots.len(), budget)?;
-    for root in roots {
-        let origin = select(
-            root.logical_name(),
-            references
-                .iter()
-                .map(|binding| (binding.logical_kernel_name.as_str(), &binding.origin)),
-            budget,
-        )?;
+    for (semantic_root, name) in roots {
+        let origin = select(name, references.clone(), budget)?;
         budget.charge_work(size_of::<Expectation>())?;
         rows.push(Expectation {
-            semantic_root: root.semantic_root().index(),
+            semantic_root,
             origin,
         });
     }
@@ -225,6 +238,296 @@ mod tests {
         assert!(select("kernel", [("kernel", &origin)], &mut budget).is_err());
         assert_eq!(budget.failed_work(), first_refusal);
         assert_eq!(budget.storage(), 31);
+        assert!(budget.work_ledger_identity_v1() == account);
+    }
+
+    // These exercise capture's exact projection body, not authenticated binding
+    // construction, genuine issuer admission or the same-visit bridge caller.
+    const FLOOR: usize = 31;
+    const PREFIX: usize = 7;
+
+    fn two_root_quote(origin: &BindingOrigin) -> usize {
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        // Measure the same-shaped projection's actual allocation, not an
+        // assumption that Vec capacity always equals its requested length.
+        project(
+            [(2, "a"), (3, "b")].into_iter(),
+            [("a", origin), ("b", origin)].into_iter(),
+            &mut budget,
+        )
+        .unwrap()
+        .retained_storage()
+        .unwrap()
+    }
+
+    #[test]
+    fn capture_projection_rejects_cardinality_before_iteration_or_allocation() {
+        let oversized = fe2o3_compiler_lineage::MAX_NATIVE_CONDITIONAL_POLICY_ROSTER_ROOTS_V1 + 1;
+        for (root_count, binding_count) in [
+            (0, 0),
+            (0, 1),
+            (1, 0),
+            (2, 1),
+            (1, 2),
+            (oversized, oversized),
+        ] {
+            let mut work = Work::new(usize::MAX);
+            let mut budget = Budget::new(&mut work, FLOOR);
+            budget.charge_work(PREFIX).unwrap();
+            budget.reserve_storage(FLOOR).unwrap();
+            let account = budget.work_ledger_identity_v1();
+            let roots = (0..root_count)
+                .map(|_| -> (u32, &'static str) { panic!("invalid roots iterated") });
+            let bindings = (0..binding_count).map(|_| -> (&'static str, &'static BindingOrigin) {
+                panic!("invalid bindings iterated")
+            });
+            assert!(matches!(
+                project(roots, bindings, &mut budget),
+                Err(Error::Mismatch(
+                    "complete original CPU origin binding roster"
+                ))
+            ));
+            assert_eq!(
+                (budget.work(), budget.storage(), budget.peak_storage()),
+                (PREFIX + 3, FLOOR, FLOOR)
+            );
+            assert_eq!(
+                (budget.failed_work(), budget.failed_storage()),
+                (None, None)
+            );
+            assert!(budget.work_ledger_identity_v1() == account);
+        }
+    }
+
+    #[test]
+    fn capture_projection_preserves_mixed_origins_in_original_root_order() {
+        let registration = BindingOrigin::SourceRegistration("crate::reference".into());
+        let first = ReferenceEnrollmentOriginV1 {
+            rustc_invocation_sha256: [11; 32],
+            native_policy_sha256: [12; 32],
+            policy_generation: 13,
+            mapping_ordinal: 14,
+        };
+        let second = ReferenceEnrollmentOriginV1 {
+            rustc_invocation_sha256: [21; 32],
+            native_policy_sha256: [22; 32],
+            policy_generation: 23,
+            mapping_ordinal: 24,
+        };
+        let a_binding = BindingOrigin::ReferenceEnrollment(first);
+        let b_binding = BindingOrigin::ReferenceEnrollment(second);
+        let bindings = [("b", &b_binding), ("c", &registration), ("a", &a_binding)];
+        let a = Expectation {
+            semantic_root: 41,
+            origin: Origin::ReferenceEnrollmentV1(first),
+        };
+        let b = Expectation {
+            semantic_root: 7,
+            origin: Origin::ReferenceEnrollmentV1(second),
+        };
+        let c = Expectation {
+            semantic_root: 90,
+            origin: Origin::SourceRegistrationV1,
+        };
+        for (roots, expected) in [
+            ([(90, "c"), (41, "a"), (7, "b")], [c, a, b]),
+            ([(7, "b"), (90, "c"), (41, "a")], [b, c, a]),
+        ] {
+            let mut work = Work::new(usize::MAX);
+            let mut budget = Budget::new(&mut work, usize::MAX);
+            budget.charge_work(PREFIX).unwrap();
+            budget.reserve_storage(FLOOR).unwrap();
+            let account = budget.work_ledger_identity_v1();
+            let roster = project(roots.into_iter(), bindings.into_iter(), &mut budget).unwrap();
+            assert_eq!(roster.rows(), &expected);
+            let quote = roster.retained_storage().unwrap();
+            assert_eq!(
+                quote,
+                size_of::<RetainedCpuOriginRosterV1>()
+                    + roster.rows.capacity() * size_of::<Expectation>()
+            );
+            assert_eq!(budget.storage(), FLOOR + quote);
+            assert_eq!(budget.peak_storage(), FLOOR + quote);
+            assert_eq!(
+                budget.work(),
+                PREFIX + 4 + 9 * 3 + 3 * (size_of::<Origin>() + 1 + size_of::<Expectation>())
+            );
+            assert!(budget.work_ledger_identity_v1() == account);
+            drop(roster);
+            assert_eq!(budget.storage(), FLOOR + quote);
+            assert_eq!(
+                (budget.failed_work(), budget.failed_storage()),
+                (None, None)
+            );
+        }
+    }
+
+    #[test]
+    fn capture_projection_missing_and_ambiguous_names_keep_terminal_charges() {
+        let origin = enrolled();
+        let quote = two_root_quote(&origin);
+        let roots = [(2, "a"), (3, "b")];
+        for (bindings, reason, accepted) in [
+            (
+                [("a", &origin), ("c", &origin)],
+                "missing original CPU origin binding",
+                4 + 12 + size_of::<Origin>() + 1 + size_of::<Expectation>(),
+            ),
+            (
+                [("a", &origin), ("a", &origin)],
+                "ambiguous original CPU origin binding",
+                4 + 6 + size_of::<Origin>() + 1,
+            ),
+        ] {
+            let mut work = Work::new(usize::MAX);
+            let mut budget = Budget::new(&mut work, usize::MAX);
+            budget.charge_work(PREFIX).unwrap();
+            budget.reserve_storage(FLOOR).unwrap();
+            let account = budget.work_ledger_identity_v1();
+            assert!(
+                matches!(project(roots.into_iter(), bindings.into_iter(), &mut budget), Err(Error::Mismatch(actual)) if actual == reason)
+            );
+            let terminal = budget.storage();
+            assert_eq!(terminal, FLOOR + quote);
+            assert_eq!(budget.peak_storage(), terminal);
+            assert_eq!(budget.work(), PREFIX + accepted);
+            assert_eq!(
+                (budget.failed_work(), budget.failed_storage()),
+                (None, None)
+            );
+            assert!(budget.work_ledger_identity_v1() == account);
+        }
+    }
+
+    #[test]
+    fn capture_projection_exact_and_one_short_limits_preserve_floor_and_denials() {
+        let origin = enrolled();
+        let cost = 4 + 3 + size_of::<Origin>() + 1 + size_of::<Expectation>();
+        let requested = size_of::<Vec<Expectation>>() + size_of::<Expectation>();
+        let run = |work_limit, storage_limit, prior_denials| {
+            let mut work = Work::new(work_limit);
+            let mut budget = Budget::new(&mut work, storage_limit);
+            budget.charge_work(PREFIX).unwrap();
+            budget.reserve_storage(FLOOR).unwrap();
+            let account = budget.work_ledger_identity_v1();
+            if prior_denials {
+                assert!(budget.charge_work(usize::MAX).is_err());
+                assert!(budget.reserve_storage(usize::MAX).is_err());
+            }
+            let result = project(
+                [(5, "a")].into_iter(),
+                [("a", &origin)].into_iter(),
+                &mut budget,
+            );
+            assert!(budget.work_ledger_identity_v1() == account);
+            assert_eq!(budget.storage(), budget.peak_storage());
+            (
+                result,
+                budget.work(),
+                budget.storage(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            )
+        };
+        let (result, used_work, used_storage, _, _) = run(usize::MAX, usize::MAX, false);
+        let roster = result.unwrap();
+        let quote = roster.retained_storage().unwrap();
+        assert_eq!(used_work, PREFIX + cost);
+        assert_eq!(used_storage, FLOOR + quote);
+        let (result, work, storage, failed_work, failed_storage) =
+            run(PREFIX + cost, FLOOR + quote, false);
+        assert_eq!(result.unwrap().rows(), roster.rows());
+        assert_eq!((work, storage), (PREFIX + cost, FLOOR + quote));
+        assert_eq!((failed_work, failed_storage), (None, None));
+        for prior in [false, true] {
+            let history = prior.then_some(usize::MAX);
+            let (result, work, storage, failed_work, failed_storage) =
+                run(PREFIX + cost - 1, FLOOR + quote, prior);
+            assert!(
+                matches!(result, Err(Error::Resource(Resource::Work(error))) if error.actual() == PREFIX + cost)
+            );
+            assert_eq!(work, PREFIX + cost - size_of::<Expectation>());
+            assert_eq!(storage, FLOOR + quote);
+            assert_eq!(failed_work, history.or(Some(PREFIX + cost)));
+            assert_eq!(failed_storage, history);
+            let (result, work, storage, failed_work, failed_storage) =
+                run(PREFIX + cost, FLOOR + quote - 1, prior);
+            assert!(
+                matches!(result, Err(Error::Resource(Resource::Storage(error))) if error.actual() == FLOOR + quote)
+            );
+            // If the allocator reports spare capacity, the requested reservation
+            // remains charged when the later excess-capacity reservation fails.
+            let (accepted_work, accepted_storage) = if quote == requested {
+                (3, FLOOR)
+            } else {
+                (4, FLOOR + requested)
+            };
+            assert_eq!((work, storage), (PREFIX + accepted_work, accepted_storage));
+            assert_eq!(failed_work, history);
+            assert_eq!(failed_storage, history.or(Some(FLOOR + quote)));
+        }
+    }
+
+    #[test]
+    fn retained_roster_quote_counts_actual_spare_capacity() {
+        let mut rows = Vec::with_capacity(5);
+        rows.push(Expectation {
+            semantic_root: 17,
+            origin: Origin::SourceRegistrationV1,
+        });
+        let roster = RetainedCpuOriginRosterV1 { rows };
+        assert!(roster.rows.capacity() > roster.rows().len());
+        assert_eq!(
+            roster.retained_storage().unwrap(),
+            size_of::<RetainedCpuOriginRosterV1>()
+                + roster.rows.capacity() * size_of::<Expectation>()
+        );
+        assert!(
+            roster.retained_storage().unwrap()
+                > size_of::<RetainedCpuOriginRosterV1>() + std::mem::size_of_val(roster.rows())
+        );
+    }
+
+    #[test]
+    fn capture_projection_unwind_keeps_allocated_storage_and_prefix_work() {
+        let origin = enrolled();
+        let quote = two_root_quote(&origin);
+        let mut work = Work::new(usize::MAX);
+        let mut budget = Budget::new(&mut work, usize::MAX);
+        budget.charge_work(PREFIX).unwrap();
+        budget.reserve_storage(FLOOR).unwrap();
+        let account = budget.work_ledger_identity_v1();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let roots = [(2, "a"), (3, "b")].into_iter().map(|row| {
+                if row.0 == 3 {
+                    std::panic::panic_any("stop after first projected row");
+                }
+                row
+            });
+            project(
+                roots,
+                [("a", &origin), ("b", &origin)].into_iter(),
+                &mut budget,
+            )
+        }));
+        let Err(payload) = result else {
+            panic!("projection did not unwind after its first row")
+        };
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"stop after first projected row")
+        );
+        assert_eq!(budget.storage(), FLOOR + quote);
+        assert_eq!(budget.peak_storage(), budget.storage());
+        assert_eq!(
+            budget.work(),
+            PREFIX + 4 + 6 + size_of::<Origin>() + 1 + size_of::<Expectation>()
+        );
+        assert_eq!(
+            (budget.failed_work(), budget.failed_storage()),
+            (None, None)
+        );
         assert!(budget.work_ledger_identity_v1() == account);
     }
 }
