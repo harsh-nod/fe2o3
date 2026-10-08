@@ -34546,7 +34546,8 @@ mod optimized_source_v18;
 pub use optimized_source_v18::{
     ProductionLifecycleCheckedNativePoliciesV18, ProductionMixedMemoryCheckedNativePoliciesV26,
     ProductionOptimizedExecutionKindV18, ProductionOptimizedExecutionRecipesV18,
-    ProductionOptimizedSourceAllocationV18, ProductionOptimizedSourceCfgEventV18,
+    ProductionOptimizedSourceAllocationV18, ProductionOptimizedSourceAtomicDispositionV1,
+    ProductionOptimizedSourceAtomicRmwV1, ProductionOptimizedSourceCfgEventV18,
     ProductionOptimizedSourceCfgRootV18, ProductionOptimizedSourceCorrespondenceV18,
     ProductionOptimizedSourceEffectsV18, ProductionOptimizedSourceGapIntervalV18,
     ProductionOptimizedSourceGapV18, ProductionOptimizedSourceMemoryAccessV18,

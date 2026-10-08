@@ -449,6 +449,7 @@ fn typed_alloca_shape_checks_both_result_and_allocation_representation() {
 mod source_emission_tests {
     use super::*;
     include!("production_source_object_emission_v29_tests.rs");
+    include!("production_source_selected_raw_helper_abi_v1_tests.rs");
 }
 
 #[test]

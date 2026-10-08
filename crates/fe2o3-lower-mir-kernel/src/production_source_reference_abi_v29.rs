@@ -355,6 +355,20 @@ fn check_source_reference_parameter_v29(
                 SemanticBorrowKindV1::Fake => return Err(execution_call_error_v29()),
             }
         }
+    } else if matches!(
+        plan.nodes[node].kind,
+        SourceReferenceNodeKindV29::Address(_)
+    ) && mapped.local_field().is_none()
+        && mapped.tuple_field().is_none()
+        && mapped.source_ownership() == SemanticSourceArgumentOwnershipV1::RawPointer
+    {
+        // The original rustc source classifies top-level raw arguments as
+        // RawPointer. This is only ABI transport for an already selected
+        // owner-bound address; it grants no new referent or loan permission.
+        if !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_)) {
+            return Err(execution_call_error_v29());
+        }
+        SemanticSourceArgumentOwnershipV1::RawPointer
     } else if plan.nodes[node].descriptor.is_some() && mapped.tuple_field().is_none() {
         SemanticSourceArgumentOwnershipV1::SharedBorrow
     } else {
