@@ -1061,12 +1061,19 @@ fn thread_write_support_closure_keeps_original_theorems_and_exact_referenced_bod
                 for absent in [
                     "invocation_source_scalar_local_preserves_heap_v78",
                     "invocation_source_constant_transfer_preserves_heap_v78",
-                    "invocation_source_plain_return_preserves_heap_v78",
-                    "invocation_empty_private_map_has_no_private_source_v78",
                     "invocation_cut_frame_descriptor_step_v93",
                     "invocation_cut_frame_issue_witness_v93",
                 ] {
                     assert!(!text.contains(absent), "{absent}");
+                }
+                for retained in [
+                    "invocation_private_free_frame_end_identity_v77",
+                    "invocation_source_put_local_preserves_heap_v78",
+                    "invocation_source_plain_return_install_preserves_heap_v78",
+                    "invocation_source_plain_return_preserves_heap_v78",
+                    "invocation_empty_private_map_has_no_private_source_v78",
+                ] {
+                    assert_eq!(text.matches(&format!("proof fn {retained}(")).count(), 1);
                 }
             }
         })

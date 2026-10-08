@@ -16,6 +16,9 @@ mod summaries;
 #[path = "original_semantic_mir_constructor_state_generate_v162.rs"]
 mod constructor_states;
 
+#[path = "original_semantic_mir_root_return_heap_v313.rs"]
+mod root_returns;
+
 #[derive(Clone, Copy)]
 enum Goal {
     All,
@@ -57,6 +60,11 @@ pub(super) fn emit(
         return Err(mismatch());
     }
     let follow_fuel = target_follow_fuel(model, row, out)?;
+    let root_scan = if !hints.conserves_heap {
+        Some(root_returns::scan(model, root, out)?)
+    } else {
+        None
+    };
     if !hints.conserves_heap {
         emit!(
             out,
@@ -87,7 +95,13 @@ pub(super) fn emit(
             None => None,
         };
         let summary = summaries::derive(model, row, hints, block, cut, hint, out)?;
-        if (summary.is_some() || constructor.is_some()) && !*summary_shared {
+        let root_return = if let Some(scan) = &root_scan {
+            root_returns::derive(model, scan, root, block, hint, out)?
+        } else {
+            None
+        };
+        if (summary.is_some() || constructor.is_some() || root_return.is_some()) && !*summary_shared
+        {
             emit!(out, "{}", summaries::SHARED);
             *summary_shared = true;
         }
@@ -122,6 +136,9 @@ pub(super) fn emit(
                 out.budget.charge_work(1)?;
                 header(root, Some(cut.source), goal, out)?;
                 match goal {
+                    Goal::Heap if root_return.is_some() => {
+                        root_returns::emit(root, root_return.as_ref().ok_or_else(mismatch)?, out)?;
+                    }
                     Goal::Relation => {
                         compose_opaquely(root, out)?;
                         for part in [Goal::Map, Goal::Heap, Goal::Residual] {
@@ -685,6 +702,10 @@ fn headers() -> usize {
     size_of::<Goal>()
         + size_of::<Option<summaries::Summary>>()
         + size_of::<Option<constructor_states::Summary>>()
+        + size_of::<Option<root_returns::Summary>>()
+        + size_of::<Result<Option<root_returns::Summary>>>()
+        + size_of::<Option<root_returns::RootScan<'_>>>()
+        + size_of::<Result<root_returns::RootScan<'_>>>()
         + size_of::<Result<Option<summaries::Summary>>>()
         + size_of::<std::iter::Enumerate<std::slice::Iter<'static, Option<Cut>>>>()
         + 2 * size_of::<bool>()
