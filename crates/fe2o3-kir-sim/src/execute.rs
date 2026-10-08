@@ -25,9 +25,9 @@ use crate::debug_identity_state::{FrameIdentityState, InvocationIdentityState, O
 use crate::model::mask;
 use crate::preflight::{supported_cast, supports_binary, supports_compare, supports_unary};
 use crate::resident::{
-    ResidentLedger, geometric_vec_bytes, hash_map_capacity_bytes,
-    partitioned_bool_vec_storage_bytes, partitioned_geometric_vec_bytes, reserved_bool_vec_bytes,
-    reserved_hash_map_bytes, reserved_vec_bytes,
+    ResidentLedger, hash_map_capacity_bytes, partitioned_bool_vec_storage_bytes,
+    partitioned_geometric_vec_bytes, reserved_bool_vec_bytes, reserved_hash_map_bytes,
+    reserved_vec_bytes,
 };
 use crate::schedule::{
     ExecutionScheduleRequestV1, PreparedScheduleV1, ReductionScheduleSourceV1,
@@ -70,12 +70,21 @@ mod alloca_v1;
 pub(crate) mod execution_lifecycle_v18;
 #[path = "execute_generic_exposure_v18.rs"]
 mod generic_exposure_v18;
+#[path = "execute_incoming_capacity_v1.rs"]
+mod incoming_capacity_v1;
+pub(crate) use incoming_capacity_v1::{IncomingValueCapacityV1, incoming_value_capacity};
+
 #[path = "execute_matrix_bf16_exact_v1.rs"]
 mod matrix_bf16_exact_v1;
+#[path = "execute_matrix_fp4_exact_v1.rs"]
+mod matrix_fp4_exact_v1;
 #[path = "execute_storage_scalar_v18.rs"]
 mod storage_scalar_v18;
 pub(crate) fn matrix_bf16_exact_resident_bytes() -> Option<usize> {
     matrix_bf16_exact_v1::resident_bytes()
+}
+pub(crate) fn matrix_fp4_exact_resident_bytes() -> Option<usize> {
+    matrix_fp4_exact_v1::resident_bytes()
 }
 
 // Pure size guard for the separate V12 metered observation facade. The existing
@@ -2168,6 +2177,12 @@ fn capture_debug_memory(
     SimulationDebugCollectionV1::Captured(captured)
 }
 
+fn frame_stack_resident_bytes(depth: usize) -> Option<usize> {
+    // InvocationMachine::new and Call reserve exactly one before each push;
+    // inactive frames retain that same bounded capacity across reset/return.
+    reserved_vec_bytes::<RuntimeFrame<'static>>(depth)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conservative_execution_resident_bytes(
     admitted_resident_bytes: usize,
@@ -2175,6 +2190,7 @@ pub(crate) fn conservative_execution_resident_bytes(
     limits: SimulationLimitsV1,
     reserved_call_depth: usize,
     reachable_ssa_values: usize,
+    incoming_capacity: IncomingValueCapacityV1,
     plan_identity_bytes: usize,
     reachable_indices_capacity: usize,
     execution_index_resident_bytes: usize,
@@ -2262,7 +2278,7 @@ pub(crate) fn conservative_execution_resident_bytes(
     )?)?;
     resident.add_product(
         workgroup_participants,
-        geometric_vec_bytes::<RuntimeFrame<'static>>(reserved_call_depth)?,
+        frame_stack_resident_bytes(reserved_call_depth)?,
     )?;
     // InvocationMachine::new owns the next frame before it is moved into one reserved stack.
     resident.add_bytes(size_of::<RuntimeFrame<'static>>())?;
@@ -2271,7 +2287,7 @@ pub(crate) fn conservative_execution_resident_bytes(
         workgroup_participants.checked_mul(reserved_call_depth)?,
         values_per_frame,
     )?;
-    let incoming_per_frame = reserved_vec_bytes::<RuntimeValue>(reachable_ssa_values)?;
+    let incoming_per_frame = reserved_vec_bytes::<RuntimeValue>(incoming_capacity.0)?;
     resident.add_product(
         workgroup_participants.checked_mul(reserved_call_depth)?,
         incoming_per_frame,
@@ -2298,6 +2314,57 @@ mod execution_resident_tests {
     use super::*;
 
     #[test]
+    fn frame_stack_charge_matches_exact_growth_and_retained_capacity() {
+        let mut frames = Vec::<std::mem::MaybeUninit<RuntimeFrame<'static>>>::new();
+        for depth in 1..=9 {
+            if frames.len() == frames.capacity() {
+                frames.try_reserve_exact(1).unwrap();
+            }
+            frames.push(std::mem::MaybeUninit::uninit());
+            assert_eq!(
+                frame_stack_resident_bytes(depth).unwrap(),
+                frames.capacity() * size_of::<RuntimeFrame<'static>>()
+            );
+        }
+        let capacity = frames.capacity();
+        frames.clear();
+        assert_eq!(frames.capacity(), capacity);
+        assert_eq!(
+            frame_stack_resident_bytes(9).unwrap(),
+            capacity * size_of::<RuntimeFrame<'static>>()
+        );
+    }
+
+    #[test]
+    fn incoming_capacity_reserves_exact_retained_vectors_per_live_frame() {
+        let request = SimulationRequestV1::new("incoming", [1, 1, 1], [1, 1, 1], vec![]);
+        let limits = SimulationLimitsV1::default();
+        let accounted = |count| {
+            conservative_execution_resident_bytes(
+                0,
+                &request,
+                limits,
+                3,
+                53,
+                IncomingValueCapacityV1(count),
+                0,
+                0,
+                0,
+                0,
+                7,
+                0,
+                0,
+            )
+            .unwrap()
+        };
+        for (small, large) in [(0, 1), (1, 17), (17, 53), (53, 127)] {
+            let delta = reserved_vec_bytes::<RuntimeValue>(large).unwrap()
+                - reserved_vec_bytes::<RuntimeValue>(small).unwrap();
+            assert_eq!(accounted(large) - accounted(small), 7 * 3 * delta);
+        }
+    }
+
+    #[test]
     fn atomic_scope_frontier_resident_accounting_uses_actual_compact_cells() {
         let request = SimulationRequestV1::new("frontier-resident", [1, 1, 1], [1, 1, 1], vec![]);
         let accounted = |records| {
@@ -2316,6 +2383,7 @@ mod execution_resident_tests {
                 limits,
                 limits.max_call_depth,
                 0,
+                IncomingValueCapacityV1(0),
                 0,
                 0,
                 0,
@@ -2358,6 +2426,7 @@ mod execution_resident_tests {
                 limits,
                 limits.max_call_depth,
                 0,
+                IncomingValueCapacityV1(0),
                 0,
                 0,
                 0,
@@ -4444,6 +4513,18 @@ fn resolve_ready_collectives<'a>(
             })?;
             engine.charge_steps(&arrival.site, work)?;
         }
+        let matrix_fp4_exact = matrix_fp4_exact_v1::is_operation(arrival.operation);
+        if matrix_fp4_exact {
+            let work = matrix_fp4_exact_v1::resolution_work(machines.len()).ok_or_else(|| {
+                engine.at(
+                    arrival.site,
+                    SimulationExecutionErrorKindV1::StepLimit {
+                        limit: engine.limits.max_steps,
+                    },
+                )
+            })?;
+            engine.charge_steps(&arrival.site, work)?;
+        }
         let width = u64::from(arrival.width.lanes());
         let linear = local_linear(machines[representative].invocation);
         let wave_in_workgroup = linear / width;
@@ -4501,6 +4582,11 @@ fn resolve_ready_collectives<'a>(
 
         if matrix_exact {
             matrix_bf16_exact_v1::resolve(engine, machines, arrival, start)?;
+            resolved += 1;
+            continue;
+        }
+        if matrix_fp4_exact {
+            matrix_fp4_exact_v1::resolve(engine, machines, arrival, start)?;
             resolved += 1;
             continue;
         }
@@ -5267,6 +5353,7 @@ struct WaveArrival<'a> {
 #[derive(Clone)]
 enum CollectiveInput {
     MatrixBf16Exact(matrix_bf16_exact_v1::Input),
+    MatrixFp4Exact(matrix_fp4_exact_v1::Input),
     PhysicalEntryPredicate(bool),
     MatrixLdsLoad {
         base: PointerValue,
@@ -6330,12 +6417,9 @@ fn prepare_collective_wait(
                     matrix_bf16_exact_v1::prepare(engine, frame, matrix, site)?,
                 ),
                 MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
-                    return Err(engine.at(
-                        site,
-                        SimulationExecutionErrorKindV1::InternalInvariant(
-                            "matrix numerical operation passed preflight",
-                        ),
-                    ));
+                    CollectiveInput::MatrixFp4Exact(matrix_fp4_exact_v1::prepare(
+                        engine, frame, matrix, site,
+                    )?)
                 }
             },
         ),
