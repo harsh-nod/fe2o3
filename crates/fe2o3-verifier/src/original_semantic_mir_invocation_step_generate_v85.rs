@@ -19,6 +19,9 @@ mod constructor_states;
 #[path = "original_semantic_mir_root_return_heap_v313.rs"]
 mod root_returns;
 
+#[path = "original_semantic_mir_scalar_return_summary_v325.rs"]
+mod scalar_returns;
+
 #[derive(Clone, Copy)]
 enum Goal {
     All,
@@ -65,6 +68,11 @@ pub(super) fn emit(
     } else {
         None
     };
+    let scalar_routes = if root_scan.is_some() {
+        Some(scalar_returns::scan(model, root, out)?)
+    } else {
+        None
+    };
     if !hints.conserves_heap {
         emit!(
             out,
@@ -100,7 +108,17 @@ pub(super) fn emit(
         } else {
             None
         };
-        if (summary.is_some() || constructor.is_some() || root_return.is_some()) && !*summary_shared
+        let scalar_return = match (&root_scan, &scalar_routes) {
+            (Some(scan), Some(routes)) => {
+                scalar_returns::derive(model, scan, routes, root, block, hint, out)?
+            }
+            _ => None,
+        };
+        if (summary.is_some()
+            || constructor.is_some()
+            || root_return.is_some()
+            || scalar_return.is_some())
+            && !*summary_shared
         {
             emit!(out, "{}", summaries::SHARED);
             *summary_shared = true;
@@ -138,6 +156,15 @@ pub(super) fn emit(
                 match goal {
                     Goal::Heap if root_return.is_some() => {
                         root_returns::emit(root, root_return.as_ref().ok_or_else(mismatch)?, out)?;
+                    }
+                    Goal::Heap | Goal::Control | Goal::Halted if scalar_return.is_some() => {
+                        scalar_returns::emit(
+                            model,
+                            root,
+                            scalar_return.as_ref().ok_or_else(mismatch)?,
+                            goal,
+                            out,
+                        )?;
                     }
                     Goal::Relation => {
                         compose_opaquely(root, out)?;
@@ -706,6 +733,10 @@ fn headers() -> usize {
         + size_of::<Result<Option<root_returns::Summary>>>()
         + size_of::<Option<root_returns::RootScan<'_>>>()
         + size_of::<Result<root_returns::RootScan<'_>>>()
+        + size_of::<Option<scalar_returns::Routes<'_>>>()
+        + size_of::<Result<scalar_returns::Routes<'_>>>()
+        + size_of::<Option<scalar_returns::Summary<'_>>>()
+        + size_of::<Result<Option<scalar_returns::Summary<'_>>>>()
         + size_of::<Result<Option<summaries::Summary>>>()
         + size_of::<std::iter::Enumerate<std::slice::Iter<'static, Option<Cut>>>>()
         + 2 * size_of::<bool>()

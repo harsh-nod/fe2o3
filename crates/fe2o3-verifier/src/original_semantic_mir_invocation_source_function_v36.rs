@@ -6,7 +6,9 @@ use super::super::{
 };
 use super::source_bytes::{Event, SourceByteBody, TypedOperand};
 use super::source_enter::SourceFrameEnter;
+pub(super) use super::source_frames::PlainScalarReturnV325;
 use super::source_frames::SourceFrameReturn;
+pub(super) use super::source_scalar::ScalarCopyV325;
 use super::source_scalar::SourceScalarStatements;
 use super::{Error, Resource, Result, Writer, slots::SourceSlots, vector};
 use fe2o3_mir_model::{
@@ -74,8 +76,18 @@ pub(super) struct SourceCutHintsV85 {
     pub(super) frame_preserving: bool,
     pub(super) needs_scalar_store_facts: bool,
     pub(super) root_unit_return_v313: Option<(u32, Range<usize>)>,
+    pub(super) scalar_return_v325: Option<SourceScalarReturnV325>,
     descriptor_wf: Option<(usize, descriptor_calls::DescriptorCall)>,
     normalization: Option<thread_write::ThreadWriteCall>,
+}
+
+pub(super) struct SourceScalarReturnV325 {
+    pub(super) returned: PlainScalarReturnV325,
+    pub(super) root: usize,
+    pub(super) instance: usize,
+    pub(super) pc: usize,
+    pub(super) block: usize,
+    pub(super) statements: Vec<ScalarCopyV325>,
 }
 
 impl SourceCutHintsV85 {

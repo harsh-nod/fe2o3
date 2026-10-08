@@ -108,6 +108,7 @@ pub(super) fn derive(
                 } else {
                     None
                 },
+                scalar_return_v325: scalar_return(function, root, instance, block, out)?,
                 descriptor_wf: if !conserves_heap && source_wf::supports(function, block, out)? {
                     match row.end {
                         End::Descriptor(call) => Some((block, call)),
@@ -132,6 +133,70 @@ pub(super) fn derive(
         fuels,
         entries,
         cuts,
+    }))
+}
+
+fn scalar_return(
+    function: &SourceByteFunction<'_, '_, '_>,
+    root: usize,
+    instance: usize,
+    block: usize,
+    out: &mut Writer<'_, '_>,
+) -> Result<Option<SourceScalarReturnV325>> {
+    out.budget.reserve_storage(
+        size_of::<SourceScalarReturnV325>()
+            + size_of::<Option<SourceScalarReturnV325>>()
+            + size_of::<Result<Option<SourceScalarReturnV325>>>()
+            + size_of::<PlainScalarReturnV325>()
+            + size_of::<Result<Option<PlainScalarReturnV325>>>()
+            + size_of::<Vec<ScalarCopyV325>>()
+            + size_of::<Result<Vec<ScalarCopyV325>>>()
+            + size_of::<Event>()
+            + size_of::<Result<Event>>()
+            + size_of::<ScalarCopyV325>()
+            + size_of::<Result<Option<ScalarCopyV325>>>()
+            + 10 * size_of::<usize>(),
+    )?;
+    out.budget.charge_work(3)?;
+    let row = function.control.get(block).ok_or_else(mismatch)?;
+    if !matches!(row.end, End::Return) {
+        return Ok(None);
+    }
+    let pc = function
+        .blocks
+        .start
+        .checked_add(block)
+        .ok_or(Resource::Arithmetic)?;
+    let Some(returned) = function
+        .returned
+        .plain_scalar_frame_metadata_v325(root, instance, out)?
+    else {
+        return Ok(None);
+    };
+    let mut statements = vector(row.statements, out)?;
+    for statement in 0..row.statements {
+        out.budget.charge_work(1)?;
+        if !matches!(
+            function.body.event_at(block, statement, out)?,
+            Event::Scalar
+        ) {
+            return Ok(None);
+        }
+        let Some(coordinates) = function
+            .scalar
+            .copy_coordinates_v325(root, instance, block, statement, out)?
+        else {
+            return Ok(None);
+        };
+        statements.push(coordinates);
+    }
+    Ok(Some(SourceScalarReturnV325 {
+        returned,
+        root,
+        instance,
+        pc,
+        block,
+        statements,
     }))
 }
 
@@ -196,6 +261,7 @@ fn headers() -> usize {
         + h::<Option<thread_write::ThreadWriteCall>>()
         + h::<Option<(usize, u32)>>()
         + h::<Option<(u32, Range<usize>)>>()
+        + h::<Option<SourceScalarReturnV325>>()
         + h::<SourceEntryHintsV85>()
         + h::<SourceCallHintsV85>()
         + h::<(usize, bool, u32)>()

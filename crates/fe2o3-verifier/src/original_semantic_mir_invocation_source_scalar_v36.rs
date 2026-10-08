@@ -10,6 +10,14 @@ use std::{fmt::Write as _, mem::size_of, ops::Range};
 
 type Input = (usize, usize, ScalarV30);
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct ScalarCopyV325 {
+    pub(super) destination: usize,
+    pub(super) graph: usize,
+    pub(super) inputs: [Option<usize>; 2],
+    pub(super) unit: bool,
+}
+
 pub(super) struct SourceScalarStatements<'slots, 'view, 'source> {
     slots: &'slots SourceSlots<'view, 'source>,
     root: usize,
@@ -33,6 +41,89 @@ fn unsupported() -> Error {
 }
 
 impl<'slots, 'view, 'source> SourceScalarStatements<'slots, 'view, 'source> {
+    pub(super) fn copy_coordinates_v325(
+        &self,
+        root: usize,
+        instance: usize,
+        block: usize,
+        ordinal: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<ScalarCopyV325>> {
+        self.check(out)?;
+        out.budget.reserve_storage(
+            headers()
+                + size_of::<ScalarCopyV325>()
+                + size_of::<Option<ScalarCopyV325>>()
+                + size_of::<Result<Option<ScalarCopyV325>>>()
+                + size_of::<[Option<usize>; 2]>()
+                + size_of::<std::slice::IterMut<'_, Option<usize>>>()
+                + size_of::<Option<&mut Option<usize>>>()
+                + size_of::<Result<()>>()
+                + 8 * size_of::<usize>()
+                + 8 * size_of::<&()>(),
+        )?;
+        out.budget.charge_work(6)?;
+        if self.root != root || self.instance != instance || block >= self.blocks.len() {
+            return Err(mismatch());
+        }
+        let source = self.slots.correspondence(out)?.source(out.budget)?;
+        let semantic = source.source_semantic(out.budget)?;
+        let function = semantic
+            .functions()
+            .get(self.function)
+            .ok_or_else(mismatch)?;
+        let statement = function
+            .blocks()
+            .get(block)
+            .and_then(|body| body.statements().get(ordinal))
+            .ok_or_else(mismatch)?;
+        let Statement::Assign(assignment) = statement.kind() else {
+            return Ok(None);
+        };
+        if !matches!(
+            assignment.value().kind(),
+            Rvalue::Use(_) | Rvalue::Unary { .. } | Rvalue::Binary { .. }
+        ) {
+            return Ok(None);
+        }
+        let mut copied = true;
+        let mut inputs = [None; 2];
+        assignment
+            .value()
+            .kind()
+            .try_visit_operands(|operand| -> Result<()> {
+                out.budget.charge_work(1)?;
+                copied &= !matches!(operand, Operand::Move(_));
+                if let Operand::Copy(place) = operand {
+                    let global = self.place(function, place, out)?.1;
+                    out.budget.charge_work(2)?;
+                    if !inputs.contains(&Some(global)) {
+                        *inputs
+                            .iter_mut()
+                            .find(|value| value.is_none())
+                            .ok_or(Resource::Accounting)? = Some(global);
+                    }
+                }
+                Ok(())
+            })?;
+        if !copied {
+            return Ok(None);
+        }
+        Ok(Some(ScalarCopyV325 {
+            destination: self.place(function, assignment.destination(), out)?.1,
+            graph: graph_key(
+                self.blocks
+                    .start
+                    .checked_add(block)
+                    .ok_or(Resource::Arithmetic)?,
+                ordinal,
+            )?,
+            inputs,
+            unit: ScalarV30::from_source(semantic.types(), assignment.destination().ty())?
+                == ScalarV30::Unit,
+        }))
+    }
+
     pub(super) fn new(
         plan: &InvocationPlan<'_, '_>,
         slots: &'slots SourceSlots<'view, 'source>,
