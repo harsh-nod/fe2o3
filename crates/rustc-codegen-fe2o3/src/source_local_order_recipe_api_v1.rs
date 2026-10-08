@@ -11,6 +11,14 @@ use std::mem::size_of;
 mod measurement;
 pub use measurement::SourceLocalOrderRecipeRetainedStorageV1;
 
+#[path = "source_local_order_recipe_cancellation_v1.rs"]
+pub(crate) mod cancellation;
+pub use cancellation::{
+    SourceLocalOrderRecipeCancellationCheckpointV1,
+    SourceLocalOrderRecipeCancellationObservationV1, SourceLocalOrderRecipeCancellationRequestV1,
+    SourceLocalOrderRecipeCancellationV1,
+};
+
 pub(crate) const LLVM_BYTE_CAP: usize = 48 * 1024;
 const DIAGNOSTIC_BYTE_CAP: usize = 4096;
 pub(crate) const DESCRIPTOR_PRODUCER: &str = "source-local-order-policy6-v1/gfx942";
@@ -118,11 +126,25 @@ pub enum SourceLocalOrderRecipeFailurePhaseV1 {
     Observation,
     SourceCurrentness,
 }
-#[derive(Debug)]
 pub struct SourceLocalOrderRecipeFailureV1 {
     phase: SourceLocalOrderRecipeFailurePhaseV1,
     diagnostic: String,
     compiler_fatal: bool,
+    cancellation: Option<SourceLocalOrderRecipeCancellationObservationV1>,
+}
+impl std::fmt::Debug for SourceLocalOrderRecipeFailureV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut value = f.debug_struct("SourceLocalOrderRecipeFailureV1");
+        value
+            .field("phase", &self.phase)
+            .field("diagnostic", &self.diagnostic)
+            .field("compiler_fatal", &self.compiler_fatal);
+        // Preserve the ordinary derived-Debug representation byte for byte.
+        if let Some(observation) = self.cancellation {
+            value.field("cancellation", &observation);
+        }
+        value.finish()
+    }
 }
 impl std::fmt::Display for SourceLocalOrderRecipeFailureV1 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -140,6 +162,10 @@ impl SourceLocalOrderRecipeFailureV1 {
     pub const fn compiler_fatal(&self) -> bool {
         self.compiler_fatal
     }
+    /// Typed cancellation observation; ordinary failures return None.
+    pub const fn cancellation(&self) -> Option<SourceLocalOrderRecipeCancellationObservationV1> {
+        self.cancellation
+    }
     pub(crate) fn new(phase: SourceLocalOrderRecipeFailurePhaseV1, mut diagnostic: String) -> Self {
         if diagnostic.len() > DIAGNOSTIC_BYTE_CAP {
             let mut end = DIAGNOSTIC_BYTE_CAP;
@@ -152,6 +178,7 @@ impl SourceLocalOrderRecipeFailureV1 {
             phase,
             diagnostic,
             compiler_fatal: false,
+            cancellation: None,
         }
     }
 }

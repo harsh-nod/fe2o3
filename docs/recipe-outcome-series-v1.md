@@ -148,9 +148,9 @@ authority or memory overclaims. Its result is explicitly consistency-only,
 not execution authentication. Pure Rust and Node controls use inert synthetic
 records and must never be reported as genuine workloads.
 
-Cancellation remains a separate owner/interface gap. A process timeout or
-SIGTERM is not a compiler cancellation result. This change invents no
-cancellation API and does not satisfy that acceptance item.
+The original outcome-series selectors do not request cancellation. A process
+timeout or SIGTERM is not a compiler cancellation result. See the separate
+cooperative phase-boundary API and qualification below.
 
 ## 2026-10-08 CPU qualification snapshot
 
@@ -295,9 +295,9 @@ as operation-owned memory or exact temporary overlap.
 `heap_peak_bytes` remain null. Existing `retained_logical_bytes`
 and `canonical_peak_storage` retain their original meanings; the
 latter is a reservation-ledger peak, not a heap measurement. `budget_accepted`
-and authority remain false. Cancellation is still a separate unimplemented
-owner/API obligation: a process timeout, signal or memory-reader refusal is
-not a compiler cancellation result.
+and authority remain false. This process-memory selector does not request
+cancellation. The separate phase-boundary API below does not turn a process
+timeout, signal or memory-reader refusal into a compiler cancellation result.
 
 Pure controls cover units and identity, missing/duplicate fields, malformed
 numbers and overflow, framing, bounded EOF/short/interrupted reads, complete
@@ -369,3 +369,124 @@ Complete retained-owner heap and temporary-overlap accounting remain
 unavailable; their fields remain null. Neither a compiler cancellation result
 nor a performance budget/SLO was established. This snapshot grants no native
 or GPU authority and does not close #282 U4.
+
+## Cooperative phase-boundary cancellation
+
+The Linux embedding API now provides an opt-in, single-attempt cancellation
+token. This is separate from the outcome/latency/process-memory selectors above;
+those selectors and the ordinary driver keep their existing interfaces and
+report formats.
+
+`run_source_local_order_recipe_driver_cancellable_v1(args, request, &token)`
+consumes the same admitted request through the original compiler transaction.
+It does not import an edited graph, reuse compiler owners, relax source checks,
+publish output files, or grant native/launch authority. The caller still owns
+process isolation, complete original rustc arguments, environment, source and
+recipe-file custody, deadlines and publication.
+
+For an embedding that already constructs the ordinary request:
+
+```rust
+use rustc_codegen_fe2o3::{
+    SourceLocalOrderRecipeAttemptV1 as Attempt,
+    SourceLocalOrderRecipeCancellationCheckpointV1 as Checkpoint,
+    SourceLocalOrderRecipeCancellationV1 as Cancellation,
+    SourceLocalOrderRecipeRequestV1 as Request,
+    run_source_local_order_recipe_driver_cancellable_v1,
+};
+
+fn run_one(args: &[String], request: Request, stop: &Cancellation) -> Attempt {
+    run_source_local_order_recipe_driver_cancellable_v1(args, request, stop)
+}
+
+fn cancelled_at(attempt: &Attempt) -> Option<Checkpoint> {
+    attempt.result().err()
+        .and_then(|error| error.cancellation())
+        .map(|observation| observation.checkpoint())
+}
+```
+
+Create a fresh `Cancellation::new()` for each attempt. An existing scoped
+control thread may call `request_cancellation()` on the same token. The driver
+itself spawns no thread and retains no token in the returned attempt. Tokens
+cannot be reset or reused: a second claim is a request failure.
+
+The request result is `Requested`, `AlreadyRequested`, or `TooLate`. It is
+not an acknowledgement that compilation stopped. Inspect the returned failure's
+typed `cancellation()` observation; do not recognize cancellation by parsing a
+diagnostic string or by treating every error as cancellation.
+
+Twenty closed checkpoints cover input admission, frontend entry/analysis,
+transaction creation, capture/import/middle-end/SSA/materialization/ranked
+verification, prefix and source joins, continuation/replay, final source
+currentness, and driver commit. Polls occur at phase boundaries, not inside an
+opaque compiler phase. A pre-cancelled token can stop before input validation.
+An already-produced semantic, resource, currentness or compiler-fatal error is
+preserved when a request arrives later. Cancellation is not manufactured as a
+resource-budget error.
+
+At final commit, an atomic state transition decides whether success or a
+cancellation request wins. If the request wins before success commits, the
+provisional output is dropped and no successful output escapes. If success
+already committed, a later request is too late. Requests use at most two strong
+compare-and-exchange operations; there is no spin loop, reset, or token-owned
+heap/graph. Abandonment/unwind makes a claimed token terminal.
+
+This API supplies no maximum stop latency, intra-phase interruption, complete
+owner-heap measurement or temporary-overlap result. A process timeout or signal
+remains a separate external event, not a typed compiler cancellation. The test
+observer's drop witness establishes only that observer's destruction; it does
+not measure every compiler allocation.
+
+### Genuine-source cancellation checkpoint
+
+On 2026-10-08, the original candidate based on
+`60829fe70b60fb85a666d8290d364346e447bfa0` plus the ten cancellation source/test
+leaves passed 78 genuine child runs on `mi350`. Its unchanged before/after
+source census was 15,384 files / 221,635,058 bytes, SHA-256
+`7a26c20d238727d651e831e82f723c883e9069cf9972b9932dabc2f177dcea51`.
+This is the tested candidate identity, not a claim that every later main
+revision ran this campaign.
+
+Each of Create, same-source Replay and changed-source checked rebind used its
+own independent ordinary output oracle. Its 25 controls comprised never
+cancel, all 20 checkpoints, observer refusal, observer-triggered cancellation,
+compiler fatal, and repeated callback. All 75 controls passed with 72 compiler
+callbacks and 75 method callbacks across the full 78-child campaign.
+Never-cancel output matched its complete independent ordinary oracle bytes.
+Observed cancellation returned no successful output; the original refusal,
+fatal and repeated-callback precedence checks passed.
+
+The prerequisite original recipe ladder also passed 28 driver attempts and
+450 simulations. These are correctness checks, not a latency benchmark.
+The campaign retained complete direct-child exit/close observations and
+unchanged selected source/dependency/runtime inputs. It makes no arbitrary
+escaped-descendant or future dynamic-loader claim.
+
+Retained evidence (SHA-256):
+
+- Normal campaign receipt: 465,704 bytes,
+  `2a4f5046df2f2cf10523456ff574d30d4537df4fda2695c4300844f8b0c3b88b`.
+- Campaign result: 334,841 bytes,
+  `b449e703b2ac632091a06ccaa53bf64f28b74b474577d708f9088cac6ea273f9`.
+- Harness controls: 24 passed, zero failed; receipt
+  `332e3aaced1a0343265a3cbe97281ae89ebd1bf6b1146e0be9774e48c194ca76`.
+
+An earlier campaign stopped before any child because its harness incorrectly
+required trailing LF in original whole JSON files. The failed receipt
+`81de3952c9a9e71d3981334ad19da733a5b4627899b6aa504ba2cba7adfc9dff`
+is retained. The corrected harness accepts original complete UTF-8 JSON files
+with or without trailing LF; newline-framed stdout/stderr remains strict.
+No source/recipe/output bytes or limits were changed to repair that harness.
+
+Complete owner-heap/overlap accounting and accepted performance/stop-latency
+budgets remain open. This checkpoint does not complete #282 U4.
+
+The ten implementation/test leaves were then applied unchanged on
+`17533a8378b7d2ac816a34e610b515b1c3835463` and passed the complete
+`rustc-codegen-fe2o3 --lib` suite: 4,327 passed, zero failed,
+353 explicitly ignored; seven nested child regression invocations also passed.
+The current-main normal receipt is 42,751 bytes, SHA-256
+`04ae02c513de30ca78f6b78de5962086dcd3dfc2d343093e42122d46d57cc218`.
+This is a separate regression result, not a rerun of the original 78-child
+genuine-source campaign on the later revision.

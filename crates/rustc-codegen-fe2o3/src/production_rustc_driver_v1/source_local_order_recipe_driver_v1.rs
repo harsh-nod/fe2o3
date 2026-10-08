@@ -10,9 +10,12 @@ use crate::source_local_order_recipe_api_v1::{
     SourceLocalOrderRecipeRequestV1 as Request, finish_callback, validate_arguments,
 };
 
+use crate::source_local_order_recipe_api_v1::SourceLocalOrderRecipeCancellationV1 as Cancellation;
+use crate::source_local_order_recipe_api_v1::cancellation::{self, Checkpoint, Gate};
 use std::time::{Duration, Instant};
 
-struct RecipeCallbacks {
+struct RecipeCallbacks<'a> {
+    cancellation: Option<&'a Gate<'a>>,
     request: Request,
     input: Option<RetainedInput>,
     calls: usize,
@@ -29,10 +32,11 @@ struct RecipeCallbacks {
     #[cfg(test)]
     fatal_after_first: bool,
 }
-impl RecipeCallbacks {
+impl<'a> RecipeCallbacks<'a> {
     fn new(request: Request) -> Self {
         Self {
             request,
+            cancellation: None,
             input: None,
             calls: 0,
             compiler_entries: 0,
@@ -50,7 +54,7 @@ impl RecipeCallbacks {
         }
     }
 }
-impl Callbacks for RecipeCallbacks {
+impl Callbacks for RecipeCallbacks<'_> {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         #[cfg(test)]
         if !self.injecting_reentry {
@@ -82,14 +86,23 @@ impl Callbacks for RecipeCallbacks {
         let mut callback_stage_elapsed = None;
         let operation = || {
             let started = measure_callback_stage.then(Instant::now);
-            let result = transaction_in_active_session_v1(
-                tcx,
-                crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
-            )
-            .map_err(|message| Failure::new(Phase::Frontend, message))
-            .and_then(|transaction| {
-                transaction.compile_source_local_order_recipe_v1(input, &self.request)
-            });
+            let result = (|| {
+                cancellation::poll(self.cancellation, Checkpoint::AfterAnalysis)?;
+                let transaction = transaction_in_active_session_v1(
+                    tcx,
+                    crate::rustc_semantic_plan_v1::DebugSourceCaptureRequestV2::Disabled,
+                )
+                .map_err(|message| Failure::new(Phase::Frontend, message))?;
+                cancellation::poll(self.cancellation, Checkpoint::AfterTransaction)?;
+                match self.cancellation {
+                    Some(gate) => transaction.compile_source_local_order_recipe_cancellable_v1(
+                        input,
+                        &self.request,
+                        Some(gate),
+                    ),
+                    None => transaction.compile_source_local_order_recipe_v1(input, &self.request),
+                }
+            })();
             callback_stage_elapsed = started.map(|started| started.elapsed());
             result
         };
@@ -146,7 +159,31 @@ pub fn run_source_local_order_recipe_driver_measured_v1(
     run(args, callbacks)
 }
 
-fn run(args: &[String], mut callbacks: RecipeCallbacks) -> Attempt {
+/// Cooperative phase-boundary cancellation, not an interrupt inside rustc or
+/// any original consuming phase. Same caller/process obligations as ordinary.
+/// The caller-owned token is single-use and is never retained in the Attempt.
+pub fn run_source_local_order_recipe_driver_cancellable_v1(
+    args: &[String],
+    request: Request,
+    token: &Cancellation,
+) -> Attempt {
+    let gate = match token.claim() {
+        Ok(gate) => gate,
+        Err(error) => return Attempt::new(request, Err(error), 0, 0),
+    };
+    let attempt = run_claimed(args, request, &gate);
+    gate.finish_attempt(attempt)
+}
+fn run_claimed(args: &[String], request: Request, gate: &Gate<'_>) -> Attempt {
+    if let Err(error) = gate.poll(Checkpoint::BeforeInput) {
+        return Attempt::new(request, Err(error), 0, 0);
+    }
+    let mut callbacks = RecipeCallbacks::new(request);
+    callbacks.cancellation = Some(gate);
+    run(args, callbacks)
+}
+
+fn run(args: &[String], mut callbacks: RecipeCallbacks<'_>) -> Attempt {
     if let Err(error) = validate_arguments(args) {
         return Attempt::new(callbacks.request, Err(error), 0, 0);
     }
@@ -170,6 +207,9 @@ fn run(args: &[String], mut callbacks: RecipeCallbacks) -> Attempt {
         }
     };
     callbacks.input = Some(input);
+    if let Err(error) = cancellation::poll(callbacks.cancellation, Checkpoint::BeforeCompiler) {
+        return Attempt::new(callbacks.request, Err(error), 0, 0);
+    }
     let fatal =
         rustc_driver::catch_fatal_errors(|| rustc_driver::run_compiler(args, &mut callbacks))
             .is_err();

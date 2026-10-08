@@ -581,3 +581,6 @@ mod controls;
 
 #[path = "source_local_order_recipe_outcome_series_v1_tests.rs"]
 mod outcome_series;
+
+#[path = "source_local_order_recipe_cancellation_v1_tests.rs"]
+mod cancellation_controls;

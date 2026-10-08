@@ -26,6 +26,7 @@ pub use source_bitselect_promotion_driver_v1::run_bitselect_source_promotion_dri
 pub(crate) mod source_local_order_recipe_driver_v1;
 #[cfg(target_os = "linux")]
 pub use source_local_order_recipe_driver_v1::{
+    run_source_local_order_recipe_driver_cancellable_v1,
     run_source_local_order_recipe_driver_measured_v1, run_source_local_order_recipe_driver_v1,
 };
 

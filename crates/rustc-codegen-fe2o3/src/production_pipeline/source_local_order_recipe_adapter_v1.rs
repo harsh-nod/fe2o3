@@ -3,6 +3,7 @@
 use super::local_order_join as join;
 use super::*;
 use crate::collector::source_census_v1::bitselect_feasibility::retained::local_order::capture_local_order;
+use crate::source_local_order_recipe_api_v1::cancellation::{Checkpoint, Gate, poll};
 use crate::source_local_order_recipe_api_v1::{
     self as api, Intent, SourceLocalOrderIdentityObservationV1 as Identity,
     SourceLocalOrderRecipeEvidenceV1 as Evidence, SourceLocalOrderRecipeFailurePhaseV1 as Phase,
@@ -32,9 +33,18 @@ fn currentness(message: String) -> Failure {
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
     pub(crate) fn compile_source_local_order_recipe_v1(
         self,
-        mut input: RetainedInput,
+        input: RetainedInput,
         request: &Request,
     ) -> Result<Output, Failure> {
+        self.compile_source_local_order_recipe_cancellable_v1(input, request, None)
+    }
+    pub(crate) fn compile_source_local_order_recipe_cancellable_v1(
+        self,
+        mut input: RetainedInput,
+        request: &Request,
+        gate: Option<&Gate<'_>>,
+    ) -> Result<Output, Failure> {
+        poll(gate, Checkpoint::BeforeCapture)?;
         let tcx = self.stage.tcx;
         let mut captured =
             capture_local_order(tcx, &self.stage.closure, &input).map_err(eligibility)?;
@@ -46,6 +56,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             request.expected_current_source_sha256(),
             &captured.original_sha256,
         )?;
+        poll(gate, Checkpoint::AfterCapture)?;
         let identities = captured.identities;
         let binding = codec::InstanceBinding {
             function: *identities.function().as_bytes(),
@@ -60,7 +71,26 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                 .bind(binding, captured.original_sha256)
                 .map_err(|error| api::failure(Phase::RecipeBinding, error))?,
         };
-        let ranked = self.verify_general_kernel_checks().map_err(continuation)?;
+        let ranked = if gate.is_some() {
+            // Exactly the ordinary consuming chain; polls occur only after an
+            // original successful owner transition, never inside its cleanup.
+            let imported = self.import_semantic_mir().map_err(continuation)?;
+            poll(gate, Checkpoint::AfterImport)?;
+            let middle = imported
+                .construct_semantic_middle_end()
+                .map_err(continuation)?;
+            poll(gate, Checkpoint::AfterMiddleEnd)?;
+            let ssa = middle.construct_semantic_ssa().map_err(continuation)?;
+            poll(gate, Checkpoint::AfterSsa)?;
+            let materialized = ssa.materialize_target_neutral().map_err(continuation)?;
+            poll(gate, Checkpoint::AfterMaterialization)?;
+            materialized
+                .verify_general_kernel_checks()
+                .map_err(continuation)?
+        } else {
+            self.verify_general_kernel_checks().map_err(continuation)?
+        };
+        poll(gate, Checkpoint::AfterRankedVerification)?;
         let mut work = Work::new(
             usize::try_from(crate::production_canonical_phase_policy_v1::WORK_LIMIT)
                 .map_err(continuation)?,
@@ -77,9 +107,11 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         budget
             .reserve_storage(std::mem::size_of::<Option<codec::Recipe>>())
             .map_err(continuation)?;
+        poll(gate, Checkpoint::BeforePrefix)?;
         let prefix = ranked
             .prepare_source_local_order_prefix_v1(&mut budget)
             .map_err(continuation)?;
+        poll(gate, Checkpoint::AfterPrefix)?;
         captured.recheck(tcx, &mut input).map_err(currentness)?;
         let joined = join::exact_join(&mut captured, prefix.admitted.source_semantic_kir())
             .map_err(eligibility)?;
@@ -138,6 +170,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             .bind(binding, captured.original_sha256)
             .and_then(|_| recipe.check_current_program(&n, &i))
             .map_err(|error| api::failure(Phase::RecipeBinding, error))?;
+        poll(gate, Checkpoint::AfterSourceJoin)?;
         let first = selected.first_operation;
         let operations = [0_u32, 1, 2].map(|offset| {
             first
@@ -152,12 +185,15 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                 "local-order recipe source coordinate overflow".into(),
             ));
         };
+        poll(gate, Checkpoint::BeforeContinuation)?;
         let continued = crate::production_pipeline::source_local_order_v1::continue_admitted_source_local_order_v1(
             prefix, SourceU32LocalOrderRequestV1 {
                 expected_source: n, operations: [xor, or, and], preference: preference.preference(),
             }, &mut budget,
         ).map_err(continuation)?;
+        poll(gate, Checkpoint::AfterContinuation)?;
         let floor = budget.storage();
+        poll(gate, Checkpoint::BeforeReplay)?;
         continued
             .verify_equivalence(&mut budget)
             .map_err(continuation)?;
@@ -166,6 +202,7 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
                 "local-order recipe replay changed storage floor",
             ));
         }
+        poll(gate, Checkpoint::AfterReplay)?;
         let (actual_relation, results) = relation::observe(
             continued.input(),
             continued.output(),
@@ -317,6 +354,8 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
         // This is after the optional test observer. Mutation/failure there cannot
         // expose a previous successful source result or unchecked output text.
         captured.recheck(tcx, &mut input).map_err(currentness)?;
+        // A cancelling observer cannot mask a failed final currentness check.
+        poll(gate, Checkpoint::AfterFinalCurrentness)?;
         // Live source witness, exact I/L owners and original bindings stay on
         // this stack until final currentness and bounded inert conversion finish.
         Ok(Output {

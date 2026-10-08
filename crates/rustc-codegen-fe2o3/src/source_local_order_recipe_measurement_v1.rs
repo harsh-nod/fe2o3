@@ -79,6 +79,7 @@ impl Attempt {
                 phase: _,
                 diagnostic,
                 compiler_fatal: _,
+                cancellation: _, // fixed inline field already included in size_of::<Attempt>()
             }) => {
                 failure_diagnostic_owned_bytes = part(&mut c, |c| c.string(diagnostic))?;
             }
