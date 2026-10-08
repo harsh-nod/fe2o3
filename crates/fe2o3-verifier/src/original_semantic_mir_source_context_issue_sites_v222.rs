@@ -161,7 +161,13 @@ mod tests {
                 .unwrap()
                 .0;
             assert_eq!(header.len(), bytes);
-            assert_eq!(format!("{:x}", Sha256::digest(header.as_bytes())), digest);
+            assert_eq!(
+                Sha256::digest(header.as_bytes())
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>(),
+                digest
+            );
         }
     }
 
