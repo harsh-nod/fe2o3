@@ -65,7 +65,7 @@ SUPPORT_FILES = (
 def ordinary(path):
     need(path.is_file() and not path.is_symlink() and path.resolve() == path,
          'ordinary canonical input: ' + str(path))
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     try:
         before = os.fstat(fd)
         need(stat.S_ISREG(before.st_mode) and before.st_size <= 1024**2,
@@ -138,28 +138,47 @@ def support_check():
     return actual
 
 
+def root_item_prefix(prefix, message):
+    stack = []
+    closing = {')': '(', ']': '[', '}': '{'}
+    for token in prefix:
+        if token in '([{':
+            stack.append(token)
+        elif token in closing:
+            need(stack and stack.pop() == closing[token], 'balanced item prefix')
+    need(not stack and (not prefix.strip() or prefix.rstrip()[-1] in ';}'), message)
+
+
 def root_module(source, name):
-    code = compact(source)
-    marker = 'mod' + name + ';'
-    need(code.count(marker) == 1, 'one active module ' + name)
-    prefix = code[:code.index(marker)]
-    need(prefix.count('{') == prefix.count('}') and not prefix.endswith(']'),
-         'root module has no hidden attributes/path ' + name)
+    code = CODE(source)
+    hits = list(re.finditer(r'\bmod\s+' + re.escape(name) + r'\s*;', code))
+    need(len(hits) == 1, 'one active module ' + name)
+    prefix = code[:hits[0].start()]
+    prefix = re.sub(r'\bpub(?:\s*\([^()]*\))?\s*$', '', prefix)
+    root_item_prefix(prefix, 'root module has no hidden attributes/path ' + name)
 
 
 def module_edges(values):
     root_module(values[LIB], 'context')
     root_module(values[CONTEXT], 'unpublished')
-    code = compact(values[CONTEXT])
-    marker = '#[cfg(test)]modtests{'
-    need(code.count(marker) == 1, 'exact cfg(test) inline test owner')
-    start = code.index(marker)
-    prefix = code[:start]
-    need(prefix.count('{') == prefix.count('}') and not prefix.endswith(']'),
-         'root test owner has no additional attribute')
-    content, _ = block(code, start + len(marker))
+    code = CODE(values[CONTEXT])
+    hits = list(re.finditer(r'#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*mod\s+tests\s*\{', code))
+    need(len(hits) == 1, 'exact cfg(test) inline test owner')
+    root_item_prefix(code[:hits[0].start()], 'root test owner has no additional attribute')
+    # Keep lexical boundaries for the nested module declaration.
+    content, _ = block(code, hits[0].end())
     root_module(content, 'submission_identity_tests')
     root_module(values[IDENTITY_TESTS], 'cached_poll')
+
+
+def root_include(text, include):
+    need(text.count(include) == 1, 'exact shared include')
+    marker = '__cached_poll_include__'
+    need(marker not in text, 'reserved include marker')
+    active = CODE(text.replace(include, marker + ';'))
+    hits = list(re.finditer(r'\b' + marker + r'\s*;', active))
+    need(len(hits) == 1, 'active shared include')
+    root_item_prefix(active[:hits[0].start()], 'root unqualified include')
 
 
 def lexer():
@@ -248,13 +267,7 @@ def audit(inputs):
         (context, 'include!("context/cached_poll_body.rs");'),
         (proof, 'include!("../../fe2o3-runtime/src/context/cached_poll_body.rs");'),
     ):
-        need(text.count(include) == 1, 'exact shared include')
-        marker = '__cached_poll_include__'
-        need(marker not in text, 'reserved include marker')
-        active = compact(text.replace(include, marker))
-        need(active.count(marker) == 1, 'active shared include')
-        prefix = active[:active.index(marker)]
-        need(prefix.count('{') == prefix.count('}') and not prefix.endswith(']'), 'root unqualified include')
+        root_include(text, include)
     need('macro_rules!cached_' not in compact(context + unpublished), 'no runtime body shadow')
     code = compact(body)
     declarations = []

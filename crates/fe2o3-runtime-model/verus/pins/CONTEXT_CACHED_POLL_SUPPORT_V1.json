@@ -5,9 +5,9 @@
     "sha256": "a4b79832d9d9fce23de938ca63292dd4f8fdd2426cb43598e13b85d218e4b362"
   },
   "crates/fe2o3-runtime-model/verus/check-context-cached-poll-v1.py": {
-    "bytes": 18017,
+    "bytes": 18479,
     "mode": 420,
-    "sha256": "79d06678bf8a763279dc158fbc22b1b68896ce29b11848360b88be6ab1c0c1de"
+    "sha256": "934001946675fbae90bf0bace3346ace2d65465106ad2207ab992ed92031bfa5"
   },
   "crates/fe2o3-runtime-model/verus/context-cached-poll-diagnostics-v1.py": {
     "bytes": 18979,
@@ -55,9 +55,9 @@
     "sha256": "975d29e8d25babcd8d88ec3fae8cfaae09b1b73632fde58b8d62d0e16598e5e5"
   },
   "crates/fe2o3-runtime-model/verus/test-context-cached-poll-v1.py": {
-    "bytes": 8148,
+    "bytes": 14230,
     "mode": 420,
-    "sha256": "d62d528f8e7af2da6889c2701789f2d2ae05fe82ab75dd62ec47f9681148d2f9"
+    "sha256": "081c0c9b984d37ea6e00ef422f3e828db2e5b79f6f612a7aa7f3bfad20990a94"
   },
   "scripts/qualify-runtime-production-proofs.sh": {
     "bytes": 1858,

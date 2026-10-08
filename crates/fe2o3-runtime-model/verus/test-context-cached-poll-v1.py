@@ -174,5 +174,118 @@ class PortableSourceControls(unittest.TestCase):
                     gate.audit(candidate)
 
 
+class ReachabilityControls(unittest.TestCase):
+    EDGES = (('LIB', 'context'), ('CONTEXT', 'unpublished'),
+             ('CONTEXT', 'submission_identity_tests'), ('IDENTITY_TESTS', 'cached_poll'))
+
+    def reject_edge(self, owner, name, replacement):
+        data = gate.inputs()
+        path = getattr(gate, owner)
+        old = 'mod ' + name + ';'
+        self.assertEqual(data[path].count(old), 1)
+        data[path] = data[path].replace(old, replacement)
+        with self.assertRaises(ValueError):
+            gate.audit(data)
+
+    def test_root_module_preserves_lexical_tokens_and_visibility(self):
+        for visibility in ('', 'pub ', 'pub(crate) ', 'pub(super) ', 'pub(in crate::scope) '):
+            with self.subTest(visibility=visibility):
+                gate.root_module('use other::item;\n' + visibility + 'mod /* gap */ context;', 'context')
+
+    def test_root_module_requires_actual_token_and_unique_declaration(self):
+        for text in ('modcontext;', 'notmod context;', 'mod context_suffix;',
+                     '// mod context;', '"mod context;"', 'mod context; mod context;'):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                gate.root_module(text, 'context')
+
+    def test_all_actual_module_edges_reject_macro_delimiter_decoys(self):
+        for owner, name in self.EDGES:
+            old = 'mod ' + name + ';'
+            for wrapper in ('stringify!({})', 'stringify![{}]', 'stringify!{{{}}}'):
+                with self.subTest(owner=owner, name=name, wrapper=wrapper):
+                    self.reject_edge(owner, name, wrapper.format(old) + ';')
+
+    def test_all_actual_module_edges_reject_attributes_hidden_by_visibility(self):
+        for owner, name in self.EDGES:
+            for attribute, visibility in (('#[cfg(any())]', 'pub(crate) '),
+                                          ('#[path = "other.rs"]', 'pub ')):
+                with self.subTest(owner=owner, name=name, attribute=attribute):
+                    self.reject_edge(owner, name, attribute + '\n' + visibility + 'mod ' + name + ';')
+
+    def test_inline_owner_keeps_original_code_token_boundaries(self):
+        gate.module_edges(gate.inputs())
+        values = {gate.LIB: 'mod context;', gate.IDENTITY_TESTS: 'mod cached_poll;'}
+        for owner in ('#[cfg(test)]\nmod tests { mod submission_identity_tests; }',
+                      '# [ cfg ( test ) ] mod /* gap */ tests { pub(super) mod submission_identity_tests; }'):
+            with self.subTest(owner=owner):
+                gate.module_edges(values | {gate.CONTEXT: 'mod unpublished;\n' + owner})
+
+    def test_inline_owner_rejects_macro_nesting_and_extra_attributes(self):
+        owner = '#[cfg(test)] mod tests { mod submission_identity_tests; }'
+        values = {gate.LIB: 'mod context;', gate.IDENTITY_TESTS: 'mod cached_poll;'}
+        candidates = [wrapper.format(owner) + ';' for wrapper in
+                      ('stringify!({})', 'stringify![{}]', 'stringify!{{{}}}')]
+        candidates += ['#[cfg(any())]\n' + owner, '#[path = "other.rs"]\n' + owner,
+                       owner.replace('mod tests', 'pub(crate) mod tests'), owner + owner]
+        for candidate in candidates:
+            with self.subTest(candidate=candidate), self.assertRaises(ValueError):
+                gate.module_edges(values | {gate.CONTEXT: 'mod unpublished;\n' + candidate})
+
+    def test_actual_runtime_and_proof_includes_remain_root_items(self):
+        data = gate.inputs()
+        for path, include in ((gate.CONTEXT, 'include!("context/cached_poll_body.rs");'),
+                              (gate.PROOF, 'include!("../../fe2o3-runtime/src/context/cached_poll_body.rs");')):
+            with self.subTest(path=path):
+                gate.root_include(data[path], include)
+
+    def test_shared_include_rejects_nested_expression_attributes_and_decoys(self):
+        include = 'include!("context/cached_poll_body.rs");'
+        for wrapper in ('stringify!({})', 'stringify![{}]', 'stringify!{{{}}}',
+                        'const _: () = ({})', '#[cfg(any())] {}', '#[path = "other.rs"] {}'):
+            with self.subTest(wrapper=wrapper):
+                data = gate.inputs()
+                self.assertEqual(data[gate.CONTEXT].count(include), 1)
+                data[gate.CONTEXT] = data[gate.CONTEXT].replace(include, wrapper.format(include) + ';')
+                with self.assertRaises(ValueError):
+                    gate.audit(data)
+        for text in ('// ' + include, 'not__cached_poll_include__;' + include, include + include):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                gate.root_include(text, include)
+
+
+class ReaderControls(unittest.TestCase):
+    def test_stale_regular_precheck_cannot_block_on_fifo_substitution(self):
+        import os
+        import stat
+        import tempfile
+        from unittest import mock
+        original_is_file = Path.is_file
+        original_open = os.open
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'input.rs'
+            path.write_bytes(b'original regular input')
+            opens = []
+
+            def stale_precheck(selected):
+                if selected == path:
+                    self.assertTrue(original_is_file(selected))
+                    selected.unlink()
+                    os.mkfifo(selected)
+                    return True
+                return original_is_file(selected)
+
+            def checked_open(selected, flags, *args, **kwargs):
+                self.assertTrue(flags & os.O_NONBLOCK)
+                opens.append(str(selected))
+                return original_open(selected, flags, *args, **kwargs)
+
+            with mock.patch.object(Path, 'is_file', side_effect=stale_precheck, autospec=True), \
+                    mock.patch.object(os, 'open', side_effect=checked_open):
+                with self.assertRaisesRegex(ValueError, 'bounded regular input'):
+                    gate.ordinary(path)
+            self.assertEqual(opens, [str(path)])
+            self.assertTrue(stat.S_ISFIFO(path.lstat().st_mode))
+
+
 if __name__ == '__main__':
     unittest.main()
