@@ -161,6 +161,7 @@ jobs:
             ${{ env.A2_CAMPAIGN_ROOT }}/graph-version-ledger
             ${{ env.A2_CAMPAIGN_ROOT }}/graph-reservation-retirement
             ${{ env.A2_CAMPAIGN_ROOT }}/context-cached-poll
+            ${{ env.A2_CAMPAIGN_ROOT }}/context-writer-lookup
           if-no-files-found: warn
           retention-days: 7
 

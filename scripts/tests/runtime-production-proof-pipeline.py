@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -21,8 +22,9 @@ COMMANDS = (
     ("qualify-graph-version-ledger-v1.py", "graph-version-ledger", ()),
     ("qualify-graph-reservation-retirement-v1.py", "graph-reservation-retirement", ()),
 )
-CACHED_COMMANDS = (
+CONTEXT_COMMANDS = (
     ("qualify-context-cached-poll-v1.py", "context-cached-poll", ()),
+    ("qualify-context-writer-lookup-v1.py", "context-writer-lookup", ()),
 )
 RECORDER = r'''#!/bin/bash
 set -Eeuo pipefail
@@ -34,6 +36,17 @@ count=$(wc -l < "$LOG")
 
 
 class ProductionProofPipelineTests(unittest.TestCase):
+    def test_writer_qualifier_orchestration_controls(self):
+        result = subprocess.run(
+            [sys.executable, "-I", "-B", str(ROOT /
+             "crates/fe2o3-runtime-model/verus/test-qualify-context-writer-lookup-v1.py")],
+            cwd=ROOT, capture_output=True, text=True, check=False, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertRegex(result.stderr, r"\nRan 28 tests in [0-9.]+s\n\nOK\n\Z")
+        self.assertEqual(result.stderr.count(" ... ok\n"), 28)
+
     def test_reviewed_host_routes_only_the_commit_without_relaxing_event_gates(self):
         workflow = (ROOT / ".github/workflows/runtime-model-verus.yml").read_text()
         job_marker = "  producer-live-composition:\n"
@@ -76,13 +89,13 @@ class ProductionProofPipelineTests(unittest.TestCase):
             (ROOT / "scripts/ci-local.sh").read_text(),
         )
 
-    def test_workflow_retains_cached_prefix_diagnostics_in_existing_upload(self):
+    def test_workflow_retains_context_diagnostics_in_existing_upload(self):
         workflow = (ROOT / ".github/workflows/runtime-model-verus.yml").read_text()
         marker = "      - name: Retain complete campaign diagnostics\n"
         self.assertEqual(workflow.count(marker), 1)
         upload = workflow.partition(marker)[2].partition(
             "      - name: Remove private campaign directory\n")[0]
-        for _, output, _ in CACHED_COMMANDS:
+        for _, output, _ in CONTEXT_COMMANDS:
             path = f"            ${{{{ env.A2_CAMPAIGN_ROOT }}}}/{output}\n"
             self.assertEqual(workflow.count(path), 1)
             self.assertEqual(upload.count(path), 1)
@@ -139,7 +152,7 @@ class ProductionProofPipelineTests(unittest.TestCase):
             expected = [
                 (str(ROOT), "-I", "-B", f"crates/fe2o3-runtime-model/verus/{script}",
                  *options, "--verus", str(verifier), "--output", str(campaign / output))
-                for script, output, options in (*COMMANDS, *CACHED_COMMANDS)
+                for script, output, options in (*COMMANDS, *CONTEXT_COMMANDS)
             ]
             return result, rows, expected
 
@@ -149,7 +162,7 @@ class ProductionProofPipelineTests(unittest.TestCase):
         self.assertEqual(rows, expected)
 
     def test_each_campaign_failure_stops_before_the_next_campaign(self):
-        for position in range(1, len(COMMANDS) + len(CACHED_COMMANDS) + 1):
+        for position in range(1, len(COMMANDS) + len(CONTEXT_COMMANDS) + 1):
             with self.subTest(position=position):
                 result, rows, expected = self.invoke(fail_at=position)
                 self.assertEqual(result.returncode, 37, result.stderr.decode())

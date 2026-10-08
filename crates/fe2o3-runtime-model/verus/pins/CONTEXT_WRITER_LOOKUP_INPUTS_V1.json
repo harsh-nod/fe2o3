@@ -1,0 +1,72 @@
+{
+  "crates/fe2o3-runtime-model/src/context_queued_writers/declarations.rs": {
+    "bytes": 3300,
+    "mode": 420,
+    "sha256": "be86f5cbd3c408c6edfdffc271e62bcf82c5de10bf9e0496090005025fb87ffc"
+  },
+  "crates/fe2o3-runtime-model/src/context_version_journal/declarations.rs": {
+    "bytes": 5078,
+    "mode": 420,
+    "sha256": "de362edd368eda151aa2a0a112cf113af91d42a2fb03259707db77c0581e5c16"
+  },
+  "crates/fe2o3-runtime-model/verus/context_writer_lookup_v1.rs": {
+    "bytes": 8585,
+    "mode": 420,
+    "sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+  },
+  "crates/fe2o3-runtime/src/context.rs": {
+    "bytes": 206400,
+    "mode": 420,
+    "sha256": "d1534e852a29479617bab268b0c6d8208b755979eeab08a03e6fb3eb8be3e366"
+  },
+  "crates/fe2o3-runtime/src/context/versions.rs": {
+    "bytes": 18260,
+    "mode": 420,
+    "sha256": "cf9540406ce47355154d47ef573a4733b5ff4d264e1d02b794e97fb0b9815faf"
+  },
+  "crates/fe2o3-runtime/src/context/versions/producer_input_preflight_tests.rs": {
+    "bytes": 16331,
+    "mode": 420,
+    "sha256": "799b35e0a04757acb5eb38cc884e68c09590d7a0b4c546ca78c250e3e6b4c6a4"
+  },
+  "crates/fe2o3-runtime/src/context/versions/producer_readers.rs": {
+    "bytes": 45461,
+    "mode": 420,
+    "sha256": "29ee06cc894618f560cde6f1e33785c8edb4276c69526d2b544d3796633167ec"
+  },
+  "crates/fe2o3-runtime/src/context/versions/readers.rs": {
+    "bytes": 17043,
+    "mode": 420,
+    "sha256": "21320e6bac1b0ab438e253d8180a746fa47589d537ae76ab1973b8e002af8afa"
+  },
+  "crates/fe2o3-runtime/src/context/versions/settlement_bodies.rs": {
+    "bytes": 2699,
+    "mode": 420,
+    "sha256": "4f59463a07f13ef61983221fa96ef5543573ee46c7ea8bf4f2ea9c1a06647064"
+  },
+  "crates/fe2o3-runtime/src/context/versions/submissions.rs": {
+    "bytes": 50075,
+    "mode": 420,
+    "sha256": "f88c2f0d79714e99ad9c95328ee5d46df52546a268dde05e0f80124fc8d02804"
+  },
+  "crates/fe2o3-runtime/src/context/versions/submissions/writer_lookup.rs": {
+    "bytes": 658,
+    "mode": 420,
+    "sha256": "517a871c43b9497b80655c69113eed1cae9b99a9bfdd44fc0c19b7099288c3be"
+  },
+  "crates/fe2o3-runtime/src/context/versions/submissions/writer_lookup_body.rs": {
+    "bytes": 2031,
+    "mode": 420,
+    "sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77"
+  },
+  "crates/fe2o3-runtime/src/context/versions/submissions/writer_lookup_tests.rs": {
+    "bytes": 11121,
+    "mode": 420,
+    "sha256": "8be3d1a7bc10a94f05a5feab698a65bfb75b2c5f97935d054a6ab0e0d31da804"
+  },
+  "crates/fe2o3-runtime/src/lib.rs": {
+    "bytes": 39560,
+    "mode": 420,
+    "sha256": "54aada5ceb23c3470d1e6c6a2f8ef030f3f0af1641e9466f341a4f2797b61edc"
+  }
+}
