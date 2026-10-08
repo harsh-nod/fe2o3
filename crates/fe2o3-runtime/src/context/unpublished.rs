@@ -116,21 +116,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         stream: RuntimeStreamIdV1,
     ) -> Result<(), RuntimeValidationErrorV1> {
-        self.unheld_stream_v1(stream).map(|_| ())
+        self.unheld_stream_v1(stream).map(|_held_stream| ())
     }
 
     pub(super) fn unheld_stream_v1(
         &self,
         stream: RuntimeStreamIdV1,
     ) -> Result<&StreamRecordV1, RuntimeValidationErrorV1> {
-        let record = self
-            .streams
-            .get(&stream)
-            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
-        if record.unpublished.is_some() {
-            return Err(RuntimeValidationErrorV1::ContextReserved);
-        }
-        Ok(record)
+        cached_unheld_stream_body_v1!(cached_poll_rust_expr, self, stream)
     }
 
     pub(super) fn has_unpublished_holds_v1(&self) -> bool {

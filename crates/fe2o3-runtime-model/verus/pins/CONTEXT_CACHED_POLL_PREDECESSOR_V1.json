@@ -1,0 +1,98 @@
+{
+  "constants": {
+    "RUNTIME_CANCELLED_CODE_V1": "-2",
+    "RUNTIME_QUIESCENT_WITHOUT_RESULT_CODE_V1": "-3"
+  },
+  "enums": {
+    "RuntimeCompletionFailureV1": "BackendCode(i64),Cancelled",
+    "RuntimeCompletionStatusV1": "Pending,Succeeded,Failed(RuntimeCompletionFailureV1),QuiescentWithoutResult",
+    "RuntimePollV1": "Pending,Succeeded,Failed{code:i64}"
+  },
+  "fields": {
+    "RuntimeContextV1": {
+      "allocation_admission": "ContextAllocationAdmissionV1",
+      "allocations": "HashMap<RuntimeAllocationIdV1,AllocationRecordV1>",
+      "backend": "B",
+      "backend_allocations": "HashSet<u64>",
+      "backend_events": "HashSet<u64>",
+      "backend_modules": "HashSet<u64>",
+      "backend_streams": "HashSet<u64>",
+      "backend_submissions": "HashSet<u64>",
+      "completion_callback_count": "usize",
+      "completion_callback_panic_count": "u64",
+      "completion_callbacks": "HashMap<RuntimeSubmissionIdV1,Vec<RuntimeCompletionCallbackV1>>",
+      "context_generation": "u64",
+      "devices": "Vec<RuntimeDeviceV1>",
+      "events": "HashMap<RuntimeEventIdV1,EventRecordV1>",
+      "generated_issues": "HashMap<RuntimeStreamIdV1,generated_issue::GeneratedIssueV1>",
+      "graph_issue_closed": "bool",
+      "graph_reservation": "Option<ContextGraphReservationV1>",
+      "kernels": "HashMap<u64,KernelRecordV1>",
+      "modules": "HashMap<RuntimeModuleIdV1,ModuleRecordV1>",
+      "native_pair_reservation": "Option<u64>",
+      "next_identity": "u64",
+      "producer_launches": "HashMap<RuntimeSubmissionIdV1,ProducerLaunchRootV1>",
+      "replicas": "Option<RuntimeReplicaStorageV1>",
+      "same_device_copies": "HashMap<RuntimeSubmissionIdV1,SameDeviceCopyRootV1>",
+      "scalar_peer_copies": "HashMap<RuntimeSubmissionIdV1,ScalarPeerCopyRootV1>",
+      "scope_epoch": "scope_epoch::Anchor",
+      "segmented_peer_copies": "HashMap<RuntimeSubmissionIdV1,SegmentedPeerCopyRootV1>",
+      "streams": "HashMap<RuntimeStreamIdV1,StreamRecordV1>",
+      "submissions": "HashMap<RuntimeSubmissionIdV1,SubmissionRecordV1>",
+      "terminal": "bool",
+      "versions": "Option<ContextVersionsV1>"
+    },
+    "RuntimeSubmissionV1": {
+      "backend_submission": "u64",
+      "completion": "Option<RuntimePollV1>",
+      "device": "RuntimeDeviceIdV1",
+      "id": "RuntimeSubmissionIdV1",
+      "marker": "PhantomData<fn(A)->A>",
+      "peer_transfer": "Option<PeerTransferMechanismV1>",
+      "stream": "RuntimeStreamIdV1"
+    },
+    "StreamRecordV1": {
+      "backend_stream": "u64",
+      "device": "RuntimeDeviceIdV1",
+      "generated": "Option<u64>",
+      "unpublished": "Option<u64>"
+    },
+    "SubmissionRecordV1": {
+      "backend_submission": "u64",
+      "dependency_retains": "usize",
+      "device": "RuntimeDeviceIdV1",
+      "directed_peer_copy": "bool",
+      "journal_producer_read": "Option<versions::SubmissionProducerReaderMarkerV1>",
+      "journal_read": "Option<SubmissionReaderMarkerV1>",
+      "journal_writer": "Option<fe2o3_runtime_model::ContextWriterReferenceV1>",
+      "producer_launch": "bool",
+      "quiescent": "bool",
+      "same_device_copy": "bool",
+      "scalar_peer_copy": "bool",
+      "segmented_destination": "Option<RuntimeAllocationIdV1>",
+      "segmented_peer_copy": "bool",
+      "status": "RuntimeCompletionStatusV1",
+      "stream": "RuntimeStreamIdV1"
+    }
+  },
+  "methods": {
+    "crates/fe2o3-runtime/src/context.rs": {
+      "is_terminal": "!matches!(self,Self::Pending)",
+      "legacy_poll": "matchself{Self::Pending=>RuntimePollV1::Pending,Self::Succeeded=>RuntimePollV1::Succeeded,Self::Failed(RuntimeCompletionFailureV1::BackendCode(code))=>{RuntimePollV1::Failed{code}}Self::Failed(RuntimeCompletionFailureV1::Cancelled)=>RuntimePollV1::Failed{code:RUNTIME_CANCELLED_CODE_V1},Self::QuiescentWithoutResult=>RuntimePollV1::Failed{code:RUNTIME_QUIESCENT_WITHOUT_RESULT_CODE_V1}}",
+      "live_submission_record": "letrecord=self.submission_record(submission)?;letstream=self.streams.get(&record.stream).ok_or(RuntimeValidationErrorV1::UnknownStream)?;ifstream.device!=record.device{returnErr(RuntimeValidationErrorV1::WrongDevice);}Ok(record)",
+      "observe_status": "letobservation=status.legacy_poll();ifstatus.is_terminal(){self.completion=Some(observation);}observation",
+      "poll_with_graph_access_v1": "self.require_graph_access(access)?;letrecord=self.live_submission_record(submission)?;self.require_stream_unheld_v1(record.stream)?;ifrecord.status.is_terminal(){returnOk(submission.observe_status(record.status));}letstatus=self.observe_completion_step_v1(submission.id,|backend,id|backend.poll_v1(id))?;Ok(submission.observe_status(status))",
+      "submission_record": "ifsubmission.id.context_generation!=self.context_generation{returnErr(RuntimeValidationErrorV1::UnknownSubmission);}letrecord=*self.submissions.get(&submission.id).ok_or(RuntimeValidationErrorV1::UnknownSubmission)?;ifrecord.backend_submission!=submission.backend_submission||record.stream!=submission.stream||record.device!=submission.device{returnErr(RuntimeValidationErrorV1::UnknownSubmission);}Ok(record)"
+    },
+    "crates/fe2o3-runtime/src/context/unpublished.rs": {
+      "require_stream_unheld_v1": "self.unheld_stream_v1(stream).map(|_|())",
+      "unheld_stream_v1": "letrecord=self.streams.get(&stream).ok_or(RuntimeValidationErrorV1::UnknownStream)?;ifrecord.unpublished.is_some(){returnErr(RuntimeValidationErrorV1::ContextReserved);}Ok(record)"
+    }
+  },
+  "original_sha256": {
+    "crates/fe2o3-runtime/src/context.rs": "dcc242b6e0b780eaec86b924d2d3ee7599e24585f80d7de7529857f6ec4c75e1",
+    "crates/fe2o3-runtime/src/context/unpublished.rs": "7f205fc8f12d555559d3dc3e36e537247ea738cd7f058269301a8d7984b2dd75"
+  },
+  "predecessor": "7b452cf60e18c78dc9ddda0895caaa262a2b2d27",
+  "schema": "fe2o3.cached-poll.predecessor-source-projection.v1"
+}

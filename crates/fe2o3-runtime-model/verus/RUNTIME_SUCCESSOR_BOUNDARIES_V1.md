@@ -184,7 +184,7 @@ Settled and pristine-cancelled registrations can release their local conflict
 claim, while pending and unknown registrations continue to conflict.
 
 These checked custody, journal, decoder and scope joins are included in the
-630-file runtime capture, not added to any executable proof premise. The
+635-file runtime capture, not added to any executable proof premise. The
 unchanged shared-body theorems do not prove the adapter, a generated
 input-consuming successor, multi-device execution, native overlap, replay
 safety or performance. Source controls and prior signed campaigns do not

@@ -21,6 +21,9 @@ COMMANDS = (
     ("qualify-graph-version-ledger-v1.py", "graph-version-ledger", ()),
     ("qualify-graph-reservation-retirement-v1.py", "graph-reservation-retirement", ()),
 )
+CACHED_COMMANDS = (
+    ("qualify-context-cached-poll-v1.py", "context-cached-poll", ()),
+)
 RECORDER = r'''#!/bin/bash
 set -Eeuo pipefail
 printf '%s\0' "$PWD" "$@" >> "$LOG"
@@ -72,6 +75,17 @@ class ProductionProofPipelineTests(unittest.TestCase):
             "    python3 -I -B scripts/tests/runtime-production-proof-pipeline.py\n",
             (ROOT / "scripts/ci-local.sh").read_text(),
         )
+
+    def test_workflow_retains_cached_prefix_diagnostics_in_existing_upload(self):
+        workflow = (ROOT / ".github/workflows/runtime-model-verus.yml").read_text()
+        marker = "      - name: Retain complete campaign diagnostics\n"
+        self.assertEqual(workflow.count(marker), 1)
+        upload = workflow.partition(marker)[2].partition(
+            "      - name: Remove private campaign directory\n")[0]
+        for _, output, _ in CACHED_COMMANDS:
+            path = f"            ${{{{ env.A2_CAMPAIGN_ROOT }}}}/{output}\n"
+            self.assertEqual(workflow.count(path), 1)
+            self.assertEqual(upload.count(path), 1)
 
     def invoke(self, fail_at: int = 0, invalid: str = ""):
         with tempfile.TemporaryDirectory(prefix="fe2o3-production-proof-wiring-") as name:
@@ -125,7 +139,7 @@ class ProductionProofPipelineTests(unittest.TestCase):
             expected = [
                 (str(ROOT), "-I", "-B", f"crates/fe2o3-runtime-model/verus/{script}",
                  *options, "--verus", str(verifier), "--output", str(campaign / output))
-                for script, output, options in COMMANDS
+                for script, output, options in (*COMMANDS, *CACHED_COMMANDS)
             ]
             return result, rows, expected
 
@@ -135,7 +149,7 @@ class ProductionProofPipelineTests(unittest.TestCase):
         self.assertEqual(rows, expected)
 
     def test_each_campaign_failure_stops_before_the_next_campaign(self):
-        for position in range(1, len(COMMANDS) + 1):
+        for position in range(1, len(COMMANDS) + len(CACHED_COMMANDS) + 1):
             with self.subTest(position=position):
                 result, rows, expected = self.invoke(fail_at=position)
                 self.assertEqual(result.returncode, 37, result.stderr.decode())

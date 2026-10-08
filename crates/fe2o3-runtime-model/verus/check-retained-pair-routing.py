@@ -23,8 +23,8 @@ PROOF = V / "retained_pair_routing_v1.rs"
 FILES = [PROOF, DECLARATIONS, BODY]
 BASE = V / "check-compute-pipeline-publication.py"
 BASE_SHA = "1d4264a646983906fff5e54a2279865f5eba55413c1313698bee57064dfdfd8e"
-SOURCE_FILES = 630
-SOURCE_TREE_SHA = '03dd7717895960deddb32b9508d4953a985852c509b55edccd35707759a8fa86'
+SOURCE_FILES = 635
+SOURCE_TREE_SHA = 'c25e709ce0f60e713b2b030f8ee15611de37995f868d77b3f724ae23f44d0734'
 PROOF_SHA = "c5138489a6b5e2773fb510a9a502aeeb9cd21ef88ff7d9863dacd94d7e797341"
 # All four files are byte-identical to the reproduced predecessor 2761f359.
 # Native callback implementations outside this owner remain explicit boundaries.

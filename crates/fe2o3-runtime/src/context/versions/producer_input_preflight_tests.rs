@@ -219,6 +219,102 @@ fn fixture(queued: &[bool], launch: bool, record_present: bool) -> Owner {
     }
 }
 
+fn settlement_writer_selection(
+    owner: &Owner,
+) -> Result<Option<ContextWriterReferenceV1>, ContextVersionJournalErrorV1> {
+    submissions::preflight_settlement_writer_for_test_v1(
+        &owner.submissions,
+        owner.versions.as_ref(),
+        id(),
+        SubmissionWriterDomainV1::Ordinary,
+    )
+}
+
+#[test]
+fn writer_lookup_producer_map_conflict_precedes_missing_writer() {
+    let mut owner = fixture(&[false], true, true);
+    owner
+        .submissions
+        .get_mut(&id())
+        .unwrap()
+        .journal_producer_read = None;
+    owner
+        .versions
+        .as_mut()
+        .unwrap()
+        .submission_writers
+        .remove(&id());
+    let before = owner.snapshot();
+    assert_eq!(
+        settlement_writer_selection(&owner),
+        Err(ContextVersionJournalErrorV1::InvalidState)
+    );
+    assert_eq!(owner.snapshot(), before);
+    assert!(
+        owner
+            .versions
+            .as_ref()
+            .unwrap()
+            .producer_readers
+            .contains_key(&id())
+    );
+    assert!(owner.submissions[&id()].journal_producer_read.is_none());
+}
+
+#[test]
+fn writer_lookup_producer_marker_conflict_precedes_missing_writer() {
+    let mut owner = fixture(&[false], true, true);
+    owner
+        .versions
+        .as_mut()
+        .unwrap()
+        .submission_writers
+        .remove(&id());
+    let before = owner.snapshot();
+    let retained = owner
+        .versions
+        .as_mut()
+        .unwrap()
+        .producer_readers
+        .remove(&id())
+        .unwrap();
+    let original_marker = retained.marker;
+    assert!(original_marker.is_some());
+    assert_eq!(
+        owner.submissions[&id()].journal_producer_read,
+        original_marker
+    );
+    assert!(owner.versions.as_ref().unwrap().producer_readers.is_empty());
+    assert_eq!(
+        settlement_writer_selection(&owner),
+        Err(ContextVersionJournalErrorV1::InvalidState)
+    );
+    assert_eq!(
+        owner.submissions[&id()].journal_producer_read,
+        original_marker
+    );
+    assert!(
+        owner
+            .versions
+            .as_ref()
+            .unwrap()
+            .submission_writers
+            .is_empty()
+    );
+    assert!(owner.versions.as_ref().unwrap().producer_readers.is_empty());
+    // Reinsert the exact metadata owner only to compare the existing full fixture view.
+    assert!(
+        owner
+            .versions
+            .as_mut()
+            .unwrap()
+            .producer_readers
+            .insert(id(), retained)
+            .is_none()
+    );
+    assert_eq!(owner.snapshot(), before);
+}
+
 fn rejected(owner: &Owner) {
     let before = owner.snapshot();
     assert!(matches!(

@@ -16,6 +16,7 @@ macro_rules! completion_settlement_rust_expr {
     };
 }
 include!("context/completion_settlement_body.rs");
+include!("context/cached_poll_body.rs");
 
 mod graph;
 pub(crate) use graph::*;
@@ -2211,35 +2212,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         submission: &RuntimeSubmissionV1<A>,
     ) -> Result<SubmissionRecordV1, RuntimeValidationErrorV1> {
-        if submission.id.context_generation != self.context_generation {
-            return Err(RuntimeValidationErrorV1::UnknownSubmission);
-        }
-        let record = *self
-            .submissions
-            .get(&submission.id)
-            .ok_or(RuntimeValidationErrorV1::UnknownSubmission)?;
-        if record.backend_submission != submission.backend_submission
-            || record.stream != submission.stream
-            || record.device != submission.device
-        {
-            return Err(RuntimeValidationErrorV1::UnknownSubmission);
-        }
-        Ok(record)
+        cached_submission_record_body_v1!(cached_poll_rust_expr, self, submission)
     }
 
     fn live_submission_record<A>(
         &self,
         submission: &RuntimeSubmissionV1<A>,
     ) -> Result<SubmissionRecordV1, RuntimeValidationErrorV1> {
-        let record = self.submission_record(submission)?;
-        let stream = self
-            .streams
-            .get(&record.stream)
-            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
-        if stream.device != record.device {
-            return Err(RuntimeValidationErrorV1::WrongDevice);
-        }
-        Ok(record)
+        cached_live_submission_body_v1!(cached_poll_rust_expr, self, submission)
     }
 
     fn require_ordinary_submission_v1(
@@ -3263,14 +3243,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         access: Option<ContextGraphReservationV1>,
     ) -> Result<RuntimePollV1, RuntimeErrorV1<B::Error>> {
         self.require_graph_access(access)?;
-        let record = self.live_submission_record(submission)?;
-        self.require_stream_unheld_v1(record.stream)?;
-        if record.status.is_terminal() {
-            return Ok(submission.observe_status(record.status));
+        if let Some(status) = self.poll_cached_status_v1(submission)? {
+            return Ok(status);
         }
         let status =
             self.observe_completion_step_v1(submission.id, |backend, id| backend.poll_v1(id))?;
         Ok(submission.observe_status(status))
+    }
+
+    fn poll_cached_status_v1<A>(
+        &self,
+        submission: &mut RuntimeSubmissionV1<A>,
+    ) -> Result<Option<RuntimePollV1>, RuntimeValidationErrorV1> {
+        cached_poll_prefix_body_v1!(cached_poll_rust_expr, self, submission)
     }
 
     pub fn wait<A>(
@@ -4216,23 +4201,11 @@ impl RuntimeStreamObservationV1 {
 
 impl RuntimeCompletionStatusV1 {
     pub const fn is_terminal(self) -> bool {
-        !matches!(self, Self::Pending)
+        cached_status_terminal_body_v1!(cached_poll_rust_expr, self)
     }
 
     fn legacy_poll(self) -> RuntimePollV1 {
-        match self {
-            Self::Pending => RuntimePollV1::Pending,
-            Self::Succeeded => RuntimePollV1::Succeeded,
-            Self::Failed(RuntimeCompletionFailureV1::BackendCode(code)) => {
-                RuntimePollV1::Failed { code }
-            }
-            Self::Failed(RuntimeCompletionFailureV1::Cancelled) => RuntimePollV1::Failed {
-                code: RUNTIME_CANCELLED_CODE_V1,
-            },
-            Self::QuiescentWithoutResult => RuntimePollV1::Failed {
-                code: RUNTIME_QUIESCENT_WITHOUT_RESULT_CODE_V1,
-            },
-        }
+        cached_status_legacy_body_v1!(cached_poll_rust_expr, self)
     }
 }
 
@@ -4262,11 +4235,7 @@ impl<A> RuntimeSubmissionV1<A> {
     }
 
     fn observe_status(&mut self, status: RuntimeCompletionStatusV1) -> RuntimePollV1 {
-        let observation = status.legacy_poll();
-        if status.is_terminal() {
-            self.completion = Some(observation);
-        }
-        observation
+        cached_observe_status_body_v1!(cached_poll_rust_expr, self, status)
     }
 }
 
