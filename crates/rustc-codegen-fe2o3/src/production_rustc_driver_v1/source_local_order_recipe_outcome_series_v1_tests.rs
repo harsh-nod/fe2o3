@@ -2,6 +2,10 @@
 use super::*;
 use crate::source_local_order_recipe_v1 as codec;
 
+#[path = "source_local_order_recipe_process_memory_v1_tests.rs"]
+mod process_memory;
+use process_memory::Stage as MemoryStage;
+
 const INPUT_SCHEMA: &str = "fe2o3-recipe-outcome-series-input-v1";
 const OUTCOME_SCHEMA: &str = "fe2o3-recipe-outcome-v1";
 const OUTCOME_ENV: &str = "FE2O3_RECIPE_OUTCOME_CONFIG";
@@ -277,16 +281,26 @@ fn statistics(rows: &[Row], expected: &[u8]) -> Result<Stats, String> {
         max_ns: times[29],
     })
 }
-fn ordinary(input: &Input, origin: &mut RetainedBytes) -> Result<(), String> {
+fn ordinary(
+    input: &Input,
+    origin: &mut RetainedBytes,
+    memory: &mut process_memory::Profile,
+) -> Result<(), String> {
     let (request, mut recipe) = prepare_request(&input.invocation)?;
     let bound = prepared_binding(input, &recipe, &origin.bytes)?;
+    memory.observe(MemoryStage::BeforeTransaction, Some(1))?;
     let attempt = run_source_local_order_recipe_driver_v1(&input.invocation.rustc_args, request);
+    memory.observe(MemoryStage::AfterReturn, Some(1))?;
     let bytes = outcome(
         attempt.result(),
         &bound,
         attempt.callback_count(),
         attempt.compiler_callback_count(),
     )?;
+    if memory.enabled() {
+        drop(attempt);
+        memory.observe(MemoryStage::AfterResultDrop, Some(1))?;
+    }
     recheck(&mut recipe)?;
     origin.recheck()?;
     emit_outcome(&bytes)?;
@@ -300,6 +314,7 @@ fn ordinary(input: &Input, origin: &mut RetainedBytes) -> Result<(), String> {
     )
 }
 struct OutcomeCallbacks<'a> {
+    memory: &'a mut process_memory::Profile,
     input: &'a Input,
     origin: &'a [u8],
     expected: &'a [u8],
@@ -339,7 +354,10 @@ impl OutcomeCallbacks<'_> {
                 return Err("per-call source/recipe/origin binding changed".into());
             }
             // Exactly the original fresh collector and consuming operational route.
-            // No observer, synthetic source graph, alternate Work, or storage walk.
+            // No owner observer, synthetic source graph, alternate Work, or storage walk.
+            // The separate process-memory selector samples outside this interval.
+            self.memory
+                .observe(MemoryStage::BeforeTransaction, Some(index + 1))?;
             let started = Instant::now();
             let result = transaction_in_active_session_v1(
                 tcx,
@@ -350,10 +368,14 @@ impl OutcomeCallbacks<'_> {
                 transaction.compile_source_local_order_recipe_v1(input, &request)
             });
             let elapsed = started.elapsed().as_nanos();
+            self.memory
+                .observe(MemoryStage::AfterReturn, Some(index + 1))?;
             self.current_elapsed = Some(elapsed);
             self.current_phase = result.as_ref().err().map(|error| error.phase());
             let bytes = outcome(result.as_ref(), &self.binding, 1, self.entries)?;
             drop(result);
+            self.memory
+                .observe(MemoryStage::AfterResultDrop, Some(index + 1))?;
             recheck(&mut recipe)?;
             compare(&bytes, Some(self.expected))?;
             drop((request, recipe));
@@ -393,6 +415,7 @@ fn series(
     input: &Input,
     origin: &mut RetainedBytes,
     expected: &mut RetainedBytes,
+    memory: &mut process_memory::Profile,
 ) -> Result<(), String> {
     let mut reservations = Reservations::new(true)?;
     reservations.next()?;
@@ -411,6 +434,7 @@ fn series(
         SUMMARY_LIMIT,
     )?;
     let mut callbacks = OutcomeCallbacks {
+        memory,
         input,
         origin: &origin.bytes,
         expected: &expected.bytes,
@@ -461,13 +485,13 @@ fn series(
             "all35_exact_ordinary_oracle_equal":true,"frontend_reused":true,"admitted_owner_reused":false,
             "scope":"fresh_transaction_creation_through_original_consuming_recipe_return",
             "companion_serialization_hash_equality_in_timer":false,"api_internal_checks_in_timer":true,
-            "retained_logical_bytes":null,"peak_heap_measured":false,"rss_measured":false,
+            "retained_logical_bytes":null,"peak_heap_measured":false,"rss_measured":memory.enabled(),
             "budget_accepted":false,"grants_authority":false
         }),
         SUMMARY_LIMIT,
     )
 }
-fn child() -> Result<(), String> {
+fn child(memory_enabled: bool) -> Result<(), String> {
     let guard = RetainedBytes::open(
         &PinnedFile {
             path: std::env::var(OUTCOME_ENV).map_err(|_| "missing outcome config")?,
@@ -478,9 +502,23 @@ fn child() -> Result<(), String> {
     let input: Input = serde_json::from_slice(&guard.bytes).map_err(|e| e.to_string())?;
     validate_input(&input)?;
     let mut origin = RetainedBytes::open(&input.origin_oracle, NORMAL_LIMIT)?;
+    let memory_config = memory_enabled.then(|| sha(&guard.bytes));
+    let mut memory = process_memory::Profile::new(
+        memory_config.as_deref(),
+        &input.invocation.source_sha256,
+        match input.workload {
+            Workload::CheckedRebind => "checked_rebind",
+            Workload::ExactRevisionRefusal => "exact_revision_refusal",
+        },
+        match input.mode {
+            RunMode::Ordinary => 1,
+            RunMode::Series => CALLS,
+        },
+    )?;
     drop(guard);
+    memory.observe(MemoryStage::BeforeRun, None)?;
     match input.mode {
-        RunMode::Ordinary => ordinary(&input, &mut origin),
+        RunMode::Ordinary => ordinary(&input, &mut origin, &mut memory),
         RunMode::Series => {
             let mut expected = RetainedBytes::open(
                 input
@@ -489,14 +527,15 @@ fn child() -> Result<(), String> {
                     .ok_or("missing ordinary oracle")?,
                 OUTCOME_LIMIT,
             )?;
-            series(&input, &mut origin, &mut expected)
+            series(&input, &mut origin, &mut expected, &mut memory)
         }
-    }
+    }?;
+    memory.observe(MemoryStage::Terminal, None)
 }
 #[test]
 #[ignore = "root-pinned actual edited source, genuine Create and ordinary outcome oracles, bounded process interval"]
 fn actual_source_local_order_recipe_outcome_series_v1() {
-    if let Err(error) = child() {
+    if let Err(error) = child(false) {
         let _ = emit_row(
             &serde_json::json!({
                 "kind":"child_refused","diagnostic":diagnostic(error),"statistics":null,
@@ -505,6 +544,21 @@ fn actual_source_local_order_recipe_outcome_series_v1() {
             SUMMARY_LIMIT,
         );
         panic!("original outcome series refused; retain the bounded original streams");
+    }
+}
+/// A different ignored selector: sampled whole-process RSS, not latency qualification.
+#[test]
+#[ignore = "root-pinned genuine changed-source outcomes and bounded Linux process-memory profile"]
+fn actual_source_local_order_recipe_outcome_process_memory_v1() {
+    if let Err(error) = child(true) {
+        let _ = emit_row(
+            &serde_json::json!({
+                "kind":"child_refused","diagnostic":diagnostic(error),"statistics":null,
+                "budget_accepted":false,"grants_authority":false
+            }),
+            SUMMARY_LIMIT,
+        );
+        panic!("process-memory outcome profile refused; retain original bounded streams");
     }
 }
 #[path = "source_local_order_recipe_outcome_controls_v1.rs"]

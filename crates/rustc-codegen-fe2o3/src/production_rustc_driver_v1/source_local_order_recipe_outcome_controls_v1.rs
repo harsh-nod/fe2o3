@@ -261,3 +261,31 @@ fn compiler_fatal_refusal_never_counts_as_the_designated_negative() {
     assert!(failure.compiler_fatal());
     assert!(check_refusal(&failure).is_err());
 }
+
+#[test]
+fn process_memory_does_not_expand_the_closed_outcome_input() {
+    assert!(serde_json::from_str::<RunMode>("\"process_memory\"").is_err());
+    let (mut input, _, _) = inert_binding_fixture(Workload::CheckedRebind);
+    input.invocation.rustc_args = vec!["rustc".into(), "-C".into(), "overflow-checks=on".into()];
+    // Selection is a distinct ignored test, not a caller-controlled JSON mode
+    // or a newly accepted failure kind.
+    assert!(serde_json::from_str::<Workload>("\"rss_refusal\"").is_err());
+    assert_eq!(input.mode, RunMode::Ordinary);
+}
+#[test]
+fn process_memory_presence_does_not_substitute_for_the_original_refusal_oracle() {
+    let original = Failure::new(Phase::RecipeBinding, REFUSAL.into());
+    let bound = bound(Workload::ExactRevisionRefusal);
+    let before = outcome(Err(&original), &bound, 1, 1).unwrap();
+    let profile = process_memory::Profile::new(
+        Some(&"11".repeat(32)),
+        &bound.current_source_sha256,
+        "exact_revision_refusal",
+        35,
+    )
+    .unwrap();
+    assert!(profile.enabled());
+    let after = outcome(Err(&original), &bound, 1, 1).unwrap();
+    assert_eq!(before, after);
+    assert!(check_refusal(&Failure::new(Phase::Observation, REFUSAL.into())).is_err());
+}
