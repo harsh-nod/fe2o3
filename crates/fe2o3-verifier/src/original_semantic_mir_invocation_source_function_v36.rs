@@ -736,6 +736,27 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
         })
     }
 
+    fn emit_statement_result(
+        &self,
+        block: usize,
+        statement: usize,
+        cursor: &str,
+        endian: &str,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<()> {
+        let (r, i) = (self.root, self.instance);
+        if self.body.event_at(block, statement, out)? == Event::Scalar {
+            write!(
+                out,
+                "invocation_source_scalar_{r}_{i}_{block}_{statement}_v36({cursor}.source)"
+            )
+            .map_err(|_| out.error())?;
+        } else {
+            write!(out, "match invocation_source_byte_event_{r}_{i}_v36({block}, {statement}) {{ Some(event) => invocation_source_byte_step_v36({cursor}.source, event, {r}, {i}, {endian}), None => invocation_source_byte_refused_v36({cursor}.source) }}").map_err(|_| out.error())?;
+        }
+        Ok(())
+    }
+
     pub(super) fn emit(&mut self, out: &mut Writer<'_, '_>) -> Result<()> {
         let source = self.slots.correspondence(out)?.source(out.budget)?;
         if out.budget.storage() < self.required {
@@ -782,15 +803,7 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             for statement in 0..row.statements {
                 out.budget.charge_work(1)?;
                 write!(out, " if cursor.source.machine.pc == {} && cursor.next_statement == {statement} {{\n let after = ", self.blocks.start + block).map_err(|_| out.error())?;
-                if self.body.event_at(block, statement, out)? == Event::Scalar {
-                    write!(
-                        out,
-                        "invocation_source_scalar_{r}_{i}_{block}_{statement}_v36(cursor.source)"
-                    )
-                    .map_err(|_| out.error())?;
-                } else {
-                    write!(out, "match invocation_source_byte_event_{r}_{i}_v36({block}, {statement}) {{ Some(event) => invocation_source_byte_step_v36(cursor.source, event, {r}, {i}, little_endian), None => invocation_source_byte_refused_v36(cursor.source) }}").map_err(|_| out.error())?;
-                }
+                self.emit_statement_result(block, statement, "cursor", "little_endian", out)?;
                 write!(out, ";\n invocation_source_micro_record_v36(cursor, after, {r}, {i}, {block}, {statement}, invocation_source_byte_event_{r}_{i}_v36({block}, {statement}))\n }} else").map_err(|_| out.error())?;
             }
         }
@@ -906,6 +919,8 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
     hide(invocation_source_byte_event_{r}_{i}_v36);
     hide(invocation_source_byte_step_v36);
     hide(invocation_source_byte_refused_v36);
+    hide(invocation_source_micro_record_v36);
+    hide(invocation_source_micro_refused_v36);
 "#
         )
         .map_err(|_| out.error())?;
@@ -930,14 +945,31 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             out,
             r#"
     reveal(invocation_source_micro_step_{r}_{i}_v36);
-    reveal(invocation_source_micro_record_v36);
-    reveal(invocation_source_micro_refused_v36);
     let n = invocation_source_micro_step_{r}_{i}_v36(c, e);
-    let l = c.observations.len() as int;
-    if n.observations.len() == l + 1 {{
-        assert(n.observations.take(l) =~= c.observations);
-    }} else {{
+    if !invocation_source_active_{r}_{i}_v36(c.source) || c.next_statement < 0 || c.next_statement != c.observations.len() {{
         assert(n == invocation_source_micro_refused_v36(c));
+    }} else {{
+"#
+        )
+        .map_err(|_| out.error())?;
+        // Replay the same dispatch, importing only the generic record summary.
+        for (block, row) in self.control.iter().enumerate() {
+            out.budget.charge_work(1)?;
+            if matches!(row.end, End::Unreachable) {
+                continue;
+            }
+            for statement in 0..row.statements {
+                out.budget.charge_work(1)?;
+                write!(out, "        if c.source.machine.pc == {} && c.next_statement == {statement} {{\n            let after = ", self.blocks.start + block).map_err(|_| out.error())?;
+                self.emit_statement_result(block, statement, "c", "e", out)?;
+                write!(out, ";\n            invocation_source_micro_record_history_v348(c, after, {r}, {i}, {block}, {statement}, invocation_source_byte_event_{r}_{i}_v36({block}, {statement}));\n            assert(n == invocation_source_micro_record_v36(c, after, {r}, {i}, {block}, {statement}, invocation_source_byte_event_{r}_{i}_v36({block}, {statement})));\n        }} else").map_err(|_| out.error())?;
+            }
+        }
+        write!(
+            out,
+            r#" {{
+            assert(n == invocation_source_micro_refused_v36(c));
+        }}
     }}
 }}
 proof fn invocation_source_micro_run_history_{r}_{i}_v293(c: InvocationSourceMicroStateV36, f: nat, e: bool)
@@ -1129,6 +1161,27 @@ spec fn invocation_source_micro_record_v36(cursor: InvocationSourceMicroStateV36
     InvocationSourceMicroStateV36 { source: after, next_statement: cursor.next_statement + 1,
         observations: cursor.observations.push(InvocationSourceStatementObservationV36 {
             root, instance, block, statement, event, before: cursor.source, after }) }
+}
+proof fn invocation_source_micro_record_history_v348(cursor: InvocationSourceMicroStateV36,
+    after: InvocationSourceByteStateV36, root: int, instance: int, block: int, statement: int,
+    event: Option<InvocationSourceByteEventV36>,
+)
+    ensures {
+        let n = invocation_source_micro_record_v36(cursor, after, root, instance, block, statement, event);
+        let l = cursor.observations.len() as int;
+        n.next_statement == cursor.next_statement + 1
+        && n.observations.len() == l + 1
+        && n.observations.take(l) == cursor.observations
+        && n.observations[l].root == root
+        && n.observations[l].instance == instance
+        && n.observations[l].statement == statement
+        && n.observations[l].before == cursor.source
+        && n.observations[l].after == n.source
+    },
+{
+    reveal(invocation_source_micro_record_v36);
+    let n = invocation_source_micro_record_v36(cursor, after, root, instance, block, statement, event);
+    assert(n.observations.take(cursor.observations.len() as int) =~= cursor.observations);
 }
 spec fn invocation_source_block_refused_v36(cursor: InvocationSourceMicroStateV36) -> InvocationSourceBlockResultV36 {
     InvocationSourceBlockResultV36 { source: invocation_source_byte_refused_v36(cursor.source),

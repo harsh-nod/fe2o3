@@ -77,7 +77,6 @@ fn check_history(text: &str, root: usize, instance: usize) {
             "target",
             "well_formed",
             ".block ==",
-            "machine.pc",
         ] {
             assert!(!proof.contains(forbidden), "{forbidden}");
         }
@@ -85,13 +84,13 @@ fn check_history(text: &str, root: usize, instance: usize) {
     assert!(step.contains(&format!(
         "reveal(invocation_source_micro_step_{root}_{instance}_v36);"
     )));
-    assert!(step.contains("reveal(invocation_source_micro_record_v36);"));
-    assert!(step.contains("if n.observations.len() == l + 1 {"));
     let mut hidden = vec![
         format!("invocation_source_active_{root}_{instance}_v36"),
         format!("invocation_source_byte_event_{root}_{instance}_v36"),
         "invocation_source_byte_step_v36".to_owned(),
         "invocation_source_byte_refused_v36".to_owned(),
+        "invocation_source_micro_record_v36".to_owned(),
+        "invocation_source_micro_refused_v36".to_owned(),
     ];
     let dispatcher = text
         .split_once(&format!(
@@ -123,24 +122,75 @@ fn check_history(text: &str, root: usize, instance: usize) {
         assert!(!step_body.contains(&format!("reveal({name}")));
         assert!(!step_body.contains(&format!("reveal_with_fuel({name}")));
     }
-    let prior_body = format!(
+    let mut expected_body = format!(
         r#"    reveal(invocation_source_micro_step_{root}_{instance}_v36);
-    reveal(invocation_source_micro_record_v36);
-    reveal(invocation_source_micro_refused_v36);
     let n = invocation_source_micro_step_{root}_{instance}_v36(c, e);
-    let l = c.observations.len() as int;
-    if n.observations.len() == l + 1 {{
-        assert(n.observations.take(l) =~= c.observations);
-    }} else {{
+    if !invocation_source_active_{root}_{instance}_v36(c.source) || c.next_statement < 0 || c.next_statement != c.observations.len() {{
         assert(n == invocation_source_micro_refused_v36(c));
-    }}
-}}"#
+    }} else {{
+"#
+    );
+    // Each proof case must replay the actual dispatcher, including its value producer.
+    let lines: Vec<_> = dispatcher.lines().collect();
+    let mut cases = 0;
+    for (index, line) in lines.iter().enumerate() {
+        if line.starts_with(" if cursor.source.machine.pc == ") {
+            let adapt = |text: &str| text.replace("cursor.", "c.").replace("little_endian", "e");
+            expected_body.push_str(&format!("        {}\n", adapt(line.trim())));
+            assert!(lines[index + 1].starts_with(" let after = "));
+            expected_body.push_str(&format!("            {}\n", adapt(lines[index + 1].trim())));
+            let record = lines[index + 2].trim();
+            assert!(record.starts_with("invocation_source_micro_record_v36(cursor, after, "));
+            let record = record.replace("(cursor,", "(c,");
+            expected_body.push_str(&format!(
+                "            {};\n            assert(n == {record});\n        }} else",
+                record.replacen("micro_record_v36", "micro_record_history_v348", 1)
+            ));
+            cases += 1;
+        }
+    }
+    expected_body.push_str(
+        " {\n            assert(n == invocation_source_micro_refused_v36(c));\n        }\n    }\n}",
+    );
+    assert_eq!(
+        step.matches("invocation_source_micro_record_history_v348(")
+            .count(),
+        cases
     );
     let without_hides: Vec<_> = step_body
         .lines()
         .filter(|line| !line.trim().is_empty() && !line.trim().starts_with("hide("))
         .collect();
-    assert_eq!(without_hides, prior_body.lines().collect::<Vec<_>>());
+    assert_eq!(without_hides, expected_body.lines().collect::<Vec<_>>());
+    let record_summary = declaration(
+        SOURCE_FUNCTION_V36,
+        "invocation_source_micro_record_history_v348",
+    );
+    assert!(!record_summary.contains("requires"));
+    for fact in [
+        "n.next_statement == cursor.next_statement + 1",
+        "n.observations.len() == l + 1",
+        "n.observations.take(l) == cursor.observations",
+        "n.observations[l].root == root",
+        "n.observations[l].instance == instance",
+        "n.observations[l].statement == statement",
+        "n.observations[l].before == cursor.source",
+        "n.observations[l].after == n.source",
+    ] {
+        assert_eq!(record_summary.matches(fact).count(), 1, "{fact}");
+    }
+    assert!(record_summary.contains("reveal(invocation_source_micro_record_v36);"));
+    for forbidden in [
+        "assume(",
+        "admit(",
+        "external_body",
+        "well_formed",
+        "machine.valid",
+        "byte_step",
+    ] {
+        assert!(!record_summary.contains(forbidden), "{forbidden}");
+    }
+    assert!(!run.contains("machine.pc"));
     let opaque_step = format!("hide(invocation_source_micro_step_{root}_{instance}_v36);");
     assert!(run_body.starts_with(&format!(
         "    {opaque_step}\n    reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, 2);"
