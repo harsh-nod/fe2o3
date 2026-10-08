@@ -902,6 +902,33 @@ impl<'slots, 'view, 'source> SourceByteFunction<'slots, 'view, 'source> {
             && n.observations[l].after == n.source)
     }},
 {{
+    hide(invocation_source_active_{r}_{i}_v36);
+    hide(invocation_source_byte_event_{r}_{i}_v36);
+    hide(invocation_source_byte_step_v36);
+    hide(invocation_source_byte_refused_v36);
+"#
+        )
+        .map_err(|_| out.error())?;
+        // History needs the dispatcher and record shape, not statement semantics.
+        for (block, row) in self.control.iter().enumerate() {
+            out.budget.charge_work(1)?;
+            if matches!(row.end, End::Unreachable) {
+                continue;
+            }
+            for statement in 0..row.statements {
+                out.budget.charge_work(1)?;
+                if self.body.event_at(block, statement, out)? == Event::Scalar {
+                    writeln!(
+                        out,
+                        "    hide(invocation_source_scalar_{r}_{i}_{block}_{statement}_v36);"
+                    )
+                    .map_err(|_| out.error())?;
+                }
+            }
+        }
+        write!(
+            out,
+            r#"
     reveal(invocation_source_micro_step_{r}_{i}_v36);
     reveal(invocation_source_micro_record_v36);
     reveal(invocation_source_micro_refused_v36);

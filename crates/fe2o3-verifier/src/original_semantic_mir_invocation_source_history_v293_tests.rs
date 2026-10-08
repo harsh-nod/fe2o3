@@ -24,7 +24,7 @@ fn check_history(text: &str, root: usize, instance: usize) {
         text,
         &format!("invocation_source_micro_run_history_{root}_{instance}_v293"),
     );
-    let step_header = step.split_once("\n{\n").unwrap().0;
+    let (step_header, step_body) = step.split_once("\n{\n").unwrap();
     let (run_header, run_body) = run.split_once("\n{\n").unwrap();
     assert_eq!(
         step_header,
@@ -87,6 +87,60 @@ fn check_history(text: &str, root: usize, instance: usize) {
     )));
     assert!(step.contains("reveal(invocation_source_micro_record_v36);"));
     assert!(step.contains("if n.observations.len() == l + 1 {"));
+    let mut hidden = vec![
+        format!("invocation_source_active_{root}_{instance}_v36"),
+        format!("invocation_source_byte_event_{root}_{instance}_v36"),
+        "invocation_source_byte_step_v36".to_owned(),
+        "invocation_source_byte_refused_v36".to_owned(),
+    ];
+    let dispatcher = text
+        .split_once(&format!(
+            "spec fn invocation_source_micro_step_{root}_{instance}_v36("
+        ))
+        .unwrap()
+        .1
+        .split_once("\nspec fn ")
+        .unwrap()
+        .0;
+    let scalar_prefix = format!("spec fn invocation_source_scalar_{root}_{instance}_");
+    for line in text.lines().filter(|line| line.starts_with(&scalar_prefix)) {
+        let name = line
+            .strip_prefix("spec fn ")
+            .unwrap()
+            .split_once('(')
+            .unwrap()
+            .0;
+        if dispatcher.contains(&format!("{name}(cursor.source)")) {
+            hidden.push(name.to_owned());
+        }
+    }
+    let actual_hidden: Vec<_> = step_body
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("hide(")?.strip_suffix(");"))
+        .collect();
+    assert_eq!(actual_hidden, hidden);
+    for name in &hidden {
+        assert!(!step_body.contains(&format!("reveal({name}")));
+        assert!(!step_body.contains(&format!("reveal_with_fuel({name}")));
+    }
+    let prior_body = format!(
+        r#"    reveal(invocation_source_micro_step_{root}_{instance}_v36);
+    reveal(invocation_source_micro_record_v36);
+    reveal(invocation_source_micro_refused_v36);
+    let n = invocation_source_micro_step_{root}_{instance}_v36(c, e);
+    let l = c.observations.len() as int;
+    if n.observations.len() == l + 1 {{
+        assert(n.observations.take(l) =~= c.observations);
+    }} else {{
+        assert(n == invocation_source_micro_refused_v36(c));
+    }}
+}}"#
+    );
+    let without_hides: Vec<_> = step_body
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.trim().starts_with("hide("))
+        .collect();
+    assert_eq!(without_hides, prior_body.lines().collect::<Vec<_>>());
     let opaque_step = format!("hide(invocation_source_micro_step_{root}_{instance}_v36);");
     assert!(run_body.starts_with(&format!(
         "    {opaque_step}\n    reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, 2);"
