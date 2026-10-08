@@ -128,6 +128,11 @@ proof fn checked_actual_source_target_step_{root}_{instance}_{block}_{statement}
 {{
  hide(invocation_source_micro_step_{root}_{instance}_v36);
  hide(byte_micro_step_{root}_v30);
+ hide(invocation_source_byte_state_well_formed_v36);
+ hide(invocation_source_active_{root}_{instance}_v36);
+ hide(byte_inputs_{root}_v55);
+ hide(checked_prefix_demands_{root}_{instance}_{block}_{statement}_v296);
+ hide(checked_target_next_{root}_{instance}_{block}_{statement}_v298);
  reveal(checked_actual_segment_inputs_{root}_{instance}_{block}_{statement}_v298);
  checked_add_actual_micro_step_{root}_{instance}_{block}_{statement}_v293(s, left, right, little_endian);
  checked_add_actual_demanded_step_{root}_{instance}_{block}_{statement}_v296(s, left, right, little_endian);
