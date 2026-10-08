@@ -16,9 +16,11 @@ macro_rules! completion_settlement_rust_expr {
     };
 }
 include!("context/completion_settlement_body.rs");
+include!("context/cached_poll_body.rs");
 
 mod graph;
 pub(crate) use graph::*;
+pub use graph::{RuntimeGraphDeviceCoverageV1, RuntimeGraphGroupV1};
 mod allocation_admission;
 mod allocation_witness;
 pub use allocation_witness::*;
@@ -49,18 +51,26 @@ pub use producer_launch::{
     BackendLaunchProducerV1, BackendProducerAwareLaunchV1, RuntimeProducerAwareLaunchBackendV1,
 };
 use producer_launch::{PreparedSubmissionCustodyV1, ProducerLaunchRootV1};
+mod peer_placement;
 mod peer_segments;
+pub use peer_placement::*;
+#[cfg(feature = "hardware-qualification")]
+mod qualification_allocation_version;
 #[cfg(feature = "hardware-qualification")]
 mod qualification_generated_copy;
+#[cfg(feature = "hardware-qualification")]
+pub use qualification_allocation_version::RuntimeAllocationVersionObservationV1;
 #[cfg(feature = "hardware-qualification")]
 mod qualification_xgmi;
 use peer_segments::SegmentedPeerCopyRootV1;
 pub use peer_segments::*;
+mod replicas;
 mod unpublished;
 mod versions;
 use allocation_admission::ContextAllocationAdmissionV1;
 pub use drain_capture::*;
 pub use generated_preparation::*;
+pub use replicas::*;
 pub(crate) use unpublished::ContextUnpublishedHoldV1;
 use versions::{
     ContextReadSourceV1, ContextVersionsV1, SubmissionReaderMarkerV1, SubmissionWriterDomainV1,
@@ -856,6 +866,18 @@ pub trait RuntimeBackendV1 {
         false
     }
 
+    /// Optional read-only placement estimate for these exact original regions.
+    /// `None` refuses selection. An estimate reserves nothing and grants no
+    /// route, currentness, residency or future submission authority.
+    fn observe_peer_copy_placement_v1(
+        &self,
+        _stream: u64,
+        _source: BackendMemoryRegionV1,
+        _destination: BackendMemoryRegionV1,
+    ) -> Option<BackendPeerCopyPlacementV1> {
+        None
+    }
+
     fn peer_copy_v1(
         &mut self,
         stream: u64,
@@ -1190,6 +1212,7 @@ pub struct RuntimeCleanupReportV1<E> {
     graph_reserved: bool,
     native_pair_reserved: bool,
     scope_reserved: bool,
+    replica_pending: usize,
     allocation_credit_records: usize,
     // Journal capacity is bounded by CONTEXT_VERSION_JOURNAL_MAX_ENTRIES_V1.
     allocation_journal_records: u32,
@@ -1220,6 +1243,7 @@ impl<E> RuntimeCleanupReportV1<E> {
             && !self.graph_reserved
             && !self.native_pair_reserved
             && !self.scope_reserved
+            && self.replica_pending == 0
             && self.retained.is_empty()
             && self.allocation_credit_records == 0
             && self.allocation_journal_records == 0
@@ -1243,6 +1267,11 @@ impl<E> RuntimeCleanupReportV1<E> {
     /// A lexical generated scope still retains this Context, even if empty or forgotten.
     pub const fn is_generated_scope_reserved_v1(&self) -> bool {
         self.scope_reserved
+    }
+
+    /// Tracked copies still requiring original retirement; not replica availability.
+    pub const fn pending_replica_copies_v1(&self) -> usize {
+        self.replica_pending
     }
 
     /// Remaining opt-in allocation credit records, including unidentified
@@ -1380,6 +1409,8 @@ fn completion_callback_panicked_v1(
 pub struct RuntimeContextV1<B: RuntimeBackendV1> {
     // Fail stop before backend/resource destruction after a forgotten scope.
     scope_epoch: scope_epoch::Anchor,
+    // A forgotten tracked copy must fail stop before backend destruction.
+    replicas: Option<RuntimeReplicaStorageV1>,
     backend: B,
     context_generation: u64,
     devices: Vec<RuntimeDeviceV1>,
@@ -1586,6 +1617,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         };
         Ok(Self {
             scope_epoch: scope_epoch::Anchor::default(),
+            replicas: None,
             context_generation,
             devices,
             streams: HashMap::new(),
@@ -1712,6 +1744,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             || self.graph_reservation.is_some()
             || self.native_pair_reservation.is_some()
             || self.has_unpublished_holds_v1()
+            || self.pending_replicas_v1() != 0
         {
             return self.cleanup_report(failures);
         }
@@ -1897,6 +1930,10 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
     /// Failure returns the still-owning context so quiescent or rejected
     /// operations may be inspected and retried. Terminal contexts retain their
     /// symbolic handle custody but will never call the lost backend again.
+    #[allow(
+        clippy::result_large_err,
+        reason = "the original cleanup report stays inline in the existing owner-return contract"
+    )]
     pub fn shutdown(mut self) -> Result<B, RuntimeContextShutdownFailureV1<B>> {
         let report = self.cleanup();
         if report.is_complete() {
@@ -1926,6 +1963,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
             graph_reserved: self.graph_reservation.is_some(),
             native_pair_reserved: self.native_pair_reservation.is_some(),
             scope_reserved: self.scope_epoch.active(),
+            replica_pending: self.pending_replicas_v1(),
             allocation_credit_records: self.allocation_admission.retained_records(),
             allocation_journal_records: u32::try_from(
                 self.versions
@@ -2174,35 +2212,14 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         &self,
         submission: &RuntimeSubmissionV1<A>,
     ) -> Result<SubmissionRecordV1, RuntimeValidationErrorV1> {
-        if submission.id.context_generation != self.context_generation {
-            return Err(RuntimeValidationErrorV1::UnknownSubmission);
-        }
-        let record = *self
-            .submissions
-            .get(&submission.id)
-            .ok_or(RuntimeValidationErrorV1::UnknownSubmission)?;
-        if record.backend_submission != submission.backend_submission
-            || record.stream != submission.stream
-            || record.device != submission.device
-        {
-            return Err(RuntimeValidationErrorV1::UnknownSubmission);
-        }
-        Ok(record)
+        cached_submission_record_body_v1!(cached_poll_rust_expr, self, submission)
     }
 
     fn live_submission_record<A>(
         &self,
         submission: &RuntimeSubmissionV1<A>,
     ) -> Result<SubmissionRecordV1, RuntimeValidationErrorV1> {
-        let record = self.submission_record(submission)?;
-        let stream = self
-            .streams
-            .get(&record.stream)
-            .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
-        if stream.device != record.device {
-            return Err(RuntimeValidationErrorV1::WrongDevice);
-        }
-        Ok(record)
+        cached_live_submission_body_v1!(cached_poll_rust_expr, self, submission)
     }
 
     fn require_ordinary_submission_v1(
@@ -2560,7 +2577,16 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         allocation: RuntimeAllocationIdV1,
         bytes: &[u8],
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
-        self.require_live()?;
+        self.write_host_visible_with_graph_access_v1(allocation, bytes, None)
+    }
+
+    fn write_host_visible_with_graph_access_v1(
+        &mut self,
+        allocation: RuntimeAllocationIdV1,
+        bytes: &[u8],
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        self.require_graph_access(access)?;
         let record = self
             .allocations
             .get(&allocation)
@@ -2571,7 +2597,7 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         if u64::try_from(bytes.len()).ok() != Some(record.byte_len) {
             return Err(RuntimeValidationErrorV1::InvalidRange.into());
         }
-        self.write_allocation(allocation, 0, bytes)
+        self.write_allocation_with_graph_access_v1(allocation, 0, bytes, access)
     }
 
     pub fn write_allocation(
@@ -2580,7 +2606,17 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         byte_offset: u64,
         bytes: &[u8],
     ) -> Result<(), RuntimeErrorV1<B::Error>> {
-        self.require_live()?;
+        self.write_allocation_with_graph_access_v1(allocation, byte_offset, bytes, None)
+    }
+
+    fn write_allocation_with_graph_access_v1(
+        &mut self,
+        allocation: RuntimeAllocationIdV1,
+        byte_offset: u64,
+        bytes: &[u8],
+        access: Option<ContextGraphReservationV1>,
+    ) -> Result<(), RuntimeErrorV1<B::Error>> {
+        self.require_graph_access(access)?;
         let record = *self
             .allocations
             .get(&allocation)
@@ -3207,14 +3243,19 @@ impl<B: RuntimeBackendV1> RuntimeContextV1<B> {
         access: Option<ContextGraphReservationV1>,
     ) -> Result<RuntimePollV1, RuntimeErrorV1<B::Error>> {
         self.require_graph_access(access)?;
-        let record = self.live_submission_record(submission)?;
-        self.require_stream_unheld_v1(record.stream)?;
-        if record.status.is_terminal() {
-            return Ok(submission.observe_status(record.status));
+        if let Some(status) = self.poll_cached_status_v1(submission)? {
+            return Ok(status);
         }
         let status =
             self.observe_completion_step_v1(submission.id, |backend, id| backend.poll_v1(id))?;
         Ok(submission.observe_status(status))
+    }
+
+    fn poll_cached_status_v1<A>(
+        &self,
+        submission: &mut RuntimeSubmissionV1<A>,
+    ) -> Result<Option<RuntimePollV1>, RuntimeValidationErrorV1> {
+        cached_poll_prefix_body_v1!(cached_poll_rust_expr, self, submission)
     }
 
     pub fn wait<A>(
@@ -4160,23 +4201,11 @@ impl RuntimeStreamObservationV1 {
 
 impl RuntimeCompletionStatusV1 {
     pub const fn is_terminal(self) -> bool {
-        !matches!(self, Self::Pending)
+        cached_status_terminal_body_v1!(cached_poll_rust_expr, self)
     }
 
     fn legacy_poll(self) -> RuntimePollV1 {
-        match self {
-            Self::Pending => RuntimePollV1::Pending,
-            Self::Succeeded => RuntimePollV1::Succeeded,
-            Self::Failed(RuntimeCompletionFailureV1::BackendCode(code)) => {
-                RuntimePollV1::Failed { code }
-            }
-            Self::Failed(RuntimeCompletionFailureV1::Cancelled) => RuntimePollV1::Failed {
-                code: RUNTIME_CANCELLED_CODE_V1,
-            },
-            Self::QuiescentWithoutResult => RuntimePollV1::Failed {
-                code: RUNTIME_QUIESCENT_WITHOUT_RESULT_CODE_V1,
-            },
-        }
+        cached_status_legacy_body_v1!(cached_poll_rust_expr, self)
     }
 }
 
@@ -4206,11 +4235,7 @@ impl<A> RuntimeSubmissionV1<A> {
     }
 
     fn observe_status(&mut self, status: RuntimeCompletionStatusV1) -> RuntimePollV1 {
-        let observation = status.legacy_poll();
-        if status.is_terminal() {
-            self.completion = Some(observation);
-        }
-        observation
+        cached_observe_status_body_v1!(cached_poll_rust_expr, self, status)
     }
 }
 
@@ -4246,10 +4271,12 @@ mod tests {
     mod peer_batch_tests;
     mod peer_custody_tests;
     mod peer_directed_tests;
+    mod peer_gather_tests;
     mod peer_segments_tests;
     mod producer_launch_tests;
     mod progress_stream_tests;
     mod quiescence_order_tests;
+    mod replica_tests;
     mod submission_identity_tests;
     mod version_journal_tests;
 
@@ -4365,6 +4392,7 @@ mod tests {
         allocation_failure: MockMemoryFailure,
         release_allocation_failure: MockMemoryFailure,
         memory: HashMap<u64, Vec<u8>>,
+        peer_placement: HashMap<(u64, u64), Option<BackendPeerCopyPlacementV1>>,
         polls: HashMap<u64, u8>,
         terminal_on_submit: bool,
         last_dependency_count: usize,
@@ -4393,6 +4421,7 @@ mod tests {
         observed_kernel_reads: Vec<MockObservedKernelRead>,
         launch_failure: MockMemoryFailure,
         copy_failure: MockMemoryFailure,
+        release_submission_failure: MockMemoryFailure,
         copy_call_count: usize,
         write_call_count: usize,
         cancel_failure: MockMemoryFailure,
@@ -4830,6 +4859,7 @@ mod tests {
             submission: u64,
         ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
             self.accounted_fault.enter("release-submission");
+            mock_memory_failure_v1(core::mem::take(&mut self.release_submission_failure))?;
             assert!(!self.pending_copies.contains_key(&submission));
             assert!(!self.pending_peer_segments.contains_key(&submission));
             assert!(!self.pending_kernel_reads.contains_key(&submission));
@@ -4899,6 +4929,20 @@ mod tests {
 
         fn supports_ordered_compute_peer_copy_v1(&self) -> bool {
             self.ordered_compute_peer
+        }
+
+        fn observe_peer_copy_placement_v1(
+            &self,
+            _stream: u64,
+            source: BackendMemoryRegionV1,
+            destination: BackendMemoryRegionV1,
+        ) -> Option<BackendPeerCopyPlacementV1> {
+            self.peer_placement
+                .get(&(source.allocation, destination.allocation))
+                .copied()
+                .unwrap_or(Some(BackendPeerCopyPlacementV1::HostStaged {
+                    peak_bytes: source.byte_len,
+                }))
         }
 
         fn peer_copy_v1(

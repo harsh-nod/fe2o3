@@ -216,12 +216,12 @@ impl crate::RuntimeGfx942GeneratedCarrierV1 for StagedCarrier {
 
 fn staged_roster() -> crate::generated_source::GeneratedHostRosterV1 {
     crate::generated_source::GeneratedHostRosterV1 {
-        source_identity: std::sync::Arc::new(()),
+        source_identity: std::sync::Arc::new(()).into(),
         buffers: [None; fe2o3_kfd::GFX942_MAX_FIXED_DISPATCH_DATA_V1],
         count: 0,
         readback_bytes: 0,
         fixup_count: 0,
-        dispatch_contract_sha256: [0; 32],
+        dispatch_contract_sha256: [0; 32].into(),
     }
 }
 

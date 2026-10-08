@@ -648,6 +648,7 @@ mod tests {
         fixture.backend.submissions.insert(
             100,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream: fixture.stream,
                 status: BackendPollV1::Succeeded,
                 dependency_depth: 1,
@@ -731,6 +732,7 @@ mod tests {
                     fixture.backend.submissions.insert(
                         101,
                         SubmissionRecordV1 {
+                            origin: SubmissionOriginV1::Ordinary,
                             stream: fixture.stream,
                             status: BackendPollV1::Succeeded,
                             dependency_depth: 1,
@@ -820,6 +822,7 @@ mod tests {
                     fixture.backend.submissions.insert(
                         999,
                         SubmissionRecordV1 {
+                            origin: SubmissionOriginV1::Ordinary,
                             stream: fixture.stream,
                             status: BackendPollV1::Pending,
                             dependency_depth: 1,

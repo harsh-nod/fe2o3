@@ -362,10 +362,11 @@ Socket-dependent and native-exec validation remain incomplete.
 The private V4 release/broker family carries a freshly loaded, fixed-origin V3
 client profile; the old V3 transport still means V1 profile. Distinct release
 magic, authentication domains, route grammar and exact profile identity reject
-cross-family records. There is no V1-to-V3 conversion or downgrade. The V4
-release launch remains deliberately unselected by the working default driver.
-Selecting it is a later paired validation/integration step, not a route hint
-that upgrades authority. The new profile's load/admission account survives
+cross-family records. There is no V1-to-V3 conversion or downgrade. The default
+driver still selects V3/V1; `authority release --native` explicitly selects the
+paired V4/V3 contract before `build`, `run`, or `probe`. This selector does not
+establish deployment admission or end-to-end qualification. The new profile's
+load/admission account survives
 descriptor transfers, thread moves and the retained invocation stream.
 
 The protected wrapper's V4 branch retains its genuine invocation authority

@@ -1,10 +1,12 @@
 //! Runtime binding of the existing completion graph; no compiler authority.
 
 use super::*;
-use crate::context::{ContextGraphReservationV1, PreparedContextGraphActionV1};
+use crate::context::{
+    ContextGraphReservationV1, ContextGraphSubmissionV1, PreparedContextGraphActionV1,
+};
 use crate::{
     RuntimeAccessV1, RuntimeArgumentsV1, RuntimeAsyncCopyBackendV1, RuntimeBindingV1,
-    RuntimeLaunchGeometryV1, RuntimeMemoryRegionV1, RuntimeSubmissionV1, TypedRuntimeKernelV1,
+    RuntimeLaunchGeometryV1, RuntimeMemoryRegionV1, TypedRuntimeKernelV1,
 };
 use fe2o3_completion::{
     CancellationCodeV1, CompletionAuthorityV1, CompletionGraphIdentityV1, CompletionGraphV1,
@@ -14,10 +16,15 @@ use fe2o3_completion::{
 use std::collections::VecDeque;
 mod admitted;
 mod generated;
+mod host_staging;
+mod peer_placement;
+mod replicas;
 mod versions;
 pub(crate) use admitted::*;
 use generated::GraphReplyV1;
 pub use generated::*;
+pub(crate) use host_staging::HostStagingV1;
+pub use peer_placement::{MAX_RUNTIME_GRAPH_PEER_SHARDS_V1, RuntimeGraphPeerShardV1};
 pub use versions::{
     MAX_RUNTIME_GRAPH_VERSION_REFERENCES_V1, MAX_RUNTIME_GRAPH_VERSIONS_V1,
     RuntimeGraphDataVersionV1, RuntimeGraphInputVersionV1, RuntimeGraphVersionRecordV1,
@@ -27,6 +34,10 @@ pub use versions::{
 pub const MAX_RUNTIME_GRAPH_NODES_V1: usize = 256;
 pub const MAX_RUNTIME_GRAPH_KERNARG_BYTES_V1: usize = 65_536;
 pub const MAX_RUNTIME_GRAPH_EFFECTS_V1: usize = 1_024;
+/// Per-action byte-work ceiling for a new ordinary HostStaging action. This is
+/// neither the scope's metadata bound nor a replacement for original result
+/// credits or Context allocation admission. Caller scratch remains caller-owned.
+pub const MAX_RUNTIME_GRAPH_HOST_STAGING_BYTES_V1: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeGraphValidationErrorV1 {
@@ -39,6 +50,10 @@ pub enum RuntimeGraphValidationErrorV1 {
     DuplicateVersionInput,
     InvalidVersionInput,
     VersionNotAvailable,
+    InvalidHostStaging,
+    InvalidPeerGather,
+    InvalidReplicaCopy,
+    HostStagingRequiresScope,
     UnorderedMemoryConflict {
         first: CompletionNodeIdV1,
         second: CompletionNodeIdV1,
@@ -181,6 +196,9 @@ impl<B: RuntimeBackendV1, A: RuntimeArgumentsV1> FrozenLaunch<B> for Launch<A> {
 enum Action<B: RuntimeBackendV1> {
     Launch(Box<dyn FrozenLaunch<B>>),
     Copy(RuntimeMemoryRegionV1, RuntimeMemoryRegionV1),
+    PeerCopy(RuntimeMemoryRegionV1, RuntimeMemoryRegionV1),
+    ReplicaCopy(RuntimeMemoryRegionV1, RuntimeMemoryRegionV1),
+    HostStaging(HostStagingV1),
 }
 
 /// A bounded, process-local graph request. Its identities and effects are
@@ -196,6 +214,8 @@ pub struct RuntimeGraphRequestV1<B: RuntimeBackendV1> {
     kernarg_bytes: usize,
     effects: usize,
     version_inputs: BTreeMap<versions::InputKey, RuntimeGraphVersionSourceV1>,
+    peer_placement: Option<crate::RuntimePeerGatherPlacementV1>,
+    group: Option<crate::RuntimeGraphGroupV1>,
 }
 impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
     pub fn new(
@@ -226,6 +246,8 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
             kernarg_bytes: 0,
             effects: 0,
             version_inputs: BTreeMap::new(),
+            peer_placement: None,
+            group: None,
         })
     }
 
@@ -317,6 +339,7 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
                 ancestors[i][p / 64] |= 1 << (p % 64);
             }
         }
+        self.validate_host_staging_dependencies_v1(&ancestors)?;
         let mut effects = Vec::with_capacity(self.effects);
         for (&node, action) in &self.actions {
             let mut add = |region: RuntimeMemoryRegionV1| {
@@ -334,10 +357,13 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
                         add(binding.region);
                     }
                 }
-                Action::Copy(source, destination) => {
+                Action::Copy(source, destination)
+                | Action::PeerCopy(source, destination)
+                | Action::ReplicaCopy(source, destination) => {
                     add(*source);
                     add(*destination);
                 }
+                Action::HostStaging(staging) => add(staging.destination),
             }
         }
         effects.sort_unstable_by_key(|effect| (effect.0, effect.1));
@@ -345,7 +371,7 @@ impl<B: RuntimeBackendV1> RuntimeGraphRequestV1<B> {
             // Context range validation precedes this check, so addition cannot overflow.
             let end = start.checked_add(len).expect("validated region");
             for &(other, offset, _, other_access, second) in &effects[i + 1..] {
-                if other != allocation || offset >= end {
+                if other != allocation || (self.group.is_none() && offset >= end) {
                     break;
                 }
                 if first == second
@@ -399,7 +425,7 @@ enum PreparedGraphActionV1 {
 enum ActiveGraphActionV1 {
     Ordinary(
         usize,
-        RuntimeSubmissionV1<()>,
+        ContextGraphSubmissionV1,
         Option<RuntimeCompletionStatusV1>,
     ),
     Generated(usize, RuntimeAsyncGeneratedCompletionV1),
@@ -744,7 +770,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
             }
             return true;
         }
-        match context.poll_with_graph_access_v1(&mut submission, Some(token)) {
+        match context.poll_with_graph_access_v1(&mut submission.original, Some(token)) {
             Ok(_) => {}
             Err(RuntimeErrorV1::BackendRejected(_)) => {
                 self.rejected_observations = self.rejected_observations.saturating_add(1);
@@ -767,7 +793,7 @@ impl<B: RuntimeAsyncCopyBackendV1 + RuntimeFlushBackendV1 + 'static> Graph<B> {
             }
         }
         let status = context
-            .query_submission(&submission)
+            .query_submission(&submission.original)
             .expect("exact owned submission");
         if status == RuntimeCompletionStatusV1::Pending {
             self.active

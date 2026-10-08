@@ -68,6 +68,7 @@ fn direct_kfd_stream_tail_does_not_consume_explicit_dependency_capacity() {
         backend.submissions.insert(
             submission,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream,
                 status: BackendPollV1::Succeeded,
                 dependency_depth: 1,
@@ -81,6 +82,7 @@ fn direct_kfd_stream_tail_does_not_consume_explicit_dependency_capacity() {
     backend.submissions.insert(
         9_999,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Succeeded,
             dependency_depth: 1,
@@ -121,6 +123,7 @@ fn direct_kfd_copy_stream_tail_cannot_exceed_dependency_bound() {
         backend.submissions.insert(
             submission,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream,
                 status: BackendPollV1::Succeeded,
                 dependency_depth: 1,
@@ -134,6 +137,7 @@ fn direct_kfd_copy_stream_tail_cannot_exceed_dependency_bound() {
     backend.submissions.insert(
         9_999,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Succeeded,
             dependency_depth: 1,

@@ -49,6 +49,19 @@ impl Future for RuntimeGfx942ScopedCompletionFutureV1<'_> {
             Poll::Ready(Err(crate::RuntimeAsyncEngineCallErrorV1::CancelledBeforeSubmission)) => {
                 Poll::Ready(Err(RuntimeGfx942ScopeErrorV1::CancelledBeforeSubmission))
             }
+            Poll::Ready(Err(crate::RuntimeAsyncEngineCallErrorV1::CancelledBeforePublication)) => {
+                Poll::Ready(Err(RuntimeGfx942ScopeErrorV1::CancelledBeforePublication))
+            }
+            Poll::Ready(Err(crate::RuntimeAsyncEngineCallErrorV1::RejectedBeforePublication)) => {
+                Poll::Ready(Err(RuntimeGfx942ScopeErrorV1::RejectedBeforePublication))
+            }
+            Poll::Ready(Err(
+                crate::RuntimeAsyncEngineCallErrorV1::DeviceUnavailableBeforeActivation {
+                    device_uid,
+                },
+            )) => Poll::Ready(Err(
+                RuntimeGfx942ScopeErrorV1::DeviceUnavailableBeforeActivation { device_uid },
+            )),
             Poll::Ready(Err(_)) => Poll::Ready(Err(RuntimeGfx942ScopeErrorV1::Unknown)),
         }
     }
@@ -57,7 +70,6 @@ impl Future for RuntimeGfx942ScopedCompletionFutureV1<'_> {
 impl<'scope, B, P> RuntimeGfx942GeneratedScopeV1<'scope, '_, B, P>
 where
     B: RuntimeBackendV1<Error = KfdRuntimeBackendErrorV1>,
-    P: RuntimeGfx942GeneratedCompletionCarrierV1,
 {
     /// Takes the sole future for this ticket, before or after exact settlement.
     /// The ticket remains available for the original typed result-owner gate.
@@ -99,24 +111,60 @@ where
     /// does not cancel work: the owning scope must still settle or fail-stop.
     pub async fn drive_with_wake_v1<W, F>(
         &mut self,
-        mut wait: W,
+        wait: W,
     ) -> Result<(), RuntimeGfx942ScopeErrorV1>
     where
         W: FnMut(Instant) -> F,
         F: Future<Output = ()>,
     {
-        while self.pending_v1() != 0 {
-            let transitions = self.progress_v1()?;
-            if self.pending_v1() == 0 {
-                break;
-            }
-            if transitions == 0 {
-                wait(self.deadline).await;
-            }
-            yield_to_executor().await;
-        }
+        drive(self, wait).await
+    }
+}
+
+pub(super) trait Driver {
+    fn pending(&self) -> usize;
+    fn progress(&mut self) -> Result<usize, RuntimeGfx942ScopeErrorV1>;
+    fn deadline(&self) -> Instant;
+    fn settled(&self) -> Result<(), RuntimeGfx942ScopeErrorV1>;
+}
+
+impl<B: RuntimeBackendV1<Error = KfdRuntimeBackendErrorV1>, P> Driver
+    for RuntimeGfx942GeneratedScopeV1<'_, '_, B, P>
+{
+    fn pending(&self) -> usize {
+        self.pending_v1()
+    }
+    fn progress(&mut self) -> Result<usize, RuntimeGfx942ScopeErrorV1> {
+        self.progress_v1()
+    }
+    fn deadline(&self) -> Instant {
+        self.deadline
+    }
+    fn settled(&self) -> Result<(), RuntimeGfx942ScopeErrorV1> {
         self.settled_result_v1()
     }
+}
+
+pub(super) async fn drive<D, W, F>(
+    owner: &mut D,
+    mut wait: W,
+) -> Result<(), RuntimeGfx942ScopeErrorV1>
+where
+    D: Driver,
+    W: FnMut(Instant) -> F,
+    F: Future<Output = ()>,
+{
+    while owner.pending() != 0 {
+        let transitions = owner.progress()?;
+        if owner.pending() == 0 {
+            break;
+        }
+        if transitions == 0 {
+            wait(owner.deadline()).await;
+        }
+        yield_to_executor().await;
+    }
+    owner.settled()
 }
 
 async fn yield_to_executor() {

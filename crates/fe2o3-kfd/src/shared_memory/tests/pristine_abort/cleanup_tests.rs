@@ -1101,4 +1101,4 @@ fn check_completed_prefix(f: &Fixture, before: &Snapshot, completed: usize) {
 }
 
 #[path = "cleanup_tests/cleanup_tests.rs"]
-mod cleanup_tests;
+mod release_cases;

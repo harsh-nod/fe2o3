@@ -8,6 +8,9 @@ use backend::{Backend, Failure, State};
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 mod native;
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+mod graph;
+
 struct Output<T: GeneratedDeviceScalarV1> {
     budget: GeneratedRuntimeResultBudgetV1,
     custody: ChargedOutputCustodyV1,

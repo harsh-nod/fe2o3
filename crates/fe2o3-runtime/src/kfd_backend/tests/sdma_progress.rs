@@ -99,6 +99,7 @@ fn scripted_sdma_dependency_pending_is_observed_without_publication() {
     backend.submissions.insert(
         dependency,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Pending,
             dependency_depth: 1,
@@ -136,6 +137,7 @@ fn scripted_unpublished_sdma_dependency_rejection_is_terminal_and_reindexed() {
     backend.submissions.insert(
         dependency,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Pending,
             dependency_depth: 1,
@@ -328,6 +330,7 @@ fn scripted_pending_compute_dependency_rejection_is_terminal_and_reindexed() {
     backend.submissions.insert(
         dependency,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream,
             status: BackendPollV1::Pending,
             dependency_depth: 1,

@@ -1015,11 +1015,11 @@ assert_equals \
 assert_step_count tiled-gemm-capability-ui 1 \
   'generic core did not run the standalone GEMM capability UI exactly once'
 assert_equals \
-  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --offline --manifest-path examples/tiled_gemm_general_v1/Cargo.toml --test paired_contract" \
+  "env FE2O3_HIP_SYS_DISABLE=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --offline --manifest-path examples/tiled_gemm_general_v1/Cargo.toml --test paired_contract" \
   "$(step_command cpu-reference-tiled-gemm-paired-default)" \
   'generic core did not gate the default GEMM paired contract'
 assert_equals \
-  "env FE2O3_HIP_SYS_DISABLE=1 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --offline --manifest-path examples/tiled_gemm_general_v1/Cargo.toml --no-default-features --features kernel-simt-gemm-general --test paired_contract" \
+  "env FE2O3_HIP_SYS_DISABLE=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 ${TIMEOUT_TEST_ROOT}/production-driver/cargo-fe2o3 test --locked --offline --manifest-path examples/tiled_gemm_general_v1/Cargo.toml --no-default-features --features kernel-simt-gemm-general --test paired_contract" \
   "$(step_command cpu-reference-tiled-gemm-paired-simt)" \
   'generic core did not gate the SIMT GEMM paired contract'
 assert_equals \

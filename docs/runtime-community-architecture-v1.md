@@ -7,6 +7,12 @@ bounded protected Worker V3 dispatch remains an internal production direction,
 but it is not yet a supported public application path. New backend work extends
 the direct-KFD boundary; HIP/HSA paths are deprecated qualification-only code.
 
+The cancellation, graph-staging and native-cohort additions described below are
+narrow component implementation boundaries. `Checked` means executable admission
+and ownership checks, not a formal executable-refinement theorem or an observed
+native execution. Their source presence and CPU controls do not close A1, A2 or
+A3; qualification must identify the exact source and actual exercised path.
+
 ## Dependency Direction
 
 The runtime stack has one inward dependency direction:
@@ -305,6 +311,37 @@ never-adopted carrier and releases its exact unpublished hold before reporting
 reuses the slot quota, and refuses graph-owned or already-adopted operations.
 Dropping an observer is not cancellation.
 
+### Cancellation Before Publication
+
+The separate `cancel_before_publication_v1` method in
+[`context/generated_scope/cancellation.rs`](../crates/fe2o3-runtime/src/context/generated_scope/cancellation.rs)
+accepts an independent adopted slot only while its original native DATA is
+pristine or its exact original submission receipt remains `Ready` or
+`RetryReady`. Published, completed, recycled, unknown and graph-owned work is
+not cancellable through this method. The gate does not poll for quietness or
+infer nonpublication from a completed or recycled queue.
+
+The Checked gate joins the original Context hold and journal in
+[`context/generated_issue/unpublished.rs`](../crates/fe2o3-runtime/src/context/generated_issue/unpublished.rs)
+to the original backend shell, lane lease and receipt in
+[`kfd_backend/generated_adoption/unpublished.rs`](../crates/fe2o3-runtime/src/kfd_backend/generated_adoption/unpublished.rs).
+The multi-device route additionally checks the original child and local/global
+submission association. Existing journal-corruption checks still quarantine the
+Context; this is not a weaker read-only alternative to those checks.
+
+Before irreversible cleanup, the lifecycle becomes `Unknown`. Only actual
+original native disposal, no-result Context retirement, carrier destruction and
+exact hold release permit `CancelledBeforePublication`. No decoder runs, no
+successful or no-effect writer version is invented, and the slot quota remains
+consumed. Duplicate cancellation reports `AlreadyCancelled`. Other independent
+slots can continue after successful retirement, but failed currentness or
+uncertain disposal keeps the existing global fail-stop rule. This is local
+unpublished-work cancellation, not hardware-reset or post-publication failure
+isolation. CPU lifecycle, receipt and refusal controls are distinct from an
+actual native disposal qualification or a new refinement proof.
+
+### Ordinary Graph Staging
+
 The lexical DAG adapter and threaded engine share `PreparedGraphAdmissionV1`
 and `AdmittedGraphV1`, including the original completion authority, reservation
 token and version ledger. Preparation retains the original graph request on
@@ -319,6 +356,135 @@ This adapter currently admits a single same-device graph in an otherwise empty
 scope. Generated dependency edges order frozen arguments; they do not rebind
 kernel arguments to predecessor-produced data. Cross-device graphs, physical
 overlap, and full A1/A2/A3 refinement remain separate acceptance requirements.
+
+The draft `RuntimeGraphRequestV1::bind_host_staging_v1` action in
+[`async_engine/graph/host_staging.rs`](../crates/fe2o3-runtime/src/async_engine/graph/host_staging.rs)
+declares a separate whole-allocation `HostVisible` write after an actual
+generated predecessor. Its destination, dependency and ordinary graph version
+are admitted independently of the generated kernel's sealed effect set. The
+threaded/static adapter refuses this action before reservation; the lexical
+caller must explicitly stage it before draining the graph.
+
+`try_stage_graph_host_write_v1` in
+[`context/generated_scope/graph/staging.rs`](../crates/fe2o3-runtime/src/context/generated_scope/graph/staging.rs)
+checks the original graph occurrence, reservation token, issue-open state,
+successful decoded predecessor and complete destination. The host bridge
+`GeneratedRuntimeChargedResultV1::try_stage_graph_completed_v1` in
+[`generated_runtime_results/staging/graph.rs`](../crates/fe2o3-host/src/generated_runtime_results/staging/graph.rs)
+also authenticates the original private result gate before encoding into
+caller-preallocated scratch. The runtime callback alone does not certify the
+origin or meaning of arbitrary caller-provided bytes.
+
+Only the actual host write and journal settlement permit the staging node's
+distinct version to succeed. An ordinary copy can consume that version through
+`ProducedBy(node)`. A definite write rejection fails the node and blocks its
+consumers; ambiguous effects retain the whole graph under terminal policy.
+Encoding contention or refusal does not take, clone or refund the charged
+result. That original result stays retained until authentic take or disposal.
+These are Checked ownership/data-movement boundaries with CPU controls, not
+proof of native overlap or general generated producer-to-kernel-consumer
+dataflow. Generated arguments and effects remain unchanged.
+
+The actual `VersionLedger::begin` and `commit` now expand the same executable
+transition bodies used by the conditional Verus refinement in
+[`runtime-graph-version-ledger-refinement-v1`](runtime-graph-version-ledger-refinement-v1.md).
+The proof retains all nine fields and the ordered behavior of duplicate segment
+aliases. Index bounds remain an explicit premise; `prepare`, Context/native
+settlement and completion-authority composition are not proved by this slice.
+
+### Bounded Peer Gather
+
+`RuntimeGraphRequestV1::bind_peer_gather_v1` binds one explicit gather of one
+through eight shards to the existing graph core. The original Context resolves
+each source allocation on another device, one destination allocation and one
+destination stream. Destination ranges must be disjoint; sources remain read-only
+throughout the graph and use their initial admitted versions. Other graph actions
+may consume the gathered versions but may not write the destination. Cross-device
+producer claims and caller-supplied replica equivalence are not accepted.
+
+The graph's original reservation token lends the existing scalar peer-copy
+preparation, reader/writer custody, publication and retirement path. It introduces
+no separate progress engine. One-stream ordering preserves the whole-allocation
+writer journal and is deliberately serial. Definite rejection produces no
+successful version; indeterminate failure retains original custody and global
+quarantine. This is bounded cross-device copy placement, not generated cross-device
+producer scheduling or physical-overlap evidence.
+
+`select_peer_gather_destination_v1` additionally compares up to eight original
+destination allocation/stream pairs against the same fixed sources. It admits a
+candidate only when every shard has valid original regions and a bounded transport
+observation. Least host-staged bytes wins, with stable original-roster ties.
+Native XGMI eligibility reuses the actual retained route/window checks; it is not
+a promise of eventual native transport or measured bandwidth. The private selected
+plan rechecks exact graph actions and current observations before graph reservation.
+Neither an observation nor a plan creates a version or replica capability.
+
+### Lower-Level Native Cohorts
+
+`Gfx942NativeFillCohortV1::admit` in
+[`queue_dispatch_binding/native_fill_cohort.rs`](../crates/fe2o3-kfd/src/queue_dispatch_binding/native_fill_cohort.rs)
+accepts 2 through 16 independently owned closed-full64 fill members. Admission
+is inert: it retains each original executable, conditional packet and distinct
+whole coherent output, and returns all original members on refusal. The
+`full64` constraint is workgroup `[64, 1, 1]` and a nonzero one-dimensional grid
+whose size is divisible by 64, not a logical output count divisible by 64.
+Each member's nonzero count must fit its grid and exactly match its whole output
+size at four bytes per element. Thus counts 64 and 37 at grid size 64 satisfy
+these geometry/count rules; all other authority and storage checks still apply.
+The original `SharedGttMemorySessionV1` can create a primary queue through
+`create_compute_aql_queue_with_native_fill_cohort_v1`, or its explicit-capacity
+variant. These root the original VM, programs, packets and DATA before the
+existing primary construction sequence, selecting cohort preparation explicitly.
+The separate `bind_initial_native_fill_cohort_v1` method in
+[`queue_live/native_fill_cohort.rs`](../crates/fe2o3-kfd/src/queue_live/native_fill_cohort.rs)
+roots those inputs before native preparation on an unused primary queue.
+Partial or uncertain preparation retains the original inputs and queue parent;
+it is not rollback or a cancellation result.
+
+All members use `WaitForPrior`. Submission, polling, recycling and readback use
+the same actual fixed batch type and member count; no member result or resource
+release precedes whole-cohort settlement. This Checked composition preserves
+the separate singleton contract, but has no new batch-refinement theorem or
+genuine native qualification. It creates no compiler or launch authority.
+
+The host/generated-runtime bridge now has a separate exact-three profile.
+`prepare_generated_cohort3` retains three original charged carriers and result
+gates. Nested native-input callbacks keep every original source borrowed through
+actual preparation. The fresh-primary runtime path retains the actual
+`Gfx942DispatchBatchV1<3>` receipt, not three synthetic scalar receipts. Its
+readback borrows three separately charged output rosters and validates the entire
+roster before copying. Native retirement, Context settlement, original decoder
+completion and hold release remain ordered under the existing lexical engine.
+
+The distinct cohort scope/ticket cannot enter singleton graph or copy APIs.
+It admits one ordered cohort on an unused primary queue, with no lane reuse,
+per-member cancellation or independent completion. The ordinary singleton backend
+still has two active compute lanes. Neither this exact-three profile nor the
+scope's 4,096 logical-slot bound establishes thousands of GPU-published operations.
+Rolling admission, measured mixed-duration execution, out-of-order completion and
+physical overlap remain open.
+
+### Native Recipe Registry
+
+`Gfx942NativeFillRegistrySessionV1` owns one original queue and four distinct
+original recipes. Six metadata tables are prepaid against the supplied original
+account before native preparation. Each recipe publishes its own real one-packet
+receipt and can be polled, recycled and copied into host readback independently.
+The shared ordinary submission and completion bodies select either the original
+scalar owner or the exact registry recipe; the registry never exports its queue
+or aliases a cohort receipt into scalar completion.
+
+All CODE, kernarg and native DATA backing remains in the common root until actual
+registry destruction. A copied result does not release its native partition or
+establish ordinary Context settlement. Destruction requires every accepted recipe
+to be settled; lost receipts, ambiguous publication and failed teardown cannot
+authorize disposal. Recipes are single-use and retain `WaitForPrior` ordering.
+This lower interface is not yet the scoped runtime registry bridge, rolling
+admission, independent device scheduling or thousands of concurrent operations.
+Its selector/readback composition also remains outside the existing narrow
+dispatch-template executable proofs.
+
+### Production And Acceptance
 
 The native production composition is an explicit V5 application handoff over
 the existing protected V3 compiler/currentness deployment. Its root manager,
@@ -337,6 +503,44 @@ in disposable private mount namespaces. Neither lane establishes a genuine
 manager/application exchange or GPU execution. Current source-bound results and
 unmet deployment/hardware gates are recorded in
 [`runtime-a123-production-20261006`](evidence/runtime-a123-production-20261006/README.md).
+
+The remaining milestone requirements include functional work, not just access
+to hardware or a CI runner:
+
+- **A1:** the scoped registry and ordered 1,024-recipe Arena now retain their
+  common DATA debit through per-member readback until common destruction.
+  Remaining work includes rolling admission and qualification of high-depth
+  resource pressure and
+  mixed-duration/out-of-order execution through genuine admitted kernels.
+  The closed fill, ordered cohort and Arena CPU controls do not establish those
+  GPU workloads. Completion still uses the caller's wake source and busy-poll
+  signals: `AmdBusyCompletionSignalV1` has zero event/mailbox fields, and KFD
+  queue-exception events are not ordinary completion wakeups. A hardware-event
+  wake path needs its own retained signal/event ownership and lost-wakeup
+  checks. CPU executor fairness is not GPU progress or latency evidence.
+- **A2:** bind an actual predecessor-produced version into a successor
+  generated kernel's admitted arguments and effects. Retaining the original
+  detached DATA owner is implemented, but does not admit such a consumer.
+  Ordinary HostStaging and
+  copy consumption are only one explicit host-mediated edge. Repeated
+  multistage generated dataflow, cross-device DAG scheduling, measured
+  compute/copy overlap and complete executable DAG/settlement refinement remain
+  open. Existing source-bound validation/planner proofs do not imply them.
+- **A3:** extend bounded serial peer gather to general versioned shard/replica
+  placement, cross-device producer DAGs and per-device failure isolation with
+  partial-run reporting.
+  Successful unpublished cancellation is not recovery from device loss: an
+  uncertain or terminal child still seals the multi-device router. Selected
+  roster compute followed by serial directed copies does not qualify physical
+  overlap, unselected devices or all-host execution. Native gfx950 admission
+  remains separate from the closed gfx942 execution authority.
+
+A genuine protected compiler-to-manager-to-application exchange, approved fixed
+deployment/policy inputs, native execution and current-source CI/proof replay
+also remain qualification gates. Neither packaged refusal tests, private-root
+deployment checks nor historical proof results establish those successes.
+No full milestone, HIP/HSA parity or performance advantage follows from these
+component additions.
 
 ## Performance Rules
 

@@ -19,6 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/ci-local.sh"
 PACKAGE_GROUPS = ("foundation", "analysis", "lowering", "pliron", "finalize")
 CPU_GROUPS = (*PACKAGE_GROUPS, "integration")
+HOSTED_CPU_GROUPS = ("foundation", "analysis", "lowering", "pliron", "finalize-0", "finalize-1",
+                     "finalize-2", "finalize-3", "integration")
 RAW = ("fe2o3-raw-a", "fe2o3-raw-b")
 MANAGED = ("fe2o3-managed-a", "fe2o3-managed-b")
 HEAVY = {
@@ -67,6 +69,12 @@ repeat_package_group() {
   run_cpu_package_group "$1"
   run_cpu_package_group "$1"
 }
+record_profiles_after() {
+  "$@"
+  record inherited-profiles "${CARGO_PROFILE_DEV_DEBUG-}" "${CARGO_PROFILE_TEST_DEBUG-}" \
+    "${CARGO_PROFILE_DEV_DEBUG_ASSERTIONS-}" "${CARGO_PROFILE_TEST_DEBUG_ASSERTIONS-}" \
+    "${CARGO_PROFILE_DEV_OPT_LEVEL-}" "${CARGO_PROFILE_TEST_OPT_LEVEL-}"
+}
 "$@"
 '''
 
@@ -110,6 +118,9 @@ class CpuGroupTests(unittest.TestCase):
     def package_command(self, row):
         self.assertEqual(row[1:6], ("env", "FE2O3_HIP_SYS_DISABLE=1", "cargo", "test", "--locked"))
         arguments = row[6:]
+        if row[0] == "cpu-foundation-tests":
+            self.assertEqual(arguments[-2:], ("--", "--nocapture"))
+            arguments = arguments[:-2]
         self.assertTrue(arguments, "empty -p set would run unrelated workspace targets")
         self.assertEqual(len(arguments) % 2, 0)
         self.assertTrue(all(flag == "-p" for flag in arguments[::2]))
@@ -117,14 +128,20 @@ class CpuGroupTests(unittest.TestCase):
 
     def semantics(self, rows):
         result = []
+        finalizer_shards = []
         for row in rows:
             if (row[0].endswith("-workspace-dependencies") or row[0].startswith("driver-")
                     or row[0] == "standalone-lockfiles"):
                 continue
-            if row[0] == "cpu-tests" or row[0] in {f"cpu-{group}-tests" for group in CPU_GROUPS}:
+            if re.fullmatch(r"cpu-finalize-[0-3]-tests", row[0]):
+                finalizer_shards.append(int(row[0].split("-")[2]))
+            elif row[0] == "cpu-tests" or row[0] in {f"cpu-{group}-tests" for group in CPU_GROUPS}:
                 result.extend(("default-package", package) for package in self.package_command(row))
             else:
                 result.append(row)
+        if finalizer_shards:
+            self.assertCountEqual(finalizer_shards, [0, 1, 2, 3])
+            result.append(("default-package", "fe2o3-hsaco-finalize"))
         return Counter(result)
 
     def test_hosted_union_preserves_every_legacy_package_and_nonpackage_command(self):
@@ -132,7 +149,7 @@ class CpuGroupTests(unittest.TestCase):
         self.assertEqual(legacy, self.successful("run_cpu_tests", "all"))
         self.assertEqual(legacy, self.successful("main", "generic-core", "cpu"))
         hosted = []
-        for group in CPU_GROUPS:
+        for group in HOSTED_CPU_GROUPS:
             hosted.extend(self.successful("main", "generic-core", f"cpu-{group}"))
         self.assertEqual(self.semantics(hosted), self.semantics(legacy))
         packages = [
@@ -146,12 +163,95 @@ class CpuGroupTests(unittest.TestCase):
             "cargo-fe2o3-tests", "cargo-fe2o3-worker-v3-envelope-tests",
             "fe2o3-pliron-default-api-ui", "fe2o3-artifact-transaction-tests",
             "fe2o3-runtime-release-tests", "fe2o3-device-release-tests", "wrapper-managed-cpu-tests",
+            "native-data-copy-application-binding-check",
             "tiled-gemm-capability-ui", "cpu-reference-tiled-gemm-paired-default",
             "cpu-reference-tiled-gemm-paired-simt", "cpu-test-partition-revalidation",
             "cpu-test-binding-projection-revalidation", "dialect-mir-pliron-tests",
         ]:
             self.assertEqual(names[name], 1, name)
         self.assertEqual(sum(name.startswith("host-reference-") for name in names), 35)
+
+
+    def test_native_data_copy_binding_check_is_explicit_compile_only_and_driver_validated(self):
+        expected = (
+            "native-data-copy-application-binding-check", "env",
+            "-u", "LD_PRELOAD", "-u", "LD_LIBRARY_PATH", "FE2O3_HIP_SYS_DISABLE=1",
+            "/sealed-production-driver", "check", "--locked", "--bins",
+            "--features", "data-copy-observation", "--manifest-path",
+            "crates/cargo-fe2o3/tests/fixtures/conditional-custodian-application/Cargo.toml",
+        )
+        for arguments in [("run_cpu_tests",), ("run_cpu_tests", "integration"),
+                          ("main", "generic-core", "cpu-integration")]:
+            with self.subTest(arguments=arguments):
+                rows = self.successful(*arguments)
+                actual = [row for row in rows if row[0] == expected[0]]
+                self.assertEqual(actual, [expected])
+                position = rows.index(expected)
+                self.assertEqual(rows[position - 1], ("driver-validate",))
+                self.assertEqual(rows[position + 1][0], "tiled-gemm-capability-ui")
+
+    def test_paired_host_images_limit_only_debug_info_through_the_sealed_driver(self):
+        common = (
+            "env", "-u", "LD_PRELOAD", "-u", "LD_LIBRARY_PATH", "FE2O3_HIP_SYS_DISABLE=1",
+            "CARGO_PROFILE_DEV_DEBUG=0", "CARGO_PROFILE_TEST_DEBUG=0",
+            "/sealed-production-driver", "test", "--locked", "--offline", "--manifest-path",
+            "examples/tiled_gemm_general_v1/Cargo.toml",
+        )
+        expected = [
+            ("cpu-reference-tiled-gemm-paired-default", *common, "--test", "paired_contract"),
+            ("cpu-reference-tiled-gemm-paired-simt", *common, "--no-default-features",
+             "--features", "kernel-simt-gemm-general", "--test", "paired_contract"),
+        ]
+        for arguments in [("run_cpu_tests",), ("run_cpu_tests", "integration"),
+                          ("main", "generic-core", "cpu-integration")]:
+            with self.subTest(arguments=arguments):
+                rows = self.successful(*arguments)
+                actual = [row for row in rows if row[0].startswith("cpu-reference-tiled-gemm-paired-")]
+                self.assertEqual(actual, expected)
+                first = rows.index(expected[0])
+                self.assertEqual(rows[first + 1], expected[1])
+                self.assertEqual(rows[first - 1][0], "tiled-gemm-capability-ui")
+                self.assertIn(("driver-validate",), rows[:first])
+                self.assertTrue(any(row[0] == "driver-bootstrap" for row in rows[:first]))
+
+    def test_paired_host_debug_overrides_do_not_mutate_inherited_profiles(self):
+        profiles = {
+            "CARGO_PROFILE_DEV_DEBUG": "1", "CARGO_PROFILE_TEST_DEBUG": "2",
+            "CARGO_PROFILE_DEV_DEBUG_ASSERTIONS": "true", "CARGO_PROFILE_TEST_DEBUG_ASSERTIONS": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0", "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        }
+        for arguments in [("run_cpu_tests",), ("run_cpu_tests", "integration"),
+                          ("main", "generic-core", "cpu-integration")]:
+            with self.subTest(arguments=arguments):
+                rows = self.successful("record_profiles_after", *arguments, **profiles)
+                self.assertEqual(rows[:-1], self.successful(*arguments, **profiles))
+                self.assertEqual(rows[-1], ("inherited-profiles", "1", "2", "true", "true", "0", "0"))
+
+    def test_native_timestamp_cpu_lane_preserves_closed_roster_and_order(self):
+        expected = [
+            ("native-timestamp-cpu-discovery", "cargo", "test", "--locked", "-p", "fe2o3-kfd",
+             "--features", "engineering-native-packet-diagnostics", "--lib", "native_timestamp_",
+             "--", "--list"),
+            ("native-timestamp-cpu-discovery-check", "python3", "-I", "-B",
+             "scripts/check-native-timestamp-cpu.py", "list",
+             "<private-root>/logs/native-timestamp-cpu-discovery.log"),
+            ("native-timestamp-cpu-tests", "cargo", "test", "--locked", "-p", "fe2o3-kfd",
+             "--features", "engineering-native-packet-diagnostics", "--lib", "native_timestamp_",
+             "--", "--test-threads=1"),
+            ("native-timestamp-cpu-result-check", "python3", "-I", "-B",
+             "scripts/check-native-timestamp-cpu.py", "run",
+             "<private-root>/logs/native-timestamp-cpu-tests.log"),
+        ]
+        for arguments in [("run_cpu_tests",), ("run_cpu_tests", "integration"),
+                          ("main", "generic-core", "cpu-integration")]:
+            rows = self.successful(*arguments)
+            actual = [row for row in rows if row[0].startswith("native-timestamp-cpu-")]
+            self.assertEqual(actual, expected)
+            for row in actual:
+                self.assertNotIn("--ignored", row)
+                self.assertNotIn("--include-ignored", row)
+        self.assertEqual(self.successful("run_native_timestamp_cpu_tests"), expected)
+
 
     def test_device_release_tests_disable_assertions_and_run_the_complete_library(self):
         for arguments in [("run_cpu_tests",), ("run_cpu_tests", "integration"),
@@ -238,11 +338,30 @@ class CpuGroupTests(unittest.TestCase):
             ("run_cpu_tests", "integration", "extra"),
             ("main", "generic-core", "cpu-unknown"),
             ("main", "generic-core", "cpu-finalize", "extra"),
+            ("run_cpu_finalizer_shard",), ("run_cpu_finalizer_shard", "4"),
+            ("run_cpu_finalizer_shard", "-1"), ("run_cpu_finalizer_shard", "00"),
+            ("run_cpu_finalizer_shard", "0", "extra"),
+            ("main", "generic-core", "cpu-finalize-4"),
         ]:
             with self.subTest(arguments=arguments):
                 result, rows = self.invoke(*arguments)
                 self.assertEqual(result.returncode, 2, result.stderr.decode())
                 self.assertEqual(rows, [])
+
+    def test_finalizer_shards_keep_cold_prerequisites_and_one_original_outer_bound(self):
+        for shard in range(4):
+            group = f"cpu-finalize-{shard}"
+            rows = self.successful("main", "generic-core", group)
+            self.assertEqual([row[0] for row in rows], [f"{group}-workspace-dependencies",
+                "standalone-lockfiles", "driver-bootstrap", f"{group}-tests"])
+            self.assertEqual(rows[2], ("driver-bootstrap", group, "create-private"))
+            self.assertEqual(rows[-1], (f"{group}-tests", "env", "FE2O3_HIP_SYS_DISABLE=1", "python3",
+                "-I", "-B", str(ROOT / "scripts/finalizer-test-shards.py"), "--shard", str(shard),
+                "--output", f"<private-root>/logs/finalizer-shard-{shard}"))
+            for row in rows:
+                result, stopped = self.invoke("main", "generic-core", group, failure=row[0])
+                self.assertEqual(result.returncode, 29)
+                self.assertEqual(stopped, rows[:rows.index(row) + 1])
 
     def test_empty_raw_examples_do_not_fall_back_to_workspace_tests(self):
         rows = self.successful("run_cpu_tests", "integration", EMPTY_RAW="1")
@@ -262,13 +381,16 @@ class CpuGroupTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 2, result.stderr.decode())
                     self.assertNotIn("cargo-fe2o3-tests", [row[0] for row in rows])
 
-    def test_hosted_matrix_limits_environment_and_strict_aggregate_are_preserved(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    def assert_hosted_workflow(self, workflow):
+        self.assertEqual(workflow.count("\n  generic-core:\n"), 1)
+        self.assertEqual(workflow.count("\n  generic-validation:\n"), 1)
         core = workflow.split("\n  generic-core:\n", 1)[1].split("\n  rustc-codegen-shards:\n", 1)[0]
         matrix = core.split("        group:\n", 1)[1].split("    env:\n", 1)[0]
-        self.assertEqual(re.findall(r"^          - (.+)$", matrix, re.MULTILINE), [
-            "policy", *(f"cpu-{group}" for group in CPU_GROUPS), "auxiliary",
-        ])
+        groups = re.findall(r"^          - (.+)$", matrix, re.MULTILINE)
+        legacy = ["policy", *(f"cpu-{group}" for group in CPU_GROUPS), "auxiliary"]
+        sharded = ["policy", *(f"cpu-{group}" for group in HOSTED_CPU_GROUPS), "auxiliary"]
+        self.assertIn(groups, (legacy, sharded))
+        mode = "legacy" if groups == legacy else "sharded"
         self.assertIn("    timeout-minutes: 90\n", core)
         self.assertIn("      fail-fast: false\n", core)
         self.assertNotIn("continue-on-error", core)
@@ -284,15 +406,156 @@ class CpuGroupTests(unittest.TestCase):
         self.assertIn("generic-core-${{ matrix.group }}-logs-${{ github.run_attempt }}", core)
         aggregate = workflow.split("\n  generic-validation:\n", 1)[1]
         self.assertIn("    if: ${{ always() }}", aggregate)
-        self.assertIn("      - generic-core\n      - rustc-codegen-shards\n      - native-static-cpu\n", aggregate)
+        needs = aggregate.split("    needs:\n", 1)[1].split("    runs-on:", 1)[0]
+        self.assertEqual(re.findall(r"^      - (.+)$", needs, re.MULTILINE),
+                         ["generic-core", "rustc-codegen-shards", "native-static-cpu"])
         self.assertIn("scripts/require-ci-success.sh", aggregate)
         self.assertIn('"${GENERIC_CORE_RESULT}"', aggregate)
         self.assertIn('"${RUSTC_CODEGEN_SHARDS_RESULT}"', aggregate)
         self.assertIn("NATIVE_STATIC_CPU_RESULT: ${{ needs.native-static-cpu.result }}", aggregate)
         self.assertIn('"${NATIVE_STATIC_CPU_RESULT}"', aggregate)
+        if mode == "legacy":
+            self.assertNotIn("finalizer-shard", core + aggregate)
+            self.assertNotIn("Require complete disjoint finalizer coverage", aggregate)
+        else:
+            self.assertEqual(core.count("      - name: Upload complete finalizer shard receipts\n"), 1)
+            self.assertEqual(aggregate.count("      - name: Download all four finalizer shard receipts\n"), 1)
+            self.assertEqual(aggregate.count("      - name: Require complete disjoint finalizer coverage\n"), 1)
+            self.assertIn("--aggregate target/finalizer-shard-receipts", aggregate)
+            self.assertIn('--expected-commit "${{ github.sha }}"', aggregate)
+            self.assertIn("pattern: finalizer-shard-*-receipt", aggregate)
+            self.assertIn("name: Upload complete finalizer shard receipts", core)
+            receipt_upload = core.split("      - name: Upload complete finalizer shard receipts\n", 1)[1].split("      - name:", 1)[0]
+            self.assertIn("name: finalizer-shard-${{ matrix.group }}-receipt\n", receipt_upload)
+            self.assertIn("overwrite: true", receipt_upload)
+            self.assertIn("          if-no-files-found: error\n", receipt_upload)
+            self.assertIn("${{ env.CI_LOG_DIR }}/finalizer-shard-*/inventory.json", receipt_upload)
+            self.assertIn("${{ env.CI_LOG_DIR }}/finalizer-shard-*/result.json", receipt_upload)
+            self.assertIn("success() && startsWith(matrix.group, 'cpu-finalize-')", receipt_upload)
+            self.assertNotIn("github.run_attempt", receipt_upload)
+            receipt_download = aggregate.split("      - name: Download all four finalizer shard receipts\n", 1)[1].split("      - name:", 1)[0]
+            for override in ("github.run_attempt", "run-id:", "repository:", "github-token:"):
+                self.assertNotIn(override, receipt_download)
+            self.assertLess(aggregate.index("scripts/require-ci-success.sh"),
+                            aggregate.index("Download all four finalizer shard receipts"))
         script = SCRIPT.read_text()
         self.assertIn('CI_STEP_TIMEOUT_SECONDS="${FE2O3_CI_STEP_TIMEOUT_SECONDS:-3000}"', script)
         self.assertIn('CI_STEP_KILL_AFTER_SECONDS="${FE2O3_CI_STEP_KILL_AFTER_SECONDS:-15}"', script)
+        return mode
+
+    def hosted_workflow_fixtures(self):
+        actual = (ROOT / ".github/workflows/ci.yml").read_text()
+        upload = '''      - name: Upload complete finalizer shard receipts
+        if: ${{ success() && startsWith(matrix.group, 'cpu-finalize-') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: finalizer-shard-${{ matrix.group }}-receipt
+          overwrite: true
+          path: |
+            ${{ env.CI_LOG_DIR }}/finalizer-shard-*/inventory.json
+            ${{ env.CI_LOG_DIR }}/finalizer-shard-*/result.json
+          if-no-files-found: error
+          retention-days: 7
+
+'''
+        aggregate = '''      - name: Download all four finalizer shard receipts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53
+        with:
+          pattern: finalizer-shard-*-receipt
+          path: target/finalizer-shard-receipts
+
+      - name: Require complete disjoint finalizer coverage
+        run: >-
+          python3 -I -B scripts/finalizer-test-shards.py
+          --aggregate target/finalizer-shard-receipts
+          --expected-commit "${{ github.sha }}"
+'''
+        shard_rows = "".join(f"          - cpu-finalize-{i}\n" for i in range(4))
+        legacy_row = "          - cpu-finalize\n"
+        legacy = actual.replace(upload, "").replace(aggregate, "").replace(shard_rows, legacy_row)
+        self.assertEqual(legacy.count(legacy_row), 1)
+        self.assertNotIn("finalizer-shard", legacy)
+        sharded = legacy.replace(legacy_row, shard_rows)
+        anchor = "      - name: Upload failure logs\n"
+        self.assertIn(anchor, sharded)
+        sharded = sharded.replace(anchor, upload + anchor, 1) + aggregate
+        return legacy, sharded
+
+    def test_hosted_matrix_limits_environment_and_strict_aggregate_are_preserved(self):
+        self.assert_hosted_workflow((ROOT / ".github/workflows/ci.yml").read_text())
+
+    def test_both_closed_workflow_topologies_preserve_complete_legacy_coverage(self):
+        legacy, sharded = self.hosted_workflow_fixtures()
+        self.assertEqual(self.assert_hosted_workflow(legacy), "legacy")
+        self.assertEqual(self.assert_hosted_workflow(sharded), "sharded")
+        complete = self.semantics(self.successful("run_cpu_tests"))
+        for groups in (CPU_GROUPS, HOSTED_CPU_GROUPS):
+            with self.subTest(groups=groups):
+                rows = []
+                for group in groups:
+                    rows.extend(self.successful("main", "generic-core", f"cpu-{group}"))
+                self.assertEqual(self.semantics(rows), complete)
+
+    def test_workflow_topology_rejects_mixed_missing_duplicate_and_foreign_members(self):
+        legacy, sharded = self.hosted_workflow_fixtures()
+        bad = [
+            legacy.replace("          - cpu-finalize\n", ""),
+            legacy.replace("          - cpu-finalize\n", "          - cpu-finalize\n" * 2),
+            legacy.replace("          - cpu-finalize\n", "          - cpu-finalize\n          - cpu-finalize-0\n"),
+            legacy.replace("          - cpu-finalize\n", "          - cpu-finalize-4\n"),
+        ]
+        for shard in range(4):
+            row = f"          - cpu-finalize-{shard}\n"
+            bad.extend([sharded.replace(row, ""), sharded.replace(row, row * 2)])
+        for text in bad:
+            with self.subTest(workflow=text), self.assertRaises(AssertionError):
+                self.assert_hosted_workflow(text)
+
+    def test_shard_topology_requires_exact_current_commit_receipts(self):
+        legacy, sharded = self.hosted_workflow_fixtures()
+        upload_start = sharded.index("      - name: Upload complete finalizer shard receipts\n")
+        upload_end = sharded.index("      - name: Upload failure logs\n", upload_start)
+        download_start = sharded.index("      - name: Download all four finalizer shard receipts\n")
+        require_start = sharded.index("      - name: Require complete disjoint finalizer coverage\n")
+        bad = [
+            sharded[:upload_start] + sharded[upload_end:],
+            sharded[:download_start] + sharded[require_start:],
+            sharded[:require_start],
+            sharded.replace('--expected-commit "${{ github.sha }}"', '--expected-commit "foreign"'),
+            sharded.replace("if-no-files-found: error", "if-no-files-found: ignore"),
+            sharded.replace("if-no-files-found: error", "if-no-files-found: ignore").replace(
+                "      - name: Upload failure logs\n",
+                "      - name: Upload failure logs\n        # if-no-files-found: error\n"),
+            sharded.replace("overwrite: true", "overwrite: false"),
+            sharded.replace("${{ env.CI_LOG_DIR }}/finalizer-shard-*/inventory.json", ""),
+            sharded.replace("${{ env.CI_LOG_DIR }}/finalizer-shard-*/result.json", ""),
+            sharded.replace("pattern: finalizer-shard-*-receipt", "pattern: unrelated"),
+            sharded.replace("path: target/finalizer-shard-receipts", "run-id: 123\n          path: target/finalizer-shard-receipts"),
+            sharded.replace("name: finalizer-shard-${{ matrix.group }}-receipt", "name: finalizer-shard-${{ matrix.group }}-${{ github.run_attempt }}-receipt"),
+            legacy + sharded[download_start:],
+            sharded.replace("      - name: Upload complete finalizer shard receipts\n",
+                            "      - name: Upload complete finalizer shard receipts\n" * 2),
+        ]
+        for text in bad:
+            with self.subTest(workflow=text), self.assertRaises(AssertionError):
+                self.assert_hosted_workflow(text)
+
+    def test_both_topologies_retain_strict_common_limits_and_aggregate(self):
+        for workflow in self.hosted_workflow_fixtures():
+            for old, new in [
+                ("    timeout-minutes: 90\n", "    timeout-minutes: 91\n"),
+                ("      fail-fast: false\n", "      fail-fast: true\n"),
+                ("      CARGO_PROFILE_DEV_DEBUG: '1'", "      CARGO_PROFILE_DEV_DEBUG: '0'"),
+                ("      CARGO_PROFILE_TEST_DEBUG: '1'", "      CARGO_PROFILE_TEST_DEBUG: '0'"),
+                ("      CARGO_INCREMENTAL: '0'", "      CARGO_INCREMENTAL: '1'"),
+                ("      - native-static-cpu\n", ""),
+                ("      - native-static-cpu\n", "      - native-static-cpu\n" * 2),
+                ("scripts/require-ci-success.sh", "true"),
+                ('"${NATIVE_STATIC_CPU_RESULT}"', '"success"'),
+                ("      fail-fast: false\n", "      fail-fast: false\n      continue-on-error: true\n"),
+            ]:
+                with self.subTest(old=old, new=new), self.assertRaises(AssertionError):
+                    self.assert_hosted_workflow(workflow.replace(old, new))
 
     def test_strict_aggregate_rejects_failure_cancellation_skips_and_missing_results(self):
         checker = ROOT / "scripts/require-ci-success.sh"
@@ -308,6 +571,56 @@ class CpuGroupTests(unittest.TestCase):
                     capture_output=True, check=False, timeout=10,
                 )
                 self.assertEqual(result.returncode == 0, statuses == success)
+
+
+
+class NativeTimestampLogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        path = ROOT / "scripts/check-native-timestamp-cpu.py"
+        spec = importlib.util.spec_from_file_location("native_timestamp_cpu", path)
+        cls.checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.checker)
+
+    def listing(self):
+        return "\n".join(name + ": test" for name in self.checker.NAMES) + "\n\n3 tests, 0 benchmarks\n"
+
+    def outcome(self):
+        return ("running 3 tests\n" + "\n".join("test " + name + " ... ok" for name in self.checker.NAMES)
+                + "\n\ntest result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2100 filtered out; finished in 0.01s\n")
+
+    def test_actual_three_case_shapes_pass(self):
+        self.checker.validate("list", self.listing())
+        self.checker.validate("run", self.outcome())
+
+    def test_discovery_refuses_zero_missing_duplicate_foreign_benchmark_and_summary_changes(self):
+        raw = self.listing()
+        first, second, _ = self.checker.NAMES
+        for bad in [
+            "0 tests, 0 benchmarks\n", raw.replace(first + ": test\n", ""),
+            raw.replace(second, first), raw.replace(first, "foreign"),
+            raw.replace(first + ": test", first + ": benchmark"),
+            raw.replace("3 tests", "4 tests"), raw + "3 tests, 0 benchmarks\n",
+            raw + "foreign: test\n", raw.rsplit("\n\n", 1)[0],
+        ]:
+            with self.subTest(raw=bad), self.assertRaises(ValueError):
+                self.checker.validate("list", bad)
+
+    def test_outcome_refuses_missing_duplicate_foreign_ignored_failed_and_extra_cases(self):
+        raw = self.outcome()
+        first, second, _ = self.checker.NAMES
+        for bad in [
+            raw.replace("test " + first + " ... ok\n", ""),
+            raw.replace(second, first), raw.replace(first, "foreign"),
+            raw.replace(first + " ... ok", first + " ... ignored"),
+            raw.replace(first + " ... ok", first + " ... FAILED"),
+            raw + "test foreign ... ok\n", raw.replace("running 3", "running 1"),
+            raw.replace("3 passed", "0 passed"), raw.replace("0 ignored", "1 ignored"),
+            raw + raw, raw.split("test result:")[0], "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n",
+        ]:
+            with self.subTest(raw=bad), self.assertRaises(ValueError):
+                self.checker.validate("run", bad)
 
 
 def standalone_metadata_commands():

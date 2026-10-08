@@ -1,0 +1,1119 @@
+{
+  "maintained_qualification": false,
+  "negative_credit": false,
+  "observation": {
+    "application_declarations": [
+      "context_writer_lookup_v1::ContextVersionJournalErrorV1::clone",
+      "context_writer_lookup_v1::ContextVersionJournalErrorV1::eq_spec",
+      "context_writer_lookup_v1::ContextVersionJournalErrorV1::obeys_eq_spec",
+      "context_writer_lookup_v1::ContextWriterKeyV1::clone",
+      "context_writer_lookup_v1::ContextWriterKeyV1::eq_spec",
+      "context_writer_lookup_v1::ContextWriterKeyV1::obeys_eq_spec",
+      "context_writer_lookup_v1::ContextWriterKindV1::clone",
+      "context_writer_lookup_v1::ContextWriterKindV1::eq_spec",
+      "context_writer_lookup_v1::ContextWriterKindV1::obeys_eq_spec",
+      "context_writer_lookup_v1::ContextWriterReferenceV1::clone",
+      "context_writer_lookup_v1::ContextWriterReferenceV1::eq_spec",
+      "context_writer_lookup_v1::ContextWriterReferenceV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeAllocationIdV1::clone",
+      "context_writer_lookup_v1::RuntimeAllocationIdV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeAllocationIdV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::arrow_0",
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::arrow_BackendCode_0",
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::clone",
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::arrow_0",
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::arrow_Failed_0",
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::clone",
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeDeviceIdV1::clone",
+      "context_writer_lookup_v1::RuntimeDeviceIdV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeDeviceIdV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeStreamIdV1::clone",
+      "context_writer_lookup_v1::RuntimeStreamIdV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeStreamIdV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeSubmissionIdV1::clone",
+      "context_writer_lookup_v1::RuntimeSubmissionIdV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeSubmissionIdV1::obeys_eq_spec",
+      "context_writer_lookup_v1::SubmissionRecordV1::clone",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_Generated_hold",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_Generated_shell_key",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_Generated_stream",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_hold",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_shell_key",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_stream",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::clone",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::eq_spec",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::obeys_eq_spec",
+      "context_writer_lookup_v1::borrowed_versions_v1",
+      "context_writer_lookup_v1::key_contract_v1",
+      "context_writer_lookup_v1::preflight_settlement_writer_v1",
+      "context_writer_lookup_v1::reader_conflict_precedes_missing_writer_v1",
+      "context_writer_lookup_v1::selected_writer_is_exact_original_v1",
+      "context_writer_lookup_v1::writer_lookup_frames_original_owners_v1",
+      "context_writer_lookup_v1::writer_lookup_selection_v1"
+    ],
+    "diagnostics": [],
+    "functions": [
+      "alloc::boxed::impl&%15::clone",
+      "context_writer_lookup_v1::ContextVersionJournalErrorV1::clone",
+      "context_writer_lookup_v1::ContextVersionJournalErrorV1::eq_spec",
+      "context_writer_lookup_v1::ContextVersionJournalErrorV1::obeys_eq_spec",
+      "context_writer_lookup_v1::ContextWriterKeyV1::clone",
+      "context_writer_lookup_v1::ContextWriterKeyV1::eq_spec",
+      "context_writer_lookup_v1::ContextWriterKeyV1::obeys_eq_spec",
+      "context_writer_lookup_v1::ContextWriterKindV1::clone",
+      "context_writer_lookup_v1::ContextWriterKindV1::eq_spec",
+      "context_writer_lookup_v1::ContextWriterKindV1::obeys_eq_spec",
+      "context_writer_lookup_v1::ContextWriterReferenceV1::clone",
+      "context_writer_lookup_v1::ContextWriterReferenceV1::eq_spec",
+      "context_writer_lookup_v1::ContextWriterReferenceV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeAllocationIdV1::clone",
+      "context_writer_lookup_v1::RuntimeAllocationIdV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeAllocationIdV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::arrow_0",
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::arrow_BackendCode_0",
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::clone",
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::arrow_0",
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::arrow_Failed_0",
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::clone",
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeDeviceIdV1::clone",
+      "context_writer_lookup_v1::RuntimeDeviceIdV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeDeviceIdV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeStreamIdV1::clone",
+      "context_writer_lookup_v1::RuntimeStreamIdV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeStreamIdV1::obeys_eq_spec",
+      "context_writer_lookup_v1::RuntimeSubmissionIdV1::clone",
+      "context_writer_lookup_v1::RuntimeSubmissionIdV1::eq_spec",
+      "context_writer_lookup_v1::RuntimeSubmissionIdV1::obeys_eq_spec",
+      "context_writer_lookup_v1::SubmissionRecordV1::clone",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_Generated_hold",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_Generated_shell_key",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_Generated_stream",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_hold",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_shell_key",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_stream",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::clone",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::eq_spec",
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::obeys_eq_spec",
+      "context_writer_lookup_v1::borrowed_versions_v1",
+      "context_writer_lookup_v1::key_contract_v1",
+      "context_writer_lookup_v1::preflight_settlement_writer_v1",
+      "context_writer_lookup_v1::reader_conflict_precedes_missing_writer_v1",
+      "context_writer_lookup_v1::selected_writer_is_exact_original_v1",
+      "context_writer_lookup_v1::writer_lookup_frames_original_owners_v1",
+      "context_writer_lookup_v1::writer_lookup_selection_v1",
+      "core::clone::Clone::clone",
+      "core::clone::impls::impl&%11::clone",
+      "core::clone::impls::impl&%17::clone",
+      "core::clone::impls::impl&%29::clone",
+      "core::clone::impls::impl&%41::clone",
+      "core::clone::impls::impl&%6::clone",
+      "core::clone::impls::impl&%9::clone",
+      "core::cmp::PartialEq::eq",
+      "core::cmp::PartialEq::ne",
+      "core::cmp::impls::impl&%19::eq",
+      "core::cmp::impls::impl&%19::ne",
+      "core::cmp::impls::impl&%21::eq",
+      "core::cmp::impls::impl&%21::ne",
+      "core::cmp::impls::impl&%22::eq",
+      "core::cmp::impls::impl&%22::ne",
+      "core::cmp::impls::impl&%25::eq",
+      "core::cmp::impls::impl&%25::ne",
+      "core::cmp::impls::impl&%31::eq",
+      "core::cmp::impls::impl&%31::ne",
+      "core::cmp::impls::impl&%9::eq",
+      "core::cmp::impls::impl&%9::ne",
+      "core::option::impl&%0::as_ref",
+      "core::option::impl&%0::is_some",
+      "core::option::impl&%17::eq",
+      "core::option::impl&%6::clone",
+      "std::collections::hash::map::impl&%4::contains_key",
+      "std::collections::hash::map::impl&%4::get",
+      "std::collections::hash::map::impl&%5::clone",
+      "verus_builtin::impl&%7::clone",
+      "verus_builtin::impl&%9::clone",
+      "vstd::function::axiom_fn_mut_call_ensures",
+      "vstd::function::axiom_fn_mut_call_requires",
+      "vstd::iset::ISet::contains",
+      "vstd::iset::lemma_iset_ext_equal",
+      "vstd::iset::lemma_iset_ext_equal_deep",
+      "vstd::map::axiom_map_ext_equal",
+      "vstd::map::axiom_map_ext_equal_deep",
+      "vstd::map::axiom_map_index_decreases",
+      "vstd::map::impl&%0::dom",
+      "vstd::map::impl&%0::index",
+      "vstd::map::impl&%0::spec_index",
+      "vstd::map_lib::impl&%0::contains_key",
+      "vstd::pervasive::cloned",
+      "vstd::pervasive::strictly_cloned",
+      "vstd::relations::injective",
+      "vstd::seq::Seq::index",
+      "vstd::seq::Seq::len",
+      "vstd::seq::impl&%2::spec_index",
+      "vstd::seq::lemma_seq_ext_equal",
+      "vstd::seq::lemma_seq_ext_equal_deep",
+      "vstd::seq::lemma_seq_index_decreases",
+      "vstd::set::Set::contains",
+      "vstd::set::axiom_set_ext_equal",
+      "vstd::set::axiom_set_ext_equal_deep",
+      "vstd::set::impl&%0::to_iset",
+      "vstd::std_specs::cmp::PartialEqSpec::eq_spec",
+      "vstd::std_specs::cmp::PartialEqSpec::obeys_eq_spec",
+      "vstd::std_specs::cmp::impl&%12::eq_spec",
+      "vstd::std_specs::cmp::impl&%12::obeys_eq_spec",
+      "vstd::std_specs::cmp::impl&%2::eq_spec",
+      "vstd::std_specs::cmp::impl&%2::obeys_eq_spec",
+      "vstd::std_specs::cmp::impl&%3::eq_spec",
+      "vstd::std_specs::cmp::impl&%3::obeys_eq_spec",
+      "vstd::std_specs::cmp::impl&%9::eq_spec",
+      "vstd::std_specs::cmp::impl&%9::obeys_eq_spec",
+      "vstd::std_specs::hash::axiom_bool_obeys_hash_table_key_model",
+      "vstd::std_specs::hash::axiom_box_bool_obeys_hash_table_key_model",
+      "vstd::std_specs::hash::axiom_box_integer_type_obeys_hash_table_key_model",
+      "vstd::std_specs::hash::axiom_contains_box",
+      "vstd::std_specs::hash::axiom_contains_deref_key",
+      "vstd::std_specs::hash::axiom_hashmap_decreases",
+      "vstd::std_specs::hash::axiom_hashmap_deepview_borrow",
+      "vstd::std_specs::hash::axiom_i64_obeys_hash_table_key_model",
+      "vstd::std_specs::hash::axiom_maps_box_key_to_value",
+      "vstd::std_specs::hash::axiom_maps_deref_key_to_value",
+      "vstd::std_specs::hash::axiom_random_state_builds_valid_hashers",
+      "vstd::std_specs::hash::axiom_u64_obeys_hash_table_key_model",
+      "vstd::std_specs::hash::axiom_u8_obeys_hash_table_key_model",
+      "vstd::std_specs::hash::axiom_usize_obeys_hash_table_key_model",
+      "vstd::std_specs::hash::builds_valid_hashers",
+      "vstd::std_specs::hash::contains_borrowed_key",
+      "vstd::std_specs::hash::hash_map_deep_view_impl",
+      "vstd::std_specs::hash::impl&%0::view",
+      "vstd::std_specs::hash::maps_borrowed_key_to_value",
+      "vstd::std_specs::hash::obeys_key_model",
+      "vstd::std_specs::num::i64_specs_tmp::impl&%0::eq_spec",
+      "vstd::std_specs::num::i64_specs_tmp::impl&%0::obeys_eq_spec",
+      "vstd::std_specs::num::u64_specs_tmp::impl&%0::eq_spec",
+      "vstd::std_specs::num::u64_specs_tmp::impl&%0::obeys_eq_spec",
+      "vstd::std_specs::num::u8_specs_tmp::impl&%0::eq_spec",
+      "vstd::std_specs::num::u8_specs_tmp::impl&%0::obeys_eq_spec",
+      "vstd::std_specs::num::usize_specs_tmp::impl&%0::eq_spec",
+      "vstd::std_specs::num::usize_specs_tmp::impl&%0::obeys_eq_spec",
+      "vstd::std_specs::option::OptionAdditionalFns::arrow_0",
+      "vstd::std_specs::option::impl&%0::arrow_0",
+      "vstd::std_specs::option::impl&%1::eq_spec",
+      "vstd::std_specs::option::impl&%1::obeys_eq_spec",
+      "vstd::std_specs::option::is_none",
+      "vstd::std_specs::option::is_some",
+      "vstd::std_specs::option::spec_unwrap",
+      "vstd::view::DeepView::deep_view",
+      "vstd::view::View::view",
+      "vstd::view::impl&%0::view",
+      "vstd::view::impl&%10::view",
+      "vstd::view::impl&%11::deep_view",
+      "vstd::view::impl&%14::view",
+      "vstd::view::impl&%15::deep_view",
+      "vstd::view::impl&%16::view",
+      "vstd::view::impl&%17::deep_view",
+      "vstd::view::impl&%18::view",
+      "vstd::view::impl&%19::deep_view",
+      "vstd::view::impl&%1::deep_view",
+      "vstd::view::impl&%20::view",
+      "vstd::view::impl&%21::deep_view",
+      "vstd::view::impl&%26::view",
+      "vstd::view::impl&%27::deep_view",
+      "vstd::view::impl&%2::view",
+      "vstd::view::impl&%30::view",
+      "vstd::view::impl&%31::deep_view",
+      "vstd::view::impl&%38::view",
+      "vstd::view::impl&%39::deep_view",
+      "vstd::view::impl&%3::deep_view",
+      "vstd::view::impl&%46::view",
+      "vstd::view::impl&%47::deep_view",
+      "vstd::view::impl&%48::view",
+      "vstd::view::impl&%49::deep_view",
+      "vstd::view::impl&%4::view",
+      "vstd::view::impl&%5::deep_view",
+      "vstd::view::impl&%6::view",
+      "vstd::view::impl&%7::deep_view"
+    ],
+    "inputs": {
+      "crates/fe2o3-runtime-model/verus/context_writer_lookup_v1.rs": {
+        "bytes": 8585,
+        "mode": 420,
+        "sha256": "8ca891942dad1dcccf1611d944dbd1ca2dcba0ea07fdca2c4c55999819ad78bd"
+      },
+      "crates/fe2o3-runtime/src/context/versions/submissions/writer_lookup_body.rs": {
+        "bytes": 2031,
+        "mode": 420,
+        "sha256": "fb21d538e2622078336188f9e65a9ae4ec81c6dfa9e320546620191585a4af77"
+      },
+      "rust-toolchain.toml": {
+        "bytes": 56,
+        "mode": 420,
+        "sha256": "0b5ab62ff48b93d11576964057a24fe8122e76b50d797779e2b3b11f3e0e50f1"
+      }
+    },
+    "logical_sites": [],
+    "report_sha256": "aa195d103cd2d294aae050b31a251cb60378d15c876f7ad5569b032cee8b74d6",
+    "summary": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "errors": 0,
+      "is-verifying-entire-crate": true,
+      "success": true,
+      "verified": 16
+    },
+    "warnings": [
+      {
+        "$message_type": "diagnostic",
+        "children": [
+          {
+            "children": [],
+            "code": null,
+            "level": "help",
+            "message": "to suppress this warning, use `#[verifier::allow(autoderive_clone_without_spec)]` on the surrounding function, datatype, or module or `#![verifier::allow(autoderive_clone_without_spec)]` in the module or crate",
+            "rendered": null,
+            "spans": []
+          }
+        ],
+        "code": null,
+        "level": "warning",
+        "message": "Verus does not (yet) support autoderive Clone impl when the clone is not a copy; continuing, but without adding a specification for the derived Clone impl",
+        "rendered": "warning: Verus does not (yet) support autoderive Clone impl when the clone is not a copy; continuing, but without adding a specification for the derived Clone impl\n  --> <CAPTURED_SOURCE>/crates/fe2o3-runtime-model/verus/context_writer_lookup_v1.rs:49:10\n   |\n49 | #[derive(Clone, Copy)]\n   |          ^^^^^\n   |\n   = help: to suppress this warning, use `#[verifier::allow(autoderive_clone_without_spec)]` on the surrounding function, datatype, or module or `#![verifier::allow(autoderive_clone_without_spec)]` in the module or crate\n\n",
+        "spans": [
+          {
+            "byte_end": 1985,
+            "byte_start": 1980,
+            "column_end": 15,
+            "column_start": 10,
+            "expansion": {
+              "def_site_span": {
+                "byte_end": 11043,
+                "byte_start": 11028,
+                "column_end": 16,
+                "column_start": 1,
+                "expansion": null,
+                "file_name": "/rustc/8bab26f4f68e0e26f0bb7960be334d5b520ea452/library/core/src/clone.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 289,
+                "line_start": 289,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": []
+              },
+              "macro_decl_name": "#[derive(Clone)]",
+              "span": {
+                "byte_end": 1985,
+                "byte_start": 1980,
+                "column_end": 15,
+                "column_start": 10,
+                "expansion": null,
+                "file_name": "<CAPTURED_SOURCE>/crates/fe2o3-runtime-model/verus/context_writer_lookup_v1.rs",
+                "is_primary": false,
+                "label": null,
+                "line_end": 49,
+                "line_start": 49,
+                "suggested_replacement": null,
+                "suggestion_applicability": null,
+                "text": [
+                  {
+                    "highlight_end": 15,
+                    "highlight_start": 10,
+                    "text": "#[derive(Clone, Copy)]"
+                  }
+                ]
+              }
+            },
+            "file_name": "<CAPTURED_SOURCE>/crates/fe2o3-runtime-model/verus/context_writer_lookup_v1.rs",
+            "is_primary": true,
+            "label": null,
+            "line_end": 49,
+            "line_start": 49,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 15,
+                "highlight_start": 10,
+                "text": "#[derive(Clone, Copy)]"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "$message_type": "diagnostic",
+        "children": [],
+        "code": null,
+        "level": "warning",
+        "message": "1 warning emitted",
+        "rendered": "warning: 1 warning emitted\n\n",
+        "spans": []
+      }
+    ]
+  },
+  "raw_sha256": {
+    "CLOSING.json": "291351b6aea0cd244492a5513f0bbb563ea82aab06f90101397959cb308e6fe4",
+    "PROOF_SOURCE.json": "3ffe7c5038f6d738907bf120f892a8f3fff05dd6d04fae931fa0668f2fce8065",
+    "RESULT.json": "219ddfe6cc9f2b6d61e0c6923888df5b7d44619d5e47ec801b7a583a270a8e80",
+    "attempt01/010-verus-positive/stderr.log": "9ffb518d043bfe1a19af3f718d9ca1696b8f1287754f3b1b73ab71c9ef0bed52",
+    "attempt01/010-verus-positive/stdout.log": "3262cf73d58081739d1965d5785c93e0b2746aeb4e73be8771263e83590a5654"
+  },
+  "report": {
+    "func-details": {
+      "alloc::boxed::impl&%15::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextVersionJournalErrorV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextVersionJournalErrorV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextVersionJournalErrorV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextWriterKeyV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextWriterKeyV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextWriterKeyV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextWriterKindV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextWriterKindV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextWriterKindV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextWriterReferenceV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextWriterReferenceV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::ContextWriterReferenceV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeAllocationIdV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeAllocationIdV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeAllocationIdV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::arrow_0": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::arrow_BackendCode_0": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeCompletionFailureV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::arrow_0": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::arrow_Failed_0": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeCompletionStatusV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeDeviceIdV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeDeviceIdV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeDeviceIdV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeStreamIdV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeStreamIdV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeStreamIdV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeSubmissionIdV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeSubmissionIdV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::RuntimeSubmissionIdV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::SubmissionRecordV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_Generated_hold": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_Generated_shell_key": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_Generated_stream": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_hold": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_shell_key": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::arrow_stream": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::SubmissionWriterDomainV1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::borrowed_versions_v1": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::key_contract_v1": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::preflight_settlement_writer_v1": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::reader_conflict_precedes_missing_writer_v1": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::selected_writer_is_exact_original_v1": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::writer_lookup_frames_original_owners_v1": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "context_writer_lookup_v1::writer_lookup_selection_v1": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::clone::Clone::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::clone::impls::impl&%11::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::clone::impls::impl&%17::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::clone::impls::impl&%29::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::clone::impls::impl&%41::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::clone::impls::impl&%6::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::clone::impls::impl&%9::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::PartialEq::eq": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::PartialEq::ne": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%19::eq": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%19::ne": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%21::eq": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%21::ne": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%22::eq": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%22::ne": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%25::eq": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%25::ne": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%31::eq": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%31::ne": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%9::eq": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::cmp::impls::impl&%9::ne": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::option::impl&%0::as_ref": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::option::impl&%0::is_some": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::option::impl&%17::eq": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "core::option::impl&%6::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "std::collections::hash::map::impl&%4::contains_key": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "std::collections::hash::map::impl&%4::get": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "std::collections::hash::map::impl&%5::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "verus_builtin::impl&%7::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "verus_builtin::impl&%9::clone": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::function::axiom_fn_mut_call_ensures": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::function::axiom_fn_mut_call_requires": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::iset::ISet::contains": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::iset::lemma_iset_ext_equal": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::iset::lemma_iset_ext_equal_deep": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::map::axiom_map_ext_equal": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::map::axiom_map_ext_equal_deep": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::map::axiom_map_index_decreases": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::map::impl&%0::dom": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::map::impl&%0::index": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::map::impl&%0::spec_index": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::map_lib::impl&%0::contains_key": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::pervasive::cloned": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::pervasive::strictly_cloned": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::relations::injective": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::seq::Seq::index": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::seq::Seq::len": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::seq::impl&%2::spec_index": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::seq::lemma_seq_ext_equal": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::seq::lemma_seq_ext_equal_deep": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::seq::lemma_seq_index_decreases": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::set::Set::contains": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::set::axiom_set_ext_equal": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::set::axiom_set_ext_equal_deep": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::set::impl&%0::to_iset": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::cmp::PartialEqSpec::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::cmp::PartialEqSpec::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::cmp::impl&%12::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::cmp::impl&%12::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::cmp::impl&%2::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::cmp::impl&%2::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::cmp::impl&%3::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::cmp::impl&%3::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::cmp::impl&%9::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::cmp::impl&%9::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_bool_obeys_hash_table_key_model": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_box_bool_obeys_hash_table_key_model": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_box_integer_type_obeys_hash_table_key_model": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_contains_box": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_contains_deref_key": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_hashmap_decreases": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_hashmap_deepview_borrow": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_i64_obeys_hash_table_key_model": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_maps_box_key_to_value": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_maps_deref_key_to_value": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_random_state_builds_valid_hashers": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_u64_obeys_hash_table_key_model": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_u8_obeys_hash_table_key_model": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::axiom_usize_obeys_hash_table_key_model": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::builds_valid_hashers": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::contains_borrowed_key": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::hash_map_deep_view_impl": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::impl&%0::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::maps_borrowed_key_to_value": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::hash::obeys_key_model": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::num::i64_specs_tmp::impl&%0::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::num::i64_specs_tmp::impl&%0::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::num::u64_specs_tmp::impl&%0::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::num::u64_specs_tmp::impl&%0::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::num::u8_specs_tmp::impl&%0::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::num::u8_specs_tmp::impl&%0::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::num::usize_specs_tmp::impl&%0::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::num::usize_specs_tmp::impl&%0::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::option::OptionAdditionalFns::arrow_0": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::option::impl&%0::arrow_0": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::option::impl&%1::eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::option::impl&%1::obeys_eq_spec": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::option::is_none": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::option::is_some": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::std_specs::option::spec_unwrap": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::DeepView::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::View::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%0::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%10::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%11::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%14::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%15::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%16::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%17::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%18::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%19::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%1::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%20::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%21::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%26::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%27::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%2::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%30::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%31::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%38::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%39::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%3::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%46::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%47::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%48::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%49::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%4::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%5::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%6::view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      },
+      "vstd::view::impl&%7::deep_view": {
+        "failed_proof_notes": [],
+        "obligation_proof_notes": []
+      }
+    },
+    "verification-results": {
+      "encountered-error": false,
+      "encountered-vir-error": false,
+      "errors": 0,
+      "is-verifying-entire-crate": true,
+      "success": true,
+      "verified": 16
+    },
+    "verus": {
+      "commit": "92f466f247f45128c630d1c843fd6e27d2115587",
+      "platform": {
+        "arch": "x86_64",
+        "os": "linux"
+      },
+      "profile": "release",
+      "toolchain": "1.97.1-x86_64-unknown-linux-gnu",
+      "version": "0.2026.08.09.92f466f"
+    }
+  },
+  "schema": "writer-lookup.historical-positive.v1",
+  "tools_manifest_sha256": "e2f980198e8f307fd527c0afc7e37fee37a0b8f2e3057d90a033b8a4c14519b6"
+}

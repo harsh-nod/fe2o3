@@ -168,6 +168,7 @@ fn unticketed_xgmi_dependency_failure_is_observable_without_publication() {
     completed.insert(
         1,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream: 3,
             status: BackendPollV1::Failed { code: -7 },
             dependency_depth: 1,
@@ -256,6 +257,7 @@ fn native_xgmi_batch_selection_is_ready_directional_bounded_and_ordered() {
     completed.insert(
         70,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream: 8,
             status: BackendPollV1::Succeeded,
             dependency_depth: 1,
@@ -265,6 +267,7 @@ fn native_xgmi_batch_selection_is_ready_directional_bounded_and_ordered() {
     completed.insert(
         71,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream: 8,
             status: BackendPollV1::Pending,
             dependency_depth: 1,

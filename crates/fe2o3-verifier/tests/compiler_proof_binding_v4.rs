@@ -262,7 +262,7 @@ fn actual_guarded_store_lowering_reaches_exact_v9_singleton_admission() {
                 .try_into()
                 .unwrap()
         ),
-        3
+        fe2o3_kernel_ir::FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V3
     );
     assert_eq!(
         u16::from_le_bytes(
@@ -367,7 +367,7 @@ fn write_only_formal_obligation_receipt_cannot_be_downgraded_or_retagged() {
         let original = receipts.formal_memory.canonical_preimage();
         assert_eq!(
             u16::from_le_bytes(original[128..130].try_into().unwrap()),
-            3
+            fe2o3_kernel_ir::FORMAL_MEMORY_OBLIGATION_RECEIPT_VERSION_V3
         );
         assert_eq!(
             u16::from_le_bytes(original[130..132].try_into().unwrap()),
@@ -384,12 +384,15 @@ fn write_only_formal_obligation_receipt_cannot_be_downgraded_or_retagged() {
         replace_formal_memory(&mut receipts, bytes);
         let evidence = signed_verus_evidence(exact_pliron_identity(&receipts));
         let binding = proof_binding(&receipts, None, evidence.canonical_bytes());
-        assert!(matches!(
-            validate(&binding, &receipts),
-            Err(CompilerProofInputValidationErrorV4::Stage(error)) if matches!(*error, CompilerProofInputValidationErrorV3::FormalMemoryV4Decode(
-                    fe2o3_lower_mir_kernel::ProductionFormalMemoryEvidenceErrorV4::FormalReceipt(_)
-                ))
-        ));
+        assert!(
+            matches!(
+                validate(&binding, &receipts),
+                Err(CompilerProofInputValidationErrorV4::Stage(error)) if matches!(*error, CompilerProofInputValidationErrorV3::FormalMemoryV4Decode(
+                        fe2o3_lower_mir_kernel::ProductionFormalMemoryEvidenceErrorV4::FormalReceipt(_)
+                    ))
+            ),
+            "retagged guarded receipt as version {version}"
+        );
     }
 }
 

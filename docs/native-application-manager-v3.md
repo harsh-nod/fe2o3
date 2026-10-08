@@ -7,12 +7,19 @@ tests.
 
 ## One Original Request
 
-The explicit `--native-application-proof-custodian` Cargo route uses one installed
-`fe2o3-native-application-manager`, started **before compilation** by an approved
+The explicit `authority release --native run --native-application-proof-custodian`
+Cargo route uses one installed `fe2o3-native-application-manager`, started
+**before compilation** by an approved
 external whole-cgroup custodian. It is not paired with a concurrently running
 standalone `fe2o3-compiler-execution.service` or its V1 counterpart. Those services
 compete for the same fixed compiler listener and lifecycle resources. The manager
 does not stop other services or bypass their locks; conflicting startup refuses.
+
+`--native` must occur once immediately after `release`, before `build`, `run`,
+or `probe`. It selects the existing paired V4 release contract and fixed-origin
+V3 profile; it is not admission. Omitting it preserves the legacy V3/V1 route.
+Application arguments after `--` cannot select a release family, and no missing
+native deployment triggers a legacy fallback.
 
 The closed sequence is:
 
@@ -48,8 +55,9 @@ approve themselves. The worker and exact functional-refinement runtime must also
 be admitted. Do not print signing seeds, relax source policies, or install a PR
 runner persistently on a shared host.
 
-Bootstrap source-policy inputs with the separate build-only protected compiler
-route and explicit `--export-native-policy-inputs` selection before installing
+Bootstrap source-policy inputs with the separate `authority release --native
+build` protected compiler route and explicit `--export-native-policy-inputs`
+selection before installing
 the native proof profile. Its actual-owner export remains an authority-free
 candidate. Independently review and pin both source packet and roster before
 `export-native-policy-candidate`, then independently approve/pin the resulting

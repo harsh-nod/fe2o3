@@ -90,10 +90,11 @@ mod allocation_table;
 mod multi_admission;
 mod multi_allocation;
 mod multi_generated;
-pub(crate) use multi_generated::GeneratedAdoptionScopeV1;
+pub(crate) use multi_generated::{GeneratedAdoptionScopeV1, GeneratedColdDeviceFailureV1};
 mod multi_open;
 #[cfg(feature = "hardware-qualification")]
 mod multi_qualification;
+mod peer_placement;
 use allocation_table::AllocationTableV1;
 mod compute_dispatch;
 mod compute_launch_payload;
@@ -170,14 +171,20 @@ pub use xgmi_batch_diagnostic::{
 #[cfg(feature = "hardware-diagnostic")]
 pub use xgmi_diagnostic::{KfdRuntimeXgmiCallObservationV1, KfdRuntimeXgmiDiagnosticCallV1};
 mod generated_adoption;
+pub(crate) use generated_adoption::arena1024::ArenaPreallocationV1;
+pub(crate) use generated_adoption::observe_generated_retirement_v1;
 #[cfg(feature = "hardware-qualification")]
 pub use generated_adoption::qualification::{
     KfdGeneratedCopyCoexistenceFailureV1, KfdGeneratedCopyCoexistenceWitnessV1,
     KfdGeneratedCopyPublicationKindV1,
 };
+pub(crate) use generated_adoption::registry4::RegistryStorageV1;
 mod generated_preparation;
 mod generated_shells;
-pub(crate) use generated_shells::{GeneratedShellBindingV1, GeneratedShellPlanV1};
+pub(crate) use generated_shells::{
+    GeneratedShellBindingV1, GeneratedShellCommitPlanV1, GeneratedShellPlanV1,
+};
+pub(crate) use multi_generated::MultiGeneratedShellCommitV1;
 mod compute_dependencies;
 mod native_budget;
 mod producer_peers;
@@ -919,8 +926,21 @@ impl KfdRuntimeSdmaStorageV1 {
     }
 }
 
+// Private immutable routing metadata, never physical completion authority.
+// Only generated DATA-copy admission constructs the keyed variant.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SubmissionOriginV1 {
+    Ordinary,
+    GeneratedDataCopy {
+        shell: u64,
+        producer: u64,
+        destination: u64,
+    },
+}
+
 #[derive(Clone, Copy, Debug)]
 struct SubmissionRecordV1 {
+    origin: SubmissionOriginV1,
     stream: u64,
     status: BackendPollV1,
     dependency_depth: usize,
@@ -1383,7 +1403,7 @@ struct StagingBudgetsV1 {
 pub struct KfdRuntimeBackendV1 {
     description: BackendDeviceDescriptionV1,
     dispatch_capacity: RuntimeDispatchCapacityV1,
-    admitted_device: Option<CheckedGfx942XnackMinusDevice>,
+    admitted_device: multi_generated::DeviceCustodyV1,
     queue: Option<ComputeAqlQueueSessionV1>,
     #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
     cpu_queue: Option<Box<ordinary_queue_io::CpuOrdinaryQueueV1>>,
@@ -1906,7 +1926,7 @@ impl KfdRuntimeBackendV1 {
         Self {
             description,
             dispatch_capacity: dispatch.capacity,
-            admitted_device,
+            admitted_device: multi_generated::DeviceCustodyV1::from_ready(admitted_device),
             queue: None,
             #[cfg(all(test, feature = "cpu-runtime-fixtures"))]
             cpu_queue: None,
@@ -2332,6 +2352,11 @@ impl KfdRuntimeBackendV1 {
                     KfdRuntimeBackendErrorKindV1::Terminal,
                     "KFD backend is terminal",
                 ),
+            ))
+        } else if self.admitted_device.cold().is_some() {
+            Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Unsupported,
+                "original cold device is permanently unavailable",
             ))
         } else {
             Ok(())
@@ -6150,7 +6175,7 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         &mut self,
         stream: u64,
     ) -> Result<(), RuntimeBackendFailureV1<Self::Error>> {
-        self.require_live()?;
+        self.require_live_or_cold_metadata_v1()?;
         self.require_no_generated_stream_v1(stream)?;
         if !self.streams.contains_key(&stream) {
             return Err(Self::rejected(
@@ -6819,6 +6844,12 @@ impl RuntimeBackendV1 for KfdRuntimeBackendV1 {
         self.require_live()?;
         if self.generated_submissions.contains_key(&submission) {
             return self.release_generated_submission_v1(submission);
+        }
+        if self.generated_copy_release_blocked_v1(submission)? {
+            return Err(Self::rejected(
+                KfdRuntimeBackendErrorKindV1::Busy,
+                "generated DATA copy retains original native custody",
+            ));
         }
         if self.active_compute_lane_v1(submission).is_some() {
             return Err(Self::rejected(
@@ -7630,6 +7661,7 @@ fn settle_xgmi_submission_record_v1(
     submissions.insert(
         active.id,
         SubmissionRecordV1 {
+            origin: SubmissionOriginV1::Ordinary,
             stream: active.stream,
             status,
             dependency_depth: 1,
@@ -10942,6 +10974,15 @@ impl KfdNativeXgmiRuntimeBackendV1 {
 impl RuntimeBackendV1 for KfdNativeXgmiRuntimeBackendV1 {
     type Error = KfdRuntimeBackendErrorV1;
 
+    fn observe_peer_copy_placement_v1(
+        &self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+    ) -> Option<crate::BackendPeerCopyPlacementV1> {
+        self.observe_native_peer_placement_v1(stream, source, destination)
+    }
+
     fn allocation_admission_profile_v1(
         &self,
     ) -> Result<crate::RuntimeAllocationAdmissionProfileV1, RuntimeBackendFailureV1<Self::Error>>
@@ -12000,6 +12041,15 @@ impl Drop for KfdNativeXgmiRuntimeBackendV1 {
 
 impl RuntimeBackendV1 for KfdMultiDeviceRuntimeBackendV1 {
     type Error = KfdRuntimeBackendErrorV1;
+
+    fn observe_peer_copy_placement_v1(
+        &self,
+        stream: u64,
+        source: BackendMemoryRegionV1,
+        destination: BackendMemoryRegionV1,
+    ) -> Option<crate::BackendPeerCopyPlacementV1> {
+        self.observe_multi_peer_placement_v1(stream, source, destination)
+    }
 
     fn capture_coherent_host_range_v1(
         &mut self,

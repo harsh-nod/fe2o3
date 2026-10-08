@@ -121,7 +121,12 @@ fn permanent_errors_and_impossible_read_lengths_poison_the_reader() {
 #[test]
 fn live_writer_alias_prevents_admission_until_every_writer_closes() {
     let (reader_fd, writer) = pipe_with(PipeFlags::CLOEXEC | PipeFlags::NONBLOCK).unwrap();
-    let alias = rustix::io::dup(&writer).unwrap();
+    let alias = rustix::io::fcntl_dupfd_cloexec(&writer, 0).unwrap();
+    assert!(
+        rustix::io::fcntl_getfd(&alias)
+            .unwrap()
+            .contains(rustix::io::FdFlags::CLOEXEC)
+    );
     let bytes = [0x41; BYTES];
     assert_eq!(rustix::io::write(&writer, &bytes).unwrap(), BYTES);
     drop(writer);
@@ -138,9 +143,19 @@ fn live_writer_alias_prevents_admission_until_every_writer_closes() {
         assert!(reader.report().is_err());
     }
     drop(alias);
-    assert_eq!(
-        reader.observe(|out| rustix::io::read(&reader_fd, out)),
-        Ok(Some(()))
-    );
+    // A concurrent test may fork while a writer is open. CLOEXEC closes that
+    // inherited writer at exec, not fork; only an actual EOF admits the report.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match reader.observe(|out| rustix::io::read(&reader_fd, out)) {
+            Ok(Some(())) => break,
+            Ok(None) => {
+                assert!(reader.report().is_err());
+                assert!(std::time::Instant::now() < deadline, "writer EOF timed out");
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(error) => panic!("writer EOF observation failed: {error:?}"),
+        }
+    }
     assert_eq!(reader.report().unwrap(), bytes);
 }

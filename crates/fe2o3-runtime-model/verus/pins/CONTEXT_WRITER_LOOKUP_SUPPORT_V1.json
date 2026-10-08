@@ -1,0 +1,82 @@
+{
+  "crates/fe2o3-runtime-model/verus/CONTEXT_WRITER_LOOKUP_BOUNDARY.md": {
+    "bytes": 4827,
+    "mode": 420,
+    "sha256": "16cf5bee89a09c0045756bb43eeb9bbb77ce8b49480cd54eeaab61a3c84e5592"
+  },
+  "crates/fe2o3-runtime-model/verus/check-context-writer-lookup-v1.py": {
+    "bytes": 15326,
+    "mode": 420,
+    "sha256": "e3d126da5732f380d21606134e67e0716127cc06da7b4734f29bc3ae9f76ac59"
+  },
+  "crates/fe2o3-runtime-model/verus/check-negative-quality.py": {
+    "bytes": 110527,
+    "mode": 493,
+    "sha256": "74c83c0776206e6c486ebb0bf9fbf6bcfdf207a1f86c22bed6054b5f7438c5fd"
+  },
+  "crates/fe2o3-runtime-model/verus/context-writer-lookup-diagnostics-v1.py": {
+    "bytes": 25255,
+    "mode": 420,
+    "sha256": "635c10978b5300d98e14df48cfc0a31ae5ec0c5461d0fa69afb96541116b5107"
+  },
+  "crates/fe2o3-runtime-model/verus/context-writer-lookup-mutations-v1.py": {
+    "bytes": 5390,
+    "mode": 420,
+    "sha256": "d1ba0e1f40fc4622423fe816c68cbdbe1cb5a68292c07f3f3860062566aac80e"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_WRITER_LOOKUP_DIAGNOSTICS_V1.json": {
+    "bytes": 633050,
+    "mode": 420,
+    "sha256": "2039bd8aaa0420311a4cbde531999afcfbd662635d71c37b3e43272ec71997c4"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_WRITER_LOOKUP_INPUTS_V1.json": {
+    "bytes": 2667,
+    "mode": 420,
+    "sha256": "0f88686f585aaa54b0ef9dcba9d251abaf17f767b7f414fe84829911d7b1c936"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_WRITER_LOOKUP_INPUTS_V1_SHA256": {
+    "bytes": 65,
+    "mode": 420,
+    "sha256": "073e24fd5c3eb0a10b03fcc61b1745bfdb7254e9df78ab6060568f31656a36e2"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_WRITER_LOOKUP_MUTATIONS_V1.json": {
+    "bytes": 17075,
+    "mode": 420,
+    "sha256": "d1fd28512dcb0633cbbc305a4880f94204fdcc27e60943eaf499647cb340b42e"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_WRITER_LOOKUP_POSITIVE_V1.json": {
+    "bytes": 43749,
+    "mode": 420,
+    "sha256": "c2c2b3621d2bddb7c1d7604fb11617941af9b2b887a68c4089b60578fbaeb366"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_WRITER_LOOKUP_PREDECESSOR_V1.json": {
+    "bytes": 71287,
+    "mode": 420,
+    "sha256": "adb0e36676a9a5fcfc59bf2c95739dbb19cdacab2add51ede4666d7cb236793e"
+  },
+  "crates/fe2o3-runtime-model/verus/pins/CONTEXT_WRITER_LOOKUP_TOOLCHAIN.toml": {
+    "bytes": 56,
+    "mode": 420,
+    "sha256": "0b5ab62ff48b93d11576964057a24fe8122e76b50d797779e2b3b11f3e0e50f1"
+  },
+  "crates/fe2o3-runtime-model/verus/qualify-context-writer-lookup-v1.py": {
+    "bytes": 12143,
+    "mode": 420,
+    "sha256": "194201a78649d7c4c34b8758e0d2e18b28c83b7682cfa6eb9b9192c49b51871f"
+  },
+  "crates/fe2o3-runtime-model/verus/test-context-writer-lookup-diagnostics-v1.py": {
+    "bytes": 22864,
+    "mode": 420,
+    "sha256": "25bcc8f813f58dc13c231ddc125eec75b7d419eba9d692284c5a6bd130821df2"
+  },
+  "crates/fe2o3-runtime-model/verus/test-context-writer-lookup-v1.py": {
+    "bytes": 17496,
+    "mode": 420,
+    "sha256": "ab0205ccc5609462c4e7173a46c45aa952b72faae8870cd6fa199cfd6f742a3c"
+  },
+  "crates/fe2o3-runtime-model/verus/test-qualify-context-writer-lookup-v1.py": {
+    "bytes": 19459,
+    "mode": 420,
+    "sha256": "193e48295dab8b71fa5d99cdb08a56bc60605f443f03e379daaaececb194407c"
+  }
+}

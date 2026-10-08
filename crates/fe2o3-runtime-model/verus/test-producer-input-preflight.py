@@ -62,7 +62,7 @@ def rejected_after_source_repin(path, changed):
 
 
 context_path = Path("crates/fe2o3-runtime/src/context.rs")
-for field in ("scope_epoch", "same_device_copies", "segmented_peer_copies", "native_pair_reservation",
+for field in ("scope_epoch", "replicas", "same_device_copies", "segmented_peer_copies", "native_pair_reservation",
               "same_device_copy", "segmented_peer_copy", "segmented_destination"):
     pattern = r"^    " + field + r": [^\n]+,\n"
     rows = re.findall(pattern, sources[context_path], re.M)

@@ -123,6 +123,7 @@ impl Request {
             original_handoff_bytes: observations.handoff.1,
             original_carriage_identity: observations.carriage,
             original_finalized_artifact_identity: observations.artifact,
+            final_f_copy_observation: CopyObservation::from(observations.copy_classification),
             grants_authority: false,
             independently_approved: false,
         };
@@ -169,6 +170,33 @@ pub(crate) struct OriginalObservations {
     pub handoff: ([u8; 32], u64),
     pub carriage: [u8; 32],
     pub artifact: [u8; 32],
+    pub copy_classification: fe2o3_verifier::NativeCopyProgramClassificationV1,
+}
+
+#[derive(Serialize)]
+struct CopyObservation {
+    classification: &'static str,
+    load: Option<[u32; 2]>,
+    store: Option<[u32; 2]>,
+    machine_accepted: bool,
+}
+
+impl From<fe2o3_verifier::NativeCopyProgramClassificationV1> for CopyObservation {
+    fn from(value: fe2o3_verifier::NativeCopyProgramClassificationV1) -> Self {
+        use fe2o3_verifier::NativeCopyProgramClassificationV1 as C;
+        let (classification, load, store) = match value {
+            C::Unsupported => ("unsupported", None, None),
+            C::GuardedU32 { load, store } => {
+                ("guarded-u32-copy-final-f-v1", Some(load), Some(store))
+            }
+        };
+        Self {
+            classification,
+            load,
+            store,
+            machine_accepted: false,
+        }
+    }
 }
 #[derive(Serialize)]
 struct Blob {
@@ -195,6 +223,7 @@ struct Manifest<'a> {
     original_handoff_bytes: u64,
     original_carriage_identity: [u8; 32],
     original_finalized_artifact_identity: [u8; 32],
+    final_f_copy_observation: CopyObservation,
     grants_authority: bool,
     independently_approved: bool,
 }
