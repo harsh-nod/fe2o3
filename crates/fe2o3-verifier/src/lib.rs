@@ -193,6 +193,7 @@ pub use conditional_ranked_formulas_v1::{
     ProductionConditionalFormulaExecutionV1, ProductionConditionalFormulaExecutionV2,
     ProductionConditionalFormulaReportV1, ProductionConditionalFormulaReportV2,
     RetainedProductionConditionalFormulaV1, RetainedProductionConditionalFormulaV2,
+    execute_and_retain_conditional_ranked_formula_policy_v2,
     execute_and_retain_conditional_ranked_formula_v1,
     execute_and_retain_conditional_ranked_formula_v2,
     import_and_retain_conditional_ranked_formula_v2, with_conditional_ranked_formula_execution_v1,

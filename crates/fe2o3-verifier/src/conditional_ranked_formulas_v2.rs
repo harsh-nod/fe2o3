@@ -10,8 +10,8 @@ use crate::functional_refinement_receipt_v2::{
 use crate::portable_reference_v1::{
     ReferenceReplayInputV1,
     codec::{
-        DecodedNativeCpuInputV1, NativeCpuCodecErrorV1, NativeCpuInputV1,
-        with_encoded_native_cpu_input_v1,
+        DecodedNativeCpuInputV1, NativeCpuCodecErrorV1, NativeCpuInputV1, NativeCpuPolicyInputV2,
+        with_encoded_native_cpu_input_v1, with_encoded_native_cpu_policy_input_v2,
     },
 };
 
@@ -131,8 +131,60 @@ pub fn execute_and_retain_conditional_ranked_formula_v2(
     budget: &mut Budget<'_>,
     timeout_seconds: u32,
 ) -> Result<RetainedProductionConditionalFormulaV2, Error> {
+    execute_and_retain_using(
+        runtime,
+        request,
+        LiveCpuInput::Registration(input),
+        budget,
+        timeout_seconds,
+    )
+}
+
+/// Executes a CPU-content-bound statement using the policy-origin V2 codec.
+/// The origin description does not authenticate enrollment: the caller must
+/// preserve the original invocation, admitted policy and live source owners.
+/// This grants no native launch authority and accepts no raw commitment.
+///
+/// ```compile_fail
+/// use fe2o3_verifier::{execute_and_retain_conditional_ranked_formula_policy_v2 as execute, FunctionalRefinementVerusRuntimeLeaseV1};
+/// use fe2o3_verifier::portable_reference_v1::codec::NativeCpuInputV1;
+/// use fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1 as Request;
+/// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+/// fn wrong_origin(runtime: &FunctionalRefinementVerusRuntimeLeaseV1, request: &Request<'_>,
+///     input: NativeCpuInputV1<'_>, budget: &mut Budget<'_>) {
+///     let _ = execute(runtime, request, input, budget, 1);
+/// }
+/// ```
+pub fn execute_and_retain_conditional_ranked_formula_policy_v2(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    request: &Request<'_>,
+    input: NativeCpuPolicyInputV2<'_>,
+    budget: &mut Budget<'_>,
+    timeout_seconds: u32,
+) -> Result<RetainedProductionConditionalFormulaV2, Error> {
+    execute_and_retain_using(
+        runtime,
+        request,
+        LiveCpuInput::Policy(input),
+        budget,
+        timeout_seconds,
+    )
+}
+
+enum LiveCpuInput<'a> {
+    Registration(NativeCpuInputV1<'a>),
+    Policy(NativeCpuPolicyInputV2<'a>),
+}
+
+fn execute_and_retain_using(
+    runtime: &FunctionalRefinementVerusRuntimeLeaseV1,
+    request: &Request<'_>,
+    input: LiveCpuInput<'_>,
+    budget: &mut Budget<'_>,
+    timeout_seconds: u32,
+) -> Result<RetainedProductionConditionalFormulaV2, Error> {
     retention::retain_reservation_using(budget, RETAINED_STORAGE, |budget| {
-        with_live_cpu(request, input, budget, |request, cpu_input, budget| {
+        with_live_cpu_input(request, input, budget, |request, cpu_input, budget| {
             with_scratch_using(budget, retention::PREPARATION_STORAGE, |budget| {
                 let prepared = prepare_v2(request, cpu_input, budget)?;
                 let (formula, retained, policy) =
@@ -360,6 +412,36 @@ impl RetainedProductionConditionalFormulaV2 {
         })
     }
 
+    /// Re-encodes the entire policy-origin input before the same strict replay.
+    /// This cannot upgrade a registration-origin receipt or authenticate the
+    /// policy description. Original enrollment-owner checks remain external.
+    ///
+    /// ```compile_fail
+    /// use fe2o3_verifier::{RetainedProductionConditionalFormulaV2, ProductionConditionalFormulaExecutionV2};
+    /// use fe2o3_verifier::portable_reference_v1::codec::NativeCpuPolicyInputV2;
+    /// use fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1 as Request;
+    /// use fe2o3_kernel_ir::CanonicalKernelIrVerificationResourceBudgetV1 as Budget;
+    /// fn escape<'a>(p: &RetainedProductionConditionalFormulaV2, r: &Request<'_>,
+    ///     input: NativeCpuPolicyInputV2<'_>, b: &mut Budget<'_>) -> &'a ProductionConditionalFormulaExecutionV2 {
+    ///     p.with_replayed_policy_request_v2(r, input, b, |proof, _| Ok(proof)).unwrap()
+    /// }
+    /// ```
+    pub fn with_replayed_policy_request_v2<R>(
+        &self,
+        request: &Request<'_>,
+        input: NativeCpuPolicyInputV2<'_>,
+        budget: &mut Budget<'_>,
+        consume: impl for<'proof> FnOnce(
+            &'proof ProductionConditionalFormulaExecutionV2,
+            &mut Budget<'_>,
+        ) -> Result<R, Error>,
+    ) -> Result<R, Error> {
+        self.require_reservation(budget)?;
+        with_live_policy_cpu(request, input, budget, |request, cpu_input, budget| {
+            self.replay_checked(request, cpu_input, budget, consume)
+        })
+    }
+
     /// Uses this decoded owner's input and commitment together, without a clone.
     ///
     /// ```compile_fail
@@ -488,9 +570,63 @@ fn with_live_cpu<R>(
     run: impl FnOnce(&Request<'_>, DigestV1, &mut Budget<'_>) -> Result<R, Error>,
 ) -> Result<R, Error> {
     with_encoded_native_cpu_input_v1(reborrow(&input), budget, |_, commitment, budget| {
-        with_cpu(request, input, commitment, budget, run)
+        with_cpu(
+            request,
+            CpuCorrespondenceInput::from(input),
+            commitment,
+            budget,
+            run,
+        )
     })
     .map_err(Error::Codec)?
+}
+
+fn reborrow_policy<'a>(input: &NativeCpuPolicyInputV2<'a>) -> NativeCpuPolicyInputV2<'a> {
+    NativeCpuPolicyInputV2 {
+        association: input.association,
+        kernel: input.kernel,
+        reference: input.reference,
+        replay: ReferenceReplayInputV1 {
+            signature_preimage: input.replay.signature_preimage,
+            effect_ir: input.replay.effect_ir,
+            effect_ir_sha256: input.replay.effect_ir_sha256,
+            observable_output_writes: input.replay.observable_output_writes,
+        },
+    }
+}
+
+fn with_live_policy_cpu<R>(
+    request: &Request<'_>,
+    input: NativeCpuPolicyInputV2<'_>,
+    budget: &mut Budget<'_>,
+    run: impl FnOnce(&Request<'_>, DigestV1, &mut Budget<'_>) -> Result<R, Error>,
+) -> Result<R, Error> {
+    with_encoded_native_cpu_policy_input_v2(
+        reborrow_policy(&input),
+        budget,
+        |_, commitment, budget| {
+            with_cpu(
+                request,
+                CpuCorrespondenceInput::from(input),
+                commitment,
+                budget,
+                run,
+            )
+        },
+    )
+    .map_err(Error::Codec)?
+}
+
+fn with_live_cpu_input<R>(
+    request: &Request<'_>,
+    input: LiveCpuInput<'_>,
+    budget: &mut Budget<'_>,
+    run: impl FnOnce(&Request<'_>, DigestV1, &mut Budget<'_>) -> Result<R, Error>,
+) -> Result<R, Error> {
+    match input {
+        LiveCpuInput::Registration(input) => with_live_cpu(request, input, budget, run),
+        LiveCpuInput::Policy(input) => with_live_policy_cpu(request, input, budget, run),
+    }
 }
 
 fn with_decoded_cpu<R>(
@@ -501,17 +637,53 @@ fn with_decoded_cpu<R>(
 ) -> Result<R, Error> {
     with_cpu(
         request,
-        input.input_v1(),
+        CpuCorrespondenceInput::from(input.input_v1()),
         input.commitment_v1(),
         budget,
         run,
     )
 }
 
+// Only the borrowed correspondence subject is shared. Origin stays in each
+// complete, domain-separated codec commitment; no synthetic V1 input is made.
+struct CpuCorrespondenceInput<'a> {
+    semantic_mir_sha256: [u8; 32],
+    semantic_root: u32,
+    reference: ConditionalReferenceInputV1<'a>,
+}
+
+impl<'a> From<NativeCpuInputV1<'a>> for CpuCorrespondenceInput<'a> {
+    fn from(input: NativeCpuInputV1<'a>) -> Self {
+        Self {
+            semantic_mir_sha256: input.association.semantic_mir_sha256,
+            semantic_root: input.association.semantic_root,
+            reference: ConditionalReferenceInputV1 {
+                kernel: input.kernel,
+                reference: input.reference,
+                replay: input.replay,
+            },
+        }
+    }
+}
+
+impl<'a> From<NativeCpuPolicyInputV2<'a>> for CpuCorrespondenceInput<'a> {
+    fn from(input: NativeCpuPolicyInputV2<'a>) -> Self {
+        Self {
+            semantic_mir_sha256: input.association.semantic_mir_sha256,
+            semantic_root: input.association.semantic_root,
+            reference: ConditionalReferenceInputV1 {
+                kernel: input.kernel,
+                reference: input.reference,
+                replay: input.replay,
+            },
+        }
+    }
+}
+
 // This raw commitment is PRIVATE and supplied only by the paired codec paths.
 fn with_cpu<R>(
     request: &Request<'_>,
-    input: NativeCpuInputV1<'_>,
+    input: CpuCorrespondenceInput<'_>,
     commitment: [u8; 32],
     budget: &mut Budget<'_>,
     run: impl FnOnce(&Request<'_>, DigestV1, &mut Budget<'_>) -> Result<R, Error>,
@@ -519,8 +691,8 @@ fn with_cpu<R>(
     current(request.pliron_input(), budget)?;
     let semantic = request.source().semantic_ssa().source_semantic();
     budget.charge_work(64)?;
-    if input.association.semantic_mir_sha256 != *semantic.semantic_sha256().as_bytes()
-        || input.association.semantic_mir_sha256
+    if input.semantic_mir_sha256 != *semantic.semantic_sha256().as_bytes()
+        || input.semantic_mir_sha256
             != *request.pliron_input().source_semantic_identity().as_bytes()
     {
         return Err(Error::Subject("conditional V2 CPU source association"));
@@ -528,19 +700,15 @@ fn with_cpu<R>(
     let mut root_found = false;
     for root in semantic.roots() {
         budget.charge_work(1)?;
-        root_found |= root.index() == input.association.semantic_root;
+        root_found |= root.index() == input.semantic_root;
     }
     if !root_found {
         return Err(Error::Subject("conditional V2 CPU root association"));
     }
     with_source_bound_cpu_correspondence_v1(
         request,
-        ConditionalReferenceInputV1 {
-            kernel: input.kernel,
-            reference: input.reference,
-            replay: input.replay,
-        },
-        input.association.semantic_root,
+        input.reference,
+        input.semantic_root,
         budget,
         |cpu, budget| {
             cpu.require_subjects(budget)
@@ -604,6 +772,9 @@ mod import_check_tests;
 #[cfg(test)]
 #[path = "conditional_ranked_formula_import_v2_tests.rs"]
 mod import_tests;
+#[cfg(test)]
+#[path = "conditional_ranked_formula_policy_v2_tests.rs"]
+mod policy_tests;
 #[cfg(test)]
 #[path = "conditional_ranked_formula_resources_v2_tests.rs"]
 mod resource_tests;
