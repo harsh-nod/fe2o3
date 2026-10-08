@@ -393,6 +393,15 @@ pub(super) fn emit(
     let target_pc = summary.target_pc;
     let target_next = summary.target_next;
     let target_result = summary.target_result;
+    if matches!(goal, Goal::Halted) {
+        // The existing residual contract pairs negative PCs and maps every
+        // nonnegative source PC to a nonnegative target PC.
+        emit!(
+            out,
+            " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_paired_related_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_paired_residual_{root}_v85);\n hide(invocation_source_byte_map_{root}_v36);\n hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_byte_states_related_v36);\n hide(invocation_byte_heaps_related_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_value_related_v36);\n hide(byte_scalar_type_v57);\n let original = invocation_paired_source_step_{root}_v36(source).state;\n let actual = invocation_paired_actual_step_{root}_v36(target).state;\n assert((original.machine.pc < 0) == (actual.pc < 0)) by {{\n  invocation_paired_cut_{root}_pc{pc}_residual_v85(source, target);\n  reveal(invocation_paired_residual_{root}_v85);\n }}\n assert(invocation_paired_source_step_{root}_v36(source).halted == (original.machine.pc < 0)) by {{\n  reveal(invocation_paired_source_step_{root}_v36);\n }}\n assert(invocation_paired_actual_step_{root}_v36(target).halted == (actual.pc < 0)) by {{\n  reveal(invocation_paired_actual_step_{root}_v36);\n }}\n"
+        );
+        return Ok(());
+    }
     emit!(
         out,
         " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_byte_states_related_v36);\n hide(invocation_byte_heaps_related_v36);\n hide(byte_memory_well_formed_v30);\n hide(byte_frame_runtime_well_formed_v30);\n hide(byte_private_frames_live_v30);\n hide(private_generation_counters_valid_v30);\n hide(invocation_source_logical_write_v38);\n hide(invocation_source_logical_clear_v38);\n hide(invocation_source_return_v36);\n hide(byte_end_frame_v30);\n"
@@ -488,12 +497,6 @@ pub(super) fn emit(
             emit!(
                 out,
                 " assert(value == actual.values[{target_result}]) by {{\n  reveal(invocation_paired_actual_step_{root}_v36);\n  reveal(invocation_byte_boundary_{root}_v36);\n  reveal_with_fuel(invocation_byte_follow_{root}_v36, {target_fuel});\n }}\n assert(invocation_paired_control_values_{root}_v36(source, invocation_source_block_runtime_{root}_v36(source), invocation_byte_boundary_{root}_v36(target))) by {{\n  reveal(invocation_source_block_runtime_{root}_v36);\n  reveal(invocation_byte_boundary_{root}_v36);\n  reveal(invocation_source_return_v36);\n  reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {source_fuel});\n  reveal_with_fuel(invocation_byte_follow_{root}_v36, {target_fuel});\n }}\n"
-            );
-        }
-        Goal::Halted => {
-            emit!(
-                out,
-                " assert(original.machine.pc == {continuation}) by {{ reveal(invocation_source_return_v36); }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted && !invocation_paired_actual_step_{root}_v36(target).halted) by {{\n  reveal(invocation_paired_source_step_{root}_v36);\n  reveal(invocation_paired_actual_step_{root}_v36);\n }}\n"
             );
         }
         Goal::Observations => {

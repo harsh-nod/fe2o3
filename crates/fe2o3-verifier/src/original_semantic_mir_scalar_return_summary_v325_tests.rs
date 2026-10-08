@@ -202,6 +202,60 @@ fn assert_observation_summary(
     }
 }
 
+fn assert_halted_summary(text: &str, root: usize, pc: usize) {
+    let emitted = body(text, root, pc, "halted");
+    let (header, body) = emitted.split_once("\n{\n").unwrap();
+    assert_eq!(
+        header,
+        format!(
+            "source: InvocationSourceByteStateV36, target: MemoryStateV30)\n requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},\n ensures  invocation_paired_source_step_{root}_v36(source).halted == invocation_paired_actual_step_{root}_v36(target).halted,"
+        )
+    );
+    assert_eq!(
+        body.split_once("\n}\n").unwrap().0,
+        format!(
+            r#" hide(invocation_paired_source_step_{root}_v36);
+ hide(invocation_paired_actual_step_{root}_v36);
+ hide(invocation_source_block_runtime_{root}_v36);
+ hide(invocation_byte_boundary_{root}_v36);
+ hide(invocation_paired_related_{root}_v36);
+ hide(invocation_paired_source_defined_{root}_v36);
+ hide(invocation_paired_residual_{root}_v85);
+ hide(invocation_source_byte_map_{root}_v36);
+ hide(invocation_source_byte_storage_related_{root}_v36);
+ hide(invocation_byte_states_related_v36);
+ hide(invocation_byte_heaps_related_v36);
+ hide(invocation_source_byte_state_well_formed_v36);
+ hide(invocation_value_related_v36);
+ hide(byte_scalar_type_v57);
+ let original = invocation_paired_source_step_{root}_v36(source).state;
+ let actual = invocation_paired_actual_step_{root}_v36(target).state;
+ assert((original.machine.pc < 0) == (actual.pc < 0)) by {{
+  invocation_paired_cut_{root}_pc{pc}_residual_v85(source, target);
+  reveal(invocation_paired_residual_{root}_v85);
+ }}
+ assert(invocation_paired_source_step_{root}_v36(source).halted == (original.machine.pc < 0)) by {{
+  reveal(invocation_paired_source_step_{root}_v36);
+ }}
+ assert(invocation_paired_actual_step_{root}_v36(target).halted == (actual.pc < 0)) by {{
+  reveal(invocation_paired_actual_step_{root}_v36);
+ }}"#
+        )
+    );
+    for forbidden in [
+        "reveal_with_fuel(",
+        "reveal(invocation_source_block_runtime_",
+        "reveal(invocation_byte_boundary_",
+        "invocation_source_return_v36(",
+        "invocation_source_put_local_preserves_heap_v78(",
+        "let state_",
+        "assume(",
+        "admit(",
+    ] {
+        assert!(!body.contains(forbidden), "{forbidden}");
+    }
+}
+
 fn run(
     layout: Layout,
     work: usize,
@@ -292,7 +346,9 @@ fn run(
                 for goal in ["heap", "control", "halted", "observations"] {
                     let emitted = body(&out.text, root, pc, goal);
                     assert!(emitted.contains(&format!("requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},")));
-                    if enabled {
+                    if enabled && goal == "halted" {
+                        assert_halted_summary(&out.text, root, pc);
+                    } else if enabled {
                         for ordinal in 0..statements {
                             assert!(emitted.contains(&format!("hide(invocation_source_scalar_{root}_{instance}_{block}_{ordinal}_v36);")));
                             assert!(emitted.contains(&format!(
@@ -741,6 +797,7 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                     for (root, pc, instance, statements, continuation, operations, target_fuel) in observation_summaries {
                         assert_observation_summary(&out.text, root, pc, instance, statements,
                             continuation, operations, target_fuel);
+                        assert_halted_summary(&out.text, root, pc);
                     }
                     let emitted_values = out.text.contains("let value_2 = MemoryValueV30::Scalar(original_invocation_source_scalar_trace_");
                     assert!(coverage.len() < 4, "bounded fixture layout census");
@@ -815,6 +872,9 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                                 let emitted = body(&out.text, root, cut.source, "observations");
                                 assert!(!emitted.contains("let state_0 = source;"));
                                 assert!(emitted.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
+                                let halted = body(&out.text, root, cut.source, "halted");
+                                assert!(!halted.contains(&format!("invocation_paired_cut_{root}_pc{}_residual_v85(source, target);", cut.source)));
+                                assert!(halted.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
                                 fallback += 1;
                             }
                         }
