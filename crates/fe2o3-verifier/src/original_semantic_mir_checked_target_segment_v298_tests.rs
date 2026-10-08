@@ -144,86 +144,7 @@ fn generate(layout: Layout, work: usize, storage: usize) -> (Result<()>, usize, 
             text.matches("spec fn checked_actual_segment_results_")
                 .count()
         );
-        for tail in text
-            .split("proof fn checked_actual_source_target_step_")
-            .skip(1)
-        {
-            let declaration = tail.split("\nproof fn ").next().unwrap();
-            let site = declaration.split_once('(').unwrap().0;
-            let (root, remaining) = site.split_once('_').unwrap();
-            let (instance, _) = remaining.split_once('_').unwrap();
-            let (header, body) = declaration.split_once("\n{\n").unwrap();
-            assert_eq!(
-                header,
-                format!(
-                    "{site}(\n s: InvocationSourceMicroStateV36, t: MemoryMicroStateV30,\n left: int, right: int, little_endian: bool,\n)\n requires checked_actual_segment_inputs_{site}(s, t, left, right, little_endian),\n ensures checked_actual_segment_results_{site}(s, t,\n     invocation_source_micro_step_{root}_{instance}_v36(s, little_endian),\n     byte_micro_step_{root}_v30(t, little_endian), left, right),"
-                )
-            );
-            let source_header =
-                format!(" hide(invocation_source_micro_step_{root}_{instance}_v36);\n");
-            let target_header = format!(" hide(byte_micro_step_{root}_v30);\n");
-            let demand_site = site.strip_suffix("_v298").unwrap();
-            let summary_headers = [
-                " hide(invocation_source_byte_state_well_formed_v36);\n".to_owned(),
-                format!(" hide(invocation_source_active_{root}_{instance}_v36);\n"),
-                format!(" hide(byte_inputs_{root}_v55);\n"),
-                format!(" hide(checked_prefix_demands_{demand_site}_v296);\n"),
-                format!(" hide(checked_target_next_{site});\n"),
-            ];
-            assert!(body.starts_with(&format!(
-                "{source_header}{target_header}{} reveal(checked_actual_segment_inputs_{site});\n",
-                summary_headers.concat()
-            )));
-            assert_eq!(body.matches(" hide(").count(), 7);
-            assert_eq!(body.matches(&source_header).count(), 1);
-            assert_eq!(body.matches(&target_header).count(), 1);
-            let mut previous_body = body.to_owned();
-            for directive in &summary_headers {
-                assert_eq!(body.matches(directive).count(), 1);
-                previous_body = previous_body.replacen(directive, "", 1);
-            }
-            let target_declaration = text
-                .split_once(&format!("proof fn checked_target_actual_step_{site}("))
-                .unwrap()
-                .1
-                .split_once("\nspec fn ")
-                .unwrap()
-                .0;
-            let mut updates = target_declaration.split(".update(").skip(1);
-            let value: usize = updates
-                .next()
-                .unwrap()
-                .split_once("int,")
-                .unwrap()
-                .0
-                .parse()
-                .unwrap();
-            let overflow: usize = updates
-                .next()
-                .unwrap()
-                .split_once("int,")
-                .unwrap()
-                .0
-                .parse()
-                .unwrap();
-            assert!(updates.next().is_none());
-            assert_eq!(
-                previous_body,
-                format!(
-                    "{source_header}{target_header} reveal(checked_actual_segment_inputs_{site});\n checked_add_actual_micro_step_{demand_site}_v293(s, left, right, little_endian);\n checked_add_actual_demanded_step_{demand_site}_v296(s, left, right, little_endian);\n checked_target_actual_step_{site}(t, left, right, little_endian);\n let n = byte_micro_step_{root}_v30(t, little_endian);\n assert forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}\n     implies #[trigger] n.next.state.values[i] == t.state.values[i] by {{ }}\n reveal(checked_actual_segment_results_{site});\n}}"
-                )
-            );
-            let (requires, rest) = declaration.split_once("\n ensures").unwrap();
-            assert!(requires.contains("requires checked_actual_segment_inputs_"));
-            assert!(!requires.contains("results_"));
-            assert!(!requires.contains("after_"));
-            assert!(rest.contains("invocation_source_micro_step_"));
-            assert!(rest.contains("byte_micro_step_"));
-            assert!(rest.contains("checked_add_actual_demanded_step_"));
-            assert!(rest.contains("checked_target_actual_step_"));
-            assert!(!declaration.contains("assume("));
-            assert!(!declaration.contains("admit("));
-        }
+        assert_composition_projections(text);
         assert!(text.contains(".leaves[seq![0int]]"));
         assert!(text.contains(".leaves[seq![1int]]"));
         assert!(text.contains("MemoryValueV30::Scalar(if left + right >= 4294967296"));
@@ -240,6 +161,168 @@ fn generate(layout: Layout, work: usize, storage: usize) -> (Result<()>, usize, 
         }
         Ok(())
     })
+}
+
+fn assert_composition_projections(text: &str) {
+    for tail in text
+        .split("proof fn checked_actual_source_target_step_")
+        .skip(1)
+    {
+        let declaration = tail.split("\nproof fn ").next().unwrap();
+        let site = declaration.split_once('(').unwrap().0;
+        let (root, remaining) = site.split_once('_').unwrap();
+        let (instance, _) = remaining.split_once('_').unwrap();
+        let (header, body) = declaration.split_once("\n{\n").unwrap();
+        assert_eq!(
+            header,
+            format!(
+                "{site}(\n s: InvocationSourceMicroStateV36, t: MemoryMicroStateV30,\n left: int, right: int, little_endian: bool,\n)\n requires checked_actual_segment_inputs_{site}(s, t, left, right, little_endian),\n ensures checked_actual_segment_results_{site}(s, t,\n     invocation_source_micro_step_{root}_{instance}_v36(s, little_endian),\n     byte_micro_step_{root}_v30(t, little_endian), left, right),"
+            )
+        );
+        let source_header = format!(" hide(invocation_source_micro_step_{root}_{instance}_v36);\n");
+        let target_header = format!(" hide(byte_micro_step_{root}_v30);\n");
+        let demand_site = site.strip_suffix("_v298").unwrap();
+        let summary_headers = [
+            " hide(invocation_source_byte_state_well_formed_v36);\n".to_owned(),
+            format!(" hide(invocation_source_active_{root}_{instance}_v36);\n"),
+            format!(" hide(byte_inputs_{root}_v55);\n"),
+            format!(" hide(checked_prefix_demands_{demand_site}_v296);\n"),
+            format!(" hide(checked_target_next_{site});\n"),
+        ];
+        assert!(body.starts_with(&format!(
+            "{source_header}{target_header}{} reveal(checked_actual_segment_inputs_{site});\n",
+            summary_headers.concat()
+        )));
+        assert_eq!(body.matches(" hide(").count(), 7);
+        assert_eq!(body.matches(&source_header).count(), 1);
+        assert_eq!(body.matches(&target_header).count(), 1);
+        let mut previous_body = body.to_owned();
+        for directive in &summary_headers {
+            assert_eq!(body.matches(directive).count(), 1);
+            previous_body = previous_body.replacen(directive, "", 1);
+        }
+        let target_declaration = text
+            .split_once(&format!("proof fn checked_target_actual_step_{site}("))
+            .unwrap()
+            .1
+            .split_once("\nspec fn ")
+            .unwrap()
+            .0;
+        let mut updates = target_declaration.split(".update(").skip(1);
+        let value: usize = updates
+            .next()
+            .unwrap()
+            .split_once("int,")
+            .unwrap()
+            .0
+            .parse()
+            .unwrap();
+        let overflow: usize = updates
+            .next()
+            .unwrap()
+            .split_once("int,")
+            .unwrap()
+            .0
+            .parse()
+            .unwrap();
+        assert!(updates.next().is_none());
+        let result_declaration = text
+            .split_once(&format!("spec fn checked_actual_segment_results_{site}("))
+            .unwrap()
+            .1
+            .split_once("\nproof fn ")
+            .unwrap()
+            .0;
+        let destination: usize = result_declaration
+            .split_once(".logical.aggregates.contains_key(")
+            .unwrap()
+            .1
+            .split_once(')')
+            .unwrap()
+            .0
+            .parse()
+            .unwrap();
+        assert_ne!(value, overflow);
+        let projected = format!(
+            r#" let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
+ let n = byte_micro_step_{root}_v30(t, little_endian);
+ assert(a.source.machine.valid && invocation_source_active_{root}_{instance}_v36(a.source)
+     && invocation_source_byte_state_well_formed_v36(a.source)
+     && a.source.machine.pc == s.source.machine.pc
+     && a.next_statement == s.next_statement + 1
+     && a.observations.len() == s.observations.len() + 1
+     && a.observations.take(s.observations.len() as int) == s.observations
+     && a.source.machine.memory == s.source.machine.memory
+     && a.source.machine.frames == s.source.machine.frames
+     && a.source.machine.generations == s.source.machine.generations
+     && a.source.slots == s.source.slots && a.source.objects == s.source.objects
+     && a.source.logical.aggregates.contains_key({destination})
+     && a.source.logical.aggregates[{destination}].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)
+     && a.source.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})) by {{
+  checked_add_actual_micro_step_{demand_site}_v293(s, left, right, little_endian);
+ }}
+ assert(checked_prefix_demands_{demand_site}_v296(s.source, a.source, left, right)) by {{
+  checked_add_actual_demanded_step_{demand_site}_v296(s, left, right, little_endian);
+ }}
+ assert(n.next.state.valid && n.next.state.pc == t.state.pc
+     && n.next.state.values.len() == t.state.values.len()
+     && n.next.state.values[{value}] == MemoryValueV30::Scalar((left + right) % 4294967296)
+     && n.next.state.values[{overflow}] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})
+     && (forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}
+         ==> #[trigger] n.next.state.values[i] == t.state.values[i])
+     && n.next.state.memory == t.state.memory && n.next.state.frames == t.state.frames
+     && n.next.state.generations == t.state.generations
+     && n.next.next_operation == checked_target_next_{site}()
+     && n.next.observations.len() == t.observations.len() + 1
+     && n.next.observations.take(t.observations.len() as int) == t.observations
+     && n.observation.before == t.state && n.observation.after == n.next.state
+     && n.observation.effect == MemoryOperationEffectV30::Pure) by {{
+  checked_target_actual_step_{site}(t, left, right, little_endian);
+  assert({value}int != {overflow}int);
+  assert(0 <= {value}int < t.state.values.len() && 0 <= {overflow}int < t.state.values.len());
+  assert(n.next.state.values == t.state.values.update({value}int, MemoryValueV30::Scalar((left + right) % 4294967296))
+      .update({overflow}int, MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})));
+  assert(n.next.state.values.len() == t.state.values.len());
+  assert(n.next.state.values[{value}] == MemoryValueV30::Scalar((left + right) % 4294967296));
+  assert(n.next.state.values[{overflow}] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}));
+  assert forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}
+      implies #[trigger] n.next.state.values[i] == t.state.values[i] by {{ }}
+ }}
+"#
+        );
+        assert_eq!(body.matches(&projected).count(), 1);
+        for call in [
+            format!(
+                "checked_add_actual_micro_step_{demand_site}_v293(s, left, right, little_endian);"
+            ),
+            format!(
+                "checked_add_actual_demanded_step_{demand_site}_v296(s, left, right, little_endian);"
+            ),
+            format!("checked_target_actual_step_{site}(t, left, right, little_endian);"),
+        ] {
+            assert_eq!(body.matches(&call).count(), 1);
+        }
+        let legacy = format!(
+            " checked_add_actual_micro_step_{demand_site}_v293(s, left, right, little_endian);\n checked_add_actual_demanded_step_{demand_site}_v296(s, left, right, little_endian);\n checked_target_actual_step_{site}(t, left, right, little_endian);\n let n = byte_micro_step_{root}_v30(t, little_endian);\n assert forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}\n     implies #[trigger] n.next.state.values[i] == t.state.values[i] by {{ }}\n"
+        );
+        previous_body = previous_body.replacen(&projected, &legacy, 1);
+        assert_eq!(
+            previous_body,
+            format!(
+                "{source_header}{target_header} reveal(checked_actual_segment_inputs_{site});\n checked_add_actual_micro_step_{demand_site}_v293(s, left, right, little_endian);\n checked_add_actual_demanded_step_{demand_site}_v296(s, left, right, little_endian);\n checked_target_actual_step_{site}(t, left, right, little_endian);\n let n = byte_micro_step_{root}_v30(t, little_endian);\n assert forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}\n     implies #[trigger] n.next.state.values[i] == t.state.values[i] by {{ }}\n reveal(checked_actual_segment_results_{site});\n}}"
+            )
+        );
+        let (requires, rest) = declaration.split_once("\n ensures").unwrap();
+        assert!(requires.contains("requires checked_actual_segment_inputs_"));
+        assert!(!requires.contains("results_"));
+        assert!(!requires.contains("after_"));
+        assert!(rest.contains("invocation_source_micro_step_"));
+        assert!(rest.contains("byte_micro_step_"));
+        assert!(rest.contains("checked_add_actual_demanded_step_"));
+        assert!(rest.contains("checked_target_actual_step_"));
+        assert!(!declaration.contains("assume("));
+        assert!(!declaration.contains("admit("));
+    }
 }
 
 #[test]
@@ -589,6 +672,7 @@ fn actual_checked_target_segment_uses_global_target_cursors_and_relative_history
                         let start = out.text.len();
                         segment.emit(out)?;
                         let text = &out.text[start..];
+                        assert_composition_projections(text);
                         assert!(text.contains(&format!(
                             "t.state.pc == {}, t.next_operation == {}",
                             segment.target_block, segment.target_operation
@@ -759,7 +843,10 @@ fn actual_checked_target_segment_copied_operand_alias_is_retained() {
                         assert_ne!(segment.destination, segment.source_operands[0]);
                         assert_eq!(segment.checked.operands[0], segment.checked.operands[1]);
                         assert_ne!(segment.checked.results[0], segment.checked.results[1]);
-                        segment.emit(out)
+                        let start = out.text.len();
+                        segment.emit(out)?;
+                        assert_composition_projections(&out.text[start..]);
+                        Ok(())
                     })? > 0
                 );
                 Ok(())

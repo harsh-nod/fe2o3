@@ -134,12 +134,50 @@ proof fn checked_actual_source_target_step_{root}_{instance}_{block}_{statement}
  hide(checked_prefix_demands_{root}_{instance}_{block}_{statement}_v296);
  hide(checked_target_next_{root}_{instance}_{block}_{statement}_v298);
  reveal(checked_actual_segment_inputs_{root}_{instance}_{block}_{statement}_v298);
- checked_add_actual_micro_step_{root}_{instance}_{block}_{statement}_v293(s, left, right, little_endian);
- checked_add_actual_demanded_step_{root}_{instance}_{block}_{statement}_v296(s, left, right, little_endian);
- checked_target_actual_step_{root}_{instance}_{block}_{statement}_v298(t, left, right, little_endian);
+ let a = invocation_source_micro_step_{root}_{instance}_v36(s, little_endian);
  let n = byte_micro_step_{root}_v30(t, little_endian);
- assert forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}
-     implies #[trigger] n.next.state.values[i] == t.state.values[i] by {{ }}
+ assert(a.source.machine.valid && invocation_source_active_{root}_{instance}_v36(a.source)
+     && invocation_source_byte_state_well_formed_v36(a.source)
+     && a.source.machine.pc == s.source.machine.pc
+     && a.next_statement == s.next_statement + 1
+     && a.observations.len() == s.observations.len() + 1
+     && a.observations.take(s.observations.len() as int) == s.observations
+     && a.source.machine.memory == s.source.machine.memory
+     && a.source.machine.frames == s.source.machine.frames
+     && a.source.machine.generations == s.source.machine.generations
+     && a.source.slots == s.source.slots && a.source.objects == s.source.objects
+     && a.source.logical.aggregates.contains_key({destination})
+     && a.source.logical.aggregates[{destination}].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)
+     && a.source.logical.aggregates[{destination}].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})) by {{
+  checked_add_actual_micro_step_{root}_{instance}_{block}_{statement}_v293(s, left, right, little_endian);
+ }}
+ assert(checked_prefix_demands_{root}_{instance}_{block}_{statement}_v296(s.source, a.source, left, right)) by {{
+  checked_add_actual_demanded_step_{root}_{instance}_{block}_{statement}_v296(s, left, right, little_endian);
+ }}
+ assert(n.next.state.valid && n.next.state.pc == t.state.pc
+     && n.next.state.values.len() == t.state.values.len()
+     && n.next.state.values[{value}] == MemoryValueV30::Scalar((left + right) % 4294967296)
+     && n.next.state.values[{overflow}] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})
+     && (forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}
+         ==> #[trigger] n.next.state.values[i] == t.state.values[i])
+     && n.next.state.memory == t.state.memory && n.next.state.frames == t.state.frames
+     && n.next.state.generations == t.state.generations
+     && n.next.next_operation == checked_target_next_{root}_{instance}_{block}_{statement}_v298()
+     && n.next.observations.len() == t.observations.len() + 1
+     && n.next.observations.take(t.observations.len() as int) == t.observations
+     && n.observation.before == t.state && n.observation.after == n.next.state
+     && n.observation.effect == MemoryOperationEffectV30::Pure) by {{
+  checked_target_actual_step_{root}_{instance}_{block}_{statement}_v298(t, left, right, little_endian);
+  assert({value}int != {overflow}int);
+  assert(0 <= {value}int < t.state.values.len() && 0 <= {overflow}int < t.state.values.len());
+  assert(n.next.state.values == t.state.values.update({value}int, MemoryValueV30::Scalar((left + right) % 4294967296))
+      .update({overflow}int, MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }})));
+  assert(n.next.state.values.len() == t.state.values.len());
+  assert(n.next.state.values[{value}] == MemoryValueV30::Scalar((left + right) % 4294967296));
+  assert(n.next.state.values[{overflow}] == MemoryValueV30::Scalar(if left + right >= 4294967296 {{ 1int }} else {{ 0int }}));
+  assert forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}
+      implies #[trigger] n.next.state.values[i] == t.state.values[i] by {{ }}
+ }}
  reveal(checked_actual_segment_results_{root}_{instance}_{block}_{statement}_v298);
 }}
 proof fn checked_actual_source_prefix_target_step_{root}_{instance}_{block}_{statement}_v298(
