@@ -82,6 +82,15 @@ disambiguators, actual nongeneric Instances, missing/nonlocal definitions,
 real unique/ambiguous/absent CGU monomorphizations and cumulative work limits.
 They are in a separate test module, without integer stand-ins for Instances.
 
+The policy replay probe is separate from the existing V1 registration probes.
+Its opt-in observer must wrap an exact, single-threaded genuine production child
+and see one actual retained policy replay. Nine report rows cover borrowed
+typed input, V1 input refusal, unchanged retained replay, four independent
+origin-field mutations and callback error/unwind storage accounting. No request,
+retained proof or issuer is fabricated. These rows are written but unexecuted,
+and do not test live issuer/currentness or decoded policy recovery. Existing V1
+probe behavior and report schemas are unchanged.
+
 Required after the actual issuer is available:
 
 - Unchanged and renamed local kernel/reference positives; ordinary no-request
