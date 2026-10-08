@@ -392,6 +392,11 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
                 | OperationKind::GuardedLoad { pointer, .. }
                 | OperationKind::Store { pointer, .. }
                 | OperationKind::GuardedStore { pointer, .. } => *pointer,
+                OperationKind::Atomic(_) => {
+                    return resources::binding(
+                        "atomic access requires qualified optimized atomic transport",
+                    );
+                }
                 OperationKind::Storage(_) => {
                     return resources::binding(
                         "typed Storage requires complete object source transport",
@@ -509,6 +514,11 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
             let payload = match payload {
                 None => None,
                 Some(payload) => Some(match payload.source {
+                    ScopedMemoryPayloadV29::AtomicRmw { .. } => {
+                        return resources::binding(
+                            "atomic payload requires qualified optimized atomic transport",
+                        );
+                    }
                     ScopedMemoryPayloadV29::Load { .. }
                     | ScopedMemoryPayloadV29::IndexLoad { .. } => {
                         let [result] = out.results.as_slice() else {

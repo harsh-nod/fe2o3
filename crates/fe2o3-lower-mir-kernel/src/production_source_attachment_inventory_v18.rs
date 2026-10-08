@@ -856,6 +856,49 @@ mod source_attachment_inventory_v18 {
         }
         rhs.ok_or(ScopedTileFailureKindV29::ReplayMismatch)
     }
+    // RMW retains both its old-value result and exact RHS operand use. Reuse
+    // the complete existing read/write attachment slots; no new row census.
+    pub(super) fn tile_atomic_payload_operand_v1(
+        operation: &Operation,
+        pointer: ValueId,
+        value: ValueId,
+        result: ValueId,
+        effect: ScopedAtomicEffectV1,
+        budget: &mut ArgumentBudgetV1<'_>,
+    ) -> TileAttachmentResultV29<u32> {
+        budget.charge_work(10)?;
+        let OperationKind::Atomic(atomic) = &operation.kind else {
+            return Err(ScopedTileFailureKindV29::ReplayMismatch);
+        };
+        let [output] = operation.results.as_slice() else {
+            return Err(ScopedTileFailureKindV29::ReplayMismatch);
+        };
+        if atomic.pointer != pointer
+            || atomic.value != Some(value)
+            || output.id != result
+            || ScopedAtomicEffectV1::from_operation(atomic) != Some(effect)
+        {
+            return Err(ScopedTileFailureKindV29::ReplayMismatch);
+        }
+        let expected = [pointer, value];
+        let mut visited = 0usize;
+        operation
+            .kind
+            .try_visit_operands(|operand| -> TileAttachmentResultV29<()> {
+                budget.charge_work(2)?;
+                if expected.get(visited) != Some(&operand) {
+                    return Err(ScopedTileFailureKindV29::ReplayMismatch);
+                }
+                visited = visited
+                    .checked_add(1)
+                    .ok_or(ArgumentResourceV1::Arithmetic)?;
+                Ok(())
+            })?;
+        if visited != expected.len() {
+            return Err(ScopedTileFailureKindV29::ReplayMismatch);
+        }
+        Ok(1)
+    }
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(super) enum TileAttachmentFamilyV29 {
         InstanceSpans,
@@ -1422,6 +1465,41 @@ mod source_attachment_inventory_v18 {
                 .and_then(|block| block.operations.get(ordinal as usize))
                 .ok_or(ScopedTileFailureKindV29::ReplayMismatch)?;
             let operand = tile_store_payload_operand_v18(operation, pointer, value, self.budget)?;
+            self.emitted_use(key, instance, block, position, operand)
+        }
+
+        fn emitted_atomic_payload_use_v1(
+            &mut self,
+            key: TileAttachmentKeyV29,
+            instance: ProductionCallInstanceIdV1,
+            block: BlockId,
+            position: u32,
+            pointer: ValueId,
+            value: ValueId,
+            result: ValueId,
+            effect: ScopedAtomicEffectV1,
+        ) -> TileAttachmentResultV29<()> {
+            let (physical_block, physical_position) = self
+                .emitted_point(instance, block, position, false)?
+                .ok_or(ScopedTileFailureKindV29::ReplayMismatch)?;
+            let ordinal = self.lifecycle_ordinal(physical_block, physical_position, false)?;
+            let block_ordinal = self.block_ordinal(physical_block)?;
+            let operation = self
+                .graph
+                .functions
+                .get(self.root.function_ordinal)
+                .and_then(|function| function.body.as_ref())
+                .and_then(|body| body.blocks.get(block_ordinal))
+                .and_then(|block| block.operations.get(ordinal as usize))
+                .ok_or(ScopedTileFailureKindV29::ReplayMismatch)?;
+            let operand = tile_atomic_payload_operand_v1(
+                operation,
+                pointer,
+                value,
+                result,
+                effect,
+                self.budget,
+            )?;
             self.emitted_use(key, instance, block, position, operand)
         }
 

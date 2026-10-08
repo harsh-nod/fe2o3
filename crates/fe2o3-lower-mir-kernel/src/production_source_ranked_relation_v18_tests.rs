@@ -3310,6 +3310,7 @@ fn actual_scalar_payloads_join_repeated_instances_results_values_and_operand_use
                             let payload = relation.retained_scalar_payload_v18(root, row.coordinate, &access, budget)?
                                 .expect("the original scalar grammar must retain its actual payload");
                             match payload.source {
+                                ScopedMemoryPayloadV29::AtomicRmw { .. } => panic!("ordinary scalar fixture has no atomics"),
                                 ScopedMemoryPayloadV29::IndexLoad { .. } => panic!("ordinary scalar fixture has no projection index loads"),
                                 ScopedMemoryPayloadV29::Load { read, .. } => {
                                     assert_eq!(read.ty, U32);

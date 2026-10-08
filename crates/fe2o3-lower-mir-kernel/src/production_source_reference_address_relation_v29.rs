@@ -1526,6 +1526,10 @@ fn source_address_accesses_v29(
                     let frame = row.source.ok_or_else(source_raw_physical_error_v29)?;
                     source_index.frame_gap(instance, frame, row.block, row.position, budget)?;
                     let (place, prefix, access) = match payload {
+                        ScopedMemoryPayloadV29::AtomicRmw { .. } => {
+                            // B-stage capture does not grant the A-stage atomic loan relation.
+                            return Err(source_raw_physical_error_v29());
+                        }
                         ScopedMemoryPayloadV29::IndexLoad { .. } => {
                             return Err(source_raw_physical_error_v29());
                         }
@@ -2662,6 +2666,10 @@ fn check_source_address_payloads_v29(
                     }
                 }
                 match payload {
+                    ScopedMemoryPayloadV29::AtomicRmw { .. } => {
+                        // Never reinterpret a read-modify-write as an ordinary Store.
+                        return Err(source_raw_physical_error_v29());
+                    }
                     ScopedMemoryPayloadV29::IndexLoad { .. } => {
                         // The retained occurrence is authenticated above. Its actual
                         // incoming memory version is still a final-census obligation.
