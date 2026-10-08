@@ -82,7 +82,7 @@ impl<'slots, 'view, 'source> SourceScalarStatements<'slots, 'view, 'source> {
         };
         if !matches!(
             assignment.value().kind(),
-            Rvalue::Use(_) | Rvalue::Unary { .. } | Rvalue::Binary { .. }
+            Rvalue::Unary { .. } | Rvalue::Binary { .. }
         ) {
             return Ok(None);
         }

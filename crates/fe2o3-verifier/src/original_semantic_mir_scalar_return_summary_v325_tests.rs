@@ -1,6 +1,8 @@
 //! Authentic selection/emission/accounting checks; these do not execute Verus.
 use super::super::super::super::super::super::invocations::tests as fixtures;
 use super::super::super::super::super::slots::tests::with_tile_slots;
+use super::super::super::super::super::source_bytes::{Event, SourceByteBody};
+use super::super::super::super::super::source_scalar::SourceScalarStatements;
 use super::*;
 use fe2o3_kernel_ir::ExecutionTileLayoutV1 as Layout;
 
@@ -11,6 +13,7 @@ fn scalar_fixture(
     callables: &mut Vec<fe2o3_mir_model::semantic_mir_v1::SemanticCallableDeclV1>,
     nested: bool,
     moved: bool,
+    transfer: bool,
 ) {
     use fe2o3_mir_model::semantic_mir_v1::*;
     let index = functions.len() - 1;
@@ -31,7 +34,15 @@ fn scalar_fixture(
     let statements = vec![
         assign(
             3,
-            SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(1))),
+            if transfer {
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(1)))
+            } else {
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::BitOr,
+                    left: SemanticOperandV1::Copy(place(1)),
+                    right: SemanticOperandV1::Copy(place(1)),
+                }
+            },
         ),
         assign(
             3,
@@ -576,7 +587,7 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
     for layout in [Layout::Blocked, Layout::Striped] {
         for nested in [false, true] {
             fixtures::run_callable_transform(LIMIT, LIMIT,
-                |_, functions, callables| scalar_fixture(functions, callables, nested, false),
+                |_, functions, callables| scalar_fixture(functions, callables, nested, false, false),
                 |plan, out| with_tile_slots(plan, layout, out, |slots, out| {
                     let mut program = SourceByteProgram::derive(plan, slots, out)?;
                     let paired = PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
@@ -639,6 +650,10 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                                 assert_eq!(summary.source.returned.depth, if nested { 3 } else { 2 });
                                 let statements = &summary.source.statements;
                                 assert_eq!(statements.len(), 3);
+                                assert!(statements[0].inputs[0].is_some());
+                                assert_eq!(statements[0].inputs[1], None);
+                                assert_ne!(statements[0].inputs[0], Some(statements[0].destination));
+                                assert_eq!(statements[0].destination, statements[1].destination);
                                 assert_eq!(statements[1].inputs, [Some(statements[1].destination), None]);
                                 assert_eq!(statements[2].inputs, [Some(statements[1].destination), None]);
                                 scalar_count += 1;
@@ -654,31 +669,64 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                     Ok(())
                 })).0.unwrap();
         }
-        fixtures::run_callable_transform(
-            LIMIT,
-            LIMIT,
-            |_, functions, callables| scalar_fixture(functions, callables, false, true),
-            |plan, out| {
-                with_tile_slots(plan, layout, out, |slots, out| {
-                    let program = SourceByteProgram::derive(plan, slots, out)?;
-                    let paired =
-                        PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
-                    for row in &paired.roots {
-                        assert!(
-                            row.step_hints
-                                .as_ref()
-                                .unwrap()
-                                .cuts
-                                .iter()
-                                .all(|hint| hint.scalar_return_v325.is_none())
-                        );
-                    }
-                    Ok(())
-                })
-            },
-        )
-        .0
-        .unwrap();
+        for (moved, transfer) in [(true, false), (false, true)] {
+            fixtures::run_callable_transform(
+                LIMIT,
+                LIMIT,
+                |_, functions, callables| {
+                    scalar_fixture(functions, callables, false, moved, transfer)
+                },
+                |plan, out| {
+                    with_tile_slots(plan, layout, out, |slots, out| {
+                        let program = SourceByteProgram::derive(plan, slots, out)?;
+                        let paired = PairedInvocations::derive(
+                            plan,
+                            &program,
+                            FormalIndexWidth::Bits64,
+                            out,
+                        )?;
+                        let mut observed = 0;
+                        for (root, row) in paired.roots.iter().enumerate() {
+                            for instance in 1..row.instances.len() {
+                                if paired.instances[row.instances.start + instance].is_none() {
+                                    continue;
+                                }
+                                let body =
+                                    SourceByteBody::derive(plan, slots, root, instance, out)?;
+                                let first = body.event_at(0, 0, out)?;
+                                if transfer {
+                                    assert!(matches!(first, Event::Transfer { .. }));
+                                } else {
+                                    assert!(matches!(first, Event::Scalar));
+                                    assert!(matches!(body.event_at(0, 2, out)?, Event::Scalar));
+                                }
+                                let scalar =
+                                    SourceScalarStatements::new(plan, slots, root, instance, out)?;
+                                let rejected = if transfer { 0 } else { 2 };
+                                assert!(
+                                    scalar
+                                        .copy_coordinates_v325(root, instance, 0, rejected, out)?
+                                        .is_none()
+                                );
+                                observed += 1;
+                            }
+                            assert!(
+                                row.step_hints
+                                    .as_ref()
+                                    .unwrap()
+                                    .cuts
+                                    .iter()
+                                    .all(|hint| hint.scalar_return_v325.is_none())
+                            );
+                        }
+                        assert_eq!(observed, 4);
+                        Ok(())
+                    })
+                },
+            )
+            .0
+            .unwrap();
+        }
     }
     assert_eq!(coverage.len(), 4);
     for (layout, nested, scalar_count, empty_count, emitted_values) in coverage {
