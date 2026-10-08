@@ -5,6 +5,7 @@ include!("production_source_issued_pointer_v29.rs");
 include!("production_source_issued_pointer_actual_v29.rs");
 include!("production_source_issued_pointer_accesses_v29.rs");
 include!("production_source_scalar_loan_access_v29.rs");
+include!("production_source_atomic_address_relation_v41.rs");
 struct SourceAddressStatementV29<'source> {
     instance: usize,
     block: u32,
@@ -1527,8 +1528,15 @@ fn source_address_accesses_v29(
                     source_index.frame_gap(instance, frame, row.block, row.position, budget)?;
                     let (place, prefix, access) = match payload {
                         ScopedMemoryPayloadV29::AtomicRmw { .. } => {
-                            // B-stage capture does not grant the A-stage atomic loan relation.
-                            return Err(source_raw_physical_error_v29());
+                            if object.is_some() {
+                                return Err(source_atomic_external_error_v41());
+                            }
+                            source_atomic_external_role_v41(
+                                instances, references, instance, row, budget,
+                            )?;
+                            // Only a proposal outside private slots. Mandatory final
+                            // external-atomic validation runs after the physical solve.
+                            continue;
                         }
                         ScopedMemoryPayloadV29::IndexLoad { .. } => {
                             return Err(source_raw_physical_error_v29());
@@ -2667,7 +2675,9 @@ fn check_source_address_payloads_v29(
                 }
                 match payload {
                     ScopedMemoryPayloadV29::AtomicRmw { .. } => {
-                        // Never reinterpret a read-modify-write as an ordinary Store.
+                        // External atomic rows have their mandatory separate final
+                        // custody/payload/relocation census. A private-slot RMW is
+                        // still unsupported, never reinterpreted as an ordinary Store.
                         return Err(source_raw_physical_error_v29());
                     }
                     ScopedMemoryPayloadV29::IndexLoad { .. } => {

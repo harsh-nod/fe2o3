@@ -1327,10 +1327,13 @@ fn enum_variant_metadata_validation_has_an_independent_exact_work_boundary() {
                     unreachable!()
                 };
                 *variant = Some(original);
-                // Emission owner5 + plan owner5 + node1 + enum owner5
-                // + charged shape(owner5+6)
-                // + two fields(owner5+2 each) + metadata(owner5+2).
-                let exact = 5 + 5 + 1 + 5 + (5 + 6) + 2 * (5 + 2) + (5 + 2);
+                assert!(plan.nodes[node].atomic_custody.is_none());
+                // Emission owner5 + plan owner5 + node1.
+                // The atomic-type None probe still charges owner5 plus(owner5+12).
+                // Then enum owner5 + shape(owner5+6), two fields(owner5+2 each),
+                // and metadata(owner5+2). The final2 rejects the unequal variants.
+                let exact = 5 + 5 + 1 + (5 + (5 + 12)) + 5 + (5 + 6) + 2 * (5 + 2) + (5 + 2);
+                assert_eq!(exact, 70);
                 budget.charge_work(usize::MAX - budget.work() - exact + usize::from(short))?;
                 let before = (budget.work(), budget.storage());
                 let mut untouched = [None];
@@ -1352,14 +1355,20 @@ fn enum_variant_metadata_validation_has_an_independent_exact_work_boundary() {
                 assert!(leaves.next().is_some());
                 assert_eq!(untouched, [None]);
                 if short {
-                    assert!(matches!(
-                        checked,
-                        Err(
-                            ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
-                                ArgumentResourceV1::Work(_)
-                            )
-                        )
-                    ));
+                    let Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                        ArgumentResourceV1::Work(bound),
+                    )) = &checked
+                    else {
+                        panic!("final metadata charge must exhaust the original work meter");
+                    };
+                    // With69 available,68 are accepted. The final2 overflows MAX;
+                    // the original meter reports its documented MAX sentinel.
+                    assert_eq!(budget.work(), usize::MAX - 1);
+                    assert_eq!(bound.actual(), usize::MAX);
+                    assert_eq!(bound.limit(), usize::MAX);
+                    assert!(matches!(plan.failure.first_error(),
+                        Some(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                            ArgumentResourceV1::Work(first))) if first == *bound));
                     let stopped = (budget.work(), budget.storage());
                     assert!(
                         source_reference_merge_node_v29(

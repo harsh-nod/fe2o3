@@ -11,6 +11,9 @@ mod fixture_closure;
 #[path = "production_source_reference_validation_scratch_v29_tests.rs"]
 mod validation_scratch;
 
+#[path = "production_source_atomic_view_v41_tests.rs"]
+mod atomic_view_v41_tests;
+
 // Retained semantic-source component fixtures copied from the frozen A owner
 // fixtures. These tests do not replace the genuine rustc source acceptance gates.
 

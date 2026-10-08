@@ -531,6 +531,7 @@ fn original_compiler_carriers_define_plain_cfg_transport_contracts() {
             storage: None,
             inactive: None,
             descriptor: None,
+            atomic_custody: None,
         };
         let expected_types: Vec<_> = values.iter().map(|value| value.ty.clone()).collect();
         assert_eq!(

@@ -1,4 +1,5 @@
 include!("production_source_reference_current_projection_v29.rs");
+include!("production_source_atomic_storage_path_v41.rs");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SourceReferenceRawFormationV29 {
@@ -522,6 +523,13 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             return Err(source_reference_error_v29(
                 "source raw cast input type differs",
             ));
+        }
+        if self.plan.instances.owner().source_semantic().wire_version()
+            == fe2o3_mir_model::semantic_mir_v1::SemanticMirWireVersionV1::V41
+            && let Some(result) =
+                self.cast_atomic_view_v41(site, kind, operand, node, output, budget)?
+        {
+            return Ok(result);
         }
         if kind == SemanticCastKindV1::PointerExposeProvenance {
             source_reference_check_address_exposure_v29(
@@ -1313,6 +1321,11 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             return Err(source_reference_error_v29(
                 "source raw address pointer contract differs",
             ));
+        }
+        if let Some(node) =
+            self.address_atomic_view_v41(site, source, pointer_type, mutability, budget)?
+        {
+            return Ok(node);
         }
         let target =
             self.resolve_reference_place(site, source, SourceReferenceAccessV29::Address, budget)?;

@@ -689,7 +689,7 @@ fn nominal_v35_unknown_versions_truncation_and_trailing_bytes_refuse() {
         .admit_exact_v35(SemanticMirLimitsV1::default())
         .unwrap();
     let bytes = admitted.canonical_encoding();
-    for version in [0, 1, 16, 27, 41, u16::MAX] {
+    for version in [0, 1, 16, 27, 42, u16::MAX] {
         let mut invalid = bytes.to_vec();
         invalid[MAGIC.len()..MAGIC.len() + 2].copy_from_slice(&version.to_le_bytes());
         assert_eq!(
@@ -701,6 +701,20 @@ fn nominal_v35_unknown_versions_truncation_and_trailing_bytes_refuse() {
             SemanticMirDecodeErrorV1::UnsupportedVersion(version)
         );
     }
+    // Newly allocated V41 is known but still refused at the exact-V35 boundary.
+    let mut wrong_atomic_version = bytes.to_vec();
+    wrong_atomic_version[MAGIC.len()..MAGIC.len() + 2].copy_from_slice(&41_u16.to_le_bytes());
+    assert_eq!(
+        AdmittedInertSemanticMirV1::decode_exact_v35_canonical(
+            &wrong_atomic_version,
+            SemanticMirLimitsV1::default()
+        )
+        .unwrap_err(),
+        SemanticMirDecodeErrorV1::WireVersionMismatch {
+            expected: SemanticMirWireVersionV1::V35,
+            actual: SemanticMirWireVersionV1::V41,
+        }
+    );
     // V36 is allocated, but remains invalid at the frozen exact-V35 boundary.
     let mut wrong_known_version = bytes.to_vec();
     wrong_known_version[MAGIC.len()..MAGIC.len() + 2].copy_from_slice(&36_u16.to_le_bytes());

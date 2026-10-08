@@ -5,11 +5,11 @@ use super::*;
 
 impl SemanticMirWireVersionV1 {
     pub(super) const fn has_execution_roles(self) -> bool {
-        matches!(self, Self::V29 | Self::V40)
+        matches!(self, Self::V29 | Self::V40 | Self::V41)
     }
 
     pub(super) const fn has_nominal_integers(self) -> bool {
-        matches!(self, Self::V35 | Self::V40)
+        matches!(self, Self::V35 | Self::V40 | Self::V41)
     }
 
     pub(super) const fn has_rust_call_locals(self) -> bool {
@@ -27,6 +27,7 @@ impl SemanticMirWireVersionV1 {
                 | Self::V38
                 | Self::V39
                 | Self::V40
+                | Self::V41
         )
     }
 

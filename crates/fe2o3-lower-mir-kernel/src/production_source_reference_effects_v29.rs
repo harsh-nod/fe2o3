@@ -74,6 +74,18 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         let mut result = source_reference_scratch_v29(0, budget)?;
         while let Some(node) = pending.pop() {
             budget.charge_work(1)?;
+            if self
+                .plan
+                .nodes
+                .get(node)
+                .is_some_and(|row| row.atomic_custody.is_some())
+            {
+                let custody = self
+                    .plan
+                    .atomic_custody_v41(node, budget)?
+                    .ok_or(ArgumentResourceV1::Accounting)?;
+                emission_push_v1(&mut result, custody.parent, budget)?;
+            }
             match self
                 .plan
                 .nodes
@@ -397,6 +409,12 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         if execution_cfg_nominal_kind_v29(types, ty)?.is_some() {
             return self.plain(ty, budget);
         }
+        if self.plan.instances.owner().source_semantic().wire_version()
+            == fe2o3_mir_model::semantic_mir_v1::SemanticMirWireVersionV1::V41
+            && let Some(node) = self.borrow_atomic_view_v41(site, kind, source, ty, budget)?
+        {
+            return Ok(node);
+        }
         if let Some(node) = self.external_reference_borrow_v29(site, kind, source, ty, budget)? {
             return Ok(node);
         }
@@ -664,6 +682,14 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         node: usize,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        if self
+            .plan
+            .nodes
+            .get(node)
+            .is_some_and(|row| row.atomic_custody.is_some())
+        {
+            return Err(source_atomic_view_error_v41());
+        }
         for loan in self.node_loans(node, budget)? {
             self.check_loan_use(loan, budget)?;
             self.effect(loan, SourceReferenceEffectV29::ObserveAddress, budget)?;
@@ -904,14 +930,15 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 && anchor.ty == origin.ty
             {
                 prepay_argument_shape_v1(semantic, anchor.ty, budget)?;
-                if authenticated_disjoint_slice_parameter(
-                    semantic.types(),
-                    semantic.callables(),
-                    root,
-                    anchor.argument,
-                    anchor.ty,
-                )
-                .is_some()
+                if source_atomic_root_type_v41(&self.plan, index, budget)?.is_some()
+                    || authenticated_disjoint_slice_parameter(
+                        semantic.types(),
+                        semantic.callables(),
+                        root,
+                        anchor.argument,
+                        anchor.ty,
+                    )
+                    .is_some()
                 {
                     SourceReferenceRepresentationV29::ExistingAllocationBinding(anchor)
                 } else if self.snapshot_type(origin.ty, budget)? {

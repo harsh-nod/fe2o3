@@ -290,8 +290,15 @@ fn cfg_carrier_plain_route_does_not_admit_reference_or_storage_nodes() {
         storage: None,
         inactive: None,
         descriptor: None,
+        atomic_custody: None,
     };
     assert!(execution_cfg_plain_carrier_node_v29(&plain));
+    assert!(!execution_cfg_plain_carrier_node_v29(
+        &SourceReferenceNodeV29 {
+            atomic_custody: Some(0),
+            ..plain
+        }
+    ));
     for kind in [
         SourceReferenceNodeKindV29::Absent,
         SourceReferenceNodeKindV29::Plain(Some(SourceReferenceAnchorV29 {

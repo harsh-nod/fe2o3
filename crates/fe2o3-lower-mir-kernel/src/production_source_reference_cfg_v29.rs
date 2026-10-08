@@ -453,7 +453,10 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             .nodes
             .get(right)
             .ok_or_else(source_reference_cfg_obligation_v29)?;
-        if left.ty != right.ty || left.descriptor != right.descriptor {
+        if left.ty != right.ty
+            || left.descriptor != right.descriptor
+            || left.atomic_custody != right.atomic_custody
+        {
             return Ok(false);
         }
         if !self.storage_values_equal(left.storage, right.storage, budget)? {

@@ -3470,6 +3470,13 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
             transaction,
         } = self.stage;
         let constructed = match profile {
+            source_owned_v29::ImportProfile::AtomicV41 => {
+                crate::collector::construct_production_semantic_mir_atomic_v41(
+                    tcx,
+                    closure,
+                    debug_source_capture,
+                )
+            }
             source_owned_v29::ImportProfile::NominalV35 => {
                 crate::collector::construct_production_semantic_mir_nominal_v35(
                     tcx,

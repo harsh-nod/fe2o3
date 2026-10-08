@@ -500,6 +500,18 @@ impl AdmittedInertSemanticMirV1 {
         )
     }
 
+    /// Explicit atomic nominal decoding; inert bytes grant no source or pointer authority.
+    pub fn decode_exact_v41_canonical(
+        bytes: &[u8],
+        limits: SemanticMirLimitsV1,
+    ) -> Result<Self, SemanticMirDecodeErrorV1> {
+        Self::decode_with_policy(
+            bytes,
+            limits,
+            CanonicalDecodePolicyV1::Exact(SemanticMirWireVersionV1::V41),
+        )
+    }
+
     fn decode_with_policy(
         bytes: &[u8],
         limits: SemanticMirLimitsV1,
@@ -943,7 +955,9 @@ impl<'a> CanonicalDecoderV1<'a> {
             first_pointee: self.optional_pointee_info()?,
             second_pointee: self.optional_pointee_info()?,
         };
-        let maximum_tag = if self.wire_version.has_nominal_integers() {
+        let maximum_tag = if self.wire_version == SemanticMirWireVersionV1::V41 {
+            21
+        } else if self.wire_version.has_nominal_integers() {
             19
         } else if self.wire_version.has_execution_roles() {
             17
@@ -973,6 +987,8 @@ impl<'a> CanonicalDecoderV1<'a> {
             }
             18 => SemanticRustTypeKindV1::Usize,
             19 => SemanticRustTypeKindV1::Isize,
+            20 => SemanticRustTypeKindV1::AtomicI32,
+            21 => SemanticRustTypeKindV1::AtomicU32,
             _ => SemanticRustTypeKindV1::Ordinary,
         };
         let shape = match shape_tag {
@@ -1042,7 +1058,7 @@ impl<'a> CanonicalDecoderV1<'a> {
                 element: SemanticTypeIdV1(self.u32()?),
             },
             13 => SemanticTypeShapeV1::Opaque,
-            14..=17 => SemanticTypeShapeV1::Aggregate(self.type_list()?),
+            14..=17 | 20 | 21 => SemanticTypeShapeV1::Aggregate(self.type_list()?),
             _ => unreachable!(),
         };
         Ok(
@@ -3051,6 +3067,8 @@ mod tests {
     use super::*;
     use std::fmt::Debug;
 
+    #[path = "../../atomic_storage_v41_tests.rs"]
+    mod atomic_storage_v41_tests;
     mod capability_v29_tests;
     mod complete_body_v36_tests;
     #[path = "../../context_nominal_v40_tests.rs"]

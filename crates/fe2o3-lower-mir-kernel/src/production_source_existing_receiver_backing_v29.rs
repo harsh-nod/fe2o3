@@ -1,3 +1,5 @@
+include!("production_source_atomic_receiver_backing_v41.rs");
+
 // The existing checked loan representation is reused before candidate entry
 // storage is selected. These rows are locators, not allocation exemptions.
 fn source_reference_existing_value_loan_v29(
@@ -146,7 +148,11 @@ fn source_existing_receiver_value_v53(
     let supported = matches!(physical, Some(Type::Slice(_)));
     drop(physical);
     budget.release_storage(std::mem::size_of::<Type>())?;
-    Ok(supported)
+    if supported {
+        Ok(true)
+    } else {
+        source_atomic_receiver_value_v41(plan, source, budget)
+    }
 }
 
 fn source_existing_receiver_rows_v29(
@@ -211,7 +217,9 @@ fn source_existing_receiver_rows_v29(
                         SemanticBorrowKindV1::Shared | SemanticBorrowKindV1::Mutable
                     )
             ) || source_existing_receiver_write_v53(plan, access, budget)?);
-        rows[index].1 &= whole;
+        // Only the exact original atomic pointer-field capture may retain its
+        // authenticated root value; unrelated projections still need backing.
+        rows[index].1 &= whole || source_atomic_receiver_capture_read_v41(plan, access, budget)?;
     }
     // Authenticate every replacement's original nominal ABI anchor before
     // allowing any entry/write in this local to keep its existing Slice value.

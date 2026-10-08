@@ -163,7 +163,7 @@ fn roundtrip(request: InertSemanticMirRequestV1) -> AdmittedInertSemanticMirV1 {
 fn context_nominal_v40_four_combinations_preserve_original_records_and_abi() {
     assert_eq!(SemanticMirWireVersionV1::from_u16(40), Some(V40));
     assert_eq!(V40.as_u16(), 40);
-    assert_eq!(SemanticMirWireVersionV1::from_u16(41), None);
+    assert_eq!(SemanticMirWireVersionV1::from_u16(42), None);
     for context in [false, true] {
         for nominal in [false, true] {
             let admitted = roundtrip(request(context, nominal));
@@ -958,4 +958,281 @@ fn context_nominal_v40_exact_bytes_types_and_truncation_are_bounded() {
         AdmittedInertSemanticMirV1::decode_exact_v40_canonical(&trailing, limits),
         Err(SemanticMirDecodeErrorV1::TrailingBytes { .. })
     ));
+}
+
+#[test]
+fn atomic_v41_composition_preserves_ordinary_rust_call_execution_and_nominal_records() {
+    const VERSION: SemanticMirWireVersionV1 = SemanticMirWireVersionV1::V41;
+    let limits = SemanticMirLimitsV1::default();
+    let originals = [
+        request(false, false),
+        request(false, true),
+        request(true, false),
+        request(true, true),
+        rust_call_request(),
+    ];
+    for original in originals {
+        for add_atomic in [false, true] {
+            let mut input = original.clone();
+            if add_atomic {
+                let mut types = input.types.into_vec();
+                let mut previous = SemanticTypeIdV1(0);
+                for index in 0..3u8 {
+                    let current = SemanticTypeIdV1(types.len() as u32);
+                    let mut declaration = SemanticTypeDeclV1::new(
+                        SemanticTypeIdentityV1(identity(230 + index)),
+                        SemanticLayoutIdentityV1(identity(240 + index)),
+                        SemanticTypeLayoutV1::aggregate(
+                            Some(4),
+                            4,
+                            SemanticAggregateLayoutV1::new(vec![0], vec![]).unwrap(),
+                        )
+                        .unwrap(),
+                        SemanticTypeShapeV1::Aggregate(
+                            SemanticAggregateTypeV1::new(vec![previous]).unwrap(),
+                        ),
+                    );
+                    if index == 2 {
+                        declaration.rust_type_kind = SemanticRustTypeKindV1::AtomicU32;
+                    }
+                    types.push(declaration);
+                    previous = current;
+                }
+                input.types = types.into_boxed_slice();
+                let mut locals = input.functions[0].locals.to_vec();
+                locals.push(SemanticLocalDeclV1::new(
+                    SemanticLocalIdentityV1(identity(250)),
+                    previous,
+                    SemanticLocalRoleV1::Temporary,
+                    SemanticSourceProvenanceV1::unavailable(),
+                ));
+                input.functions[0].locals = locals.into_boxed_slice();
+            }
+            let admitted = input.clone().admit_exact_v41(limits).unwrap();
+            let decoded = AdmittedInertSemanticMirV1::decode_exact_v41_canonical(
+                admitted.canonical_encoding(),
+                limits,
+            )
+            .unwrap();
+            assert_eq!(decoded.wire_version(), VERSION);
+            assert_eq!(decoded.types(), input.types.as_ref());
+            assert_eq!(decoded.functions(), input.functions.as_ref());
+            assert_eq!(decoded.callables(), input.callables.as_ref());
+            assert_eq!(decoded.canonical_encoding(), admitted.canonical_encoding());
+            assert_eq!(decoded.semantic_sha256(), admitted.semantic_sha256());
+            if !add_atomic {
+                let old = input.admit_exact_v40(limits).unwrap();
+                assert_eq!(
+                    &old.canonical_encoding()[MAGIC.len() + 2..],
+                    &admitted.canonical_encoding()[MAGIC.len() + 2..]
+                );
+                assert_ne!(old.semantic_sha256(), admitted.semantic_sha256());
+            }
+        }
+    }
+}
+
+#[test]
+fn atomic_v41_composition_intrinsic_tags_are_closed_and_reuse_execution_bytes() {
+    let operations = [
+        SemanticExecutionOperationV29::ContextIssue { context: CONTEXT },
+        SemanticExecutionOperationV29::WorkgroupDerive {
+            context: CONTEXT,
+            workgroup: SemanticTypeIdV1(6),
+        },
+        SemanticExecutionOperationV29::MaskedTileLoadU32 {
+            workgroup: SemanticTypeIdV1(6),
+            tile: SemanticTypeIdV1(9),
+        },
+        SemanticExecutionOperationV29::MaskedTileIntoFragmentU32 {
+            tile: SemanticTypeIdV1(9),
+            fragment: SemanticTypeIdV1(10),
+        },
+        SemanticExecutionOperationV29::LaneFragmentIntoPartsU32 {
+            fragment: SemanticTypeIdV1(10),
+            parts: SemanticTypeIdV1(11),
+        },
+    ];
+    for (operation, tag) in operations.into_iter().zip([81, 82, 84, 85, 86]) {
+        let operation = SemanticCompilerIntrinsicOperationV1::Execution(operation);
+        let mut old = CanonicalWriterV1::new(64);
+        let mut shared = CanonicalWriterV1::new(64);
+        encode_compiler_intrinsic_operation(&mut old, operation, SemanticMirWireVersionV1::V29)
+            .unwrap();
+        encode_compiler_intrinsic_operation(&mut shared, operation, SemanticMirWireVersionV1::V41)
+            .unwrap();
+        let bytes = shared.finish();
+        assert_eq!(bytes, old.finish());
+        assert_eq!(bytes[0], tag);
+        let mut decoder = CanonicalDecoderV1::new(&bytes, SemanticMirLimitsV1::default());
+        decoder.wire_version = SemanticMirWireVersionV1::V41;
+        assert_eq!(decoder.compiler_intrinsic().unwrap(), operation);
+        decoder.finish().unwrap();
+    }
+    for tag in (69..=80).chain([83]).chain(87..=255) {
+        let bytes = [tag];
+        let mut decoder = CanonicalDecoderV1::new(&bytes, SemanticMirLimitsV1::default());
+        decoder.wire_version = SemanticMirWireVersionV1::V41;
+        assert!(
+            matches!(decoder.compiler_intrinsic(), Err(SemanticMirDecodeErrorV1::InvalidTag { value, .. }) if value == tag)
+        );
+    }
+}
+
+#[test]
+fn atomic_v41_composition_excludes_every_specialized_sibling_family() {
+    use SemanticCompilerIntrinsicOperationV1 as Op;
+    use SemanticMirWireVersionV1 as Version;
+    let mut descriptors = [0; SEMANTIC_GFX942_U32_PROGRAM_MAX_STEPS_V32];
+    descriptors[0] = 8;
+    let operations = [
+        (
+            Op::SaturatingInteger(SemanticSaturatingIntegerOpV1::Add),
+            Version::V30,
+        ),
+        (
+            Op::Gfx942OrderedRegion(SemanticGfx942OrderedRegionProfileV31::XorAddU32E32),
+            Version::V31,
+        ),
+        (
+            Op::Gfx942OrderedProgram(
+                SemanticGfx942U32ProgramV32::from_descriptors(1, descriptors).unwrap(),
+            ),
+            Version::V32,
+        ),
+        (
+            Op::Gfx942Wave64ShuffleIndex {
+                context: CONTEXT,
+                element: SemanticTypeIdV1(0),
+            },
+            Version::V33,
+        ),
+        (
+            Op::Gfx942InlineU32(
+                SemanticGfx942InlineU32V30::new(SemanticGfx942InlineInstructionV30::VMovB32, 1)
+                    .unwrap(),
+            ),
+            Version::V34,
+        ),
+        (
+            Op::Gfx942CompleteBody(SemanticCompleteBodyPackingVNext {
+                block_count: 1,
+                instruction_count: 1,
+                block_words: [0x41ff, 0, 0, 0],
+                instruction_words: [8, 0, 0, 0],
+            }),
+            Version::V36,
+        ),
+        (Op::Gfx942PhysicalEntryBegin, Version::V37),
+        (Op::Gfx942PhysicalGlobalCopyBegin, Version::V38),
+        (
+            Op::Gfx942PhysicalLdsExchangeBegin(
+                SemanticPhysicalLdsExchangeFrameV39::new(0, 512, 4, 1).unwrap(),
+            ),
+            Version::V39,
+        ),
+    ];
+    for (operation, required) in operations {
+        let mut writer = CanonicalWriterV1::new(4096);
+        writer.raw(&[71, 72]).unwrap();
+        assert_eq!(
+            encode_compiler_intrinsic_operation(
+                &mut writer,
+                operation,
+                SemanticMirWireVersionV1::V41
+            ),
+            Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: SemanticMirWireVersionV1::V41,
+                required
+            })
+        );
+        assert_eq!(writer.finish(), [71, 72]);
+        let mut mixed = request(true, true);
+        let SemanticCallableDeclV1::CompilerIntrinsic {
+            operation: actual, ..
+        } = &mut mixed.callables[1]
+        else {
+            unreachable!()
+        };
+        *actual = operation;
+        // Membership must refuse before the intentionally incompatible signature.
+        assert_eq!(
+            mixed
+                .admit_exact_v41(SemanticMirLimitsV1::default())
+                .unwrap_err(),
+            SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: SemanticMirWireVersionV1::V41,
+                required
+            }
+        );
+    }
+}
+
+#[test]
+fn atomic_v41_composition_cannot_silently_drop_specialized_source_tails() {
+    let original = request(true, true);
+    let SemanticTerminatorKindV1::Call(call) = &original.functions[0].blocks[0].terminator.kind
+    else {
+        unreachable!()
+    };
+    let scalar_source = SemanticInlineAssemblySourceV30::new(
+        identity(1),
+        SemanticFunctionIdentityV1(identity(2)),
+        identity(3),
+        identity(4),
+    )
+    .unwrap();
+    let physical_source = SemanticPhysicalGlobalCopySourceV38::new(
+        [
+            identity(1),
+            identity(2),
+            identity(3),
+            identity(4),
+            identity(5),
+        ],
+        identity(6),
+        identity(7),
+        identity(8),
+        identity(9),
+        identity(10),
+        (0, 0),
+    )
+    .unwrap();
+    for (call, required) in [
+        (
+            call.clone().with_inline_assembly_source_v30(scalar_source),
+            SemanticMirWireVersionV1::V34,
+        ),
+        (
+            call.clone()
+                .with_physical_global_copy_source_v38(physical_source),
+            SemanticMirWireVersionV1::V38,
+        ),
+    ] {
+        let mut writer = CanonicalWriterV1::new(4096);
+        writer.raw(&[71, 72]).unwrap();
+        assert_eq!(
+            wire_schema_membership_v1::encode_direct_call(
+                &mut writer,
+                &call,
+                SemanticMirWireVersionV1::V41
+            ),
+            Err(SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: SemanticMirWireVersionV1::V41,
+                required,
+            })
+        );
+        assert_eq!(writer.finish(), [71, 72]);
+        let mut changed = original.clone();
+        changed.functions[0].blocks[0].terminator.kind = SemanticTerminatorKindV1::Call(call);
+        assert_eq!(
+            changed
+                .admit_exact_v41(SemanticMirLimitsV1::default())
+                .unwrap_err(),
+            SemanticMirErrorV1::WireVersionCannotRepresent {
+                requested: SemanticMirWireVersionV1::V41,
+                required,
+            }
+        );
+    }
 }

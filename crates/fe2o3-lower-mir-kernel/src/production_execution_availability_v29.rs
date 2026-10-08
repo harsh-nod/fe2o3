@@ -699,6 +699,35 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         Err(execution_availability_error_v29())
     }
 
+    // The original producer uses a distinct role for an AtomicRmw old-result.
+    // Select it only from this exact original statement and direct destination,
+    // never by searching for a convenient extra event or accepting another role.
+    // This consumes an SSA definition; it grants no atomic address permission.
+    fn definition_roles_v29(
+        &self,
+        site: ExecutionSiteV29,
+        local: SemanticLocalIdV1,
+        budget: &mut dyn SemanticEmissionBudgetV1,
+    ) -> Result<&'static [ExecutionOperandV29], ProductionSemanticKirErrorV1> {
+        self.check_ledger(budget)?;
+        budget.charge_work(3)?;
+        if let Some(SemanticStatementKindV1::AtomicRmw(original)) =
+            scoped_source_statement_v29(self.function, site)
+        {
+            if !original.destination().projections().is_empty()
+                || original.destination().local() != local
+            {
+                return Err(execution_availability_error_v29());
+            }
+            Ok(&[ExecutionOperandV29::AtomicDestination])
+        } else {
+            Ok(&[
+                ExecutionOperandV29::Destination,
+                ExecutionOperandV29::ElidedBorrowDestination,
+            ])
+        }
+    }
+
     fn define(
         &mut self,
         site: ExecutionSiteV29,
@@ -706,20 +735,16 @@ impl<'a> ExecutionAvailabilityV29<'a> {
         value: SsaValueV1,
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
-        let index = match self.find_event(
-            site,
-            ExecutionOperandV29::Destination,
-            ExecutionEventV29::DestinationDefine,
-            budget,
-        )? {
-            Some(index) => index,
-            None => self.event(
-                site,
-                ExecutionOperandV29::ElidedBorrowDestination,
-                ExecutionEventV29::DestinationDefine,
-                budget,
-            )?,
-        };
+        let mut selected = None;
+        for &operand in self.definition_roles_v29(site, local, budget)? {
+            if let Some(index) =
+                self.find_event(site, operand, ExecutionEventV29::DestinationDefine, budget)?
+            {
+                selected = Some(index);
+                break;
+            }
+        }
+        let index = selected.ok_or_else(execution_availability_error_v29)?;
         if self.occurrences.events()[index].resolved()
             != Some(SsaResolvedEventV1::Define {
                 variable: fe2o3_mir_model::SsaVariableIdV1::new(local.index()),

@@ -246,6 +246,16 @@ fn source_reference_rebuild_node_v29(
     execution_cfg_charge_node_v29(nodes, budget)
         .inspect_err(|error| source_reference_record_failure_v29(plan, error))?;
     let row = *plan.nodes.get(node).ok_or_else(execution_cfg_error_v29)?;
+    if let Some(expected) = source_atomic_node_type_v41(plan, node, budget)? {
+        let value = values.next().ok_or_else(execution_cfg_error_v29)?;
+        if !invocation_equal_types_v1(&value.ty, &expected, budget)? {
+            return Err(source_atomic_view_error_v41());
+        }
+        return Ok(SemanticValueBindingV1::Value {
+            id: value.id,
+            ty: expected,
+        });
+    }
     match row.kind {
         SourceReferenceNodeKindV29::Absent => {
             let types = source_reference_inactive_payload_types_v29(plan, node, nodes, budget)?;
@@ -465,6 +475,28 @@ fn source_reference_merge_node_plan_v59(
     execution_cfg_charge_node_v29(nodes, budget)
         .inspect_err(|error| source_reference_record_failure_v29(plan, error))?;
     let row = *plan.nodes.get(node).ok_or_else(execution_cfg_error_v29)?;
+    if let Some(expected) = source_atomic_node_type_v41(plan, node, budget)? {
+        let (
+            SemanticValueBindingV1::Value {
+                id: held,
+                ty: actual,
+            },
+            SemanticValueBindingV1::Value {
+                id: archived,
+                ty: archived_type,
+            },
+        ) = (held, archived)
+        else {
+            return Err(source_atomic_view_error_v41());
+        };
+        if held != archived
+            || !invocation_equal_types_v1(actual, archived_type, budget)?
+            || !invocation_equal_types_v1(actual, &expected, budget)?
+        {
+            return Err(source_atomic_view_error_v41());
+        }
+        return Ok(());
+    }
     match row.kind {
         SourceReferenceNodeKindV29::Absent => {
             source_reference_merge_inactive_plan_v59(plan, node, held, archived, nodes, budget)

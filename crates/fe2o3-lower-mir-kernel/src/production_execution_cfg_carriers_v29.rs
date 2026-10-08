@@ -84,6 +84,7 @@ fn execution_cfg_plain_carrier_node_v29(row: &SourceReferenceNodeV29) -> bool {
         && row.storage.is_none()
         && row.inactive.is_none()
         && row.descriptor.is_none()
+        && row.atomic_custody.is_none()
 }
 
 impl ExecutionCfgCarriersV29 {

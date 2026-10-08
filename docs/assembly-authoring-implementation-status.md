@@ -3425,3 +3425,65 @@ separately. Authored buffer/atomic/
 wave coverage, genuine source-to-simulator integration, broader pending schedules,
 descriptor reconciliation and applicable hardware qualification still remain
 for M3. No native or GPU behavior is inferred from this bounded simulator fix.
+
+## Opt-in original Rust atomic storage and whole-root lowering (R86 CPU evidence)
+
+The explicit V41 importer retains authenticated core `AtomicI32`/`AtomicU32`
+storage identity and the original `UnsafeCell`/transparent-field chain. This is
+a separate, selected wire/profile path: older/default admission is not silently
+upgraded. The nominal fact alone grants no pointer permission.
+
+The source-owned planner retains the exact exclusive root, current holder,
+generation and loan through supported helper transport, field capture,
+`AddressOf`, borrowing and forward transparent-descendant casts. Atomic-only
+receipts do not permit an ordinary shared write, dereference, pointer exposure,
+reverse/foreign cast or an unproved lifetime transition. Lowering emits real
+Global-to-Generic pointer conversions and preserves the original RMW kind,
+ordering, scope, scalar type, address, RHS, old-result destination and memory
+access contract. Whole-root completion still consumes the original ExpandedRaw
+census, source occurrences, relocated graph, anchors and lifetime obligations;
+receipt presence is not a replacement for these joins.
+
+The [genuine whole-root callback](../crates/rustc-codegen-fe2o3/src/production_rustc_driver_atomic_root_v41_tests.rs)
+uses the real compiler transaction twice per session: an independent original
+semantic census, then the selected source-owned preparation and canonical
+consumer. Its [consumer](../crates/rustc-codegen-fe2o3/src/production_pipeline_atomic_root_v41_tests.rs)
+is test-only and grants no executable, proof or output authority. Four actual
+callbacks passed after diagnostic cleanup: two repeated sessions each for
+`gfx942` and `gfx950`, at `opt0/mir0`. Each retained one root, 13 active original
+call instances, 50 source RMW occurrences and 50 emitted RMWs covering ten
+operation kinds × five orderings, 50 memory anchors, and two actual
+`PointerToGeneric` casts. Repetition preserved the source/canonical identities
+within each target; the identities remain target-specific. These observed
+counts are not a rule that arbitrary optimization must preserve 50 operations.
+
+The exact CPU qualification snapshots are:
+
+| Snapshot and check | Actual result | Retained receipt SHA-256 |
+| --- | --- | --- |
+| `17533a8378b7d2ac816a34e610b515b1c3835463` plus the cleaned atomic source: complete `fe2o3-mir-model` and `fe2o3-lower-mir-kernel` tests | 5,995 passed, 0 failed, 2 ignored across 38 result groups | `f03bd3a60dc18b3e774a0e692bf3995e59304ba4ef991b8d2820d636dfa10a1f` |
+| Same snapshot: complete `rustc-codegen-fe2o3 --lib` suite | Enclosing suite: 4,319 passed, 0 failed, 356 ignored; seven nested one-test subprocess results reported separately | `d10cda0c020ad8e87c59b94dfa14cbf20255d8b0b9eff0606785b9ae8ac80edf` |
+| Same snapshot: explicitly selected, normally ignored genuine whole-root test, R7 | 1 parent test passed; all four original compiler callbacks passed | `47487e9557a36692e11ad71e0cd5d5024828715e72d075bd62e1676c263d8b2b` |
+| `172a32f03a4a3ad23a6a682d39ccd9b3927c4202` plus the same 56 atomic leaves, including the intervening recipe-cancellation integration: complete backend library suite | Enclosing suite: 4,332 passed, 0 failed, 357 ignored; seven nested one-test subprocess results reported separately | `d704997ea39611ffc9c4c84c0841cc9954acfd93ac0f626b8b88d505227ca27d` |
+
+The first three runs share the unchanged source census
+`4985256007dd6979cf9bd925e2400c93dd329728df4283b24c5a12dbb0854f03`
+(15,403 files / 221,961,851 bytes). The combined backend run completed at
+2026-10-08 09:48:05 UTC with unchanged census
+`0f3e58b772e925359082c0bf1a056338ce419bb7b04bb97dbad433ff2c29b52b`
+(15,406 files / 222,002,113 bytes). The two skipped model/lowerer cases are the
+inert tile-descriptor diagnostic and opt-in serialized-fixture regeneration.
+Skipped backend integration cases are not counted as executed; the genuine R7
+run above is separately selected evidence, not implied by the ordinary suite.
+Earlier refused/failed attempts remain historical evidence and are not
+rewritten as passing.
+
+This closes a concrete source-owned atomic preparation gap, **not M3 as a
+whole**. The selected callback stops after canonical observation. It does not
+establish ordinary CLI/default-profile activation, Rust atomic kernel
+simulation, LLVM/code-object generation, protected finalization, native/GPU
+execution, hardware memory-order behavior, general unsafe/shared-reference
+writes, atomic loads/stores/compare-exchange, or untested kinds and widths.
+Those routes and the remaining memory/synchronization acceptance work require
+their own implementation and qualification. The existing simulator-only scope
+and range evidence above remains separate.

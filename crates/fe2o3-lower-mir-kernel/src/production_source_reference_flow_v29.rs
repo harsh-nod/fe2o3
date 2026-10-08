@@ -312,6 +312,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 )?;
                 Ok(())
             }
+            SemanticStatementKindV1::AtomicRmw(atomic) => self.atomic_rmw_v41(site, atomic, budget),
             SemanticStatementKindV1::Nop => Ok(()),
             // No unexamined operation can silently certify a stable referent.
             _ => Err(source_reference_error_v29(
@@ -436,7 +437,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
             SemanticOperandV1::Constant(constant) => self.plain(constant.ty(), budget),
             SemanticOperandV1::Copy(place) => self.read_place(site, place, budget),
             SemanticOperandV1::Move(place) => {
-                let resolved = self.resolve_reference_place(
+                let mut resolved = self.resolve_reference_place(
                     site,
                     place,
                     SourceReferenceAccessV29::Read,
@@ -445,6 +446,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 if let Some(loan) = resolved.loan {
                     self.effect(loan, SourceReferenceEffectV29::ReadReferent, budget)?;
                 }
+                self.capture_atomic_root_pointer_v41(site, place, &mut resolved, budget)?;
                 let node = self.attach_storage_value(&resolved, budget)?;
                 let tracked = self.mutate_storage_place(
                     &resolved,
@@ -512,11 +514,12 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
         place: &SemanticPlaceV1,
         budget: &mut ArgumentBudgetV1<'_>,
     ) -> Result<usize, ProductionSemanticKirErrorV1> {
-        let resolved =
+        let mut resolved =
             self.resolve_reference_place(site, place, SourceReferenceAccessV29::Read, budget)?;
         if let Some(loan) = resolved.loan {
             self.effect(loan, SourceReferenceEffectV29::ReadReferent, budget)?;
         }
+        self.capture_atomic_root_pointer_v41(site, place, &mut resolved, budget)?;
         self.attach_storage_value(&resolved, budget)
     }
 
@@ -774,6 +777,18 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                     &index_value,
                     budget,
                 )?;
+            }
+            if projection.kind() == SemanticProjectionKindV1::Dereference
+                && self.plan.nodes[resolved.node].atomic_custody.is_some()
+            {
+                let fact = self
+                    .plan
+                    .atomic_custody_v41(resolved.node, budget)?
+                    .ok_or(ArgumentResourceV1::Accounting)?;
+                self.check_atomic_custody_v41(fact, budget)?;
+                // Generic/RW is a physical carrier, never ordinary permission,
+                // including before a view and through copied or moved aliases.
+                return Err(source_atomic_view_error_v41());
             }
             match (projection.kind(), self.plan.nodes[resolved.node].kind) {
                 (
@@ -1621,6 +1636,9 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                 "source reference CFG value types differ",
             ));
         }
+        if a.atomic_custody != b.atomic_custody {
+            return Err(source_atomic_view_error_v41());
+        }
         match (a.kind, b.kind) {
             (
                 SourceReferenceNodeKindV29::EnumView(left),
@@ -1692,6 +1710,7 @@ impl SourceReferenceBuilderV29<'_, '_, '_> {
                     budget,
                 )?;
                 self.plan.nodes[node].descriptor = descriptor;
+                self.plan.nodes[node].atomic_custody = self.plan.nodes[left].atomic_custody;
                 Ok(node)
             }
             (SourceReferenceNodeKindV29::Address(a), SourceReferenceNodeKindV29::Address(b)) => {

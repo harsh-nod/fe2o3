@@ -42,6 +42,7 @@ struct SourceReferenceEmissionV29<'a, 'source> {
     descriptors: Vec<std::cell::Cell<Option<SourceReferenceDescriptorUseV29>>>,
     descriptor_guards: Vec<std::cell::Cell<Option<SourceReferenceDescriptorGuardUseV29>>>,
     raw_formations: Vec<std::cell::Cell<Option<SourceRawFormationReceiptV29>>>,
+    atomic_receipts: Vec<std::cell::Cell<Option<SourceAtomicPhysicalReceiptV41>>>,
     floor: usize,
     owned: usize,
 }
@@ -238,6 +239,14 @@ impl<'a, 'source> SourceReferenceEmissionV29<'a, 'source> {
             budget.source_reference_charge_v29(plan, plan.raw_origins.len())?;
             raw_formations.resize_with(plan.raw_origins.len(), || std::cell::Cell::new(None));
         }
+        let atomic_count = argument_sum_v1(&[
+            plan.atomic_captures.len(),
+            plan.atomic_formations.len(),
+            plan.atomic_uses.len(),
+        ])?;
+        let mut atomic_receipts = source_reference_owned_vec_v29(plan, atomic_count, budget)?;
+        budget.source_reference_charge_v29(plan, atomic_count)?;
+        atomic_receipts.resize_with(atomic_count, || std::cell::Cell::new(None));
         let floor = budget.storage();
         Ok(Self {
             plan,
@@ -253,6 +262,7 @@ impl<'a, 'source> SourceReferenceEmissionV29<'a, 'source> {
             descriptors,
             descriptor_guards,
             raw_formations,
+            atomic_receipts,
             floor,
             owned: floor
                 .checked_sub(before)
@@ -402,6 +412,14 @@ impl<'a, 'source> SourceReferenceEmissionV29<'a, 'source> {
         &self,
         budget: &mut dyn SemanticEmissionBudgetV1,
     ) -> Result<(), ProductionSemanticKirErrorV1> {
+        budget.source_reference_charge_v29(self.plan, self.atomic_receipts.len())?;
+        if self
+            .atomic_receipts
+            .iter()
+            .any(|claim| claim.get().is_none())
+        {
+            return Err(source_atomic_view_error_v41());
+        }
         budget.source_reference_charge_v29(self.plan, self.claimed.len())?;
         budget.source_reference_charge_v29(self.plan, self.external_borrows.len())?;
         if self.external_borrows.iter().any(|claimed| !claimed.get()) {
@@ -550,6 +568,15 @@ fn source_reference_node_has_loan_v29(
     pending.push(node);
     while let Some(index) = pending.pop() {
         budget.source_reference_charge_v29(plan, 1)?;
+        if plan
+            .nodes
+            .get(index)
+            .is_some_and(|node| node.atomic_custody.is_some())
+        {
+            source_atomic_node_type_v41(plan, index, budget)?
+                .ok_or_else(source_atomic_view_error_v41)?;
+            return Ok(true);
+        }
         match plan
             .nodes
             .get(index)
@@ -671,6 +698,11 @@ fn source_reference_payload_types_v29(
                 .inspect_err(|error| source_reference_record_failure_v29(plan, error))
         }
         SourceReferenceRepresentationV29::ExistingAllocationBinding(anchor) => {
+            if let Some(ty) = source_atomic_root_type_v41(plan, loan, budget)? {
+                let mut types = source_reference_owned_vec_v29(plan, 1, budget)?;
+                types.push(ty);
+                return Ok(types);
+            }
             let root = plan
                 .instances
                 .instance(plan.root)
@@ -874,6 +906,11 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         let SemanticRvalueKindV1::Borrow { kind, place } = value else {
             return Ok(None);
         };
+        if let Some(binding) =
+            self.try_lower_atomic_formation_v41(block, statement, result_type, value, operations)?
+        {
+            return Ok(Some(binding));
+        }
         if let Some(binding) = self.try_lower_source_external_reference_v29(
             block,
             statement,
@@ -1322,6 +1359,16 @@ fn source_reference_allocation_borrowed_v29<'binding>(
         SourceReferenceRepresentationV29::ExistingAllocationBinding(_)
     ) {
         return Ok(None);
+    }
+    if let Some(expected) =
+        source_atomic_root_type_v41(plan, binding.origin.single_loan()?, budget)?
+    {
+        if binding.values.len() != 1
+            || !invocation_equal_types_v1(&binding.values[0].ty, &expected, budget)?
+        {
+            return Err(source_atomic_view_error_v41());
+        }
+        return Ok(binding.values.first());
     }
     if binding.values.len() != 1 || !matches!(binding.values[0].ty, Type::Slice(_)) {
         return Err(allocation_receiver_error_v29());

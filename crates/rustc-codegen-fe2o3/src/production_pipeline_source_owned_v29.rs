@@ -41,6 +41,7 @@ struct SourceBindingContextV29<'bindings> {
 
 pub(super) enum ImportProfile {
     Current,
+    AtomicV41,
     NominalV35,
     SourceOwnedV29,
 }
@@ -788,6 +789,18 @@ fn pay_context_preparation_headers_v29(budget: &mut Budget<'_>) -> Result<(), Er
 
 #[cfg(test)]
 impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
+    // Genuine collector/body/identity construction, not a decoded or reencoded
+    // owner. This accessor deliberately stops before any physical lowering.
+    pub(crate) fn source_owned_atomic_ssa_for_test_v41(
+        self,
+    ) -> Result<fe2o3_pliron::ProductionSemanticSsaOwnerV1, Error> {
+        let source = self
+            .import_semantic_mir_with_profile_v29(ImportProfile::AtomicV41)?
+            .construct_semantic_middle_end()?
+            .construct_semantic_ssa()?;
+        Ok(source.stage.semantic_ssa)
+    }
+
     pub(crate) fn source_owned_ssa_for_test_v29(
         self,
         source_owned: bool,
@@ -844,6 +857,12 @@ impl<'tcx> ProductionCompilation<'tcx, CollectedRustStage<'tcx>> {
 #[cfg(test)]
 #[path = "production_pipeline_source_owned_v29_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "production_pipeline_atomic_root_v41_tests.rs"]
+mod atomic_root_v41_tests;
+#[cfg(test)]
+pub(crate) use atomic_root_v41_tests::AtomicRootObservationV41;
 
 #[cfg(test)]
 pub(crate) use tests::{

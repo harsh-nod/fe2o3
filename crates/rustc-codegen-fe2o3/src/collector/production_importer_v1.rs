@@ -48,8 +48,8 @@ use crate::production_semantic_terminal_v1::{
     ProductionBf16ConversionV1, ProductionTerminalExpansionV1,
 };
 use crate::production_semantic_types_v1::{
-    ProductionSemanticTypeErrorV1, construct_production_semantic_types_nominal_v35,
-    construct_production_semantic_types_v1,
+    ProductionSemanticTypeErrorV1, construct_production_semantic_types_atomic_v41,
+    construct_production_semantic_types_nominal_v35, construct_production_semantic_types_v1,
 };
 use crate::production_target_v1::ProductionTargetErrorV1;
 use crate::rustc_semantic_adapter_v1::{
@@ -313,6 +313,28 @@ pub(crate) fn construct_production_semantic_mir_nominal_v35<'tcx>(
     construct_production_semantic_mir_with_nominal_v35(tcx, closure, debug_source_capture, true)
 }
 
+/// Explicit original-rustc atomic storage import; this is not a default selector
+/// and grants no pointer, execution, optimization or target authority.
+pub(crate) fn construct_production_semantic_mir_atomic_v41<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    closure: AuthenticatedCollectedKernelClosureV1<'tcx>,
+    debug_source_capture: DebugSourceCaptureRequestV2,
+) -> Result<ConstructedProductionSemanticMirV1, ProductionSemanticImportErrorV1> {
+    let (constructed, completion) = construct_production_semantic_mir_with_policy_v1(
+        tcx,
+        closure,
+        debug_source_capture,
+        false,
+        SourceImportPolicyV1::AtomicV41,
+    )?;
+    match completion {
+        SourceImportCompletionV1::AtomicV41 => Ok(constructed),
+        _ => Err(body_owner_table_mismatch_v1(
+            "atomic V41 import returned a foreign completion profile",
+        )),
+    }
+}
+
 /// The source-owned pipeline selects its exact grammar before admission.
 /// This reuses the live rustc producers and all original custody checks; it
 /// does not reencode an admitted legacy owner or infer a policy from a kernel.
@@ -376,6 +398,7 @@ impl<'tcx> AuthenticatedOrderedCompositionMirV1<'tcx> {
 #[derive(Clone, Copy)]
 enum SourceImportPolicyV1 {
     Singleton,
+    AtomicV41,
     SourceOwnedV29,
     Composition,
     Bf16Inspection,
@@ -384,6 +407,7 @@ enum SourceImportPolicyV1 {
 // Exact private completion modes: no inferred or fallback source custody.
 enum SourceImportCompletionV1<'tcx> {
     Singleton,
+    AtomicV41,
     SourceOwnedV29,
     Composition(crate::production_ordered_composition_source_v1::AuthenticatedOrderedCompositionSourceSeedV1<'tcx>),
     Bf16Inspection(crate::production_tiled_region_source_v1::AuthenticatedBf16MfmaSourceSeedV1<'tcx>),
@@ -574,7 +598,9 @@ fn construct_production_semantic_mir_with_policy_v1<'tcx>(
         Err(error) => return Err(ProductionSemanticImportErrorV1::Preflight(Box::new(error))),
     };
     require_lineage_transcript_bound_v3("rustc preflight plan", plan.canonical_transcript())?;
-    let constructed_types = if nominal {
+    let constructed_types = if matches!(ordered_policy, SourceImportPolicyV1::AtomicV41) {
+        construct_production_semantic_types_atomic_v41(tcx, plan.type_producers())
+    } else if nominal {
         construct_production_semantic_types_nominal_v35(tcx, plan.type_producers())
     } else {
         construct_production_semantic_types_v1(tcx, plan.type_producers())
@@ -646,6 +672,12 @@ fn construct_production_semantic_mir_with_policy_v1<'tcx>(
             Bf16::Disabled,
             TileValues::Disabled,
         ) => SourceImportCompletionV1::Singleton,
+        (
+            SourceImportPolicyV1::AtomicV41,
+            Ordered::Singleton,
+            Bf16::Disabled,
+            TileValues::Disabled,
+        ) => SourceImportCompletionV1::AtomicV41,
         (
             SourceImportPolicyV1::SourceOwnedV29,
             Ordered::Singleton,
@@ -818,6 +850,7 @@ fn construct_complete_request_v1<'tcx>(
     .with_ordered_sources_v31(ordered_sources);
     match ordered_policy {
         SourceImportPolicyV1::Singleton
+        | SourceImportPolicyV1::AtomicV41
         | SourceImportPolicyV1::SourceOwnedV29
         | SourceImportPolicyV1::Bf16Inspection
         | SourceImportPolicyV1::Bf16TileValues => {
@@ -1092,7 +1125,11 @@ fn construct_complete_request_v1<'tcx>(
         plan.roots().to_vec(),
     )
     .and_then(|request| {
-        if matches!(ordered_policy, SourceImportPolicyV1::SourceOwnedV29) {
+        if matches!(ordered_policy, SourceImportPolicyV1::AtomicV41) {
+            // An explicit original transaction selects this exact composition.
+            // Sibling authoring/physical forms refuse; no marker-driven fallback.
+            request.admit_exact_v41(SemanticMirLimitsV1::default())
+        } else if matches!(ordered_policy, SourceImportPolicyV1::SourceOwnedV29) {
             // Fixed pipeline context, including ordinary scalar roots. Newer
             // sibling syntax must fail exact membership, never fall back.
             request.admit_exact_v29(SemanticMirLimitsV1::default())

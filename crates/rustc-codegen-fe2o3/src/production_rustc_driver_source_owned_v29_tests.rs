@@ -14,6 +14,9 @@ mod target_llvm_tests;
 #[path = "production_rustc_driver_source_preparation_v29_tests.rs"]
 mod preparation_tests;
 
+#[path = "production_rustc_driver_atomic_import_v41_tests.rs"]
+mod atomic_import_v41_tests;
+
 #[path = "production_rustc_driver_source_integer_handoff_v29_tests.rs"]
 mod integer_handoff_tests;
 

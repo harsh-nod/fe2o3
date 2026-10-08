@@ -272,10 +272,9 @@ impl ExecutionAvailabilityV29<'_> {
                     return Err(execution_archive_error_v29());
                 }
                 let mut selected = None;
-                for operand in [
-                    ExecutionOperandV29::Destination,
-                    ExecutionOperandV29::ElidedBorrowDestination,
-                ] {
+                for &operand in
+                    self.definition_roles_v29(site, SemanticLocalIdV1::from_index(local), budget)?
+                {
                     let key = unit_local_source_key_v1(
                         site,
                         operand,

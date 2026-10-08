@@ -16,6 +16,8 @@ use std::fmt;
 
 use sha2::{Digest, Sha256};
 
+mod atomic_storage_v41;
+pub use atomic_storage_v41::semantic_atomic_storage_chain_v41;
 mod canonical_decode;
 mod capability_v29;
 mod complete_body_source_vnext;
@@ -124,6 +126,8 @@ pub const INERT_SEMANTIC_MIR_VERSION_V39: u16 = 39;
 /// Exact ordinary/RustCall, execution-role and nominal integer composition.
 /// This inert schema is not selected by default and grants no authority.
 pub const INERT_SEMANTIC_MIR_VERSION_V40: u16 = 40;
+/// Provisional explicit atomic nominal grammar; no default admission or authority.
+pub const INERT_SEMANTIC_MIR_VERSION_V41: u16 = 41;
 
 /// Closed wire schema selected for one admitted semantic MIR value.
 ///
@@ -159,6 +163,7 @@ pub enum SemanticMirWireVersionV1 {
     V38,
     V39,
     V40,
+    V41,
 }
 
 impl SemanticMirWireVersionV1 {
@@ -191,6 +196,7 @@ impl SemanticMirWireVersionV1 {
             Self::V38 => INERT_SEMANTIC_MIR_VERSION_V38,
             Self::V39 => INERT_SEMANTIC_MIR_VERSION_V39,
             Self::V40 => INERT_SEMANTIC_MIR_VERSION_V40,
+            Self::V41 => INERT_SEMANTIC_MIR_VERSION_V41,
         }
     }
 
@@ -223,6 +229,7 @@ impl SemanticMirWireVersionV1 {
             INERT_SEMANTIC_MIR_VERSION_V38 => Some(Self::V38),
             INERT_SEMANTIC_MIR_VERSION_V39 => Some(Self::V39),
             INERT_SEMANTIC_MIR_VERSION_V40 => Some(Self::V40),
+            INERT_SEMANTIC_MIR_VERSION_V41 => Some(Self::V41),
             _ => None,
         }
     }
@@ -1994,6 +2001,10 @@ pub enum SemanticRustTypeKindV1 {
     Usize,
     /// Rust isize, retaining its distinct nominal kind beside its integer shape.
     Isize,
+    /// Inert exact core Atomic<i32> storage fact, explicit V41 only.
+    AtomicI32,
+    /// Inert exact core Atomic<u32> storage fact, explicit V41 only.
+    AtomicU32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -6654,6 +6665,15 @@ impl InertSemanticMirRequestV1 {
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
         self.admit_for_wire_version(SemanticMirWireVersionV1::V40, limits)
     }
+    /// Explicit inert atomic nominal facts with ordinary/RustCall, existing
+    /// execution-role and nominal-integer records. No source or pointer authority.
+    pub fn admit_exact_v41(
+        self,
+        limits: SemanticMirLimitsV1,
+    ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        self.admit_for_wire_version(SemanticMirWireVersionV1::V41, limits)
+    }
+
     /// Selects V5 for the baseline production surface, V6/V7 for their typed
     /// extensions, V8 when authenticated BF16 conversions are present, V9 for
     /// target-neutral workgroup reduction or when BF16 conversions and
@@ -6696,12 +6716,16 @@ impl InertSemanticMirRequestV1 {
         wire_version: SemanticMirWireVersionV1,
         limits: SemanticMirLimitsV1,
     ) -> Result<AdmittedInertSemanticMirV1, SemanticMirErrorV1> {
+        atomic_storage_v41::validate_request_schema(&self, wire_version)?;
         wire_schema_membership_v1::validate_request_schema(&self, wire_version)?;
         nominal_pointer_sized_v35::validate_request_schema(&self, wire_version)?;
         validate_request(&self, limits)?;
         // V40 uses the closed composition membership above, never an ordinal
         // maximum of incompatible sibling schemas. Legacy selection is frozen.
-        if wire_version != SemanticMirWireVersionV1::V40 {
+        if !matches!(
+            wire_version,
+            SemanticMirWireVersionV1::V40 | SemanticMirWireVersionV1::V41
+        ) {
             let mut required = minimum_wire_version(&self);
             if required == SemanticMirWireVersionV1::V34
                 && matches!(
@@ -10337,6 +10361,7 @@ fn validate_type(
     validate_single_backend_layout_facts(&ty.layout)?;
     validate_type_abi_properties(context.request, ty)?;
     nominal_pointer_sized_v35::validate_type(context, ty)?;
+    atomic_storage_v41::validate_type(context, id, ty)?;
     if let Some(niche) = ty.layout.largest_niche {
         validate_layout_niche(niche, Some(ty.layout.rustc_size_bytes))?;
     }
@@ -17776,6 +17801,7 @@ fn encode_type(
     wire_version: SemanticMirWireVersionV1,
 ) -> Result<(), SemanticMirErrorV1> {
     nominal_pointer_sized_v35::check_type_version(ty, wire_version)?;
+    atomic_storage_v41::check_type_version(ty, wire_version)?;
     if let SemanticRustTypeKindV1::Execution(role) = ty.rust_type_kind {
         if !wire_version.has_execution_roles() {
             return Err(SemanticMirErrorV1::WireVersionCannotRepresent {
@@ -17793,6 +17819,13 @@ fn encode_type(
     writer.bool(ty.abi_properties.rustc_layout_is_noundef)?;
     encode_optional_pointee_info(writer, ty.abi_properties.first_pointee)?;
     encode_optional_pointee_info(writer, ty.abi_properties.second_pointee)?;
+    if let Some((tag, _)) = atomic_storage_v41::tag(ty.rust_type_kind) {
+        let SemanticTypeShapeV1::Aggregate(fields) = &ty.shape else {
+            return Err(SemanticMirErrorV1::InvalidTypeLayout);
+        };
+        writer.u8(tag)?;
+        return encode_type_list(writer, fields);
+    }
     if ty.rust_type_kind == SemanticRustTypeKindV1::Str {
         return writer.u8(13);
     }
@@ -18602,6 +18635,7 @@ fn encode_compiler_intrinsic_operation(
             | SemanticMirWireVersionV1::V38
             | SemanticMirWireVersionV1::V39
             | SemanticMirWireVersionV1::V40
+            | SemanticMirWireVersionV1::V41
     ) {
         SemanticMirWireVersionV1::V15
     } else {

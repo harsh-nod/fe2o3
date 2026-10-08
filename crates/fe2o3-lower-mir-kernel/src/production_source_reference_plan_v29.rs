@@ -82,6 +82,8 @@ struct SourceReferenceNodeV29 {
     storage: Option<SourceReferenceValueStorageV29>,
     inactive: Option<SourceReferenceInactiveShapeV29>,
     descriptor: Option<usize>,
+    // Private original-plan custody, never an ordinary pointer permission.
+    atomic_custody: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -152,6 +154,10 @@ struct SourceReferencePlanV29<'a, 'source> {
     projections: Vec<SemanticProjectionV1>,
     loans: Vec<SourceReferenceLoanV29>,
     external_borrows: Vec<SourceExternalReferenceBorrowV29>,
+    atomic_custody: Vec<SourceAtomicPointerCustodyV41>,
+    atomic_formations: Vec<SourceAtomicViewFormationV41>,
+    atomic_captures: Vec<SourceAtomicCaptureV41>,
+    atomic_uses: Vec<SourceAtomicUseV41>,
     nodes: Vec<SourceReferenceNodeV29>,
     selected_storage: Vec<Option<fe2o3_kernel_ir::StorageLayoutIdV1>>,
     representation_demands: Vec<SourceReferenceRepresentationDemandV29>,
@@ -235,6 +241,8 @@ include!("production_source_reference_selectors_v29.rs");
 include!("production_source_reference_descriptors_v29.rs");
 include!("production_source_reference_epochs_v29.rs");
 include!("production_source_reference_addresses_v29.rs");
+include!("production_source_atomic_view_v41.rs");
+include!("production_source_atomic_emission_v41.rs");
 include!("production_source_descriptor_facts_v29.rs");
 include!("production_source_descriptor_transport_v29.rs");
 
@@ -688,6 +696,10 @@ impl<'a, 'root, 'source> SourceReferenceBuilderV29<'a, 'root, 'source> {
                 projections: Vec::new(),
                 loans: Vec::new(),
                 external_borrows: Vec::new(),
+                atomic_custody: Vec::new(),
+                atomic_formations: Vec::new(),
+                atomic_captures: Vec::new(),
+                atomic_uses: Vec::new(),
                 nodes: Vec::new(),
                 children: Vec::new(),
                 enum_alternatives: Vec::new(),
@@ -803,6 +815,7 @@ impl<'a, 'root, 'source> SourceReferenceBuilderV29<'a, 'root, 'source> {
                 storage: None,
                 inactive: None,
                 descriptor: None,
+                atomic_custody: None,
             },
             budget,
         )?;

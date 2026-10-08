@@ -14877,6 +14877,11 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         let address = self.with_scoped_source_memory_frame_v29(
             ScopedMemoryFrameV29::operand(site, Some(ExecutionOperandV29::AtomicAddress)),
             |this| {
+                if let Some(address) =
+                    this.try_lower_atomic_address_v41(block, statement, atomic)?
+                {
+                    return Ok(address);
+                }
                 if atomic.address().projections().is_empty()
                     && this
                         .legacy_retained_slot_v29(atomic.address().local())?
@@ -14990,6 +14995,9 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                     },
                 )
             },
+        )?;
+        self.claim_atomic_operation_v41(
+            block, statement, atomic, pointer, value, access, &result, operations,
         )?;
         self.assign_place(
             block,
@@ -15521,6 +15529,15 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 )
             }
             SemanticRvalueKindV1::Cast { kind, operand } => {
+                if let Some(binding) = self.try_lower_atomic_formation_v41(
+                    block,
+                    statement,
+                    result_type,
+                    value,
+                    operations,
+                )? {
+                    return Ok(binding);
+                }
                 let (input, input_ty) = self
                     .lower_rvalue_operand_v29(block, statement, 0, operand, operations)?
                     .value()
@@ -22202,6 +22219,19 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         let mut projection_index = 0;
         let mut source_value = false;
         while projection_index < place.projections().len() {
+            if let Some(value) = self.try_lower_atomic_capture_v41(
+                block,
+                statement,
+                place,
+                projection_index,
+                &binding,
+                operations,
+            )? {
+                binding = value;
+                current_type = place.projections()[projection_index].result_type();
+                projection_index += 1;
+                continue;
+            }
             if matches!(
                 binding,
                 SemanticValueBindingV1::OptionPointer { .. }

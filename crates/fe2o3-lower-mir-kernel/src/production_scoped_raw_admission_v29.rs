@@ -2327,6 +2327,13 @@ fn check_expanded_source_memory_inner_v29(
         let query_floor = budget.storage();
         #[cfg(test)]
         let row_reclaimed_before = SOURCE_OBJECT_PAYLOAD_ROW_SCRATCH_V29.get().1;
+        check_source_atomic_external_memory_v41(
+            instances,
+            references,
+            &source_index,
+            &graph,
+            budget,
+        )?;
         check_source_address_payloads_v29(
             instances,
             references,

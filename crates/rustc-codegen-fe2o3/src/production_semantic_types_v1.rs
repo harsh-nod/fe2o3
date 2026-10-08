@@ -33,6 +33,7 @@ use rustc_middle::ty::{
 use crate::rustc_semantic_adapter_v1::rustc_type_identity_v1;
 use crate::rustc_semantic_plan_v1::RetainedSemanticTypeProducerV1;
 
+mod atomic_storage_v41;
 mod execution_v29;
 pub(crate) use execution_v29::role as execution_role_v29;
 
@@ -127,7 +128,7 @@ pub(crate) fn construct_production_semantic_types_v1<'tcx>(
     tcx: TyCtxt<'tcx>,
     producers: &[RetainedSemanticTypeProducerV1<'tcx>],
 ) -> Result<ConstructedSemanticTypesV1, ProductionSemanticTypeErrorV1> {
-    construct_semantic_types_with_nominal_v35(tcx, producers, false)
+    construct_semantic_types_with_nominal_v35(tcx, producers, false, false)
 }
 
 /// Preserves actual normalized rustc usize/isize classification without replacing
@@ -136,13 +137,22 @@ pub(crate) fn construct_production_semantic_types_nominal_v35<'tcx>(
     tcx: TyCtxt<'tcx>,
     producers: &[RetainedSemanticTypeProducerV1<'tcx>],
 ) -> Result<ConstructedSemanticTypesV1, ProductionSemanticTypeErrorV1> {
-    construct_semantic_types_with_nominal_v35(tcx, producers, true)
+    construct_semantic_types_with_nominal_v35(tcx, producers, true, false)
+}
+
+/// Explicit original rustc atomic nominal facts; no ordinary selector changes.
+pub(crate) fn construct_production_semantic_types_atomic_v41<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    producers: &[RetainedSemanticTypeProducerV1<'tcx>],
+) -> Result<ConstructedSemanticTypesV1, ProductionSemanticTypeErrorV1> {
+    construct_semantic_types_with_nominal_v35(tcx, producers, true, true)
 }
 
 fn construct_semantic_types_with_nominal_v35<'tcx>(
     tcx: TyCtxt<'tcx>,
     producers: &[RetainedSemanticTypeProducerV1<'tcx>],
     nominal: bool,
+    atomic: bool,
 ) -> Result<ConstructedSemanticTypesV1, ProductionSemanticTypeErrorV1> {
     let mut ids = BTreeMap::new();
     for (index, producer) in producers.iter().enumerate() {
@@ -176,7 +186,34 @@ fn construct_semantic_types_with_nominal_v35<'tcx>(
                 _ => record,
             };
         }
+        if atomic {
+            if let Some((kind, _)) = atomic_storage_v41::authenticated_shape(tcx, producer.ty)
+                .map_err(|construct| context.unsupported(construct))?
+            {
+                record = record.with_rust_type_kind(kind);
+            }
+        }
         records.push(record);
+    }
+    if atomic {
+        for (index, record) in records.iter().enumerate() {
+            if matches!(
+                record.rust_type_kind(),
+                SemanticRustTypeKindV1::AtomicI32 | SemanticRustTypeKindV1::AtomicU32
+            ) {
+                let id = SemanticTypeIdV1::from_index(
+                    u32::try_from(index).map_err(|_| ProductionSemanticTypeErrorV1::Cardinality)?,
+                );
+                if fe2o3_mir_model::semantic_mir_v1::semantic_atomic_storage_chain_v41(&records, id)
+                    .is_none()
+                {
+                    return Err(ProductionSemanticTypeErrorV1::Unsupported {
+                        identity: record.identity(),
+                        construct: "atomic nominal original field/layout mismatch",
+                    });
+                }
+            }
+        }
     }
     Ok(ConstructedSemanticTypesV1 {
         records: records.into_boxed_slice(),

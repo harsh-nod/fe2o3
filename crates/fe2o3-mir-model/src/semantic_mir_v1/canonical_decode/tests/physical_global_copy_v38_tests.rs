@@ -77,7 +77,7 @@ fn physical_global_copy_v38_exact_allocations_and_fifteen_descriptor_frames() {
         SemanticMirWireVersionV1::from_u16(38),
         Some(SemanticMirWireVersionV1::V38)
     );
-    assert_eq!(SemanticMirWireVersionV1::from_u16(41), None);
+    assert_eq!(SemanticMirWireVersionV1::from_u16(42), None);
     assert_eq!(
         encode(SemanticCompilerIntrinsicOperationV1::Gfx942PhysicalGlobalCopyBegin),
         [96, 0]

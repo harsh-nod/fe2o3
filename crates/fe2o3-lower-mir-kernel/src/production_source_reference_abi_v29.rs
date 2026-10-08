@@ -154,7 +154,12 @@ fn source_reference_abi_words_v29(
             "source reference ABI cannot materialize an absent holder leaf",
         ));
     }
-    let leaf = if let Some(loan) = tracked {
+    let leaf = if let Some(node) = node.filter(|node| plan.nodes[*node].atomic_custody.is_some()) {
+        Some((
+            Type::Unit,
+            ParameterAbiLeafV1::Scalar(source_atomic_abi_scalar_v41(plan, node, ty, budget)?),
+        ))
+    } else if let Some(loan) = tracked {
         Some((
             Type::Unit,
             ParameterAbiLeafV1::Scalar(source_reference_abi_scalar_v29(plan, loan, ty, budget)?),
@@ -342,7 +347,39 @@ fn check_source_reference_parameter_v29(
     {
         return Err(execution_call_error_v29());
     }
-    let expected_ownership = if let SourceReferenceNodeKindV29::Loan(loan) = plan.nodes[node].kind {
+    let expected_ownership = if plan.nodes[node].atomic_custody.is_some() {
+        source_atomic_abi_scalar_v41(plan, node, argument.ty(), budget)?;
+        if !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_))
+            || mapped.local_field().is_some()
+            || mapped.tuple_field().is_some()
+        {
+            return Err(execution_call_error_v29());
+        }
+        let pointer = source_atomic_view_pointer_v41(
+            plan.instances.owner().source_semantic().types(),
+            argument.ty(),
+        )
+        .ok_or_else(source_atomic_view_error_v41)?;
+        match pointer.kind() {
+            SemanticPointerKindV1::Raw
+                if matches!(
+                    mapped.source_ownership(),
+                    SemanticSourceArgumentOwnershipV1::RawPointer
+                        | SemanticSourceArgumentOwnershipV1::ByValue
+                ) =>
+            {
+                mapped.source_ownership()
+            }
+            SemanticPointerKindV1::Reference
+                if pointer.mutability() == SemanticMutabilityV1::Immutable =>
+            {
+                SemanticSourceArgumentOwnershipV1::SharedBorrow
+            }
+            _ => {
+                return Err(source_atomic_view_error_v41());
+            }
+        }
+    } else if let SourceReferenceNodeKindV29::Loan(loan) = plan.nodes[node].kind {
         if !matches!(argument.mode(), SemanticAbiPassModeV1::Direct(_)) {
             return Err(execution_call_error_v29());
         }
@@ -584,6 +621,10 @@ fn source_reference_append_node_types_v29(
     execution_cfg_charge_node_v29(nodes, budget)
         .inspect_err(|error| source_reference_record_failure_v29(plan, error))?;
     let row = plan.nodes.get(node).ok_or_else(execution_call_error_v29)?;
+    if let Some(ty) = source_atomic_node_type_v41(plan, node, budget)? {
+        source_reference_owned_push_v29(plan, output, ty, budget)?;
+        return Ok(());
+    }
     match row.kind {
         SourceReferenceNodeKindV29::Absent => {
             if !inactive {

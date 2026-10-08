@@ -1556,11 +1556,14 @@ fn allocation_receiver_extraction_exact_and_one_short_work_storage_preserve_firs
         + (5 + 1)
         + 5
         + (5 + 3)
+        + 5 // Empty atomic-root capture probe in source_reference_payload_types_v29.
         + (5 + 2 * 4 + 3 * 20 + 32)
         + 5
         + (5 + 5 + 3)
         + (5 + 1)
-        + (5 + 8);
+        + (5 + 8)
+        + 5; // Empty atomic-root probe in source_reference_allocation_borrowed_v29.
+    assert_eq!(extraction_work, 253);
     let retained_storage = header::<Option<(ValueId, Type)>>()
         + header::<Result<Option<(ValueId, Type)>, ProductionSemanticKirErrorV1>>()
         + header::<Option<&ValueDef>>()
@@ -1577,6 +1580,10 @@ fn allocation_receiver_extraction_exact_and_one_short_work_storage_preserve_firs
             LIMIT,
             LIMIT,
             |plan, budget| {
+                assert!(
+                    plan.atomic_captures.is_empty(),
+                    "both atomic-root probes take None"
+                );
                 let mut binding = binding(plan, budget);
                 if let Some(storage) = denial {
                     if storage {
@@ -1630,6 +1637,11 @@ fn allocation_receiver_extraction_exact_and_one_short_work_storage_preserve_firs
                         );
                         assert_eq!(budget.storage() - before.1, retained_storage);
                         assert_eq!(binding.values.len(), 1);
+                        if !storage {
+                            // The final empty atomic-root owner check charges five.
+                            // With252 available,248 are accepted; the last five asks253.
+                            assert_eq!(budget.work() - before.0, extraction_work - 5);
+                        }
                         let before_replay = (budget.work(), budget.storage());
                         let replay = source_reference_allocation_value_v29(
                             plan,

@@ -159,6 +159,11 @@ impl SemanticFunctionLoweringV1<'_, '_> {
         let SemanticRvalueKindV1::AddressOf { place, mutability } = value else {
             return Ok(None);
         };
+        if let Some(binding) =
+            self.try_lower_atomic_formation_v41(block, statement, result_type, value, operations)?
+        {
+            return Ok(Some(binding));
+        }
         let Some(cursor) = self.execution.as_ref() else {
             return Ok(None);
         };
