@@ -147,6 +147,61 @@ fn body<'a>(text: &'a str, root: usize, pc: usize, goal: &str) -> &'a str {
     .unwrap()
 }
 
+fn assert_observation_summary(
+    text: &str,
+    root: usize,
+    pc: usize,
+    instance: usize,
+    statements: usize,
+    continuation: usize,
+    operations: usize,
+    target_fuel: usize,
+) {
+    let emitted = body(text, root, pc, "observations");
+    let header = emitted.split_once("\n{\n").unwrap().0;
+    assert_eq!(
+        header,
+        format!(
+            "source: InvocationSourceByteStateV36, target: MemoryStateV30)\n requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},\n ensures  invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events),"
+        )
+    );
+    for expected in [
+        format!(
+            "assert(original.machine.pc == {continuation}) by {{ reveal(invocation_source_return_v36); }}"
+        ),
+        "assert(original.machine.pc != -2);".to_owned(),
+        format!(
+            "assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{"
+        ),
+        format!("assert(invocation_source_block_runtime_{root}_v36(source).operands.len() == 0);"),
+        format!(
+            "reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {});",
+            statements + 1
+        ),
+        format!(
+            "reveal_with_fuel(invocation_source_statements_observations_v39, {});",
+            statements + 1
+        ),
+        "reveal_with_fuel(invocation_source_operands_observations_v39, 1);".to_owned(),
+        format!(
+            "assert(invocation_paired_actual_step_{root}_v36(target).events == Seq::empty()) by {{"
+        ),
+        format!("reveal_with_fuel(invocation_byte_follow_{root}_v36, {target_fuel});"),
+        format!(
+            "assert(invocation_byte_boundary_{root}_v36(target).observations.len() == {operations});"
+        ),
+        format!(
+            "reveal_with_fuel(invocation_actual_observations_v39, {});",
+            operations + 1
+        ),
+    ] {
+        assert!(emitted.contains(&expected), "{expected}");
+    }
+    for forbidden in ["assume(", "admit(", "external_body"] {
+        assert!(!emitted.contains(forbidden));
+    }
+}
+
 fn run(
     layout: Layout,
     work: usize,
@@ -159,6 +214,7 @@ fn run(
             let mut program = SourceByteProgram::derive(plan, slots, out)?;
             let mut paired =
                 PairedInvocations::derive(plan, &program, FormalIndexWidth::Bits64, out)?;
+            let inventory = paired.slots.correspondence(out)?.inventory(out.budget)?;
             let mut selected = Vec::new();
             for (root, row) in paired.roots.iter().enumerate() {
                 let allocation = root_returns::scan(&paired, root, out)?;
@@ -200,6 +256,8 @@ fn run(
                             summary.source.returned.destination,
                             summary.source.returned.continuation,
                             summary.target_result,
+                            inventory.blocks()[summary.target_pc].operations.len(),
+                            summary.target_fuel,
                         ));
                     }
                 }
@@ -227,9 +285,11 @@ fn run(
                 destination,
                 continuation,
                 target_result,
+                operations,
+                target_fuel,
             ) in selected
             {
-                for goal in ["heap", "control", "halted"] {
+                for goal in ["heap", "control", "halted", "observations"] {
                     let emitted = body(&out.text, root, pc, goal);
                     assert!(emitted.contains(&format!("requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},")));
                     if enabled {
@@ -251,6 +311,17 @@ fn run(
                             assert!(emitted.contains(&format!(
                                 "assert(value == actual.values[{target_result}])"
                             )));
+                        } else if goal == "observations" {
+                            assert_observation_summary(
+                                &out.text,
+                                root,
+                                pc,
+                                instance,
+                                statements,
+                                continuation,
+                                operations,
+                                target_fuel,
+                            );
                         }
                     } else {
                         assert!(!emitted.contains("let state_0 = source;"));
@@ -598,6 +669,7 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                             .filter(|hint| hint.scalar_return_v325.is_some()).count()).sum();
                     let mut joined_hint_count = 0;
                     let mut coordinates = Vec::new();
+                    let mut observation_summaries = Vec::new();
                     for (root, row) in paired.roots.iter().enumerate() {
                         let allocation = root_returns::scan(&paired, root, out)?;
                         let routes = scan(&paired, root, out)?;
@@ -642,6 +714,9 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                                     (source.returned.destination, source.returned.continuation, source.returned.depth, source.returned.bits));
                             }
                             let Some(summary) = summary else { continue };
+                            observation_summaries.push((root, hint.pc, hint.instance,
+                                summary.source.statements.len(), summary.source.returned.continuation,
+                                inventory.blocks()[summary.target_pc].operations.len(), summary.target_fuel));
                             if summary.source.statements.is_empty() {
                                 assert!(nested);
                                 assert_eq!(summary.source.returned.depth, 2);
@@ -663,6 +738,10 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                     eprintln!("V328_SCALAR_RETURN_SELECTION layout={layout:?} nested={nested} source_hints={source_hint_count} joined_hints={joined_hint_count} scalar={scalar_count} empty={empty_count} coordinates(root,instance,source_pc,target_block,candidate_statements,selected)={coordinates:?}");
                     program.emit(out)?;
                     paired.emit(out)?;
+                    for (root, pc, instance, statements, continuation, operations, target_fuel) in observation_summaries {
+                        assert_observation_summary(&out.text, root, pc, instance, statements,
+                            continuation, operations, target_fuel);
+                    }
                     let emitted_values = out.text.contains("let value_2 = MemoryValueV30::Scalar(original_invocation_source_scalar_trace_");
                     assert!(coverage.len() < 4, "bounded fixture layout census");
                     coverage.push((layout, nested, scalar_count, empty_count, emitted_values));
@@ -678,7 +757,7 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                 },
                 |plan, out| {
                     with_tile_slots(plan, layout, out, |slots, out| {
-                        let program = SourceByteProgram::derive(plan, slots, out)?;
+                        let mut program = SourceByteProgram::derive(plan, slots, out)?;
                         let paired = PairedInvocations::derive(
                             plan,
                             &program,
@@ -720,6 +799,26 @@ fn scalar_plain_return_summary_uses_genuine_alias_dedup_zero_and_nested_owner_co
                             );
                         }
                         assert_eq!(observed, 4);
+                        program.emit(out)?;
+                        paired.emit(out)?;
+                        let mut fallback = 0;
+                        for (root, row) in paired.roots.iter().enumerate() {
+                            for cut in row.cuts.iter().flatten() {
+                                if !matches!(cut.end, End::Return) {
+                                    continue;
+                                }
+                                let hint = row.step_hints.as_ref().unwrap().cuts.iter()
+                                    .find(|hint| hint.pc == cut.source).unwrap();
+                                if hint.instance == 0 {
+                                    continue;
+                                }
+                                let emitted = body(&out.text, root, cut.source, "observations");
+                                assert!(!emitted.contains("let state_0 = source;"));
+                                assert!(emitted.contains(&format!("reveal_with_fuel(invocation_source_micro_run_{root}_{}_v36, {});", hint.instance, hint.statements + 1)));
+                                fallback += 1;
+                            }
+                        }
+                        assert_eq!(fallback, observed);
                         Ok(())
                     })
                 },

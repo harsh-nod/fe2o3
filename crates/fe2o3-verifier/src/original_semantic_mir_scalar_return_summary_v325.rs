@@ -496,6 +496,22 @@ pub(super) fn emit(
                 " assert(original.machine.pc == {continuation}) by {{ reveal(invocation_source_return_v36); }}\n assert(!invocation_paired_source_step_{root}_v36(source).halted && !invocation_paired_actual_step_{root}_v36(target).halted) by {{\n  reveal(invocation_paired_source_step_{root}_v36);\n  reveal(invocation_paired_actual_step_{root}_v36);\n }}\n"
             );
         }
+        Goal::Observations => {
+            out.budget.charge_work(8)?;
+            // The admitted first block contains only scalar operations. Every
+            // cached bridge has no operations, and Branch adds no observation.
+            let operations = inventory
+                .blocks()
+                .get(target_pc)
+                .ok_or_else(mismatch)?
+                .operations
+                .len();
+            let observation_fuel = add(operations, 1)?;
+            emit!(
+                out,
+                " assert(original.machine.pc == {continuation}) by {{ reveal(invocation_source_return_v36); }}\n assert(original.machine.pc != -2);\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n  reveal(invocation_paired_source_step_{root}_v36);\n  reveal(invocation_source_block_runtime_{root}_v36);\n  reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {source_fuel});\n  assert(invocation_source_block_runtime_{root}_v36(source).operands.len() == 0);\n  reveal_with_fuel(invocation_source_statements_observations_v39, {source_fuel});\n  reveal_with_fuel(invocation_source_operands_observations_v39, 1);\n }}\n assert(invocation_paired_actual_step_{root}_v36(target).events == Seq::empty()) by {{\n  reveal(invocation_paired_actual_step_{root}_v36);\n  reveal(invocation_byte_boundary_{root}_v36);\n  reveal_with_fuel(invocation_byte_follow_{root}_v36, {target_fuel});\n  assert(invocation_byte_boundary_{root}_v36(target).observations.len() == {operations});\n  reveal_with_fuel(invocation_actual_observations_v39, {observation_fuel});\n }}\n"
+            );
+        }
         _ => return Err(mismatch()),
     }
     Ok(())
@@ -529,7 +545,7 @@ fn headers() -> usize {
         + size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirDefinitionRefV1<'_>>>()
         + size_of::<std::slice::Iter<'_, fe2o3_kernel_analysis::CanonicalKirUseRefV1>>()
         + size_of::<std::iter::Flatten<std::slice::Iter<'_, Option<usize>>>>()
-        + 32 * size_of::<usize>()
+        + 34 * size_of::<usize>()
         + 32 * size_of::<&()>()
 }
 
