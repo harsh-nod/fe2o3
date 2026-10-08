@@ -69,7 +69,12 @@ fn headers() -> usize {
         + size_of::<Resolved>()
         + size_of::<Exit>()
         + size_of::<Current>()
-        + size_of::<Option<usize>>()
+        + size_of::<Option<Current>>()
+        + size_of::<Option<&[SourceSsaBlockEventsV299]>>()
+        + size_of::<SourceSsaBlockEventsV299>()
+        + size_of::<std::slice::Iter<'_, SourceSsaBlockEventsV299>>()
+        + 4 * size_of::<usize>()
+        + 2 * size_of::<Option<usize>>()
         + size_of::<Option<Value>>()
         + size_of::<Result<()>>()
         + size_of::<&Plan>()
@@ -87,12 +92,37 @@ fn headers() -> usize {
 }
 
 impl Boundaries {
-    fn derive(plan: &Plan, input: ControlInput<'_>, out: &mut Meter<'_, '_>) -> Result<Self> {
+    fn derive(
+        plan: &Plan,
+        input: ControlInput<'_>,
+        failures: Option<&[SourceSsaBlockEventsV299]>,
+        out: &mut Meter<'_, '_>,
+    ) -> Result<Self> {
         out.reserve(headers())?;
         if input.successors.len() != plan.resources().input_blocks()
             || !plan.is_reachable(input.entry)
         {
             return Err(malformed());
+        }
+        if let Some(blocks) = failures {
+            out.work(2)?;
+            if blocks.len() != input.successors.len() {
+                return Err(malformed());
+            }
+            let mut total = 0usize;
+            for row in blocks {
+                out.work(3)?;
+                if row
+                    .terminal_failure_start
+                    .is_some_and(|start| start > row.events)
+                {
+                    return Err(malformed());
+                }
+                total = total.checked_add(row.events).ok_or(Resource::Arithmetic)?;
+            }
+            if total != plan.resources().input_events() {
+                return Err(malformed());
+            }
         }
         let mut count = 0usize;
         let mut event_count = 0usize;
@@ -140,6 +170,11 @@ impl Boundaries {
             }
             for &(ordinal, event) in plan.resolved_events(block).ok_or_else(malformed)? {
                 out.work(2)?;
+                if failures
+                    .is_some_and(|rows| ordinal as usize >= rows[block.get() as usize].events)
+                {
+                    return Err(malformed());
+                }
                 let variable = match event {
                     Event::Use { variable, .. }
                     | Event::Define { variable, .. }
@@ -167,6 +202,9 @@ impl Boundaries {
                 .map(Current::Entry)
                 .unwrap_or(Current::Untracked);
             let mut previous = None;
+            let failure_start =
+                failures.and_then(|rows| rows[first.block.get() as usize].terminal_failure_start);
+            let mut successful_exit = None;
             while at < events.len()
                 && (events[at].block, events[at].variable) == (first.block, first.variable)
             {
@@ -176,6 +214,14 @@ impl Boundaries {
                     return Err(malformed());
                 }
                 previous = Some(event.ordinal);
+                if successful_exit.is_none()
+                    && failure_start.is_some_and(|start| event.ordinal as usize >= start)
+                {
+                    successful_exit = Some(current);
+                }
+                if successful_exit.is_some() && matches!(event.event, Event::Define { .. }) {
+                    return Err(malformed());
+                }
                 match event.event {
                     Event::Use { value, .. } => result.expect(current, Some(value), out)?,
                     Event::Define { value, .. } => current = Current::Value(value),
@@ -193,7 +239,7 @@ impl Boundaries {
             exits.push(Exit {
                 block: first.block,
                 variable: first.variable,
-                current,
+                current: successful_exit.unwrap_or(current),
             });
         }
         for block in 0..input.successors.len() {

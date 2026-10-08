@@ -77,6 +77,18 @@ fn source_boundary_derive_headers_v31() -> Result<usize, ArgumentResourceV1> {
     type Frame<'a, 'w> = (
         Vec<Vec<BoundaryBlockV31>>,
         Vec<BoundaryBlockV31>,
+        Vec<fe2o3_kernel_analysis::SourceSsaBlockEventsV299>,
+        Result<Vec<fe2o3_kernel_analysis::SourceSsaBlockEventsV299>, ProductionSemanticKirErrorV1>,
+        fe2o3_kernel_analysis::SourceSsaBlockEventsV299,
+        fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'a>,
+        Option<fe2o3_pliron::ProductionSemanticSsaFunctionOccurrencesV1<'a>>,
+        Option<&'a [fe2o3_pliron::ProductionSemanticSsaEventOccurrenceV1]>,
+        Option<fe2o3_pliron::ProductionSemanticSsaOccurrenceViewV1<'a>>,
+        std::iter::Enumerate<
+            std::slice::Iter<'a, fe2o3_mir_model::semantic_mir_v1::SemanticBasicBlockV1>,
+        >,
+        Option<usize>,
+        [usize; 2],
         Owner<'a>,
         Receipt,
         Result<(Owner<'a>, Receipt), fe2o3_kernel_analysis::SourceSsaBoundaryErrorV31>,
@@ -170,13 +182,28 @@ fn source_scalar_boundaries_v31(
                 ProductionSourceOwnedViewErrorV18::Binding("source scalar boundary plan is absent"))?.plan();
             let function = semantic.functions().get(source.function.index() as usize).ok_or(
                 ProductionSourceOwnedViewErrorV18::Binding("source scalar boundary function is absent"))?;
-            let capture = (&mut rows, &mut next, relation, root, instance, plan, function, semantic.types());
+            let occurrences = owner.occurrences_v1().and_then(|rows| rows.function(source.function)).ok_or(
+                ProductionSourceOwnedViewErrorV18::Binding("source scalar boundary occurrences are absent"))?;
+            let capture = (&mut rows, &mut next, relation, root, instance, plan, function, semantic.types(), occurrences);
             let run = move |budget: &mut ArgumentBudgetV1<'_>| {
-                let (rows, next, relation, root, instance, plan, function, types) = capture;
+                let (rows, next, relation, root, instance, plan, function, types, occurrences) = capture;
                 relation.retain_query((|| {
+                    budget.charge_work(3)?;
+                    if occurrences.block_count_v299() != function.blocks().len()
+                        || !occurrences.owner().plan_for_function(occurrences.function())
+                            .is_some_and(|row| std::ptr::eq(row.plan(), plan)) {
+                        return relation.source.missing("source scalar boundary occurrence owner differs");
+                    }
                     let mut topology = emission_vec_v1(function.blocks().len(), budget).map_err(source_emission_error_v18)?;
-                    for block in function.blocks() {
-                        budget.charge_work(1)?;
+                    let mut failure_roster = emission_vec_v1(function.blocks().len(), budget).map_err(source_emission_error_v18)?;
+                    for (index, block) in function.blocks().iter().enumerate() {
+                        budget.charge_work(3)?;
+                        let id = BoundaryBlockV31::new(u32::try_from(index).map_err(|_| ArgumentResourceV1::Arithmetic)?);
+                        let events = occurrences.block_events_v299(id).ok_or(
+                            ProductionSourceOwnedViewErrorV18::Binding("source scalar boundary event block is absent"))?;
+                        failure_roster.push(fe2o3_kernel_analysis::SourceSsaBlockEventsV299 {
+                            events: events.len(), terminal_failure_start: occurrences.terminal_failure_start(id),
+                        });
                         let mut edges = emission_vec_v1(block.terminator().kind().edge_count(), budget).map_err(source_emission_error_v18)?;
                         block.terminator().kind().try_for_each_edge(|edge| {
                             budget.charge_work(1)?;
@@ -185,8 +212,8 @@ fn source_scalar_boundaries_v31(
                         })?;
                         topology.push(edges);
                     }
-                    let (boundaries, receipt) = fe2o3_kernel_analysis::SourceSsaBoundariesV31::derive(
-                        plan, BoundaryBlockV31::new(function.entry().index()), &topology, budget).map_err(source_boundary_error_v31)?;
+                    let (boundaries, receipt) = fe2o3_kernel_analysis::SourceSsaBoundariesV31::derive_with_terminal_failures_v299(
+                        plan, BoundaryBlockV31::new(function.entry().index()), &topology, &failure_roster, budget).map_err(source_boundary_error_v31)?;
                     budget.reserve_storage(receipt.retained_storage())?;
                     for block in plan.reverse_postorder() {
                         for variable in plan.transport_variables(*block).ok_or(
@@ -216,6 +243,7 @@ fn source_scalar_boundaries_v31(
                         }
                     }
                     drop(boundaries);
+                    drop(failure_roster);
                     drop(topology);
                     Ok(())
                 })())

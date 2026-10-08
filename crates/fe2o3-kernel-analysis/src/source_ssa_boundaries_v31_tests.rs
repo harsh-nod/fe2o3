@@ -79,6 +79,428 @@ fn run(
     (result, work, peak)
 }
 
+fn failure_run(
+    plan: &Plan,
+    successors: &[Vec<Block>],
+    blocks: &[SourceSsaBlockEventsV299],
+    work: usize,
+    storage: usize,
+) -> (Result<Vec<(Block, Variable, Value)>>, usize, usize) {
+    let mut work = Work::new(work);
+    let mut budget = Budget::new(&mut work, storage);
+    budget.reserve_storage(23).unwrap();
+    let result = (|| {
+        let (boundaries, receipt) = SourceSsaBoundariesV31::derive_with_terminal_failures_v299(
+            plan,
+            Block::new(0),
+            successors,
+            blocks,
+            &mut budget,
+        )?;
+        assert_eq!(budget.storage(), 23);
+        budget.reserve_storage(receipt.retained_storage())?;
+        let result = (|| {
+            let mut values = Vec::new();
+            for row in &boundaries.checked.rows {
+                values.push((
+                    row.block,
+                    row.variable,
+                    boundaries.value(plan, row.block, row.variable, &mut budget)?,
+                ));
+            }
+            Ok(values)
+        })();
+        drop(boundaries);
+        budget.release_storage(receipt.retained_storage())?;
+        result
+    })();
+    let work = budget.work();
+    let peak = budget.peak_storage();
+    assert_eq!(budget.storage(), 23);
+    (result, work, peak)
+}
+
+fn failure_fixture() -> (Plan, Vec<Vec<Block>>, Vec<SourceSsaBlockEventsV299>) {
+    let a = Variable::new(0);
+    let (plan, edges) = fixture(
+        vec![
+            block(
+                vec![SsaEventV1::Use(a), SsaEventV1::Use(a), SsaEventV1::Kill(a)],
+                &[1],
+            )
+            .with_terminal_failure_start(1),
+            block(vec![SsaEventV1::Use(a)], &[]),
+        ],
+        1,
+    );
+    (
+        plan,
+        edges,
+        vec![
+            SourceSsaBlockEventsV299 {
+                events: 3,
+                terminal_failure_start: Some(1),
+            },
+            SourceSsaBlockEventsV299 {
+                events: 1,
+                terminal_failure_start: None,
+            },
+        ],
+    )
+}
+
+#[test]
+fn source_ssa_failure_tail_preserves_success_without_skipping_failure_uses() {
+    let (plan, edges, blocks) = failure_fixture();
+    assert!(matches!(
+        run(&plan, &edges, 1_000_000, 1 << 20).0,
+        Err(Error::Statement(_))
+    ));
+    let values = failure_run(&plan, &edges, &blocks, 1_000_000, 1 << 20)
+        .0
+        .unwrap();
+    let expected = plan.entry_definitions()[0].value();
+    assert_eq!(
+        values,
+        vec![
+            (Block::new(0), Variable::new(0), expected),
+            (Block::new(1), Variable::new(0), expected)
+        ]
+    );
+
+    // Both original arms return. Adding an edge from a redefining arm into the
+    // failure-only use must still conflict, even without any successful use.
+    let a = Variable::new(0);
+    let (plan, mut edges) = fixture(
+        vec![
+            block(vec![], &[1, 2]),
+            block(vec![SsaEventV1::Use(a), SsaEventV1::Kill(a)], &[])
+                .with_terminal_failure_start(0),
+            block(vec![SsaEventV1::Define(a)], &[]),
+        ],
+        1,
+    );
+    let blocks = [
+        SourceSsaBlockEventsV299 {
+            events: 0,
+            terminal_failure_start: None,
+        },
+        SourceSsaBlockEventsV299 {
+            events: 2,
+            terminal_failure_start: Some(0),
+        },
+        SourceSsaBlockEventsV299 {
+            events: 1,
+            terminal_failure_start: None,
+        },
+    ];
+    failure_run(&plan, &edges, &blocks, 1_000_000, 1 << 20)
+        .0
+        .unwrap();
+    edges[2].push(Block::new(1));
+    assert!(matches!(
+        failure_run(&plan, &edges, &blocks, 1_000_000, 1 << 20).0,
+        Err(Error::Statement(_))
+    ));
+}
+
+#[test]
+fn source_ssa_failure_tail_rejects_incomplete_counts_cuts_and_prefix_definitions() {
+    let (plan, edges, rows) = failure_fixture();
+    let mut mutations = vec![rows[..1].to_vec(), vec![rows[0]; 3]];
+    let mut wrong = rows.clone();
+    wrong[0].terminal_failure_start = Some(4);
+    mutations.push(wrong);
+    let mut wrong = rows.clone();
+    wrong[0].events += 1;
+    mutations.push(wrong);
+    let mut wrong = rows.clone();
+    wrong[0].events -= 1;
+    wrong[1].events += 1;
+    mutations.push(wrong);
+    let mut wrong = rows.clone();
+    wrong[0].terminal_failure_start = None;
+    mutations.push(wrong);
+    for wrong in mutations {
+        assert!(matches!(
+            failure_run(&plan, &edges, &wrong, 1_000_000, 1 << 20).0,
+            Err(Error::Statement(_))
+        ));
+    }
+    let a = Variable::new(0);
+    let (plan, edges) = fixture(vec![block(vec![SsaEventV1::Define(a)], &[])], 1);
+    assert!(matches!(
+        failure_run(
+            &plan,
+            &edges,
+            &[SourceSsaBlockEventsV299 {
+                events: 1,
+                terminal_failure_start: Some(0)
+            }],
+            1_000_000,
+            1 << 20
+        )
+        .0,
+        Err(Error::Statement(_))
+    ));
+}
+
+#[test]
+fn source_ssa_failure_tail_keeps_empty_full_unpromoted_and_loop_boundaries() {
+    let a = Variable::new(0);
+    for cut in [None, Some(0), Some(1)] {
+        let mut first = block(vec![SsaEventV1::Use(a)], &[1]);
+        if let Some(start) = cut {
+            first = first.with_terminal_failure_start(start);
+        }
+        let (plan, edges) = fixture(vec![first, block(vec![SsaEventV1::Use(a)], &[])], 1);
+        let rows = [
+            SourceSsaBlockEventsV299 {
+                events: 1,
+                terminal_failure_start: cut,
+            },
+            SourceSsaBlockEventsV299 {
+                events: 1,
+                terminal_failure_start: None,
+            },
+        ];
+        assert_eq!(
+            failure_run(&plan, &edges, &rows, 1_000_000, 1 << 20)
+                .0
+                .unwrap(),
+            run(&plan, &edges, 1_000_000, 1 << 20).0.unwrap()
+        );
+    }
+    let input = SsaConstructionInputV1::new(
+        Block::new(0),
+        2,
+        vec![true, false],
+        vec![a],
+        vec![
+            block(vec![], &[1]),
+            block(
+                vec![
+                    SsaEventV1::Use(a),
+                    SsaEventV1::Use(Variable::new(1)),
+                    SsaEventV1::Kill(Variable::new(1)),
+                    SsaEventV1::Kill(a),
+                ],
+                &[1, 2, 2],
+            )
+            .with_terminal_failure_start(1),
+            block(vec![SsaEventV1::Use(a)], &[]),
+        ],
+    );
+    let plan = plan_ssa_with_limits_v1(&input, SsaPlannerLimitsV1::default()).unwrap();
+    let edges = [
+        vec![Block::new(1)],
+        vec![Block::new(1), Block::new(2), Block::new(2)],
+        vec![],
+    ];
+    let rows = [
+        SourceSsaBlockEventsV299 {
+            events: 0,
+            terminal_failure_start: None,
+        },
+        SourceSsaBlockEventsV299 {
+            events: 4,
+            terminal_failure_start: Some(1),
+        },
+        SourceSsaBlockEventsV299 {
+            events: 1,
+            terminal_failure_start: None,
+        },
+    ];
+    let values = failure_run(&plan, &edges, &rows, 1_000_000, 1 << 20)
+        .0
+        .unwrap();
+    assert_eq!(values.len(), 3);
+    assert!(values.iter().all(
+        |(_, variable, value)| *variable == a && *value == plan.entry_definitions()[0].value()
+    ));
+    assert_eq!(
+        plan.resolved_events(Block::new(1))
+            .unwrap()
+            .iter()
+            .map(|(at, _)| *at)
+            .collect::<Vec<_>>(),
+        vec![0, 3]
+    );
+}
+
+#[test]
+fn source_ssa_failure_tail_never_repairs_normal_moves_or_invalid_failure_uses() {
+    use fe2o3_mir_model::SsaPlannerErrorV1;
+    let a = Variable::new(0);
+    for (events, cut, failure_block) in [
+        (vec![SsaEventV1::Use(a), SsaEventV1::Kill(a)], 2, 1),
+        (
+            vec![SsaEventV1::Use(a), SsaEventV1::Kill(a), SsaEventV1::Use(a)],
+            0,
+            0,
+        ),
+    ] {
+        let input = SsaConstructionInputV1::new(
+            Block::new(0),
+            1,
+            vec![true],
+            vec![a],
+            vec![
+                block(events, &[1]).with_terminal_failure_start(cut),
+                block(vec![SsaEventV1::Use(a)], &[]),
+            ],
+        );
+        // These genuinely undefined inputs refuse in the planner, before the
+        // shared checker can receive an authenticated plan.
+        assert!(
+            matches!(plan_ssa_with_limits_v1(&input, SsaPlannerLimitsV1::default()),
+            Err(SsaPlannerErrorV1::UndefinedAtUse { block, variable, .. })
+                if block == Block::new(failure_block) && variable == a)
+        );
+    }
+}
+
+#[test]
+fn source_ssa_failure_tail_has_exact_resource_and_foreign_plan_boundaries() {
+    let (plan, edges, rows) = failure_fixture();
+    let measured = failure_run(&plan, &edges, &rows, 1_000_000, 1 << 20);
+    measured.0.unwrap();
+    let exact = failure_run(&plan, &edges, &rows, measured.1, measured.2);
+    exact.0.unwrap();
+    assert_eq!((exact.1, exact.2), (measured.1, measured.2));
+    assert!(
+        matches!(failure_run(&plan, &edges, &rows, measured.1 - 1, measured.2).0,
+        Err(Error::Resource(Resource::Work(e))) if e.actual() == measured.1 && e.limit() == measured.1 - 1)
+    );
+    assert!(
+        matches!(failure_run(&plan, &edges, &rows, measured.1, measured.2 - 1).0,
+        Err(Error::Resource(Resource::Storage(e))) if e.actual() == measured.2 && e.limit() == measured.2 - 1)
+    );
+    let foreign = plan.clone();
+    let mut work = Work::new(1_000_000);
+    let mut budget = Budget::new(&mut work, 1 << 20);
+    budget.reserve_storage(23).unwrap();
+    let (owner, receipt) = SourceSsaBoundariesV31::derive_with_terminal_failures_v299(
+        &plan,
+        Block::new(0),
+        &edges,
+        &rows,
+        &mut budget,
+    )
+    .unwrap();
+    budget.reserve_storage(receipt.retained_storage()).unwrap();
+    let floor = budget.storage();
+    assert!(matches!(
+        owner.value(&foreign, Block::new(1), Variable::new(0), &mut budget),
+        Err(Error::ForeignPlan)
+    ));
+    assert_eq!(budget.storage(), floor);
+    drop(owner);
+    budget.release_storage(receipt.retained_storage()).unwrap();
+    assert_eq!(budget.storage(), 23);
+}
+
+#[test]
+fn source_ssa_failure_tail_keeps_each_redefined_variable_before_interleaved_moves() {
+    for reversed in [false, true] {
+        let a = Variable::new(u32::from(reversed));
+        let b = Variable::new(u32::from(!reversed));
+        let input = SsaConstructionInputV1::new(
+            Block::new(0),
+            2,
+            vec![true; 2],
+            vec![Variable::new(0), Variable::new(1)],
+            vec![
+                block(
+                    vec![
+                        SsaEventV1::Define(a),
+                        SsaEventV1::Use(b),
+                        SsaEventV1::Use(a),
+                        SsaEventV1::Kill(a),
+                        SsaEventV1::Use(b),
+                        SsaEventV1::Kill(b),
+                    ],
+                    &[1],
+                )
+                .with_terminal_failure_start(2),
+                block(vec![SsaEventV1::Use(b), SsaEventV1::Use(a)], &[]),
+            ],
+        );
+        let plan = plan_ssa_with_limits_v1(&input, SsaPlannerLimitsV1::default()).unwrap();
+        let edges = [vec![Block::new(1)], vec![]];
+        let rows = [
+            SourceSsaBlockEventsV299 {
+                events: 6,
+                terminal_failure_start: Some(2),
+            },
+            SourceSsaBlockEventsV299 {
+                events: 2,
+                terminal_failure_start: None,
+            },
+        ];
+        let Some(Event::Define {
+            variable,
+            value: a_new,
+        }) = plan.resolved_event(Block::new(0), 0).copied()
+        else {
+            panic!("original prefix definition");
+        };
+        assert_eq!(variable, a);
+        let b_old = plan
+            .entry_definitions()
+            .iter()
+            .find(|row| row.variable() == b)
+            .unwrap()
+            .value();
+        assert_ne!(
+            a_new,
+            plan.entry_definitions()
+                .iter()
+                .find(|row| row.variable() == a)
+                .unwrap()
+                .value()
+        );
+        for (ordinal, variable, value) in [(2, a, a_new), (4, b, b_old)] {
+            assert_eq!(
+                plan.resolved_event(Block::new(0), ordinal).copied(),
+                Some(Event::Use { variable, value })
+            );
+            assert_eq!(
+                plan.resolved_event(Block::new(0), ordinal + 1).copied(),
+                Some(Event::Kill {
+                    variable,
+                    previous: Some(value)
+                })
+            );
+        }
+        assert!(matches!(
+            run(&plan, &edges, 1_000_000, 1 << 20).0,
+            Err(Error::Statement(_))
+        ));
+        let values = failure_run(&plan, &edges, &rows, 1_000_000, 1 << 20)
+            .0
+            .unwrap();
+        assert_eq!(values.len(), 3);
+        assert!(values.contains(&(Block::new(0), b, b_old)));
+        assert!(values.contains(&(Block::new(1), a, a_new)));
+        assert!(values.contains(&(Block::new(1), b, b_old)));
+        assert_eq!(
+            plan.resolved_event(Block::new(1), 0).copied(),
+            Some(Event::Use {
+                variable: b,
+                value: b_old
+            })
+        );
+        assert_eq!(
+            plan.resolved_event(Block::new(1), 1).copied(),
+            Some(Event::Use {
+                variable: a,
+                value: a_new
+            })
+        );
+    }
+}
+
 #[test]
 fn source_ssa_boundaries_apply_definitions_only_on_their_original_edge() {
     let variable = Variable::new(0);
@@ -247,6 +669,34 @@ fn source_ssa_boundary_header_oracles_name_owned_and_return_frames() {
         std::mem::align_of::<QueryCapture<'_, '_>>()
     );
     type DeriveScope<'a, 'w> = Scope<'a, 'w, (Owner<'a>, Receipt), DeriveFields<'a>>;
+    #[allow(dead_code)]
+    struct BlockEventFields {
+        events: usize,
+        terminal_failure_start: Option<usize>,
+    }
+    type FailureFields<'a> = (&'a Plan, Input<'a>, &'a [BlockEventFields]);
+    type FailureScope<'a, 'w> = Scope<'a, 'w, (Owner<'a>, Receipt), FailureFields<'a>>;
+    assert_eq!(
+        size_of::<BlockEventFields>(),
+        size_of::<SourceSsaBlockEventsV299>()
+    );
+    assert_eq!(
+        size_of::<FailureFields<'_>>(),
+        size_of::<FailureCaptureV299<'_, '_>>()
+    );
+    assert_eq!(
+        std::mem::align_of::<FailureFields<'_>>(),
+        std::mem::align_of::<FailureCaptureV299<'_, '_>>()
+    );
+    assert_eq!(
+        boundary_failure_owner_headers_v299().unwrap(),
+        size_of::<Frame<'_, '_>>()
+            + std::mem::align_of::<Frame<'_, '_>>()
+            + size_of::<DeriveScope<'_, '_>>()
+            + std::mem::align_of::<DeriveScope<'_, '_>>()
+            + size_of::<FailureScope<'_, '_>>()
+            + std::mem::align_of::<FailureScope<'_, '_>>()
+    );
     assert_eq!(
         boundary_owner_headers_v31().unwrap(),
         size_of::<Frame<'_, '_>>()
@@ -279,7 +729,12 @@ fn source_ssa_boundary_header_oracles_name_owned_and_return_frames() {
         + size_of::<Resolved>()
         + size_of::<Exit>()
         + size_of::<Current>()
-        + size_of::<Option<usize>>()
+        + size_of::<Option<Current>>()
+        + size_of::<Option<&[SourceSsaBlockEventsV299]>>()
+        + size_of::<SourceSsaBlockEventsV299>()
+        + size_of::<std::slice::Iter<'_, SourceSsaBlockEventsV299>>()
+        + 4 * size_of::<usize>()
+        + 2 * size_of::<Option<usize>>()
         + size_of::<Option<Value>>()
         + size_of::<Result<()>>()
         + size_of::<&Plan>()
