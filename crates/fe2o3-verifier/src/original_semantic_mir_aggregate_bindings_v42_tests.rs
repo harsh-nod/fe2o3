@@ -381,8 +381,66 @@ fn checked_wf_actual_micro_and_prefix_consumers_retain_arbitrary_frame_shapes() 
 
 #[test]
 fn checked_wf_laws_do_not_assume_empty_maps_or_poststate_well_formedness() {
+    use sha2::{Digest, Sha256};
+
     let laws = include_str!("original_semantic_mir_checked_well_formed_v294.vrs");
     assert_eq!(laws.matches("proof fn ").count(), 3);
+    for (name, expected) in [
+        (
+            "invocation_source_logical_write_well_formed_v294",
+            "26f24c0d6c289d331effce96b08a4ae649f8fee95e4b7902f17a3bfe4d454ae3",
+        ),
+        (
+            "invocation_source_plain_aggregate_install_well_formed_v294",
+            "55a3ae7fd4156da098d10aa784515ac4f1820db45b22ee721e8637deabc2ef54",
+        ),
+        (
+            "invocation_source_checked_add_local_well_formed_v294",
+            "08b8b721b0f87fa916891916897bc699587ac89419fafa5bb3d7398079d6b3b0",
+        ),
+    ] {
+        let start = laws.find(&format!("proof fn {name}(")).unwrap();
+        let header = laws[start..].split_once("\n{\n").unwrap().0;
+        let actual: String = Sha256::digest(header.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(actual, expected, "theorem contract changed: {name}");
+    }
+    let install = laws
+        .split_once("proof fn invocation_source_plain_aggregate_install_well_formed_v294(")
+        .unwrap()
+        .1
+        .split_once("\nproof fn ")
+        .unwrap()
+        .0;
+    let descriptor = install
+        .split_once("assert forall|i: int| after.logical.descriptor_references.contains_key(i)")
+        .unwrap()
+        .1
+        .split_once("\n    }")
+        .unwrap()
+        .0;
+    for fact in [
+        "assert(i != destination && source.logical.descriptor_references.contains_key(i));",
+        "assert(0 <= i < source.machine.values.len());",
+        "assert(!source.objects.contains_key(i));",
+        "assert(match source.machine.values[i] { MemoryValueV30::Slice(_) => true, _ => false });",
+        "assert(after.objects == source.objects);",
+        "assert(after.machine.values == source.machine.values.update(destination, MemoryValueV30::Undefined));",
+        "assert(after.machine.values[i] == source.machine.values[i]);",
+    ] {
+        assert!(
+            descriptor.contains(fact),
+            "missing resident transfer: {fact}"
+        );
+    }
+    assert!(CHECKED_WF_CASES.contains(
+        "after.logical.descriptor_references[other] == source.logical.descriptor_references[other]"
+    ));
+    assert!(
+        CHECKED_WF_CASES.contains("after.machine.values[other] == source.machine.values[other]")
+    );
     for body in laws.split("proof fn ").skip(1) {
         let contract = body.split_once("\n{").unwrap().0;
         let requires = contract

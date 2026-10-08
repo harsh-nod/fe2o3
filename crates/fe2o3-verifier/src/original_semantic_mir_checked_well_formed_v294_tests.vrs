@@ -124,10 +124,20 @@ proof fn checked_wf_arbitrary_frames_and_pending_v294(
                     && after.logical.execution_pending[other] == source.logical.execution_pending[other])
             && (source.logical.products.contains_key(other) ==>
                 after.logical.products.contains_key(other)
-                    && after.logical.products[other] == source.logical.products[other]) }),
+                    && after.logical.products[other] == source.logical.products[other])
+            && (source.logical.descriptor_references.contains_key(other) ==>
+                after.logical.descriptor_references.contains_key(other)
+                    && after.logical.descriptor_references[other] == source.logical.descriptor_references[other]
+                    && after.machine.values[other] == source.machine.values[other]
+                    && !after.objects.contains_key(other)
+                    && match after.machine.values[other] { MemoryValueV30::Slice(_) => true, _ => false }) }),
 {
     invocation_source_plain_aggregate_install_well_formed_v294(source, destination, aggregate);
     invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);
+    if source.logical.descriptor_references.contains_key(other) {
+        assert(0 <= other < source.machine.values.len());
+        assert(match source.machine.values[other] { MemoryValueV30::Slice(_) => true, _ => false });
+    }
 }
 
 proof fn checked_wf_install_refusals_stay_invalid_v294(

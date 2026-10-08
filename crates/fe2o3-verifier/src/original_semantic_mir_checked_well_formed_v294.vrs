@@ -140,6 +140,12 @@ proof fn invocation_source_plain_aggregate_install_well_formed_v294(
         !after.objects.contains_key(i)
             && match after.machine.values[i] { MemoryValueV30::Slice(_) => true, _ => false } by {
         assert(i != destination && source.logical.descriptor_references.contains_key(i));
+        assert(0 <= i < source.machine.values.len());
+        assert(!source.objects.contains_key(i));
+        assert(match source.machine.values[i] { MemoryValueV30::Slice(_) => true, _ => false });
+        assert(after.objects == source.objects);
+        assert(after.machine.values == source.machine.values.update(destination, MemoryValueV30::Undefined));
+        assert(after.machine.values[i] == source.machine.values[i]);
     }
     assert forall|i: int| after.logical.aggregates.contains_key(i) implies
         after.machine.values[i] == MemoryValueV30::Undefined && !after.objects.contains_key(i) by {
