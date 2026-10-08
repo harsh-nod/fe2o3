@@ -1,5 +1,6 @@
 use std::convert::Infallible;
 use std::ffi::OsString;
+use std::mem::size_of;
 
 use super::*;
 
@@ -275,4 +276,112 @@ fn charge_refusals_are_returned_unchanged_before_decoding() {
         assert_eq!(calls, stop);
         assert_eq!(error, ReferenceEnrollmentDecodeErrorV1::Work(Refused(stop)));
     }
+}
+
+#[test]
+fn retained_storage_counts_empty_and_spare_vector_capacity() {
+    // Private synthetic owners exercise storage arithmetic, not schema admission.
+    for bindings in [Vec::new(), Vec::with_capacity(13)] {
+        let expected = size_of::<ReferenceEnrollmentRequestV1>()
+            + bindings.capacity() * size_of::<ReferenceEnrollmentBindingV1>();
+        let request = ReferenceEnrollmentRequestV1 {
+            version: 1,
+            bindings,
+        };
+        assert_eq!(request.retained_storage_bytes(), Some(expected));
+        assert!(request.bindings().is_empty());
+    }
+}
+
+#[test]
+fn retained_storage_counts_capacity_of_empty_strings() {
+    let mut bindings = Vec::with_capacity(7);
+    bindings.push(ReferenceEnrollmentBindingV1 {
+        kernel: String::with_capacity(17),
+        reference: String::with_capacity(31),
+    });
+    let expected = size_of::<ReferenceEnrollmentRequestV1>()
+        + bindings.capacity() * size_of::<ReferenceEnrollmentBindingV1>()
+        + bindings[0].kernel.capacity()
+        + bindings[0].reference.capacity();
+    let request = ReferenceEnrollmentRequestV1 {
+        version: 1,
+        bindings,
+    };
+    assert_eq!(request.retained_storage_bytes(), Some(expected));
+    assert!(request.bindings()[0].kernel().is_empty());
+    assert!(request.bindings()[0].reference().is_empty());
+}
+
+#[test]
+fn retained_storage_counts_every_decoded_binding_and_both_selectors() {
+    let request = decode(
+        r#"{"version":1,"bindings":[{"kernel":"a","reference":"first"},{"kernel":"bb","reference":"second"}]}"#,
+    ).unwrap();
+    let expected = size_of::<ReferenceEnrollmentRequestV1>()
+        + request.bindings.capacity() * size_of::<ReferenceEnrollmentBindingV1>()
+        + request.bindings[0].kernel.capacity()
+        + request.bindings[0].reference.capacity()
+        + request.bindings[1].kernel.capacity()
+        + request.bindings[1].reference.capacity();
+    assert_eq!(request.retained_storage_bytes(), Some(expected));
+    assert_eq!(request, decode(
+        r#"{"version":1,"bindings":[{"kernel":"a","reference":"first"},{"kernel":"bb","reference":"second"}]}"#,
+    ).unwrap());
+}
+
+#[test]
+fn retained_storage_tracks_each_spare_capacity_without_changing_descriptions() {
+    let text = r#"{"version":1,"bindings":[{"kernel":"a","reference":"first"},{"kernel":"bb","reference":"second"}]}"#;
+    for field in 0..5 {
+        let mut request = decode(text).unwrap();
+        let before = request.retained_storage_bytes().unwrap();
+        let increase = if field == 0 {
+            let old = request.bindings.capacity();
+            request.bindings.reserve_exact(old + 17);
+            (request.bindings.capacity() - old) * size_of::<ReferenceEnrollmentBindingV1>()
+        } else {
+            let binding = &mut request.bindings[(field - 1) / 2];
+            let selector = if field % 2 == 1 {
+                &mut binding.kernel
+            } else {
+                &mut binding.reference
+            };
+            let old = selector.capacity();
+            selector.reserve_exact(old + 19);
+            selector.capacity() - old
+        };
+        assert!(increase > 0);
+        assert_eq!(request.retained_storage_bytes(), Some(before + increase));
+        assert_eq!(request, decode(text).unwrap());
+    }
+}
+
+#[test]
+fn retained_storage_arithmetic_is_checked_without_large_allocations() {
+    let header = size_of::<ReferenceEnrollmentRequestV1>();
+    let binding_header = size_of::<ReferenceEnrollmentBindingV1>();
+    assert_eq!(checked_retained_storage_bytes(0, []), Some(header));
+    assert_eq!(
+        checked_retained_storage_bytes(3, [(7, 11), (13, 17)]),
+        Some(header + 3 * binding_header + 7 + 11 + 13 + 17)
+    );
+    assert_eq!(checked_retained_storage_bytes(usize::MAX, []), None);
+    let largest_vector = usize::MAX / binding_header;
+    assert_eq!(
+        checked_retained_storage_bytes(largest_vector, []),
+        header.checked_add(largest_vector * binding_header)
+    );
+    assert_eq!(checked_retained_storage_bytes(0, [(usize::MAX, 0)]), None);
+    assert_eq!(checked_retained_storage_bytes(0, [(0, usize::MAX)]), None);
+    let remaining = usize::MAX - header;
+    assert_eq!(
+        checked_retained_storage_bytes(0, [(remaining, 0)]),
+        Some(usize::MAX)
+    );
+    assert_eq!(checked_retained_storage_bytes(0, [(remaining, 1)]), None);
+    assert_eq!(
+        checked_retained_storage_bytes(0, [(remaining, 0), (1, 0)]),
+        None
+    );
 }

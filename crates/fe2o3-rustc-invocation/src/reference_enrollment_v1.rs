@@ -102,6 +102,32 @@ impl ReferenceEnrollmentRequestV1 {
         &self.bindings
     }
 
+    /// Measures this inert owner, including unused vector and string capacity.
+    ///
+    /// Counts one request header, the bindings vector's actual capacity times
+    /// the binding header size, and both strings' actual capacities for every
+    /// initialized binding. String headers are already in the vector backing;
+    /// unused vector slots have no string backing to visit.
+    ///
+    /// This allocation-free traversal visits at most
+    /// [`MAX_REFERENCE_ENROLLMENT_BINDINGS_V1`] bindings. Callers must fund the
+    /// traversal before calling it and reserve the returned logical backing
+    /// charge while retaining this owner. `None` means arithmetic overflow,
+    /// not a zero charge. This observation neither reserves storage nor grants
+    /// authority.
+    ///
+    /// The quote excludes the input owner, parser temporaries, allocator
+    /// metadata/rounding, and stack. It is not a peak-allocation or RSS bound,
+    /// and cannot retroactively prepay decoding.
+    pub fn retained_storage_bytes(&self) -> Option<usize> {
+        checked_retained_storage_bytes(
+            self.bindings.capacity(),
+            self.bindings
+                .iter()
+                .map(|binding| (binding.kernel.capacity(), binding.reference.capacity())),
+        )
+    }
+
     /// Interpret only this inert descriptor's captured environment.
     ///
     /// This does not authenticate the descriptor or its invocation owner.
@@ -138,6 +164,16 @@ impl ReferenceEnrollmentRequestV1 {
     /// `64 * bytes.len() + size_of::<Self>()` before serde or decoded validation.
     /// The quote covers bounded decoding, string/vector backing, and checks;
     /// it is source work, not canonical TARGET storage, RSS, or authority.
+    ///
+    /// # Storage and failure
+    ///
+    /// The work callback does not reserve storage. The typed parse and shape
+    /// parse use internal serde allocations, including on schema-error paths;
+    /// the typed request remains live during the shape parse. Allocation
+    /// failure is not guaranteed to return a decode error. Callers requiring
+    /// prepaid parsing storage need a separately justified trusted allocation
+    /// boundary before entering this method. Neither the work quote nor a
+    /// later [`Self::retained_storage_bytes`] observation supplies that boundary.
     pub fn decode<E>(
         bytes: &str,
         mut charge: impl FnMut(usize) -> Result<(), E>,
@@ -216,6 +252,22 @@ impl ReferenceEnrollmentRequestV1 {
                 .collect(),
         })
     }
+}
+
+// Keep capacity arithmetic separately testable without enormous allocations.
+fn checked_retained_storage_bytes(
+    bindings_capacity: usize,
+    selector_capacities: impl IntoIterator<Item = (usize, usize)>,
+) -> Option<usize> {
+    let mut bytes = std::mem::size_of::<ReferenceEnrollmentRequestV1>().checked_add(
+        bindings_capacity.checked_mul(std::mem::size_of::<ReferenceEnrollmentBindingV1>())?,
+    )?;
+    for (kernel_capacity, reference_capacity) in selector_capacities {
+        bytes = bytes
+            .checked_add(kernel_capacity)?
+            .checked_add(reference_capacity)?;
+    }
+    Some(bytes)
 }
 
 #[cfg(test)]
