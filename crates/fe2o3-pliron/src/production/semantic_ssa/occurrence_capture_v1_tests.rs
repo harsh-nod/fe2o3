@@ -452,6 +452,7 @@ fn sealed_block_events_distinguish_nonreturning_assert_from_cleanup() {
                 assert_eq!(
                     event.resolved(),
                     plan.resolved_event(SsaBlockIdV1::new(0), event.ordinal())
+                        .copied()
                 );
                 assert!(event.resolved().is_some());
             }

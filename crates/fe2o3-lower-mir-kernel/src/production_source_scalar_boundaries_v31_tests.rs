@@ -398,7 +398,7 @@ fn source_scalar_boundaries_keep_nonreturning_assert_move_on_success_edge() {
                     );
                     let plan = owner.plan_for_function(function).unwrap().plan();
                     assert_eq!(
-                        plan.resolved_event(BoundaryBlockV31::new(2), 0),
+                        plan.resolved_event(BoundaryBlockV31::new(2), 0).copied(),
                         Some(Event::Use { variable, value })
                     );
                     assert!(leaves.original.leaves.boundaries.rows.iter().any(|row| {
