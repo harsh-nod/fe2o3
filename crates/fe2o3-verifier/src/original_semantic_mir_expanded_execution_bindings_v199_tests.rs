@@ -396,7 +396,7 @@ fn expanded_transition_support_uses_actual_steps_and_input_only_guards() {
         "reveal(invocation_source_checked_pair_v44);",
         "reveal(invocation_source_byte_value_typed_v36);",
         "reveal(memory_value_modulus_v30);",
-        "assert(memory_value_modulus_v30(32 / 8) == 4294967296);",
+        "assert(memory_value_modulus_v30(32int / 8int) == 4294967296);",
         "assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(left), 32));",
         "assert(invocation_source_byte_value_typed_v36(MemoryValueV30::Scalar(right), 32));",
         "let sum = left + right;",
