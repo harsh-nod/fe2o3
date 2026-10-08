@@ -277,7 +277,9 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
         assert!(model.contains("assert(reconstructed.machine == (MemoryStateV30"));
         assert!(model.contains("== reconstructed) by {"));
         for step in model.split("proof fn checked_add_actual_step_").skip(1) {
-            let body = step.split("\nproof fn ").next().unwrap();
+            let declaration = step.split("\nproof fn ").next().unwrap();
+            let (contract, body) = declaration.split_once("\n{\n").unwrap();
+            let site = contract.split_once("_v260(").unwrap().0;
             assert!(body.contains("hide(invocation_source_byte_event_"));
             assert_eq!(
                 body.matches("invocation_source_checked_add_local_step_v266(source,")
@@ -285,16 +287,12 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
                 1
             );
             assert_eq!(
-                body.matches("let checked_event = InvocationSourceByteEventV36::Checked {")
+                body.matches(&format!("checked_add_actual_schema_{site}_v260();"))
                     .count(),
                 1
             );
-            assert_eq!(body.matches(".unwrap() == checked_event);").count(), 1);
-            assert_eq!(
-                body.matches("== invocation_source_byte_step_v36(source, checked_event,")
-                    .count(),
-                1
-            );
+            assert!(!body.contains("checked_event"));
+            assert!(!body.contains("assert("));
             assert!(!body.contains("reveal(invocation_source_byte_step_v36);"));
             assert!(!body.contains("hide(invocation_source_byte_evaluate_v36);"));
             assert!(!body.contains("invocation_source_local_evaluates_v265(source,"));
@@ -302,11 +300,6 @@ fn checked_add_transition_has_authentic_u32_bool_source_witnesses_v260() {
             assert!(!body.contains("reveal(invocation_source_byte_evaluate_v36);"));
             assert!(
                 body.find("checked_add_actual_schema_").unwrap()
-                    < body.find("let checked_event =").unwrap()
-            );
-            assert!(
-                body.find("== invocation_source_byte_step_v36(source, checked_event,")
-                    .unwrap()
                     < body
                         .find("invocation_source_checked_add_local_step_v266(source,")
                         .unwrap()

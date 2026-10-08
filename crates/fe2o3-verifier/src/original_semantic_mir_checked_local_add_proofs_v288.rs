@@ -58,7 +58,7 @@ impl Checked {
             .map_err(|_| out.error())?;
             self.emit(out)?;
             writeln!(out, "),\n{{ }}").map_err(|_| out.error())?;
-            write!(out, r#"proof fn checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260(
+            writeln!(out, r#"proof fn checked_add_actual_step_{root}_{instance}_{block}_{statement}_v260(
  source: InvocationSourceByteStateV36, left: int, right: int, little_endian: bool,
 )
  requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),
@@ -81,28 +81,7 @@ impl Checked {
  hide(invocation_source_aggregate_leaf_bits_v42);
  hide(invocation_source_byte_step_v36);
  hide(invocation_source_byte_event_{root}_{instance}_v36);
- assert(invocation_source_aggregate_leaf_count_v42({ty}) == 2
- && invocation_source_aggregate_leaf_path_v42({ty}, 0) == seq![0int]
- && invocation_source_aggregate_leaf_path_v42({ty}, 1) == seq![1int]
- && invocation_source_aggregate_leaf_bits_v42({ty}, 0) == 32
- && invocation_source_aggregate_leaf_bits_v42({ty}, 1) == 1
- && invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}) == Some("#)
-            .map_err(|_| out.error())?;
-            self.emit(out)?;
-            write!(
-                out,
-                r#")) by {{
  checked_add_actual_schema_{root}_{instance}_{block}_{statement}_v260();
- }}
- let checked_event = "#
-            )
-            .map_err(|_| out.error())?;
-            self.emit(out)?;
-            writeln!(out, r#";
- assert(invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap() == checked_event);
- assert(invocation_source_byte_step_v36(source,
- invocation_source_byte_event_{root}_{instance}_v36({block}, {statement}).unwrap(), {root}, {instance}, little_endian)
- == invocation_source_byte_step_v36(source, checked_event, {root}, {instance}, little_endian));
  invocation_source_checked_add_local_step_v266(source, {destination}, {ty},
  {left}, {right}, left, right, {root}, {instance}, little_endian);
 }}
@@ -389,6 +368,23 @@ mod tests {
                         .contains("invocation_source_checked_add_local_step_v266(source, 3, 9,")
                 );
                 assert!(out.text.contains("5, 7, left, right, 2, 4, little_endian)"));
+                let step = out
+                    .text
+                    .split_once("proof fn checked_add_actual_step_2_4_6_8_v260(")
+                    .unwrap()
+                    .1
+                    .split_once("proof fn checked_add_actual_micro_step_")
+                    .unwrap()
+                    .0;
+                let (contract, body) = step.split_once("\n{\n").unwrap();
+                assert_eq!(
+                    contract,
+                    "\n source: InvocationSourceByteStateV36, left: int, right: int, little_endian: bool,\n)\n requires source.machine.valid && invocation_source_byte_state_well_formed_v36(source),\n 0 <= 3 < source.machine.values.len(), !source.objects.contains_key(3),\n 0 <= 5 < source.machine.values.len(), 0 <= 7 < source.machine.values.len(),\n source.machine.values[5] == MemoryValueV30::Scalar(left),\n source.machine.values[7] == MemoryValueV30::Scalar(right),\n 0 <= left < 4294967296, 0 <= right < 4294967296,\n ensures ({ let after = invocation_source_byte_step_v36(source,\n invocation_source_byte_event_2_4_v36(6, 8).unwrap(), 2, 4, little_endian);\n after.machine.valid && after.machine.memory == source.machine.memory\n && after.machine.frames == source.machine.frames && after.machine.generations == source.machine.generations\n && after.logical.aggregates.contains_key(3)\n && after.logical.aggregates[3].leaves[seq![0int]] == MemoryValueV30::Scalar((left + right) % 4294967296)\n && after.logical.aggregates[3].leaves[seq![1int]] == MemoryValueV30::Scalar(if left + right >= 4294967296 { 1int } else { 0int }) }),"
+                );
+                assert_eq!(
+                    body,
+                    " hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_source_aggregate_leaf_count_v42);\n hide(invocation_source_aggregate_leaf_path_v42);\n hide(invocation_source_aggregate_leaf_bits_v42);\n hide(invocation_source_byte_step_v36);\n hide(invocation_source_byte_event_2_4_v36);\n checked_add_actual_schema_2_4_6_8_v260();\n invocation_source_checked_add_local_step_v266(source, 3, 9,\n 5, 7, left, right, 2, 4, little_endian);\n}\n\n"
+                );
                 assert!(
                     out.text
                         .contains("c.source.machine.pc == 106, c.next_statement == 8,")
