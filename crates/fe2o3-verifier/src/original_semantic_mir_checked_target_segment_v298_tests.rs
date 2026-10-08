@@ -149,6 +149,18 @@ fn generate(layout: Layout, work: usize, storage: usize) -> (Result<()>, usize, 
             .skip(1)
         {
             let declaration = tail.split("\nproof fn ").next().unwrap();
+            let site = declaration.split_once('(').unwrap().0;
+            let (root, remaining) = site.split_once('_').unwrap();
+            let (instance, _) = remaining.split_once('_').unwrap();
+            let (_, body) = declaration.split_once("\n{\n").unwrap();
+            let source_header =
+                format!(" hide(invocation_source_micro_step_{root}_{instance}_v36);\n");
+            let target_header = format!(" hide(byte_micro_step_{root}_v30);\n");
+            assert!(body.starts_with(&format!(
+                "{source_header}{target_header} reveal(checked_actual_segment_inputs_{site});\n"
+            )));
+            assert_eq!(body.matches(&source_header).count(), 1);
+            assert_eq!(body.matches(&target_header).count(), 1);
             let (requires, rest) = declaration.split_once("\n ensures").unwrap();
             assert!(requires.contains("requires checked_actual_segment_inputs_"));
             assert!(!requires.contains("results_"));

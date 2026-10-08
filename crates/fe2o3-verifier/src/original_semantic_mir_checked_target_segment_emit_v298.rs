@@ -126,12 +126,12 @@ proof fn checked_actual_source_target_step_{root}_{instance}_{block}_{statement}
      invocation_source_micro_step_{root}_{instance}_v36(s, little_endian),
      byte_micro_step_{root}_v30(t, little_endian), left, right),
 {{
+ hide(invocation_source_micro_step_{root}_{instance}_v36);
+ hide(byte_micro_step_{root}_v30);
  reveal(checked_actual_segment_inputs_{root}_{instance}_{block}_{statement}_v298);
  checked_add_actual_micro_step_{root}_{instance}_{block}_{statement}_v293(s, left, right, little_endian);
  checked_add_actual_demanded_step_{root}_{instance}_{block}_{statement}_v296(s, left, right, little_endian);
  checked_target_actual_step_{root}_{instance}_{block}_{statement}_v298(t, left, right, little_endian);
- hide(invocation_source_micro_step_{root}_{instance}_v36);
- hide(byte_micro_step_{root}_v30);
  let n = byte_micro_step_{root}_v30(t, little_endian);
  assert forall|i: int| 0 <= i < t.state.values.len() && i != {value} && i != {overflow}
      implies #[trigger] n.next.state.values[i] == t.state.values[i] by {{ }}
