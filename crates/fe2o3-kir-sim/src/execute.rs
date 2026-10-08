@@ -60,6 +60,10 @@ pub use allocation_reuse_v1::{
 mod observed_storage;
 pub use observed_storage::ObservationExecutionOptionsV1;
 
+#[path = "execute_access_invocation_v1.rs"]
+mod access_invocation_v1;
+use access_invocation_v1::AccessInvocationV1;
+
 #[path = "execute_atomic_scope_v1.rs"]
 mod atomic_scope_v1;
 use atomic_scope_v1::{AtomicAccess, AtomicHistory, Relation as AtomicRelation};
@@ -1962,7 +1966,7 @@ struct AccessFrontier {
 
 #[derive(Clone, Copy)]
 struct LastAccess {
-    invocation: SimulationInvocationV1,
+    invocation: AccessInvocationV1,
     site: CompactSite,
     atomic: Option<AtomicAccess>,
     happens_before_epoch: u64,
@@ -3075,6 +3079,8 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 SimulationExecutionErrorKindV1::InternalInvariant("memory access invocation"),
             )
         })?;
+        // This invocation and every retained record belong to the same Engine.
+        let stored_invocation = AccessInvocationV1::store(invocation);
         let end = offset
             .checked_add(bytes)
             .ok_or_else(|| self.at(*site, SimulationExecutionErrorKindV1::PointerOffsetOverflow))?;
@@ -3098,13 +3104,14 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             for earlier_access in candidates
                 .into_iter()
                 .flatten()
-                .filter(|earlier| earlier.invocation != invocation)
+                .filter(|earlier| earlier.invocation != stored_invocation)
             {
                 conflicting = true;
+                let earlier_invocation = earlier_access.invocation.restore(invocation);
                 let conflict_evidence = SimulationMemoryConflictV1 {
                     allocation,
                     offset: byte,
-                    earlier: earlier_access.invocation,
+                    earlier: earlier_invocation,
                     later: invocation,
                     earlier_site: self.materialize_site(earlier_access.site),
                     later_site: self.materialize_site(*site),
@@ -3113,11 +3120,11 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                     self.first_conflict = Some(conflict_evidence.clone());
                 }
                 let atomic_relation = earlier_access.atomic.zip(atomic).map(|(earlier, later)| {
-                    earlier.relation(earlier_access.invocation, later, invocation)
+                    earlier.relation(earlier_invocation, later, invocation)
                 });
                 let ordered = if atomic_relation == Some(AtomicRelation::Serialized) {
                     Some(SimulationHappensBeforeReasonV1::AtomicSerialization)
-                } else if earlier_access.invocation.workgroup == invocation.workgroup
+                } else if earlier_invocation.workgroup == invocation.workgroup
                     && earlier_access.happens_before_epoch < self.workgroup_happens_before_epoch
                 {
                     Some(SimulationHappensBeforeReasonV1::GlobalWorkgroupBarrier)
@@ -3202,7 +3209,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
             if previous.is_some() || self.accesses.len() < self.limits.max_memory_access_records {
                 let slot = if write {
                     if let Some(earlier) = frontier.write
-                        && (earlier.invocation != invocation
+                        && (earlier.invocation != stored_invocation
                             || earlier.happens_before_epoch != self.workgroup_happens_before_epoch)
                         && !frontier.raced
                     {
@@ -3214,7 +3221,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                                 .displaced_write
                                 .expect("checked displaced write frontier");
                             let lost = displaced.atomic.and_then(|access| {
-                                AtomicHistory::new(access, displaced.invocation)
+                                AtomicHistory::new(access, displaced.invocation.restore(invocation))
                             });
                             frontier.lost_writes_atomic = if frontier.lost_write {
                                 frontier
@@ -3234,7 +3241,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                     &mut frontier.write
                 } else {
                     if let Some(earlier) = frontier.read
-                        && (earlier.invocation != invocation
+                        && (earlier.invocation != stored_invocation
                             || earlier.happens_before_epoch != self.workgroup_happens_before_epoch)
                         && !frontier.raced
                     {
@@ -3246,7 +3253,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                                 .displaced_read
                                 .expect("checked displaced read frontier");
                             let lost = displaced.atomic.and_then(|access| {
-                                AtomicHistory::new(access, displaced.invocation)
+                                AtomicHistory::new(access, displaced.invocation.restore(invocation))
                             });
                             frontier.lost_reads_atomic = if frontier.lost_read {
                                 frontier
@@ -3264,7 +3271,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                 };
                 *slot = Some(match *slot {
                     Some(earlier)
-                        if earlier.invocation == invocation
+                        if earlier.invocation == stored_invocation
                             && earlier.happens_before_epoch
                                 == self.workgroup_happens_before_epoch =>
                     {
@@ -3280,7 +3287,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                             earlier.site
                         };
                         LastAccess {
-                            invocation,
+                            invocation: stored_invocation,
                             site,
                             atomic: earlier
                                 .atomic
@@ -3290,7 +3297,7 @@ impl<S: SimulationEventSinkV1> Engine<'_, S> {
                         }
                     }
                     _ => LastAccess {
-                        invocation,
+                        invocation: stored_invocation,
                         site: compact_site,
                         atomic,
                         happens_before_epoch: self.workgroup_happens_before_epoch,
