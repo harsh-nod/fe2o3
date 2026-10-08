@@ -15,15 +15,15 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "sha256": "3e2af8e9eaf7f7300fca94466a9844634cf274a1ba9079ed2252d68c315d7b8f"
+      "sha256": "77ce673a4d54cedb103c99b1460b6c9bbea1761304fbd51a99b48d11d103c550"
     },
     {
       "path": ".github/workflows/runtime-model-verus.yml",
-      "sha256": "4f7ac422b8e8cbc10f91ed5b131a13dcddb5a554c5ebb3edf2e4984c50785c34"
+      "sha256": "a7062f979fe49bcfb0c9c798ba75cbd71955cd97d267d66c32f78f95161aa560"
     },
     {
       "path": "scripts/ci-local.sh",
-      "sha256": "e9cb512cb9dd0248c6c24fbdb5969aadaa22fd4cbf6328a65e04ea7477b88a53"
+      "sha256": "74a22a2dfaed1d0e5f237af5358e9f9bfa2ceeeaad5edb847139c5fd49769bd1"
     },
     {
       "path": "scripts/tests/ci-local-test-gate.sh",
@@ -43,25 +43,25 @@
     },
     {
       "path": "crates/fe2o3-runtime-model/verus/pins/PRODUCER_LIVE_CAMPAIGN_INPUTS.json",
-      "sha256": "ce31c89496180fb1b683e1b0cfab545467fbe275509a404003eb49cb29fa6cd2"
+      "sha256": "4ace9e06ee8f78a99332470da4678cd903ceb0707ef9d476436e21fe0a2a3a05"
     },
     {
       "path": "crates/fe2o3-runtime-model/verus/pins/PRODUCER_PLANNER_INPUT_CAMPAIGN_V1.json",
-      "sha256": "0b4fa81844b89ac53213a34bd6bf2d9c661fa458e68082cf2ebb2e6827705ecc"
+      "sha256": "f9771369a5a9226b25979a09c55dbd7a318fae914a535bff485a017f04dcfc68"
     }
   ],
   "group_hash_algorithm": "SHA-256 of records sorted by repository-relative path: lowercase file SHA-256, two ASCII spaces, POSIX repository-relative path, newline. UTF-8; no domain prefix.",
   "group_scope": "All regular files recursively beneath each package src plus its Cargo.toml and build.rs when present. No implicit claim about other package files.",
   "groups": [
     {
-      "files": 92,
+      "files": 94,
       "package": "cargo-fe2o3",
-      "records_sha256": "893408d8c1b467cc7f5b550f24d051b49cecbbf87325de5261bb65d54f2da7a9"
+      "records_sha256": "ecd8700ae10677fc42685b70d5d93ac2a2337bd6809863b703ce1e2c22c26d82"
     },
     {
-      "files": 508,
+      "files": 569,
       "package": "fe2o3-runtime",
-      "records_sha256": "37e35b60dd6beeb35f772b939c601a52bb89cc232550acd52a535be2a3cc0148"
+      "records_sha256": "8ded2f19086282db123cd3fa4c24e49e730b67700b3b6c2fdfcefd7858c159de"
     },
     {
       "files": 314,
@@ -69,14 +69,14 @@
       "records_sha256": "1832db1d93e336c7e55a4645f421727df9c9fe1df1ff52156a31776ed1a57d31"
     },
     {
-      "files": 484,
+      "files": 499,
       "package": "fe2o3-kfd",
-      "records_sha256": "0750ef5d1fa3506948c3f992fb326038ea8bed9550111339dac40115ce033978"
+      "records_sha256": "143ecb09f4cb1e6ffd4eefbe42973244510be2d633b9f60aa7c0ac6f2a548fd0"
     },
     {
-      "files": 123,
+      "files": 133,
       "package": "fe2o3-host",
-      "records_sha256": "0cdfd185ee1d068517f06da7799c9cf00f98196a99c952ec1866486479b62c7e"
+      "records_sha256": "3281d70c1630d1abc402378edd6951660387e18a9550978bdc3b546b7c986661"
     },
     {
       "files": 395,
@@ -106,7 +106,7 @@
     {
       "files": 35,
       "package": "fe2o3-compiler-execution-client",
-      "records_sha256": "451b18dcd7112ce2d13265ce16d8a1c83f6ad4618dd88ed1b97fa75d27f09172"
+      "records_sha256": "67829310fc22c9d7e9686724047aa9a0e1b919180092db3e212838b6997ee21b"
     },
     {
       "files": 108,
@@ -114,14 +114,14 @@
       "records_sha256": "8aff2c38dd814aca9c0359c61cf41ff3984960f12d80e5296ec4c049380cba71"
     },
     {
-      "files": 118,
+      "files": 119,
       "package": "fe2o3-compiler-execution-supervisor",
-      "records_sha256": "31581fcf11af2c22466b8d58b6f4821a8b81aaa01f806b090b4fcc2a9fc9393e"
+      "records_sha256": "eb6fc677d57e1ddd67e1c356ab22b39fe0cd0ed27e66f6ebb595e8cd50430862"
     },
     {
-      "files": 112,
+      "files": 113,
       "package": "fe2o3-broker-authority-service",
-      "records_sha256": "af87db3c7276ba8e6a135c1585f000a0d146623914b977e41f78646c604f5292"
+      "records_sha256": "fa0881595edc2583a13d631239482f308ba77dc0a3f9bdd3a896a3dcb3701e41"
     },
     {
       "files": 94,
@@ -129,9 +129,9 @@
       "records_sha256": "289ae7ef8973a464de94b37a87b79d4e742ba5c4fa1608dd7c31e08f5a1dd312"
     },
     {
-      "files": 557,
+      "files": 558,
       "package": "fe2o3-verifier",
-      "records_sha256": "caae8b927c4331c426b7b6e84c34a507c680bb889e93ae451278f474fea0722d"
+      "records_sha256": "951522dd6ddea357fe911b18c4b27722e89aa13f37d963397fb8706ed5a87e82"
     },
     {
       "files": 11,
@@ -139,7 +139,7 @@
       "records_sha256": "e364bca79400a60613a4f734c2026b44f04d2c370b3b98ea0f16ca244503f936"
     }
   ],
-  "integration_base_commit": "64ba4c359baa9e62d98132dcc7fa60d7ab332666",
+  "integration_base_commit": "727f32888ff27391223e0c2b2546d867fdc0e453",
   "reproduction": [
     "cargo fmt --all -- --check",
     "bash scripts/tests/ci-local-test-gate.sh",
@@ -154,6 +154,7 @@
   ],
   "reproduction_requirements": [
     "Use the complete landed source tree and locked dependencies; a package digest alone is not a source archive.",
+    "Use a fresh target directory or explicitly clean all workspace package artifacts before changing tar-based source snapshots; verify newly added tests actually execute.",
     "CPU commands used nightly-2026-04-03, FE2O3_HIP_SYS_DISABLE=1, two Cargo jobs, private build/cache paths and disabled core dumps.",
     "Static deployment tests require noninteractive sudo for disposable private mount namespaces, not installation or service activation.",
     "Verus gates require their exact maintained tool closure and unchanged resource admission; CPU tests do not replace these proofs."

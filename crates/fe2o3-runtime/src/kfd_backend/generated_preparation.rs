@@ -92,7 +92,7 @@ impl KfdRuntimeBackendV1 {
                     Ok(prepare(device))
                 }
             };
-            match (&mut self.admitted_device, &mut self.queue) {
+            match (self.admitted_device.as_mut(), self.queue.as_mut()) {
                 (Some(device), None) => device
                     .with_retained_device_v1(prepare)
                     .map_err(|error| error.to_string())
@@ -101,6 +101,33 @@ impl KfdRuntimeBackendV1 {
                     .with_retained_device_v1(prepare)
                     .map_err(|error| error.to_string())
                     .and_then(|result| result.map_err(str::to_owned)),
+                (None, None) => {
+                    let mut originals = self
+                        .generated_shells
+                        .values_mut()
+                        .flat_map(|record| {
+                            [
+                                record
+                                    .registry
+                                    .as_mut()
+                                    .filter(|root| !root.is_retired())
+                                    .map(OriginalGeneratedDeviceV1::Registry),
+                                record
+                                    .arena
+                                    .as_mut()
+                                    .filter(|root| !root.is_retired())
+                                    .map(OriginalGeneratedDeviceV1::Arena),
+                            ]
+                        })
+                        .flatten();
+                    match (originals.next(), originals.next()) {
+                        (Some(mut registry), None) => registry
+                            .with_device(prepare)
+                            .map_err(|error| error.to_string())
+                            .and_then(|result| result.map_err(str::to_owned)),
+                        _ => Err("missing or duplicated registry device owner".to_owned()),
+                    }
+                }
                 _ => Err("missing or duplicated retained-device owner".to_owned()),
             }
         }));
@@ -115,6 +142,23 @@ impl KfdRuntimeBackendV1 {
                 }
                 std::panic::resume_unwind(payload)
             }
+        }
+    }
+}
+
+enum OriginalGeneratedDeviceV1<'a> {
+    Registry(&'a mut super::generated_adoption::registry4::RegistryV1),
+    Arena(&'a mut super::generated_adoption::arena1024::ArenaV1),
+}
+
+impl OriginalGeneratedDeviceV1<'_> {
+    fn with_device<R>(
+        &mut self,
+        observe: impl FnOnce(&CheckedGfx942XnackMinusDevice) -> R,
+    ) -> Result<R, fe2o3_kfd::ComputeAqlQueueSessionErrorV1> {
+        match self {
+            Self::Registry(root) => root.with_device(observe),
+            Self::Arena(root) => root.with_device(observe),
         }
     }
 }

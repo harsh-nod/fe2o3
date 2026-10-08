@@ -326,6 +326,7 @@ mod tests {
         child.submissions.insert(
             local,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream: stream_route.local,
                 status: BackendPollV1::Succeeded,
                 dependency_depth: 1,

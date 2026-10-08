@@ -20,6 +20,17 @@ pub(super) struct CopySlot {
 }
 
 impl CopySlot {
+    pub(super) fn conflicts_with_generated(
+        &self,
+        stream: RuntimeStreamIdV1,
+        allocation: RuntimeAllocationIdV1,
+    ) -> bool {
+        self.unsettled()
+            && (self.stream == stream
+                || self.source.allocation == allocation
+                || self.destination.allocation == allocation)
+    }
+
     pub(super) fn unsettled(&self) -> bool {
         self.settled.is_none()
     }
@@ -128,6 +139,19 @@ where
                 return Err(RuntimeValidationErrorV1::Unsupported);
             }
             self.context.require_stream_unheld_v1(stream)?;
+            if self
+                .slots
+                .iter()
+                .filter(|slot| slot.lifecycle.unsettled())
+                .filter_map(|slot| slot.data_copy.as_ref())
+                .any(|request| {
+                    request.stream == stream
+                        || [source.allocation, destination.allocation]
+                            .contains(&request.destination.allocation)
+                })
+            {
+                return Err(RuntimeValidationErrorV1::ContextReserved);
+            }
             if self
                 .context
                 .submissions

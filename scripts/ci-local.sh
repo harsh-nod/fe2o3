@@ -172,7 +172,7 @@ Usage: scripts/ci-local.sh <command>
 Commands:
   generic         Run all validation suitable for a machine without ROCm/GPU
   generic-core [group]  Run all core validation or policy, cpu, auxiliary, or cpu-<group>
-                         CPU groups: foundation, analysis, lowering, pliron, finalize, integration
+                         CPU groups: foundation, analysis, lowering, pliron, finalize, finalize-0..3, integration
   workspace-policy  Validate workspace ownership and dependency directions
   hygiene-delta <base> <head>  Validate changed production source hygiene
   standalone-locks  Validate every tracked standalone Cargo lockfile
@@ -711,6 +711,22 @@ run_artifact_transaction_tests() {
     cargo test --locked -p fe2o3-artifact-transaction
 }
 
+
+run_native_timestamp_cpu_tests() {
+  # These three cases use aligned host arrays, never a native device or queue.
+  local -a command=(cargo test --locked -p fe2o3-kfd
+    --features engineering-native-packet-diagnostics --lib native_timestamp_)
+  run_step native-timestamp-cpu-discovery "${command[@]}" -- --list
+  run_step native-timestamp-cpu-discovery-check \
+    python3 -I -B scripts/check-native-timestamp-cpu.py list \
+      "${LOG_DIR}/native-timestamp-cpu-discovery.log"
+  run_step native-timestamp-cpu-tests "${command[@]}" -- --test-threads=1
+  run_step native-timestamp-cpu-result-check \
+    python3 -I -B scripts/check-native-timestamp-cpu.py run \
+      "${LOG_DIR}/native-timestamp-cpu-tests.log"
+}
+
+
 run_runtime_release_tests() {
   # These host-only tests intentionally abort child processes and must also
   # exercise bookkeeping with debug assertions disabled.
@@ -827,8 +843,32 @@ run_cpu_package_group() {
   if [[ "${group}" == pliron ]]; then
     run_pliron_default_api_tests
   fi
+  if [[ "${group}" == foundation ]]; then
+    # Runtime fail-stop can abort during unwinding, before libtest prints its buffer.
+    cargo_args+=(-- --nocapture)
+  fi
   run_step "cpu-${group}-tests" \
     env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
+}
+
+run_cpu_finalizer_shard() {
+  if (($# != 1)) || [[ ! "$1" =~ ^[0-3]$ ]]; then
+    printf 'finalizer shard requires exactly one id from 0 through 3\n' >&2
+    return 2
+  fi
+  local shard="$1"
+  local -a packages
+  load_cpu_package_group finalize packages
+  if [[ "${packages[*]}" != fe2o3-hsaco-finalize ]]; then
+    printf 'finalizer shards require the exact original package group\n' >&2
+    return 2
+  fi
+  run_workspace_dependency_bootstrap "cpu-finalize-${shard}"
+  run_standalone_lockfiles
+  ensure_production_cargo_fe2o3_driver "cpu-finalize-${shard}" create-private
+  run_step "cpu-finalize-${shard}-tests" \
+    env FE2O3_HIP_SYS_DISABLE=1 python3 -I -B "${REPO_ROOT}/scripts/finalizer-test-shards.py" \
+      --shard "${shard}" --output "${LOG_DIR}/finalizer-shard-${shard}"
 }
 
 run_cpu_tests() {
@@ -899,6 +939,7 @@ run_cpu_tests() {
     run_step "${package_step}" env FE2O3_HIP_SYS_DISABLE=1 cargo "${cargo_args[@]}"
   fi
   run_runtime_release_tests
+  run_native_timestamp_cpu_tests
   run_step fe2o3-device-release-tests \
     env CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=false \
       cargo test --locked --release -p fe2o3-device --lib
@@ -910,16 +951,23 @@ run_cpu_tests() {
       "${CARGO_FE2O3_BINARY}" "${wrapper_cargo_args[@]}"
   fi
   validate_cargo_fe2o3_driver
+  run_step native-data-copy-application-binding-check \
+    env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
+    "${CARGO_FE2O3_BINARY}" check --locked --bins --features data-copy-observation \
+      --manifest-path crates/cargo-fe2o3/tests/fixtures/conditional-custodian-application/Cargo.toml
   run_step tiled-gemm-capability-ui \
     env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
     cargo test --locked --offline \
       --manifest-path examples/tiled_gemm_general_v1/device-api/Cargo.toml --test device_api_ui
+  # Keep host test images within the sealed runner's unchanged 512 MiB bound.
   run_step cpu-reference-tiled-gemm-paired-default \
     env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
+    CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
     "${CARGO_FE2O3_BINARY}" test --locked --offline \
       --manifest-path examples/tiled_gemm_general_v1/Cargo.toml --test paired_contract
   run_step cpu-reference-tiled-gemm-paired-simt \
     env "${loader_environment_removals[@]}" FE2O3_HIP_SYS_DISABLE=1 \
+    CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
     "${CARGO_FE2O3_BINARY}" test --locked --offline \
       --manifest-path examples/tiled_gemm_general_v1/Cargo.toml \
       --no-default-features --features kernel-simt-gemm-general --test paired_contract
@@ -1487,6 +1535,10 @@ run_generic_core() {
       run_cpu_package_group "${group#cpu-}"
       return
       ;;
+    cpu-finalize-[0-3])
+      run_cpu_finalizer_shard "${group##*-}"
+      return
+      ;;
     cpu-integration)
       run_cpu_tests integration
       return
@@ -1545,6 +1597,8 @@ run_generic_core() {
     python3 -I -B scripts/tests/generic-core-groups.py
   run_step generic-cpu-group-tests \
     python3 -I -B scripts/tests/generic-cpu-groups.py
+  run_step finalizer-test-shard-tests \
+    python3 -I -B scripts/tests/finalizer-test-shards.py
   run_step runtime-production-proof-pipeline-tests \
     python3 -I -B scripts/tests/runtime-production-proof-pipeline.py
   if [[ "${group}" == all ]]; then

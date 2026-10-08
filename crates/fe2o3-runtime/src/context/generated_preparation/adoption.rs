@@ -7,6 +7,28 @@ use crate::generated_source::GeneratedHostRosterV1;
 macro_rules! impl_generated_adoption_context {
     ($backend:ty) => {
         impl RuntimeContextV1<$backend> {
+            pub(in crate::context) fn preflight_gfx942_sdma_storage_v1(
+                &self,
+                device: RuntimeDeviceIdV1,
+                stream: RuntimeStreamIdV1,
+            ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                self.require_live()?;
+                let stream = self
+                    .streams
+                    .get(&stream)
+                    .ok_or(RuntimeValidationErrorV1::UnknownStream)?;
+                if stream.device != device {
+                    return Err(RuntimeValidationErrorV1::WrongDevice.into());
+                }
+                self.backend
+                    .generated_sdma_ready_for_stream_v1(
+                        self.device(device)?.backend_device,
+                        stream.backend_stream,
+                    )
+                    .map(|_| ())
+                    .map_err(map_backend_error)
+            }
+
             pub(in crate::context) fn generated_adoption_scope_for_hold_v1(
                 &self,
                 hold: &ContextUnpublishedHoldV1,
@@ -56,6 +78,21 @@ macro_rules! impl_generated_adoption_context {
                 &self,
                 hold: &ContextUnpublishedHoldV1,
             ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                self.gfx942_adoption_storage_ready_v1(hold, false)
+            }
+
+            pub(in crate::context) fn gfx942_sdma_adoption_ready_v1(
+                &self,
+                hold: &ContextUnpublishedHoldV1,
+            ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                self.gfx942_adoption_storage_ready_v1(hold, true)
+            }
+
+            fn gfx942_adoption_storage_ready_v1(
+                &self,
+                hold: &ContextUnpublishedHoldV1,
+                sdma: bool,
+            ) -> Result<bool, RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
                 self.validate_unpublished_hold_v1(hold)?;
                 let stream = self.streams.get(&hold.stream()).expect("exact held stream");
                 if stream.generated.is_some()
@@ -64,6 +101,15 @@ macro_rules! impl_generated_adoption_context {
                         .generated_empty_prefix_v1(stream.backend_stream)
                 {
                     return Err(RuntimeValidationErrorV1::InvalidBackendDescription.into());
+                }
+                if sdma {
+                    return self
+                        .backend
+                        .generated_sdma_ready_for_stream_v1(
+                            self.device(stream.device)?.backend_device,
+                            stream.backend_stream,
+                        )
+                        .map_err(map_backend_error);
                 }
                 self.backend
                     .generated_lane_ready_for_stream_v1(
@@ -78,6 +124,27 @@ macro_rules! impl_generated_adoption_context {
                 prepared: &mut RuntimeGfx942PreparedV1<T>,
                 expected: &GeneratedHostRosterV1,
                 hold: &ContextUnpublishedHoldV1,
+            ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                self.adopt_gfx942_prepared_storage_v1(prepared, expected, hold, false)
+            }
+
+            pub(in crate::context) fn adopt_gfx942_sdma_prepared_v1<
+                T: RuntimeGfx942GeneratedCarrierV1,
+            >(
+                &mut self,
+                prepared: &mut RuntimeGfx942PreparedV1<T>,
+                expected: &GeneratedHostRosterV1,
+                hold: &ContextUnpublishedHoldV1,
+            ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
+                self.adopt_gfx942_prepared_storage_v1(prepared, expected, hold, true)
+            }
+
+            fn adopt_gfx942_prepared_storage_v1<T: RuntimeGfx942GeneratedCarrierV1>(
+                &mut self,
+                prepared: &mut RuntimeGfx942PreparedV1<T>,
+                expected: &GeneratedHostRosterV1,
+                hold: &ContextUnpublishedHoldV1,
+                sdma: bool,
             ) -> Result<(), RuntimeErrorV1<KfdRuntimeBackendErrorV1>> {
                 let scope = self.generated_adoption_scope_for_hold_v1(hold)?;
                 let result = catch_unwind(AssertUnwindSafe(|| {
@@ -97,8 +164,14 @@ macro_rules! impl_generated_adoption_context {
                         .value
                         .source()
                         .with_native_inputs_v1(device_uid, expected, |program, buffers| {
-                            self.backend
-                                .adopt_generated_data_v1(&plan, expected, program, buffers)
+                            if sdma {
+                                self.backend.adopt_generated_data_with_storage_v1(
+                                    &plan, expected, program, buffers, true,
+                                )
+                            } else {
+                                self.backend
+                                    .adopt_generated_data_v1(&plan, expected, program, buffers)
+                            }
                         })
                         .map_err(|_| {
                             RuntimeErrorV1::Validation(

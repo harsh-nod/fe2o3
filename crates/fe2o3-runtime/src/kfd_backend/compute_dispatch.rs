@@ -550,6 +550,7 @@ impl KfdRuntimeBackendV1 {
         self.submissions.insert(
             active.id,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream: active.stream,
                 status,
                 dependency_depth: active.dependency_depth,

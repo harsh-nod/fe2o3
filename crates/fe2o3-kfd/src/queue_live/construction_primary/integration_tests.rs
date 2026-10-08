@@ -24,6 +24,14 @@ mod replacement_cases;
 #[path = "integration_capacity_tests.rs"]
 mod capacity_cases;
 
+#[path = "integration_native_fill_cohort_tests.rs"]
+mod native_fill_cohort_cases;
+
+#[path = "integration_native_fill_arena_tests.rs"]
+mod native_fill_arena_cases;
+#[path = "integration_native_fill_registry_tests.rs"]
+mod native_fill_registry_cases;
+
 #[path = "integration_projection_tests.rs"]
 mod projection_cases;
 

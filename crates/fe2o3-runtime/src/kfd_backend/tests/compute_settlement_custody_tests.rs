@@ -250,6 +250,7 @@ fn inspect_failure(failed_dependency: bool, mutation: usize) {
             backend.submissions.insert(
                 pending,
                 SubmissionRecordV1 {
+                    origin: SubmissionOriginV1::Ordinary,
                     stream,
                     status: BackendPollV1::Failed { code: -2 },
                     dependency_depth: 1,

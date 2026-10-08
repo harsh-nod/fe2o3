@@ -14,14 +14,35 @@ use lifecycle::{Lifecycle, Phase};
 mod futures;
 pub use futures::RuntimeGfx942ScopedCompletionFutureV1;
 mod copies;
+mod data_copy;
 pub use copies::{RuntimeGfx942ScopedCopyFutureV1, RuntimeGfx942ScopedCopyTicketV1};
 mod graph;
 pub use graph::{
     RuntimeGfx942ScopedGraphAdmissionErrorV1, RuntimeGfx942ScopedGraphFutureV1,
-    RuntimeGfx942ScopedGraphTicketV1,
+    RuntimeGfx942ScopedGraphStagingErrorV1, RuntimeGfx942ScopedGraphTicketV1,
 };
+mod arena1024;
 mod cancellation;
+mod cohort3;
+mod registry4;
+mod settled_exit;
+pub(in crate::context) use arena1024::ArenaObservationsV1;
+pub(crate) use arena1024::ArenaReceiptEventV1;
+pub use arena1024::{
+    RuntimeGfx942Arena1024ResultFutureV1, RuntimeGfx942Arena1024ScopeV1,
+    RuntimeGfx942Arena1024TicketV1, RuntimeGfx942ArenaMemberObservationV1,
+    RuntimeGfx942ArenaObservationV1, RuntimeGfx942ArenaOutOfOrderObservationV1,
+    RuntimeGfx942IndependentArena2048ResultFutureV1, RuntimeGfx942IndependentArena2048ScopeV1,
+    RuntimeGfx942IndependentArena2048TicketV1,
+};
 pub use cancellation::RuntimeGfx942ScopedCancelResultV1;
+pub use cohort3::RuntimeGfx942ScopedCohort3TicketV1;
+pub use registry4::{
+    RuntimeGfx942Registry4ResultFutureV1, RuntimeGfx942Registry4ScopeV1,
+    RuntimeGfx942Registry4TicketV1, RuntimeGfx942Registry16ResultFutureV1,
+    RuntimeGfx942Registry16ScopeV1, RuntimeGfx942Registry16TicketV1,
+};
+pub use settled_exit::{RuntimeGfx942SettledFailureV1, RuntimeGfx942SettledScopeV1};
 
 /// Finite owner-local metadata bound; native admission still uses Context credits.
 pub const MAX_RUNTIME_GFX942_SCOPED_SUBMISSIONS_V1: usize = 4096;
@@ -40,9 +61,20 @@ pub enum RuntimeGfx942ScopeErrorV1 {
     InvalidTicket,
     CompletionObserverTaken,
     CancelledBeforeSubmission,
+    CancelledBeforePublication,
+    /// Actual classified rejection followed by complete original-owner disposal.
+    /// Native DATA may have existed; this does not certify a no-effect writer.
+    RejectedBeforePublication,
+    /// Inert failure identity after exact source/hold disposal; not a reset or
+    /// health certificate for any other device.
+    DeviceUnavailableBeforeActivation {
+        device_uid: u64,
+    },
     Deadline,
     Unknown,
-    CopyFailed { code: i64 },
+    CopyFailed {
+        code: i64,
+    },
     Reservation(RuntimeGfx942GeneratedReservationErrorV1),
     Context(NativeError),
     Readback(RuntimeGfx942ReadbackErrorV1),
@@ -78,12 +110,25 @@ pub struct RuntimeGfx942ScopedTicketV1<'scope> {
 }
 
 struct Slot<P> {
+    sdma_backed: bool,
+    data_copy: Option<data_copy::Request>,
     lifecycle: Lifecycle<RuntimeGfx942PreparedV1<P>, Outcome>,
     roster: GeneratedHostRosterV1,
     hold: ContextUnpublishedHoldV1,
-    domain: crate::RuntimeGeneratedResultDomainV1,
+    domain: CompletionDomainsV1,
     reply: crate::async_engine::RuntimeAsyncReplyV1<Outcome>,
     future: Option<crate::RuntimeAsyncCommandFutureV1<Outcome>>,
+}
+
+enum CompletionDomainsV1 {
+    Singleton(crate::RuntimeGeneratedResultDomainV1),
+    Cohort3([crate::RuntimeGeneratedResultDomainV1; 3]),
+}
+
+impl CompletionDomainsV1 {
+    fn matches_single<T: Send + Sync + 'static>(&self, owner: &std::sync::Arc<T>) -> bool {
+        matches!(self, Self::Singleton(domain) if domain.matches_owner(owner))
+    }
 }
 
 fn roster_bytes<P>(slots: usize, copies: usize) -> Result<usize, RuntimeGfx942ScopeErrorV1> {
@@ -144,24 +189,61 @@ type Progress<B, P> = fn(
     &ContextUnpublishedHoldV1,
 ) -> Result<bool, NativeError>;
 
+type ColdCheck<B, P> =
+    fn(
+        &mut RuntimeContextV1<B>,
+        &mut RuntimeGfx942PreparedV1<P>,
+        &GeneratedHostRosterV1,
+        &ContextUnpublishedHoldV1,
+    ) -> Result<Option<generated_preparation::ContextColdDeviceFailureV1>, NativeError>;
+type ColdSettle<B, P> = fn(
+    &mut RuntimeContextV1<B>,
+    &mut RuntimeGfx942PreparedV1<P>,
+    &GeneratedHostRosterV1,
+    &ContextUnpublishedHoldV1,
+    &generated_preparation::ContextColdDeviceFailureV1,
+) -> Result<(), NativeError>;
+
 type GraphSubmit<B> = fn(
     &mut RuntimeContextV1<B>,
     ContextGraphReservationV1,
     PreparedContextGraphActionV1,
-) -> Result<RuntimeSubmissionV1<()>, NativeError>;
+) -> Result<ContextGraphSubmissionV1, NativeError>;
 type GraphProgress<B> = fn(
     &mut RuntimeContextV1<B>,
     RuntimeStreamIdV1,
     Option<ContextGraphReservationV1>,
 ) -> Result<(), NativeError>;
 
+type Adoption<B, P> = (
+    fn(&RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
+    Step<B, P>,
+);
+
 struct Hooks<B: RuntimeBackendV1, P> {
+    domains: fn(&P) -> Result<CompletionDomainsV1, RuntimeGfx942ReadbackErrorV1>,
+    decode: fn(RuntimeGfx942PreparedV1<P>) -> Outcome,
+    progress_graph: for<'s, 'e> fn(
+        &mut RuntimeGfx942GeneratedScopeV1<'s, 'e, B, P>,
+    ) -> Result<usize, RuntimeGfx942ScopeErrorV1>,
+    progress_copies: for<'s, 'e> fn(
+        &mut RuntimeGfx942GeneratedScopeV1<'s, 'e, B, P>,
+    ) -> Result<usize, RuntimeGfx942ScopeErrorV1>,
     reserve: Reserved<B, P>,
     preflight: Preflight<B, P>,
     ready: fn(&RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
     adopt: Step<B, P>,
+    sdma_adoption: Option<Adoption<B, P>>,
+    data_copy: Option<data_copy::Step<B, P>>,
+    cold: Option<(ColdCheck<B, P>, ColdSettle<B, P>)>,
     progress: Progress<B, P>,
-    complete: Step<B, P>,
+    rejected: fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
+    retire_rejected: Step<B, P>,
+    complete: Progress<B, P>,
+    unpublished:
+        fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<bool, NativeError>,
+    retire_unpublished:
+        fn(&mut RuntimeContextV1<B>, &ContextUnpublishedHoldV1) -> Result<(), NativeError>,
     copy_progress: fn(&mut RuntimeContextV1<B>, RuntimeStreamIdV1) -> Result<(), NativeError>,
     graph_submit: GraphSubmit<B>,
     graph_progress: GraphProgress<B>,
@@ -203,7 +285,6 @@ impl<B: RuntimeBackendV1, P> Drop for RuntimeGfx942GeneratedScopeV1<'_, '_, B, P
 impl<'scope, B, P> RuntimeGfx942GeneratedScopeV1<'scope, '_, B, P>
 where
     B: RuntimeBackendV1<Error = KfdRuntimeBackendErrorV1>,
-    P: RuntimeGfx942GeneratedCompletionCarrierV1,
 {
     /// Exact element-capacity bytes of the two preallocated owner arrays.
     /// Does not include indirect allocations, Context/backend resources or RSS.
@@ -237,20 +318,37 @@ where
 
     fn admit(
         &mut self,
+        prepared: RuntimeGfx942PreparedV1<P>,
+        stream: RuntimeStreamIdV1,
+    ) -> Result<RuntimeGfx942ScopedTicketV1<'scope>, RuntimeGfx942ScopeErrorV1> {
+        self.admit_with_storage(prepared, stream, false)
+    }
+
+    fn admit_with_storage(
+        &mut self,
         mut prepared: RuntimeGfx942PreparedV1<P>,
         stream: RuntimeStreamIdV1,
+        sdma_backed: bool,
     ) -> Result<RuntimeGfx942ScopedTicketV1<'scope>, RuntimeGfx942ScopeErrorV1> {
         self.check_submission()?;
         let _permit = self
             .epoch
             .enter()
             .map_err(|error| RuntimeGfx942ScopeErrorV1::Context(error.into()))?;
-        let domain = prepared
-            .value()
-            .completion_domain_v1()
-            .map_err(RuntimeGfx942ScopeErrorV1::Readback)?;
+        let domain =
+            (self.hooks.domains)(prepared.value()).map_err(RuntimeGfx942ScopeErrorV1::Readback)?;
         let roster = (self.hooks.reserve)(self.context, &mut prepared)
             .map_err(RuntimeGfx942ScopeErrorV1::Reservation)?;
+        if sdma_backed
+            && (self.hooks.sdma_adoption.is_none()
+                || roster.source_identity.profile()
+                    != crate::generated_source::GeneratedProfileV1::Singleton
+                || roster.count != 1)
+        {
+            return Err(RuntimeGfx942ScopeErrorV1::Context(
+                RuntimeValidationErrorV1::InvalidBackendDescription.into(),
+            ));
+        }
         (self.hooks.preflight)(self.context, &prepared, &roster, stream, None)
             .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
         let (reply, future) = crate::async_engine::RuntimeAsyncReplyV1::pair();
@@ -265,6 +363,8 @@ where
         // before any generated-shell/native adoption hook can be called.
         let index = self.slots.len();
         self.slots.push(Slot {
+            sdma_backed,
+            data_copy: None,
             lifecycle: Lifecycle::new(prepared),
             roster,
             hold,
@@ -321,33 +421,117 @@ where
             return Err(RuntimeGfx942ScopeErrorV1::Deadline);
         }
         let mut transitions = 0;
-        transitions += self.progress_graph_v1()?;
+        transitions += (self.hooks.progress_graph)(self)?;
         for slot in &mut self.slots {
             let context = &mut *self.context;
             let hooks = &self.hooks;
-            let changed = slot
-                .lifecycle
-                .advance(
+            let before = slot.lifecycle.phase;
+            let mut cold_failure = None;
+            let mut changed = if matches!(before, Phase::RetainedProducer | Phase::Copying)
+                && let Some(request) = slot.data_copy.as_mut()
+            {
+                let Some(step) = hooks.data_copy else {
+                    std::process::abort()
+                };
+                slot.lifecycle.advance_copy(
+                    |prepared| {
+                        step(
+                            context,
+                            prepared,
+                            &slot.roster,
+                            &slot.hold,
+                            request.stream,
+                            request.destination,
+                            &mut request.submission,
+                        )
+                    },
+                    hooks.decode,
+                )
+            } else {
+                slot.lifecycle.advance(
                     |phase, prepared| match phase {
                         Phase::Adopting => {
-                            if !(hooks.ready)(context, &slot.hold)? {
+                            if let Some((check, _)) = hooks.cold {
+                                cold_failure = check(context, prepared, &slot.roster, &slot.hold)?;
+                                if cold_failure.is_some() {
+                                    return Ok(false);
+                                }
+                            }
+                            let (ready, adopt) = if slot.sdma_backed {
+                                hooks.sdma_adoption.expect("admitted SDMA storage hooks")
+                            } else {
+                                (hooks.ready, hooks.adopt)
+                            };
+                            if !ready(context, &slot.hold)? {
                                 return Ok(false);
                             }
-                            (hooks.adopt)(context, prepared, &slot.roster, &slot.hold)?;
+                            adopt(context, prepared, &slot.roster, &slot.hold)?;
                             Ok(true)
                         }
                         Phase::Issuing => {
                             (hooks.progress)(context, prepared, &slot.roster, &slot.hold)
                         }
-                        Phase::Completing => {
-                            (hooks.complete)(context, prepared, &slot.roster, &slot.hold)?;
-                            Ok(true)
+                        Phase::Completing | Phase::RetainedProducer => {
+                            (hooks.complete)(context, prepared, &slot.roster, &slot.hold)
                         }
                         _ => unreachable!("lifecycle rejects terminal transitions"),
                     },
-                    RuntimeGfx942PreparedV1::complete_readback_v1,
+                    hooks.decode,
                 )
-                .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
+            }
+            .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
+            if let Some(failure) = cold_failure {
+                let Some((_, settle)) = hooks.cold else {
+                    std::process::abort()
+                };
+                let device_uid = failure.device_uid();
+                changed = slot
+                    .lifecycle
+                    .settle_cold_device(
+                        context,
+                        device_uid,
+                        |context, prepared| {
+                            settle(context, prepared, &slot.roster, &slot.hold, &failure)
+                        },
+                        |context| {
+                            context
+                                .release_unpublished_hold_v1(&slot.hold)
+                                .map_err(Into::into)
+                        },
+                    )
+                    .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
+                if !changed {
+                    std::process::abort();
+                }
+                slot.reply.complete(Err(
+                    crate::RuntimeAsyncEngineCallErrorV1::DeviceUnavailableBeforeActivation {
+                        device_uid,
+                    },
+                ));
+            }
+            if before == Phase::Issuing
+                && !changed
+                && (hooks.rejected)(context, &slot.hold)
+                    .map_err(RuntimeGfx942ScopeErrorV1::Context)?
+            {
+                changed = slot
+                    .lifecycle
+                    .settle_rejected(
+                        context,
+                        |context, prepared| {
+                            (hooks.retire_rejected)(context, prepared, &slot.roster, &slot.hold)
+                        },
+                        |context| {
+                            context
+                                .release_unpublished_hold_v1(&slot.hold)
+                                .map_err(Into::into)
+                        },
+                    )
+                    .map_err(RuntimeGfx942ScopeErrorV1::Context)?;
+                slot.reply.complete(Err(
+                    crate::RuntimeAsyncEngineCallErrorV1::RejectedBeforePublication,
+                ));
+            }
             if let Some(outcome) = &slot.lifecycle.outcome {
                 slot.reply.complete(Ok(outcome.clone()));
             }
@@ -356,7 +540,7 @@ where
                 return Err(RuntimeGfx942ScopeErrorV1::Unknown);
             }
         }
-        transitions += self.progress_copies_v1()?;
+        transitions += (self.hooks.progress_copies)(self)?;
         Ok(transitions)
     }
 
@@ -386,6 +570,17 @@ where
         if slot.lifecycle.phase == Phase::Cancelled {
             return Err(RuntimeGfx942ScopeErrorV1::CancelledBeforeSubmission);
         }
+        if slot.lifecycle.phase == Phase::CancelledUnpublished {
+            return Err(RuntimeGfx942ScopeErrorV1::CancelledBeforePublication);
+        }
+        if slot.lifecycle.phase == Phase::FailedUnpublished {
+            return Err(RuntimeGfx942ScopeErrorV1::RejectedBeforePublication);
+        }
+        if let Phase::ColdDeviceFailed { device_uid } = slot.lifecycle.phase {
+            return Err(
+                RuntimeGfx942ScopeErrorV1::DeviceUnavailableBeforeActivation { device_uid },
+            );
+        }
         Ok(slot.lifecycle.outcome.as_ref())
     }
 
@@ -396,20 +591,33 @@ where
         owner: &std::sync::Arc<T>,
     ) -> Result<bool, RuntimeGfx942ScopeErrorV1> {
         let complete = matches!(self.completion_v1(ticket)?, Some(Ok(())));
-        Ok(complete && self.slots[ticket.index].domain.matches_owner(owner))
+        Ok(complete && self.slots[ticket.index].domain.matches_single(owner))
     }
 
     pub fn drain_v1(&mut self) -> Result<(), RuntimeGfx942ScopeErrorV1> {
+        self.drain_owners_v1()?;
+        self.settled_result_v1()
+    }
+
+    fn drain_owners_v1(&mut self) -> Result<(), RuntimeGfx942ScopeErrorV1> {
         while self.pending_v1() != 0 {
             if self.progress_v1()? == 0 {
                 std::thread::yield_now();
             }
         }
-        self.settled_result_v1()
+        Ok(())
     }
 
     fn settled_result_v1(&self) -> Result<(), RuntimeGfx942ScopeErrorV1> {
         for slot in &self.slots {
+            if let Phase::ColdDeviceFailed { device_uid } = slot.lifecycle.phase {
+                return Err(
+                    RuntimeGfx942ScopeErrorV1::DeviceUnavailableBeforeActivation { device_uid },
+                );
+            }
+            if slot.lifecycle.phase == Phase::FailedUnpublished {
+                return Err(RuntimeGfx942ScopeErrorV1::RejectedBeforePublication);
+            }
             if let Some(Err(error)) = &slot.lifecycle.outcome {
                 return Err(RuntimeGfx942ScopeErrorV1::Readback(error.clone()));
             }
@@ -421,6 +629,19 @@ where
         }
         Ok(())
     }
+
+    /// Inert partial failure manifest of disposed, never-activated preparations.
+    /// The retained device owners remain private in Context. These identities
+    /// cannot certify reset independence, native quiescence, or other devices.
+    pub fn cold_device_failures_v1(&self) -> impl Iterator<Item = (usize, u64)> + '_ {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| match slot.lifecycle.phase {
+                Phase::ColdDeviceFailed { device_uid } => Some((index, device_uid)),
+                _ => None,
+            })
+    }
 }
 
 macro_rules! impl_scoped_generated {
@@ -431,6 +652,11 @@ macro_rules! impl_scoped_generated {
             /// Settled ticket slots are not reused; start another fully settled
             /// scope to reuse Context capacity. Both owner arrays are bounded
             /// independently of any storage retained by their pointees.
+            /// A singleton's definite publication rejection fails locally only
+            /// after original native abort, currentness, Context and source-owner
+            /// settlement. It never produces decoded output or a successful DATA
+            /// version. Unknown state and device/currentness failures still stop
+            /// the whole Context; this is not device-reset fault isolation.
             ///
             /// ```compile_fail
             /// use fe2o3_runtime::*;
@@ -560,18 +786,41 @@ macro_rules! impl_scoped_generated {
                     epoch, context: self, slots, copies, graph: None, capacity, deadline, identity,
                     invariant: PhantomData,
                     hooks: Hooks {
+                        domains: |value| value.completion_domain_v1().map(CompletionDomainsV1::Singleton),
+                        decode: RuntimeGfx942PreparedV1::complete_readback_v1,
+                        progress_graph: Self::progress_generated_scope_graph_v1::<P>,
+                        progress_copies: Self::progress_generated_scope_copies_v1::<P>,
                         reserve: Self::reserve_gfx942_prepared_v1::<P>,
                         preflight: Self::preflight_gfx942_adoption_v1::<P>,
                         ready: Self::gfx942_adoption_ready_v1,
                         adopt: Self::adopt_gfx942_prepared_v1::<P>,
-                        progress: Self::progress_gfx942_issue_v1::<P>,
-                        complete: Self::complete_gfx942_issue_v1::<P>,
+                        sdma_adoption: Some((Self::gfx942_sdma_adoption_ready_v1, Self::adopt_gfx942_sdma_prepared_v1::<P>)),
+                        data_copy: Self::generated_data_copy_hook_v1::<P>(),
+                        cold: Some((Self::check_gfx942_cold_device_v1::<P>, Self::settle_gfx942_cold_device_v1::<P>)),
+                        progress: Self::progress_gfx942_issue_preserving_rejection_v1::<P>,
+                        rejected: Self::gfx942_issue_rejected_v1,
+                        retire_rejected: Self::settle_gfx942_rejected_v1::<P>,
+                        complete: Self::complete_gfx942_scoped_issue_v1::<P>,
+                        unpublished: Self::gfx942_adoption_unpublished_v1,
+                        retire_unpublished: Self::retire_gfx942_unpublished_v1,
                         copy_progress: Self::progress_stream_v1,
                         graph_submit: Self::submit_graph_action_v1,
                         graph_progress: |context, stream, access| context.drive_stream_with_graph_access_v1(
                             stream, access, <$backend as RuntimeFlushBackendV1>::progress_stream_v1),
                     },
                 })
+            }
+
+            fn progress_generated_scope_graph_v1<P: RuntimeGfx942GeneratedCompletionCarrierV1>(
+                scope: &mut RuntimeGfx942GeneratedScopeV1<'_, '_, $backend, P>,
+            ) -> Result<usize, RuntimeGfx942ScopeErrorV1> {
+                scope.progress_graph_v1()
+            }
+
+            fn progress_generated_scope_copies_v1<P: RuntimeGfx942GeneratedCompletionCarrierV1>(
+                scope: &mut RuntimeGfx942GeneratedScopeV1<'_, '_, $backend, P>,
+            ) -> Result<usize, RuntimeGfx942ScopeErrorV1> {
+                scope.progress_copies_v1()
             }
         }
 
@@ -585,15 +834,49 @@ macro_rules! impl_scoped_generated {
                 stream: RuntimeStreamIdV1,
                 prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E>,
             ) -> Result<RuntimeGfx942ScopedTicketV1<'scope>, RuntimeGfx942ScopedSubmissionErrorV1<E>> {
+                self.try_submit_storage_v1(device, stream, prepare, false)
+            }
+
+            /// Retains one Singleton carrier using original SDMA-backed DATA on
+            /// the native primary queue. Default submissions remain unchanged.
+            ///
+            /// This preserves the original promotion bridge internally; normal
+            /// completion still disposes DATA. It neither exports DATA nor
+            /// admits a generated consumer, copy edge, or graph version.
+            pub fn try_submit_sdma_backed_v1<E>(
+                &mut self,
+                device: RuntimeDeviceIdV1,
+                stream: RuntimeStreamIdV1,
+                prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E>,
+            ) -> Result<RuntimeGfx942ScopedTicketV1<'scope>, RuntimeGfx942ScopedSubmissionErrorV1<E>> {
+                self.try_submit_storage_v1(device, stream, prepare, true)
+            }
+
+            fn try_submit_storage_v1<E>(
+                &mut self,
+                device: RuntimeDeviceIdV1,
+                stream: RuntimeStreamIdV1,
+                prepare: impl FnOnce(&fe2o3_kfd::CheckedGfx942XnackMinusDevice) -> Result<P, E>,
+                sdma_backed: bool,
+            ) -> Result<RuntimeGfx942ScopedTicketV1<'scope>, RuntimeGfx942ScopedSubmissionErrorV1<E>> {
                 self.check_submission().map_err(RuntimeGfx942ScopedSubmissionErrorV1::Scope)?;
                 let prepared = {
                     let _permit = self.epoch.enter().map_err(|error|
                         RuntimeGfx942ScopedSubmissionErrorV1::Scope(
                             RuntimeGfx942ScopeErrorV1::Context(error.into())))?;
+                    if sdma_backed {
+                        self.context.preflight_gfx942_sdma_storage_v1(device, stream)
+                            .map_err(|error| RuntimeGfx942ScopedSubmissionErrorV1::Scope(
+                                RuntimeGfx942ScopeErrorV1::Context(error)))?;
+                    }
                     self.context.with_gfx942_preparation_device_v1(device, prepare)
                         .map_err(RuntimeGfx942ScopedSubmissionErrorV1::Preparation)?
                 };
-                self.admit(prepared, stream).map_err(RuntimeGfx942ScopedSubmissionErrorV1::Scope)
+                if sdma_backed {
+                    self.admit_with_storage(prepared, stream, true)
+                } else {
+                    self.admit(prepared, stream)
+                }.map_err(RuntimeGfx942ScopedSubmissionErrorV1::Scope)
             }
         }
     };

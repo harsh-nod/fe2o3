@@ -576,6 +576,7 @@ impl KfdRuntimeBackendV1 {
         self.submissions.insert(
             plan.id,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream: plan.stream,
                 status: BackendPollV1::Succeeded,
                 dependency_depth: plan.depth,

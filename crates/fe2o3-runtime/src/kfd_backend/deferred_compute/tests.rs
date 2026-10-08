@@ -41,6 +41,7 @@ impl Fixture {
         backend.children[0].submissions.insert(
             producer_local,
             SubmissionRecordV1 {
+                origin: SubmissionOriginV1::Ordinary,
                 stream: backend.streams[&producer_stream].local,
                 status: BackendPollV1::Pending,
                 dependency_depth: 1,
