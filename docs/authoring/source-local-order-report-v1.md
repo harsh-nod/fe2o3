@@ -1,7 +1,9 @@
 # Ordinary saved-recipe diagnostic output
 
-This additive example interface is a source proposal, not a qualified tutorial
-or a completed #282 U4 milestone. Its authored controls have not been executed.
+This additive example interface has the source-qualified CPU checkpoint below.
+It is not a published tutorial or a completed #282 U4 milestone. The original
+source-only proposal is preserved separately; current evidence is dated and
+bound to its exact candidate rather than inferred from these files.
 It does not change the public API, canonical recipe codec, compilation pipeline,
 source ownership, proof gates or device-launch behavior.
 
@@ -148,3 +150,60 @@ window. Add machine-readable links to those genuine runs only after their
 commands pass. Do not reuse the earlier U4 benchmark as evidence for this new
 ordinary-example interface, and do not mark U4, native execution, full owner
 memory, cancellation, tutorials or site publication complete from this patch.
+
+## 2026-10-08 CPU qualification snapshot
+
+This checkpoint is scoped to `73dacccba6eebdd74e6b9b0ed92e76e338c58d51` plus the ten U4 report/series leaves.
+The before/after source census was 15,375 files / 221,500,471 bytes,
+SHA-256 `0e94deab4c89f7ae3b8296f0c7da5e6e1bc5f6b617fabf1cfa5e823746a3e843`.
+It identifies the tested uncommitted candidate, not a subsequently published
+compiler commit or a claim about arbitrary current main. Documentation-only
+updates are separate from that tested source census.
+
+On `mi350-2`, the actual ordinary example completed all nine fixed cases:
+
+| Case | Observed outcome |
+| --- | --- |
+| Legacy Create and Replay | Both accepted |
+| JSON exact-revision Create and Replay | Both accepted |
+| JSON rebind Create and edited-source Replay | Both accepted |
+| JSON edited-source exact-revision Replay | Designated source-revision refusal |
+| JSON advisory relation mismatch | Accepted with the advisory not honored |
+| JSON exact relation mismatch | Designated constraint refusal |
+
+These are seven accepted commands and two intended typed refusals, not nine
+zero-exit compiler commands. Successful source/recipe/LLVM files and report
+joins were checked by the enclosing campaign. The terminal normal receipt
+records identical selected inputs and source before/after. The report remains
+observation-only and does not authenticate execution by itself.
+
+Retained evidence (SHA-256; these are record identities, not runnable commands):
+
+- `u4-main-normal-example-nine-r2/receipt.json`: 442,922 bytes,
+  `84eccde2ee6dceea35bbc977e54e6ed5e4595da46f8943f93bdc2cb351ff75d6`.
+- `ordinary-example-r84-r1/RESULT.json`: 265,828 bytes,
+  `b98d8167712940e6b6d3682d1f0cb58d7f7a71e6d5a5b962c1886b43702aa6f5`.
+
+The preceding campaign attempt was preserved as a failed root configuration:
+its installed-startup selection was unsorted and mixed with retained runtime
+rows. The fresh R2 configuration restored the required exact sorted selection;
+no repository validator or failure condition was relaxed.
+
+This qualifies these ordinary command/report cases on the named CPU source,
+toolchain and host. It is not full-backend qualification, site/tutorial
+publication, cancellation, complete-owner memory, a latency budget, native/GPU
+execution or completion of #282 U4. The separately measured changed-source
+series is described in [the outcome-series checkpoint](../recipe-outcome-series-v1.md#2026-10-08-cpu-qualification-snapshot).
+
+## Published implementation and separate backend regression
+
+The ten tested report/series leaves were committed unchanged as
+`5654782a316526aef9bb76602343a9a6a903e44d` and pushed to `main` in both
+`harsh-nod/fe2o3` and `powderluv/fe2o3`. The dated source census above precedes
+that commit; this documentation update is separate.
+
+A genuine Cargo backend-library run on that same candidate passed 4,300 tests,
+with no failures and 351 ignored tests. Its terminal receipt is 45,593 bytes,
+SHA-256 `923271924a902d7ac6f76187dc78e94e6deff47d2c4f678a6150740d107f8552`.
+Ignored tests were not executed. This regression result does not close the
+remaining U4 memory, cancellation or performance-budget acceptance items.

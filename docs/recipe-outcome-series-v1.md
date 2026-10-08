@@ -1,8 +1,9 @@
 # Checked-rebind and exact-revision outcome series
 
-Status: source-only test adapter and consistency parser. No genuine run, compiler
-qualification, accepted performance budget, complete memory result, hardware
-evidence, or milestone completion is supplied by these files.
+Status: test adapter and consistency parser with the source-qualified genuine
+CPU checkpoint below. These files alone are not execution evidence. No accepted
+performance budget, complete memory result, hardware evidence or milestone
+completion is supplied.
 
 This extends the existing recipe observation tests, not the production API. Two
 closed workloads use the unchanged consuming
@@ -150,3 +151,70 @@ records and must never be reported as genuine workloads.
 Cancellation remains a separate owner/interface gap. A process timeout or
 SIGTERM is not a compiler cancellation result. This change invents no
 cancellation API and does not satisfy that acceptance item.
+
+## 2026-10-08 CPU qualification snapshot
+
+This checkpoint is scoped to `73dacccba6eebdd74e6b9b0ed92e76e338c58d51` plus the ten U4 report/series leaves.
+The before/after source census was 15,375 files / 221,500,471 bytes,
+SHA-256 `0e94deab4c89f7ae3b8296f0c7da5e6e1bc5f6b617fabf1cfa5e823746a3e843`.
+It identifies the tested uncommitted candidate, not a subsequently published
+compiler commit or a claim about arbitrary current main. Documentation-only
+updates are separate from that tested source census.
+
+A fresh campaign on `mi350-2` completed six genuine children: two ordinary
+Create calls retaining original recipe/origin bytes, two independent ordinary
+changed-source outcomes, and two series. Each series made 35 fresh consuming
+transactions in its genuine frontend callback: five calibration calls and
+thirty retained calls. Every outcome matched its independent ordinary oracle;
+all 70 raw sample rows were retained. The checked rebind succeeded; the exact
+revision workload produced only the designated original source-revision
+refusal, not an arbitrary error.
+
+| Workload | p50 (ns) | p95 (ns) | Maximum (ns) |
+| --- | ---: | ---: | ---: |
+| `checked_rebind` | 168237386 | 168552778 | 168646367 |
+| `exact_revision_refusal` | 15954744 | 16136026 | 16151498 |
+
+The values are nearest ranks 15, 29 and 30 of each thirty-sample measured
+sequence. They were recomputed from the retained raw rows without dropping
+outliers. The measured boundary is fresh transaction creation through the
+original consuming recipe return inside an already entered frontend; it is
+not cold rustc startup, exclusive generation, whole-process elapsed time,
+compiler-owner reuse, a cross-machine result or an accepted SLO. The frontend
+is reused, but admitted transaction/graph/Work owners are not.
+
+Retained evidence (SHA-256):
+
+- `u4-main-outcome-six-r1/receipt.json`: 427,327 bytes,
+  `9a63d4e394db83ad84a357dadb282fd6a29b0df0e9e74990a94caf233663d1cc`.
+- `outcomes/result.json`: 169,477 bytes,
+  `0bd18808137c32c0446ee1b8a2c195804ff168f789a467ff95924ddb29965391`.
+- `checked-rebind-series.stderr`: 13,699 bytes,
+  `5c84115acd592f677d79933e885e618dc0d44ac411a6781a259abd485ac0448e`.
+- `exact-revision-refusal-series.stderr`: 13,640 bytes,
+  `a395004a4f23f119dd89f0e838907ddcc4a9d8656079681f8a4188c9025b30f8`.
+
+The terminal normal receipt preserves identical selected inputs and source
+before/after. Raw stdout and stderr, the original recipe/origin files and
+ordinary oracles remain separate evidence; the consistency parser alone is
+not execution authentication. Earlier measurements from the separate
+`d6653c608210d84f8bde4d7c781492d01357d818` candidate are historical and
+are not substituted for this snapshot.
+
+Complete-owner retained heap, temporary-overlap peak and RSS remain unmeasured;
+`retained_logical_bytes` remains null and `budget_accepted` remains false.
+No cancellation result, full-backend qualification, site publication, native
+or GPU authority, or #282 U4 completion follows from these measurements.
+
+## Published implementation and separate backend regression
+
+The ten tested report/series leaves were committed unchanged as
+`5654782a316526aef9bb76602343a9a6a903e44d` and pushed to `main` in both
+`harsh-nod/fe2o3` and `powderluv/fe2o3`. The dated source census above precedes
+that commit; this documentation update is separate.
+
+A genuine Cargo backend-library run on that same candidate passed 4,300 tests,
+with no failures and 351 ignored tests. Its terminal receipt is 45,593 bytes,
+SHA-256 `923271924a902d7ac6f76187dc78e94e6deff47d2c4f678a6150740d107f8552`.
+Ignored tests were not executed. This regression result does not close the
+remaining U4 memory, cancellation or performance-budget acceptance items.
