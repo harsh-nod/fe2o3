@@ -165,7 +165,31 @@ fn assert_observation_summary(
             "source: InvocationSourceByteStateV36, target: MemoryStateV30)\n requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},\n ensures  invocation_paired_observations_related_{root}_v39(invocation_paired_source_step_{root}_v36(source).events, invocation_paired_actual_step_{root}_v36(target).events),"
         )
     );
+    let validity = format!(
+        " assert(actual.valid) by {{\n  invocation_paired_cut_{root}_pc{pc}_residual_v85(source, target);\n  reveal(invocation_paired_residual_{root}_v85);\n }}\n"
+    );
+    assert_eq!(emitted.matches(&validity).count(), 1);
+    assert_eq!(
+        emitted
+            .matches(&format!(
+                "invocation_paired_cut_{root}_pc{pc}_residual_v85(source, target);"
+            ))
+            .count(),
+        1
+    );
+    let outer = emitted.replace(&validity, "");
+    assert!(!outer.contains("reveal(invocation_paired_residual_"));
+    assert_eq!(
+        emitted.matches("hide(invocation_source_scalar_").count(),
+        statements
+    );
+    for statement in 0..statements {
+        assert!(emitted.contains(&format!("assert(state_{statement}.machine.valid) by {{")));
+    }
     for expected in [
+        format!("hide(invocation_paired_residual_{root}_v85);"),
+        format!("invocation_paired_source_defined_step_valid_{root}_v92(source);"),
+        format!("assert(state_{statements}.machine.valid);"),
         format!(
             "assert(original.machine.pc == {continuation}) by {{ reveal(invocation_source_return_v36); }}"
         ),
@@ -197,8 +221,23 @@ fn assert_observation_summary(
     ] {
         assert!(emitted.contains(&expected), "{expected}");
     }
-    for forbidden in ["assume(", "admit(", "external_body"] {
-        assert!(!emitted.contains(forbidden));
+    for forbidden in [
+        " let map = ",
+        " let value_",
+        " let value = ",
+        " let returned = ",
+        "original_invocation_source_scalar_trace_",
+        "invocation_related_target_inputs_v96(",
+        "invocation_source_put_local_preserves_heap_v78(",
+        "invocation_source_plain_return_preserves_heap_v78(",
+        "actual.values[",
+        "actual.memory ==",
+        "original.machine.frames.execution",
+        "assume(",
+        "admit(",
+        "external_body",
+    ] {
+        assert!(!emitted.contains(forbidden), "{forbidden}");
     }
 }
 
@@ -348,6 +387,17 @@ fn run(
                     assert!(emitted.contains(&format!("requires invocation_paired_related_{root}_v36(source, target), invocation_paired_source_defined_{root}_v36(source, 1),\n source.machine.pc == {pc},")));
                     if enabled && goal == "halted" {
                         assert_halted_summary(&out.text, root, pc);
+                    } else if enabled && goal == "observations" {
+                        assert_observation_summary(
+                            &out.text,
+                            root,
+                            pc,
+                            instance,
+                            statements,
+                            continuation,
+                            operations,
+                            target_fuel,
+                        );
                     } else if enabled {
                         for ordinal in 0..statements {
                             assert!(emitted.contains(&format!("hide(invocation_source_scalar_{root}_{instance}_{block}_{ordinal}_v36);")));
@@ -367,17 +417,6 @@ fn run(
                             assert!(emitted.contains(&format!(
                                 "assert(value == actual.values[{target_result}])"
                             )));
-                        } else if goal == "observations" {
-                            assert_observation_summary(
-                                &out.text,
-                                root,
-                                pc,
-                                instance,
-                                statements,
-                                continuation,
-                                operations,
-                                target_fuel,
-                            );
                         }
                     } else {
                         assert!(!emitted.contains("let state_0 = source;"));

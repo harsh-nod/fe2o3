@@ -406,6 +406,9 @@ pub(super) fn emit(
         out,
         " hide(invocation_paired_source_step_{root}_v36);\n hide(invocation_paired_actual_step_{root}_v36);\n hide(invocation_source_block_runtime_{root}_v36);\n hide(invocation_byte_boundary_{root}_v36);\n hide(invocation_paired_source_defined_{root}_v36);\n hide(invocation_source_byte_storage_related_{root}_v36);\n hide(invocation_source_byte_state_well_formed_v36);\n hide(invocation_byte_states_related_v36);\n hide(invocation_byte_heaps_related_v36);\n hide(byte_memory_well_formed_v30);\n hide(byte_frame_runtime_well_formed_v30);\n hide(byte_private_frames_live_v30);\n hide(private_generation_counters_valid_v30);\n hide(invocation_source_logical_write_v38);\n hide(invocation_source_logical_clear_v38);\n hide(invocation_source_return_v36);\n hide(byte_end_frame_v30);\n"
     );
+    if matches!(goal, Goal::Observations) {
+        emit!(out, " hide(invocation_paired_residual_{root}_v85);\n");
+    }
     for statement in 0..count {
         out.budget.charge_work(1)?;
         emit!(
@@ -413,10 +416,17 @@ pub(super) fn emit(
             " hide(invocation_source_scalar_{root}_{instance}_{block}_{statement}_v36);\n"
         );
     }
-    emit!(
-        out,
-        " let map = invocation_source_byte_map_{root}_v36(source, target);\n assert(invocation_source_byte_state_well_formed_v36(source) && invocation_byte_states_related_v36(source.machine, target, map) && invocation_byte_heaps_related_v36(source.machine.memory, target.memory, map) && source.machine.valid && target.valid) by {{\n  reveal(invocation_source_byte_storage_related_{root}_v36);\n  reveal(invocation_byte_states_related_v36);\n }}\n invocation_related_target_inputs_v96(source.machine, target, map);\n invocation_paired_source_defined_step_valid_{root}_v92(source);\n let little_endian = invocation_runtime_little_endian_v36();\n let original = invocation_paired_source_step_{root}_v36(source).state;\n let actual = invocation_paired_actual_step_{root}_v36(target).state;\n assert(source.machine.pc == {pc} && target.pc == {target_pc});\n let state_0 = source;\n"
-    );
+    if matches!(goal, Goal::Observations) {
+        emit!(
+            out,
+            " invocation_paired_source_defined_step_valid_{root}_v92(source);\n let little_endian = invocation_runtime_little_endian_v36();\n let original = invocation_paired_source_step_{root}_v36(source).state;\n let actual = invocation_paired_actual_step_{root}_v36(target).state;\n assert(source.machine.pc == {pc} && target.pc == {target_pc});\n let state_0 = source;\n"
+        );
+    } else {
+        emit!(
+            out,
+            " let map = invocation_source_byte_map_{root}_v36(source, target);\n assert(invocation_source_byte_state_well_formed_v36(source) && invocation_byte_states_related_v36(source.machine, target, map) && invocation_byte_heaps_related_v36(source.machine.memory, target.memory, map) && source.machine.valid && target.valid) by {{\n  reveal(invocation_source_byte_storage_related_{root}_v36);\n  reveal(invocation_byte_states_related_v36);\n }}\n invocation_related_target_inputs_v96(source.machine, target, map);\n invocation_paired_source_defined_step_valid_{root}_v92(source);\n let little_endian = invocation_runtime_little_endian_v36();\n let original = invocation_paired_source_step_{root}_v36(source).state;\n let actual = invocation_paired_actual_step_{root}_v36(target).state;\n assert(source.machine.pc == {pc} && target.pc == {target_pc});\n let state_0 = source;\n"
+        );
+    }
     for statement in 0..count {
         out.budget.charge_work(4)?;
         let next = add(statement, 1)?;
@@ -435,6 +445,25 @@ pub(super) fn emit(
             out,
             " assert(state_{statement}.machine.valid) by {{\n  reveal(invocation_source_scalar_{root}_{instance}_{block}_{statement}_v36);\n }}\n"
         );
+    }
+    if matches!(goal, Goal::Observations) {
+        out.budget.charge_work(8)?;
+        let inventory = model.slots.correspondence(out)?.inventory(out.budget)?;
+        let operations = inventory
+            .blocks()
+            .get(target_pc)
+            .ok_or_else(mismatch)?
+            .operations
+            .len();
+        let observation_fuel = add(operations, 1)?;
+        // The residual exports only target validity here. Scalar statement
+        // validity and the nontrapping Return suffice for source observations;
+        // no returned-value equality or heap reconstruction is needed.
+        emit!(
+            out,
+            " assert(actual.valid) by {{\n  invocation_paired_cut_{root}_pc{pc}_residual_v85(source, target);\n  reveal(invocation_paired_residual_{root}_v85);\n }}\n assert(original.machine.pc == {continuation}) by {{ reveal(invocation_source_return_v36); }}\n assert(original.machine.pc != -2);\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n  reveal(invocation_paired_source_step_{root}_v36);\n  reveal(invocation_source_block_runtime_{root}_v36);\n  reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {source_fuel});\n  assert(invocation_source_block_runtime_{root}_v36(source).operands.len() == 0);\n  reveal_with_fuel(invocation_source_statements_observations_v39, {source_fuel});\n  reveal_with_fuel(invocation_source_operands_observations_v39, 1);\n }}\n assert(invocation_paired_actual_step_{root}_v36(target).events == Seq::empty()) by {{\n  reveal(invocation_paired_actual_step_{root}_v36);\n  reveal(invocation_byte_boundary_{root}_v36);\n  reveal_with_fuel(invocation_byte_follow_{root}_v36, {target_fuel});\n  assert(invocation_byte_boundary_{root}_v36(target).observations.len() == {operations});\n  reveal_with_fuel(invocation_actual_observations_v39, {observation_fuel});\n }}\n"
+        );
+        return Ok(());
     }
     for (statement, coordinates) in source.statements.iter().enumerate() {
         out.budget.charge_work(7)?;
@@ -497,22 +526,6 @@ pub(super) fn emit(
             emit!(
                 out,
                 " assert(value == actual.values[{target_result}]) by {{\n  reveal(invocation_paired_actual_step_{root}_v36);\n  reveal(invocation_byte_boundary_{root}_v36);\n  reveal_with_fuel(invocation_byte_follow_{root}_v36, {target_fuel});\n }}\n assert(invocation_paired_control_values_{root}_v36(source, invocation_source_block_runtime_{root}_v36(source), invocation_byte_boundary_{root}_v36(target))) by {{\n  reveal(invocation_source_block_runtime_{root}_v36);\n  reveal(invocation_byte_boundary_{root}_v36);\n  reveal(invocation_source_return_v36);\n  reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {source_fuel});\n  reveal_with_fuel(invocation_byte_follow_{root}_v36, {target_fuel});\n }}\n"
-            );
-        }
-        Goal::Observations => {
-            out.budget.charge_work(8)?;
-            // The admitted first block contains only scalar operations. Every
-            // cached bridge has no operations, and Branch adds no observation.
-            let operations = inventory
-                .blocks()
-                .get(target_pc)
-                .ok_or_else(mismatch)?
-                .operations
-                .len();
-            let observation_fuel = add(operations, 1)?;
-            emit!(
-                out,
-                " assert(original.machine.pc == {continuation}) by {{ reveal(invocation_source_return_v36); }}\n assert(original.machine.pc != -2);\n assert(invocation_paired_source_step_{root}_v36(source).events == Seq::empty()) by {{\n  reveal(invocation_paired_source_step_{root}_v36);\n  reveal(invocation_source_block_runtime_{root}_v36);\n  reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {source_fuel});\n  assert(invocation_source_block_runtime_{root}_v36(source).operands.len() == 0);\n  reveal_with_fuel(invocation_source_statements_observations_v39, {source_fuel});\n  reveal_with_fuel(invocation_source_operands_observations_v39, 1);\n }}\n assert(invocation_paired_actual_step_{root}_v36(target).events == Seq::empty()) by {{\n  reveal(invocation_paired_actual_step_{root}_v36);\n  reveal(invocation_byte_boundary_{root}_v36);\n  reveal_with_fuel(invocation_byte_follow_{root}_v36, {target_fuel});\n  assert(invocation_byte_boundary_{root}_v36(target).observations.len() == {operations});\n  reveal_with_fuel(invocation_actual_observations_v39, {observation_fuel});\n }}\n"
             );
         }
         _ => return Err(mismatch()),
