@@ -43,6 +43,12 @@ fn admitted_no_request_survives_fresh_loan_and_publication_preparation() {
     budget.charge_work(19).unwrap();
     let ledger = budget.work_ledger_identity_v1();
     let policy = fixture::policy(&mut budget);
+    // Keep the setup charges, the admitted policy copy, and exactly three
+    // logical identity owners: session, original invocation, foreign invocation.
+    // Owner charges are not allocator RSS and are not refunded by Owner::drop.
+    let retained = budget.storage() + policy.retained_storage() + 3 * Owner::STORAGE;
+    let client_storage =
+        std::mem::size_of::<fe2o3_compiler_execution_client::CompilerExecutionClientV3<'_, '_>>();
     let (native, _server) = fixture::session(&policy, &mut budget);
     let mut source = Work::default();
     source.charge(17).unwrap();
@@ -62,10 +68,12 @@ fn admitted_no_request_survives_fresh_loan_and_publication_preparation() {
         .unwrap();
     let mut moved = invocation;
     let published = Cell::new(false);
+    let publication_account = Cell::new(None);
     let result = native.prepare_and_acquire_with_enrollment::<_, (), (), SessionError>(
         |preparation, budget| {
             assert!(preparation.is_enrolled());
             assert!(budget.work_ledger_identity_v1() == ledger);
+            assert_eq!(budget.storage(), retained + client_storage);
             assert!(preparation.owner.unwrap().matches(&stamp.session));
             preparation.with_invocation(&mut moved, budget, |loan| {
                 assert!(loan.requested_bindings.get().is_none());
@@ -84,6 +92,28 @@ fn admitted_no_request_survives_fresh_loan_and_publication_preparation() {
             assert_eq!(finished.descriptor(), &expected);
             finished.revalidate_for_publication().unwrap();
             finished.assert_reference_owner_for_test(&stamp.invocation, &foreign_stamp.invocation);
+            assert_eq!(budget.storage(), retained + client_storage);
+            assert_eq!(
+                (budget.failed_work(), budget.failed_storage()),
+                (None, None)
+            );
+            let accepted = (budget.storage(), budget.work(), budget.peak_storage());
+            // Record real nonempty denials before the deliberate publication
+            // refusal. Failed charges must neither refund nor advance acceptance.
+            assert!(budget.charge_work(usize::MAX).is_err());
+            assert!(budget.reserve_storage(STORAGE).is_err());
+            assert_eq!(
+                (budget.storage(), budget.work(), budget.peak_storage()),
+                accepted
+            );
+            assert_eq!(budget.failed_work(), Some(usize::MAX));
+            assert_eq!(budget.failed_storage(), Some(accepted.0 + STORAGE));
+            publication_account.set(Some((
+                accepted,
+                budget.work_ledger_identity_v1(),
+                budget.failed_work(),
+                budget.failed_storage(),
+            )));
             // Stop before receipt acquisition: there is no signing service or
             // fabricated positive carriage. Full production publication is open.
             Err(SessionError::Reference(Error::new(
@@ -95,9 +125,22 @@ fn admitted_no_request_survives_fresh_loan_and_publication_preparation() {
     refused(result, "fixture publication stop");
     assert!(published.get());
     assert!(budget.work_ledger_identity_v1() == ledger);
-    assert!(budget.storage() >= 91 && budget.work() > 19);
-    assert_eq!(budget.failed_work(), None);
-    assert_eq!(budget.failed_storage(), None);
+    let ((storage, work, peak), publication_ledger, failed_work, failed_storage) =
+        publication_account
+            .get()
+            .expect("publication account snapshot");
+    assert!(budget.work_ledger_identity_v1() == publication_ledger);
+    // Only Client::RETAINED (size_of::<Client> at this pin) retires on refusal.
+    // Policy/identity logical charges remain, even after their owners drop.
+    assert_eq!(
+        budget.storage(),
+        storage.checked_sub(client_storage).unwrap()
+    );
+    assert_eq!(budget.storage(), retained);
+    assert_eq!(budget.work(), work);
+    assert_eq!(budget.peak_storage(), peak);
+    assert_eq!(budget.failed_work(), failed_work);
+    assert_eq!(budget.failed_storage(), failed_storage);
 }
 
 #[test]

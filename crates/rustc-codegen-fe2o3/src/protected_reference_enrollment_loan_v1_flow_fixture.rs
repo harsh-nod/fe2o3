@@ -59,7 +59,7 @@ pub(super) fn isolated(full_name: &str, request: Option<&str>) -> bool {
         return false;
     }
     let directory = crate::test_temp_dir::TestTempDir::create("fe2o3-loan-flow");
-    let executable = std::env::current_exe().unwrap();
+    let executable = std::env::current_exe().unwrap().canonicalize().unwrap();
     let digest =
         measure_compiler_image_sha256_v1(&executable, CompilerImageRoleV1::Executable, |_| {
             Ok::<_, std::convert::Infallible>(())
@@ -102,16 +102,10 @@ pub(super) fn isolated(full_name: &str, request: Option<&str>) -> bool {
             hex(closure.identity_sha256()),
         )
         .env(CODEGEN_BACKEND_BUILD_OBSERVATION_ENV_V2, hex(digest));
-    for key in [
-        "PATH",
-        "HOME",
-        "RUSTUP_HOME",
-        "RUSTUP_TOOLCHAIN",
-        "LD_LIBRARY_PATH",
-    ] {
-        if let Some(value) = std::env::var_os(key) {
-            command.env(key, value);
-        }
+    // Preserve only dynamic-library loading. The collector resolves its linked
+    // driver sysroot in process, without PATH, HOME or a rustup proxy selection.
+    if let Some(value) = std::env::var_os("LD_LIBRARY_PATH") {
+        command.env("LD_LIBRARY_PATH", value);
     }
     if let Some(request) = request {
         command.env(crate::reference_enrollment_policy_v1::ENV, request);
@@ -171,6 +165,10 @@ pub(super) fn isolated(full_name: &str, request: Option<&str>) -> bool {
             Ok(())
         });
     }
+    // This is the fixture's sole child. The CHILD branch cannot re-exec, and
+    // the collector's fixed-source callback runs rustc in process with no
+    // helper, proc macro or linker. Every wait failure/deadline kills and reaps
+    // this owned child; successful exits are reaped before report assertions.
     let mut child = command.spawn().unwrap();
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {

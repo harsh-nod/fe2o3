@@ -28,18 +28,38 @@ impl<F: for<'tcx> FnMut(TyCtxt<'tcx>)> Callbacks for CheckCallbacks<F> {
     }
 }
 
-// Same actual rustc callback pattern as reference_custody_v1_tests::with_source.
+fn linked_driver_sysroot() -> std::path::PathBuf {
+    // The isolated child intentionally has no PATH or rustup selection. Resolve
+    // the loaded rustc_driver in process, never a cwd-dependent rustc proxy.
+    for key in ["PATH", "HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"] {
+        assert!(std::env::var_os(key).is_none(), "unexpected {key}");
+    }
+    let argv0 = std::path::PathBuf::from(std::env::args_os().next().unwrap());
+    assert!(argv0.is_absolute());
+    assert_eq!(argv0, argv0.canonicalize().unwrap());
+    assert!(std::fs::symlink_metadata(&argv0).unwrap().is_file());
+    // The pinned Sysroot implementation tries an argv[0] symlink before the
+    // loaded driver. Reject that alternative above, even if it has a rustlib.
+    let sysroot = rustc_session::config::Sysroot::new(None);
+    let sysroot = sysroot.path().canonicalize().unwrap();
+    assert!(
+        sysroot
+            .join("lib/rustlib")
+            .join(rustc_session::config::host_tuple())
+            .join("lib")
+            .is_dir()
+    );
+    sysroot
+}
+
 // A capturing callback keeps the original move-only native session outside it.
+// This fixed source has no proc macros; Stop after analysis avoids codegen and
+// linking. No helper process is created beneath the deadline-owned child.
 fn with_source(check: impl for<'tcx> FnMut(TyCtxt<'tcx>) + Send) {
     let directory = TestTempDir::create("fe2o3-loan-empty-roster");
     let source = directory.path().join("fixture.rs");
     std::fs::write(&source, "pub fn unregistered(value: u32) -> u32 { value }").unwrap();
-    let output = std::process::Command::new("rustc")
-        .args(["--print", "sysroot"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let sysroot = String::from_utf8(output.stdout).unwrap();
+    let sysroot = linked_driver_sysroot();
     let args = vec![
         "rustc".into(),
         "--crate-name=fe2o3_loan_empty_roster".into(),
@@ -50,7 +70,7 @@ fn with_source(check: impl for<'tcx> FnMut(TyCtxt<'tcx>) + Send) {
         "-Copt-level=0".into(),
         "-Cpanic=abort".into(),
         "--sysroot".into(),
-        sysroot.trim().into(),
+        sysroot.to_str().unwrap().into(),
         "-o".into(),
         directory.path().join("fixture.rmeta").display().to_string(),
         source.display().to_string(),
