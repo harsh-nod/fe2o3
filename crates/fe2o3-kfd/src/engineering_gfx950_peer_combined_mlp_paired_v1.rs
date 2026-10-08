@@ -1,6 +1,12 @@
 //! Private R1 -> MLP -> validator -> paired barrier -> R2 coordinator.
 use super::*;
 
+#[cfg(feature = "engineering-currentness-duration-diagnostics")]
+#[path = "engineering_gfx950_peer_layer_duration_v1.rs"]
+mod layer_duration;
+#[cfg(feature = "engineering-currentness-duration-diagnostics")]
+pub use layer_duration::Gfx950EngineeringPeerScopedLayerDurationsV1;
+
 #[path = "engineering_gfx950_peer_combined_mlp_paired_arena_v1.rs"]
 mod arena;
 #[path = "engineering_gfx950_peer_combined_mlp_paired_profiles_v1.rs"]
@@ -126,6 +132,25 @@ fn coordinate_with_terminal_policy(
     outer_deadline: Option<Instant>,
     terminal_policy: TerminalPolicy,
 ) -> Result<Completion> {
+    coordinate_recorded(
+        backend,
+        timeout_ms,
+        outer_deadline,
+        terminal_policy,
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        None,
+    )
+}
+
+fn coordinate_recorded(
+    backend: &mut impl CoordinatorBackend,
+    timeout_ms: u32,
+    outer_deadline: Option<Instant>,
+    terminal_policy: TerminalPolicy,
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")] mut recording: Option<
+        &mut layer_duration::Recorder<'_, 7>,
+    >,
+) -> Result<Completion> {
     let started = backend.now();
     let result = (|| {
         if !(1..=10_000).contains(&timeout_ms) {
@@ -138,23 +163,43 @@ fn coordinate_with_terminal_policy(
         if outer_deadline.is_some() {
             deadline_check(backend.now(), deadline)?;
         }
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        if let Some(value) = recording.as_deref_mut() {
+            value.mark()?;
+        }
         backend.preflight()?;
         deadline_check(backend.now(), deadline)?;
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        if let Some(value) = recording.as_deref_mut() {
+            value.mark()?;
+        }
         // submit() checks idle queues, so both owners are consumed before either
         // software ring reservation. Every kernel and arena is already prepared.
         for rank in 0..2 {
             backend.consume(rank)?;
             deadline_check(backend.now(), deadline)?;
         }
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        if let Some(value) = recording.as_deref_mut() {
+            value.mark()?;
+        }
         for rank in 0..2 {
             backend.reserve(rank)?;
             deadline_check(backend.now(), deadline)?;
+        }
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        if let Some(value) = recording.as_deref_mut() {
+            value.mark()?;
         }
         for rank in 0..2 {
             backend.fence()?;
             deadline_check(backend.now(), deadline)?;
             backend.publish(rank, deadline)?;
             deadline_check(backend.now(), deadline)?;
+        }
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        if let Some(value) = recording.as_deref_mut() {
+            value.mark()?;
         }
         // Both complete batches are exposed before the first completion poll.
         loop {
@@ -166,15 +211,28 @@ fn coordinate_with_terminal_policy(
             }
             backend.pause();
         }
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        if let Some(value) = recording.as_deref_mut() {
+            value.mark()?;
+        }
         for rank in 0..2 {
             deadline_check(backend.now(), deadline)?;
             backend.retire(rank, deadline)?;
         }
         deadline_check(backend.now(), deadline)?;
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        if let Some(value) = recording.as_deref_mut() {
+            value.mark()?;
+        }
         let (states, observed_queue_frontiers) = match terminal_policy {
             TerminalPolicy::Legacy => legacy_terminal_until(backend, deadline)?,
             TerminalPolicy::PairedFences => backend.complete_terminal_pair_until(deadline)?,
         };
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        if let Some(value) = recording.as_deref_mut() {
+            value.mark()?;
+            value.finish()?;
+        }
         let finished = backend.now();
         deadline_check(finished, deadline)?;
         Ok(Completion {

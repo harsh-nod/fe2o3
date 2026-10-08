@@ -52,6 +52,8 @@ mod wave_mlp_state_v1;
 pub use wave_mlp_state_v1::Gfx950EngineeringPeerWaveMlpStateV1;
 #[path = "engineering_gfx950_peer_combined_mlp_state_v1.rs"]
 mod combined_mlp_state_v1;
+#[cfg(feature = "engineering-currentness-duration-diagnostics")]
+pub use combined_mlp_state_v1::paired::Gfx950EngineeringPeerScopedLayerDurationsV1;
 pub use combined_mlp_state_v1::paired::{
     Gfx950EngineeringPeerGuardedMlpBankEntryV1, Gfx950EngineeringPeerGuardedMlpInputsV1,
     Gfx950EngineeringPeerGuardedMlpObservationV1, Gfx950EngineeringPeerGuardedMlpRankInputsV1,

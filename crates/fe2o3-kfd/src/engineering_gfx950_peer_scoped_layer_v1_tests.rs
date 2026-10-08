@@ -1,4 +1,7 @@
 use super::*;
+#[cfg(feature = "engineering-currentness-duration-diagnostics")]
+#[path = "engineering_gfx950_peer_scoped_layer_duration_v1_tests.rs"]
+mod duration;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 #[derive(Default)]

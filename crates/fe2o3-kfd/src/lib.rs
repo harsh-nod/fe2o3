@@ -79,6 +79,13 @@ pub use engineering_gfx950::{
     execute_gfx950_engineering_wave_tasks_unchecked_v1, run_gfx950_engineering_worker_unchecked_v1,
 };
 
+#[cfg(all(
+    feature = "engineering-currentness-duration-diagnostics",
+    target_os = "linux",
+    target_arch = "x86_64"
+))]
+pub use engineering_gfx950::Gfx950EngineeringPeerScopedLayerDurationsV1;
+
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[allow(unsafe_code)]
 mod linux;

@@ -125,6 +125,16 @@ impl<B: CensusBackend> ClosedBackend for CensusLayer<B> {
     fn quarantine(&mut self) {
         self.inner.quarantine();
     }
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    fn accept_layer_durations(
+        &mut self,
+        output: &mut Self::Output,
+        phase_ns: [u64; 6],
+        body_ns: u64,
+    ) -> Result<()> {
+        self.inner
+            .accept_layer_durations(&mut output.0, phase_ns, body_ns)
+    }
 }
 
 pub(super) fn run(

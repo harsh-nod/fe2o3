@@ -45,6 +45,8 @@ pub struct Gfx950EngineeringPeerScopedWarmLayerObservationV1 {
     pub currentness: Gfx950EngineeringPeerScopedCurrentnessCountsV1,
     #[cfg(feature = "engineering-currentness-duration-diagnostics")]
     pub currentness_durations: crate::Gfx950EngineeringCurrentnessDurationsV1,
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    pub layer_durations: Gfx950EngineeringPeerScopedLayerDurationsV1,
 }
 
 struct LayerOperation<'a> {
@@ -127,6 +129,15 @@ trait ClosedBackend {
         hidden: Self::Hidden,
         counts: Self::Counts,
     ) -> Result<Self::Output>;
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    fn accept_layer_durations(
+        &mut self,
+        _output: &mut Self::Output,
+        _phase_ns: [u64; 6],
+        _body_ns: u64,
+    ) -> Result<()> {
+        Ok(())
+    }
     fn quarantine(&mut self);
 }
 struct ClosedAttempt<'a, B: ClosedBackend> {
@@ -141,16 +152,64 @@ impl<B: ClosedBackend> Drop for ClosedAttempt<'_, B> {
     }
 }
 fn closed_layer<B: ClosedBackend>(backend: &mut B) -> Result<B::Output> {
+    closed_layer_recorded(
+        backend,
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        &mut layer_duration::Monotonic,
+    )
+}
+
+fn closed_layer_recorded<B: ClosedBackend>(
+    backend: &mut B,
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    clock: &mut dyn layer_duration::Clock,
+) -> Result<B::Output> {
     let mut guard = ClosedAttempt {
         backend,
         committed: false,
     };
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    let mut recording = layer_duration::Recorder::<6>::new(clock);
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    {
+        recording.mark()?;
+    }
     guard.backend.enter()?;
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    {
+        recording.mark()?;
+    }
     let prefix = guard.backend.prefix()?;
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    {
+        recording.mark()?;
+    }
     let pending = guard.backend.mlp()?;
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    {
+        recording.mark()?;
+    }
     let hidden = guard.backend.hidden()?;
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    {
+        recording.mark()?;
+    }
     let counts = guard.backend.exit()?;
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    {
+        recording.mark()?;
+    }
     let result = guard.backend.commit(prefix, pending, hidden, counts)?;
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    let result = {
+        let mut result = result;
+        recording.mark()?;
+        let (phase_ns, body_ns) = recording.finish()?;
+        guard
+            .backend
+            .accept_layer_durations(&mut result, phase_ns, body_ns)?;
+        result
+    };
     guard.committed = true;
     Ok(result)
 }
@@ -159,6 +218,8 @@ struct PendingLayer {
     completion: Completion,
     proof: arena::Retired,
     generation: u64,
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    paired_durations: ([u64; 7], u64),
 }
 struct NativeLayer<'owner, 'kernel> {
     op: LayerOperation<'owner>,
@@ -261,12 +322,26 @@ impl ClosedBackend for NativeLayer<'_, '_> {
                 self.window.as_mut().ok_or("scoped window absent")?,
             ),
         };
+        #[cfg(not(feature = "engineering-currentness-duration-diagnostics"))]
         let completion = coordinate_with_terminal_policy(
             &mut native,
             self.timeout_ms,
             Some(until),
             TerminalPolicy::Legacy,
         )?;
+        #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+        let (completion, paired_durations) = {
+            let mut clock = layer_duration::Monotonic;
+            let mut recording = layer_duration::Recorder::<7>::new(&mut clock);
+            let completion = coordinate_recorded(
+                &mut native,
+                self.timeout_ms,
+                Some(until),
+                TerminalPolicy::Legacy,
+                Some(&mut recording),
+            )?;
+            (completion, recording.finish()?)
+        };
         deadline_check(Instant::now(), until)?;
         let proof = native
             .staged
@@ -277,6 +352,8 @@ impl ClosedBackend for NativeLayer<'_, '_> {
             completion,
             proof,
             generation: native.generation,
+            #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+            paired_durations,
         })
     }
     fn hidden(&mut self) -> Result<Self::Hidden> {
@@ -333,10 +410,45 @@ impl ClosedBackend for NativeLayer<'_, '_> {
             currentness: counts.into(),
             #[cfg(feature = "engineering-currentness-duration-diagnostics")]
             currentness_durations,
+            #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+            layer_durations: Gfx950EngineeringPeerScopedLayerDurationsV1 {
+                phase_ns: [0; 6],
+                layer_body_ns: 0,
+                paired_mlp_phase_ns: pending.paired_durations.0,
+                paired_mlp_body_ns: pending.paired_durations.1,
+            },
         };
+        #[cfg(not(feature = "engineering-currentness-duration-diagnostics"))]
+        {
+            deadline_check(Instant::now(), self.until.ok_or("scoped deadline absent")?)?;
+            self.op.committed = true;
+        }
+        Ok(result)
+    }
+    #[cfg(feature = "engineering-currentness-duration-diagnostics")]
+    fn accept_layer_durations(
+        &mut self,
+        output: &mut Self::Output,
+        phase_ns: [u64; 6],
+        body_ns: u64,
+    ) -> Result<()> {
+        let mut value = output.layer_durations;
+        value.phase_ns = phase_ns;
+        value.layer_body_ns = body_ns;
+        value.validate()?;
+        if output
+            .currentness_durations
+            .checked_sum_ns()
+            .map_err(explain)?
+            > body_ns
+        {
+            return Err("layer callbacks exceed closed body".into());
+        }
+        output.layer_durations = value;
+        // Keep both guards armed through acceptance and the original final deadline.
         deadline_check(Instant::now(), self.until.ok_or("scoped deadline absent")?)?;
         self.op.committed = true;
-        Ok(result)
+        Ok(())
     }
     fn quarantine(&mut self) {
         self.op.quarantine();

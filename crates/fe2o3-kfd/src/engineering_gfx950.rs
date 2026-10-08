@@ -61,6 +61,8 @@ mod wave_tasks;
 pub use finite_join::{
     Gfx950EngineeringFiniteJoinResultV1, execute_gfx950_engineering_finite_join_unchecked_v1,
 };
+#[cfg(feature = "engineering-currentness-duration-diagnostics")]
+pub use peer::Gfx950EngineeringPeerScopedLayerDurationsV1;
 pub use peer::{
     Gfx950EngineeringPeerBufferV1, Gfx950EngineeringPeerClockObservationV1,
     Gfx950EngineeringPeerDependencyCompletionV3, Gfx950EngineeringPeerDependencyObservationV1,

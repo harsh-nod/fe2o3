@@ -1,4 +1,7 @@
 use super::*;
+#[cfg(feature = "engineering-currentness-duration-diagnostics")]
+#[path = "engineering_gfx950_peer_combined_mlp_paired_duration_v1_tests.rs"]
+mod duration;
 use fe2o3_aql::{AqlPeerBarrierAndPacketV1, AqlPeerPacketBatchPublicationTargetV1};
 
 fn terminal_state() -> CombinedMlpSnapshotV1 {
