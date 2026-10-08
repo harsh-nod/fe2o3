@@ -5,7 +5,7 @@ use super::*;
 #[inline(never)]
 pub(super) fn execute(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: &Operation,
     site: CompactSite,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
@@ -62,7 +62,7 @@ pub(super) fn execute(
         OperationKind::Cast { kind, value, to } => {
             if matches!(kind, CastKind::PointerToGeneric | CastKind::SliceToGeneric) {
                 return one(generic_exposure_v18::expose(
-                    runtime_value(engine, values, *value, &site)?,
+                    &runtime_value(engine, values, *value, &site)?,
                     *kind,
                     to,
                     engine.target,

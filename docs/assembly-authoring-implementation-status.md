@@ -3487,3 +3487,144 @@ writes, atomic loads/stores/compare-exchange, or untested kinds and widths.
 Those routes and the remaining memory/synchronization acceptance work require
 their own implementation and qualification. The existing simulator-only scope
 and range evidence above remains separate.
+
+## Columnar simulator storage and genuine Rust FP8 GEMM (R87 CPU evidence)
+
+The simulator now retains scalar SSA values as exact bits plus initialization
+flags in typed columns, with separate slots for non-scalars and shared immutable
+layouts derived from admitted reachable functions. Frame storage is reserved
+before argument binding and remains subject to the resident ledger. This is
+a representation change, not liveness-based value deletion, a new schedule,
+a numerical-policy expansion or a higher memory limit. The V20–V22 physical
+state paths retain their existing map representation. Fixed temporary storage
+and actual column capacities remain accounted.
+
+On public base `b44fd4da0df4bc7f08a7f74606bca5199a80483a` plus the
+23 simulator leaves and the new genuine FP8 integration test, the following
+independent CPU gates passed:
+
+| Check | Actual result | Retained receipt SHA-256 |
+| --- | --- | --- |
+| Complete `fe2o3-kir-sim` and `fe2o3-kir-sim-cli` suites | 792 passed, 0 failed, 0 ignored across 44 result groups | `c6855afd0af571367fec9b73a4ccca77cc59bf4a20ca8074b88285a17044869d` |
+| Unchanged original small-native-stack regression | 1 passed: 128 KiB stack, 1,024-level acyclic execution and exact recursive depth-limit refusal | `204db4573b5f2a615488513e3a0d456e80445e430a48e0a8d8444281f754d983` |
+| FP8 source integration | 8 ordinary controls passed; the normally ignored genuine test was then separately selected and passed | `afa5180a35f49a91776640c5bd1d975553b812d5fdadcfe3c83423ba19ceabce` |
+
+All three receipts retain the same before/after source census: 15,409 files /
+222,078,043 bytes, SHA-256
+`c1a4eaa8628cc6bc57d5853ed064cc5b7c5539d511385aa42602b3a86daf2bbc`.
+This documentation append was not part of that measured source. The genuine
+run completed at 2026-10-08 10:21:43 UTC.
+
+The [source integration regression](../crates/rustc-codegen-fe2o3/tests/production_fp8_source_simulation_v1.rs)
+uses the unchanged ordinary `gfx950_fp8_gemm_rust` example and the existing
+`fe2o3-export-sim --bundle-version 6` route with `kernel-fp8-gemm`.
+It strictly admits the resulting Bundle V6 / canonical KIR V11 through the
+existing CLI admission API and executes that same module; it does not replace
+the exported graph with a constructed matrix fixture. The target is
+`gfx950:xnack-`, with 1,024 invocations, four 256-invocation workgroups and
+sixteen independent 16×16×128 GEMMs. Both 32,768-byte inputs remain unchanged;
+all 4,096 F32 outputs and four tail canaries match the existing independent
+host reference byte-for-byte.
+
+This genuine case uses OCP E4M3 inputs from the exact set
+`{-1, -0.5, +0, 0.5, 1}`, zero initial accumulators and identity scale.
+The broader implemented [closed FP8 numerical domain](gfx950-fp8-exact-simulator-v1.md#closed-descriptor-and-numerical-domain)
+remains finite quarter-integral A/B values with magnitude at most 16, and
+positive zero or normal sixteenth-integral C with magnitude at most 2^18.
+Neither this run nor the columnar change establishes arbitrary FP8 rounding,
+FNUZ/E5M2, mixed-format MFMA, arbitrary scaling or attention execution.
+
+A second actual run with an intentionally wrong expected canary reports
+`mismatch`. Separate input mutations at the final byte of the first wave's
+packed A/B operands produce the exact typed
+`UnsupportedMatrixInputDomain` refusal at lane 63, component 31: A=NaN and
+B=negative zero. Caller-owned inputs remain unchanged; a damaged bundle also
+refuses. The unchanged CLI envelope is 2^27 steps, 256 MiB resident storage and
+65,536 access-history records. These are not raised to admit the source graph.
+
+The exported bundle is 639,540 bytes, raw SHA-256
+`81f2d52020f3bd6ec869a039ad69b22e4f7b638992feae851a37f94004185c7e`.
+Its canonical V11 payload is 42,407 bytes, SHA-256
+`784007474454fb63a5831b0efb245ac017337c5f89cd944a4e67befcee87268e`;
+the original kernel source SHA-256 is
+`37f0c0f9dd28b576e6d8c0ff11426c0874d92e95a21405cd5dd5ff261ef72cd0`.
+The bundle's own identity and compiler stable source identity are distinct
+from these raw byte hashes. Source files and selected exporter/extractor
+identities were checked before and after extraction, with source checked again
+after simulation.
+
+Earlier failed columnar attempts remain failures. In particular, the original
+small-stack R1/R2 abort receipts
+`ec5e5f01a24d31c11074f3d6b523a6f0d06cab3cf824a6589c6f9f1121a33a18`
+and
+`b7a6500e26b992cae6b701bd2864fc4942509108ccd067784226e59ff59c994e`
+are retained; the passing run did not enlarge that test's stack or depth.
+
+This closes one genuine ordinary-source-to-CPU-simulator FP8 path, not M3 or M4
+as a whole. The V6 export still records compiler execution authentication as
+unavailable; proof, artifact, hardware, load and launch authority remain false.
+There is no native/GPU result, hardware numerical qualification, performance
+prediction, complete race-history claim or transitive tool attestation.
+Other numerical formats, kernels, synchronization cases and target-qualified
+execution retain their separate acceptance obligations.
+
+## Current-build recorded-viewer baseline (2026-10-08, R87)
+
+Eight original production-route cells completed on mi350: navigation, recorded
+program, and two retained V22 CPU recordings, each at 1280×800 and 390×844.
+Every cell retained five calibration pairs and 30 measured pairs (280 total;
+240 measured). Timing is the real action to exact identity-bound DOM plus two
+animation frames, not paint or isolated parser/query/render time.
+
+Measured site commit: `29b2a93272e9abd4dc2f7c2d04e72cfa1c191edc`.
+Unchanged pre/post source census: 1,187 files / 26,696,448 bytes, SHA-256
+`f7f6026d49b797fc700c082cd2751eb4348607fd090809d8596dc8fee75908df`.
+The fresh production build and campaign preceded the later V3 shared static
+instruction selection edits; those edits are not measured by this run.
+The existing site document `docs/ui-route-performance-20261001.md` adds the
+dated eight-cell table without replacing its earlier observations.
+
+Across these cells, nearest-rank p95 first open/import spans 329.2–429.0 ms,
+warm reopen/reimport 48.8–281.1 ms, and the named interaction 44.8–51.9 ms.
+All percentiles were independently recomputed from samples 5–34.
+Discrete CDP used-heap checkpoints and signed deltas are not peak heap, RSS,
+owner-attributed memory, leak proof or reclamation guarantees.
+
+The normal receipt is 1,538,614 bytes, SHA-256
+`f28124a4ed30948a13986bb92be946513168c9e5bbb337182fd047918ff0c4c0`.
+Its source/tool/input before-and-after checks match. The separate named-service
+cleanup is 129,400 bytes, SHA-256
+`32bed6043c557a41e79817f7cc41d40d0b11952ca26bda9beeec2af14a79f920`:
+launcher exit 0, inactive/dead, MainPID 0 and removed/empty cgroup; observed
+members used CPUs 10–11. This does not prove global quiescence or absence of
+escaped processes. Original limits remain unchanged. Retained recordings are
+not new kernel or hardware execution. No new budget agreement, worst-size
+importer result, V0 or other milestone closure follows.
+
+## R87 columnar integration regression on faa2 (2026-10-08)
+
+The same 24 implementation/test leaves were fast-forwarded onto
+`faa2debb1c849fef3387a33e47fce852ee1ed159`. The complete
+`cargo test --locked --offline -p rustc-codegen-fe2o3 -j2 -- --test-threads=2`
+run passed: 4,468 tests, zero failures, 450 ignored across 25 top-level test
+results. Seven nested subprocess results are not counted twice. The library
+contributes 4,334 passed and 357 ignored. This does not execute the normally
+ignored hardware/source campaigns automatically.
+
+The passing receipt is 61,637 bytes, SHA-256
+`9e9bba5d70417ed2fbee5d185720b008dd10a91eebe5857728adf704468ac871`;
+stdout SHA-256 `ac8cb0729eff30e49a1142c15065912bc6435160a3285c3e8c893eab10bde57a`.
+The source before/after census agrees: 15,409 files, 222,087,631 bytes,
+`f6449d6ed548f7c0e36fb56eed4248b8acacd52e5e411f711c6d8797b7394623`.
+The earlier complete-backend attempt remains failed: its disk-usage monitor
+encountered a disappearing compiler temporary archive in that case's own RAM
+target. A separately tested monitor successor permits only bounded complete
+remeasurement for that exact case's ENOENT, without changing resource or time
+limits; the passing rerun needed no retries. It did not change project code.
+
+The ordinary-source FP8 execution above was measured on its stated earlier
+base plus these implementation leaves, not retrospectively on a later public
+commit. A current-main tutorial compatibility report must retain that
+separation until its selected public revision is actually exercised. These
+status/baseline appendices were added after the code qualification and do not
+change the recorded source census or close any additional milestone.

@@ -5,14 +5,16 @@ use super::*;
 #[inline(never)]
 pub(super) fn execute(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: &Operation,
     site: CompactSite,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
     let one = |value| Ok(SmallResults::One(value));
     match &operation.kind {
         OperationKind::SliceLength { slice } => {
-            let RuntimeValue::Slice(slice) = runtime_value(engine, values, *slice, &site)? else {
+            let RuntimeValue::Slice(slice) =
+                runtime_non_scalar_value(engine, values, *slice, &site, "slice")?
+            else {
                 return Err(engine.at(
                     site,
                     SimulationExecutionErrorKindV1::RuntimeType {
@@ -28,7 +30,9 @@ pub(super) fn execute(
             ))
         }
         OperationKind::SliceData { slice } => {
-            let RuntimeValue::Slice(slice) = runtime_value(engine, values, *slice, &site)? else {
+            let RuntimeValue::Slice(slice) =
+                runtime_non_scalar_value(engine, values, *slice, &site, "slice")?
+            else {
                 return Err(engine.at(
                     site,
                     SimulationExecutionErrorKindV1::RuntimeType {
@@ -61,7 +65,8 @@ pub(super) fn execute(
             }))
         }
         OperationKind::GetElementPointer { base, offset } => {
-            let RuntimeValue::Pointer(pointer) = runtime_value(engine, values, *base, &site)?
+            let RuntimeValue::Pointer(pointer) =
+                runtime_non_scalar_value(engine, values, *base, &site, "pointer")?
             else {
                 return Err(engine.at(
                     site,

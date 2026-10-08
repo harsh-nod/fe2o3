@@ -120,7 +120,7 @@ pub(super) fn capture(
                     .ok_or(Resource::Arithmetic)?,
             )?;
             let mut ordered = vector(frame.values.len(), budget)?;
-            ordered.extend(frame.values.iter());
+            ordered.extend(frame.values.legacy_iter().ok_or(Failure::Unavailable)?);
             sort_work(ordered.len(), budget)?;
             ordered.sort_unstable_by_key(|(id, _)| **id);
             let mut bindings = vector(ordered.len(), budget)?;

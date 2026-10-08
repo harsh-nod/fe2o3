@@ -32,6 +32,8 @@ fn with_engine(test: impl FnOnce(&mut Engine<'_, NoopSimulationEventSinkV1>)) {
         function_module_indices: vec![0],
         block_indices: vec![HashMap::from([(BlockId(0), 0)])],
         function_ssa_values: vec![200],
+        value_layouts: &[],
+        value_plan: FrameValuePlan::legacy(200),
         call_targets: vec![vec![]],
         switch_targets: vec![vec![]],
         target: SimulationTargetV1::amdgpu_64(),
@@ -153,7 +155,7 @@ fn lgkm_completes_only_same_actual_lds_result_and_epoch_transactionally() {
                     epoch: if case == 6 { 2 } else { 1 },
                 })
             };
-            let mut values = HashMap::from([(id, value)]);
+            let mut values = RuntimeValues::from([(id, value)]);
             let before = values.clone();
             if case != 7 {
                 assert!(scalar_value(engine, &values, id, &site(22)).is_err());
@@ -179,7 +181,7 @@ fn vm_wait_and_old_profile_cannot_complete_lds_or_kernarg_pending() {
         let id = engine.module.functions[0].body.as_ref().unwrap().blocks[0].operations[21].results
             [0]
         .id;
-        let mut values = HashMap::from([(
+        let mut values = RuntimeValues::from([(
             id,
             symbolic(Value::LdsPendingRead {
                 generation: site(21),
@@ -226,7 +228,7 @@ fn write_wait_commits_but_does_not_publish_or_complete_at_barrier() {
                 .all(|x| !x)
         );
         assert!(physical_lds_context_v22::barrier(engine, site(18)).is_err());
-        let mut empty = HashMap::new();
+        let mut empty = RuntimeValues::new();
         assert!(
             physical_global_copy_pending_v21::complete_vm_for(
                 engine,

@@ -33,11 +33,11 @@ fn end(id: u32) -> Operation {
         }),
     )
 }
-fn apply(values: &mut HashMap<ValueId, RuntimeValue>, op: &Operation) -> Result<(), Failure> {
+fn apply(values: &mut RuntimeValues<'_>, op: &Operation) -> Result<(), Failure> {
     transition(values, op, invocation(), 3, FunctionRole::KernelEntry, 8)
 }
-fn issued() -> HashMap<ValueId, RuntimeValue> {
-    let mut values = HashMap::with_capacity(8);
+fn issued() -> RuntimeValues<'static> {
+    let mut values = RuntimeValues::with_capacity(8);
     apply(&mut values, &issue()).unwrap();
     values
 }
@@ -53,7 +53,7 @@ fn lifecycle_tokens_reuse_bounded_cells_with_distinct_generations() {
         assert_eq!(group.generation, generation);
         assert_eq!(group.invocation, invocation());
         assert_eq!(
-            runtime_type(values.get(&ValueId(11)).unwrap()),
+            runtime_type(values.get_ref(&ValueId(11)).unwrap()),
             Type::Execution(Role::Workgroup)
         );
         apply(&mut values, &end(11)).unwrap();
@@ -169,6 +169,6 @@ fn lifecycle_debug_does_not_fabricate_legacy_scalar_values() {
     let mut values = issued();
     apply(&mut values, &derive(11)).unwrap();
     for id in [10, 11] {
-        assert_eq!(debug_value(values.get(&ValueId(id)).unwrap()), None);
+        assert_eq!(debug_value(values.get_ref(&ValueId(id)).unwrap()), None);
     }
 }

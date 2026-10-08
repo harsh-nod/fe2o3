@@ -61,12 +61,12 @@ enum Failure {
 }
 
 fn token(
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     id: ValueId,
     invocation: SimulationInvocationV1,
     function: usize,
 ) -> Result<Token, Failure> {
-    match values.get(&id) {
+    match values.get_ref(&id) {
         Some(RuntimeValue::Execution(value))
             if value.producer == id && value.matches_owner(invocation, function) =>
         {
@@ -77,7 +77,7 @@ fn token(
 }
 
 fn transition(
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     operation: &Operation,
     invocation: SimulationInvocationV1,
     function: usize,
@@ -102,16 +102,18 @@ fn transition(
     match kind {
         Op::ContextIssue => {
             let id = result.ok_or(Failure::Invalid)?;
-            values.insert(
-                id,
-                RuntimeValue::Execution(Token {
-                    invocation,
-                    function,
-                    generation: 0,
-                    producer: id,
-                    state: State::Context { borrowed: None },
-                }),
-            );
+            values
+                .try_insert(
+                    id,
+                    RuntimeValue::Execution(Token {
+                        invocation,
+                        function,
+                        generation: 0,
+                        producer: id,
+                        state: State::Context { borrowed: None },
+                    }),
+                )
+                .map_err(|()| Failure::Invalid)?;
         }
         Op::WorkgroupDerive { context } => {
             let id = result.ok_or(Failure::Invalid)?;
@@ -126,8 +128,12 @@ fn transition(
                 state: State::Workgroup { context: *context },
                 ..source
             };
-            values.insert(*context, RuntimeValue::Execution(source));
-            values.insert(id, RuntimeValue::Execution(workgroup));
+            values
+                .try_insert(*context, RuntimeValue::Execution(source))
+                .map_err(|()| Failure::Invalid)?;
+            values
+                .try_insert(id, RuntimeValue::Execution(workgroup))
+                .map_err(|()| Failure::Invalid)?;
         }
         Op::ScopeEnd { workgroup, .. } => {
             let group = token(values, *workgroup, invocation, function)?;
@@ -145,7 +151,9 @@ fn transition(
             }
             source.state = State::Context { borrowed: None };
             values.remove(workgroup);
-            values.insert(context, RuntimeValue::Execution(source));
+            values
+                .try_insert(context, RuntimeValue::Execution(source))
+                .map_err(|()| Failure::Invalid)?;
         }
         _ => return Err(Failure::Invalid),
     }

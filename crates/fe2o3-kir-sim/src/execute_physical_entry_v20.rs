@@ -31,16 +31,16 @@ fn operand_id(
 }
 fn operand<'a>(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &'a HashMap<ValueId, RuntimeValue>,
+    values: &'a RuntimeValues<'_>,
     step: &Step,
     index: usize,
     site: &CompactSite,
 ) -> Result<&'a RuntimeValue, SimulationExecutionErrorV1> {
-    runtime_value(engine, values, operand_id(engine, step, index, site)?, site)
+    runtime_value_ref(engine, values, operand_id(engine, step, index, site)?, site)
 }
 fn scalar(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     step: &Step,
     index: usize,
     ty: ScalarType,
@@ -62,7 +62,7 @@ fn u64_scalar(
 }
 fn pair(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     step: &Step,
     index: usize,
     site: &CompactSite,
@@ -110,7 +110,7 @@ fn binary(
 }
 fn full_exec(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     step: &Step,
     site: &CompactSite,
 ) -> Result<(), SimulationExecutionErrorV1> {
@@ -146,7 +146,7 @@ pub(super) fn is_collective(operation: &OperationKind) -> bool {
 #[inline(never)]
 pub(super) fn execute_and_bind(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     operation: &Operation,
     site: &CompactSite,
 ) -> Result<(), SimulationExecutionErrorV1> {
@@ -157,7 +157,7 @@ pub(super) fn execute_and_bind(
 #[inline(never)]
 pub(super) fn execute(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: &Operation,
     site: &CompactSite,
 ) -> Result<Results, SimulationExecutionErrorV1> {
@@ -508,7 +508,7 @@ pub(super) fn execute(
 
 pub(super) fn comparison_input(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: &OperationKind,
     site: &CompactSite,
 ) -> Result<bool, SimulationExecutionErrorV1> {

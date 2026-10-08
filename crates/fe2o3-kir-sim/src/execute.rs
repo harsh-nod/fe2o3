@@ -76,7 +76,11 @@ pub(crate) mod execution_lifecycle_v18;
 mod generic_exposure_v18;
 #[path = "execute_incoming_capacity_v1.rs"]
 mod incoming_capacity_v1;
+#[path = "execute_values_v1.rs"]
+mod values_v1;
 pub(crate) use incoming_capacity_v1::{IncomingValueCapacityV1, incoming_value_capacity};
+pub(crate) use values_v1::{FrameValuePlan, frame_value_plan, uses_legacy_frame_values};
+use values_v1::{RuntimeValues, ValueLayout};
 
 #[path = "execute_matrix_bf16_exact_v1.rs"]
 mod matrix_bf16_exact_v1;
@@ -1911,6 +1915,8 @@ struct Engine<'a, S> {
     function_module_indices: Vec<usize>,
     block_indices: Vec<HashMap<BlockId, usize>>,
     function_ssa_values: Vec<usize>,
+    value_layouts: &'a [ValueLayout<'a>],
+    value_plan: FrameValuePlan,
     call_targets: Vec<Vec<Vec<CallTarget>>>,
     switch_targets: Vec<Vec<SwitchLookup>>,
     target: SimulationTargetV1,
@@ -2067,8 +2073,8 @@ fn capture_debug_stack(
                 required: u64::try_from(value_count).unwrap_or(u64::MAX),
             };
         }
-        ordered.extend(frame.values.iter());
-        ordered.sort_unstable_by_key(|(value, _)| **value);
+        ordered.extend(frame.values.ids());
+        ordered.sort_unstable();
         let mut values = Vec::new();
         if values.try_reserve_exact(ordered.len()).is_err() {
             return SimulationDebugCollectionV1::Unavailable {
@@ -2076,8 +2082,9 @@ fn capture_debug_stack(
                 required: u64::try_from(value_count).unwrap_or(u64::MAX),
             };
         }
-        for (value, observed) in ordered {
-            let Some(observed) = debug_value(observed) else {
+        for value in ordered {
+            let observed = frame.values.get(&value);
+            let Some(observed) = observed.as_ref().and_then(debug_value) else {
                 // Tagged storage, execution roles and symbolic bindings have no legacy DTO.
                 // Never erase their type identity or silently omit a binding.
                 return SimulationDebugCollectionV1::Unavailable {
@@ -2085,10 +2092,7 @@ fn capture_debug_stack(
                     required: u64::try_from(value_count).unwrap_or(u64::MAX),
                 };
             };
-            values.push(SimulationDebugBindingV1 {
-                value: *value,
-                observed,
-            });
+            values.push(SimulationDebugBindingV1 { value, observed });
         }
         let Some(function_ordinal) = function_module_indices.get(frame.function_index).copied()
         else {
@@ -2201,6 +2205,7 @@ pub(crate) fn conservative_execution_resident_bytes(
     reserved_call_depth: usize,
     reachable_ssa_values: usize,
     incoming_capacity: IncomingValueCapacityV1,
+    value_plan: FrameValuePlan,
     plan_identity_bytes: usize,
     reachable_indices_capacity: usize,
     execution_index_resident_bytes: usize,
@@ -2292,7 +2297,9 @@ pub(crate) fn conservative_execution_resident_bytes(
     )?;
     // InvocationMachine::new owns the next frame before it is moved into one reserved stack.
     resident.add_bytes(size_of::<RuntimeFrame<'static>>())?;
-    let values_per_frame = reserved_hash_map_bytes::<ValueId, RuntimeValue>(reachable_ssa_values)?;
+    resident.add_bytes(value_plan.shared_bytes)?;
+    resident.add_bytes(values_v1::fixed_temporary_bytes()?)?;
+    let values_per_frame = value_plan.frame_bytes()?;
     resident.add_product(
         workgroup_participants.checked_mul(reserved_call_depth)?,
         values_per_frame,
@@ -2357,6 +2364,7 @@ mod execution_resident_tests {
                 3,
                 53,
                 IncomingValueCapacityV1(count),
+                FrameValuePlan::legacy(53),
                 0,
                 0,
                 0,
@@ -2394,6 +2402,7 @@ mod execution_resident_tests {
                 limits.max_call_depth,
                 0,
                 IncomingValueCapacityV1(0),
+                FrameValuePlan::legacy(0),
                 0,
                 0,
                 0,
@@ -2437,6 +2446,7 @@ mod execution_resident_tests {
                 limits.max_call_depth,
                 0,
                 IncomingValueCapacityV1(0),
+                FrameValuePlan::legacy(0),
                 0,
                 0,
                 0,
@@ -3666,6 +3676,120 @@ struct ExecutionConfiguration<'a> {
     allocation_reuse: Option<SimulationAllocationReuseV1>,
 }
 
+// Keep one-time layout construction temporaries off the long-lived scheduler
+// stack. The original plan, allocation order and errors are unchanged.
+#[inline(never)]
+fn prepare_frame_value_layouts<'a>(
+    admitted: &'a AdmittedSimulationModuleV1,
+    function_module_indices: &[usize],
+) -> Result<(FrameValuePlan, Vec<ValueLayout<'a>>), SimulationExecutionErrorV1> {
+    let legacy_values = uses_legacy_frame_values(admitted.identity.wire_version());
+    let value_plan = frame_value_plan(&admitted.module, function_module_indices, legacy_values)
+        .ok_or_else(|| {
+            top_level_error(SimulationExecutionErrorKindV1::InternalInvariant(
+                "preflighted typed SSA storage plan",
+            ))
+        })?;
+    let value_layouts =
+        values_v1::build_layouts(&admitted.module, function_module_indices, value_plan)
+            .map_err(top_level_error)?;
+    Ok((value_plan, value_layouts))
+}
+
+// Preparation errors and allocation temporaries must not remain in the live
+// scheduler stack. These fields are immediately moved into the original bindings.
+struct PreparedExecutionStorage<'a> {
+    function_module_indices: Vec<usize>,
+    block_indices: Vec<HashMap<BlockId, usize>>,
+    function_ssa_values: Vec<usize>,
+    call_targets: Vec<Vec<Vec<CallTarget>>>,
+    switch_targets: Vec<Vec<SwitchLookup>>,
+    entry_index: usize,
+    entry: &'a Function,
+    value_plan: FrameValuePlan,
+    value_layouts: Vec<ValueLayout<'a>>,
+    memory: Memory,
+    accesses: HashMap<(u64, usize), AccessFrontier>,
+    workgroup_allocations: Vec<WorkgroupAllocation>,
+}
+
+#[inline(never)]
+fn prepare_execution_storage<'a>(
+    admitted: &'a AdmittedSimulationModuleV1,
+    request: &SimulationRequestV1,
+    plan: &SimulationPlanV1,
+    target: SimulationTargetV1,
+    limits: SimulationLimitsV1,
+    allocation_reuse: Option<SimulationAllocationReuseV1>,
+) -> Result<PreparedExecutionStorage<'a>, SimulationExecutionErrorV1> {
+    let indices =
+        build_execution_indices(&admitted.module, &plan.reachable_function_indices, target)?;
+    let actual_index_resident_bytes =
+        execution_indices_resident_bytes(&indices).ok_or_else(|| {
+            top_level_error(SimulationExecutionErrorKindV1::InternalInvariant(
+                "execution index resident accounting overflow",
+            ))
+        })?;
+    if actual_index_resident_bytes > plan.execution_index_resident_bytes {
+        return Err(top_level_error(
+            SimulationExecutionErrorKindV1::InternalInvariant(
+                "execution index resident capacity exceeded preflight plan",
+            ),
+        ));
+    }
+    let (
+        function_indices,
+        function_module_indices,
+        block_indices,
+        function_ssa_values,
+        call_targets,
+        switch_targets,
+    ) = indices;
+    let entry_index = function_indices
+        .get(&plan.kernel.entry)
+        .copied()
+        .ok_or_else(|| SimulationExecutionErrorV1 {
+            invocation: None,
+            site: None,
+            kind: SimulationExecutionErrorKindV1::MissingFunction(plan.kernel.entry.clone()),
+            observation_failure: None,
+        })?;
+    let entry_module_index = function_module_indices[entry_index];
+    drop(function_indices);
+    let entry = &admitted.module.functions[entry_module_index];
+    let (value_plan, value_layouts) =
+        prepare_frame_value_layouts(admitted, &function_module_indices)?;
+    let memory = Memory::new(
+        request.arguments.len(),
+        request.shared_buffers.len(),
+        limits,
+        allocation_reuse,
+    )
+    .map_err(top_level_error)?;
+    let mut accesses = HashMap::new();
+    accesses
+        .try_reserve(limits.max_memory_access_records)
+        .map_err(|_| top_level_error(SimulationExecutionErrorKindV1::AllocationFailure))?;
+    let mut workgroup_allocations = Vec::new();
+    workgroup_allocations
+        .try_reserve_exact(plan.workgroup_allocation_sites)
+        .map_err(|_| top_level_error(SimulationExecutionErrorKindV1::AllocationFailure))?;
+    Ok(PreparedExecutionStorage {
+        function_module_indices,
+        block_indices,
+        function_ssa_values,
+        call_targets,
+        switch_targets,
+        entry_index,
+        entry,
+        value_plan,
+        value_layouts,
+        memory,
+        accesses,
+        workgroup_allocations,
+    })
+}
+
 fn execute(
     admitted: &AdmittedSimulationModuleV1,
     request: &SimulationRequestV1,
@@ -3729,56 +3853,20 @@ fn execute_with_physical_debug(
         resident_offset,
     )
     .map_err(|error| top_level_error(schedule_prepare_error(error)))?;
-    let indices =
-        build_execution_indices(&admitted.module, &plan.reachable_function_indices, target)?;
-    let actual_index_resident_bytes =
-        execution_indices_resident_bytes(&indices).ok_or_else(|| {
-            top_level_error(SimulationExecutionErrorKindV1::InternalInvariant(
-                "execution index resident accounting overflow",
-            ))
-        })?;
-    if actual_index_resident_bytes > plan.execution_index_resident_bytes {
-        return Err(top_level_error(
-            SimulationExecutionErrorKindV1::InternalInvariant(
-                "execution index resident capacity exceeded preflight plan",
-            ),
-        ));
-    }
-    let (
-        function_indices,
+    let PreparedExecutionStorage {
         function_module_indices,
         block_indices,
         function_ssa_values,
         call_targets,
         switch_targets,
-    ) = indices;
-    let entry_index = function_indices
-        .get(&plan.kernel.entry)
-        .copied()
-        .ok_or_else(|| SimulationExecutionErrorV1 {
-            invocation: None,
-            site: None,
-            kind: SimulationExecutionErrorKindV1::MissingFunction(plan.kernel.entry.clone()),
-            observation_failure: None,
-        })?;
-    let entry_module_index = function_module_indices[entry_index];
-    drop(function_indices);
-    let entry = &admitted.module.functions[entry_module_index];
-    let memory = Memory::new(
-        request.arguments.len(),
-        request.shared_buffers.len(),
-        limits,
-        allocation_reuse,
-    )
-    .map_err(top_level_error)?;
-    let mut accesses = HashMap::new();
-    accesses
-        .try_reserve(limits.max_memory_access_records)
-        .map_err(|_| top_level_error(SimulationExecutionErrorKindV1::AllocationFailure))?;
-    let mut workgroup_allocations = Vec::new();
-    workgroup_allocations
-        .try_reserve_exact(plan.workgroup_allocation_sites)
-        .map_err(|_| top_level_error(SimulationExecutionErrorKindV1::AllocationFailure))?;
+        entry_index,
+        entry,
+        value_plan,
+        value_layouts,
+        memory,
+        accesses,
+        workgroup_allocations,
+    } = prepare_execution_storage(admitted, request, &plan, target, limits, allocation_reuse)?;
     let allocation_lifecycle_requested = debug_sink.wants_allocation_lifecycle_v1();
     let debug_observation_requested =
         debug_capture.is_enabled() && debug_sink.wants_observation_context_v1();
@@ -3806,6 +3894,8 @@ fn execute_with_physical_debug(
         function_module_indices,
         block_indices,
         function_ssa_values,
+        value_layouts: &value_layouts,
+        value_plan,
         call_targets,
         switch_targets,
         target,
@@ -5309,7 +5399,7 @@ fn copy_back_shared_buffers(
 struct RuntimeFrame<'a> {
     function_index: usize,
     function: &'a Function,
-    values: HashMap<ValueId, RuntimeValue>,
+    values: RuntimeValues<'a>,
     allocations: Vec<FrameAllocation>,
     current: BlockId,
     current_index: usize,
@@ -5437,7 +5527,7 @@ enum MachineYield<'a> {
 
 impl<'a> RuntimeFrame<'a> {
     fn new(
-        engine: &Engine<'_, impl SimulationEventSinkV1>,
+        engine: &Engine<'a, impl SimulationEventSinkV1>,
         function_index: usize,
         function: &'a Function,
         arguments: &[RuntimeValue],
@@ -5458,11 +5548,13 @@ impl<'a> RuntimeFrame<'a> {
                 actual: arguments.len(),
             }));
         }
-        let mut values = HashMap::new();
-        let value_capacity = engine.function_ssa_values[function_index];
-        values
-            .try_reserve(value_capacity)
-            .map_err(|_| engine.fail(SimulationExecutionErrorKindV1::AllocationFailure))?;
+        let mut values = RuntimeValues::prepared(
+            engine.value_layouts.get(function_index),
+            engine.value_plan,
+            engine.target,
+            engine.function_ssa_values[function_index],
+        )
+        .map_err(|kind| engine.fail(kind))?;
         for (id, argument) in body.parameters.iter().copied().zip(arguments) {
             bind_runtime_value(engine, &mut values, id, argument.clone())?;
         }
@@ -5483,7 +5575,7 @@ impl<'a> RuntimeFrame<'a> {
 
     fn reset(
         &mut self,
-        engine: &Engine<'_, impl SimulationEventSinkV1>,
+        engine: &Engine<'a, impl SimulationEventSinkV1>,
         function_index: usize,
         function: &'a Function,
         arguments: &[RuntimeValue],
@@ -5511,13 +5603,12 @@ impl<'a> RuntimeFrame<'a> {
                 )),
             );
         }
-        self.values.clear();
-        let value_capacity = engine.function_ssa_values[function_index];
-        if self.values.capacity() < value_capacity {
-            self.values
-                .try_reserve(value_capacity)
-                .map_err(|_| engine.fail(SimulationExecutionErrorKindV1::AllocationFailure))?;
-        }
+        self.values
+            .reset(
+                engine.value_layouts.get(function_index),
+                engine.function_ssa_values[function_index],
+            )
+            .map_err(|kind| engine.fail(kind))?;
         for (id, argument) in body.parameters.iter().copied().zip(arguments) {
             bind_runtime_value(engine, &mut self.values, id, argument.clone())?;
         }
@@ -5546,7 +5637,7 @@ fn function_ssa_definition_count(function: &Function) -> Option<usize> {
 
 impl<'a> InvocationMachine<'a> {
     fn new(
-        engine: &Engine<'_, impl SimulationEventSinkV1>,
+        engine: &Engine<'a, impl SimulationEventSinkV1>,
         invocation: SimulationInvocationV1,
         function_index: usize,
         function: &'a Function,
@@ -6879,7 +6970,7 @@ impl<T> SmallResults<T> {
 
 fn bind_small_results(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     definitions: &[ValueDef],
     results: SmallResults<RuntimeValue>,
     site: &CompactSite,
@@ -6911,7 +7002,7 @@ fn bind_small_results(
 
 fn bind_dynamic_results(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     definitions: &[ValueDef],
     results: &[RuntimeValue],
     site: &CompactSite,
@@ -6938,7 +7029,7 @@ fn execute_operation(
     block: &BasicBlock,
     ordinal: usize,
     operation: &Operation,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     frame_allocations: &mut Vec<FrameAllocation>,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
     // Choose the execution frame before entering either implementation. Calling the
@@ -6983,7 +7074,7 @@ fn execute_non_assembly_operation(
     block: &BasicBlock,
     ordinal: usize,
     operation: &Operation,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     _frame_allocations: &mut Vec<FrameAllocation>,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
     let site = operation_site(function_index, block, ordinal);
@@ -7103,7 +7194,7 @@ fn execute_non_assembly_operation(
 #[inline(never)]
 fn execute_inline_assembly(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: &Operation,
     site: &CompactSite,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
@@ -7159,7 +7250,7 @@ fn execute_inline_assembly(
 
 fn execute_memory_intrinsic(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     intrinsic: &MemoryIntrinsicOperation,
     site: &CompactSite,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
@@ -7427,11 +7518,11 @@ fn execute_memory_intrinsic(
 
 fn pointer_value<'a>(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &'a HashMap<ValueId, RuntimeValue>,
+    values: &'a RuntimeValues<'_>,
     id: ValueId,
     site: &CompactSite,
 ) -> Result<&'a PointerValue, SimulationExecutionErrorV1> {
-    match runtime_value(engine, values, id, site)? {
+    match runtime_non_scalar_value(engine, values, id, site, "pointer")? {
         RuntimeValue::Pointer(pointer) => Ok(pointer),
         _ => Err(engine.at(
             *site,
@@ -7445,11 +7536,11 @@ fn pointer_value<'a>(
 
 fn slice_value<'a>(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &'a HashMap<ValueId, RuntimeValue>,
+    values: &'a RuntimeValues<'_>,
     id: ValueId,
     site: &CompactSite,
 ) -> Result<&'a SliceValue, SimulationExecutionErrorV1> {
-    match runtime_value(engine, values, id, site)? {
+    match runtime_non_scalar_value(engine, values, id, site, "slice")? {
         RuntimeValue::Slice(slice) => Ok(slice),
         _ => Err(engine.at(
             *site,
@@ -7463,7 +7554,7 @@ fn slice_value<'a>(
 
 fn index_u64(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     id: ValueId,
     site: &CompactSite,
 ) -> Result<u64, SimulationExecutionErrorV1> {
@@ -7484,7 +7575,7 @@ fn index_u64(
 #[inline(never)]
 fn execute_float_call(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: SoftFloatOperationV1,
     arguments: &[ValueId],
     site: CompactSite,
@@ -7512,11 +7603,12 @@ fn execute_float_call(
 
 fn execute_atomic(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     atomic: &Atomic,
     site: &CompactSite,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
-    let RuntimeValue::Pointer(pointer) = runtime_value(engine, values, atomic.pointer, site)?
+    let RuntimeValue::Pointer(pointer) =
+        runtime_non_scalar_value(engine, values, atomic.pointer, site, "atomic pointer")?
     else {
         return Err(engine.at(
             *site,
@@ -7773,12 +7865,14 @@ fn address_space_mask(address_spaces: &std::collections::BTreeSet<AddressSpace>)
 
 fn execute_scalar_load(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     pointer: ValueId,
     access: MemoryAccess,
     site: &CompactSite,
 ) -> Result<ScalarBitsV1, SimulationExecutionErrorV1> {
-    let RuntimeValue::Pointer(pointer_value) = runtime_value(engine, values, pointer, site)? else {
+    let RuntimeValue::Pointer(pointer_value) =
+        runtime_non_scalar_value(engine, values, pointer, site, "pointer")?
+    else {
         return Err(engine.at(
             *site,
             SimulationExecutionErrorKindV1::RuntimeType {
@@ -8248,7 +8342,7 @@ fn bind_block_arguments(
     function: usize,
     block: &BasicBlock,
     incoming: &[RuntimeValue],
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
 ) -> Result<(), SimulationExecutionErrorV1> {
     if block.parameters.len() != incoming.len() {
         return Err(
@@ -8271,7 +8365,7 @@ fn bind_block_arguments(
 
 fn bind_typed_value(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     definition: &ValueDef,
     value: RuntimeValue,
     site: &CompactSite,
@@ -8290,7 +8384,7 @@ fn bind_typed_value(
 
 fn bind_runtime_value(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     id: ValueId,
     value: RuntimeValue,
 ) -> Result<(), SimulationExecutionErrorV1> {
@@ -8299,8 +8393,11 @@ fn bind_runtime_value(
             limit: engine.limits.max_ssa_values,
         }));
     }
-    values.insert(id, value);
-    Ok(())
+    values.try_insert(id, value).map_err(|()| {
+        engine.fail(SimulationExecutionErrorKindV1::InternalInvariant(
+            "admitted SSA slot and runtime type",
+        ))
+    })
 }
 
 fn runtime_type(value: &RuntimeValue) -> Type {
@@ -8326,12 +8423,45 @@ fn runtime_type(value: &RuntimeValue) -> Type {
     }
 }
 
-fn runtime_value<'a>(
+fn runtime_non_scalar_value<'a>(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &'a HashMap<ValueId, RuntimeValue>,
+    values: &'a RuntimeValues<'_>,
+    id: ValueId,
+    site: &CompactSite,
+    expected: &'static str,
+) -> Result<&'a RuntimeValue, SimulationExecutionErrorV1> {
+    // A live scalar has no borrowed full-value cell in Columns. Preserve the
+    // caller's existing wrong-type error rather than reporting it undefined.
+    values.get_ref(&id).ok_or_else(|| {
+        let kind = if values.contains_key(&id) {
+            SimulationExecutionErrorKindV1::RuntimeType {
+                value: Some(id),
+                expected,
+            }
+        } else {
+            SimulationExecutionErrorKindV1::UndefinedValue(id)
+        };
+        engine.at(*site, kind)
+    })
+}
+
+fn runtime_value_ref<'a>(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &'a RuntimeValues<'_>,
     id: ValueId,
     site: &CompactSite,
 ) -> Result<&'a RuntimeValue, SimulationExecutionErrorV1> {
+    values
+        .get_ref(&id)
+        .ok_or_else(|| engine.at(*site, SimulationExecutionErrorKindV1::UndefinedValue(id)))
+}
+
+fn runtime_value(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &RuntimeValues<'_>,
+    id: ValueId,
+    site: &CompactSite,
+) -> Result<RuntimeValue, SimulationExecutionErrorV1> {
     values
         .get(&id)
         .ok_or_else(|| engine.at(*site, SimulationExecutionErrorKindV1::UndefinedValue(id)))
@@ -8339,12 +8469,12 @@ fn runtime_value<'a>(
 
 fn scalar_value(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     id: ValueId,
     site: &CompactSite,
 ) -> Result<ScalarBitsV1, SimulationExecutionErrorV1> {
     match runtime_value(engine, values, id, site)? {
-        RuntimeValue::Scalar(value) => Ok(*value),
+        RuntimeValue::Scalar(value) => Ok(value),
         _ => Err(engine.at(
             *site,
             SimulationExecutionErrorKindV1::RuntimeType {
@@ -8357,19 +8487,35 @@ fn scalar_value(
 
 fn resolve_values_into(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     ids: &[ValueId],
     site: &CompactSite,
     resolved: &mut Vec<RuntimeValue>,
 ) -> Result<(), SimulationExecutionErrorV1> {
     resolved.clear();
+    // Empty call/return/edge lists need no owned RuntimeValue temporaries.
+    // Keep their native stack path separate even in unoptimized builds.
+    if ids.is_empty() {
+        return Ok(());
+    }
+    resolve_nonempty_values_into(engine, values, ids, site, resolved)
+}
+
+#[inline(never)]
+fn resolve_nonempty_values_into(
+    engine: &Engine<'_, impl SimulationEventSinkV1>,
+    values: &RuntimeValues<'_>,
+    ids: &[ValueId],
+    site: &CompactSite,
+    resolved: &mut Vec<RuntimeValue>,
+) -> Result<(), SimulationExecutionErrorV1> {
     if resolved.capacity() < ids.len() {
         resolved
             .try_reserve_exact(ids.len())
             .map_err(|_| engine.at(*site, SimulationExecutionErrorKindV1::AllocationFailure))?;
     }
     for id in ids {
-        resolved.push(runtime_value(engine, values, *id, site)?.clone());
+        resolved.push(runtime_value(engine, values, *id, site)?);
     }
     Ok(())
 }
@@ -8902,7 +9048,7 @@ mod tests {
             workgroup_writer: vec![],
             observation_descriptor: Vec::new(),
         };
-        let values = HashMap::from([
+        let values = RuntimeValues::from([
             (
                 ValueId(0),
                 RuntimeValue::Pointer(PointerValue {
@@ -8935,6 +9081,8 @@ mod tests {
             function_module_indices: vec![0],
             block_indices: vec![HashMap::new()],
             function_ssa_values: vec![0],
+            value_layouts: &[],
+            value_plan: FrameValuePlan::legacy(0),
             call_targets: vec![vec![]],
             switch_targets: vec![vec![]],
             target: SimulationTargetV1::amdgpu_64(),

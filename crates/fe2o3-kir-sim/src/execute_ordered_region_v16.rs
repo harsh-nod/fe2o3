@@ -6,7 +6,7 @@ use super::*;
 #[inline(never)]
 pub(super) fn execute(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: &Operation,
     site: &CompactSite,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {

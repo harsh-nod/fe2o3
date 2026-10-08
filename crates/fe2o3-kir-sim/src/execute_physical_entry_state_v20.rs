@@ -202,7 +202,7 @@ impl Results {
     pub(super) fn bind(
         self,
         engine: &Engine<'_, impl SimulationEventSinkV1>,
-        values: &mut HashMap<ValueId, RuntimeValue>,
+        values: &mut RuntimeValues<'_>,
         definitions: &[ValueDef],
         site: &CompactSite,
     ) -> Result<(), SimulationExecutionErrorV1> {

@@ -108,6 +108,8 @@ fn with_engine(test: impl FnOnce(&mut Engine<'_, NoopSimulationEventSinkV1>)) {
         function_module_indices: vec![0],
         block_indices: vec![HashMap::new()],
         function_ssa_values: vec![200],
+        value_layouts: &[],
+        value_plan: FrameValuePlan::legacy(200),
         call_targets: vec![vec![]],
         switch_targets: vec![vec![]],
         target: SimulationTargetV1::amdgpu_64(),
@@ -356,7 +358,7 @@ fn zero_exec_store_skips_undefined_pointer_and_data_before_memory_validation() {
             0,
             &[ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
         );
-        let values = HashMap::from([(ValueId(3), mask(0))]);
+        let values = RuntimeValues::from([(ValueId(3), mask(0))]);
         physical_entry_v20::execute(engine, &values, &op, &site(5)).unwrap();
         assert_eq!(engine.memory.allocations[&7].bytes, vec![0xa5; 4]);
         assert_eq!(engine.memory.allocations[&7].initialized, vec![false; 4]);
@@ -377,7 +379,7 @@ fn lane63_mask_bit_is_not_truncated_to_u32() {
             &[ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
         );
         let c = chain();
-        let values = HashMap::from([
+        let values = RuntimeValues::from([
             (ValueId(0), symbolic(Value::AddressLow(c.clone()))),
             (
                 ValueId(1),
@@ -413,7 +415,7 @@ fn inactive_high_lane_skips_bad_pointer_even_when_low_lane_is_active() {
             0,
             &[ValueId(0), ValueId(1), ValueId(2), ValueId(3)],
         );
-        let values = HashMap::from([(ValueId(3), mask(1))]);
+        let values = RuntimeValues::from([(ValueId(3), mask(1))]);
         physical_entry_v20::execute(engine, &values, &op, &site(5)).unwrap();
         assert!(engine.accesses.is_empty());
         assert_eq!(engine.memory.allocations[&7].initialized, vec![false; 4]);
@@ -432,7 +434,7 @@ fn active_store_preserves_bounds_checks() {
         );
         let mut c = chain();
         c.displacement = 4;
-        let values = HashMap::from([
+        let values = RuntimeValues::from([
             (ValueId(0), symbolic(Value::AddressLow(c.clone()))),
             (
                 ValueId(1),
@@ -460,7 +462,7 @@ fn partial_exec_cannot_define_valu_without_passthrough() {
             0,
             &[ValueId(0), ValueId(1), ValueId(2)],
         );
-        let values = HashMap::from([(ValueId(2), mask(0))]);
+        let values = RuntimeValues::from([(ValueId(2), mask(0))]);
         let error = physical_entry_v20::execute(engine, &values, &op, &site(5))
             .err()
             .unwrap();
@@ -483,14 +485,14 @@ fn scalar_wait_and_restore_run_after_zero_exec_mask() {
             0,
             &[ValueId(0), ValueId(1)],
         );
-        let mut values = HashMap::from([(ValueId(0), mask(0)), (ValueId(1), mask(u64::MAX))]);
+        let mut values = RuntimeValues::from([(ValueId(0), mask(0)), (ValueId(1), mask(u64::MAX))]);
         let result = physical_entry_v20::execute(engine, &values, &save, &site(5)).unwrap();
         result
             .bind(engine, &mut values, &save.results, &site(5))
             .unwrap();
-        assert_eq!(values[&ValueId(102)], mask(0));
+        assert_eq!(values.get(&ValueId(102)).unwrap(), mask(0));
         assert_eq!(
-            values[&ValueId(103)],
+            values.get(&ValueId(103)).unwrap(),
             RuntimeValue::Scalar(ScalarBitsV1::boolean(false))
         );
         let wait = operation(Opcode::WaitVm0, 0, 0, 0, 0, &[]);
@@ -504,10 +506,10 @@ fn scalar_wait_and_restore_run_after_zero_exec_mask() {
             &[ValueId(100), ValueId(101)],
         );
         let result = physical_entry_v20::execute(engine, &values, &restore, &site(7)).unwrap();
-        let mut restored = HashMap::new();
+        let mut restored = RuntimeValues::new();
         result
             .bind(engine, &mut restored, &restore.results, &site(7))
             .unwrap();
-        assert_eq!(restored[&ValueId(100)], mask(u64::MAX));
+        assert_eq!(restored.get(&ValueId(100)).unwrap(), mask(u64::MAX));
     });
 }

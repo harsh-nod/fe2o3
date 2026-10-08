@@ -5,7 +5,7 @@ use super::*;
 #[inline(never)]
 pub(super) fn execute(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: &Operation,
     site: CompactSite,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
@@ -44,7 +44,7 @@ pub(super) fn execute(
             access,
         } => {
             let RuntimeValue::Pointer(pointer_value) =
-                runtime_value(engine, values, *pointer, &site)?
+                runtime_non_scalar_value(engine, values, *pointer, &site, "pointer")?
             else {
                 return Err(engine.at(
                     site,
@@ -93,7 +93,7 @@ pub(super) fn execute(
                 return Ok(SmallResults::None);
             }
             let RuntimeValue::Pointer(pointer_value) =
-                runtime_value(engine, values, *pointer, &site)?
+                runtime_non_scalar_value(engine, values, *pointer, &site, "pointer")?
             else {
                 return Err(engine.at(
                     site,

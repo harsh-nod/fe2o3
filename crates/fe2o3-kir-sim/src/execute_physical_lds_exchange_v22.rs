@@ -31,7 +31,7 @@ pub(super) fn is_barrier(operation: &OperationKind) -> bool {
 }
 fn scalar(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     step: &Step,
     index: usize,
     ty: ScalarType,
@@ -51,7 +51,7 @@ fn scalar(
 }
 fn full_exec(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     step: &Step,
     site: &CompactSite,
 ) -> Result<(), SimulationExecutionErrorV1> {
@@ -69,7 +69,7 @@ fn full_exec(
 #[inline(never)]
 pub(super) fn execute_and_bind(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     operation: &Operation,
     site: &CompactSite,
 ) -> Result<(), SimulationExecutionErrorV1> {
@@ -169,7 +169,7 @@ pub(super) fn execute_and_bind(
 }
 fn complete_lgkm(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     site: CompactSite,
 ) -> Result<(), SimulationExecutionErrorV1> {
     if site.operation == Some(5) {
@@ -224,7 +224,7 @@ fn complete_lgkm(
 }
 pub(super) fn comparison_input(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: &OperationKind,
     site: &CompactSite,
 ) -> Result<bool, SimulationExecutionErrorV1> {

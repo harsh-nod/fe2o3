@@ -674,6 +674,16 @@ pub(crate) fn preflight(
                 limit: limits.max_resident_bytes as u64,
             },
         )?,
+        crate::execute::frame_value_plan(
+            module,
+            &reachable_function_indices,
+            crate::execute::uses_legacy_frame_values(wire_version),
+        )
+        .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+            resource: "SSA column storage",
+            actual: u64::MAX,
+            limit: limits.max_resident_bytes as u64,
+        })?,
         kernel_identity_bytes,
         reachable_function_indices.capacity(),
         execution_index_resident_bytes,

@@ -46,6 +46,8 @@ fn with_engine(test: impl FnOnce(&mut Engine<'_, NoopSimulationEventSinkV1>)) {
         function_module_indices: vec![0],
         block_indices: vec![HashMap::from([(BlockId(0), 0)])],
         function_ssa_values: vec![200],
+        value_layouts: &[],
+        value_plan: FrameValuePlan::legacy(200),
         call_targets: vec![vec![]],
         switch_targets: vec![vec![]],
         target: SimulationTargetV1::amdgpu_64(),
@@ -141,7 +143,7 @@ fn pending_read_is_typed_but_never_scalar_or_debug_bits() {
     assert_eq!(runtime_type(&value), Type::Scalar(ScalarType::U32));
     assert!(debug_value(&value).is_none());
     with_engine(|engine| {
-        let values = HashMap::from([(ValueId(20), value)]);
+        let values = RuntimeValues::from([(ValueId(20), value)]);
         assert!(scalar_value(engine, &values, ValueId(20), &site(14)).is_err());
     });
 }
@@ -176,7 +178,7 @@ fn vm_wait_requires_exact_actual_load_result_and_generation_then_changes_same_id
                     },
                 })
             };
-            let mut values = HashMap::from([(id, value)]);
+            let mut values = RuntimeValues::from([(id, value)]);
             let before = values.clone();
             let result = complete_vm(engine, &mut values, site(14));
             assert_eq!(result.is_ok(), case == 0);
@@ -191,7 +193,7 @@ fn vm_wait_requires_exact_actual_load_result_and_generation_then_changes_same_id
                 assert_eq!(values, before);
             }
         }
-        let mut values = HashMap::from([(
+        let mut values = RuntimeValues::from([(
             id,
             symbolic(Value::GlobalCopyPendingRead {
                 generation: site(13),
@@ -205,7 +207,7 @@ fn vm_wait_requires_exact_actual_load_result_and_generation_then_changes_same_id
 #[test]
 fn lgkm_wait_validates_all_eight_ids_before_any_readiness_change() {
     with_engine(|engine| {
-        let mut values = HashMap::new();
+        let mut values = RuntimeValues::new();
         for op in 1..=4 {
             let operation =
                 &engine.module.functions[0].body.as_ref().unwrap().blocks[0].operations[op];
@@ -252,7 +254,10 @@ fn lgkm_wait_validates_all_eight_ids_before_any_readiness_change() {
         assert!(complete_lgkm(engine, &mut values, site(6)).is_err());
         complete_lgkm(engine, &mut values, site(5)).unwrap();
         assert_eq!(values.len(), 8);
-        for value in values.values() {
+        for (_, value) in values
+            .legacy_iter()
+            .expect("physical fixture retains Legacy values")
+        {
             assert!(!matches!(
                 value,
                 RuntimeValue::PhysicalEntry(

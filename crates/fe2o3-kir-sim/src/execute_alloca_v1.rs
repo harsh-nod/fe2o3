@@ -5,7 +5,7 @@ use super::*;
 #[inline(never)]
 pub(super) fn execute(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: &Operation,
     site: CompactSite,
     frame_allocations: &mut Vec<FrameAllocation>,

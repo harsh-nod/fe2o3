@@ -132,14 +132,14 @@ fn ready_kernarg(
 /// transaction counter, new SSA definition or replacement executable graph.
 pub(super) fn complete_lgkm(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     site: CompactSite,
 ) -> Result<(), SimulationExecutionErrorV1> {
     complete_initial_lgkm(engine, values, site, Profile::CopyV21)
 }
 pub(super) fn complete_initial_lgkm(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     site: CompactSite,
     profile: Profile,
 ) -> Result<(), SimulationExecutionErrorV1> {
@@ -162,7 +162,7 @@ pub(super) fn complete_initial_lgkm(
         for (part, half) in [Half::Low, Half::High].into_iter().enumerate() {
             let id = operation.results[part].id;
             let value = values
-                .get(&id)
+                .get_ref(&id)
                 .ok_or_else(|| failure(engine, site, "global-copy pending kernarg ID"))?;
             if ready_kernarg(value, source, half, slot).is_none() {
                 return Err(failure(
@@ -196,14 +196,14 @@ pub(super) fn complete_initial_lgkm(
 }
 pub(super) fn complete_vm(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     site: CompactSite,
 ) -> Result<(), SimulationExecutionErrorV1> {
     complete_vm_for(engine, values, site, Profile::CopyV21)
 }
 pub(super) fn complete_vm_for(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &mut HashMap<ValueId, RuntimeValue>,
+    values: &mut RuntimeValues<'_>,
     site: CompactSite,
     profile: Profile,
 ) -> Result<(), SimulationExecutionErrorV1> {

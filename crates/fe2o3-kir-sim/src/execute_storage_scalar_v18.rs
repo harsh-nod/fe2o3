@@ -4,12 +4,14 @@ use fe2o3_kernel_ir::{StorageLayoutKindV1, StorageOperationV1, StorageProjection
 
 fn project(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     base: ValueId,
     step: StorageProjectionV1,
     site: CompactSite,
 ) -> Result<StoragePointerValueV18, SimulationExecutionErrorV1> {
-    let RuntimeValue::StoragePointer(storage) = runtime_value(engine, values, base, &site)? else {
+    let RuntimeValue::StoragePointer(storage) =
+        runtime_non_scalar_value(engine, values, base, &site, "private storage pointer")?
+    else {
         return Err(engine.at(
             site,
             SimulationExecutionErrorKindV1::RuntimeType {
@@ -125,11 +127,17 @@ fn project(
 
 fn storage_pointer<'a>(
     engine: &Engine<'_, impl SimulationEventSinkV1>,
-    values: &'a HashMap<ValueId, RuntimeValue>,
+    values: &'a RuntimeValues<'_>,
     address: ValueId,
     site: CompactSite,
 ) -> Result<&'a PointerValue, SimulationExecutionErrorV1> {
-    let RuntimeValue::StoragePointer(storage) = runtime_value(engine, values, address, &site)?
+    let RuntimeValue::StoragePointer(storage) = runtime_non_scalar_value(
+        engine,
+        values,
+        address,
+        &site,
+        "private scalar storage pointer",
+    )?
     else {
         return Err(engine.at(
             site,
@@ -159,7 +167,7 @@ fn storage_pointer<'a>(
 #[inline(never)]
 pub(super) fn execute(
     engine: &mut Engine<'_, impl SimulationEventSinkV1>,
-    values: &HashMap<ValueId, RuntimeValue>,
+    values: &RuntimeValues<'_>,
     operation: &Operation,
     site: CompactSite,
 ) -> Result<SmallResults<RuntimeValue>, SimulationExecutionErrorV1> {
