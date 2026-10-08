@@ -105,6 +105,18 @@ fn run(
             program.emit_cut_frame_proofs_v93(Some(&paired), out)?;
             super::super::super::super::super::support_closure::retain_referenced(out)?;
             for (root, summary) in selected {
+                let row = &paired.roots[root];
+                let hint = row
+                    .step_hints
+                    .as_ref()
+                    .unwrap()
+                    .cuts
+                    .iter()
+                    .find(|hint| hint.pc == summary.source_pc)
+                    .unwrap();
+                let instance = hint.instance;
+                let source_fuel = hint.statements.checked_add(1).unwrap();
+                let follow_fuel = super::super::target_follow_fuel(&paired, row, out)?;
                 let body = heap_body(&out.text, root, summary.source_pc);
                 let header = body.split_once("\n{\n").unwrap().0;
                 assert_eq!(
@@ -127,10 +139,10 @@ fn run(
                 } else {
                     assert!(!body.contains("invocation_source_plain_return_preserves_heap_v78("));
                     assert!(body.contains(&format!(
-                        "reveal(invocation_source_block_runtime_{root}_v36);"
+                        "reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {source_fuel});"
                     )));
                     assert!(body.contains(&format!(
-                        "reveal_with_fuel(invocation_byte_follow_{root}_v36,"
+                        "reveal_with_fuel(invocation_byte_follow_{root}_v36, {follow_fuel});"
                     )));
                 }
                 let mut ordinary = false;
@@ -360,18 +372,32 @@ fn root_unit_return_heap_keeps_memory_bearing_roots_on_generic_path() {
                 assert_eq!(tested, paired.roots.len());
                 paired.emit(out)?;
                 for (root, row) in paired.roots.iter().enumerate() {
+                    let follow_fuel = super::super::target_follow_fuel(&paired, row, out)?;
                     for cut in row
                         .cuts
                         .iter()
                         .flatten()
                         .filter(|cut| matches!(cut.end, End::Return))
                     {
+                        let hint = row
+                            .step_hints
+                            .as_ref()
+                            .unwrap()
+                            .cuts
+                            .iter()
+                            .find(|hint| hint.pc == cut.source)
+                            .unwrap();
+                        let instance = hint.instance;
+                        let source_fuel = hint.statements.checked_add(1).unwrap();
                         let body = heap_body(&out.text, root, cut.source);
                         assert!(
                             !body.contains("invocation_source_plain_return_preserves_heap_v78(")
                         );
                         assert!(body.contains(&format!(
-                            "reveal(invocation_source_block_runtime_{root}_v36);"
+                            "reveal_with_fuel(invocation_source_micro_run_{root}_{instance}_v36, {source_fuel});"
+                        )));
+                        assert!(body.contains(&format!(
+                            "reveal_with_fuel(invocation_byte_follow_{root}_v36, {follow_fuel});"
                         )));
                     }
                 }
