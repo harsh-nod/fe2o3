@@ -7,9 +7,9 @@
 
 use std::fmt;
 
-use serde::Deserialize;
-
 use crate::{CompileEnvironmentV2, MAX_ENVIRONMENT_VALUE_BYTES_V2, RustcInvocationDescriptorV3};
+
+mod parse;
 
 /// Captured compile-environment key containing a V1 enrollment request.
 pub const REFERENCE_ENROLLMENT_ENV_V1: &str = "FE2O3_REFERENCE_ENROLLMENT_V1";
@@ -33,20 +33,6 @@ pub struct ReferenceEnrollmentRequestV1 {
 /// An inert pair of selector strings, without compiler resolution or authority.
 #[derive(Debug, Eq, PartialEq)]
 pub struct ReferenceEnrollmentBindingV1 {
-    kernel: String,
-    reference: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireRequest {
-    version: u16,
-    bindings: Vec<WireBinding>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireBinding {
     kernel: String,
     reference: String,
 }
@@ -167,10 +153,10 @@ impl ReferenceEnrollmentRequestV1 {
     ///
     /// # Storage and failure
     ///
-    /// The work callback does not reserve storage. The typed parse and shape
-    /// parse use internal serde allocations, including on schema-error paths;
-    /// the typed request remains live during the shape parse. Allocation
-    /// failure is not guaranteed to return a decode error. Callers requiring
+    /// The work callback does not reserve storage. One fixed-schema parse uses
+    /// internal serde allocations, including on schema-error paths. Output
+    /// allocations are fallible, but allocation failure inside serde is not
+    /// guaranteed to return a decode error. Callers requiring
     /// prepaid parsing storage need a separately justified trusted allocation
     /// boundary before entering this method. Neither the work quote nor a
     /// later [`Self::retained_storage_bytes`] observation supplies that boundary.
@@ -192,44 +178,22 @@ impl ReferenceEnrollmentRequestV1 {
             .and_then(|n| n.checked_add(std::mem::size_of::<Self>()))
             .ok_or(InvalidRequest("reference enrollment work overflow"))?;
         charge(quote).map_err(Work)?;
-        let request: WireRequest = serde_json::from_str(bytes)
+        let parsed = parse::request(bytes)
             .map_err(|_| InvalidRequest("invalid reference enrollment request schema"))?;
-        // The typed pass rejects duplicates; the shape pass rejects serde's
-        // positional-struct representation without overwriting duplicate keys.
-        let shape: serde_json::Value = serde_json::from_str(bytes)
-            .map_err(|_| InvalidRequest("invalid reference enrollment request schema"))?;
-        if !shape.is_object()
-            || !shape
-                .get("bindings")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|rows| rows.iter().all(serde_json::Value::is_object))
-        {
-            return Err(InvalidRequest(
-                "invalid reference enrollment request schema",
-            ));
-        }
-        drop(shape);
+        let request = parsed.request;
         if request.version != 1 {
             return Err(InvalidRequest(
                 "unsupported reference enrollment request version",
             ));
         }
-        if request.bindings.is_empty()
-            || request.bindings.len() > MAX_REFERENCE_ENROLLMENT_BINDINGS_V1
+        if parsed.binding_count == 0 || parsed.binding_count > MAX_REFERENCE_ENROLLMENT_BINDINGS_V1
         {
             return Err(InvalidRequest(
                 "reference enrollment binding count outside limits",
             ));
         }
-        for binding in &request.bindings {
-            for selector in [&binding.kernel, &binding.reference] {
-                if selector.is_empty()
-                    || selector.len() > MAX_REFERENCE_ENROLLMENT_SELECTOR_BYTES_V1
-                    || selector.chars().any(char::is_control)
-                {
-                    return Err(InvalidRequest("invalid reference enrollment selector"));
-                }
-            }
+        if parsed.invalid_selector {
+            return Err(InvalidRequest("invalid reference enrollment selector"));
         }
         if request
             .bindings
@@ -240,17 +204,7 @@ impl ReferenceEnrollmentRequestV1 {
                 "reference enrollment roots must be unique and sorted",
             ));
         }
-        Ok(Self {
-            version: request.version,
-            bindings: request
-                .bindings
-                .into_iter()
-                .map(|binding| ReferenceEnrollmentBindingV1 {
-                    kernel: binding.kernel,
-                    reference: binding.reference,
-                })
-                .collect(),
-        })
+        Ok(request)
     }
 }
 

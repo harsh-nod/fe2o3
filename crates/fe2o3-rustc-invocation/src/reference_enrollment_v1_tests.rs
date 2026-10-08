@@ -279,6 +279,157 @@ fn charge_refusals_are_returned_unchanged_before_decoding() {
 }
 
 #[test]
+fn closed_seed_keeps_schema_version_roster_selector_and_order_precedence() {
+    let schema = "invalid reference enrollment request schema";
+    for text in [
+        r#"{"version":2,"bindings":[{"kernel":"","reference":"r"}],"extra":0}"#,
+        r#"{"version":2,"bindings":[{"kernel":"","reference":"r"},["a","r"]]}"#,
+        r#"{"version":2,"bindings":[]} false"#,
+        r#"{"version":1,"bindings":[{"kernel":"","reference":"r"},{"kernel":"b"}]}"#,
+        r#"{"version":1,"bindings":[{"kernel":"","reference":"r"}"#,
+    ] {
+        assert_eq!(decode(text).unwrap_err().to_string(), schema, "{text}");
+    }
+    for text in [
+        r#"{"version":2,"bindings":[]}"#,
+        r#"{"bindings":[{"kernel":"","reference":"r"}],"version":2}"#,
+    ] {
+        assert_eq!(
+            decode(text).unwrap_err().to_string(),
+            "unsupported reference enrollment request version"
+        );
+    }
+    assert_eq!(
+        decode(r#"{"version":1,"bindings":[{"kernel":"b","reference":"r"},{"kernel":"a","reference":""}]}"#)
+            .unwrap_err().to_string(),
+        "invalid reference enrollment selector"
+    );
+}
+
+#[test]
+fn closed_seed_preserves_strict_u16_numeric_schema() {
+    for version in [
+        "-0", "-1", "1.0", "1e0", "65536", "1e400", "null", "true", "[]", "{}",
+    ] {
+        let text = format!(r#"{{"version":{version},"bindings":[]}}"#);
+        assert_eq!(
+            decode(&text).unwrap_err().to_string(),
+            "invalid reference enrollment request schema",
+            "{version}"
+        );
+    }
+    for version in ["0", "65535"] {
+        let text = format!(r#"{{"version":{version},"bindings":[]}}"#);
+        assert_eq!(
+            decode(&text).unwrap_err().to_string(),
+            "unsupported reference enrollment request version"
+        );
+    }
+}
+
+#[test]
+fn closed_seed_decodes_escaped_keys_and_surrogates_without_dynamic_key_owners() {
+    let request = decode(
+        r#"{"vers\u0069on":1,"bind\u0069ngs":[{"kern\u0065l":"a\ud83d\ude80","refer\u0065nce":"r\u00e9"}]}"#,
+    ).unwrap();
+    assert_eq!(request.bindings()[0].kernel(), "a\u{1f680}");
+    assert_eq!(request.bindings()[0].reference(), "r\u{e9}");
+    for text in [
+        r#"{"version":1,"bindings":[{"kernel":"a","kern\u0065l":"b","reference":"r"}]}"#,
+        r#"{"version":1,"bindings":[{"kernel":"\ud800","reference":"r"}]}"#,
+        r#"{"version":1,"bindings":[{"kernel":"\udc00","reference":"r"}]}"#,
+    ] {
+        assert_eq!(
+            decode(text).unwrap_err().to_string(),
+            "invalid reference enrollment request schema"
+        );
+    }
+}
+
+#[test]
+fn closed_seed_retains_one_bounded_vector_and_exact_selector_backing() {
+    let request = decode(REQUEST).unwrap();
+    assert_eq!(
+        request.bindings.capacity(),
+        MAX_REFERENCE_ENROLLMENT_BINDINGS_V1
+    );
+    let mut strings = 0;
+    for row in &request.bindings {
+        assert_eq!(row.kernel.capacity(), row.kernel.len());
+        assert_eq!(row.reference.capacity(), row.reference.len());
+        strings += row.kernel.capacity() + row.reference.capacity();
+    }
+    assert!(strings <= REQUEST.len());
+    assert_eq!(
+        request.retained_storage_bytes(),
+        Some(
+            size_of::<ReferenceEnrollmentRequestV1>()
+                + MAX_REFERENCE_ENROLLMENT_BINDINGS_V1 * size_of::<ReferenceEnrollmentBindingV1>()
+                + strings
+        )
+    );
+}
+
+#[test]
+fn closed_seed_defers_semantic_refusals_without_retaining_invalid_selectors() {
+    for selector in ["x".repeat(1025), "\n".to_owned(), String::new()] {
+        let text = serde_json::json!({
+            "version": 1, "bindings": [{"kernel": selector, "reference": "r"}]
+        })
+        .to_string();
+        let parsed = parse::request(&text).unwrap();
+        assert!(parsed.invalid_selector);
+        assert_eq!(parsed.binding_count, 1);
+        assert_eq!(parsed.request.bindings[0].kernel.capacity(), 0);
+        assert_eq!(parsed.request.bindings[0].reference, "r");
+        assert_eq!(
+            decode(&text).unwrap_err().to_string(),
+            "invalid reference enrollment selector"
+        );
+    }
+}
+
+#[test]
+fn closed_seed_never_grows_output_for_excess_rows_but_finishes_schema() {
+    // Exercise the private schema component beyond the earlier public byte gate.
+    let mut rows = (0..257)
+        .map(|i| serde_json::json!({"kernel": format!("k{i:04}"), "reference": "r"}))
+        .collect::<Vec<_>>();
+    let text = serde_json::json!({"version": 1, "bindings": rows}).to_string();
+    let parsed = parse::request(&text).unwrap();
+    assert_eq!(parsed.binding_count, 257);
+    assert_eq!(parsed.request.bindings.len(), 256);
+    assert_eq!(parsed.request.bindings.capacity(), 256);
+    rows[256] = serde_json::json!({"kernel": "z"});
+    let invalid = serde_json::json!({"version": 1, "bindings": rows}).to_string();
+    assert!(parse::request(&invalid).is_err());
+    assert_eq!(
+        decode(&text).unwrap_err().to_string(),
+        "reference enrollment request exceeds byte limit"
+    );
+}
+
+#[test]
+fn closed_seed_keeps_static_public_schema_errors_for_long_and_nested_inputs() {
+    for text in [
+        format!(r#"{{"version":1,"bindings":[],"{}":0}}"#, "x".repeat(2048)),
+        format!(
+            r#"{{"version":1,"bindings":[{{"kernel":{}0{},"reference":"r"}}]}}"#,
+            "[".repeat(256),
+            "]".repeat(256)
+        ),
+        r#"{"version":1,"bindings":[{"kernel":false,"reference":"r"}]}"#.to_owned(),
+        r#"{"version":1,"bindings":[{"kernel":"a","reference":"r","x":[}"#.to_owned(),
+    ] {
+        assert!(text.len() <= MAX_REFERENCE_ENROLLMENT_BYTES_V1);
+        assert_eq!(
+            decode(&text).unwrap_err().to_string(),
+            "invalid reference enrollment request schema"
+        );
+    }
+}
+
+#[test]
 fn retained_storage_counts_empty_and_spare_vector_capacity() {
     // Private synthetic owners exercise storage arithmetic, not schema admission.
     for bindings in [Vec::new(), Vec::with_capacity(13)] {
