@@ -812,6 +812,38 @@ pub(crate) fn preflight(
             actual: u64::MAX,
             limit: limits.max_resident_bytes as u64,
         })?;
+    let has_exact_fp4_fp8_matrix = reachable_function_indices.iter().any(|index| {
+        module
+            .functions
+            .get(*index)
+            .and_then(|f| f.body.as_ref())
+            .is_some_and(|body| {
+                body.blocks.iter().any(|block| {
+                    block.operations.iter().any(|operation| {
+                        matches!(&operation.kind, OperationKind::Matrix(matrix)
+                    if crate::matrix_fp4_fp8_exact_v1::supported(matrix))
+                    })
+                })
+            })
+    });
+    let execution_peak = execution_peak
+        .checked_add(
+            if has_exact_fp4_fp8_matrix {
+                crate::execute::matrix_fp4_fp8_exact_resident_bytes()
+            } else {
+                Some(0)
+            }
+            .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+                resource: "mixed FP4/FP8 matrix scratch bytes",
+                actual: u64::MAX,
+                limit: limits.max_resident_bytes as u64,
+            })?,
+        )
+        .ok_or(SimulationPreflightErrorV1::ResourceLimit {
+            resource: "resident bytes",
+            actual: u64::MAX,
+            limit: limits.max_resident_bytes as u64,
+        })?;
     let resident_bytes = preflight_peak.max(execution_peak);
     check_limit(
         "resident bytes",
@@ -2145,7 +2177,8 @@ fn scan_operation(
             fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate { .. }
                 if target.index_width() == crate::IndexWidthV1::Bits64
                     && (crate::matrix_fp4_exact_v1::supported(matrix)
-                        || crate::matrix_fp8_exact_v1::supported(matrix)) => {}
+                        || crate::matrix_fp8_exact_v1::supported(matrix)
+                        || crate::matrix_fp4_fp8_exact_v1::supported(matrix)) => {}
             fe2o3_kernel_ir::MatrixOperationKind::MultiplyAccumulate { .. }
             | fe2o3_kernel_ir::MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
                 reject!(UnsupportedFeatureV1::UnsupportedNumericalContract)

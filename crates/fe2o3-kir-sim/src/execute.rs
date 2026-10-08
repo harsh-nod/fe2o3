@@ -86,6 +86,8 @@ use values_v1::{RuntimeValues, ValueLayout};
 mod matrix_bf16_exact_v1;
 #[path = "execute_matrix_fp4_exact_v1.rs"]
 mod matrix_fp4_exact_v1;
+#[path = "execute_matrix_fp4_fp8_exact_v1.rs"]
+mod matrix_fp4_fp8_exact_v1;
 #[path = "execute_matrix_fp8_exact_v1.rs"]
 mod matrix_fp8_exact_v1;
 #[path = "execute_storage_scalar_v18.rs"]
@@ -99,6 +101,9 @@ pub(crate) fn matrix_fp4_exact_resident_bytes() -> Option<usize> {
 
 pub(crate) fn matrix_fp8_exact_resident_bytes() -> Option<usize> {
     matrix_fp8_exact_v1::resident_bytes()
+}
+pub(crate) fn matrix_fp4_fp8_exact_resident_bytes() -> Option<usize> {
+    matrix_fp4_fp8_exact_v1::resident_bytes()
 }
 
 // Pure size guard for the separate V12 metered observation facade. The existing
@@ -4640,6 +4645,19 @@ fn resolve_ready_collectives<'a>(
             })?;
             engine.charge_steps(&arrival.site, work)?;
         }
+        let matrix_fp4_fp8_exact = matrix_fp4_fp8_exact_v1::is_operation(arrival.operation);
+        if matrix_fp4_fp8_exact {
+            let work =
+                matrix_fp4_fp8_exact_v1::resolution_work(machines.len()).ok_or_else(|| {
+                    engine.at(
+                        arrival.site,
+                        SimulationExecutionErrorKindV1::StepLimit {
+                            limit: engine.limits.max_steps,
+                        },
+                    )
+                })?;
+            engine.charge_steps(&arrival.site, work)?;
+        }
         let width = u64::from(arrival.width.lanes());
         let linear = local_linear(machines[representative].invocation);
         let wave_in_workgroup = linear / width;
@@ -4707,6 +4725,11 @@ fn resolve_ready_collectives<'a>(
         }
         if matrix_fp8_exact {
             matrix_fp8_exact_v1::resolve(engine, machines, arrival, start)?;
+            resolved += 1;
+            continue;
+        }
+        if matrix_fp4_fp8_exact {
+            matrix_fp4_fp8_exact_v1::resolve(engine, machines, arrival, start)?;
             resolved += 1;
             continue;
         }
@@ -5475,6 +5498,7 @@ enum CollectiveInput {
     MatrixBf16Exact(matrix_bf16_exact_v1::Input),
     MatrixFp4Exact(matrix_fp4_exact_v1::Input),
     MatrixFp8Exact(matrix_fp8_exact_v1::Input),
+    MatrixFp4Fp8Exact(matrix_fp4_fp8_exact_v1::Input),
     PhysicalEntryPredicate(bool),
     MatrixLdsLoad {
         base: PointerValue,
@@ -6539,7 +6563,11 @@ fn prepare_collective_wait(
                     matrix_bf16_exact_v1::prepare(engine, frame, matrix, site)?,
                 ),
                 MatrixOperationKind::ScaledMultiplyAccumulate { .. } => {
-                    if crate::matrix_fp8_exact_v1::supported(matrix) {
+                    if crate::matrix_fp4_fp8_exact_v1::supported(matrix) {
+                        CollectiveInput::MatrixFp4Fp8Exact(matrix_fp4_fp8_exact_v1::prepare(
+                            engine, frame, matrix, site,
+                        )?)
+                    } else if crate::matrix_fp8_exact_v1::supported(matrix) {
                         CollectiveInput::MatrixFp8Exact(matrix_fp8_exact_v1::prepare(
                             engine, frame, matrix, site,
                         )?)

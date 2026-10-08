@@ -32,7 +32,9 @@ fn dense() -> ([u8; 2048], [u8; 2048], [i64; 256]) {
         0, 0x28, 0x30, 0x34, 0x38, 0x3a, 0x3c, 0x40, 0x44, 0x48, 0x50, 0x58, 0xa8, 0xb8, 0xd8,
     ];
     (
-        std::array::from_fn(|n| codes[(n * 7 + n / 128) % 15]),
+        std::array::from_fn(|n| {
+            [0, 1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15][(n * 7 + n / 128) % 15]
+        }),
         std::array::from_fn(|n| codes[(n * 11 + n / 16) % 15]),
         std::array::from_fn(|n| (n as i64 - 128) * 17 + 1),
     )
@@ -67,7 +69,7 @@ fn every_reduction_coordinate_and_all_row_column_lanes_have_independent_impulses
             0x28, 0x34,
         ];
         for row in 0..16 {
-            a[row * 128 + k] = codes[row];
+            a[row * 128 + k] = [1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 1, 3][row];
         }
         for col in 0..16 {
             b[k * 16 + col] = codes[15 - col];
@@ -82,9 +84,9 @@ fn every_reduction_coordinate_and_all_row_column_lanes_have_independent_impulses
 fn exact_extremes_sixteenths_and_cancellation_remain_exact() {
     let sim = admit(module(64));
     for (a, b, c) in [
-        ([0x58; 2048], [0x58; 2048], [4_194_304; 256]),
-        ([0xd8; 2048], [0x58; 2048], [-4_194_304; 256]),
-        ([0x28; 2048], [0x28; 2048], [-128; 256]),
+        ([7; 2048], [0x58; 2048], [4_194_304; 256]),
+        ([15; 2048], [0x58; 2048], [-4_194_304; 256]),
+        ([1; 2048], [0x28; 2048], [-256; 256]),
         ([0; 2048], [0xd8; 2048], [1; 256]),
     ] {
         let run = sim
@@ -104,12 +106,12 @@ fn two_waves_seeded_and_replay_keep_distinct_operands_and_outputs() {
         };
         let mut bytes = old.bytes().to_vec();
         for lane in 0..64 {
-            for word in 0..8 {
+            for word in 0..4 {
                 let offset = (512 + lane * 8 + word) * 4;
                 let mut bits = u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
-                for byte in 0..4 {
-                    if (bits >> (8 * byte)) & 0x7f != 0 {
-                        bits ^= 0x80 << (8 * byte);
+                for nibble in 0..8 {
+                    if (bits >> (4 * nibble)) & 7 != 0 {
+                        bits ^= 8 << (4 * nibble);
                     }
                 }
                 bytes[offset..offset + 4].copy_from_slice(&bits.to_le_bytes());
@@ -128,11 +130,7 @@ fn two_waves_seeded_and_replay_keep_distinct_operands_and_outputs() {
         );
         let expected = [
             oracle(&a, &b, &c),
-            oracle(
-                &a.map(|code| if code == 0 { 0 } else { code ^ 0x80 }),
-                &b,
-                &c,
-            ),
+            oracle(&a.map(|code| if code == 0 { 0 } else { code ^ 8 }), &b, &c),
         ];
         let canonical = sim
             .simulate(&request, TARGET, limits())
@@ -242,6 +240,15 @@ fn every_input_role_refuses_late_bad_values_before_any_completion_or_store() {
                 (255, 3, 0x7fc0_0000),
                 (255, 3, 0x7f80_0000),
             ]
+        } else if argument == 0 {
+            let mut cases = Vec::new();
+            for word in 0..4 {
+                cases.push((63 * 8 + word, (word * 8 + 7) as u8, 0x8111_1111));
+            }
+            for word in 4..8 {
+                cases.push((63 * 8 + word, (28 + word) as u8, 1));
+            }
+            cases
         } else {
             let mut cases = Vec::new();
             for word in 0..8 {
@@ -256,7 +263,7 @@ fn every_input_role_refuses_late_bad_values_before_any_completion_or_store() {
             cases
         };
         for (word, component, bits) in cases {
-            let mut request = request(&[0x28; 2048], &[0x28; 2048], &[0; 256], 1, 64);
+            let mut request = request(&[1; 2048], &[0x28; 2048], &[0; 256], 1, 64);
             alter(
                 &mut request,
                 argument,
@@ -287,13 +294,13 @@ fn every_input_role_refuses_late_bad_values_before_any_completion_or_store() {
 #[test]
 fn ordinary_memory_initialization_and_bounds_checks_still_run() {
     let sim = admit(module(64));
-    let mut request = request(&[0x28; 2048], &[0x28; 2048], &[0; 256], 1, 64);
-    alter(&mut request, 0, 0, &0x2828_2828_u32.to_le_bytes(), false);
+    let mut request = request(&[1; 2048], &[0x28; 2048], &[0; 256], 1, 64);
+    alter(&mut request, 0, 0, &0x1111_1111_u32.to_le_bytes(), false);
     assert!(matches!(
         kind(sim.simulate(&request, TARGET, limits()).unwrap_err()),
         SimulationExecutionErrorKindV1::UninitializedRead { .. }
     ));
-    let mut short = fixture::request(&[0x28; 2048], &[0x28; 2048], &[0; 256], 1, 64);
+    let mut short = fixture::request(&[1; 2048], &[0x28; 2048], &[0; 256], 1, 64);
     let SimulationArgumentV1::Buffer(old) = &short.arguments[1] else {
         unreachable!()
     };
@@ -317,7 +324,7 @@ fn ordinary_memory_initialization_and_bounds_checks_still_run() {
 fn partial_waves_are_not_zero_padded() {
     let sim = admit(module(64));
     for grid in [63, 65] {
-        let mut request = request(&[0x28; 2048], &[0x28; 2048], &[0; 256], 2, 64);
+        let mut request = request(&[1; 2048], &[0x28; 2048], &[0; 256], 2, 64);
         request.grid = GridShapeV1([grid, 1, 1]);
         assert!(matches!(
             kind(sim.simulate(&request, TARGET, limits()).unwrap_err()),
@@ -330,10 +337,10 @@ fn numerical_work_is_prepaid_before_any_result_completion() {
     let graph = module(64);
     let position = matrix_position(&graph) as u32;
     let sim = admit(graph);
-    let request = request(&[0x28; 2048], &[0x28; 2048], &[0; 256], 1, 64);
+    let request = request(&[1; 2048], &[0x28; 2048], &[0; 256], 1, 64);
     let before = 64 * (u64::from(position) + 1 + 40);
     let denied = SimulationLimitsV1 {
-        max_steps: before + 66 * 64 + 268_160 - 1,
+        max_steps: before + 66 * 64 + 333_952 - 1,
         ..limits()
     };
     let mut events = MatrixEvents {
@@ -398,7 +405,7 @@ fn branched(mismatched: bool) -> Module {
 }
 #[test]
 fn divergent_or_different_actual_matrix_site_cannot_complete() {
-    let request = request(&[0x28; 2048], &[0x28; 2048], &[0; 256], 1, 64);
+    let request = request(&[1; 2048], &[0x28; 2048], &[0; 256], 1, 64);
     for mismatched in [false, true] {
         let refusal = kind(
             admit(branched(mismatched))
@@ -422,7 +429,7 @@ fn divergent_or_different_actual_matrix_site_cannot_complete() {
 #[test]
 fn exact_steps_and_resident_floor_are_enforced_without_cap_increases() {
     let sim = admit(module(64));
-    let request = request(&[0x28; 2048], &[0x28; 2048], &[0; 256], 1, 64);
+    let request = request(&[1; 2048], &[0x28; 2048], &[0; 256], 1, 64);
     let baseline = sim.simulate(&request, TARGET, limits()).unwrap();
     let peak = sim
         .preflight(&request, TARGET, limits())
@@ -481,7 +488,7 @@ fn layoutless_matrix_is_refused_before_simulator_admission() {
 #[test]
 fn exact_profile_does_not_admit_a_32_bit_target_layout() {
     let sim = admit(module(64));
-    let request = request(&[0x28; 2048], &[0x28; 2048], &[0; 256], 1, 64);
+    let request = request(&[1; 2048], &[0x28; 2048], &[0; 256], 1, 64);
     assert!(sim.preflight(&request, TARGET, limits()).is_ok());
     assert!(
         sim.preflight(
@@ -494,36 +501,28 @@ fn exact_profile_does_not_admit_a_32_bit_target_layout() {
 }
 
 #[test]
-fn mixed_profile_admits_without_reinterpreting_fp8_a_as_fp4() {
-    let mut graph = module(64);
-    let position = matrix_position(&graph);
-    let OperationKind::Matrix(matrix) =
-        &mut graph.functions[0].body.as_mut().unwrap().blocks[0].operations[position].kind
-    else {
-        unreachable!()
-    };
-    let MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } = &mut matrix.kind else {
-        unreachable!()
-    };
-    *profile = MatrixMultiplyProfile::fp4_e2m1_f32_m16n16k128_wave64();
-    matrix.tensor_layout =
-        Some(TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64());
-    let caps = graph.functions[0].derived_capabilities();
-    graph.functions[0].required_capabilities = caps.clone();
-    graph.kernels[0].required_capabilities = caps.clone();
-    graph.required_capabilities = caps;
-    let sim = admit(graph);
-    let request = request(&[0x28; 2048], &[0x28; 2048], &[0; 256], 1, 64);
-    assert!(sim.preflight(&request, TARGET, limits()).is_ok());
-    // FP8's +0.25 byte is a negative-zero low nibble in FP4 A.
-    assert_eq!(
-        kind(sim.simulate(&request, TARGET, limits()).unwrap_err()),
-        SimulationExecutionErrorKindV1::UnsupportedMatrixInputDomain {
-            role: MatrixInputRoleV1::A,
-            lane: 0,
-            component: 0,
+fn reversed_operand_layout_and_wrong_profile_are_not_silently_reinterpreted() {
+    for reverse in [false, true] {
+        let mut graph = module(64);
+        let position = matrix_position(&graph);
+        let OperationKind::Matrix(matrix) =
+            &mut graph.functions[0].body.as_mut().unwrap().blocks[0].operations[position].kind
+        else {
+            unreachable!()
+        };
+        if reverse {
+            let layout = matrix.tensor_layout.as_mut().unwrap();
+            std::mem::swap(&mut layout.a, &mut layout.b);
+        } else {
+            let MatrixOperationKind::ScaledMultiplyAccumulate { profile, .. } = &mut matrix.kind
+            else {
+                unreachable!()
+            };
+            *profile = MatrixMultiplyProfile::fp8_e4m3_f32_m16n16k128_wave64();
         }
-    );
+        // Both are invalid descriptors under the existing canonical verifier.
+        assert!(VerifiedCanonicalKernelIrV12::from_module(graph).is_err());
+    }
 }
 
 #[test]
@@ -575,33 +574,40 @@ fn compact_fixture_preserves_all_memory_and_matrix_operations() {
 }
 
 #[test]
-fn all_eight_dwords_follow_the_independent_split_k_packing_contract() {
+fn independent_packing_covers_contiguous_a_split_k_b_and_a_padding() {
     let (a, b, c) = dense();
     let input = request(&a, &b, &c, 1, 64);
-    for (argument, dense) in [(0, &a), (1, &b)] {
+    for argument in 0..2 {
         let SimulationArgumentV1::Buffer(buffer) = &input.arguments[argument] else {
             unreachable!()
         };
         for lane in 0..64 {
             for word in 0..8 {
-                let expected = std::array::from_fn::<_, 4, _>(|byte| {
-                    let item = 4 * word + byte;
-                    let k = 16 * (lane / 16) + item % 16 + 64 * (item / 16);
-                    dense[if argument == 0 {
-                        (lane % 16) * 128 + k
+                let expected = if argument == 0 {
+                    if word >= 4 {
+                        0
                     } else {
-                        k * 16 + lane % 16
-                    }]
-                });
+                        (0..8).fold(0_u32, |packed, nibble| {
+                            let k = 32 * (lane / 16) + word * 8 + nibble;
+                            packed | (u32::from(a[(lane % 16) * 128 + k]) << (4 * nibble))
+                        })
+                    }
+                } else {
+                    (0..4).fold(0_u32, |packed, byte| {
+                        let item = 4 * word + byte;
+                        let k = 16 * (lane / 16) + item % 16 + 64 * (item / 16);
+                        packed | (u32::from(b[k * 16 + lane % 16]) << (8 * byte))
+                    })
+                };
                 let offset = (lane * 8 + word) * 4;
-                assert_eq!(&buffer.bytes()[offset..offset + 4], &expected);
+                assert_eq!(&buffer.bytes()[offset..offset + 4], &expected.to_le_bytes());
             }
         }
     }
 }
 
 mod fixture {
-    //! Independent row-major oracle and inert canonical load/FP8-MFMA/store graph.
+    //! Independent row-major oracle and inert canonical load/mixed-MFMA/store graph.
     use fe2o3_kernel_ir::*;
     use fe2o3_kir_sim::*;
     pub const TARGET: SimulationTargetV1 = SimulationTargetV1::amdgpu_64();
@@ -773,13 +779,13 @@ mod fixture {
                 .map(|id| ValueDef::new(*id, f.clone()))
                 .collect(),
             OperationKind::Matrix(
-                MatrixOperation::scaled_multiply_accumulate_fp8_e4m3(
+                MatrixOperation::scaled_multiply_accumulate_fp4_e2m1(
                     values[0].clone().try_into().unwrap(),
                     values[1].clone().try_into().unwrap(),
                     values[2].clone().try_into().unwrap(),
                 )
                 .with_declared_tensor_layout(
-                    TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64(),
+                    TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64(),
                 ),
             ),
         ));
@@ -833,7 +839,7 @@ mod fixture {
         let caps = entry.derived_capabilities();
         entry.required_capabilities = caps.clone();
         kernel.required_capabilities = caps.clone();
-        let mut module = Module::new("inert::fp8-exact-v1");
+        let mut module = Module::new("inert::mixed-fp4-fp8-exact-v1");
         module.required_capabilities = caps;
         module.functions.push(entry);
         module.kernels.push(kernel);
@@ -847,6 +853,10 @@ mod fixture {
         .unwrap()
     }
     /// Test-only independent numeric oracle; never calls the implementation decoder.
+    pub fn decode_fp4(code: u8) -> f64 {
+        let magnitude = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0][usize::from(code & 7)];
+        if code & 8 == 0 { magnitude } else { -magnitude }
+    }
     pub fn decode(code: u8) -> f64 {
         let sign = if code & 0x80 == 0 { 1.0 } else { -1.0 };
         let exponent = i32::from((code >> 3) & 15);
@@ -861,7 +871,7 @@ mod fixture {
         std::array::from_fn(|n| {
             let mut sum = c[n] as f64 / 16.0;
             for k in 0..128 {
-                sum += decode(a[(n / 16) * 128 + k]) * decode(b[k * 16 + n % 16]);
+                sum += decode_fp4(a[(n / 16) * 128 + k]) * decode(b[k * 16 + n % 16]);
             }
             (sum as f32).to_bits()
         })
@@ -894,10 +904,10 @@ mod fixture {
         for wave in 0..waves {
             for row in 0..16 {
                 for k in 0..128 {
-                    let lane = row + 16 * ((k % 64) / 16);
-                    let component = (k % 16) + 16 * (k / 64);
-                    aa[wave * 512 + lane * 8 + component / 4] |=
-                        u32::from(a[row * 128 + k]) << (8 * (component % 4));
+                    let lane = row + 16 * (k / 32);
+                    let component = k % 32;
+                    aa[wave * 512 + lane * 8 + component / 8] |=
+                        u32::from(a[row * 128 + k]) << (4 * (component % 8));
                 }
             }
             for k in 0..128 {

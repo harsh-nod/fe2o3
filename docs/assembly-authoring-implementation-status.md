@@ -3628,3 +3628,40 @@ commit. A current-main tutorial compatibility report must retain that
 separation until its selected public revision is actually exercised. These
 status/baseline appendices were added after the code qualification and do not
 change the recorded source census or close any additional milestone.
+
+## R87 mixed FP4 × FP8 CPU numerical implementation (2026-10-08)
+
+The [mixed exact-domain evaluator](gfx950-mixed-fp4-fp8-exact-simulator-v1.md)
+now implements the existing gfx950 FP4-A/OCP-FP8-B identity-scale contract,
+including distinct packed K mappings, exact bounded integer arithmetic and
+prepaid scratch/work accounting. It does not add a new source API, target
+lowering, schema or higher simulator cap.
+
+Base `01cf5996671499bd7bf71c9feb5fb5d840fa2c06` plus the nine mixed
+implementation/test leaves passed the complete simulator and CLI suites:
+813 passed, zero failed, zero ignored across 45 result groups, including the
+unchanged original small-stack test. Receipt SHA-256:
+`9a65017181293ba12a0164232d9770c67c405b293f2745ae8f1f1c739415e156`.
+Before/after source census:
+`edfd89c53bb67ac03713e75e43f4cc5ca661a93da1fc968599e6a39497026ea2`
+(15,413 files / 222,150,586 bytes). Documentation followed the run.
+
+Separately, clean public `01cf5996671499bd7bf71c9feb5fb5d840fa2c06`
+was actually exercised by the ordinary Rust FP8 source driver: all eight
+ordinary controls and the explicitly selected genuine ignored test passed.
+The same exported Bundle V6 / KIR V11 graph produced all 4,096 expected F32
+values and preserved four canaries; the wrong-canary and typed invalid-input
+controls also behaved as specified above. Receipt SHA-256:
+`cfe4495990e00280c9ddf752cd48dfe8eccc6dd1452cb02dc7b14412c6cb03dd`.
+Its source census was 15,409 files / 222,096,351 bytes,
+`bea5dd6095a07f243e39fabc92fd201c0792f3ccc205fec95048b48cbeff2674`;
+the run finished at 2026-10-08 11:24:41 UTC. This is a later public-revision
+CPU result, not evidence for the earlier fixed-faa2 tutorial audit.
+
+The mixed case remains canonical-fixture-only and gfx950-specific; the FP8
+source case remains gfx950 CPU simulation only. Neither establishes native
+execution on gfx942 or gfx950, proof/load/launch authority, a complete M3/M4
+exit or the required dual-target end-to-end result. Atomic diagnostic export
+is a separate unpublished candidate: its genuine retry still refuses with
+`source reference dereference has no checked origin`. That refusal is not a
+working source-to-simulator atomic path.

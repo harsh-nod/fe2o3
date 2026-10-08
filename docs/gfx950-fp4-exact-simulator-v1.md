@@ -9,7 +9,10 @@ layout, codec version, hardware profile or execution authority.
 Only the full `fp4_e2m1_f32_m16n16k128_wave64` profile with the exact
 `gfx950_scaled_mfma_fp4_e2m1_f32_m16n16k128_wave64` tensor layout,
 uniform subgroup convergence, 64 active lanes and a 64-bit simulation target
-is supported. FP8 and mixed FP4/FP8 remain unsupported. The current KIR has no
+is supported by the pure FP4 evaluator described here. Separate exact-domain
+[FP8](gfx950-fp8-exact-simulator-v1.md) and
+[mixed FP4/FP8](gfx950-mixed-fp4-fp8-exact-simulator-v1.md) evaluators now exist;
+they do not broaden this pure-FP4 numerical domain. The current KIR has no
 scale operands: its existing LLVM lowering fixes both FP4 format selectors
 to 4 and the four scale controls to zero. This is the existing identity-scale
 operation, not arbitrary E8M0 scaling. In particular, an encoded E8M0 byte of

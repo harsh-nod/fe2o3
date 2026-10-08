@@ -63,8 +63,10 @@ simulator decoder or lane lookup.
 
 The existing cooperative rendezvous requires a full physical wave at the same
 matrix site. Partial waves, divergent participation and mismatched sites do
-not receive synthetic zero lanes. Mixed FP4/FP8 remains unsupported. BF16 and
-FP4 numerical paths remain unchanged.
+not receive synthetic zero lanes. A separate
+[mixed FP4/FP8 evaluator](gfx950-mixed-fp4-fp8-exact-simulator-v1.md) now
+handles its own exact layout and domain. BF16 and pure FP4 numerical paths
+remain unchanged.
 
 All 4,352 input components are screened in deterministic lane, operand and
 component order. Every input is validated and all 256 numerical results are
@@ -101,12 +103,16 @@ cancellation, all eight packed words, two separate workgroup/wave layouts,
 seeded/replay equality, typed late input failures in every operand/word,
 ordinary initialization/bounds errors, partial/divergent/mismatched waves,
 prepaid work refusal, exact/one-short step and resident limits, layout omission,
-32-bit target refusal and retained mixed-format refusal. Four output canaries
+32-bit target refusal and, at the original checkpoint below, mixed-format
+refusal. The later mixed evaluator updates only that compatibility control
+to admit its exact layout while refusing reinterpretation of pure packed
+inputs. Four output canaries
 and unmodified input bytes remain checked.
 
-The existing FP4 mixed/FP8 compatibility test changes only the former
-FP8-unsupported expectation to exact-profile preflight admission. Its mixed
-refusal and all FP4 numerical checks remain.
+At the original FP8 checkpoint, the FP4 mixed/FP8 compatibility test changed
+only the FP8-unsupported expectation to exact-profile preflight admission.
+The later mixed implementation has its separately recorded qualification;
+all pure FP4 numerical checks remain.
 
 The private and canonical controls passed in the complete simulator suite,
 and the canonical CLI compatibility suite passed separately. The exact CPU

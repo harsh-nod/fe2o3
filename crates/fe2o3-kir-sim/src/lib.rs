@@ -12,6 +12,7 @@ pub use budgeted_v12_observation::{
 pub use budgeted_v18::{SimulationViewAdmissionErrorV18, SimulationViewStorageV18};
 mod matrix_bf16_exact_v1;
 mod matrix_fp4_exact_v1;
+mod matrix_fp4_fp8_exact_v1;
 mod matrix_fp8_exact_v1;
 pub use matrix_bf16_exact_v1::MatrixInputRoleV1;
 mod capability;

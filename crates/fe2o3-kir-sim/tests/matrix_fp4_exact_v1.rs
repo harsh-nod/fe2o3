@@ -481,7 +481,7 @@ fn exact_profile_does_not_admit_a_32_bit_target_layout() {
 }
 
 #[test]
-fn mixed_layout_refuses_while_exact_fp8_profile_admits() {
+fn mixed_and_pure_fp8_profiles_admit_but_do_not_reinterpret_packed_domains() {
     for layout in [
         TensorLayoutContractV1::gfx950_scaled_mfma_fp4_e2m1_fp8_e4m3_f32_m16n16k128_wave64(),
         TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64(),
@@ -506,35 +506,25 @@ fn mixed_layout_refuses_while_exact_fp8_profile_admits() {
         graph.kernels[0].required_capabilities = caps.clone();
         graph.required_capabilities = caps;
         let sim = admit(graph);
-        if layout == TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64() {
-            assert!(
-                sim.preflight(
-                    &request(&[1; 2048], &[1; 2048], &[0; 256], 1, 64),
-                    TARGET,
-                    limits(),
-                )
-                .is_ok()
-            );
-            continue;
-        }
-        let err = sim
-            .preflight(
-                &request(&[1; 2048], &[1; 2048], &[0; 256], 1, 64),
-                TARGET,
-                limits(),
-            )
-            .unwrap_err();
-        let SimulationPreflightErrorV1::Unsupported(report) = err else {
-            panic!("expected numerical refusal");
+        let request = request(&[1; 2048], &[1; 2048], &[0; 256], 1, 64);
+        assert!(sim.preflight(&request, TARGET, limits()).is_ok());
+        // The original FP4 buffer layout is not silently decoded as OCP FP8.
+        // Mixed A is valid FP4, so B is the first unsupported byte; pure FP8
+        // rejects A first. Both retain the numerical-domain refusal.
+        let expected = if layout
+            == TensorLayoutContractV1::gfx950_scaled_mfma_fp8_e4m3_f32_m16n16k128_wave64()
+        {
+            MatrixInputRoleV1::A
+        } else {
+            MatrixInputRoleV1::B
         };
-        assert_eq!(report.total_findings(), 1);
         assert_eq!(
-            report.findings()[0].feature,
-            UnsupportedFeatureV1::UnsupportedNumericalContract
-        );
-        assert_eq!(
-            report.findings()[0].operation,
-            Some(u32::try_from(position).unwrap())
+            kind(sim.simulate(&request, TARGET, limits()).unwrap_err()),
+            SimulationExecutionErrorKindV1::UnsupportedMatrixInputDomain {
+                role: expected,
+                lane: 0,
+                component: 0,
+            }
         );
     }
 }
