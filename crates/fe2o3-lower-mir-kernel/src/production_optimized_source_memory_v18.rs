@@ -86,7 +86,7 @@ impl ProductionOptimizedSourceMemoryAccessV18<'_> {
 }
 
 impl ProductionOptimizedSourceCorrespondenceV18<'_> {
-    fn ordered_output(
+    pub(super) fn ordered_output(
         &self,
         input: OpCoordinate,
         budget: &mut ArgumentBudgetV1<'_>,
@@ -100,7 +100,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
         }
     }
 
-    fn exact_output_operand(
+    pub(super) fn exact_output_operand(
         &self,
         input: UseCoordinate,
         output_operation: OpCoordinate,
@@ -146,7 +146,7 @@ impl ProductionOptimizedSourceCorrespondenceV18<'_> {
         Ok(actual)
     }
 
-    fn exact_output_result(
+    pub(super) fn exact_output_result(
         &self,
         input: Definition,
         output: Definition,

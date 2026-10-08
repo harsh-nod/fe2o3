@@ -10,6 +10,8 @@ use fe2o3_kernel_ir::{
     CanonicalKirUseCoordinateV1 as UseCoordinate,
 };
 
+#[path = "production_optimized_source_atomic_v1.rs"]
+pub(super) mod atomic;
 #[path = "production_optimized_source_attachments_v18.rs"]
 mod attachments;
 #[path = "production_optimized_source_cfg_v18.rs"]
@@ -22,6 +24,9 @@ mod execution;
 mod index;
 #[path = "production_optimized_source_memory_v18.rs"]
 mod memory;
+pub use atomic::{
+    ProductionOptimizedSourceAtomicDispositionV1, ProductionOptimizedSourceAtomicRmwV1,
+};
 #[path = "production_optimized_source_resources_v18.rs"]
 mod resources;
 #[path = "production_optimized_source_tile_schedule_v155.rs"]
