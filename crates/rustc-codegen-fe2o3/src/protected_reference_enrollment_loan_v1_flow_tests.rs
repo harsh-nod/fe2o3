@@ -434,6 +434,9 @@ fn explicit_empty_request_is_refused_and_cannot_be_ignored() {
             loan.request(&mut source).unwrap_err().to_string(),
             "reference enrollment binding count outside limits"
         );
+        assert!(loan.requested_bindings.get().is_none());
+        assert!(loan.inventory_context(&mut source).is_err());
+        assert!(loan.reserve_inventory_storage(0).is_err());
         assert!(loan.capture_stamp(&mut source).is_err());
         Ok(())
     });
@@ -504,13 +507,13 @@ fn no_request_empty_collector_roster_captures_and_replays_with_a_fresh_loan() {
 }
 
 #[test]
-fn original_empty_request_header_does_not_query_an_ordinal() {
+fn original_request_header_does_not_query_an_ordinal() {
     if fixture::isolated(
         concat!(
             module_path!(),
-            "::original_empty_request_header_does_not_query_an_ordinal"
+            "::original_request_header_does_not_query_an_ordinal"
         ),
-        Some(r#"{"version":1,"bindings":[]}"#),
+        Some(ONE_REQUEST),
     ) {
         return;
     }
@@ -523,9 +526,9 @@ fn original_empty_request_header_does_not_query_an_ordinal() {
     let (native, ()) = native
         .with_reference_enrollment::<_, SessionError>(&mut invocation, |loan| {
             let loan = loan.unwrap();
-            assert!(loan.request(&mut source)?.unwrap().bindings().is_empty());
+            assert_eq!(loan.request(&mut source)?.unwrap().bindings().len(), 1);
             let context = loan.inventory_context(&mut source)?.unwrap();
-            assert_eq!(context.descriptor_bindings, 0);
+            assert_eq!(context.descriptor_bindings, 1);
             assert_eq!(
                 context.rustc_invocation_sha256,
                 loan.origin.rustc_invocation_sha256

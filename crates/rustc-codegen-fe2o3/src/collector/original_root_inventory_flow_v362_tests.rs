@@ -14,12 +14,13 @@ use rustc_interface::interface::Compiler;
 use rustc_middle::mir::mono::MonoItem;
 use sha2::{Digest, Sha256};
 
+// Distinct substitutions test instance identity, not const-generic MIR lowering.
 const SOURCE: &str = r#"
 #![allow(dead_code)]
 #[inline(never)]
-pub fn generic_kernel<const N: u32>(value: u32) { let _v = value ^ N; }
+pub fn generic_kernel<const N: u32>(value: u32) { let _v = value ^ 7; }
 #[inline(never)]
-pub fn generic_reference<const N: u32>(value: u32) { let _v = value ^ N; }
+pub fn generic_reference<const N: u32>(value: u32) { let _v = value ^ 7; }
 pub fn anchor(value: u32) {
     generic_kernel::<3>(value);
     generic_kernel::<5>(value);
