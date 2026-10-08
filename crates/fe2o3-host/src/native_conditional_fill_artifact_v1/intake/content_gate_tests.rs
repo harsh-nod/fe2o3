@@ -490,9 +490,10 @@ fn direct_raw_composition_rejects_coherently_resealed_content_and_preserves_deni
             let denied = budget.failed_work();
             let error = authenticate_raw_subject(&handoff, &claimed, budget).unwrap_err();
             if !prior_denial {
-                assert_eq!(
-                    error.to_string(),
-                    "native raw V5 compiler-execution subject"
+                assert!(
+                    matches!(error, Error::Rejected(ref reason)
+                        if reason == "native raw V5 compiler-execution subject"),
+                    "{error}",
                 );
                 assert_eq!(
                     budget.storage(),
