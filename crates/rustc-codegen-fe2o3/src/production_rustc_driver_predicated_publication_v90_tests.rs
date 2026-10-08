@@ -23,6 +23,9 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticTerminatorKindV1, SemanticWriteOnlyDisjointWriteKindV1,
 };
 
+#[path = "production_rustc_driver_assert_failure_payload_v355_tests.rs"]
+mod assert_failure_payload_tests;
+
 const CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::predicated_publication_v90_tests::predicated_publication_child";
 const RESOURCE_CHILD: &str = "production_rustc_driver_v1::checked_output_source_v1_tests::context_source_v29_tests::source_owned_tests::original_source_tests::mixed_licm_tests::worker_orchestration_tests::predicated_publication_v90_tests::predicated_publication_resources_child";
 const CASES: &[(&str, &str)] = &[
@@ -396,6 +399,7 @@ fn resource(error: &Error) -> Resource {
 #[derive(Default)]
 struct PreparationCallbacks {
     boundaries: bool,
+    consumer: Option<Consumer>,
     result: Option<Result<Observation, String>>,
 }
 impl Callbacks for PreparationCallbacks {
@@ -408,6 +412,7 @@ impl Callbacks for PreparationCallbacks {
                 )
             };
             // A fixed function-pointer capture keeps exact and short frame layouts identical.
+            let consumer = self.consumer.unwrap_or(observe as Consumer);
             let run = |work_limit, storage_limit| {
                 let mut work = Work::new(work_limit);
                 let mut budget = Budget::new(&mut work, storage_limit);
@@ -418,8 +423,7 @@ impl Callbacks for PreparationCallbacks {
                 let result = budget.with_prepaid_scope(FLOOR, 0, 0, 0, |budget| {
                     pending
                         .with_original_source_predicated_publication_on_account_v90(
-                            budget,
-                            observe as Consumer,
+                            budget, consumer,
                         )
                         .map(|value| value.into_observation())
                 });
@@ -549,12 +553,17 @@ impl Callbacks for PreparationCallbacks {
 }
 
 fn child(boundaries: bool) {
+    child_with_consumer(boundaries, observe as Consumer);
+}
+
+fn child_with_consumer(boundaries: bool, consumer: Consumer) {
     let Some(path) = env::var_os(ARGS) else {
         return;
     };
     let args: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
     let mut callbacks = PreparationCallbacks {
         boundaries,
+        consumer: Some(consumer),
         ..Default::default()
     };
     rustc_driver::run_compiler(&args, &mut callbacks);
