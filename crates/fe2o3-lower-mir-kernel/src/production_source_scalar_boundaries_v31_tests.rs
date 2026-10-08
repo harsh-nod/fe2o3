@@ -478,9 +478,9 @@ fn source_scalar_boundaries_do_not_admit_cleanup_assert_as_nonreturning() {
                 ProductionPendingScopedSourceErrorV29::Source(
                     ProductionSemanticKirErrorV1::Unsupported {
                         function: 0,
-                        block: Some(1),
+                        block: None,
                         statement: None,
-                        detail: "semantic assert has a cleanup unwind edge",
+                        detail: "source reference assertion unwind requires effect transport",
                     }
                 )
             ))
