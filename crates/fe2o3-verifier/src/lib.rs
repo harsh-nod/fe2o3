@@ -134,11 +134,14 @@ pub mod compiler_native_conditional_source_proof_v2;
 pub use compiler_native_conditional_source_proof_v2::final_replay::{
     NativeConditionalFinalErrorV2, NativeConditionalFinalInputsV2,
     validate_native_conditional_source_through_f_v2,
+    validate_native_conditional_source_through_f_with_cpu_origins_v2,
 };
 pub use compiler_native_conditional_source_proof_v2::{
+    NativeConditionalCpuExpectationV1, NativeConditionalCpuOriginExpectationV1,
     NativeConditionalRootPolicyV2, NativeConditionalSourceProofErrorV2,
     NativeConditionalSourceStorageV2, ReplayedNativeConditionalSourceV2,
     select_native_conditional_ownership_site_v2, validate_native_conditional_source_packet_v2,
+    validate_native_conditional_source_packet_with_cpu_origins_v2,
 };
 
 pub use artifact_record::{

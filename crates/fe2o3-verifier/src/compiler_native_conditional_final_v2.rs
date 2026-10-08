@@ -4,13 +4,18 @@
     clippy::large_enum_variant,
     reason = "typed terminal errors without an uncharged allocation"
 )]
+use super::NativeConditionalCpuExpectationV1;
+use super::cpu_origin::{CpuReplayMode, DecodedCpu};
 use super::{
     Budget, E as SourceError, NativeConditionalRootPolicyV2, NativeConditionalSourcePacketInputV2,
     NativeConditionalSourceStorageV2, ReplayedNativeConditionalSourceV2, ReplayedNativeSourceV1,
     ReplayedRoot, Resource, reconstruct, root, with_decoded_native_conditional_source_packet_v2,
 };
 use crate::conditional_contract_request_v2::check_conditional_contract_content_v2;
-use crate::conditional_ranked_formulas_v1::import_and_check_conditional_ranked_formula_v2;
+use crate::conditional_ranked_formulas_v1::{
+    import_and_check_conditional_ranked_formula_policy_v2,
+    import_and_check_conditional_ranked_formula_v2,
+};
 use fe2o3_amd_target::ProductionAmdTargetProfileV1 as Profile;
 use fe2o3_amdgcn_model::{
     ReplayedNativeV12TextDescriptorRelationV5 as Relation,
@@ -93,6 +98,27 @@ pub fn validate_native_conditional_source_through_f_v2(
     )
 }
 
+/// Explicit per-root codec selection from independently retained expectations.
+/// Expectations are inert, caller-owned and prepaid on the original account;
+/// their agreement does not authenticate original enrollment or source custody.
+pub fn validate_native_conditional_source_through_f_with_cpu_origins_v2(
+    packet_bytes: &[u8],
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    expected_cpu: &[NativeConditionalCpuExpectationV1],
+    inputs: Inputs<'_, '_, '_>,
+    budget: &mut Budget<'_>,
+) -> Result<Output, Error> {
+    validate_using(
+        packet_bytes,
+        accepted,
+        CpuReplayMode::Expected(expected_cpu),
+        inputs,
+        budget,
+        false,
+        |_, _, _, _| Ok(()),
+    )
+}
+
 fn header<Failure>(callback: usize) -> Result<usize, Resource> {
     HEADER
         .checked_sub(size_of::<Result<Output, Error>>())
@@ -118,7 +144,15 @@ pub(crate) fn validate_native_conditional_source_through_f_using_v2<Failure>(
 where
     Failure: From<Error> + From<SourceError> + From<Resource>,
 {
-    validate_using(packet_bytes, accepted, inputs, budget, false, join)
+    validate_using(
+        packet_bytes,
+        accepted,
+        CpuReplayMode::RegistrationOnly,
+        inputs,
+        budget,
+        false,
+        join,
+    )
 }
 
 /// Selected only by the concrete original-account V5 recovery window. Nested
@@ -139,12 +173,21 @@ pub(crate) fn validate_native_conditional_source_through_f_using_original_accoun
 where
     Failure: From<Error> + From<SourceError> + From<Resource>,
 {
-    validate_using(packet_bytes, accepted, inputs, budget, true, join)
+    validate_using(
+        packet_bytes,
+        accepted,
+        CpuReplayMode::RegistrationOnly,
+        inputs,
+        budget,
+        true,
+        join,
+    )
 }
 
 fn validate_using<Failure>(
     packet_bytes: &[u8],
     accepted: &[NativeConditionalRootPolicyV2<'_>],
+    origins: CpuReplayMode<'_>,
     inputs: Inputs<'_, '_, '_>,
     budget: &mut Budget<'_>,
     original_history: bool,
@@ -158,9 +201,16 @@ fn validate_using<Failure>(
 where
     Failure: From<Error> + From<SourceError> + From<Resource>,
 {
-    let header = header::<Failure>(std::mem::size_of_val(&join))?;
+    let origin_header = match origins {
+        CpuReplayMode::RegistrationOnly => 0,
+        CpuReplayMode::Expected(_) => size_of::<CpuReplayMode<'_>>(),
+    };
+    let header = header::<Failure>(std::mem::size_of_val(&join))?
+        .checked_add(origin_header)
+        .ok_or(Resource::Arithmetic)?;
     account::transfer_using(budget, |budget| {
-        require_backing(packet_bytes, &inputs, budget)?;
+        origins.require_backing(budget)?;
+        require_backing(packet_bytes, &inputs, origins.backing_bytes(), budget)?;
         account::temporary_using(budget, header, |budget| {
             require_limits(
                 inputs.decoded_history.frame().limits(),
@@ -181,14 +231,15 @@ where
                     packet_bytes,
                     budget,
                     |packet, budget| {
+                        origins.require_roster(packet.roots, accepted, budget)?;
                         reconstruct::reconstruct_using(
                             packet,
                             accepted,
                             budget,
                             |source, packet, roots, retained, budget| {
                                 check_source(
-                                    source, packet, accepted, roots, retained, &inputs, &history,
-                                    budget, join,
+                                    source, packet, accepted, origins, roots, retained, &inputs,
+                                    &history, budget, join,
                                 )
                             },
                         )
@@ -215,6 +266,7 @@ fn require_limits(actual: Limits, expected: Limits, budget: &mut Budget<'_>) -> 
 fn require_backing(
     bytes: &[u8],
     inputs: &Inputs<'_, '_, '_>,
+    origin_backing: usize,
     budget: &mut Budget<'_>,
 ) -> Result<(), Error> {
     budget.charge_work(10)?;
@@ -233,7 +285,7 @@ fn require_backing(
     ];
     let minimum = lengths
         .into_iter()
-        .try_fold(0usize, |sum, n| sum.checked_add(n))
+        .try_fold(origin_backing, |sum, n| sum.checked_add(n))
         .ok_or(Resource::Arithmetic)?;
     if budget.storage() < minimum {
         return Err(Resource::Accounting.into());
@@ -245,6 +297,7 @@ fn check_source<Failure>(
     source: &ReplayedNativeSourceV1,
     packet: &NativeConditionalSourcePacketInputV2<'_>,
     accepted: &[NativeConditionalRootPolicyV2<'_>],
+    origins: CpuReplayMode<'_>,
     roots: &mut Vec<ReplayedRoot>,
     retained: &mut usize,
     inputs: &Inputs<'_, '_, '_>,
@@ -276,40 +329,58 @@ where
             roots,
             retained,
             budget,
-            |source, row, policy, body, budget| {
+            |ordinal, source, row, policy, body, budget| {
+                let origin = origins.at(ordinal, row.semantic_root, budget)?;
                 root::reconstruct_root_using(
                     source,
                     row,
                     policy,
+                    origin,
                     budget,
                     |request, decoded, budget| {
-                        import_and_check_conditional_ranked_formula_v2(
-                            request,
-                            decoded,
-                            row.formula_receipt,
-                            policy.formula,
-                            budget,
-                            |execution, budget| {
-                                request
-                                    .check_replayed_refined_forwarding_output_v1(
-                                        &coordinates,
-                                        history,
-                                        inputs.expected_limits,
-                                        budget,
-                                    )
-                                    .map_err(|error| Error(Cause::ConditionalFinal(error)))?;
-                                check_conditional_contract_content_v2(
-                                    request,
-                                    execution,
-                                    (SemanticFunctionIdV1::from_index(row.semantic_root), body),
-                                    KernelId::from_bytes(row.launch.kernel_binding()),
-                                    inputs.descriptors,
-                                    None,
+                        let check = |execution: &crate::ProductionConditionalFormulaExecutionV2,
+                                     budget: &mut Budget<'_>| {
+                            request
+                                .check_replayed_refined_forwarding_output_v1(
+                                    &coordinates,
+                                    history,
+                                    inputs.expected_limits,
                                     budget,
                                 )
-                                .map_err(|error| Error(Cause::Contract(error)))
-                            },
-                        )
+                                .map_err(|error| Error(Cause::ConditionalFinal(error)))?;
+                            check_conditional_contract_content_v2(
+                                request,
+                                execution,
+                                (SemanticFunctionIdV1::from_index(row.semantic_root), body),
+                                KernelId::from_bytes(row.launch.kernel_binding()),
+                                inputs.descriptors,
+                                None,
+                                budget,
+                            )
+                            .map_err(|error| Error(Cause::Contract(error)))
+                        };
+                        match decoded {
+                            DecodedCpu::Registration(decoded) => {
+                                import_and_check_conditional_ranked_formula_v2(
+                                    request,
+                                    decoded,
+                                    row.formula_receipt,
+                                    policy.formula,
+                                    budget,
+                                    check,
+                                )
+                            }
+                            DecodedCpu::Policy(decoded) => {
+                                import_and_check_conditional_ranked_formula_policy_v2(
+                                    request,
+                                    decoded,
+                                    row.formula_receipt,
+                                    policy.formula,
+                                    budget,
+                                    check,
+                                )
+                            }
+                        }
                     },
                     |imported| imported.map_err(|error| Error(Cause::Import(error)))?,
                 )

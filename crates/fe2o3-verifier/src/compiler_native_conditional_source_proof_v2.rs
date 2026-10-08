@@ -19,6 +19,9 @@ use crate::{ProductionConditionalFormulaReportV2, RetainedProductionConditionalF
 
 #[path = "compiler_native_conditional_source_proof_v2/account.rs"]
 mod account;
+#[path = "compiler_native_conditional_source_proof_v2/cpu_origin.rs"]
+mod cpu_origin;
+pub use cpu_origin::{NativeConditionalCpuExpectationV1, NativeConditionalCpuOriginExpectationV1};
 #[path = "compiler_native_conditional_source_proof_v2/error.rs"]
 mod error;
 #[path = "compiler_native_conditional_final_v2.rs"]
@@ -137,6 +140,31 @@ pub fn validate_native_conditional_source_packet_v2(
     account::transfer(budget, |budget| {
         with_decoded_native_conditional_source_packet_v2(bytes, budget, |packet, budget| {
             reconstruct::reconstruct(packet, accepted, budget)
+        })
+        .map_err(|error| E(Cause::Packet(error)))?
+    })
+}
+
+/// Explicit origin-selected counterpart; the original entrypoint remains V1-only.
+/// The complete ordered expectations are independently supplied, caller-owned
+/// and prepaid. Agreement does not authenticate their original Loan provenance.
+pub fn validate_native_conditional_source_packet_with_cpu_origins_v2(
+    bytes: &[u8],
+    accepted: &[NativeConditionalRootPolicyV2<'_>],
+    expected_cpu: &[NativeConditionalCpuExpectationV1],
+    budget: &mut Budget<'_>,
+) -> Result<
+    (
+        ReplayedNativeConditionalSourceV2,
+        NativeConditionalSourceStorageV2,
+    ),
+    E,
+> {
+    let origins = cpu_origin::CpuReplayMode::Expected(expected_cpu);
+    account::transfer(budget, |budget| {
+        origins.require_backing(budget)?;
+        with_decoded_native_conditional_source_packet_v2(bytes, budget, |packet, budget| {
+            reconstruct::reconstruct_with_origins(packet, accepted, origins, budget)
         })
         .map_err(|error| E(Cause::Packet(error)))?
     })

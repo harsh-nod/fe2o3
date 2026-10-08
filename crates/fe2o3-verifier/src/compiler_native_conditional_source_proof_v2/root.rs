@@ -1,7 +1,7 @@
+use super::cpu_origin::{DecodedCpu, NativeConditionalCpuOriginExpectationV1 as Origin};
 use super::*;
-use crate::portable_reference_v1::codec::{
-    DecodedNativeCpuInputV1, NativeCpuAssociationV1, with_decoded_native_cpu_input_v1,
-};
+#[cfg(test)]
+use crate::portable_reference_v1::codec::NativeCpuAssociationV1;
 use fe2o3_functional_proof::{
     FunctionalRefinementBoundaryV2, FunctionalRefinementImportPolicyV2,
     ImportedFunctionalRefinementProofV2,
@@ -15,22 +15,41 @@ use fe2o3_pliron::{
     ProductionSessionLimitsV1, stage_ranked_kernel_with_borrowed_policy_checked_refinement_v2,
 };
 
+#[cfg(test)]
 pub(super) fn association(
     cpu: NativeCpuAssociationV1<'_>,
     semantic: [u8; 32],
     row: &NativeConditionalSourceRootV2<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<(), E> {
+    association_fields(
+        cpu.semantic_mir_sha256,
+        cpu.semantic_root,
+        cpu.logical_kernel_name,
+        semantic,
+        row,
+        budget,
+    )
+}
+
+fn association_fields(
+    cpu_semantic: [u8; 32],
+    cpu_root: u32,
+    cpu_name: &str,
+    semantic: [u8; 32],
+    row: &NativeConditionalSourceRootV2<'_>,
+    budget: &mut Budget<'_>,
+) -> Result<(), E> {
     budget.charge_work(
-        cpu.logical_kernel_name
+        cpu_name
             .len()
             .checked_add(row.launch.logical_name().len())
             .and_then(|n| n.checked_add(34))
             .ok_or(Resource::Arithmetic)?,
     )?;
-    if cpu.semantic_mir_sha256 != semantic
-        || cpu.semantic_root != row.semantic_root
-        || cpu.logical_kernel_name != row.launch.logical_name()
+    if cpu_semantic != semantic
+        || cpu_root != row.semantic_root
+        || cpu_name != row.launch.logical_name()
     {
         return Err(E::invalid(
             "conditional CPU source/root/logical-name association",
@@ -70,21 +89,34 @@ pub(super) fn reconstruct_root(
     source: &ReplayedNativeSourceV1,
     row: &NativeConditionalSourceRootV2<'_>,
     policy: &NativeConditionalRootPolicyV2<'_>,
+    origin: Origin,
     budget: &mut Budget<'_>,
 ) -> Result<ReplayedRoot, E> {
     reconstruct_root_using(
         source,
         row,
         policy,
+        origin,
         budget,
-        |request, decoded, budget| {
-            crate::import_and_retain_conditional_ranked_formula_v2(
-                request,
-                decoded,
-                row.formula_receipt,
-                policy.formula,
-                budget,
-            )
+        |request, decoded, budget| match decoded {
+            DecodedCpu::Registration(decoded) => {
+                crate::import_and_retain_conditional_ranked_formula_v2(
+                    request,
+                    decoded,
+                    row.formula_receipt,
+                    policy.formula,
+                    budget,
+                )
+            }
+            DecodedCpu::Policy(decoded) => {
+                crate::import_and_retain_conditional_ranked_formula_policy_v2(
+                    request,
+                    decoded,
+                    row.formula_receipt,
+                    policy.formula,
+                    budget,
+                )
+            }
         },
         |formula| formula.map_err(|error| E(Cause::Formula(error))),
     )
@@ -94,18 +126,21 @@ pub(super) fn reconstruct_root_using<R, Failure: From<E> + From<Resource>>(
     source: &ReplayedNativeSourceV1,
     row: &NativeConditionalSourceRootV2<'_>,
     policy: &NativeConditionalRootPolicyV2<'_>,
+    origin: Origin,
     budget: &mut Budget<'_>,
     import: impl FnOnce(
         &fe2o3_lower_mir_kernel::ProductionSourceBoundConditionalAggregateRequestV1<'_>,
-        &DecodedNativeCpuInputV1,
+        DecodedCpu<'_>,
         &mut Budget<'_>,
     ) -> R,
     finish: impl FnOnce(R) -> Result<RetainedProductionConditionalFormulaV2, Failure>,
 ) -> Result<ReplayedRoot, Failure> {
-    with_decoded_native_cpu_input_v1(row.cpu_input_bytes, budget, |decoded, budget| {
-        let cpu = decoded.input_v1();
-        association(
-            cpu.association,
+    cpu_origin::with_decoded(row.cpu_input_bytes, origin, budget, |decoded, budget| {
+        let cpu = decoded.subjects();
+        association_fields(
+            cpu.semantic_mir_sha256,
+            cpu.semantic_root,
+            cpu.logical_kernel_name,
             *source
                 .source()
                 .semantic_ssa()
@@ -154,7 +189,6 @@ pub(super) fn reconstruct_root_using<R, Failure: From<E> + From<Resource>>(
         budget.release_storage(prior)?;
         Ok(ReplayedRoot { input, formula })
     })
-    .map_err(|error| E(Cause::Cpu(error)))?
 }
 
 fn pending(
