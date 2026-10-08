@@ -136,6 +136,7 @@ proof fn checked_wf_arbitrary_frames_and_pending_v294(
     invocation_source_plain_aggregate_install_frame_v260(source, destination, aggregate);
     if source.logical.descriptor_references.contains_key(other) {
         assert(0 <= other < source.machine.values.len());
+        assert(!source.objects.contains_key(other));
         assert(match source.machine.values[other] { MemoryValueV30::Slice(_) => true, _ => false });
     }
 }

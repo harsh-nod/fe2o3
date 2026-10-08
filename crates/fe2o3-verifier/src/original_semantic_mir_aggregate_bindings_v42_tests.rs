@@ -434,6 +434,28 @@ fn checked_wf_laws_do_not_assume_empty_maps_or_poststate_well_formedness() {
     assert!(
         CHECKED_WF_CASES.contains("after.machine.values[other] == source.machine.values[other]")
     );
+    let case = CHECKED_WF_CASES
+        .split_once("proof fn checked_wf_arbitrary_frames_and_pending_v294(")
+        .unwrap()
+        .1
+        .split_once("\nproof fn ")
+        .unwrap()
+        .0;
+    let (header, body) = case.split_once("\n{\n").unwrap();
+    let header = format!("proof fn checked_wf_arbitrary_frames_and_pending_v294({header}");
+    let actual: String = Sha256::digest(header.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    assert_eq!(
+        actual,
+        "d26bb4784f9531b1b3c8a45a8fe8ba8680d4cbeba16077a966c280c9eb7cb59e"
+    );
+    assert!(body.contains(concat!(
+        "assert(0 <= other < source.machine.values.len());\n",
+        "        assert(!source.objects.contains_key(other));\n",
+        "        assert(match source.machine.values[other] { MemoryValueV30::Slice(_) => true, _ => false });"
+    )));
     for body in laws.split("proof fn ").skip(1) {
         let contract = body.split_once("\n{").unwrap().0;
         let requires = contract
