@@ -119,6 +119,7 @@ mod production_target_v1;
 mod production_worker_handoff;
 mod protected_compiler_execution;
 mod protected_rustc_invocation;
+mod reference_enrollment_policy_v1;
 mod reference_effect_bijection_v1;
 mod reference_effect_v1;
 mod rust_type_layout_general;
