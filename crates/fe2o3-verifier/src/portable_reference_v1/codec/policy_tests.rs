@@ -26,9 +26,10 @@ fn registration_v1_matches_independently_assembled_golden() {
     );
     let (bytes, commitment) = encode(f.input()).unwrap();
     assert_eq!(bytes, expected);
+    let wire_sha256: [u8; 32] = Sha256::digest(&bytes).into();
     assert_eq!(
-        format!("{:x}", Sha256::digest(&bytes)),
-        "b520565c839eb05e9e36e8ad4e67d4ae42c8aee5833c3992122d08b778619324"
+        wire_sha256.as_slice(),
+        from_hex("b520565c839eb05e9e36e8ad4e67d4ae42c8aee5833c3992122d08b778619324")
     );
     assert_eq!(
         commitment.as_slice(),
