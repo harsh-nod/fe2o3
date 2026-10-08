@@ -8,7 +8,8 @@ use super::super::{
     invocations::InvocationPlan,
 };
 use super::source_function::{
-    SourceCallHintsV85, SourceCutHintsV85, SourceEntryHintsV85, SourceStepHintsV85,
+    ScalarCopyV325, SourceCallHintsV85, SourceCutHintsV85, SourceEntryHintsV85,
+    SourceScalarReturnV325, SourceStepHintsV85,
 };
 use super::{
     Error, Resource, Result, Writer,

@@ -51,6 +51,17 @@ pub(super) struct SourceFrameReturn<'slots, 'view, 'source> {
     required: usize,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct PlainScalarReturnV325 {
+    pub(super) locals: Range<usize>,
+    pub(super) returned: usize,
+    pub(super) destination: usize,
+    pub(super) continuation: usize,
+    pub(super) owner: u32,
+    pub(super) depth: usize,
+    pub(super) bits: u32,
+}
+
 fn mismatch() -> Error {
     Error::Statement("original MIR byte frame return differs from its exact invocation")
 }
@@ -85,6 +96,52 @@ fn root_unit_headers() -> usize {
 }
 
 impl<'slots, 'view, 'source> SourceFrameReturn<'slots, 'view, 'source> {
+    // Frame metadata only: the caller must separately authenticate an actual
+    // Return control row. This does not admit any return site or change its guard.
+    pub(super) fn plain_scalar_frame_metadata_v325(
+        &self,
+        root: usize,
+        instance: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<Option<PlainScalarReturnV325>> {
+        let source = self.slots.correspondence(out)?.source(out.budget)?;
+        if out.budget.storage() < self.required {
+            return Err(source
+                .retain_query_resource_error_v18(Resource::Accounting)
+                .into());
+        }
+        out.budget.reserve_storage(
+            root_unit_headers()
+                + size_of::<PlainScalarReturnV325>()
+                + size_of::<Option<PlainScalarReturnV325>>()
+                + size_of::<Result<Option<PlainScalarReturnV325>>>(),
+        )?;
+        out.budget.charge_work(12)?;
+        if self.root != root || self.instance != instance {
+            return Err(mismatch());
+        }
+        let ReturnClass::Scalar(bits) = self.class else {
+            return Ok(None);
+        };
+        if instance == 0
+            || self.owners.len() < 2
+            || self.destination_component.is_some()
+            || self.destination_memory.is_some()
+            || self.descriptor_destination.is_some()
+        {
+            return Ok(None);
+        }
+        Ok(Some(PlainScalarReturnV325 {
+            locals: self.locals.clone(),
+            returned: self.returned.ok_or_else(mismatch)?,
+            destination: self.destination.ok_or_else(mismatch)?,
+            continuation: self.continuation.ok_or_else(mismatch)?,
+            owner: *self.owners.last().ok_or_else(mismatch)?,
+            depth: self.owners.len(),
+            bits,
+        }))
+    }
+
     pub(super) fn root_unit_coordinates_v313(
         &self,
         root: usize,

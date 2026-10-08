@@ -17,6 +17,25 @@ pub(super) struct RootScan<'a> {
     required: usize,
 }
 
+impl RootScan<'_> {
+    pub(super) fn allocation_free(
+        &self,
+        model: &PairedInvocations<'_, '_, '_>,
+        root: usize,
+        out: &mut Writer<'_, '_>,
+    ) -> Result<bool> {
+        model
+            .slots
+            .check_query_storage_floor(self.required, out.budget)?;
+        model.check(out)?;
+        if !std::ptr::eq(self.row, model.roots.get(root).ok_or_else(mismatch)?) {
+            return Err(mismatch());
+        }
+        out.budget.charge_work(1)?;
+        Ok(self.allocation_free)
+    }
+}
+
 pub(super) fn scan<'a>(
     model: &'a PairedInvocations<'_, '_, '_>,
     root: usize,

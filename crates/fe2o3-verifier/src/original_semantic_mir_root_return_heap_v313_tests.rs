@@ -93,6 +93,12 @@ fn run(
             assert!(selected.iter().any(|(root, summary)| *root > 0
                 && summary.source_pc > 0
                 && summary.target_pc > 0));
+            // Isolate this tactic's optional-support delta from scalar returns.
+            for root in &mut paired.roots {
+                for hint in &mut root.step_hints.as_mut().unwrap().cuts {
+                    hint.scalar_return_v325 = None;
+                }
+            }
             if !enabled {
                 for root in &mut paired.roots {
                     for hint in &mut root.step_hints.as_mut().unwrap().cuts {
