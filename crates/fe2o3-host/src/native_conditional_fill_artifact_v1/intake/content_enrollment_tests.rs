@@ -1,5 +1,57 @@
 //! Actual inert V5 inputs and signed fixture carriage, never protected execution.
 use super::*;
+
+// Independent legacy field framing used by the compiler's no-enrollment producer.
+// These inert identities exercise compatibility, not recovered source authority.
+fn legacy_inventory() -> Vec<u8> {
+    fn field(out: &mut Vec<u8>, value: &[u8]) {
+        out.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        out.extend_from_slice(value);
+    }
+    let mut out = Vec::new();
+    field(&mut out, b"fe2o3/semantic-mir/rustc-identity-inventory/v2");
+    field(&mut out, &[1; 32]);
+    for value in 2..7 {
+        field(&mut out, &[value; 32]);
+    }
+    field(&mut out, &[0]);
+    field(&mut out, &[1]);
+    field(&mut out, b"fill");
+    field(&mut out, &[1]);
+    field(&mut out, &[7; 32]);
+    field(&mut out, &[0]);
+    field(&mut out, &[0]);
+    field(&mut out, &0u32.to_le_bytes());
+    out
+}
+
+#[test]
+fn producer_legacy_absence_is_accepted_without_enrollment_fallback() {
+    for request in [None, Some(REQUEST)] {
+        let handoff = raw_fixture::handoff_with_enrollment(request, |_| legacy_inventory());
+        let mut owned = Owned::new(Work::new(WORK), STORAGE);
+        owned.with_budget(|b| {
+            let (input, policy) = input(handoff, b);
+            let floor = b.storage();
+            assert_eq!(
+                input.require_enrollment(&policy, b).is_ok(),
+                request.is_none()
+            );
+            assert_eq!(b.storage(), floor);
+        });
+    }
+}
+
+#[test]
+fn synthetic_zero_count_inventory_cannot_replace_original_absence() {
+    let mut owned = Owned::new(Work::new(WORK), STORAGE);
+    owned.with_budget(|b| {
+        let (input, policy) = input(handoff(None, ""), b);
+        let floor = b.storage();
+        assert!(input.require_enrollment(&policy, b).is_err());
+        assert_eq!(b.storage(), floor);
+    });
+}
 use ed25519_dalek::SigningKey;
 use fe2o3_compiler_execution_protocol::{
     CompilerExecutionAttestationReceiptV3 as Receipt,

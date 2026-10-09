@@ -1,5 +1,41 @@
 //! Content/accounting tests; not a live compiler, proof or launch qualification.
 use super::*;
+
+// Independent legacy field framing used by the compiler's no-enrollment producer.
+// These inert identities exercise compatibility, not recovered source authority.
+fn legacy_inventory() -> Vec<u8> {
+    fn field(out: &mut Vec<u8>, value: &[u8]) {
+        out.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        out.extend_from_slice(value);
+    }
+    let mut out = Vec::new();
+    field(&mut out, b"fe2o3/semantic-mir/rustc-identity-inventory/v2");
+    field(&mut out, &[1; 32]);
+    for value in 2..7 {
+        field(&mut out, &[value; 32]);
+    }
+    field(&mut out, &[0]);
+    field(&mut out, &[1]);
+    field(&mut out, b"fill");
+    field(&mut out, &[1]);
+    field(&mut out, &[7; 32]);
+    field(&mut out, &[0]);
+    field(&mut out, &[0]);
+    field(&mut out, &0u32.to_le_bytes());
+    out
+}
+
+#[test]
+fn producer_legacy_absence_is_accepted_without_enrollment_fallback() {
+    let legacy = legacy_inventory();
+    assert!(check(&legacy, &None));
+    assert!(!check(&legacy, &Some(expected())));
+}
+
+#[test]
+fn synthetic_zero_count_inventory_cannot_replace_original_absence() {
+    assert!(!check(&bytes(expected(), false, 5), &None));
+}
 use fe2o3_compiler_lineage::{
     MAX_NATIVE_CONDITIONAL_STORAGE_V1, RustcEnrollmentInventoryHeaderV1 as Header,
     RustcEnrollmentInventoryInputV1 as Input, RustcEnrollmentInventoryRootV1 as Root,
