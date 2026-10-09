@@ -374,6 +374,9 @@ fn source_order_preserves_account_gate_semantic_recovery_and_publication_recheck
 #[path = "content_gate_raw_fixture.rs"]
 mod raw_fixture;
 
+#[path = "content_enrollment_tests.rs"]
+mod enrollment_tests;
+
 fn raw_coordinates_storage() -> usize {
     size_of::<(
         fe2o3_artifact_transaction::BuildAttempt,

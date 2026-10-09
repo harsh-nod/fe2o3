@@ -9,6 +9,13 @@ use fe2o3_rustc_invocation::{
 };
 
 pub(super) fn handoff() -> Handoff {
+    handoff_with_enrollment(None, |_| b"host-inert-inventory".to_vec())
+}
+
+pub(super) fn handoff_with_enrollment(
+    enrollment: Option<&str>,
+    inventory: impl FnOnce(&[u8]) -> Vec<u8>,
+) -> Handoff {
     let profile = fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942;
     let target = DeviceTargetV1::parse("gfx942:xnack-").unwrap();
     let pins = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32], [6; 32]];
@@ -35,6 +42,10 @@ pub(super) fn handoff() -> Handoff {
             ("FE2O3_VERIFY_KERNEL_IR", "1"),
         ]
         .into_iter()
+        .chain(
+            enrollment
+                .map(|request| (fe2o3_rustc_invocation::REFERENCE_ENROLLMENT_ENV_V1, request)),
+        )
         .map(|(key, value)| (key.into(), value.into())),
     )
     .unwrap();
@@ -44,6 +55,7 @@ pub(super) fn handoff() -> Handoff {
     )
     .unwrap();
     let invocation = fe2o3_rustc_invocation::encode_descriptor_v3(&invocation).unwrap();
+    let inventory = inventory(&invocation);
     let module = CompilerModuleHandoffV2::new(
         CompilerModuleKindV1::LlvmTextIr,
         target,
@@ -100,7 +112,7 @@ pub(super) fn handoff() -> Handoff {
     let commitment = InertFinalCompilerModuleCommitmentV3::from_handoff(&module).unwrap();
     let input = NativeConditionalMetadataInputV1 {
         invocation: &invocation,
-        rustc_inventory: b"host-inert-inventory",
+        rustc_inventory: &inventory,
         rustc_preflight: b"host-inert-preflight",
         semantic_target_layout: &target_layout,
         native_lowering: lowering.canonical_bytes(),

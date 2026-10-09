@@ -15,6 +15,9 @@ use fe2o3_hsaco_finalize::{
 };
 use fe2o3_verifier::recover_native_conditional_handoff_under_policy_file_v1 as recover_source;
 
+#[path = "content_enrollment.rs"]
+mod enrollment;
+
 // The enclosing intake owns the prepaid envelope and independently revalidated
 // profiles. This move-only intermediate preserves their original account/floor;
 // it is not publication custody, currentness, or launch authority.
@@ -34,6 +37,7 @@ pub(super) fn authenticate<'work>(
     profile: &Profile<'work>,
     budget: &mut Budget<'work>,
 ) -> Result<AuthenticatedInput<'work>> {
+    budget.check_prior_denials_v1()?;
     let account = budget
         .storage_account_identity_v1()
         .ok_or(Resource::Accounting)?;
@@ -67,14 +71,16 @@ pub(super) fn authenticate<'work>(
     authenticate_raw_subject(&handoff, carriage.request().subject(), budget)?;
     let floor = budget.storage();
     require_original_account(ledger, account, floor, budget)?;
-    Ok(AuthenticatedInput {
+    let authenticated = AuthenticatedInput {
         handoff,
         carriage,
         ledger,
         account,
         floor,
         _work: std::marker::PhantomData,
-    })
+    };
+    authenticated.require_enrollment(compiler.policy(), budget)?;
+    Ok(authenticated)
 }
 
 fn require_same_policy(
@@ -106,6 +112,7 @@ fn require_original_account(
     floor: usize,
     budget: &mut Budget<'_>,
 ) -> Result<()> {
+    budget.check_prior_denials_v1()?;
     budget.charge_work(4)?;
     if budget.work_ledger_identity_v1() != ledger
         || budget.storage_account_identity_v1() != Some(account)
