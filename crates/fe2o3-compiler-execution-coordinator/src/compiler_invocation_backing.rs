@@ -47,6 +47,7 @@ pub(crate) enum CompilerInvocationBackingError {
     Staging(StagingError),
     Output(OutputError),
     Enrollment(fe2o3_rustc_invocation::ReferenceEnrollmentDecodeErrorV1<Resource>),
+    Digest(fe2o3_rustc_invocation::DigestError),
     InvalidCount,
 }
 
@@ -88,6 +89,7 @@ impl fmt::Display for CompilerInvocationBackingError {
             Self::Staging(error) => error.fmt(f),
             Self::Output(error) => error.fmt(f),
             Self::Enrollment(error) => error.fmt(f),
+            Self::Digest(error) => error.fmt(f),
             Self::InvalidCount => f.write_str("compiler invocation exceeds count bound"),
         }
     }
@@ -102,6 +104,7 @@ impl std::error::Error for CompilerInvocationBackingError {
             Self::Staging(error) => Some(error),
             Self::Output(error) => Some(error),
             Self::Enrollment(error) => Some(error),
+            Self::Digest(error) => Some(error),
             Self::InvalidCount => None,
         }
     }

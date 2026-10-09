@@ -435,16 +435,31 @@ impl RootCompilerRequest<'_> {
         })
     }
 
-    /// The issuer is launched once. Its readiness, exact original cleanup-guard
-    /// validation and complete overlapping owners are not charged per syscall.
+    /// Issuer launch and the held intake/enrollment join occur once, not per
+    /// syscall. These derived costs do not increase deployment hard limits.
     pub(crate) fn runtime_startup_quota() -> Result<Quota> {
         let (_, compiler) = payloads()?;
         let issuer = compiler_attempt::Attempt::maximum_runtime_issuer_quota(compiler)
             .map_err(helper_error)?;
         let guard = Prepared::maximum_cleanup_guard_quota()?;
+        let query = original_enrollment()?;
+        let policy =
+            compiler_attempt::Attempt::original_policy_identity_quota().map_err(helper_error)?;
         Ok(Quota {
-            work: sum(&[issuer.work(), guard.work()])?,
-            scratch: sum(&[issuer.scratch(), guard.scratch()])?,
+            work: sum(&[
+                issuer.work(),
+                guard.work(),
+                query.work(),
+                policy.work(),
+                enrollment::WORK,
+            ])?,
+            scratch: sum(&[
+                issuer.scratch(),
+                guard.scratch(),
+                query.scratch(),
+                policy.scratch(),
+                enrollment::SCRATCH,
+            ])?,
         })
     }
 

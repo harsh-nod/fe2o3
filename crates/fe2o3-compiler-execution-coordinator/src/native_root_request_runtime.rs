@@ -103,9 +103,15 @@ impl<'work> RootCompilerRequest<'work> {
                 let growth = unsafe { self.attempt_mut()?.launch_issuer(prepared, cleanup, b) }
                     .map_err(helper_error)?;
                 self.reserve_growth(growth, b)?;
+                // Issuer creation does not resume the first exec. Join the same
+                // retained request while it is still held, before runtime work.
+                self.join_original_enrollment(state, b)?;
                 State::Running
             }
             State::Running => {
+                if self.enrollment.is_none() {
+                    return Err(rejected("missing original enrollment join"));
+                }
                 let growth = self
                     .attempt_mut()?
                     .service_publication(cleanup, MAX_COMPILER_MODULE_HANDOFF_BYTES_V5, b)

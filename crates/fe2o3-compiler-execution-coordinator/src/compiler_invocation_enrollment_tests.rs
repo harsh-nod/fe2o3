@@ -46,7 +46,11 @@ fn capture(request: Option<&str>, source: u8) -> Capture {
 }
 
 fn quote(capture: &Capture) -> usize {
-    let mut work = ENTRY + capture.canonical_bytes().len() + 1;
+    let mut work = ENTRY
+        + 2 * capture.canonical_bytes().len()
+        + INVOCATION_DIGEST_DOMAIN_V3.len()
+        + size_of::<u64>()
+        + 1;
     Request::project_binding_count_from_descriptor(capture.descriptor(), |n| {
         work = work.checked_add(n).unwrap();
         Ok::<(), std::convert::Infallible>(())
@@ -71,6 +75,17 @@ fn original_sealed_preimage_supplies_count_and_digest_without_a_header() {
         assert_eq!(result.binding_count, count);
         let expected: [u8; 32] = Sha256::digest(capture.canonical_bytes()).into();
         assert_eq!(result.rustc_invocation_sha256, expected);
+        assert_eq!(
+            result.intake_invocation_identity,
+            InvocationDigestV3::calculate(capture.descriptor())
+                .unwrap()
+                .into_bytes()
+        );
+        assert_ne!(result.intake_invocation_identity, expected);
+        assert_eq!(
+            result.invocation_bytes,
+            capture.canonical_bytes().len() as u64
+        );
         assert_eq!(
             (b.work(), b.storage(), b.peak_storage()),
             (PREFIX + cost, floor, floor + SCRATCH)

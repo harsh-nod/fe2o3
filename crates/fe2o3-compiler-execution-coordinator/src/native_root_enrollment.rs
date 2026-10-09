@@ -5,9 +5,11 @@ use crate::proof_helper_launch::{ManagedProofHelper as Helper, ProofHelperLaunch
 
 /// Inert coordinates obtained together through original attempt custody. These
 /// may describe verification expectations, never substitute for their live owner.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OriginalCompilerEnrollment {
     pub(crate) rustc_invocation_sha256: [u8; 32],
+    pub(crate) intake_invocation_identity: [u8; 32],
+    pub(crate) invocation_bytes: u64,
     pub(crate) native_policy_sha256: [u8; 32],
     pub(crate) policy_generation: u64,
     pub(crate) binding_count: Option<u32>,
@@ -111,6 +113,8 @@ impl NativeAttempt<'_, Helper> {
             self.validate_original(b)?;
             Ok(OriginalCompilerEnrollment {
                 rustc_invocation_sha256: invocation.rustc_invocation_sha256,
+                intake_invocation_identity: invocation.intake_invocation_identity,
+                invocation_bytes: invocation.invocation_bytes,
                 native_policy_sha256,
                 policy_generation,
                 binding_count: invocation.binding_count,

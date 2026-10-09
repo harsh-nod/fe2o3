@@ -10,6 +10,8 @@ const PEAK: usize = FLOOR + FRAME + OriginalCompilerEnrollment::STORAGE;
 fn value() -> OriginalCompilerEnrollment {
     OriginalCompilerEnrollment {
         rustc_invocation_sha256: [1; 32],
+        intake_invocation_identity: [5; 32],
+        invocation_bytes: 99,
         native_policy_sha256: [2; 32],
         policy_generation: 3,
         binding_count: Some(4),
