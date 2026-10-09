@@ -23,7 +23,7 @@ fn capture(request: Option<&str>, source: u8) -> Capture {
         [0x11; 32],
         [0x22; 32],
         RustcUnitV2::new(
-            "/workspace/project".into(),
+            "/workspace/project",
             vec![
                 "/toolchains/rustc".into(),
                 "-Zcodegen-backend=/proc/./self/fd/198".into(),
