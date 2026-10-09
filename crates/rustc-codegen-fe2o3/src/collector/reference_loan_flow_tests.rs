@@ -8,7 +8,6 @@
 use super::{reference_custody_v1::RetainedReferenceInputsV1, reference_enrollment_v1};
 use crate::protected_compiler_execution::native_v3::{Admitted, Error};
 use crate::protected_rustc_invocation::AdmittedProtectedRustcInvocationV1 as Invocation;
-use crate::reference_enrollment_policy_v1::ReferenceEnrollmentRequestV1 as Request;
 use crate::rustc_semantic_plan_v1::SourceClosureWorkV1 as Work;
 use crate::test_temp_dir::TestTempDir;
 use rustc_driver::{Callbacks, Compilation};
@@ -85,19 +84,16 @@ pub(crate) fn check_empty_enrollment_replay(native: Admitted<'_, '_>, invocation
     with_source(|tcx| {
         let mut source = Work::default();
         source.charge(17).unwrap();
-        let mut request_meter = Work::default();
-        request_meter.charge(1).unwrap();
-        assert!(
-            Request::from_descriptor(invocation.descriptor(), &mut request_meter)
-                .unwrap()
-                .is_none()
-        );
-        let request_cost = request_meter.validation_work_for_test();
-        let (session, (retained, owner_check_cost)) = native
+        let (session, (retained, owner_check_cost, request_cost)) = native
             .take()
             .unwrap()
             .with_reference_enrollment::<_, Error>(invocation, |loan| {
                 let loan = loan.unwrap();
+                // Measure the whole original request boundary, including count
+                // projection and custody checks, on an independent source meter.
+                let mut request_meter = Work::default();
+                assert!(loan.request(&mut request_meter)?.is_none());
+                let request_cost = request_meter.validation_work_for_test();
                 let enrollment =
                     reference_enrollment_v1::bind_v1(tcx, &[], &mut [], loan, &mut source)?;
                 let before = source.validation_work_for_test();
@@ -110,7 +106,7 @@ pub(crate) fn check_empty_enrollment_replay(native: Admitted<'_, '_>, invocation
                     Some(enrollment),
                     Some(loan),
                 )?;
-                Ok((retained, owner_check_cost))
+                Ok((retained, owner_check_cost, request_cost))
             })
             .unwrap();
         // Moving the original SOURCE account is permitted; constructing an
