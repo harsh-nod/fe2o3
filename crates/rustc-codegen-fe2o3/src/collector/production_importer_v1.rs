@@ -71,7 +71,7 @@ mod wave64_shuffle_terminal;
 #[cfg(test)]
 pub(crate) use wave64_shuffle_terminal::check_wave64_descriptor_mutations_v1;
 
-const IDENTITY_INVENTORY_DOMAIN_V2: &[u8] = b"fe2o3/semantic-mir/rustc-identity-inventory/v2";
+use fe2o3_compiler_lineage::RUSTC_IDENTITY_INVENTORY_DOMAIN_V2 as IDENTITY_INVENTORY_DOMAIN_V2;
 #[cfg(test)]
 const PRODUCTION_COMPILER_INTRINSIC_DOMAIN_V1: &[u8] =
     b"fe2o3/semantic-mir/production-compiler-intrinsic/v1";

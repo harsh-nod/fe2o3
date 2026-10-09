@@ -97,7 +97,7 @@ fn check(bytes: &[u8], expected: &Option<Enrollment>) -> bool {
 fn original_absence_is_distinct_from_zero_or_present_bindings() {
     let original = expected();
     let enrolled = bytes(original, true, 5);
-    let registration = bytes(original, false, 5);
+    let registration = legacy_inventory();
     assert!(check(&enrolled, &Some(original)));
     assert!(check(&registration, &None));
     assert!(!check(&enrolled, &None));

@@ -9,11 +9,13 @@ use fe2o3_compiler_ffi::{
     InertSemanticCompilerModuleHandoffV5 as Handoff,
     inert_semantic_compiler_module_handoff_decode_work_v5 as decode_work,
 };
+use fe2o3_compiler_lineage::NativeConditionalCpuMappingExpectationV1 as Expected;
 use fe2o3_hsaco_finalize::{
     derive_recovered_conditional_worker_publication_intent_in_original_account_v5 as derive_intent,
     revalidate_conditional_worker_finalizer_in_original_account_v5 as replay,
 };
 use fe2o3_verifier::recover_native_conditional_handoff_under_policy_file_v1 as recover_source;
+use fe2o3_verifier::recover_native_conditional_handoff_under_policy_file_with_cpu_mapping_v1 as recover_mapped_source;
 
 #[path = "content_enrollment.rs"]
 mod enrollment;
@@ -24,6 +26,7 @@ mod enrollment;
 pub(super) struct AuthenticatedInput<'work> {
     handoff: Handoff,
     carriage: Carriage,
+    enrollment: Option<Expected>,
     ledger: Ledger,
     account: Account,
     floor: usize,
@@ -71,9 +74,10 @@ pub(super) fn authenticate<'work>(
     authenticate_raw_subject(&handoff, carriage.request().subject(), budget)?;
     let floor = budget.storage();
     require_original_account(ledger, account, floor, budget)?;
-    let authenticated = AuthenticatedInput {
+    let mut authenticated = AuthenticatedInput {
         handoff,
         carriage,
+        enrollment: None,
         ledger,
         account,
         floor,
@@ -181,7 +185,10 @@ pub(super) fn recover<'work>(
         budget,
     )?;
     let AuthenticatedInput {
-        handoff, carriage, ..
+        handoff,
+        carriage,
+        enrollment,
+        ..
     } = authenticated;
     exact(
         wire.transcript_bytes(),
@@ -196,8 +203,13 @@ pub(super) fn recover<'work>(
         budget,
     )?;
 
-    let (source, charge) =
-        recover_source(profile.semantic_policy_bytes(), handoff, budget).map_err(failure)?;
+    let (source, charge) = match enrollment {
+        None => recover_source(profile.semantic_policy_bytes(), handoff, budget),
+        Some(expected) => {
+            recover_mapped_source(profile.semantic_policy_bytes(), handoff, &expected, budget)
+        }
+    }
+    .map_err(failure)?;
     budget.reserve_storage(charge.retained_storage())?;
 
     let (transcript, charge) =

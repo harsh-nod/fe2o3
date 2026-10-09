@@ -3,7 +3,9 @@ use super::*;
 use fe2o3_compiler_lineage::{
     RUSTC_ENROLLMENT_INVENTORY_MAX_READ_WORK_V1 as READ_WORK,
     RUSTC_ENROLLMENT_INVENTORY_WORKING_STORAGE_V1 as READ_SCRATCH,
+    RUSTC_IDENTITY_INVENTORY_PREFIX_WORK_V2 as LEGACY_WORK,
     RustcEnrollmentInventoryErrorV1 as InventoryError,
+    has_rustc_identity_inventory_prefix_v2 as is_legacy,
     read_rustc_enrollment_inventory_v1 as read_inventory,
 };
 
@@ -28,6 +30,16 @@ pub(super) fn require(
         ENTRY + Enrollment::HEADER_MATCH_WORK,
         SCRATCH,
         |b| {
+            let Some(expected) = expected else {
+                b.charge_work(LEGACY_WORK)?;
+                if !is_legacy(inventory) {
+                    return Err(RootPublicationCustodyErrorV3::state(
+                        "publication absent enrollment requires original legacy inventory",
+                    ));
+                }
+                b.check_prior_denials_v1()?;
+                return Ok(());
+            };
             let inventory = read_inventory(inventory, READ_SCRATCH, |work| b.charge_work(work))
                 .map_err(|error| match error {
                     InventoryError::Charge(error) => RootPublicationCustodyErrorV3::from(error),
@@ -36,13 +48,7 @@ pub(super) fn require(
                     ),
                 })?;
             let header = inventory.header();
-            let matches = match expected {
-                Some(expected) => {
-                    expected.enrollment_binding_count != 0 && expected.matches_header(&header)
-                }
-                None => header.enrollment_binding_count == 0,
-            };
-            if !matches {
+            if expected.enrollment_binding_count == 0 || !expected.matches_header(&header) {
                 return Err(RootPublicationCustodyErrorV3::state(
                     "publication enrollment differs from original request",
                 ));

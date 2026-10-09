@@ -10,6 +10,29 @@ use crate::{
 use sha2::{Digest, Sha256};
 use std::{convert::Infallible, mem::size_of};
 
+/// Domain of the compiler's unchanged, length-prefixed legacy inventory.
+pub const RUSTC_IDENTITY_INVENTORY_DOMAIN_V2: &[u8] =
+    b"fe2o3/semantic-mir/rustc-identity-inventory/v2";
+/// Fixed work bound for the legacy format discriminator; the caller charges it.
+pub const RUSTC_IDENTITY_INVENTORY_PREFIX_WORK_V2: usize =
+    3 * size_of::<u64>() + RUSTC_IDENTITY_INVENTORY_DOMAIN_V2.len() + 32;
+
+/// Recognizes the legacy domain and first target-identity field without allocation.
+///
+/// This only distinguishes the original absent-enrollment format from a wrapper.
+/// It does not validate the remaining transcript, source membership or authority;
+/// those remain obligations of actual compiler/source recovery.
+pub fn has_rustc_identity_inventory_prefix_v2(bytes: &[u8]) -> bool {
+    if bytes.len() > MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3 {
+        return false;
+    }
+    bytes
+        .strip_prefix(&(RUSTC_IDENTITY_INVENTORY_DOMAIN_V2.len() as u64).to_le_bytes())
+        .and_then(|bytes| bytes.strip_prefix(RUSTC_IDENTITY_INVENTORY_DOMAIN_V2))
+        .and_then(|bytes| bytes.strip_prefix(&32u64.to_le_bytes()))
+        .is_some_and(|bytes| bytes.len() > 32)
+}
+
 /// Closed V1 inventory wrapper discriminator, including its terminal NUL.
 pub const RUSTC_ENROLLMENT_INVENTORY_MAGIC_V1: [u8; 8] = *b"F2RINV1\0";
 /// Fixed association header extent, excluding the outer pair header.

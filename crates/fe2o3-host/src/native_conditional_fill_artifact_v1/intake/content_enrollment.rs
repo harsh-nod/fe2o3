@@ -2,9 +2,10 @@
 //! This is content validation, not fresh currentness or mapped source recovery.
 use super::*;
 use fe2o3_compiler_lineage::{
-    NativeConditionalCpuMappingExpectationV1 as Expected,
     RUSTC_ENROLLMENT_INVENTORY_WORKING_STORAGE_V1 as INVENTORY_SCRATCH,
+    RUSTC_IDENTITY_INVENTORY_PREFIX_WORK_V2 as LEGACY_WORK,
     RustcEnrollmentInventoryErrorV1 as InventoryError,
+    has_rustc_identity_inventory_prefix_v2 as is_legacy,
     read_rustc_enrollment_inventory_v1 as read_inventory,
 };
 use fe2o3_rustc_invocation::{
@@ -13,14 +14,21 @@ use fe2o3_rustc_invocation::{
 };
 
 const ENTRY: usize = 8;
-pub(super) const SCRATCH: usize =
-    INVENTORY_SCRATCH + size_of::<(Expected, Option<usize>, Enrollment, Sha256)>() + 128;
+pub(super) const SCRATCH: usize = INVENTORY_SCRATCH
+    + size_of::<(
+        Expected,
+        Option<Expected>,
+        Option<usize>,
+        Enrollment,
+        Sha256,
+    )>()
+    + 128;
 
 impl AuthenticatedInput<'_> {
     // authenticate first verifies the carriage signature against its separately
     // pinned policy and joins the raw Subject to this exact retained handoff.
     // No caller inventory/header or live process environment supplies coordinates.
-    pub(super) fn require_enrollment(&self, policy: &Policy, b: &mut Budget<'_>) -> Result<()> {
+    pub(super) fn require_enrollment(&mut self, policy: &Policy, b: &mut Budget<'_>) -> Result<()> {
         require_original_account(self.ledger, self.account, self.floor, b)?;
         b.with_prepaid_scope(
             self.floor,
@@ -40,7 +48,14 @@ impl AuthenticatedInput<'_> {
                 // None is original absence; a present empty request never falls
                 // back to registration-only inventory.
                 let count = match count {
-                    None => 0,
+                    None => {
+                        b.charge_work(LEGACY_WORK)?;
+                        require(
+                            is_legacy(capsule.rustc_identity_inventory().canonical_preimage()),
+                            "native absent enrollment requires original legacy inventory",
+                        )?;
+                        return Ok(());
+                    }
                     Some(count) if (1..=MAX_REFERENCE_ENROLLMENT_BINDINGS_V1).contains(&count) => {
                         u32::try_from(count).map_err(|_| Resource::Arithmetic)?
                     }
@@ -78,7 +93,9 @@ impl AuthenticatedInput<'_> {
                 )?;
                 // Matching coordinates do not compare root Instances or CPU/source
                 // semantics. The actual mapped verifier remains a separate gate.
-                require_original_account(self.ledger, self.account, self.floor, b)
+                require_original_account(self.ledger, self.account, self.floor, b)?;
+                self.enrollment = Some(expected);
+                Ok(())
             },
         )?;
         require_original_account(self.ledger, self.account, self.floor, b)

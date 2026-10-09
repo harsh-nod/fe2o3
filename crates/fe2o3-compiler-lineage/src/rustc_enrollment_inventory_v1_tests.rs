@@ -6,6 +6,35 @@ use std::{
 
 const LIMIT: usize = MAX_NATIVE_CONDITIONAL_STORAGE_V1;
 
+#[test]
+fn legacy_discriminator_recognizes_only_the_original_domain_and_target_prefix() {
+    let domain = b"fe2o3/semantic-mir/rustc-identity-inventory/v2";
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(domain.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(domain);
+    bytes.extend_from_slice(&32u64.to_le_bytes());
+    bytes.extend_from_slice(&[7; 32]);
+    let prefix = bytes.len();
+    bytes.extend_from_slice(&4u64.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    assert!(has_rustc_identity_inventory_prefix_v2(&bytes));
+    for end in 0..=prefix {
+        assert!(!has_rustc_identity_inventory_prefix_v2(&bytes[..end]));
+    }
+    for offset in [0, 8, 8 + domain.len()] {
+        let mut wrong = bytes.clone();
+        wrong[offset] ^= 1;
+        assert!(!has_rustc_identity_inventory_prefix_v2(&wrong));
+    }
+    assert!(!has_rustc_identity_inventory_prefix_v2(&fixture()));
+    bytes.resize(MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3 + 1, 0);
+    assert!(!has_rustc_identity_inventory_prefix_v2(&bytes));
+    assert!(
+        RUSTC_IDENTITY_INVENTORY_PREFIX_WORK_V2
+            <= NativeConditionalCpuMappingExpectationV1::HEADER_MATCH_WORK
+    );
+}
+
 fn independent_mapping_expectation() -> NativeConditionalCpuMappingExpectationV1 {
     NativeConditionalCpuMappingExpectationV1 {
         rustc_invocation_sha256: [0x11; 32],
