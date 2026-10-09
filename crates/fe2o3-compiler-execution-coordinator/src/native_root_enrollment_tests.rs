@@ -179,3 +179,23 @@ fn custody_quote_includes_both_original_checks_live_issuer_and_result_account() 
             + OriginalCompilerEnrollment::STORAGE
     );
 }
+
+#[test]
+fn callback_cannot_retire_the_borrowed_output_reservation() {
+    let mut work = Work::new(LOCAL_WORK);
+    let mut b = Budget::new(&mut work, PEAK);
+    b.reserve_storage(FLOOR).unwrap();
+    let account = RequestAccount::capture(&b);
+    let result = value().with_reserved(&account, FLOOR, &mut b, |_, b| {
+        b.release_storage(OriginalCompilerEnrollment::STORAGE)?;
+        Ok(())
+    });
+    assert!(matches!(
+        result,
+        Err(Failure::Resource(Resource::Accounting))
+    ));
+    assert_eq!(
+        (b.work(), b.storage(), b.peak_storage()),
+        (LOCAL_WORK, FLOOR, PEAK)
+    );
+}

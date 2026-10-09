@@ -28,8 +28,11 @@ impl OriginalCompilerEnrollment {
         b.check_prior_denials_v1()?;
         account
             .with(retained, b, |b| {
-                b.reserve_storage(Self::STORAGE)?;
-                Ok(operation(&self, b))
+                Ok(b.with_prepaid_scope(0, 0, 0, Self::STORAGE, |b| {
+                    let result = operation(&self, b);
+                    b.check_prior_denials_v1()?;
+                    result
+                }))
             })
             .map_err(Failure::from)?
     }
