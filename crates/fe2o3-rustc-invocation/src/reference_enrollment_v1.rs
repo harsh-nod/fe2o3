@@ -9,6 +9,7 @@ use std::fmt;
 
 use crate::{CompileEnvironmentV2, MAX_ENVIRONMENT_VALUE_BYTES_V2, RustcInvocationDescriptorV3};
 
+mod count;
 mod parse;
 
 /// Captured compile-environment key containing a V1 enrollment request.
@@ -134,14 +135,52 @@ impl ReferenceEnrollmentRequestV1 {
         environment: &CompileEnvironmentV2,
         mut charge: impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Option<Self>, ReferenceEnrollmentDecodeErrorV1<E>> {
-        for entry in environment.entries() {
-            charge(entry.key().len().saturating_add(1))
-                .map_err(ReferenceEnrollmentDecodeErrorV1::Work)?;
-            if entry.key() == REFERENCE_ENROLLMENT_ENV_V1 {
-                return Self::decode(entry.value(), charge).map(Some);
-            }
-        }
-        Ok(None)
+        captured_request(environment, &mut charge)?
+            .map(|bytes| Self::decode(bytes, charge))
+            .transpose()
+    }
+
+    /// Project the binding count from this descriptor's captured request.
+    ///
+    /// The caller must independently authenticate and retain the ORIGINAL
+    /// descriptor. This count does not authenticate an invocation, policy,
+    /// compiler attempt, inventory header, or CPU leaf.
+    pub fn project_binding_count_from_descriptor<E>(
+        descriptor: &RustcInvocationDescriptorV3,
+        charge: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<usize>, ReferenceEnrollmentDecodeErrorV1<E>> {
+        Self::project_binding_count_from_environment(descriptor.compile_environment(), charge)
+    }
+
+    /// Project only the captured request, never a value from the live environment.
+    ///
+    /// Key scanning, absence and cumulative charges match [`Self::from_environment`].
+    pub fn project_binding_count_from_environment<E>(
+        environment: &CompileEnvironmentV2,
+        mut charge: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<Option<usize>, ReferenceEnrollmentDecodeErrorV1<E>> {
+        captured_request(environment, &mut charge)?
+            .map(|bytes| Self::project_binding_count(bytes, charge))
+            .transpose()
+    }
+
+    /// Check the complete V1 schema and selectors without materializing a request.
+    ///
+    /// Prepays the same source-work quote as [`Self::decode`]. The projection
+    /// itself uses no heap allocations, including on malformed input: decoded
+    /// strings are traversed through borrowed spans, not serde scratch buffers.
+    /// Keys, escaped Unicode, strict u16 version, duplicate fields, trailing
+    /// data, selector limits and decoded kernel ordering are all checked.
+    ///
+    /// This is an inert count, not provenance or authority. The input owner,
+    /// caller's charge callback, stack and compiler closure remain separately
+    /// accountable. No parser profile or pre-parse approval is supplied here.
+    pub fn project_binding_count<E>(
+        bytes: &str,
+        mut charge: impl FnMut(usize) -> Result<(), E>,
+    ) -> Result<usize, ReferenceEnrollmentDecodeErrorV1<E>> {
+        prepay_decode(bytes, &mut charge)?;
+        count::project(bytes).map_err(ReferenceEnrollmentDecodeErrorV1::InvalidRequest)
     }
 
     /// Decode the fixed V1 object schema under a caller-owned cumulative meter.
@@ -164,47 +203,76 @@ impl ReferenceEnrollmentRequestV1 {
         bytes: &str,
         mut charge: impl FnMut(usize) -> Result<(), E>,
     ) -> Result<Self, ReferenceEnrollmentDecodeErrorV1<E>> {
-        use ReferenceEnrollmentDecodeErrorV1::{InvalidRequest, Work};
+        use ReferenceEnrollmentDecodeErrorV1::InvalidRequest;
 
-        charge(1).map_err(Work)?;
-        if bytes.len() > MAX_REFERENCE_ENROLLMENT_BYTES_V1 {
-            return Err(InvalidRequest(
-                "reference enrollment request exceeds byte limit",
-            ));
-        }
-        let quote = bytes
-            .len()
-            .checked_mul(64)
-            .and_then(|n| n.checked_add(std::mem::size_of::<Self>()))
-            .ok_or(InvalidRequest("reference enrollment work overflow"))?;
-        charge(quote).map_err(Work)?;
+        prepay_decode(bytes, &mut charge)?;
         let parsed = parse::request(bytes)
             .map_err(|_| InvalidRequest("invalid reference enrollment request schema"))?;
         let request = parsed.request;
-        if request.version != 1 {
-            return Err(InvalidRequest(
-                "unsupported reference enrollment request version",
-            ));
-        }
-        if parsed.binding_count == 0 || parsed.binding_count > MAX_REFERENCE_ENROLLMENT_BINDINGS_V1
-        {
-            return Err(InvalidRequest(
-                "reference enrollment binding count outside limits",
-            ));
-        }
-        if parsed.invalid_selector {
-            return Err(InvalidRequest("invalid reference enrollment selector"));
-        }
-        if request
-            .bindings
-            .windows(2)
-            .any(|pair| pair[0].kernel >= pair[1].kernel)
-        {
-            return Err(InvalidRequest(
-                "reference enrollment roots must be unique and sorted",
-            ));
-        }
+        validate_summary(
+            request.version,
+            parsed.binding_count,
+            parsed.invalid_selector,
+            request
+                .bindings
+                .windows(2)
+                .any(|pair| pair[0].kernel >= pair[1].kernel),
+        )
+        .map_err(InvalidRequest)?;
         Ok(request)
+    }
+}
+
+fn captured_request<'a, E>(
+    environment: &'a CompileEnvironmentV2,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<Option<&'a str>, ReferenceEnrollmentDecodeErrorV1<E>> {
+    for entry in environment.entries() {
+        charge(entry.key().len().saturating_add(1))
+            .map_err(ReferenceEnrollmentDecodeErrorV1::Work)?;
+        if entry.key() == REFERENCE_ENROLLMENT_ENV_V1 {
+            return Ok(Some(entry.value()));
+        }
+    }
+    Ok(None)
+}
+
+fn prepay_decode<E>(
+    bytes: &str,
+    charge: &mut impl FnMut(usize) -> Result<(), E>,
+) -> Result<(), ReferenceEnrollmentDecodeErrorV1<E>> {
+    use ReferenceEnrollmentDecodeErrorV1::{InvalidRequest, Work};
+    charge(1).map_err(Work)?;
+    if bytes.len() > MAX_REFERENCE_ENROLLMENT_BYTES_V1 {
+        return Err(InvalidRequest(
+            "reference enrollment request exceeds byte limit",
+        ));
+    }
+    let quote = bytes
+        .len()
+        .checked_mul(64)
+        .and_then(|n| n.checked_add(std::mem::size_of::<ReferenceEnrollmentRequestV1>()))
+        .ok_or(InvalidRequest("reference enrollment work overflow"))?;
+    charge(quote).map_err(Work)
+}
+
+// Both decoders finish the schema before applying this semantic error precedence.
+fn validate_summary(
+    version: u16,
+    count: usize,
+    invalid_selector: bool,
+    unordered: bool,
+) -> Result<usize, &'static str> {
+    if version != 1 {
+        Err("unsupported reference enrollment request version")
+    } else if count == 0 || count > MAX_REFERENCE_ENROLLMENT_BINDINGS_V1 {
+        Err("reference enrollment binding count outside limits")
+    } else if invalid_selector {
+        Err("invalid reference enrollment selector")
+    } else if unordered {
+        Err("reference enrollment roots must be unique and sorted")
+    } else {
+        Ok(count)
     }
 }
 
