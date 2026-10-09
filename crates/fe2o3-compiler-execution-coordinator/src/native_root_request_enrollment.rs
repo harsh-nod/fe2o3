@@ -1,12 +1,16 @@
 //! One held, original-request join. The retained coordinates are not authority.
 use super::*;
 use crate::native_v3::OriginalCompilerEnrollment as Enrollment;
+use fe2o3_compiler_lineage::NativeConditionalCpuMappingExpectationV1 as Mapping;
 
 const ENTRY: usize = 8;
 const COMPARE_WORK: usize = 2 * 32 + size_of::<u64>();
-pub(super) const WORK: usize = ENTRY + 3 * RECORD_WORK + COMPARE_WORK;
-pub(super) const SCRATCH: usize =
-    size_of::<Enrollment>() + 4 * size_of::<&Record>() + RECORD_SCRATCH;
+const PROJECT_WORK: usize = ENTRY + size_of::<Option<Mapping>>();
+pub(super) const WORK: usize = ENTRY + 3 * RECORD_WORK + COMPARE_WORK + PROJECT_WORK;
+pub(super) const SCRATCH: usize = size_of::<Enrollment>()
+    + size_of::<Option<Mapping>>()
+    + 4 * size_of::<&Record>()
+    + RECORD_SCRATCH;
 
 impl RootCompilerRequest<'_> {
     pub(super) fn join_original_enrollment(
@@ -29,9 +33,9 @@ impl RootCompilerRequest<'_> {
                 .attempt()?
                 .with_original_enrollment(b, |value, b| {
                     matches_intake(value, challenge, b)?;
-                    // The request's prepaid inline field owns the copy. No returned
-                    // borrow, detached approval or replacement account is introduced.
-                    Ok(*value)
+                    // Project only the original owner, never an inventory header.
+                    // The request's prepaid inline field retains the result.
+                    mapping_expectation(value, b)
                 })
                 .map_err(helper_error)?;
             b.check_prior_denials_v1()?;
@@ -41,6 +45,30 @@ impl RootCompilerRequest<'_> {
             Ok(())
         })
     }
+}
+
+// Called within the original query's result scope and the prepaid request join.
+// The descriptive value is not a parser grant or mapped recovery activation.
+fn mapping_expectation(
+    value: &Enrollment,
+    b: &mut Budget<'_>,
+) -> std::result::Result<Option<Mapping>, ProofHelperLaunchError> {
+    b.check_prior_denials_v1()?;
+    b.charge_work(PROJECT_WORK)?;
+    let Some(count) = value.binding_count else {
+        return Ok(None);
+    };
+    if count == 0 || count as usize > fe2o3_rustc_invocation::MAX_REFERENCE_ENROLLMENT_BINDINGS_V1 {
+        return Err(ProofHelperLaunchError::Invalid(
+            "invalid original enrollment binding count",
+        ));
+    }
+    Ok(Some(Mapping {
+        rustc_invocation_sha256: value.rustc_invocation_sha256,
+        native_policy_sha256: value.native_policy_sha256,
+        policy_generation: value.policy_generation,
+        enrollment_binding_count: count,
+    }))
 }
 
 fn require_deadline(deadline: Option<Instant>) -> Result<()> {

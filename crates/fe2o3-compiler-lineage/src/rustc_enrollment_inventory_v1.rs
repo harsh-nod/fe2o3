@@ -49,6 +49,42 @@ pub struct RustcEnrollmentInventoryHeaderV1 {
     pub native_policy_generation: u64,
 }
 
+/// Independent original invocation/policy coordinates, not authority by construction.
+///
+/// Native callers obtain these from retained original owners; neither an inventory
+/// header nor a CPU leaf may select these expectations. The verifier re-exports
+/// this shared type so the root coordinator need not depend on proof recovery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeConditionalCpuMappingExpectationV1 {
+    /// Raw SHA256 of the canonical invocation, not the intake-domain digest.
+    pub rustc_invocation_sha256: [u8; 32],
+    /// Identity of the original admitted native policy.
+    pub native_policy_sha256: [u8; 32],
+    /// Generation of that original policy.
+    pub policy_generation: u64,
+    /// Count independently projected from the original descriptor.
+    pub enrollment_binding_count: u32,
+}
+
+impl NativeConditionalCpuMappingExpectationV1 {
+    /// Fixed work for the header copy and coordinate comparison; caller charges it.
+    pub const HEADER_MATCH_WORK: usize = HEADER + size_of::<Self>();
+
+    /// Checks only coordinates, not root membership, source identity or custody.
+    ///
+    /// The consumer must still decode its actual retained inventory and validate
+    /// every root against original source and CPU evidence. Equal headers do not
+    /// make two inventories interchangeable or authorize recovery or execution.
+    pub fn matches_header(&self, header: &RustcEnrollmentInventoryHeaderV1) -> bool {
+        header.invocation_identity == self.rustc_invocation_sha256
+            && header.native_policy_identity == self.native_policy_sha256
+            && header.native_policy_generation == self.policy_generation
+            && header.enrollment_binding_count == self.enrollment_binding_count
+            && self.enrollment_binding_count as usize
+                <= fe2o3_rustc_invocation::MAX_REFERENCE_ENROLLMENT_BINDINGS_V1
+    }
+}
+
 /// Fixed inert root coordinates. Construction does not establish compiler origin.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RustcEnrollmentInventoryRootV1 {

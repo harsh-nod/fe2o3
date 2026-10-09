@@ -6,6 +6,76 @@ use std::{
 
 const LIMIT: usize = MAX_NATIVE_CONDITIONAL_STORAGE_V1;
 
+fn independent_mapping_expectation() -> NativeConditionalCpuMappingExpectationV1 {
+    NativeConditionalCpuMappingExpectationV1 {
+        rustc_invocation_sha256: [0x11; 32],
+        native_policy_sha256: [0x22; 32],
+        policy_generation: 0x0807_0605_0403_0201,
+        enrollment_binding_count: 1,
+    }
+}
+
+#[test]
+fn mapping_coordinates_reject_canonically_decoded_foreign_inventory_headers() {
+    let expected = independent_mapping_expectation();
+    for case in 0..5 {
+        let mut claimed = header(1, 1);
+        let mut root = row(2, 1, 0);
+        match case {
+            1 => claimed.invocation_identity[0] ^= 1,
+            2 => claimed.native_policy_identity[0] ^= 1,
+            3 => claimed.native_policy_generation += 1,
+            4 => {
+                claimed.enrollment_binding_count = 0;
+                root.origin_tag = 0;
+            }
+            _ => {}
+        }
+        let bytes = encode(input(b"old", claimed, &[root]));
+        let inventory = read(&bytes).unwrap();
+        assert_eq!(expected.matches_header(&inventory.header()), case == 0);
+    }
+    assert_eq!(
+        NativeConditionalCpuMappingExpectationV1::HEADER_MATCH_WORK,
+        80 + size_of::<NativeConditionalCpuMappingExpectationV1>()
+    );
+}
+
+#[test]
+fn equal_headers_do_not_make_different_root_inventories_equivalent() {
+    let expected = independent_mapping_expectation();
+    let first = encode(input(b"old", header(1, 1), &[row(2, 1, 0)]));
+    let mut changed = row(2, 1, 0);
+    changed.reference_instance[0] ^= 1;
+    let second = encode(input(b"old", header(1, 1), &[changed]));
+    let first = read(&first).unwrap();
+    let second = read(&second).unwrap();
+    assert!(expected.matches_header(&first.header()));
+    assert!(expected.matches_header(&second.header()));
+    assert_ne!(first.full_wrapper_sha256(), second.full_wrapper_sha256());
+    assert_ne!(
+        first.roots().next().unwrap().value(),
+        second.roots().next().unwrap().value()
+    );
+    assert!(!first.grants_authority() && !second.grants_authority());
+}
+
+#[test]
+fn missing_truncated_or_legacy_inventory_cannot_supply_a_mapping_header() {
+    let bytes = fixture();
+    for missing in [&[][..], &b"old"[..], &bytes[..bytes.len() - 1]] {
+        assert!(read(missing).is_err());
+    }
+}
+
+#[test]
+fn mapping_count_bound_is_checked_even_when_the_claimed_header_agrees() {
+    let mut expected = independent_mapping_expectation();
+    let count = fe2o3_rustc_invocation::MAX_REFERENCE_ENROLLMENT_BINDINGS_V1 as u32 + 1;
+    expected.enrollment_binding_count = count;
+    assert!(!expected.matches_header(&header(count, count)));
+}
+
 fn header(count: u32, enrolled: u32) -> RustcEnrollmentInventoryHeaderV1 {
     RustcEnrollmentInventoryHeaderV1 {
         kernel_count: count,

@@ -11,16 +11,12 @@ use fe2o3_mir_model::semantic_mir_v1::SemanticFunctionRoleV1;
 use fe2o3_mir_model::semantic_mir_v1::{SemanticFunctionDeclV1, SemanticFunctionIdV1};
 use sha2::{Digest, Sha256};
 
-/// Independent original invocation/policy coordinates, not authority by construction.
-/// Native callers obtain these from installed policy and authenticated carriage;
-/// neither an inventory header nor a CPU leaf may select these expectations.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct NativeConditionalCpuMappingExpectationV1 {
-    pub rustc_invocation_sha256: [u8; 32],
-    pub native_policy_sha256: [u8; 32],
-    pub policy_generation: u64,
-    pub enrollment_binding_count: u32,
-}
+pub use fe2o3_compiler_lineage::NativeConditionalCpuMappingExpectationV1;
+
+const _: () = assert!(
+    MAX_REFERENCE_ENROLLMENT_BINDINGS_V1 as usize
+        == fe2o3_rustc_invocation::MAX_REFERENCE_ENROLLMENT_BINDINGS_V1
+);
 
 /// Borrowed inert content for the lower source/final consumers. Caller prepays
 /// actual backing capacity, this view and its independent expectation. The lower
@@ -256,15 +252,10 @@ fn require_header(
     context: &NativeConditionalCpuMappingContextV1<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<(), E> {
-    budget.charge_work(80 + size_of::<NativeConditionalCpuMappingExpectationV1>())?;
+    budget.charge_work(NativeConditionalCpuMappingExpectationV1::HEADER_MATCH_WORK)?;
     let header = context.inventory.header();
     let expected = context.expected;
-    if header.invocation_identity != expected.rustc_invocation_sha256
-        || header.native_policy_identity != expected.native_policy_sha256
-        || header.native_policy_generation != expected.policy_generation
-        || header.enrollment_binding_count != expected.enrollment_binding_count
-        || expected.enrollment_binding_count > MAX_REFERENCE_ENROLLMENT_BINDINGS_V1
-    {
+    if !expected.matches_header(&header) {
         return Err(E::invalid(
             "independent mapped CPU invocation/policy coordinates",
         ));

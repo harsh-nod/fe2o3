@@ -71,7 +71,8 @@ pub(crate) struct RootCompilerRequest<'work> {
     attempt: Option<compiler_attempt::Attempt<'work>>,
     terminal: Option<execution::Termination>,
     completion: Option<execution::Completion>,
-    enrollment: Option<crate::native_v3::OriginalCompilerEnrollment>,
+    // Outer None is unjoined; inner None is the original no-enrollment case.
+    enrollment: Option<Option<fe2o3_compiler_lineage::NativeConditionalCpuMappingExpectationV1>>,
     state: State,
     ledger: Ledger,
     address: usize,

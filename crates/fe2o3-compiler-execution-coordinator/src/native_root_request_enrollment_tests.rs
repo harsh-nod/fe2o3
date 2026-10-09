@@ -238,10 +238,132 @@ fn startup_funds_query_and_callback_once_with_inline_result_storage() {
     let policy = compiler_attempt::Attempt::original_policy_identity_quota().unwrap();
     assert!(startup.work() >= query.work() + policy.work() + WORK);
     assert!(startup.scratch() >= query.scratch() + policy.scratch() + SCRATCH);
-    assert!(RootCompilerRequest::ENVELOPE >= size_of::<Option<Enrollment>>());
+    assert!(RootCompilerRequest::ENVELOPE >= size_of::<Option<Option<Mapping>>>());
     let one =
         crate::InheritedCompilerExecutionDeploymentV3::original_root_startup_quota(1, 1).unwrap();
     let two =
         crate::InheritedCompilerExecutionDeploymentV3::original_root_startup_quota(2, 1).unwrap();
     assert_eq!(one.request_storage(), two.request_storage());
+}
+
+#[test]
+fn projection_preserves_absence_and_copies_only_original_cpu_coordinates() {
+    let mut work = Work::new(usize::MAX);
+    let mut b = Budget::new(&mut work, usize::MAX);
+    let receiver = transcript(10, 0, &mut b);
+    let mut value = coordinates(receiver.challenge.as_ref().unwrap());
+    b.reserve_storage(size_of::<Enrollment>() + size_of::<Option<Mapping>>())
+        .unwrap();
+    for count in [
+        None,
+        Some(1),
+        Some(fe2o3_rustc_invocation::MAX_REFERENCE_ENROLLMENT_BINDINGS_V1 as u32),
+    ] {
+        value.binding_count = count;
+        let before = (b.work(), b.storage());
+        let projected = mapping_expectation(&value, &mut b).unwrap();
+        assert_eq!(projected.map(|p| p.enrollment_binding_count), count);
+        if let Some(projected) = projected {
+            assert_eq!(
+                projected.rustc_invocation_sha256,
+                value.rustc_invocation_sha256
+            );
+            assert_ne!(
+                projected.rustc_invocation_sha256,
+                value.intake_invocation_identity
+            );
+            assert_eq!(projected.native_policy_sha256, value.native_policy_sha256);
+            assert_eq!(projected.policy_generation, value.policy_generation);
+        }
+        assert_eq!(b.work() - before.0, PROJECT_WORK);
+        assert_eq!(b.storage(), before.1);
+    }
+}
+
+#[test]
+fn zero_or_overbound_original_bindings_never_fall_back_to_absent() {
+    let mut work = Work::new(usize::MAX);
+    let mut b = Budget::new(&mut work, usize::MAX);
+    let receiver = transcript(10, 0, &mut b);
+    let mut value = coordinates(receiver.challenge.as_ref().unwrap());
+    b.reserve_storage(size_of::<Enrollment>() + size_of::<Option<Mapping>>())
+        .unwrap();
+    for count in [
+        0,
+        fe2o3_rustc_invocation::MAX_REFERENCE_ENROLLMENT_BINDINGS_V1 as u32 + 1,
+        u32::MAX,
+    ] {
+        value.binding_count = Some(count);
+        let before = b.work();
+        assert!(matches!(
+            mapping_expectation(&value, &mut b),
+            Err(ProofHelperLaunchError::Invalid(_))
+        ));
+        assert_eq!(b.work() - before, PROJECT_WORK);
+    }
+}
+
+#[test]
+fn projected_expectation_rejects_inventory_policy_generation_count_and_digest_domain_changes() {
+    use fe2o3_compiler_lineage::RustcEnrollmentInventoryHeaderV1 as Header;
+    let mut work = Work::new(usize::MAX);
+    let mut b = Budget::new(&mut work, usize::MAX);
+    let receiver = transcript(10, 0, &mut b);
+    let value = coordinates(receiver.challenge.as_ref().unwrap());
+    b.reserve_storage(size_of::<Enrollment>() + size_of::<Option<Mapping>>() + size_of::<Header>())
+        .unwrap();
+    let expected = mapping_expectation(&value, &mut b).unwrap().unwrap();
+    let original = Header {
+        kernel_count: 1,
+        enrollment_binding_count: 1,
+        invocation_identity: value.rustc_invocation_sha256,
+        native_policy_identity: value.native_policy_sha256,
+        native_policy_generation: value.policy_generation,
+    };
+    b.charge_work(Mapping::HEADER_MATCH_WORK).unwrap();
+    assert!(expected.matches_header(&original));
+    for case in 0..5 {
+        let mut changed = original;
+        match case {
+            0 => changed.invocation_identity[0] ^= 1,
+            1 => changed.invocation_identity = value.intake_invocation_identity,
+            2 => changed.native_policy_identity[0] ^= 1,
+            3 => changed.native_policy_generation += 1,
+            _ => changed.enrollment_binding_count += 1,
+        }
+        b.charge_work(Mapping::HEADER_MATCH_WORK).unwrap();
+        assert!(!expected.matches_header(&changed));
+    }
+}
+
+#[test]
+fn mapping_projection_refuses_short_work_and_swallowed_prior_denials() {
+    let mut fixture_work = Work::new(usize::MAX);
+    let mut fixture_budget = Budget::new(&mut fixture_work, usize::MAX);
+    let receiver = transcript(10, 0, &mut fixture_budget);
+    let value = coordinates(receiver.challenge.as_ref().unwrap());
+    for case in 0..3 {
+        let floor = size_of::<Enrollment>() + size_of::<Option<Mapping>>();
+        let mut work = Work::new(PROJECT_WORK - usize::from(case == 0));
+        let mut b = Budget::new(&mut work, floor);
+        b.reserve_storage(floor).unwrap();
+        if case == 1 {
+            assert!(b.charge_work(PROJECT_WORK + 1).is_err());
+        }
+        if case == 2 {
+            assert!(b.reserve_storage(1).is_err());
+        }
+        let before = (b.work(), b.storage(), b.failed_work(), b.failed_storage());
+        assert!(matches!(
+            mapping_expectation(&value, &mut b),
+            Err(ProofHelperLaunchError::Resource(_))
+        ));
+        assert_eq!(b.storage(), floor);
+        if case != 0 {
+            assert_eq!(
+                (b.work(), b.storage(), b.failed_work(), b.failed_storage()),
+                before
+            );
+        }
+    }
 }
