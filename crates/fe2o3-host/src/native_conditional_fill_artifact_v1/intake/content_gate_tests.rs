@@ -376,6 +376,8 @@ mod raw_fixture;
 
 #[path = "content_enrollment_tests.rs"]
 mod enrollment_tests;
+#[path = "verifier_denial_tests.rs"]
+mod verifier_denial_tests;
 
 fn raw_coordinates_storage() -> usize {
     size_of::<(

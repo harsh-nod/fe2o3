@@ -434,6 +434,58 @@ mod tests {
             assert_eq!(b.failed_work().is_some(), work_limit == 4);
         }
     }
+
+    #[test]
+    fn native_policy_reader_rejects_recorded_denials_before_valid_or_invalid_content() {
+        let roster = roster(1);
+        let mut work = Work::new(100_000_000);
+        let mut b = Budget::new(&mut work, 1_000_000);
+        b.reserve_storage(roster.len()).unwrap();
+        let (bytes, _) = encode_native_conditional_root_policy_file_v1(&roster, &mut b).unwrap();
+        for content in [bytes.as_slice(), &[]] {
+            for mode in 0..4 {
+                let mut work = Work::new(100_000_000);
+                let mut b = Budget::new(&mut work, 1_000_000);
+                b.reserve_storage(bytes.capacity()).unwrap();
+                if mode == 3 {
+                    assert!(b.reserve_storage(1_000_001).is_err());
+                }
+                if mode != 1 {
+                    assert!(b.charge_work(100_000_001).is_err());
+                }
+                if mode == 1 || mode == 2 {
+                    assert!(b.reserve_storage(1_000_001).is_err());
+                }
+                let before = (
+                    b.work(),
+                    b.storage(),
+                    b.peak_storage(),
+                    b.failed_work(),
+                    b.failed_storage(),
+                );
+                let error =
+                    validate_native_conditional_root_policy_file_v1(content, &mut b).unwrap_err();
+                let resource = error
+                    .get_ref()
+                    .and_then(|e| e.downcast_ref::<ResourceError>())
+                    .unwrap();
+                assert!(matches!(
+                    (mode, resource),
+                    (1, ResourceError::Storage(_)) | (0 | 2 | 3, ResourceError::Work(_))
+                ));
+                assert_eq!(
+                    (
+                        b.work(),
+                        b.storage(),
+                        b.peak_storage(),
+                        b.failed_work(),
+                        b.failed_storage()
+                    ),
+                    before
+                );
+            }
+        }
+    }
     pub(super) fn roster(count: usize) -> Vec<u8> {
         let signers = [[1; 32]];
         let roots: Vec<_> = (0..count)

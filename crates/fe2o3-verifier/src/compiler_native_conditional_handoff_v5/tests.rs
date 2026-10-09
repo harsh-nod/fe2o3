@@ -14,6 +14,8 @@ const FLOOR: usize = METADATA + CAPACITY + 19;
 mod cpu_mapping;
 #[path = "cpu_origins_tests.rs"]
 mod cpu_origins;
+#[path = "denial_tests.rs"]
+mod denials;
 struct Dropped<'a>(&'a Cell<usize>);
 impl Drop for Dropped<'_> {
     fn drop(&mut self) {
