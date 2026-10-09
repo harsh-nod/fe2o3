@@ -322,6 +322,20 @@ pub const RUSTC_ENROLLMENT_INVENTORY_WORKING_STORAGE_V1: usize = CENSUS_BYTES
     + ROW
     + 2 * 128;
 
+/// Conservative cumulative work for the reader at the existing aggregate cap.
+/// This sums pair framing/hash, canonical row census and the complete raw hash;
+/// it plans original-account funding, not parser admission or a renewed budget.
+pub const RUSTC_ENROLLMENT_INVENTORY_MAX_READ_WORK_V1: usize = pair::HEADER
+    + MAX
+    + POLICY.domain.len()
+    + 8
+    + 128
+    + MAX_ROOTS * (ROW + size_of::<RustcEnrollmentInventoryRootV1>() + 16)
+    + CENSUS_BYTES
+    + HEADER
+    + MAX
+    + 128;
+
 fn storage<E>(limit: usize, owned: usize) -> Result<(), Error<E>> {
     let required = RUSTC_ENROLLMENT_INVENTORY_WORKING_STORAGE_V1
         .checked_add(owned)

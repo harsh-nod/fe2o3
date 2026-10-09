@@ -109,12 +109,20 @@ impl<'work> RootCompilerRequest<'work> {
                 State::Running
             }
             State::Running => {
-                if self.enrollment.is_none() {
-                    return Err(rejected("missing original enrollment join"));
-                }
+                let enrollment = self
+                    .enrollment
+                    .as_ref()
+                    .ok_or_else(|| rejected("missing original enrollment join"))?;
                 let growth = self
-                    .attempt_mut()?
-                    .service_publication(cleanup, MAX_COMPILER_MODULE_HANDOFF_BYTES_V5, b)
+                    .attempt
+                    .as_mut()
+                    .ok_or_else(|| rejected("missing original compiler attempt"))?
+                    .service_publication(
+                        cleanup,
+                        MAX_COMPILER_MODULE_HANDOFF_BYTES_V5,
+                        enrollment,
+                        b,
+                    )
                     .map_err(helper_error)?;
                 self.reserve_growth(growth, b)?;
                 match self.attempt_mut()?.step_runtime(b).map_err(helper_error)? {

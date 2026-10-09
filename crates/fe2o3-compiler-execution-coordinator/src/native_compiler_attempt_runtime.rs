@@ -516,6 +516,7 @@ impl<'work> Attempt<'work> {
         &mut self,
         cleanup: &mut Cleanup,
         maximum_handoff_bytes: usize,
+        enrollment: &Option<fe2o3_compiler_lineage::NativeConditionalCpuMappingExpectationV1>,
         b: &mut Budget<'_>,
     ) -> AttemptResult<usize> {
         let result = b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
@@ -528,7 +529,8 @@ impl<'work> Attempt<'work> {
             let Some(Owner::Issued(attempt)) = &mut self.owner else {
                 return Err(Failure::Invalid("root RPC lost original issued owner"));
             };
-            let growth = attempt.service_publication(cleanup, maximum_handoff_bytes, b)?;
+            let growth =
+                attempt.service_publication(cleanup, maximum_handoff_bytes, enrollment, b)?;
             b.reserve_storage(growth.additional_storage())?;
             self.retained = native::sum(&[self.retained, growth.additional_storage()])?;
             require_deadline(self.deadline)?;
