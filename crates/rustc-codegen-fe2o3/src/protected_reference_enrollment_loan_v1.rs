@@ -18,6 +18,15 @@ pub(crate) struct RetainedReferenceEnrollmentStampV1 {
     invocation: ReferenceEnrollmentInvocationStampV1,
 }
 
+/// Compiler-local custody, not guarded-root attempt or PREPARSE approval. This
+/// private, move-only projection cannot supply an inventory header or authorize
+/// parser storage. Complete live closure qualification/accounting remain required.
+struct ProjectedEnrollmentRequestV1 {
+    stamp: RetainedReferenceEnrollmentStampV1,
+    origin: Origin,
+    bindings: Option<usize>,
+}
+
 /// Descriptive header copied only after the original descriptor was checked.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct OriginalEnrollmentInventoryContextV1 {
@@ -227,11 +236,41 @@ impl ReferenceEnrollmentLoanV1<'_> {
     }
 
     pub(crate) fn request(&self, work: &mut Work) -> Result<Option<Request>, Error> {
-        self.charge(work, 1)?;
-        self.current(None)?;
+        let projection = self.project_request(work)?;
+        self.decode_projected_request(projection, work)
+    }
+
+    fn project_request(&self, work: &mut Work) -> Result<ProjectedEnrollmentRequestV1, Error> {
+        self.charge(work, std::mem::size_of::<ProjectedEnrollmentRequestV1>())?;
+        let stamp = self.capture_stamp(work)?;
+        let bindings = self.terminal(Request::project_binding_count(self.descriptor, work))?;
+        self.revalidate_stamp(&stamp, work)?;
+        Ok(ProjectedEnrollmentRequestV1 {
+            stamp,
+            origin: self.origin,
+            bindings,
+        })
+    }
+
+    fn decode_projected_request(
+        &self,
+        projection: ProjectedEnrollmentRequestV1,
+        work: &mut Work,
+    ) -> Result<Option<Request>, Error> {
+        self.revalidate_stamp(&projection.stamp, work)?;
+        if projection.origin != self.origin {
+            return self.terminal(Err(Error::new(
+                "reference enrollment projected descriptor or policy changed",
+            )));
+        }
         let request = self.terminal(Request::from_descriptor(self.descriptor, work))?;
-        self.requested_bindings
-            .set(request.as_ref().map(|request| request.bindings().len()));
+        if request.as_ref().map(|request| request.bindings().len()) != projection.bindings {
+            return self.terminal(Err(Error::new(
+                "reference enrollment projected count differs from owned request",
+            )));
+        }
+        self.revalidate_stamp(&projection.stamp, work)?;
+        self.requested_bindings.set(projection.bindings);
         Ok(request)
     }
 

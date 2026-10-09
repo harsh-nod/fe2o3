@@ -16,6 +16,9 @@ const STORAGE: usize = 4 * 1024 * 1024;
 const ONE_REQUEST: &str =
     r#"{"version":1,"bindings":[{"kernel":"fixture::kernel","reference":"fixture::reference"}]}"#;
 
+#[path = "protected_reference_enrollment_projected_count_tests.rs"]
+mod projected_count;
+
 #[test]
 fn actual_mixed_instances_seal_original_wrapper_before_preflight() {
     let request = crate::collector::reversed_original_root_inventory_request();

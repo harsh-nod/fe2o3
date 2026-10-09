@@ -23,6 +23,15 @@ use fe2o3_rustc_invocation::{
 pub(crate) struct ReferenceEnrollmentRequestV1(Request);
 
 impl ReferenceEnrollmentRequestV1 {
+    /// Inert projection; admission and retained owner checks belong to the loan.
+    pub(crate) fn project_binding_count(
+        descriptor: &RustcInvocationDescriptorV3,
+        work: &mut SourceClosureWorkV1,
+    ) -> Result<Option<usize>, Error> {
+        Request::project_binding_count_from_descriptor(descriptor, |amount| charge(work, amount))
+            .map_err(adapt_error)
+    }
+
     /// The descriptor is inert. Its original admitted owner must independently
     /// survive collection and replay; equal descriptor bytes cannot replace it.
     pub(crate) fn from_descriptor(
