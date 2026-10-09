@@ -832,6 +832,31 @@ impl<'work> Attempt<'work> {
         })
     }
 
+    /// Scoped descriptive query through this original issued owner. The caller
+    /// uses the closed request enrollment quota, plus its callback's own costs.
+    /// No execution transition, transport record or mapped recovery is enabled.
+    pub(in super::super) fn with_original_enrollment<R>(
+        &self,
+        b: &mut Budget<'_>,
+        operation: impl FnOnce(
+            &crate::native_v3::OriginalCompilerEnrollment,
+            &mut Budget<'_>,
+        ) -> AttemptResult<R>,
+    ) -> AttemptResult<R> {
+        b.check_prior_denials_v1()?;
+        b.with_prepaid_scope(self.retained, 8, LOCAL_WORK, FRAME, |b| {
+            if self.phase != Phase::Issued || self.controller.is_none() {
+                return Err(Failure::Invalid(
+                    "enrollment lost original issued controller",
+                ));
+            }
+            let Some(Owner::Issued(attempt)) = &self.owner else {
+                return Err(Failure::Invalid("enrollment lost original issued owner"));
+            };
+            attempt.with_original_enrollment(b, operation)
+        })
+    }
+
     pub(in super::super) fn original_policy_identity_quota()
     -> AttemptResult<native::CompilerExecutionLaunchQuotaV2> {
         let inner = Issued::<Helper>::original_policy_identity_quota();

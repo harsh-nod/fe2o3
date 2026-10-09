@@ -81,6 +81,32 @@ fn original_sealed_preimage_supplies_count_and_digest_without_a_header() {
 }
 
 #[test]
+fn projection_ceiling_covers_absence_and_maximum_encoded_request() {
+    let padded = format!(
+        "{ONE}{}",
+        " ".repeat(fe2o3_rustc_invocation::MAX_REFERENCE_ENROLLMENT_BYTES_V1 - ONE.len())
+    );
+    for request in [None, Some(ONE), Some(padded.as_str())] {
+        let capture = capture(request, 0x31);
+        let cost = quote(&capture);
+        assert!(cost <= OriginalInvocationEnrollment::PROJECTION_WORK);
+        let floor = capture.native_retained_storage().unwrap();
+        let mut work = Work::new(OriginalInvocationEnrollment::PROJECTION_WORK);
+        let mut b = Budget::new(
+            &mut work,
+            floor + OriginalInvocationEnrollment::PROJECTION_SCRATCH,
+        );
+        b.reserve_storage(floor).unwrap();
+        assert_eq!(
+            project(&capture, &mut b).unwrap().binding_count,
+            request.map(|_| 1)
+        );
+        assert_eq!(b.work(), cost);
+        assert_eq!(b.storage(), floor);
+    }
+}
+
+#[test]
 fn equal_counts_do_not_hide_changed_original_source_or_reference() {
     let captures = [
         capture(Some(ONE), 0x31),

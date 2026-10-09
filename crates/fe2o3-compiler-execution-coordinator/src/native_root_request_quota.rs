@@ -164,6 +164,31 @@ pub(super) fn runtime_interrupt() -> Result<Quota> {
     })
 }
 
+/// Complete scoped Attempt query, excluding callback work/outputs. Refusal's
+/// four compiler checks cover the helper's two plus the query's one, including
+/// helper image/profile/liveness, trace resources and the outer Attempt scope.
+/// Original issuer custody, count/digest work and result lifetime are added
+/// separately. This inert schedule does not select/raise deployment limits,
+/// admit the dynamic compiler/PREPARSE closure or activate a request caller.
+pub(super) fn original_enrollment() -> Result<Quota> {
+    use crate::compiler_invocation_backing::OriginalInvocationEnrollment as Projection;
+    let validation = refusal()?;
+    let custody =
+        crate::native_v3::NativeAttempt::<ManagedProofHelper>::original_enrollment_custody_quota()?;
+    Ok(Quota {
+        work: sum(&[
+            validation.work(),
+            custody.work(),
+            Projection::PROJECTION_WORK,
+        ])?,
+        scratch: sum(&[
+            validation.scratch(),
+            custody.scratch(),
+            Projection::PROJECTION_SCRATCH,
+        ])?,
+    })
+}
+
 /// First-exec transition: ready helper content validation, original inventory
 /// revalidation and the non-resuming image/census check. The fixed refusal
 /// schedule already funds four full compiler checks (this path needs three)

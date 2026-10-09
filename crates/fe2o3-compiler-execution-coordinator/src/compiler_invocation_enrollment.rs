@@ -12,9 +12,26 @@ pub(crate) struct OriginalInvocationEnrollment {
     pub(crate) binding_count: Option<u32>,
 }
 
+impl OriginalInvocationEnrollment {
+    // Captured key scan, the shared decoder's documented source-work quote,
+    // and one exact canonical-byte digest. This is not a parser storage grant.
+    pub(crate) const PROJECTION_WORK: usize = ENTRY
+        + MAX_COMPILE_ENVIRONMENT_ENTRIES_V2 * (fe2o3_rustc_invocation::MAX_NAME_BYTES_V2 + 1)
+        + 1
+        + 64 * fe2o3_rustc_invocation::MAX_REFERENCE_ENROLLMENT_BYTES_V1
+        + size_of::<Request>()
+        + fe2o3_rustc_invocation::MAX_DESCRIPTOR_BYTES_V3
+        + 1;
+    pub(crate) const PROJECTION_SCRATCH: usize = SCRATCH;
+}
+
 // Logical digest/result storage only, not an admitted native parser profile.
-const SCRATCH: usize =
-    size_of::<(Sha256, OriginalInvocationEnrollment, Option<usize>, Option<u32>)>();
+const SCRATCH: usize = size_of::<(
+    Sha256,
+    OriginalInvocationEnrollment,
+    Option<usize>,
+    Option<u32>,
+)>();
 
 impl CompilerInvocationBacking {
     /// Query only this retained capture after checking its sealed object, full
