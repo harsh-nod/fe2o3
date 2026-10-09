@@ -1,4 +1,5 @@
 //! Independent conditional content recovery, not original compiler custody.
+//! Recorded resource denials are terminal here, even if later charges would fit.
 #![allow(
     clippy::result_large_err,
     clippy::large_enum_variant,
@@ -279,6 +280,7 @@ pub fn recover_compiler_conditional_native_semantic_handoff_in_original_account_
     profile: Profile,
     budget: &mut Budget<'_>,
 ) -> Result<Output, Error> {
+    budget.check_prior_denials_v1()?;
     let policy = crate::compiler_native_conditional_policy_roster_v1::native_conditional_root_policy_input_storage_v2(
         accepted, budget,
     )?;
@@ -336,6 +338,7 @@ pub fn recover_compiler_conditional_native_semantic_handoff_with_cpu_origins_in_
     profile: Profile,
     budget: &mut Budget<'_>,
 ) -> Result<Output, Error> {
+    budget.check_prior_denials_v1()?;
     let origins = Some(expected_cpu);
     let policy = crate::compiler_native_conditional_policy_roster_v1::native_conditional_root_policy_input_storage_v2(
         accepted, budget,
@@ -366,6 +369,7 @@ fn original_recovery<T>(
     budget: &mut Budget<'_>,
     operation: impl FnOnce(&mut Budget<'_>) -> Result<T, Error>,
 ) -> Result<T, Error> {
+    budget.check_prior_denials_v1()?;
     let overlap = sum(&[inputs, Budget::STORAGE_WINDOW_SCRATCH_V1])?;
     let floor = budget.storage();
     budget.with_additional_storage_window_v1(MAX_STORAGE, |b| {
@@ -377,6 +381,7 @@ fn original_recovery<T>(
         if b.storage() != floor.checked_add(overlap).ok_or(Resource::Arithmetic)? {
             return Err(Resource::Accounting.into());
         }
+        b.check_prior_denials_v1()?;
         b.release_storage(overlap)?;
         Ok(result)
     })
@@ -419,6 +424,7 @@ fn recover_using(
 }
 
 fn begin(backing_capacity: usize, budget: &mut Budget<'_>) -> Result<Account, Error> {
+    budget.check_prior_denials_v1()?;
     budget.charge_work(8)?;
     if budget.storage_limit() > MAX_STORAGE {
         return Err(Error::mismatch("bounded conditional native storage cap"));
@@ -427,6 +433,7 @@ fn begin(backing_capacity: usize, budget: &mut Budget<'_>) -> Result<Account, Er
 }
 
 fn begin_bounded(backing_capacity: usize, budget: &mut Budget<'_>) -> Result<Account, Error> {
+    budget.check_prior_denials_v1()?;
     budget.charge_work(8)?;
     begin_after_entry(backing_capacity, budget)
 }
@@ -436,6 +443,7 @@ fn begin_with_origins(
     expected: &[NativeConditionalCpuExpectationV1],
     budget: &mut Budget<'_>,
 ) -> Result<Account, Error> {
+    budget.check_prior_denials_v1()?;
     budget.charge_work(10)?;
     if budget.storage_limit() > MAX_STORAGE {
         return Err(Error::mismatch("bounded conditional native storage cap"));
@@ -448,6 +456,7 @@ fn begin_bounded_with_origins(
     expected: &[NativeConditionalCpuExpectationV1],
     budget: &mut Budget<'_>,
 ) -> Result<Account, Error> {
+    budget.check_prior_denials_v1()?;
     budget.charge_work(10)?;
     begin_after_entry_with_origins(backing_capacity, Some(expected), budget)
 }
@@ -469,6 +478,7 @@ fn begin_selected(
     origins: CpuSelection<'_>,
     budget: &mut Budget<'_>,
 ) -> Result<Account, Error> {
+    budget.check_prior_denials_v1()?;
     let entry = Account::capture(budget);
     if budget.storage() < sum(&[backing_capacity, METADATA, selection_backing(origins)])? {
         return Err(Resource::Accounting.into());
@@ -497,6 +507,7 @@ fn finish_with_origin_working<T>(
         drop(result);
         return Err(error.into());
     }
+    budget.check_prior_denials_v1()?;
     let (parts, retained) = result?;
     if let Err(error) = entry.require_exact(budget, sum(&[retained, working])?) {
         drop(parts);
@@ -690,6 +701,7 @@ pub fn recover_compiler_conditional_native_semantic_handoff_with_cpu_mapping_v5(
     profile: Profile,
     budget: &mut Budget<'_>,
 ) -> Result<Output, Error> {
+    budget.check_prior_denials_v1()?;
     budget.charge_work(10)?;
     if budget.storage_limit() > MAX_STORAGE {
         return Err(Error::mismatch("bounded conditional native storage cap"));
@@ -718,6 +730,7 @@ pub fn recover_compiler_conditional_native_semantic_handoff_with_cpu_mapping_in_
     profile: Profile,
     budget: &mut Budget<'_>,
 ) -> Result<Output, Error> {
+    budget.check_prior_denials_v1()?;
     let selection = CpuSelection::Mapping(expected);
     let policy = crate::compiler_native_conditional_policy_roster_v1::native_conditional_root_policy_input_storage_v2(accepted, budget)?;
     let inputs = sum(&[

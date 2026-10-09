@@ -63,7 +63,7 @@ fn selected_native_entry_prepays_combined_backing_and_additional_working_header(
 }
 
 #[test]
-fn selected_native_success_preserves_first_denials_and_original_floor() {
+fn selected_native_success_preserves_clean_account_and_original_floor() {
     let rows = expected();
     let extra = origin_working(Some(&rows));
     let floor = FLOOR + std::mem::size_of_val(&rows);
@@ -71,9 +71,8 @@ fn selected_native_success_preserves_first_denials_and_original_floor() {
     let mut b = Budget::new(&mut work, MAX_STORAGE);
     b.reserve_storage(floor).unwrap();
     b.charge_work(7).unwrap();
-    assert!(b.charge_work(usize::MAX).is_err());
-    assert!(b.reserve_storage(usize::MAX).is_err());
     let denied = (b.failed_work(), b.failed_storage());
+    assert_eq!(denied, (None, None));
     let ledger = b.work_ledger_identity_v1();
     let entry = begin_with_origins(CAPACITY, &rows, &mut b).unwrap();
     b.reserve_storage(17).unwrap();

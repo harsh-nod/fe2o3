@@ -82,6 +82,7 @@ pub fn encode_native_conditional_root_policy_file_v1(
 }
 
 fn read<'a>(bytes: &'a [u8], budget: &mut Budget<'_>) -> io::Result<View<'a>> {
+    budget.check_prior_denials_v1().map_err(other)?;
     budget.charge_work(8).map_err(other)?;
     require(
         (MIN_BYTES..=MAX_POLICY_BYTES).contains(&bytes.len()),
@@ -223,6 +224,7 @@ fn recover_under_policy_file_selected(
     crate::RecoveredCompilerConditionalNativeSemanticHandoffV5,
     crate::RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
 )> {
+    budget.check_prior_denials_v1().map_err(other)?;
     if let PolicyCpuSelection::Legacy(Some(expected)) = expected_cpu {
         require_cpu_origin_backing(
             policy_bytes.len(),
