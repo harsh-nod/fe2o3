@@ -150,6 +150,19 @@ fn actual_capsule_and_signed_subject_accept_original_absence_and_enrollment() {
         let mut owned = Owned::new(Work::new(WORK), STORAGE);
         owned.with_budget(|b| {
             let (input, policy) = input(handoff, b);
+            let capsule = input.handoff.capsule();
+            let invocation = capsule.invocation_bytes();
+            assert_eq!(
+                invocation,
+                fe2o3_rustc_invocation::encode_descriptor_v3(capsule.invocation()).unwrap()
+            );
+            let bytes = capsule.canonical_bytes();
+            let start = invocation.as_ptr() as usize - bytes.as_ptr() as usize;
+            assert_eq!(&bytes[start..start + invocation.len()], invocation);
+            assert_ne!(
+                <[u8; 32]>::from(Sha256::digest(invocation)),
+                capsule.invocation_digest().into_bytes()
+            );
             let floor = b.storage();
             input.require_enrollment(&policy, b).unwrap();
             assert_eq!(b.storage(), floor);

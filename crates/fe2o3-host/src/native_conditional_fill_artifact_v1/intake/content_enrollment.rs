@@ -14,7 +14,7 @@ use fe2o3_rustc_invocation::{
 
 const ENTRY: usize = 8;
 pub(super) const SCRATCH: usize =
-    INVENTORY_SCRATCH + size_of::<(Expected, Option<usize>, Enrollment)>();
+    INVENTORY_SCRATCH + size_of::<(Expected, Option<usize>, Enrollment, Sha256)>() + 128;
 
 impl AuthenticatedInput<'_> {
     // authenticate first verifies the carriage signature against its separately
@@ -47,11 +47,18 @@ impl AuthenticatedInput<'_> {
                     Some(_) => return Err(failure("native captured enrollment count")),
                 };
                 let expected = Expected {
-                    rustc_invocation_sha256: *self
-                        .carriage
-                        .request()
-                        .subject()
-                        .rustc_invocation_sha256(),
+                    // The signed Subject digest uses the V3 domain. Inventory
+                    // coordinates use raw SHA-256 of these already joined bytes.
+                    rustc_invocation_sha256: {
+                        let invocation = capsule.invocation_bytes();
+                        b.charge_work(
+                            invocation
+                                .len()
+                                .checked_add(128)
+                                .ok_or(Resource::Arithmetic)?,
+                        )?;
+                        Sha256::digest(invocation).into()
+                    },
                     native_policy_sha256: *policy.identity().as_bytes(),
                     policy_generation: policy.generation(),
                     enrollment_binding_count: count,
