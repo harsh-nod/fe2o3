@@ -1,5 +1,8 @@
 # M1 Reference Enrollment: CPU Checkpoint
 
+For the later joined intake and denial controls, see the
+[October 9 CPU checkpoint](issue272-m1-joined-source-cpu-20261009.md).
+
 2026-10-08. Ordinary developer validation only, not protected compiler admission,
 proof execution, GPU execution, M1 completion, or 47-kernel qualification.
 
