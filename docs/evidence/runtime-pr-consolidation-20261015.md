@@ -28,7 +28,8 @@ drop their requested behavior: the newer implementation is retained in main.
 ## Minimal Candidate
 
 - Preserve all current-main production Rust, proof bodies, pins, service units,
-  workflows and CI guards.
+  workflows and CI guards, except the scoped deployment-source revalidation
+  repair described below.
 - Include signed52c5cfff's two regression tests: loader materialization/backing
   ownership and terminal cross-target preparation refusal/retry.
 - Document the actual existing static deployment-tool build and protected
@@ -49,3 +50,19 @@ required. Keep PR294-297 open until the consolidated candidate and disposition
 are reviewed. Protected deployment remains subject to genuine compiler closure,
 profile, proof-runtime, exact artifact assurance, service credential/lifetime
 custody and current device admission.
+
+## Actual Staging Failure And Repair
+
+The first maintained deployment-tool builder stopped before artifact creation:
+196 deployment tests passed, one failed and twelve were ignored. The failure was
+source_path_and_directory_replacement_after_sealing_refuse, mutation zero:
+same-length origin content replacement was not refused by the metadata-only
+final origin check. Sealed admitted copies remained intact.
+
+The candidate adds a bounded final origin-content hash pass bracketed by the
+existing metadata/path checks. A deterministic regression models equal metadata
+without depending on timestamp scheduling and checks that the sealed original
+copy is unchanged. Packaging's logical work quote increases from 64 to 72 units
+per code byte for the additional streaming read/hash, with no additional full
+backing. Existing exact/one-short account tests remain applicable. Original
+failed receipts are retained; new-source validation is a distinct attempt.

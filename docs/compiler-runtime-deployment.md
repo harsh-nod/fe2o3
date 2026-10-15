@@ -44,7 +44,11 @@ cargo run --locked -p fe2o3-compiler-execution-deployment \
 ```
 
 Verification streams exact bytes into sealed memfds, checks the canonical records
-and complete roster, and rechecks source descriptors and paths. The returned
+and complete roster, and rechecks source descriptors, paths and original content.
+The final bounded streaming content pass also refuses a same-length overwrite
+when its observed metadata snapshot is unchanged. Metadata/path checks bracket
+that pass; this is not protection against privileged concurrent writers.
+The returned
 move-only owner exposes inert policy/inventory data, not descriptors or compiler
 authority. Removing or changing the bundle afterward does not change its copies.
 
