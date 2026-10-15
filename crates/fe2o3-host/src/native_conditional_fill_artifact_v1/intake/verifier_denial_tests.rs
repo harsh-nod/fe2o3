@@ -38,7 +38,7 @@ fn public_native_recovery_routes_refuse_before_reading_inert_handoff() {
                 let before = state(b);
                 let ledger = b.work_ledger_identity_v1();
                 let account = b.storage_account_identity_v1();
-                let limits = fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1::production_v1();
+                let limits = verifier::CanonicalRefinedForwardingHistoryLimitsV1::production_v1();
                 let profile = fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942;
                 let result = match route {
                     0 => verifier::recover_compiler_conditional_native_semantic_handoff_v5(handoff, &[], limits, profile, b),
