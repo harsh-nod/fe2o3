@@ -192,6 +192,10 @@ strip = "debuginfo"
 [profile.test.package.rustc-codegen-fe2o3]
 strip = "debuginfo"
 
+# Binding-only host tests pin the real executable within the normal image cap.
+[profile.test.package.fe2o3-vecadd]
+strip = "debuginfo"
+
 # Admission tests remeasure real compiler images within production deadlines.
 [profile.test.package."sha2@0.11.0"]
 opt-level = 3

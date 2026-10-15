@@ -41,6 +41,30 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+### Reference Enrollment Inventory Review (2026-10-15)
+
+The three files below were reviewed at `622f671266926639173cb0b7fac82481f8ae966c`
+and are unchanged since `8c27e0029db793a56974ca8974df11fa678fd39e`.
+Only their stale inventory entries change; no unsafe source, checker or
+unrelated allowance changes.
+
+The native application `worker.rs` now records four blocks and two functions.
+The sole unsafe entry forwards the original exclusive fixed-descriptor contract
+to its private helper. The original owned budget outlives the complete callback;
+the fcntl, from_raw_fd and prctl obligations and retained custody are unchanged.
+
+The test-only `reference_enrollment_count_no_alloc.rs` observer records four
+blocks, four functions and one implementation. Pointer/Layout obligations pass unchanged to System. Its const
+Cell TLS observer does not allocate; the materializing-decode positive control
+checks that allocation observation is active.
+
+The isolated `protected_reference_enrollment_loan_v1_flow_fixture.rs` records
+three blocks. Its child-only pre_exec remap uses close/dup2 with owned sources above all fixed slots. The sole
+child adopts FD198 once for the image-check lifetime, and F_GETFD only observes
+the consumed invocation slot. Bounded wait/kill/reap cleanup remains unchanged.
+These reviews and affected CPU controls are not a memory-safety proof,
+protected compiler admission, native qualification or GPU execution.
+
 ### Native Timestamp Inventory Review (2026-10-08)
 
 Two reviewers examined the three timestamp-diagnostic files omitted from the
