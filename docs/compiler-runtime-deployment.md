@@ -98,6 +98,18 @@ root-owned mode0700 offline root containing the genuinely provisioned fixed
 mode0755 parents. The assembler reads that original profile and uses its actual
 identity; helper UID/GID must differ from both profile services.
 
+The ordinary nonroot compiler stage is not directly suitable for a later root
+packaging invocation: source ownership must match the actual invoking effective
+UID/GID, while the genuine profile root remains root-owned mode0700. Before
+packaging, the authorized operator must prepare NEW private source copies with
+that operator's ownership, exact role modes and the original expected per-file
+lengths/hashes, preserving the original stage and receipts unchanged. The
+[privileged packaging preparation procedure](runtime-release-installation.md#privileged-packaging-preparation)
+defines this separate step. The CLI has no preparation subcommand; do not
+substitute in-place chown/chmod of the build stage, sudo builds, profile
+permission changes or invented proof/approval identities. UNAPPROVED package
+output still requires independent complete-record approval afterward.
+
 `DESTINATION` must be absent beneath an existing private mode0700 parent owned
 by the invoking UID/GID, outside both input trees. Paths are canonical absolute
 paths of at most 4096 bytes. Exclude concurrent administrative writers and keep
