@@ -1565,6 +1565,8 @@ run_generic_core() {
   run_format
   run_check
   run_backend_build
+  run_step compiler-map-evidence-tests \
+    python3 -I -B scripts/tests/compiler_map_evidence_test.py
   run_step simulation-expectation-tests \
     python3 -I -B scripts/tests/simulation_expectation.py
   run_step tutorial-scalar-gemm-corpus-tests \
