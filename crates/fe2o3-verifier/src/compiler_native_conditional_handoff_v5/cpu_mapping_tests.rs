@@ -136,11 +136,9 @@ fn mapped_original_overlap_and_working_exact_one_short_refuse_before_content() {
     assert!(selection_working(selection) >= RUSTC_ENROLLMENT_INVENTORY_WORKING_STORAGE_V1);
     let peak = outside + overlap + mapped_working;
     let work = Budget::STORAGE_WINDOW_WORK_V1 + 10;
-    for (work_limit, storage_limit, mode) in [
-        (work, peak, 0),
-        (work, peak - 1, 1),
-        (work - 1, peak, 2),
-    ] {
+    for (work_limit, storage_limit, mode) in
+        [(work, peak, 0), (work, peak - 1, 1), (work - 1, peak, 2)]
+    {
         let mut owned = Owned::new(Work::new(work_limit), storage_limit);
         owned.with_budget(|budget| {
             budget.reserve_storage(outside).unwrap();
@@ -175,7 +173,10 @@ fn mapped_original_overlap_and_working_exact_one_short_refuse_before_content() {
                 assert_eq!(retained, HEADER);
                 assert_eq!((content_calls.get(), created.get(), drops.get()), (1, 1, 0));
                 assert_eq!((budget.storage(), budget.peak_storage()), (outside, peak));
-                assert_eq!((budget.failed_work(), budget.failed_storage()), (None, None));
+                assert_eq!(
+                    (budget.failed_work(), budget.failed_storage()),
+                    (None, None)
+                );
                 drop(owner);
                 assert_eq!(drops.get(), 1);
             } else {

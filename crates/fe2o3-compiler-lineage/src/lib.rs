@@ -117,7 +117,6 @@ pub use proof_binding_v4::{
     InertProofBindingAssociationV4, MAX_INERT_PROOF_BINDING_ASSOCIATION_BYTES_V4,
     MAX_INERT_PROOF_BINDING_VERUS_EVIDENCE_BYTES_V4,
 };
-pub use rustc_enrollment_inventory_v1::*;
 pub use receipt::{
     InertAbiReceiptIdentityV3, InertAbiReceiptV3, InertAmdgpuLoweringReceiptIdentityV3,
     InertAmdgpuLoweringReceiptV3, InertCanonicalSemanticMirIdentityV3,
@@ -134,6 +133,7 @@ pub use receipt::{
     InertTargetBindingReceiptIdentityV3, InertTargetBindingReceiptV3,
     MAX_CANONICAL_SEMANTIC_MIR_BYTES_V3, MAX_LINEAGE_RECEIPT_PREIMAGE_BYTES_V3,
 };
+pub use rustc_enrollment_inventory_v1::*;
 pub use semantic_to_llvm_v3::{
     INERT_SEMANTIC_TO_LLVM_ASSOCIATION_MAGIC_V3, INERT_SEMANTIC_TO_LLVM_ASSOCIATION_VERSION_V3,
     InertSemanticToLlvmAssociationErrorV3, InertSemanticToLlvmAssociationInputsV3,

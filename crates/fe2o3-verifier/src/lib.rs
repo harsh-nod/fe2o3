@@ -25,7 +25,7 @@ mod compiler_native_conditional_handoff_v5;
 mod compiler_native_conditional_policy_roster_v1;
 mod native_conditional_root_policy_file_v1;
 pub use compiler_native_conditional_handoff_v5::{
-    CompilerConditionalNativeSemanticHandoffErrorV5,
+    CanonicalRefinedForwardingHistoryLimitsV1, CompilerConditionalNativeSemanticHandoffErrorV5,
     RecoveredCompilerConditionalNativeSemanticHandoffStorageV5,
     RecoveredCompilerConditionalNativeSemanticHandoffV5,
     recover_compiler_conditional_native_semantic_handoff_in_original_account_v5,

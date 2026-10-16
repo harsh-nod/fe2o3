@@ -38,6 +38,8 @@ use fe2o3_kernel_ir::{
     InertCanonicalKernelIrContractCatalogV1 as Catalog,
     VerifiedCanonicalKernelIrModuleV12 as Graph,
 };
+/// Resource limits accepted by the public conditional handoff recovery routes.
+pub use fe2o3_kernel_opt::CanonicalRefinedForwardingHistoryLimitsV1;
 use fe2o3_kernel_opt::{
     CanonicalRefinedForwardingHistoryLimitsV1 as Limits,
     MAX_REFINED_FORWARDING_HISTORY_STORAGE_V1 as MAX_STORAGE,
