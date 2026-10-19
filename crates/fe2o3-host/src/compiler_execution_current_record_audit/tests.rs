@@ -398,8 +398,10 @@ mod tests {
             send_response(&service, response.canonical_bytes());
         });
         let mut auditor =
-            InheritedWorkerV3CompilerCurrentRecordAuditorV1::admit_owned_application_service(client)
-                .unwrap();
+            InheritedWorkerV3CompilerCurrentRecordAuditorV1::admit_owned_application_service(
+                client,
+            )
+            .unwrap();
         let evidence = auditor
             .audit_exact_with_challenge(
                 &fixture.subject,
