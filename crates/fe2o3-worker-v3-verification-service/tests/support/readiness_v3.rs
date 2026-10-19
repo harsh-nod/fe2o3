@@ -354,15 +354,30 @@ fn duplicate_begin_is_rejected_before_any_provider_effects() {
         WorkerV3VerificationRejectionReasonV2::BeginPhaseOrder
     );
     counted.assert_unused();
-    let mut bytes = [0; WORKER_V3_VERIFICATION_CHALLENGE_BYTES_V2];
-    let (received, _) = recv(&client, &mut bytes, RecvFlags::DONTWAIT).unwrap();
-    WorkerV3VerificationChallengeFrameV2::decode_canonical(&bytes[..received]).unwrap();
-    // Closing with unread duplicate payload may produce ECONNRESET instead of EOF.
-    let mut byte = [0];
-    assert!(matches!(
-        recv(&client, &mut byte, RecvFlags::DONTWAIT),
-        Ok((0, 0)) | Err(Errno::CONNRESET)
-    ));
+    let expected = WorkerV3VerificationChallengeFrameV2::rejected(&verification_request(95));
+    assert_eq!(
+        rejected.frame().encode_canonical(),
+        expected.encode_canonical()
+    );
+    // Unread duplicate payload may reset the connection before rejection delivery.
+    // The extra byte ensures an oversized packet cannot masquerade as a canonical prefix.
+    let mut bytes = [0; WORKER_V3_VERIFICATION_CHALLENGE_BYTES_V2 + 1];
+    match recv(&client, &mut bytes, RecvFlags::DONTWAIT) {
+        Err(Errno::CONNRESET) => {}
+        Ok((received, _)) => {
+            assert_eq!(received, WORKER_V3_VERIFICATION_CHALLENGE_BYTES_V2);
+            let frame =
+                WorkerV3VerificationChallengeFrameV2::decode_canonical(&bytes[..received]).unwrap();
+            assert_eq!(frame.disposition(), fe2o3_worker_v3_verification_protocol::WorkerV3VerificationChallengeDispositionV2::Rejected);
+            assert_eq!(frame.encode_canonical(), expected.encode_canonical());
+            let mut byte = [0];
+            assert!(matches!(
+                recv(&client, &mut byte, RecvFlags::DONTWAIT),
+                Ok((0, 0)) | Err(Errno::CONNRESET)
+            ));
+        }
+        other => panic!("unexpected duplicate-Begin terminal receive: {other:?}"),
+    }
 }
 #[test]
 fn client_rejects_malformed_legacy_ready_and_extra_fds() {
