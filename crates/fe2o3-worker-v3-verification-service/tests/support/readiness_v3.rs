@@ -26,7 +26,7 @@ fn connection() -> (tempfile::TempDir, PathBuf, OwnedFd, OwnedFd) {
 }
 fn ready_bytes(client: &OwnedFd) -> [u8; 64] {
     let mut bytes = [0; 64];
-    assert_eq!(recv(client, &mut bytes, RecvFlags::empty()).unwrap(), 64);
+    assert_eq!(recv(client, &mut bytes, RecvFlags::empty()).unwrap(), (64, 64));
     bytes
 }
 fn send_composite(client: &OwnedFd, bytes: &[u8]) {
@@ -336,7 +336,7 @@ fn duplicate_ready_and_eof_queued_before_begin_never_send_begin() {
         }
         let mut byte = [0u8; 1];
         match recv(&service, &mut byte, RecvFlags::DONTWAIT) {
-            Ok(0) | Err(Errno::CONNRESET) => {}
+            Ok((0, 0)) | Err(Errno::CONNRESET) => {}
             other => panic!("client sent data before rejecting queued readiness: {other:?}"),
         }
     }
