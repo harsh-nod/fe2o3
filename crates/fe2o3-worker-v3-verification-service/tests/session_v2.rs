@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+#[path = "support/readiness_v3.rs"]
+mod readiness_v3_cases;
 use std::fs::File;
 use std::io::{IoSlice, IoSliceMut, Write};
 use std::mem::MaybeUninit;
