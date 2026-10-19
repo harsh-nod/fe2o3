@@ -47,16 +47,25 @@ impl WorkerV3VerificationReadyServiceSessionV3 {
                 ));
             }
         };
+        Self::prepare_checked_until(control, caller, deadline, |nonce| {
+            rustix::rand::getrandom(nonce, rustix::rand::GetRandomFlags::NONBLOCK)
+                .map_err(io::Error::from)
+        })
+    }
+
+    fn prepare_checked_until(
+        control: OwnedFd,
+        caller: WorkerV3VerificationCallerV1,
+        deadline: Instant,
+        fill_once: impl FnOnce(&mut [u8; 32]) -> io::Result<usize>,
+    ) -> Result<Self, WorkerV3VerificationReadinessFailureV3> {
         let mut attempted = false;
         let prepared = (|| {
             require_deadline(deadline).map_err(WorkerV3VerificationServiceErrorV3::V2)?;
             if input_is_queued(&control, deadline)? {
                 return Err(WorkerV3VerificationServiceErrorV3::EarlyInput);
             }
-            let ready = fresh_ready_with(deadline, |nonce| {
-                rustix::rand::getrandom(nonce, rustix::rand::GetRandomFlags::NONBLOCK)
-                    .map_err(io::Error::from)
-            })?;
+            let ready = fresh_ready_with(deadline, fill_once)?;
             require_deadline(deadline).map_err(WorkerV3VerificationServiceErrorV3::V2)?;
             if input_is_queued(&control, deadline)? {
                 return Err(WorkerV3VerificationServiceErrorV3::EarlyInput);
@@ -121,7 +130,12 @@ impl WorkerV3VerificationReadyServiceSessionV3 {
             .decode_begin(&bytes)
             .map_err(WorkerV3VerificationServiceErrorV3::Protocol)?;
         begin_received_worker_v3_verification_session_until_v2(
-            (self.control, self.caller, self.deadline),
+            (
+                self.control,
+                self.caller,
+                self.deadline,
+                phase_input_is_queued_until,
+            ),
             request,
             payloads,
             policy_resolver,
@@ -189,6 +203,10 @@ impl fmt::Display for WorkerV3VerificationServiceErrorV3 {
     }
 }
 impl std::error::Error for WorkerV3VerificationServiceErrorV3 {}
+
+#[cfg(test)]
+#[path = "service_v3/tests.rs"]
+mod readiness_phase_tests;
 
 #[cfg(test)]
 mod readiness_entropy_tests {
@@ -295,6 +313,60 @@ fn input_is_queued(
                         source: e.into(),
                     },
                 ));
+            }
+        }
+    }
+}
+
+// V3 alone selects this policy at every shared post-Begin phase boundary.
+fn phase_input_is_queued_until(
+    control: &OwnedFd,
+    deadline: Instant,
+) -> Result<bool, WorkerV3VerificationServiceErrorV2> {
+    use rustix::event::{PollFd, PollFlags, Timespec, poll};
+    phase_probe_with(deadline, Instant::now, || {
+        let mut fds = [PollFd::new(
+            control,
+            PollFlags::IN | PollFlags::RDHUP | PollFlags::ERR | PollFlags::HUP,
+        )];
+        poll(
+            &mut fds,
+            Some(&Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            }),
+        )
+        .map(|count| count != 0 && !fds[0].revents().is_empty())
+    })
+}
+
+fn phase_probe_with(
+    deadline: Instant,
+    mut now: impl FnMut() -> Instant,
+    mut poll_once: impl FnMut() -> Result<bool, rustix::io::Errno>,
+) -> Result<bool, WorkerV3VerificationServiceErrorV2> {
+    loop {
+        if now() >= deadline {
+            return Err(WorkerV3VerificationServiceErrorV2::V1(
+                WorkerV3VerificationServiceErrorV1::Timeout,
+            ));
+        }
+        // Keep the same overflow refusal as the existing deadline validator.
+        crate::service_v2::require_deadline(deadline)?;
+        let result = poll_once();
+        if now() >= deadline {
+            return Err(WorkerV3VerificationServiceErrorV2::V1(
+                WorkerV3VerificationServiceErrorV1::Timeout,
+            ));
+        }
+        match result {
+            Ok(queued) => return Ok(queued),
+            Err(rustix::io::Errno::INTR) => {}
+            Err(source) => {
+                return Err(WorkerV3VerificationServiceErrorV2::Io {
+                    operation: "inspect V3 phase ordering",
+                    source: source.into(),
+                });
             }
         }
     }

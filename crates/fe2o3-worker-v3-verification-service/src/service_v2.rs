@@ -398,7 +398,9 @@ where
     let request = WorkerV3VerificationRequestV1::decode_canonical(&request_bytes)
         .map_err(WorkerV3VerificationServiceErrorV2::CanonicalBegin)?;
     begin_received_worker_v3_verification_session_until_v2(
-        (control, caller, deadline),
+        (control, caller, deadline, |control: &OwnedFd, _| {
+            phase_input_is_queued(control)
+        }),
         request,
         descriptors,
         policy_resolver,
@@ -408,8 +410,8 @@ where
     )
 }
 
-pub(crate) fn begin_received_worker_v3_verification_session_until_v2<P, M, R, C>(
-    session: (OwnedFd, WorkerV3VerificationCallerV1, Instant),
+pub(crate) fn begin_received_worker_v3_verification_session_until_v2<P, M, R, C, F>(
+    session: (OwnedFd, WorkerV3VerificationCallerV1, Instant, F),
     request: WorkerV3VerificationRequestV1,
     descriptors: [OwnedFd; 2],
     policy_resolver: &mut P,
@@ -422,9 +424,10 @@ where
     M: WorkerV3VerificationMeasurementResolverV1,
     R: WorkerV3VerificationChallengeReplayGuardV1,
     C: WorkerV3VerificationChallengeReservationProviderV2,
+    F: FnMut(&OwnedFd, Instant) -> Result<bool, WorkerV3VerificationServiceErrorV2>,
 {
-    let (control, caller, deadline) = session;
-    if phase_input_is_queued(&control)? {
+    let (control, caller, deadline, mut phase_probe) = session;
+    if phase_probe(&control, deadline)? {
         return reject_begin(
             control,
             caller,
@@ -537,7 +540,7 @@ where
             Ok(payload) => payload,
             Err(reason) => return reject_begin_v1(control, caller, request, reason, deadline),
         };
-    if phase_input_is_queued(&control)? {
+    if phase_probe(&control, deadline)? {
         return reject_begin(
             control,
             caller,
@@ -558,7 +561,7 @@ where
             );
         }
     };
-    if phase_input_is_queued(&control)? {
+    if phase_probe(&control, deadline)? {
         return reject_begin(
             control,
             caller,

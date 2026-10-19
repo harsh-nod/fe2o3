@@ -10,6 +10,59 @@ use fe2o3_worker_v3_verification_service::{
     WorkerV3VerificationReadyServiceSessionV3, WorkerV3VerificationServiceErrorV3,
 };
 
+#[derive(Clone)]
+struct CountedProviders(std::rc::Rc<std::cell::RefCell<[usize; 4]>>);
+impl CountedProviders {
+    fn new() -> Self {
+        Self(std::rc::Rc::new(std::cell::RefCell::new([0; 4])))
+    }
+    fn assert_unused(&self) {
+        assert_eq!(*self.0.borrow(), [0; 4]);
+    }
+}
+impl WorkerV3VerificationPolicyResolverV1 for CountedProviders {
+    fn resolve_expected_policy(
+        &mut self,
+        _: WorkerV3VerificationCallerV1,
+        request: &WorkerV3VerificationRequestV1,
+    ) -> Option<WorkerV3VerificationPolicyIdentityV1> {
+        self.0.borrow_mut()[0] += 1;
+        Some(request.policy_identity())
+    }
+}
+impl WorkerV3VerificationMeasurementResolverV1 for CountedProviders {
+    fn resolve_expected_measurement(
+        &mut self,
+        _: WorkerV3VerificationCallerV1,
+        _: WorkerV3VerificationPolicyIdentityV1,
+        request: &WorkerV3VerificationRequestV1,
+    ) -> Option<WorkerV3VerificationMeasurementIdentityV1> {
+        self.0.borrow_mut()[1] += 1;
+        Some(request.measurement_identity())
+    }
+}
+impl WorkerV3VerificationChallengeReplayGuardV1 for CountedProviders {
+    fn admit_fresh_challenge(
+        &mut self,
+        _: WorkerV3VerificationCallerV1,
+        _: WorkerV3VerificationPolicyIdentityV1,
+        _: WorkerV3VerificationFreshChallengeV1,
+    ) -> bool {
+        self.0.borrow_mut()[2] += 1;
+        true
+    }
+}
+impl WorkerV3VerificationChallengeReservationProviderV2 for CountedProviders {
+    fn reserve_current_record_challenge(
+        &mut self,
+        _: WorkerV3VerificationCallerV1,
+        _: &WorkerV3VerificationRequestV1,
+    ) -> Option<WorkerV3VerificationChallengeReservationV2> {
+        self.0.borrow_mut()[3] += 1;
+        Some(WorkerV3VerificationChallengeReservationV2::new([8; 32], [9; 32]).unwrap())
+    }
+}
+
 fn connection() -> (tempfile::TempDir, PathBuf, OwnedFd, OwnedFd) {
     let (root, path, listener) = prepared_path_listener();
     let client = socket_with(
@@ -26,7 +79,10 @@ fn connection() -> (tempfile::TempDir, PathBuf, OwnedFd, OwnedFd) {
 }
 fn ready_bytes(client: &OwnedFd) -> [u8; 64] {
     let mut bytes = [0; 64];
-    assert_eq!(recv(client, &mut bytes, RecvFlags::empty()).unwrap(), (64, 64));
+    assert_eq!(
+        recv(client, &mut bytes, RecvFlags::empty()).unwrap(),
+        (64, 64)
+    );
     bytes
 }
 fn send_composite(client: &OwnedFd, bytes: &[u8]) {
@@ -157,7 +213,11 @@ fn send_first_is_rejected_by_second_strict_check_and_retains_cleanup_fd() {
             _
         ))
     ));
-    drop(failure.into_control().expect("pre-I/O cleanup fd retained"));
+    let retained = failure.into_control().expect("pre-I/O cleanup fd retained");
+    expect_peer_eof(&client);
+    assert!(send(&client, b"retry", SendFlags::NOSIGNAL).is_err());
+    assert!(send(&retained, b"retry", SendFlags::NOSIGNAL).is_err());
+    drop(retained);
 }
 #[test]
 fn wrong_stale_nonce_and_legacy_begin_fail_before_policy_or_reservation() {
@@ -184,8 +244,13 @@ fn wrong_stale_nonce_and_legacy_begin_fail_before_policy_or_reservation() {
             packet = request.encode_canonical().to_vec();
         }
         send_composite(&client, &packet);
-        let (mut policy, mut measurement, mut replay) = admission_state(&request);
-        let mut reservations = FixedReservations::available(0x81, 0x82);
+        let counted = CountedProviders::new();
+        let (mut policy, mut measurement, mut replay, mut reservations) = (
+            counted.clone(),
+            counted.clone(),
+            counted.clone(),
+            counted.clone(),
+        );
         let err = ready
             .begin(
                 &mut policy,
@@ -198,6 +263,7 @@ fn wrong_stale_nonce_and_legacy_begin_fail_before_policy_or_reservation() {
             err,
             WorkerV3VerificationServiceErrorV3::Protocol(_)
         ));
+        counted.assert_unused();
         expect_peer_eof(&client);
     }
 }
@@ -222,8 +288,13 @@ fn cross_connection_nonce_is_not_a_begin_capability() {
     assert_ne!(old_frame, fresh_frame);
     let request = verification_request(93);
     send_composite(&client_b, &old_frame.encode_begin(&request));
-    let (mut policy, mut measurement, mut replay) = admission_state(&request);
-    let mut reservations = FixedReservations::available(0x81, 0x82);
+    let counted = CountedProviders::new();
+    let (mut policy, mut measurement, mut replay, mut reservations) = (
+        counted.clone(),
+        counted.clone(),
+        counted.clone(),
+        counted.clone(),
+    );
     assert!(matches!(
         ready_b.begin(
             &mut policy,
@@ -236,6 +307,7 @@ fn cross_connection_nonce_is_not_a_begin_capability() {
         ))
     ));
     expect_peer_eof(&client_b);
+    counted.assert_unused();
     drop(ready_a);
 }
 #[test]
@@ -247,8 +319,50 @@ fn preexpired_prepare_retains_fd_and_emits_no_ready() {
             .unwrap_err();
     assert!(!failure.ready_send_attempted());
     let fd = failure.into_control().unwrap();
-    drop(fd);
     expect_peer_eof(&client);
+    assert!(send(&client, b"retry", SendFlags::NOSIGNAL).is_err());
+    assert!(send(&fd, b"retry", SendFlags::NOSIGNAL).is_err());
+    drop(fd);
+}
+
+#[test]
+fn duplicate_begin_is_rejected_before_any_provider_effects() {
+    let (_root, path, service, client) = connection();
+    let ready = WorkerV3VerificationReadyServiceSessionV3::prepare_until(
+        WorkerV3VerificationAcceptedServiceEndpointV2::admit(service, &path).unwrap(),
+        Instant::now() + Duration::from_secs(2),
+    )
+    .unwrap();
+    let frame = WorkerV3VerificationReadyFrameV3::decode_canonical(&ready_bytes(&client)).unwrap();
+    let packet = frame.encode_begin(&verification_request(95));
+    send_composite(&client, &packet);
+    send_composite(&client, &packet);
+    let counted = CountedProviders::new();
+    let WorkerV3VerificationBeginOutcomeV2::Rejected(rejected) = ready
+        .begin(
+            &mut counted.clone(),
+            &mut counted.clone(),
+            &mut counted.clone(),
+            &mut counted.clone(),
+        )
+        .unwrap()
+    else {
+        panic!("duplicate Begin reserved a challenge");
+    };
+    assert_eq!(
+        rejected.reason(),
+        WorkerV3VerificationRejectionReasonV2::BeginPhaseOrder
+    );
+    counted.assert_unused();
+    let mut bytes = [0; WORKER_V3_VERIFICATION_CHALLENGE_BYTES_V2];
+    let (received, _) = recv(&client, &mut bytes, RecvFlags::DONTWAIT).unwrap();
+    WorkerV3VerificationChallengeFrameV2::decode_canonical(&bytes[..received]).unwrap();
+    // Closing with unread duplicate payload may produce ECONNRESET instead of EOF.
+    let mut byte = [0];
+    assert!(matches!(
+        recv(&client, &mut byte, RecvFlags::DONTWAIT),
+        Ok((0, 0)) | Err(Errno::CONNRESET)
+    ));
 }
 #[test]
 fn client_rejects_malformed_legacy_ready_and_extra_fds() {
