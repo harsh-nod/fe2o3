@@ -50,9 +50,8 @@ use fe2o3_worker_v3_verification_service::{
     WorkerV3VerificationMeasurementResolverV1, WorkerV3VerificationPolicyResolverV1,
     WorkerV3VerificationReadyServiceSessionV3, WorkerV3VerificationRejectionReasonV1,
     WorkerV3VerificationRejectionReasonV2, WorkerV3VerificationServiceErrorV1,
-    WorkerV3VerificationServiceErrorV2, begin_worker_v3_verification_accepted_session_until_v2,
-    begin_worker_v3_verification_session_until_v2, begin_worker_v3_verification_session_v2,
-    prepare_worker_v3_verification_receiver_v1,
+    WorkerV3VerificationServiceErrorV2, begin_worker_v3_verification_session_until_v2,
+    begin_worker_v3_verification_session_v2, prepare_worker_v3_verification_receiver_v1,
 };
 use rustix::fs::{MemfdFlags, Mode, OFlags, SealFlags};
 use rustix::io::Errno;
