@@ -5,6 +5,8 @@
 //! All admission and loan revalidation use the production entry points. These
 //! fixtures establish no compiler provenance, receipt, proof or native pass.
 
+#![cfg(test)]
+
 use super::super::{Budget, Invocation, Policy};
 use crate::protected_compiler_execution::{
     OwnedExecutionInputs,
