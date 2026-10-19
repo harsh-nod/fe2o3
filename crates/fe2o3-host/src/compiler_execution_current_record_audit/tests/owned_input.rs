@@ -70,7 +70,7 @@ fn invalid_owned_peers_close_input_and_retained_duplicate() {
 
     let (stream, _stream_service) = UnixStream::pair().unwrap();
     let (datagram, _datagram_service) = UnixDatagram::pair().unwrap();
-    let unconnected = rustix::net::socket(
+    let unconnected = rustix::net::socket_with(
         rustix::net::AddressFamily::UNIX,
         rustix::net::SocketType::SEQPACKET,
         rustix::net::SocketFlags::CLOEXEC,
