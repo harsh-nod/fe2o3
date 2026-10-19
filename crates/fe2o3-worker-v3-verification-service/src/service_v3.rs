@@ -204,52 +204,6 @@ impl fmt::Display for WorkerV3VerificationServiceErrorV3 {
 }
 impl std::error::Error for WorkerV3VerificationServiceErrorV3 {}
 
-#[cfg(test)]
-#[path = "service_v3/tests.rs"]
-mod readiness_phase_tests;
-
-#[cfg(test)]
-mod readiness_entropy_tests {
-    use super::*;
-    #[test]
-    fn zero_and_short_entropy_are_terminal_errors() {
-        let deadline = Instant::now() + std::time::Duration::from_secs(1);
-        assert!(matches!(
-            fresh_ready_with(deadline, |_| Ok(32)),
-            Err(WorkerV3VerificationServiceErrorV3::Protocol(
-                WorkerV3VerificationProtocolErrorV3::ZeroNonce
-            ))
-        ));
-        assert!(matches!(
-            fresh_ready_with(deadline, |nonce| {
-                nonce.fill(1);
-                Ok(31)
-            }),
-            Err(WorkerV3VerificationServiceErrorV3::Entropy(_))
-        ));
-    }
-    #[test]
-    fn interrupted_entropy_is_not_retried_or_replaced() {
-        let calls = std::cell::Cell::new(0);
-        let err = fresh_ready_with(Instant::now() + std::time::Duration::from_secs(1), |_| {
-            calls.set(calls.get() + 1);
-            Err(io::Error::from(io::ErrorKind::Interrupted))
-        })
-        .unwrap_err();
-        assert!(matches!(
-            err,
-            WorkerV3VerificationServiceErrorV3::Entropy(_)
-        ));
-        assert_eq!(calls.get(), 1);
-    }
-    #[test]
-    fn preexpired_deadline_never_acquires_entropy() {
-        assert!(
-            fresh_ready_with(Instant::now(), |_| panic!("expired entropy acquisition")).is_err()
-        );
-    }
-}
-
 fn fresh_ready_with(
     deadline: Instant,
     fill_once: impl FnOnce(&mut [u8; 32]) -> io::Result<usize>,
@@ -369,5 +323,51 @@ fn phase_probe_with(
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[path = "service_v3/tests.rs"]
+mod readiness_phase_tests;
+
+#[cfg(test)]
+mod readiness_entropy_tests {
+    use super::*;
+    #[test]
+    fn zero_and_short_entropy_are_terminal_errors() {
+        let deadline = Instant::now() + std::time::Duration::from_secs(1);
+        assert!(matches!(
+            fresh_ready_with(deadline, |_| Ok(32)),
+            Err(WorkerV3VerificationServiceErrorV3::Protocol(
+                WorkerV3VerificationProtocolErrorV3::ZeroNonce
+            ))
+        ));
+        assert!(matches!(
+            fresh_ready_with(deadline, |nonce| {
+                nonce.fill(1);
+                Ok(31)
+            }),
+            Err(WorkerV3VerificationServiceErrorV3::Entropy(_))
+        ));
+    }
+    #[test]
+    fn interrupted_entropy_is_not_retried_or_replaced() {
+        let calls = std::cell::Cell::new(0);
+        let err = fresh_ready_with(Instant::now() + std::time::Duration::from_secs(1), |_| {
+            calls.set(calls.get() + 1);
+            Err(io::Error::from(io::ErrorKind::Interrupted))
+        })
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            WorkerV3VerificationServiceErrorV3::Entropy(_)
+        ));
+        assert_eq!(calls.get(), 1);
+    }
+    #[test]
+    fn preexpired_deadline_never_acquires_entropy() {
+        assert!(
+            fresh_ready_with(Instant::now(), |_| panic!("expired entropy acquisition")).is_err()
+        );
     }
 }
