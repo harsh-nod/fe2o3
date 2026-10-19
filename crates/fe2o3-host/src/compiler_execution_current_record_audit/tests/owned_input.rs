@@ -99,17 +99,36 @@ fn duplicate_failure_consumes_input_in_an_isolated_child() {
     if std::env::var_os(CHILD).is_some() {
         use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
 
-        let (peer, _service) = socket_pair();
+        let (peer, service) = socket_pair();
         let input = peer.as_raw_fd();
+        let object = identity(&peer);
+        let service_object = identity(&service);
+        let service_slots = matching_slots(service_object).len();
         let original = getrlimit(Resource::Nofile);
         setrlimit(
             Resource::Nofile,
             Rlimit {
-                current: Some(0),
+                current: Some(64),
                 maximum: original.maximum,
             },
         )
         .unwrap();
+        // A valid minimum plus occupied eligible slots forces EMFILE, not EINVAL.
+        let mut fillers = Vec::new();
+        let mut exhaustion = None;
+        for _ in 0..64 {
+            match rustix::io::fcntl_dupfd_cloexec(&service, 3) {
+                Ok(filler) => fillers.push(filler),
+                Err(error) => {
+                    exhaustion = std::io::Error::from(error).raw_os_error();
+                    break;
+                }
+            }
+        }
+        if exhaustion != Some(libc::EMFILE) {
+            setrlimit(Resource::Nofile, original).unwrap();
+            panic!("expected genuine descriptor exhaustion, got {exhaustion:?}");
+        }
         let result = Auditor::admit_owned_application_service(peer);
         setrlimit(Resource::Nofile, original).unwrap();
         assert!(matches!(
@@ -118,6 +137,16 @@ fn duplicate_failure_consumes_input_in_an_isolated_child() {
                 if error.raw_os_error() == Some(libc::EMFILE)
         ));
         assert_retired(input);
+        assert!(matching_slots(object).is_empty());
+        for filler in &fillers {
+            assert!((3..64).contains(&filler.as_raw_fd()));
+            assert_ne!(
+                descriptor_flags(filler.as_raw_fd()).unwrap() & libc::FD_CLOEXEC,
+                0
+            );
+        }
+        drop(fillers);
+        assert_eq!(matching_slots(service_object).len(), service_slots);
         return;
     }
 
