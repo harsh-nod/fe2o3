@@ -679,8 +679,11 @@ FE2O3_TEST_SOURCE_AUTH_LDS_GFX942_HSACO=/absolute/path/to/lds.hsaco \
   scripts/ci-local.sh hardware-smoke
 ```
 
-The smoke suite builds and runs all supported examples. Each example copies its
-result back to the host and checks it against a CPU-computed expected value.
+This lane does not build or run every registered tutorial kernel or SIMT/tile
+variant. Its individual fixture checks retain their own output comparisons;
+device/queue checks are not numerical kernel results. Use the
+[tutorial reproduction plans](tutorial-reproduction.md) to inspect the separate
+manifest-declared inputs and correctness obligations without executing them.
 
 The scalar-GEMM compiler lane extracts the real single-source
 `#[kernel(typed)]` example through semantic MIR, ranked PLIRON, Kernel IR, and
