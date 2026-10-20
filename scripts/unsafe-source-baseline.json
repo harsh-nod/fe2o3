@@ -946,6 +946,9 @@
   "crates/fe2o3-host/src/compiler_execution_current_record_audit/tests.rs": {
     "block": 4
   },
+  "crates/fe2o3-host/src/compiler_execution_current_record_audit/tests/owned_input.rs": {
+    "block": 1
+  },
   "crates/fe2o3-host/src/compiler_execution_current_record_audit/tests/production.rs": {
     "block": 6
   },
