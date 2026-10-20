@@ -1002,10 +1002,12 @@ fn readiness_quiet_with(
     mut poll_once: impl FnMut() -> Result<usize, rustix::io::Errno>,
 ) -> Result<(), WorkerV3VerificationClientErrorV2> {
     loop {
-        if now() >= deadline {
+        let remaining = deadline.saturating_duration_since(now());
+        if remaining.is_zero() {
             return Err(WorkerV3VerificationClientErrorV2::Timeout);
         }
-        require_deadline(deadline)?;
+        Timespec::try_from(remaining)
+            .map_err(|_| WorkerV3VerificationClientErrorV2::DeadlineOverflow)?;
         let result = poll_once();
         if now() >= deadline {
             return Err(WorkerV3VerificationClientErrorV2::Timeout);
@@ -1107,23 +1109,32 @@ mod tests {
     #[test]
     fn readiness_quiet_finite_interruptions_preserve_live_poll_outcomes() {
         let deadline = Instant::now() + Duration::from_secs(60);
+        let before_deadline = deadline - Duration::from_secs(1);
         let interrupts = std::cell::Cell::new(0);
-        readiness_quiet_with(deadline, Instant::now, || {
-            interrupts.set(interrupts.get() + 1);
-            if interrupts.get() < 1024 {
-                Err(rustix::io::Errno::INTR)
-            } else {
-                Ok(0)
-            }
-        })
+        readiness_quiet_with(
+            deadline,
+            || before_deadline,
+            || {
+                interrupts.set(interrupts.get() + 1);
+                if interrupts.get() < 1024 {
+                    Err(rustix::io::Errno::INTR)
+                } else {
+                    Ok(0)
+                }
+            },
+        )
         .unwrap();
         assert_eq!(interrupts.get(), 1024);
         assert!(matches!(
-            readiness_quiet_with(deadline, Instant::now, || Ok(1)),
+            readiness_quiet_with(deadline, || before_deadline, || Ok(1)),
             Err(WorkerV3VerificationClientErrorV2::TrailingTransfer)
         ));
         assert!(matches!(
-            readiness_quiet_with(deadline, Instant::now, || Err(rustix::io::Errno::BADF)),
+            readiness_quiet_with(
+                deadline,
+                || before_deadline,
+                || Err(rustix::io::Errno::BADF)
+            ),
             Err(WorkerV3VerificationClientErrorV2::Poll(_))
         ));
     }
