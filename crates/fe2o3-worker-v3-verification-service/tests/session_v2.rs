@@ -622,7 +622,12 @@ fn legacy_v2_connected_path_send_first_is_rejected_with_endpoint_retained() {
     let peer = rustix::net::getpeername(&service)
         .unwrap()
         .expect("connected service endpoint must retain its peer address");
-    assert!(peer.as_unix().unwrap().abstract_name().is_some());
+    assert!(
+        SocketAddrUnix::try_from(peer)
+            .unwrap()
+            .abstract_name()
+            .is_some()
+    );
     let original = service.as_raw_fd();
     let failure = WorkerV3VerificationAcceptedServiceEndpointV2::admit(service, &path).unwrap_err();
     assert!(matches!(
