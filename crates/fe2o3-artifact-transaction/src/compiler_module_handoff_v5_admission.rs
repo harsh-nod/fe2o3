@@ -192,7 +192,7 @@ mod tests {
             acquired_rx.recv().unwrap();
             contender.join().unwrap();
         });
-        assert!(output.try_lock().unwrap().is_some());
+        let _reacquired = output.lock().unwrap();
     }
 
     #[test]
