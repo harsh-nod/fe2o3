@@ -320,6 +320,265 @@ run_all_rustc_codegen_shards() { :; }
         self.signal_case(signal.SIGTERM, during_spawn=True)
 
 
+class SelectedCaseHarnessTests(unittest.TestCase):
+    """All compiler/reference/simulator calls below are deterministic Python mocks."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.directory = Path(self.temporary.name)
+        self.output = self.directory / "output"
+        self.version = 0
+        self.now = 0
+        self.calls = []
+        self.observations = []
+        self.fixture = {"fixtureId": "unit-only-positive", "target": "gfx942", "compilerInput": {
+            "packageManifest": "unit-only/Cargo.toml", "cargoTarget": {"kind": "lib"},
+            "defaultFeatures": False, "features": ["unit-feature"],
+            "kernelSymbols": ["unit_first", "unit_second"]}}
+        self.manifest = {"unitOnly": True}
+        self.digest = "a" * 64
+        self.references = [("fixture", "unit-only-positive", 0, 0)]
+        self.validator = types.SimpleNamespace(load_manifest=lambda *args, **kwargs: (self.manifest, self.digest))
+        self.census = types.SimpleNamespace(input_snapshot=self.snapshot)
+        self.production = types.SimpleNamespace(prepare=lambda *args: (dict(args[3]), {"unitOnly": True}),
+                                                reconcile=self.reconcile)
+        self.simulation = types.SimpleNamespace(
+            pin_executable=lambda path: {"sha256": "b" * 64, "bytes": 1},
+            command_passed=lambda row: row.get("exitCode") == 0 and row.get("logComplete") is True
+                                      and row.get("directChildReaped") is True,
+            strict_json=json.loads,
+            read_file=lambda path: (path.read_bytes(), {}), run_case=self.simulate)
+        self.request = {"schema": harness.SELECTED_REQUEST_SCHEMA, "manifestSha256": self.digest,
+                        "invocationId": "unit-only-positive",
+                        "sourceSnapshotSha256": harness.snapshot_sha256(self.snapshot(None, None, None, None, self.fixture)),
+                        "limits": {"compileSeconds": 600, "simulationSeconds": 120,
+                                   "totalSeconds": 3, "logBytes": 512}}
+
+    def snapshot(self, *args):
+        return {"fixture": copy.deepcopy(args[-1]), "manifestSha256": self.digest,
+                "unitOnlySourceVersion": self.version}
+
+    def loaded(self, *args):
+        fixture = copy.deepcopy(self.fixture)
+        other = copy.deepcopy(fixture)
+        other.update(fixtureId="unit-only-other", target="gfx950")
+        return (self.validator, self.census, self.manifest, self.digest,
+                {"unit-only-positive": (fixture, self.references, False),
+                 "unit-only-negative": (copy.deepcopy(fixture), self.references, True),
+                 "unit-only-other": (other, self.references, False)})
+
+    def reconcile(self, log, outcome, expected):
+        if outcome["exitCode"] != 0 or outcome["logComplete"] is not True:
+            raise ValueError("unit-only production compilation refused")
+        return {"status": "production-compile-census-pass", "unitOnly": True}
+
+    def load_module(self, name, path):
+        if path.name == "tutorial_production_census_v91.py":
+            return self.production
+        if path.name == "tutorial_simulation_v92.py":
+            return self.simulation
+        self.fail(f"unexpected module {path}")
+
+    def runner(self, args, cwd, environment, log, timeout, limit):
+        self.calls.append((args, timeout, limit))
+        if len(args) > 1 and args[1] == "generate":
+            log.write_text(json.dumps({"kernel": args[2]}))
+        else:
+            log.write_bytes(b"unit-only mock output")
+        return {"status": "cargo-completed-unqualified", "exitCode": 0,
+                "logSha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+                "logBytes": log.stat().st_size, "logComplete": True, "directChildReaped": True}
+
+    def simulate(self, case, graphs, request, reference, simulator, output, runner, **kwargs):
+        self.assertEqual(case["fixture"], self.fixture)
+        self.assertEqual(graphs.name, "0000-graphs-v92")
+        self.observations.append(json.loads(request.read_bytes())["kernel"])
+        output.mkdir()
+        outcome = runner([str(simulator), "unit-only-current-graph"], ROOT, kwargs["environment"],
+                         output / "mock.log", kwargs["timeout"], 1024)
+        if outcome["exitCode"] != 0:
+            raise ValueError("unit-only CPU oracle refused")
+        return {"unitOnly": True, "oracleMatched": True, "hardwareExecuted": False}
+
+    def selected(self, request=None, *, raw=None, failures=(), runner=None):
+        payload = json.dumps(self.request if request is None else request).encode() if raw is None else raw
+        with patch.object(harness, "load_inputs", side_effect=self.loaded), \
+                patch.object(harness, "load_module", side_effect=self.load_module), \
+                patch.object(harness, "prerequisites", return_value=list(failures)):
+            report = harness.run_selected_case(ROOT, ROOT / "config/tutorial-kernel-manifest-v1.json",
+                Path("/unit-only/cargo-fe2o3"), self.directory / "cache", self.output, payload,
+                Path("/unit-only/reference"), Path("/unit-only/simulator"),
+                runner=runner or self.runner, environment={"KEEP": "unit-only"}, clock=lambda: self.now)
+        self.assertEqual(json.loads((self.output / "terminal.json").read_text()), report)
+        self.assertTrue(report["complete"])
+        self.assertFalse(report["qualified"])
+        self.assertFalse(report["hardwareExecuted"])
+        self.assertFalse(report["grantsArtifactOrLaunchAuthority"])
+        self.assertFalse(report["application"]["attempted"])
+        return report
+
+    def test_selected_case_observes_all_registered_roots_but_native_is_blocked(self):
+        report = self.selected()
+        self.assertEqual(report["status"], "blocked-native-prerequisite")
+        self.assertFalse(report["coversAllRegisteredInvocations"])
+        self.assertEqual(self.observations, self.fixture["compilerInput"]["kernelSymbols"])
+        self.assertEqual(report["compilation"]["selectedInvocations"], 1)
+        self.assertEqual(report["compilation"]["registeredInvocations"], 3)
+        self.assertFalse(report["compilation"]["coversAllRegisteredInvocations"])
+        self.assertEqual(len(self.calls), 5)
+        compile_args = self.calls[0][0]
+        self.assertEqual(compile_args[1:4], ["authority", "release", "build"])
+        self.assertEqual(compile_args[-2:], ["--features", "unit-feature"])
+        self.assertIn("--no-default-features", compile_args)
+        self.assertTrue(all(timeout <= 3 and limit <= 512 for _, timeout, limit in self.calls))
+
+    def test_schema_limits_and_override_fields_refuse_before_any_command(self):
+        mutations = [lambda r: r.update(schema="foreign"), lambda r: r.update(target="gfx950"),
+                     lambda r: r.update(kernel="foreign"), lambda r: r.update(environment={}),
+                     lambda r: r.update(nativeReady=True), lambda r: r.update(path="/foreign"),
+                     lambda r: r["limits"].update(totalSeconds=True),
+                     lambda r: r["limits"].update(compileSeconds=601),
+                     lambda r: r["limits"].update(simulationSeconds=0),
+                     lambda r: r["limits"].update(logBytes=harness.MAX_LOG_BYTES + 1),
+                     lambda r: r["limits"].update(extra=1)]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                request = copy.deepcopy(self.request)
+                mutate(request)
+                self.output = self.directory / f"refused-{index}"
+                self.assertEqual(self.selected(request)["status"], "request-refused")
+        self.assertEqual(self.calls, [])
+
+    def test_duplicate_keys_nonfinite_float_and_oversized_requests_refuse(self):
+        payloads = [b'{"schema":1,"schema":2}', b'{"schema":NaN}', b'{"schema":1.0}',
+                    b" " * (harness.MAX_SELECTED_REQUEST_BYTES + 1), b"[1]", b"not-json"]
+        for index, raw in enumerate(payloads):
+            with self.subTest(index=index):
+                self.output = self.directory / f"bytes-{index}"
+                self.assertEqual(self.selected(raw=raw)["status"], "request-refused")
+        self.assertEqual(self.calls, [])
+
+    def test_manifest_invocation_snapshot_and_registered_negative_refuse(self):
+        for index, (field, value) in enumerate([("manifestSha256", "f" * 64),
+                ("sourceSnapshotSha256", "f" * 64), ("invocationId", "foreign"),
+                ("invocationId", "unit-only-negative")]):
+            with self.subTest(field=field, value=value):
+                self.output = self.directory / f"binding-{index}"
+                request = dict(self.request, **{field: value})
+                self.assertEqual(self.selected(request)["status"], "request-refused")
+        self.assertEqual(self.calls, [])
+
+    def test_missing_compiler_prerequisite_blocks_all_executable_phases(self):
+        report = self.selected(failures=[{"kind": "unit-only-missing-provider"}])
+        self.assertEqual(report["status"], "blocked-prerequisite")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.observations, [])
+
+    def test_new_source_before_compilation_is_checked_before_runner(self):
+        original = self.loaded
+        loads = []
+        def changed(*args):
+            loads.append(True)
+            if len(loads) == 2:
+                self.version = 1
+            return original(*args)
+        self.loaded = changed
+        report = self.selected()
+        self.assertEqual(report["status"], "phase-refused")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(report["compilation"]["cases"][0]["status"], "invalid-source-input")
+
+    def test_changed_source_after_zero_exit_stops_cpu_phase(self):
+        def changed(*args):
+            result = self.runner(*args)
+            self.version = 1
+            return result
+        report = self.selected(runner=changed)
+        self.assertEqual(report["status"], "phase-refused")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.observations, [])
+
+    def test_original_deadline_dominates_zero_exit_and_is_not_reset(self):
+        def expired(*args):
+            result = self.runner(*args)
+            self.now = 3
+            return result
+        report = self.selected(runner=expired)
+        self.assertEqual(report["status"], "deadline-exceeded")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(report["commands"][0]["outcome"]["exitCode"], 0)
+        self.assertEqual(self.observations, [])
+
+    def test_compile_failure_cannot_be_promoted_by_zero_followup(self):
+        def failed(*args):
+            result = self.runner(*args)
+            result.update(status="cargo-failed", exitCode=7)
+            return result
+        report = self.selected(runner=failed)
+        self.assertEqual(report["status"], "phase-refused")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.observations, [])
+
+    def test_foreign_reference_kernel_stops_before_simulation(self):
+        def foreign(*args):
+            result = self.runner(*args)
+            if args[0][1] == "generate":
+                args[3].write_text('{"kernel":"foreign"}')
+            return result
+        report = self.selected(runner=foreign)
+        self.assertEqual(report["status"], "phase-refused")
+        self.assertEqual(self.observations, [])
+
+    def test_oracle_refusal_is_terminal_without_other_root_or_native(self):
+        def refused(*args, **kwargs):
+            raise ValueError("unit-only exact oracle mismatch")
+        self.simulation.run_case = refused
+        report = self.selected()
+        self.assertEqual(report["status"], "phase-refused")
+        self.assertIn("oracle mismatch", report["error"])
+        self.assertEqual(len(self.calls), 2)
+
+    def test_changed_cpu_tool_prevents_any_native_claim(self):
+        pins = []
+        def pin(path):
+            pins.append(path)
+            return {"sha256": ("b" if len(pins) <= 2 else "c") * 64, "bytes": 1}
+        self.simulation.pin_executable = pin
+        self.assertEqual(self.selected()["status"], "phase-refused")
+
+    def test_preexisting_output_and_receipt_are_never_overwritten(self):
+        self.output.mkdir()
+        sentinel = self.output / "terminal.json"
+        sentinel.write_bytes(b"retained old evidence")
+        with self.assertRaises(FileExistsError):
+            self.selected()
+        self.assertEqual(sentinel.read_bytes(), b"retained old evidence")
+        self.assertEqual(self.calls, [])
+
+    def test_request_file_rejects_symlink_and_preserves_exact_bytes(self):
+        path = self.directory / "request.json"
+        raw = json.dumps(self.request).encode()
+        path.write_bytes(raw)
+        self.assertEqual(harness.read_selected_request(path), raw)
+        link = self.directory / "link.json"
+        link.symlink_to(path)
+        with self.assertRaises(ValueError):
+            harness.read_selected_request(link)
+
+    def test_default_corpus_still_runs_every_registered_case(self):
+        with patch.object(harness, "load_inputs", side_effect=self.loaded), \
+                patch.object(harness, "prerequisites", return_value=[]):
+            report = harness.run_census(ROOT, ROOT / "unit-manifest", Path("/unit/cargo"),
+                self.directory / "cache", self.output, ("gfx942", "gfx950"), 2, 512,
+                runner=self.runner, environment={})
+        self.assertEqual(report["selectedInvocations"], 3)
+        self.assertTrue(report["coversAllRegisteredInvocations"])
+        self.assertEqual(len(self.calls), 3)
+        self.assertTrue(any(row["expectedNegative"] for row in report["cases"]))
+        self.assertFalse(report["qualified"])
+
+
 class ProcessLifecycleTests(unittest.TestCase):
     def test_real_terminal_leader_is_waitable_until_group_cleanup(self):
         original_stop = harness.stop_group
