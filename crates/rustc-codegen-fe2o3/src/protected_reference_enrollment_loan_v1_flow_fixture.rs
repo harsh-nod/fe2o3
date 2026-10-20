@@ -46,6 +46,82 @@ fn hex(bytes: [u8; 32]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+const REPORT_DIAGNOSTIC_LIMIT: usize = 16 * 1024;
+const PROC_DIAGNOSTIC_LIMIT: usize = 4 * 1024;
+
+fn bounded_diagnostic(path: &std::path::Path, limit: usize) -> String {
+    use std::io::Read;
+    let read = || -> io::Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        File::open(path)?
+            .take(limit as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        Ok(bytes)
+    };
+    match read() {
+        Ok(bytes) => {
+            let retained = bytes.len().min(limit);
+            let suffix = if bytes.len() > limit {
+                " [truncated]"
+            } else {
+                ""
+            };
+            format!(
+                "{retained} bytes{suffix}: {:?}",
+                String::from_utf8_lossy(&bytes[..retained])
+            )
+        }
+        Err(error) => format!("unavailable: {error}"),
+    }
+}
+
+fn child_diagnostics(report: &std::path::Path, pid: u32, elapsed: Duration) -> String {
+    let mut output = format!(
+        "owned child pid={pid} elapsed={elapsed:?}\npartial libtest report: {}\n",
+        bounded_diagnostic(report, REPORT_DIAGNOSTIC_LIMIT)
+    );
+    for name in ["status", "stat", "io", "wchan"] {
+        let path = std::path::PathBuf::from(format!("/proc/{pid}/{name}"));
+        output.push_str(&format!(
+            "child /proc/{name}: {}\n",
+            bounded_diagnostic(&path, PROC_DIAGNOSTIC_LIMIT)
+        ));
+    }
+    output
+}
+
+#[test]
+fn diagnostic_report_format_is_bounded_and_escaped() {
+    let directory = crate::test_temp_dir::TestTempDir::create("fe2o3-loan-diagnostic");
+    let report = directory.path().join("partial.jsonl");
+    std::fs::write(&report, b"abcdmore").unwrap();
+    assert_eq!(
+        bounded_diagnostic(&report, 4),
+        "4 bytes [truncated]: \"abcd\""
+    );
+    std::fs::write(&report, b"a\n\xff").unwrap();
+    assert_eq!(
+        bounded_diagnostic(&report, 3),
+        format!("3 bytes: {:?}", String::from_utf8_lossy(b"a\n\xff"))
+    );
+    std::fs::write(&report, b"").unwrap();
+    assert_eq!(bounded_diagnostic(&report, 4), "0 bytes: \"\"");
+}
+
+#[test]
+fn diagnostic_missing_report_and_process_are_explicit() {
+    let directory = crate::test_temp_dir::TestTempDir::create("fe2o3-loan-diagnostic");
+    let report = directory.path().join("missing.jsonl");
+    assert!(bounded_diagnostic(&report, REPORT_DIAGNOSTIC_LIMIT).starts_with("unavailable: "));
+    // PID zero has no proc directory; this exercises diagnostics without a child.
+    let output = child_diagnostics(&report, 0, Duration::from_secs(7));
+    assert!(output.starts_with("owned child pid=0 elapsed=7s\n"));
+    assert!(output.contains("partial libtest report: unavailable: "));
+    for name in ["status", "stat", "io", "wchan"] {
+        assert!(output.contains(&format!("child /proc/{name}: unavailable: ")));
+    }
+}
+
 /// Mirrors the existing isolated fixed-slot harness. The extra libtest skip
 /// value is the required final descriptor argument; it selects no extra test.
 pub(super) fn isolated(full_name: &str, request: Option<&str>) -> bool {
@@ -172,7 +248,8 @@ pub(super) fn isolated(full_name: &str, request: Option<&str>) -> bool {
     // helper, proc macro or linker. Every wait failure/deadline kills and reaps
     // this owned child; successful exits are reaped before report assertions.
     let mut child = command.spawn().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(60);
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(60);
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -184,9 +261,12 @@ pub(super) fn isolated(full_name: &str, request: Option<&str>) -> bool {
             }
             Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
             result => {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("isolated loan flow timed out or failed: {result:?}");
+                let diagnostics = child_diagnostics(&report, child.id(), started.elapsed());
+                let killed = child.kill();
+                let waited = child.wait();
+                panic!(
+                    "isolated loan flow timed out or failed: {result:?}\n{diagnostics}owned child kill={killed:?} wait={waited:?}"
+                );
             }
         }
     }
