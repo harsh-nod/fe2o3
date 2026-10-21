@@ -348,12 +348,12 @@ fn finite_mode_preserves_fractional_product_gradual_underflow_and_canaries() {
     for (a, b, c, result) in [
         (0x3f81_u16, 0x3f7f_u16, 0, 0x4180_7f00), // 16 exact BF16 products.
         (1, 0x3f80, 0, 0x0010_0000),              // 16 * least BF16 subnormal, no FTZ.
-        (0x8000, 0, 1, 1),
+        (0x8000, 0, 1, 1),                        // F32 subnormal accumulator survives every FMA.
         // Each +2^-24 is an exact halfway increment at 1.0; ties go to even.
         (0x3f80, 0x3380, 0x3f80_0000, 0x3f80_0000),
         (0x3f80, 0x3380, 0x3f80_0001, 0x3f80_0002),
         // A negative-zero product plus a negative-zero accumulator stays -0.
-        (0x8000, 0x3f80, 0x8000_0000, 0x8000_0000), // F32 subnormal accumulator survives every FMA.
+        (0x8000, 0x3f80, 0x8000_0000, 0x8000_0000),
     ] {
         let mut request = request(&[0; 256], &[0; 256], &[0; 256], 1, 64);
         for i in 0..256 {
