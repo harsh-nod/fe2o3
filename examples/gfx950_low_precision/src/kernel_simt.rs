@@ -8,29 +8,38 @@ use fe2o3_device::{
 
 use crate::dimensions::{GEMM_K, GEMM_M, GEMM_N, GFX950_BATCHES};
 
+// Expand the same tested arithmetic directly in barrier-checked tile kernels.
+macro_rules! decode_fp8_e4m3_scalar {
+    ($bits:expr) => {{
+        let bits: u8 = $bits;
+        let exponent = (bits >> 3) & 0xf;
+        let mantissa = bits & 7;
+        // Scalar arithmetic keeps bit-conversion library calls out of the decoder.
+        // The mask bounds the shift to 0..=15; every finite result is exact in F32.
+        let magnitude = if exponent == 15 && mantissa == 7 {
+            f32::NAN
+        } else if exponent == 0 {
+            (mantissa as f32) * 0.001_953_125
+        } else {
+            let scale = ((1_u32 << exponent) as f32) * 0.007_812_5;
+            (1.0 + (mantissa as f32) * 0.125) * scale
+        };
+        if bits & 0x80 != 0 {
+            -magnitude
+        } else {
+            magnitude
+        }
+    }};
+}
+pub(crate) use decode_fp8_e4m3_scalar;
+
 /// Widens the actual OCP E4M3 byte, including signed zero, subnormals, and NaN.
 ///
 /// The normal encodings fit exactly in F32. This is deliberately separate from
 /// gfx942's E4M3-FNUZ storage format, whose bias and exceptional values differ.
 #[inline(always)]
 pub fn decode_fp8_e4m3_simt(bits: u8) -> f32 {
-    let exponent = (bits >> 3) & 0xf;
-    let mantissa = bits & 7;
-    // Scalar arithmetic keeps bit-conversion library calls out of the decoder.
-    // The mask bounds the shift to 0..=15; every finite result is exact in F32.
-    let magnitude = if exponent == 15 && mantissa == 7 {
-        f32::NAN
-    } else if exponent == 0 {
-        (mantissa as f32) * 0.001_953_125
-    } else {
-        let scale = ((1_u32 << exponent) as f32) * 0.007_812_5;
-        (1.0 + (mantissa as f32) * 0.125) * scale
-    };
-    if bits & 0x80 != 0 {
-        -magnitude
-    } else {
-        magnitude
-    }
+    decode_fp8_e4m3_scalar!(bits)
 }
 
 /// Computes the same 16 independent 16x16x128 E4M3 GEMMs with scalar F32 MACs.
