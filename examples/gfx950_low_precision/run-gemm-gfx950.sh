@@ -168,9 +168,36 @@ require_llvm_line_count() {
 require_llvm_line_count 'target triple = "amdgcn-amd-amdhsa"' 1 'AMDGPU HSA target triple'
 require_llvm_line_count 'define amdgpu_kernel' 1 'kernel definition'
 require_llvm_line_count "define amdgpu_kernel void @$SYMBOL(" 1 "$SYMBOL definition"
-require_llvm_line_count '"target-cpu"="gfx950"' 1 'gfx950 function target binding'
-require_llvm_line_count '"target-features"="-wavefrontsize32,+wavefrontsize64,-xnack"' 1 \
-    'exact Wave64/xnack- function target binding'
+# Internal scalar helpers carry their own target attributes. Bind the kernel's
+# actual attribute group, then reject conflicting target values anywhere else.
+KERNEL_ATTRIBUTES=$(awk -v symbol="$SYMBOL" '
+    index($0, "define amdgpu_kernel void @" symbol "(") == 1 {
+        definitions += 1
+        if (match($0, /#[0-9]+/)) group = substr($0, RSTART, RLENGTH)
+        else bad = 1
+    }
+    /^attributes #[0-9]+ = / { attributes[$2] = $0; groups[$2] += 1 }
+    END {
+        if (bad || definitions != 1 || group == "" || groups[group] != 1) exit 1
+        print attributes[group]
+    }
+' "$LLVM_IR") || {
+    printf 'LLVM validation failed: missing or ambiguous kernel attribute group\n' >&2
+    exit 1
+}
+
+require_target_attribute() {
+    local attribute=$1 value=$2 expected values kernel_value
+    expected="\"$attribute\"=\"$value\""
+    values=$(grep -oE "\"$attribute\"=\"[^\"]*\"" "$LLVM_IR" || true)
+    kernel_value=$(grep -oE "\"$attribute\"=\"[^\"]*\"" <<< "$KERNEL_ATTRIBUTES" || true)
+    if [[ $kernel_value != "$expected" ]] || grep -Fvxq -- "$expected" <<< "$values"; then
+        printf 'LLVM validation failed: inconsistent or missing %s binding\n' "$attribute" >&2
+        exit 1
+    fi
+}
+require_target_attribute target-cpu gfx950
+require_target_attribute target-features '-wavefrontsize32,+wavefrontsize64,-xnack'
 if [[ $VARIANT == tile ]]; then
     require_llvm_line_count \
         'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' \
