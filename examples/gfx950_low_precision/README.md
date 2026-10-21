@@ -46,10 +46,24 @@ and executes a digest-pinned HSA numerical test:
 
 ```bash
 ./run-fp4-gemm-gfx950.sh
-./run-fp8-gemm-gfx950.sh
+./run-fp8-gemm-gfx950.sh tile
+./run-fp8-gemm-gfx950.sh simt
 ./run-fp4-attention-gfx950.sh
 ./run-fp8-attention-gfx950.sh
 ```
+
+The FP8 GEMM runner defaults to `tile`. Its `simt` selection compiles
+`src/kernel_simt.rs::gfx950_fp8_gemm_simt`, which decodes actual OCP E4M3 input
+bytes and accumulates scalar F32 products. Both variants use the same
+16-batch, WG256/grid4 geometry, three-slice ABI, independent CPU oracle,
+immutable-input checks, and output canaries. Tile retains its scaled-MFMA
+checks; SIMT requires byte loads and scalar F32 arithmetic with no MFMA.
+Both selections require `gfx950:xnack-`; this does not add gfx942 support.
+The historical hardware receipts below cover the four original tile kernels,
+not the new SIMT counterpart.
+
+For compilation and ISA validation without GPU execution, prefix either command
+with `FE2O3_EXAMPLE_COMPILE_ONLY=1`.
 
 The attention runner disables Clang's implicit GPU libraries and links only an
 ordered nine-file closure accepted by the shared digest validator. It defaults

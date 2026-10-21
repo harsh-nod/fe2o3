@@ -5,12 +5,17 @@ set -euo pipefail
 # the retained gfx950 LLVM/ISA profile, then runs the corresponding digest-
 # pinned numerical HSA test. Host paths can be overridden for SSH runs.
 
-if [[ $# -ne 1 ]]; then
-    printf 'usage: %s <fp4|fp8>\n' "$0" >&2
+if [[ $# -lt 1 || $# -gt 2 ]]; then
+    printf 'usage: %s <fp4|fp8> [tile|simt]\n' "$0" >&2
     exit 2
 fi
 
 PRECISION=$1
+VARIANT=${2:-tile}
+if [[ $VARIANT != tile && $VARIANT != simt ]] || [[ $VARIANT == simt && $PRECISION != fp8 ]]; then
+    printf 'unsupported GEMM selection: %s %s\n' "$PRECISION" "$VARIANT" >&2
+    exit 2
+fi
 case $PRECISION in
     fp4)
         FEATURE=kernel-fp4-gemm
@@ -46,11 +51,20 @@ case $PRECISION in
         ;;
 esac
 
+OUTPUT_SUFFIX=
+if [[ $VARIANT == simt ]]; then
+    FEATURE=kernel-simt-fp8-gemm
+    SYMBOL=gfx950_fp8_gemm_simt
+    LABEL='FP8 SIMT GEMM'
+    HARDWARE_TEST=gfx950_fp8_gemm_simt_cov6_runs_multigrid_and_matches_every_cpu_reference_output
+    OUTPUT_SUFFIX=-simt
+fi
+
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=${FE2O3_REPO_ROOT:-$(cd -- "$SCRIPT_DIR/../.." && pwd -P)}
 TOOLCHAIN=${FE2O3_RUST_TOOLCHAIN:-nightly-2026-04-03}
 ROOT_TARGET_DIR=${FE2O3_ROOT_TARGET_DIR:-$REPO_ROOT/target}
-OUTPUT_ROOT=${!OUTPUT_ENV:-$SCRIPT_DIR/target/fe2o3-gfx950-$PRECISION-gemm}
+OUTPUT_ROOT=${!OUTPUT_ENV:-$SCRIPT_DIR/target/fe2o3-gfx950-$PRECISION-gemm$OUTPUT_SUFFIX}
 ROCM_PATH=${ROCM_PATH:-/opt/rocm}
 RUSTUP=${RUSTUP:-rustup}
 CARGO_BIN=${CARGO:-cargo}
@@ -157,16 +171,20 @@ require_llvm_line_count "define amdgpu_kernel void @$SYMBOL(" 1 "$SYMBOL definit
 require_llvm_line_count '"target-cpu"="gfx950"' 1 'gfx950 function target binding'
 require_llvm_line_count '"target-features"="-wavefrontsize32,+wavefrontsize64,-xnack"' 1 \
     'exact Wave64/xnack- function target binding'
-require_llvm_line_count \
-    'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' \
-    1 "scaled $LABEL MFMA call"
-require_llvm_line_count "$SELECTORS" 1 "$LABEL selectors and disabled scaling controls"
-if [[ -n $WRONG_SELECTORS ]]; then
-    require_llvm_line_count "$WRONG_SELECTORS" 0 "wrong low-precision selectors in $LABEL"
+if [[ $VARIANT == tile ]]; then
+    require_llvm_line_count \
+        'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' \
+        1 "scaled $LABEL MFMA call"
+    require_llvm_line_count "$SELECTORS" 1 "$LABEL selectors and disabled scaling controls"
+    if [[ -n $WRONG_SELECTORS ]]; then
+        require_llvm_line_count "$WRONG_SELECTORS" 0 "wrong low-precision selectors in $LABEL"
+    fi
+    require_llvm_line_count \
+        'declare <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' \
+        1 "scaled $LABEL MFMA declaration"
+else
+    require_llvm_line_count 'llvm.amdgcn.mfma' 0 'matrix instructions in the SIMT kernel'
 fi
-require_llvm_line_count \
-    'declare <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' \
-    1 "scaled $LABEL MFMA declaration"
 
 "$CLANG" -O3 -nogpulib -x ir \
     --target=amdgcn-amd-amdhsa -mcpu=gfx950:xnack- \
@@ -213,19 +231,32 @@ if [[ -z $KERNEL_ISA ]]; then
     printf 'ISA validation failed: %s is absent\n' "$SYMBOL" >&2
     exit 1
 fi
-MFMA_COUNT=$(grep -Fc -- 'v_mfma_f32_16x16x128_f8f6f4' <<< "$KERNEL_ISA" || true)
-if [[ $MFMA_COUNT -ne 1 ]]; then
-    printf 'ISA validation failed: expected one gfx950 scaled %s MFMA, found %s\n' \
-        "$LABEL" "$MFMA_COUNT" >&2
-    exit 1
-fi
-for forbidden in "${FORBIDDEN_INSTRUCTIONS[@]}"; do
-    if grep -Fq -- "$forbidden" <<< "$KERNEL_ISA"; then
-        printf 'ISA validation failed: scalar/vector fallback instruction is present: %s\n' \
-            "$forbidden" >&2
+if [[ $VARIANT == tile ]]; then
+    MFMA_COUNT=$(grep -Fc -- 'v_mfma_f32_16x16x128_f8f6f4' <<< "$KERNEL_ISA" || true)
+    if [[ $MFMA_COUNT -ne 1 ]]; then
+        printf 'ISA validation failed: expected one gfx950 scaled %s MFMA, found %s\n' \
+            "$LABEL" "$MFMA_COUNT" >&2
         exit 1
     fi
-done
+    for forbidden in "${FORBIDDEN_INSTRUCTIONS[@]}"; do
+        if grep -Fq -- "$forbidden" <<< "$KERNEL_ISA"; then
+            printf 'ISA validation failed: scalar/vector fallback instruction is present: %s\n' \
+                "$forbidden" >&2
+            exit 1
+        fi
+    done
+else
+    if grep -Fq -- 'v_mfma' <<< "$KERNEL_ISA"; then
+        printf 'ISA validation failed: SIMT kernel contains MFMA\n' >&2
+        exit 1
+    fi
+    for required in global_load_ubyte v_mul_f32 v_add_f32; do
+        if ! grep -Fq -- "$required" <<< "$KERNEL_ISA"; then
+            printf 'ISA validation failed: SIMT kernel is missing %s\n' "$required" >&2
+            exit 1
+        fi
+    done
+fi
 
 HSACO=$(cd -- "$(dirname -- "$HSACO")" && pwd -P)/$(basename -- "$HSACO")
 if [[ $COMPILE_ONLY == 1 ]]; then
