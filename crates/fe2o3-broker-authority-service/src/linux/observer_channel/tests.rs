@@ -347,7 +347,11 @@ pub(crate) fn exercise_occurrence_channel(
             "--test-threads=1",
         ])
         .env("FE2O3_OBSERVER_TEST_SCENARIO", scenario)
-        .stdin(Stdio::null());
+        .stdin(if scenario == "commit_failure" {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
     // SAFETY: sources are kept alive through spawn, destinations are disjoint, and the child
     // performs only async-signal-safe dup2/fcntl operations before exec.
     unsafe {
@@ -388,12 +392,15 @@ pub(crate) fn exercise_occurrence_channel(
         }
         step_hook(progress);
         if scenario == "commit_failure" && progress == 5 {
-            // The Revalidated response is now sent. Let the helper inject the commit failure
-            // and assert poison before driving root containment of the abandoned operation.
+            // The post-send profile check has completed. Only now release the helper,
+            // which retains its live process through the commit-failure poison assertions.
+            assert!(child.0.try_wait().unwrap().is_none());
+            child.0.stdin.as_mut().unwrap().write_all(b"C").unwrap();
             while child.0.try_wait().unwrap().is_none() {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(1));
             }
+            drop(child.0.stdin.take());
         }
         assert!(Instant::now() < deadline, "observer test exceeded deadline");
         std::thread::sleep(Duration::from_millis(1));
@@ -493,6 +500,13 @@ fn issuer_helper() {
         &ed25519_dalek::SigningKey::from_bytes(&[2; 32]),
         scenario == "commit_failure",
     );
+    if scenario == "commit_failure" {
+        // Consuming Revalidated is earlier than the root's post-send namespace check.
+        // Retain this exact issuer until the parent's release, bounded by the existing
+        // control wait and the parent's original attempt deadline/ChildOwner cleanup.
+        let release = rustix::io::fcntl_dupfd_cloexec(std::io::stdin(), 0).unwrap();
+        super::super::registry::tests::await_test_control(&release, b'C');
+    }
     if scenario == "success_held" {
         // Close the completed protocol first, retaining the actual service/profile until
         // the root has processed that closure. Process exit is not a readiness signal.
