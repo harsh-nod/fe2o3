@@ -7,7 +7,7 @@ C = alpha * A * B + beta * C
 ```
 
 `M`, `N`, `K`, `lda`, `ldb`, `ldc`, `alpha`, and `beta` are runtime values.
-Each wave64 workgroup owns one 16x16 output tile and executes
+In the structured tile variant, each wave64 workgroup owns one 16x16 output tile and executes
 `V_MFMA_F32_16X16X16_BF16` for every 16-element K phase. Checked edge loads
 contribute BF16 zero; checked tiled output witnesses suppress stores outside
 logical M and N. Every active output applies the dynamic alpha/beta epilogue
@@ -26,11 +26,25 @@ none of those passes recognizes GEMM or grants it a special case.
 
 ## Run on gfx942
 
-From this directory:
+From `examples/tiled_gemm_general_v1` in the compiler repository checkout:
 
 ```bash
-./run-gfx942.sh
+./run-gfx942.sh tile
+./run-gfx942.sh simt
 ```
+
+Omitting the argument selects `tile`. Both variants consume BF16 operands stored
+as `u16` bits and use F32 accumulation, output, and alpha/beta scales. The tile
+source is `src/kernel.rs`; the ordinary Rust SIMT source is `src/kernel_simt.rs`.
+SIMT assigns one invocation to each physical output slot, including checked
+padding slots. Its host selects the matching symbol and launch grid with
+`--no-default-features --features kernel-simt-gemm-general`; the runner passes
+that same selection to kernel compilation and the host executable.
+
+The two outputs are `tiled_gemm_general_v1.hsaco` and
+`simt_gemm_general_v1.hsaco` under `target/fe2o3-gfx942/`. These commands request
+gfx942 qualification; they do not establish gfx950 support or replace each
+variant's required compilation, proof, and numerical checks.
 
 The script requests the complete qualification flow:
 
