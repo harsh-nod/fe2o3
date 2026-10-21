@@ -119,18 +119,22 @@ and artifact-currentness admission remain a separate, fail-closed pipeline.
 
 ## CPU-Only BF16 Source Observations (V6)
 
-From the repository root, use pinned `nightly-2026-04-03` with `rust-src`.
+From the repository root, install the pinned toolchain and fetch the locked
+dependencies before the offline extraction steps:
 These commands build ordinary compiler/simulator binaries, not GPU execution.
 The complete quickstart sequence below still needs an integrated-checkout run.
 
 ```bash
+rustup toolchain install nightly-2026-04-03 --component rust-src --component rustc-dev
 export RUSTC="$(rustup which --toolchain nightly-2026-04-03 rustc)"
 export CARGO="$(rustup which --toolchain nightly-2026-04-03 cargo)"
 export PATH="$(dirname "$CARGO"):$PATH"
 export LD_LIBRARY_PATH="$("$RUSTC" --print sysroot)/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export CARGO_TARGET_DIR="$PWD/target/bf16-observations"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target/bf16-observations}"
 export CARGO_PROFILE_DEV_DEBUG=0
 export CARGO_PROFILE_TEST_DEBUG=0
+"$CARGO" fetch --locked
+"$CARGO" fetch --locked --manifest-path examples/tiled_gemm_general_v1/Cargo.toml
 fixtures=examples/tiled_gemm_general_v1/simulation
 mkdir -p target/bf16-results
 
