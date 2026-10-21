@@ -78,13 +78,11 @@ pub fn tiled_gemm_general_v1(
 
     // Typed views centralize layout and padding; the output witness captures ownership.
     let output_tile = thread_index.checked_tiled_2d::<64, 16, 16, 4>();
-    let a_matrix = match Bf16MfmaAMatrix::row_major(a, 0, m as usize, k as usize, lda as usize) {
-        Ok(view) => view,
-        Err(_) => return Err(KernelError::InvalidArgument),
+    let Ok(a_matrix) = Bf16MfmaAMatrix::row_major(a, 0, m as usize, k as usize, lda as usize) else {
+        return Err(KernelError::InvalidArgument);
     };
-    let b_matrix = match Bf16MfmaBMatrix::row_major(b, 0, k as usize, n as usize, ldb as usize) {
-        Ok(view) => view,
-        Err(_) => return Err(KernelError::InvalidArgument),
+    let Ok(b_matrix) = Bf16MfmaBMatrix::row_major(b, 0, k as usize, n as usize, ldb as usize) else {
+        return Err(KernelError::InvalidArgument);
     };
     let wave_lane = WaveLane::<Wave64>::current();
     let matrix = Matrix::current();

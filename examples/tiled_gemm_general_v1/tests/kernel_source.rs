@@ -127,7 +127,7 @@ fn source_forbids_unsafe_and_contains_matrix_tiling_and_epilogue() {
     assert_eq!(facts.unsafe_functions, 0);
     assert_eq!(
         facts.try_expressions, 0,
-        "checked view errors use explicit matches; paired_contract verifies both exact arms"
+        "checked view errors use let-else; paired_contract verifies both exact failure branches"
     );
     assert_eq!(
         facts.loop_try_expressions, 0,

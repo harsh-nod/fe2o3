@@ -128,7 +128,7 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
         paths: Vec<String>,
         unsafe_count: usize,
         indexing_count: usize,
-        checked_view_matches: usize,
+        checked_view_let_else: usize,
     }
     impl<'ast> Visit<'ast> for Facts {
         fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
@@ -164,8 +164,9 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
             self.unsafe_count += usize::from(function.sig.unsafety.is_some());
             syn::visit::visit_item_fn(self, function);
         }
-        fn visit_expr_match(&mut self, expression: &'ast syn::ExprMatch) {
-            if let syn::Expr::Call(call) = expression.expr.as_ref()
+        fn visit_local(&mut self, local: &'ast syn::Local) {
+            if let Some(init) = &local.init
+                && let syn::Expr::Call(call) = init.expr.as_ref()
                 && let syn::Expr::Path(path) = call.func.as_ref()
             {
                 let name = path.path.segments.iter()
@@ -174,20 +175,18 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
                     "Bf16MfmaAMatrix::row_major" | "Bf16MfmaBMatrix::row_major"
                     | "StridedReadView2D::from_shared_slice")
                 {
-                    assert_eq!(expression.arms.len(), 2);
-                    let ok = &expression.arms[0];
-                    let err = &expression.arms[1];
-                    assert!(ok.guard.is_none() && err.guard.is_none());
-                    let syn::Pat::TupleStruct(ok_pattern) = &ok.pat else { panic!("Ok pattern") };
-                    let syn::Pat::TupleStruct(err_pattern) = &err.pat else { panic!("Err pattern") };
-                    assert!(ok_pattern.path.is_ident("Ok") && err_pattern.path.is_ident("Err"));
-                    assert_eq!(ok_pattern.elems.len(), 1);
-                    assert_eq!(err_pattern.elems.len(), 1);
-                    assert!(matches!(&err_pattern.elems[0], syn::Pat::Wild(_)));
-                    let syn::Pat::Ident(binding) = &ok_pattern.elems[0] else { panic!("Ok binding") };
-                    let syn::Expr::Path(value) = ok.body.as_ref() else { panic!("Ok value") };
-                    assert!(value.path.is_ident(&binding.ident));
-                    let syn::Expr::Return(returned) = err.body.as_ref() else { panic!("checked error return") };
+                    let syn::Pat::TupleStruct(pattern) = &local.pat else { panic!("Ok pattern") };
+                    assert!(pattern.path.is_ident("Ok"));
+                    assert_eq!(pattern.elems.len(), 1);
+                    let syn::Pat::Ident(binding) = &pattern.elems[0] else { panic!("Ok binding") };
+                    assert!(binding.by_ref.is_none() && binding.mutability.is_none()
+                        && binding.subpat.is_none());
+                    let (_, failure) = init.diverge.as_ref().expect("checked failure branch");
+                    let syn::Expr::Block(failure) = failure.as_ref() else { panic!("failure block") };
+                    assert!(failure.label.is_none());
+                    assert_eq!(failure.block.stmts.len(), 1);
+                    let syn::Stmt::Expr(syn::Expr::Return(returned), Some(_)) =
+                        &failure.block.stmts[0] else { panic!("checked error return") };
                     let syn::Expr::Call(returned) = returned.expr.as_deref().unwrap() else { panic!("Err value") };
                     let syn::Expr::Path(constructor) = returned.func.as_ref() else { panic!("Err constructor") };
                     assert!(constructor.path.is_ident("Err"));
@@ -195,10 +194,10 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
                     let syn::Expr::Path(error) = &returned.args[0] else { panic!("error code") };
                     assert_eq!(error.path.segments.iter().map(|s| s.ident.to_string())
                         .collect::<Vec<_>>().join("::"), "KernelError::InvalidArgument");
-                    self.checked_view_matches += 1;
+                    self.checked_view_let_else += 1;
                 }
             }
-            syn::visit::visit_expr_match(self, expression);
+            syn::visit::visit_local(self, local);
         }
 
         fn visit_expr_index(&mut self, expression: &'ast syn::ExprIndex) {
@@ -232,7 +231,7 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
         let mut facts = Facts::default();
         facts.visit_file(&syntax);
         assert_eq!(facts.unsafe_count, 0);
-        assert_eq!(facts.checked_view_matches, 2);
+        assert_eq!(facts.checked_view_let_else, 2);
         if name == "simt_gemm_general_v1" {
             assert_eq!(facts.indexing_count, 0);
             assert!(facts.calls.iter().any(|call| call == "thread::index_1d"));
