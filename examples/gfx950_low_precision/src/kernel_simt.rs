@@ -14,20 +14,23 @@ use crate::dimensions::{GEMM_K, GEMM_M, GEMM_N, GFX950_BATCHES};
 /// gfx942's E4M3-FNUZ storage format, whose bias and exceptional values differ.
 #[inline(always)]
 pub fn decode_fp8_e4m3_simt(bits: u8) -> f32 {
-    let sign = ((bits as u32) & 0x80) << 24;
-    let exponent = ((bits as u32) >> 3) & 0xf;
-    let mantissa = (bits as u32) & 7;
-    if exponent == 15 && mantissa == 7 {
-        return f32::from_bits(sign | 0x7fc0_0000);
+    let exponent = (bits >> 3) & 0xf;
+    let mantissa = bits & 7;
+    // Scalar arithmetic keeps bit-conversion library calls out of the decoder.
+    // The mask bounds the shift to 0..=15; every finite result is exact in F32.
+    let magnitude = if exponent == 15 && mantissa == 7 {
+        f32::NAN
+    } else if exponent == 0 {
+        (mantissa as f32) * 0.001_953_125
+    } else {
+        let scale = ((1_u32 << exponent) as f32) * 0.007_812_5;
+        (1.0 + (mantissa as f32) * 0.125) * scale
+    };
+    if bits & 0x80 != 0 {
+        -magnitude
+    } else {
+        magnitude
     }
-    if exponent == 0 {
-        let magnitude = (mantissa as f32) * 0.001_953_125;
-        if sign != 0 {
-            return -magnitude;
-        }
-        return magnitude;
-    }
-    f32::from_bits(sign | ((exponent + 120) << 23) | (mantissa << 20))
 }
 
 /// Computes the same 16 independent 16x16x128 E4M3 GEMMs with scalar F32 MACs.
