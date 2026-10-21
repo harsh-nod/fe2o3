@@ -45,22 +45,24 @@ LLVM profile, finalizes a COV6 object, checks symbol-scoped ISA and metadata,
 and executes a digest-pinned HSA numerical test:
 
 ```bash
-./run-fp4-gemm-gfx950.sh
+./run-fp4-gemm-gfx950.sh tile
+./run-fp4-gemm-gfx950.sh simt
 ./run-fp8-gemm-gfx950.sh tile
 ./run-fp8-gemm-gfx950.sh simt
 ./run-fp4-attention-gfx950.sh
 ./run-fp8-attention-gfx950.sh
 ```
 
-The FP8 GEMM runner defaults to `tile`. Its `simt` selection compiles
-`src/kernel_simt.rs::gfx950_fp8_gemm_simt`, which decodes actual OCP E4M3 input
-bytes and accumulates scalar F32 products. Both variants use the same
+The FP4 and FP8 GEMM runners default to `tile`. Their `simt` selections compile
+`src/kernel_simt_fp4.rs::gfx950_fp4_gemm_simt` and
+`src/kernel_simt.rs::gfx950_fp8_gemm_simt`. They decode actual OCP E2M1 low
+nibbles or E4M3 bytes and accumulate scalar F32 products. Each pair uses the same
 16-batch, WG256/grid4 geometry, three-slice ABI, independent CPU oracle,
 immutable-input checks, and output canaries. Tile retains its scaled-MFMA
 checks; SIMT requires byte loads and scalar F32 arithmetic with no MFMA.
 Both selections require `gfx950:xnack-`; this does not add gfx942 support.
 The historical hardware receipts below cover the four original tile kernels,
-not the new SIMT counterpart.
+not the new SIMT counterparts.
 
 For compilation and ISA validation without GPU execution, prefix either command
 with `FE2O3_EXAMPLE_COMPILE_ONLY=1`.

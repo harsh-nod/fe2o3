@@ -12,7 +12,7 @@ fi
 
 PRECISION=$1
 VARIANT=${2:-tile}
-if [[ $VARIANT != tile && $VARIANT != simt ]] || [[ $VARIANT == simt && $PRECISION != fp8 ]]; then
+if [[ $VARIANT != tile && $VARIANT != simt ]]; then
     printf 'unsupported GEMM selection: %s %s\n' "$PRECISION" "$VARIANT" >&2
     exit 2
 fi
@@ -53,10 +53,10 @@ esac
 
 OUTPUT_SUFFIX=
 if [[ $VARIANT == simt ]]; then
-    FEATURE=kernel-simt-fp8-gemm
-    SYMBOL=gfx950_fp8_gemm_simt
-    LABEL='FP8 SIMT GEMM'
-    HARDWARE_TEST=gfx950_fp8_gemm_simt_cov6_runs_multigrid_and_matches_every_cpu_reference_output
+    FEATURE=kernel-simt-$PRECISION-gemm
+    SYMBOL=gfx950_${PRECISION}_gemm_simt
+    LABEL="${PRECISION^^} SIMT GEMM"
+    HARDWARE_TEST=gfx950_${PRECISION}_gemm_simt_cov6_runs_multigrid_and_matches_every_cpu_reference_output
     OUTPUT_SUFFIX=-simt
 fi
 

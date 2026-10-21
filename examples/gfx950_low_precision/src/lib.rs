@@ -13,6 +13,7 @@
         feature = "kernel-fp4-gemm",
         feature = "kernel-fp8-gemm",
         feature = "kernel-simt-fp8-gemm",
+        feature = "kernel-simt-fp4-gemm",
         feature = "kernel-mixed-fp4-fp8-gemm",
         feature = "kernel-fp4-attention",
         feature = "kernel-fp8-attention",
@@ -23,6 +24,17 @@ compile_error!("an AMDGPU build must select exactly one gfx950 kernel feature");
 #[cfg(all(
     target_arch = "amdgpu",
     any(
+        all(
+            feature = "kernel-simt-fp4-gemm",
+            any(
+                feature = "kernel-fp4-gemm",
+                feature = "kernel-fp8-gemm",
+                feature = "kernel-simt-fp8-gemm",
+                feature = "kernel-mixed-fp4-fp8-gemm",
+                feature = "kernel-fp4-attention",
+                feature = "kernel-fp8-attention",
+            )
+        ),
         all(
             feature = "kernel-simt-fp8-gemm",
             any(
@@ -57,6 +69,8 @@ mod dimensions;
 pub mod kernel;
 #[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-simt-fp8-gemm"))]
 pub mod kernel_simt;
+#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-simt-fp4-gemm"))]
+pub mod kernel_simt_fp4;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;
 
