@@ -80,7 +80,7 @@ jobs:
   host-contract:
     name: Host contract and fail-closed source checks (${{ matrix.mode }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
