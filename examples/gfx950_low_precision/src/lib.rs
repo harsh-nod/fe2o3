@@ -82,6 +82,7 @@ mod dimensions;
 pub mod kernel;
 #[cfg(any(
     not(target_arch = "amdgpu"),
+    feature = "kernel-fp8-attention",
     feature = "kernel-simt-fp8-gemm",
     feature = "kernel-simt-fp8-attention"
 ))]
