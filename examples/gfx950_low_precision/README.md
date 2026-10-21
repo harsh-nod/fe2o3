@@ -252,3 +252,17 @@ Symbol-scoped disassembly reported:
 An earlier compile-only run on SSH host `mi350-2` used ROCm 6.4.1 and produced
 the same required instruction families, but that host exposed only
 `AMD Radeon Graphics (gfx1036)`. The executable correctly refused that device.
+
+### FP8 Attention SIMT Counterpart
+
+`./run-fp8-attention-gfx950.sh` retains the tile default;
+`./run-fp8-attention-gfx950.sh simt` selects the ordinary scalar Rust counterpart.
+Both consume real OCP E4M3 Q/K/V bytes and produce the same sixteen
+16-token, 128-depth, 16-value-column attention problems (4,096 F32 outputs).
+The SIMT kernel recomputes scores in increasing depth order, then performs
+max-subtracted F32 exponential normalization and PV accumulation without MFMA,
+LDS, or subgroup operations. It retains WG256/grid4 and the four-slice ABI.
+The hardware fixture uses the unchanged independent full-output reference,
+input-immutability checks, tolerances, and prefix/suffix canaries. These are
+gfx950-only paths; source presence is not compilation, hardware qualification,
+native MFMA numerical equivalence, or protected proof evidence.
