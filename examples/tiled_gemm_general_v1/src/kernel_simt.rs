@@ -63,8 +63,14 @@ pub fn simt_gemm_general_v1(
         return Ok(());
     }
 
-    let lhs = StridedReadView2D::from_shared_slice(a, 0, m as usize, k as usize, lda as usize)?;
-    let rhs = StridedReadView2D::from_shared_slice(b, 0, k as usize, n as usize, ldb as usize)?;
+    let lhs = match StridedReadView2D::from_shared_slice(a, 0, m as usize, k as usize, lda as usize) {
+        Ok(view) => view,
+        Err(_) => return Err(KernelError::InvalidArgument),
+    };
+    let rhs = match StridedReadView2D::from_shared_slice(b, 0, k as usize, n as usize, ldb as usize) {
+        Ok(view) => view,
+        Err(_) => return Err(KernelError::InvalidArgument),
+    };
     let mut accumulator = 0.0_f32;
     let mut depth = 0_usize;
     while depth < k as usize {

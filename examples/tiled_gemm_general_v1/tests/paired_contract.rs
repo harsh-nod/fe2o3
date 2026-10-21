@@ -128,6 +128,7 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
         paths: Vec<String>,
         unsafe_count: usize,
         indexing_count: usize,
+        checked_view_matches: usize,
     }
     impl<'ast> Visit<'ast> for Facts {
         fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
@@ -163,6 +164,43 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
             self.unsafe_count += usize::from(function.sig.unsafety.is_some());
             syn::visit::visit_item_fn(self, function);
         }
+        fn visit_expr_match(&mut self, expression: &'ast syn::ExprMatch) {
+            if let syn::Expr::Call(call) = expression.expr.as_ref()
+                && let syn::Expr::Path(path) = call.func.as_ref()
+            {
+                let name = path.path.segments.iter()
+                    .map(|segment| segment.ident.to_string()).collect::<Vec<_>>().join("::");
+                if matches!(name.as_str(),
+                    "Bf16MfmaAMatrix::row_major" | "Bf16MfmaBMatrix::row_major"
+                    | "StridedReadView2D::from_shared_slice")
+                {
+                    assert_eq!(expression.arms.len(), 2);
+                    let ok = &expression.arms[0];
+                    let err = &expression.arms[1];
+                    assert!(ok.guard.is_none() && err.guard.is_none());
+                    let syn::Pat::TupleStruct(ok_pattern) = &ok.pat else { panic!("Ok pattern") };
+                    let syn::Pat::TupleStruct(err_pattern) = &err.pat else { panic!("Err pattern") };
+                    assert!(ok_pattern.path.is_ident("Ok") && err_pattern.path.is_ident("Err"));
+                    assert_eq!(ok_pattern.elems.len(), 1);
+                    assert_eq!(err_pattern.elems.len(), 1);
+                    assert!(matches!(&err_pattern.elems[0], syn::Pat::Wild(_)));
+                    let syn::Pat::Ident(binding) = &ok_pattern.elems[0] else { panic!("Ok binding") };
+                    let syn::Expr::Path(value) = ok.body.as_ref() else { panic!("Ok value") };
+                    assert!(value.path.is_ident(&binding.ident));
+                    let syn::Expr::Return(returned) = err.body.as_ref() else { panic!("checked error return") };
+                    let syn::Expr::Call(returned) = returned.expr.as_deref().unwrap() else { panic!("Err value") };
+                    let syn::Expr::Path(constructor) = returned.func.as_ref() else { panic!("Err constructor") };
+                    assert!(constructor.path.is_ident("Err"));
+                    assert_eq!(returned.args.len(), 1);
+                    let syn::Expr::Path(error) = &returned.args[0] else { panic!("error code") };
+                    assert_eq!(error.path.segments.iter().map(|s| s.ident.to_string())
+                        .collect::<Vec<_>>().join("::"), "KernelError::InvalidArgument");
+                    self.checked_view_matches += 1;
+                }
+            }
+            syn::visit::visit_expr_match(self, expression);
+        }
+
         fn visit_expr_index(&mut self, expression: &'ast syn::ExprIndex) {
             self.indexing_count += 1;
             syn::visit::visit_expr_index(self, expression);
@@ -194,6 +232,7 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
         let mut facts = Facts::default();
         facts.visit_file(&syntax);
         assert_eq!(facts.unsafe_count, 0);
+        assert_eq!(facts.checked_view_matches, 2);
         if name == "simt_gemm_general_v1" {
             assert_eq!(facts.indexing_count, 0);
             assert!(facts.calls.iter().any(|call| call == "thread::index_1d"));
@@ -272,6 +311,138 @@ fn reference_handles_tile_tails_multiple_k_phases_and_exact_extents() {
         );
         assert_bits(&actual, &expected);
     }
+}
+
+#[test]
+fn reference_tail_oracle_varies_every_matrix_axis() {
+    let problem = ReferenceProblemV1 {
+        rows: 17,
+        columns: 19,
+        reduction: 23,
+        lhs_stride: 27,
+        rhs_stride: 24,
+        output_stride: 23,
+        product_scale: 0.5,
+        output_scale: -0.25,
+    };
+    let mut lhs = vec![0x7f81; 455];
+    let mut rhs = vec![0x7f81; 547];
+    // These small integers are exactly representable BF16 values. Encoding
+    // directly keeps this oracle independent of Bf16::from_f32 rounding.
+    let integer_bits = |value: i32| ((value as f32).to_bits() >> 16) as u16;
+    for row in 0..17 {
+        for depth in 0..23 {
+            lhs[row * 27 + depth] = integer_bits((row + 1 + depth) as i32);
+        }
+    }
+    for depth in 0..23 {
+        for column in 0..19 {
+            rhs[depth * 24 + column] = integer_bits(2 * (column + 1) as i32 - depth as i32);
+        }
+    }
+    let mut initial = vec![PAD; 394];
+    let mut expected = initial.clone();
+    for row in 0..17 {
+        for column in 0..19 {
+            let index = row * 23 + column;
+            initial[index] = 8.0;
+            // sum((a+d)*(b-d), d=0..22) uses sum(d)=253,
+            // sum(d*d)=3795, not another matrix multiply implementation.
+            let a = (row + 1) as i32;
+            let b = 2 * (column + 1) as i32;
+            let dot = 23 * a * b + (b - a) * 253 - 3795;
+            expected[index] = 0.5 * dot as f32 - 2.0;
+        }
+    }
+    let actual = evaluate_reference_v1(&lhs, &rhs, &initial, problem).unwrap();
+    assert_bits(&actual, &expected);
+    // Anchor independently hand-computed corners across both tile tails.
+    assert_eq!(actual[0], -1750.0);
+    assert_eq!(actual[16 * 23 + 18], 8186.0);
+}
+
+#[test]
+fn bf16_raw_fractional_operands_keep_f32_product_and_accumulation_precision() {
+    // Raw BF16 operands, not f32 inputs rounded by the test. The expected
+    // binary32 bits come from exact rational products with denominator 2^14.
+    let cases: &[(&[u16], &[u16], u32)] = &[
+        (&[0x3f81], &[0x3f7f], 0x3f80_7f00),
+        (&[0x3f81], &[0x3f81], 0x3f82_0200),
+        (&[0x3f81, 0x3f7f], &[0x3f81, 0xbf80], 0x3ca0_8000),
+        // 64.5^2 - 64*65 = 0.25. Rounding the products to BF16 gives zero,
+        // whose error exceeds the unchanged general GEMM 2e-3 tolerance.
+        (&[0x4281, 0x4280], &[0x4281, 0xc282], 0x3e80_0000),
+    ];
+    for &(lhs, rhs, expected_bits) in cases {
+        let actual = evaluate_reference_v1(
+            lhs,
+            rhs,
+            &[0.0, PAD],
+            ReferenceProblemV1 {
+                rows: 1,
+                columns: 1,
+                reduction: lhs.len() as u32,
+                lhs_stride: lhs.len() as u32,
+                rhs_stride: 1,
+                output_stride: 1,
+                product_scale: 1.0,
+                output_scale: 0.0,
+            },
+        )
+        .unwrap();
+        assert_bits(&actual, &[f32::from_bits(expected_bits), PAD]);
+    }
+}
+
+#[test]
+fn bf16_fractional_m16n16k16_has_independent_f32_outputs_and_canaries() {
+    let problem = ReferenceProblemV1 {
+        rows: 16,
+        columns: 16,
+        reduction: 16,
+        lhs_stride: 16,
+        rhs_stride: 16,
+        output_stride: 16,
+        product_scale: 1.0,
+        output_scale: 0.0,
+    };
+    let mut lhs = vec![0_u16; 256];
+    let mut rhs = vec![0_u16; 256];
+    for row in 0..16 {
+        for depth in 0..16 {
+            // A=(128+row+depth)/128, exactly encoded in BF16.
+            lhs[row * 16 + depth] = 0x3f80 + (row + depth) as u16;
+        }
+    }
+    for depth in 0..16 {
+        for column in 0..16 {
+            let numerator = 128 + 2 * column - depth;
+            // B=(128+2*column-depth)/128 crosses the exponent boundary at1.
+            rhs[depth * 16 + column] = if numerator >= 128 {
+                0x3f80 + (numerator - 128) as u16
+            } else {
+                0x3f00 + 2 * (numerator - 64) as u16
+            };
+        }
+    }
+    let mut initial = vec![PAD; 264];
+    initial[..256].fill(0.0);
+    let mut expected = initial.clone();
+    for row in 0..16 {
+        for column in 0..16 {
+            let a = (128 + row) as i32;
+            let b = (128 + 2 * column) as i32;
+            // sum((a+d)*(b-d),d=0..15)/128^2; sum(d)=120,sum(d*d)=1240.
+            // All intermediates and the final binary32 result are exact here.
+            expected[row * 16 + column] = (16 * a * b + 120 * (b - a) - 1240) as f32
+                / 16384.0;
+        }
+    }
+    let actual = evaluate_reference_v1(&lhs, &rhs, &initial, problem).unwrap();
+    assert!(actual[..256].iter().all(|value| value.is_finite()));
+    assert_bits(&actual, &expected);
+    assert_eq!(actual[0].to_bits(), 0x417e_ca00);
+    assert_eq!(actual[255].to_bits(), 0x41b0_ca00);
 }
 
 #[test]
