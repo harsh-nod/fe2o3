@@ -53,6 +53,9 @@ pub fn simt_gemm_general_v1(
     if m == 0 || n == 0 {
         return Ok(());
     }
+    if ldc == 0 {
+        return Err(KernelError::InvalidArgument);
+    }
 
     // Nonempty, validated C has ldc >= n > 0, so division cannot be by zero.
     let thread_index = thread::index_1d();

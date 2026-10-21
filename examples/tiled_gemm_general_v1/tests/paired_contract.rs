@@ -233,6 +233,50 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
         assert_eq!(facts.unsafe_count, 0);
         assert_eq!(facts.checked_view_let_else, 2);
         if name == "simt_gemm_general_v1" {
+            fn is_zero_check(expression: &syn::Expr, name: &str) -> bool {
+                let syn::Expr::Binary(binary) = expression else { return false };
+                matches!(binary.op, syn::BinOp::Eq(_))
+                    && matches!(binary.left.as_ref(), syn::Expr::Path(path) if path.path.is_ident(name))
+                    && matches!(binary.right.as_ref(), syn::Expr::Lit(lit)
+                        if matches!(&lit.lit, syn::Lit::Int(value) if value.base10_parse::<u32>() == Ok(0)))
+            }
+            let statements = &kernels[0].block.stmts;
+            let (guard_index, guard) = statements.iter().enumerate().find_map(|(index, statement)| {
+                match statement {
+                    syn::Stmt::Expr(syn::Expr::If(branch), _)
+                        if is_zero_check(&branch.cond, "ldc") => Some((index, branch)),
+                    _ => None,
+                }
+            }).expect("explicit original stride zero guard");
+            let syn::Stmt::Expr(syn::Expr::If(empty), _) = &statements[guard_index - 1]
+                else { panic!("empty output exits before stride zero guard") };
+            let syn::Expr::Binary(condition) = empty.cond.as_ref() else { panic!("empty shape condition") };
+            assert!(matches!(condition.op, syn::BinOp::Or(_)));
+            assert!(is_zero_check(&condition.left, "m") && is_zero_check(&condition.right, "n"));
+            assert!(guard.else_branch.is_none() && empty.else_branch.is_none());
+            assert_eq!(empty.then_branch.stmts.len(), 1);
+            let syn::Stmt::Expr(syn::Expr::Return(returned), Some(_)) = &empty.then_branch.stmts[0]
+                else { panic!("empty shape return") };
+            let syn::Expr::Call(ok) = returned.expr.as_deref().unwrap() else { panic!("empty success") };
+            assert!(matches!(ok.func.as_ref(), syn::Expr::Path(path) if path.path.is_ident("Ok")));
+            assert_eq!(ok.args.len(), 1);
+            assert!(matches!(&ok.args[0], syn::Expr::Tuple(tuple) if tuple.elems.is_empty()));
+            assert_eq!(guard.then_branch.stmts.len(), 1);
+            let syn::Stmt::Expr(syn::Expr::Return(returned), Some(_)) = &guard.then_branch.stmts[0]
+                else { panic!("zero stride refusal") };
+            let syn::Expr::Call(err) = returned.expr.as_deref().unwrap() else { panic!("stride error") };
+            assert!(matches!(err.func.as_ref(), syn::Expr::Path(path) if path.path.is_ident("Err")));
+            assert_eq!(err.args.len(), 1);
+            let syn::Expr::Path(code) = &err.args[0] else { panic!("stride error code") };
+            assert_eq!(code.path.segments.iter().map(|s| s.ident.to_string())
+                .collect::<Vec<_>>().join("::"), "KernelError::InvalidArgument");
+            for name in ["row", "column"] {
+                let index = statements.iter().position(|statement| matches!(statement,
+                    syn::Stmt::Local(local)
+                        if matches!(&local.pat, syn::Pat::Ident(binding) if binding.ident == name)
+                )).unwrap();
+                assert!(guard_index < index, "stride guard precedes both division and remainder");
+            }
             assert_eq!(facts.indexing_count, 0);
             assert!(facts.calls.iter().any(|call| call == "thread::index_1d"));
             for call in ["StridedReadView2D::from_shared_slice", "Bf16::from_bits"] {
