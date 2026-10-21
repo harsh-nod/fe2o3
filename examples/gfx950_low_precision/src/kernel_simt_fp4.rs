@@ -27,6 +27,7 @@ pub fn decode_fp4_e2m1_simt(bits: u8) -> f32 {
 ///
 /// Each lane writes the same four disjoint outputs as the tile implementation,
 /// preserving its three-slice ABI, WG256/grid4 geometry, and complete output.
+#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-simt-fp4-gemm"))]
 #[kernel(
     typed,
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1]),

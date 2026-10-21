@@ -12,7 +12,7 @@ fi
 
 PRECISION=$1
 VARIANT=${2:-tile}
-if [[ $VARIANT != tile && $VARIANT != simt ]] || [[ $VARIANT == simt && $PRECISION != fp8 ]]; then
+if [[ $VARIANT != tile && $VARIANT != simt ]]; then
     printf 'unsupported attention selection: %s %s\n' "$PRECISION" "$VARIANT" >&2
     exit 2
 fi
@@ -63,13 +63,13 @@ esac
 
 OUTPUT_SUFFIX=
 if [[ $VARIANT == simt ]]; then
-    FEATURE=kernel-simt-fp8-attention
-    SYMBOL=gfx950_fp8_attention_simt
-    DESCRIPTOR_REGEX='gfx950_fp8_attention_simt[.]kd'
-    LABEL='FP8 SIMT attention'
+    FEATURE=kernel-simt-$PRECISION-attention
+    SYMBOL=gfx950_${PRECISION}_attention_simt
+    DESCRIPTOR_REGEX="${SYMBOL}[.]kd"
+    LABEL="${PRECISION^^} SIMT attention"
     STATIC_LDS_BYTES=0
     OUTPUT_SUFFIX=-simt
-    HARDWARE_TEST=gfx950_fp8_attention_simt_cov6_runs_multigrid_and_matches_every_cpu_reference_output
+    HARDWARE_TEST=gfx950_${PRECISION}_attention_simt_cov6_runs_multigrid_and_matches_every_cpu_reference_output
 fi
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)

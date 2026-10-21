@@ -16,6 +16,7 @@ kernel-mixed-fp4-fp8-gemm = []
 kernel-fp4-attention = []
 kernel-fp8-attention = []
 kernel-simt-fp8-attention = []
+kernel-simt-fp4-attention = []
 
 [workspace]
 members = []

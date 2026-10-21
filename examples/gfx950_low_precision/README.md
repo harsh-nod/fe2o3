@@ -279,3 +279,18 @@ The hardware fixture uses the unchanged independent full-output reference,
 input-immutability checks, tolerances, and prefix/suffix canaries. These are
 gfx950-only paths; source presence is not compilation, hardware qualification,
 native MFMA numerical equivalence, or protected proof evidence.
+
+### FP4 Attention SIMT Counterpart
+
+`./run-fp4-attention-gfx950.sh` retains the tile default;
+`./run-fp4-attention-gfx950.sh simt` selects ordinary scalar Rust attention.
+Q, K, and V each store one OCP E2M1 value in the low nibble of a byte;
+the high nibble is ignored, not treated as a second packed value. The existing
+SIMT decoder's independent all-256-byte test covers this representation,
+including signed zero. Sixteen 16-token, 128-depth, 16-value-column problems
+produce all 4,096 F32 outputs with the unchanged four-slice ABI and WG256/grid4.
+The SIMT path uses increasing-depth F32 MACs, two score passes and max-subtracted
+F32 exponential normalization/PV, without MFMA, LDS, or subgroup operations.
+It uses the original independent full-output oracle, input-immutability checks,
+tolerances and canaries. This is gfx950-only source; compilation, numerical
+hardware validation, native MFMA equivalence and protected proof are separate.
