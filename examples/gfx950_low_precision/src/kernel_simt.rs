@@ -36,7 +36,7 @@ pub fn decode_fp8_e4m3_simt(bits: u8) -> f32 {
 #[kernel(
     typed,
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1]),
-    control_flow(loop_bounds(128))
+    control_flow(loop_bounds(4, 128))
 )]
 pub fn gfx950_fp8_gemm_simt(
     lhs: &[u8],
