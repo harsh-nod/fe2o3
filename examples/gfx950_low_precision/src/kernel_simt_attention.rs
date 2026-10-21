@@ -14,7 +14,7 @@ use fe2o3_device::{
 #[kernel(
     typed,
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1]),
-    control_flow(loop_bounds(4, 16, 128))
+    control_flow(loop_bounds(4, 16, 128, 16, 128))
 )]
 pub fn gfx950_fp8_attention_simt(
     query: &[u8],
