@@ -12,6 +12,7 @@ use crate::dimensions::{GEMM_K, GEMM_M, GEMM_N, GFX950_BATCHES};
 ///
 /// The normal encodings fit exactly in F32. This is deliberately separate from
 /// gfx942's E4M3-FNUZ storage format, whose bias and exceptional values differ.
+#[inline(always)]
 pub fn decode_fp8_e4m3_simt(bits: u8) -> f32 {
     let sign = ((bits as u32) & 0x80) << 24;
     let exponent = ((bits as u32) >> 3) & 0xf;
