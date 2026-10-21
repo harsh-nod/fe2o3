@@ -80,7 +80,8 @@ bash examples/gfx950_low_precision/run-fp4-gemm-gfx950.sh simt
 bash examples/gfx950_low_precision/run-fp8-gemm-gfx950.sh tile
 bash examples/gfx950_low_precision/run-fp8-gemm-gfx950.sh simt
 bash examples/gfx950_low_precision/run-fp4-attention-gfx950.sh
-bash examples/gfx950_low_precision/run-fp8-attention-gfx950.sh
+bash examples/gfx950_low_precision/run-fp8-attention-gfx950.sh tile
+bash examples/gfx950_low_precision/run-fp8-attention-gfx950.sh simt
 ```
 
 The FP4 and FP8 GEMM runners default to `tile`. Their `simt` selections compile
@@ -94,7 +95,17 @@ Both selections require `gfx950:xnack-`; this does not add gfx942 support.
 The historical hardware receipts below cover the four original tile kernels,
 not the new SIMT counterparts.
 
-For compilation and ISA validation without GPU execution, prefix either command
+The FP8 attention runner also accepts `tile` (the default) and `simt`.
+The SIMT selection compiles
+`src/kernel_simt_attention.rs::gfx950_fp8_attention_simt`: scalar E4M3
+decoding, F32 dot products, stable softmax, and F32 value accumulation. It uses
+the same four-slice ABI, 16 independent heads, WG256/grid4 geometry, full
+CPU oracle, immutable inputs, and output canaries as tile. Tile uses 8 KiB of
+static LDS per workgroup; SIMT uses none. Both value paths use the complete
+E4M3 decoder, including subnormals, signed zero, exponent-15 finite values,
+and NaNs. The historical receipts below do not qualify this changed pair.
+
+For compilation and ISA validation without GPU execution, prefix a command
 with `FE2O3_EXAMPLE_COMPILE_ONLY=1`.
 
 For a warm-cache GEMM run with a bounded native execution budget, the ordinary
@@ -122,9 +133,11 @@ ordered nine-file closure accepted by the shared digest validator. It defaults
 to `gfx950-ocml-rocm-7.2.1.manifest`; the separately reviewed
 `gfx950-ocml-rocm-7.2.4.manifest` is selected explicitly with
 `FE2O3_GFX950_OCML_MANIFEST`. Both manifests pin every device library plus
-Clang and LLD. The runner requires one scaled gfx950 MFMA, two B4 or four B8
+Clang and LLD. The tile runner requires one scaled gfx950 MFMA, two B4 or four B8
 transpose reads, one uniform publication barrier, and the exact static LDS
-allocation before dispatch.
+allocation before dispatch. The FP8 SIMT selection instead checks scalar
+arithmetic and byte loads, absence of MFMA and transpose operations, and
+zero static LDS.
 
 The selected root compiler binding is portable across checkout paths.
 Cargo's original ordered metadata remains a separate build observation; only
