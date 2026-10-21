@@ -238,7 +238,7 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
                 matches!(binary.op, syn::BinOp::Eq(_))
                     && matches!(binary.left.as_ref(), syn::Expr::Path(path) if path.path.is_ident(name))
                     && matches!(binary.right.as_ref(), syn::Expr::Lit(lit)
-                        if matches!(&lit.lit, syn::Lit::Int(value) if value.base10_parse::<u32>() == Ok(0)))
+                        if matches!(&lit.lit, syn::Lit::Int(value) if value.base10_parse::<u32>().ok() == Some(0)))
             }
             let statements = &kernels[0].block.stmts;
             let (guard_index, guard) = statements.iter().enumerate().find_map(|(index, statement)| {
