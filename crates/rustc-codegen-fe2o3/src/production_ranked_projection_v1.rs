@@ -17245,16 +17245,31 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
             let zero_target = targets.values()[0].edge().target().index() as usize;
             let nonzero_target = targets.otherwise().target().index() as usize;
+            let statement_count = block.statements().len();
+            let mut capture = ScalarAssignmentSiteV1 {
+                block: switch_block,
+                statement: statement_count,
+            };
             let discriminant_is_tested = self.local_is_value_preserving_alias_of(
                 discriminant_local,
                 local,
                 switch_block,
-                block.statements().len(),
-                None,
+                statement_count,
+                Some(&mut capture),
             )?;
             let discriminant_is_tested = discriminant_is_tested
                 && (discriminant_local == local
-                    || !self.block_defines_local(switch_block, local)?);
+                    || if capture.block != switch_block || capture.statement > statement_count {
+                        false
+                    } else {
+                        self.charge(statement_count - capture.statement)?;
+                        !self.block_defines_local_in_statement_range_v1(
+                            switch_block,
+                            local,
+                            capture.statement,
+                            statement_count,
+                        )?
+                    });
             let excluding_target = if discriminant_is_tested {
                 Some(nonzero_target)
             } else {
@@ -17531,36 +17546,52 @@ impl<'a> SemanticAssertProofsV1<'a> {
         };
         let left_local = simple_operand_local(left).map(|value| value.index() as usize);
         let right_local = simple_operand_local(right).map(|value| value.index() as usize);
+        let mut left_capture = site;
         let left_is_tested = if let Some(left_local) = left_local {
             self.local_is_value_preserving_alias_of(
                 left_local,
                 tested_local,
                 site.block,
                 site.statement,
-                None,
+                Some(&mut left_capture),
             )?
         } else {
             false
         };
+        let mut right_capture = site;
         let right_is_tested = if let Some(right_local) = right_local {
             self.local_is_value_preserving_alias_of(
                 right_local,
                 tested_local,
                 site.block,
                 site.statement,
-                None,
+                Some(&mut right_capture),
             )?
         } else {
             false
         };
-        let compares_tested_local_to_zero = left_is_tested
-            && self.operand_is_exact_unsigned_zero(right)
-            || right_is_tested && self.operand_is_exact_unsigned_zero(left);
-        if !compares_tested_local_to_zero {
+        let capture = if left_is_tested && self.operand_is_exact_unsigned_zero(right) {
+            left_capture
+        } else if right_is_tested && self.operand_is_exact_unsigned_zero(left) {
+            right_capture
+        } else {
             return Ok(None);
-        }
-        if site.block == switch_block && self.block_defines_local(switch_block, tested_local)? {
-            return Ok(None);
+        };
+        if site.block == switch_block {
+            let statement_count = self.function.blocks()[switch_block].statements().len();
+            if capture.block != switch_block || capture.statement > statement_count {
+                return Ok(None);
+            }
+            // Initialization before the observed value is valid; later writes are not.
+            self.charge(statement_count - capture.statement)?;
+            if self.block_defines_local_in_statement_range_v1(
+                switch_block,
+                tested_local,
+                capture.statement,
+                statement_count,
+            )? {
+                return Ok(None);
+            }
         }
         Ok(match operation {
             SemanticBinaryOpV1::Equal => Some(false_target),
