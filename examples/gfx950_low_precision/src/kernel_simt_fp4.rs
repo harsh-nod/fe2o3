@@ -15,7 +15,10 @@ pub fn decode_fp4_e2m1_simt(bits: u8) -> f32 {
     let value = if magnitude < 2 {
         (magnitude as f32) * 0.5
     } else {
-        f32::from_bits((((magnitude as u32) >> 1) + 126) << 23 | (((magnitude as u32) & 1) << 22))
+        // Masking bounds the exponent to 126..=129; this addition never wraps.
+        f32::from_bits(
+            ((magnitude as u32) >> 1).wrapping_add(126) << 23 | (((magnitude as u32) & 1) << 22),
+        )
     };
     if bits & 8 != 0 { -value } else { value }
 }
