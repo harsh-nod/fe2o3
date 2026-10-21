@@ -150,7 +150,7 @@ def row_modes(source: str) -> tuple[str, ...]:
     for field, expected in (
         ("name", "Host contract and fail-closed source checks (${{ matrix.mode }})"),
         ("runs-on", "ubuntu-24.04"),
-        ("timeout-minutes", "15"),
+        ("timeout-minutes", "25"),
     ):
         if re.findall(rf"(?m)^    {field}: (.+)$", owner) != [expected]:
             raise ValueError(f"host matrix changed {field}")
@@ -234,7 +234,7 @@ class WorkflowContractTests(unittest.TestCase):
         host = job(self.row, "host-contract")
         core_groups(self.ci)
         self.assertIn("    timeout-minutes: 90\n", generic)
-        self.assertIn("    timeout-minutes: 15\n", host)
+        self.assertIn("    timeout-minutes: 25\n", host)
         proof = job(self.row, "proof-contract")
         for command in ("run: examples/row_softmax_v1/run-verus.sh",
                         "run: sh examples/qwen3_rope_kv_v1/run-verus.sh"):
@@ -312,7 +312,7 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_row_modes_cannot_widen_resources_or_substitute_shared_steps(self) -> None:
         for old, new in (
-            ("    timeout-minutes: 15", "    timeout-minutes: 30"),
+            ("    timeout-minutes: 25", "    timeout-minutes: 30"),
             ("    runs-on: ubuntu-24.04", "    runs-on: self-hosted"),
             ("      CARGO_PROFILE_TEST_DEBUG: '0'", "      CARGO_PROFILE_TEST_DEBUG: '1'"),
             ("run: rustup show active-toolchain", "run: true"),

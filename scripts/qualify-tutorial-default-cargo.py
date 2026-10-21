@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import selectors
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -29,6 +30,10 @@ SCHEMA = "fe2o3-tutorial-default-cargo-census-v1"
 RUNTIME = Path("/opt/fe2o3/verus-runtime-v2/functional-refinement-0.2026.08.02-b677dd5")
 MAX_LOG_BYTES = 16 * 1024 * 1024
 MAX_TIMEOUT_SECONDS = 3600
+SELECTED_REQUEST_SCHEMA = "fe2o3-tutorial-selected-case-request-v1"
+SELECTED_RESULT_SCHEMA = "fe2o3-tutorial-selected-case-result-v1"
+MAX_SELECTED_REQUEST_BYTES = 64 * 1024
+MAX_SELECTED_SECONDS = 1800
 REQUIRED_ENV = (
     "CARGO", "FE2O3_BACKEND", "FE2O3_AUTHORITY_BACKEND_SHA256_V1",
     "FE2O3_AUTHORITY_CARGO_SHA256_V1", "FE2O3_AUTHORITY_RUSTC_PATH_V1",
@@ -218,13 +223,20 @@ def write_report(output, report):
 
 def run_census(root, manifest_path, cargo_fe2o3, cache, output, targets, timeout, max_log_bytes,
                *, runner=run_command, environment=None, production=False, capture_graphs=False,
-               isolate_negative_outputs=False):
+               isolate_negative_outputs=False, invocation_ids=None, expected_source_sha256=None):
     environment = dict(os.environ if environment is None else environment)
     validator, census, manifest, manifest_sha, invocations = load_inputs(root, manifest_path)
     production_module = load_module("tutorial_production_census_v91",
         root / "scripts/tutorial_production_census_v91.py") if production else None
     output.mkdir(parents=True, exist_ok=False)
     selected = [(key, row) for key, row in sorted(invocations.items()) if row[0]["target"] in targets]
+    if invocation_ids is not None:
+        if (not isinstance(invocation_ids, tuple) or len(invocation_ids) != 1
+                or invocation_ids[0] not in dict(selected)):
+            raise ValueError("selection must name one registered invocation on its declared target")
+        selected = [(key, row) for key, row in selected if key in invocation_ids]
+    elif expected_source_sha256 is not None:
+        raise ValueError("a bound source snapshot requires an explicit invocation selection")
     report = {
         "schema": "fe2o3-tutorial-production-census-v91" if production else SCHEMA,
         "manifest": str(manifest_path), "manifestSha256": manifest_sha,
@@ -262,6 +274,8 @@ def run_census(root, manifest_path, cargo_fe2o3, cache, output, targets, timeout
             case["negativeArtifactDirectoryV92"] = isolated.name
         try:
             before = census.input_snapshot(validator, root, manifest, manifest_sha, case["fixture"])
+            if expected_source_sha256 is not None and snapshot_sha256(before) != expected_source_sha256:
+                raise ValueError("selected source snapshot changed before compilation")
             case["sourceBefore"] = before
         except (OSError, ValueError, SystemExit) as error:
             case.update(status="invalid-source-input", sourceError=str(error))
@@ -321,6 +335,198 @@ def run_census(root, manifest_path, cargo_fe2o3, cache, output, targets, timeout
     return report
 
 
+def snapshot_sha256(snapshot):
+    return hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(",", ":"),
+                                     ensure_ascii=True, allow_nan=False).encode("ascii")).hexdigest()
+
+
+def read_selected_request(path):
+    absolute = path.absolute()
+    if absolute.resolve(strict=True) != absolute:
+        raise ValueError("selected request must have a canonical nonsymlink path")
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK
+    with os.fdopen(os.open(absolute, flags), "rb") as stream:
+        before = os.fstat(stream.fileno())
+        if not stat.S_ISREG(before.st_mode) or before.st_size > MAX_SELECTED_REQUEST_BYTES:
+            raise ValueError("selected request must be a bounded regular file")
+        raw = stream.read(MAX_SELECTED_REQUEST_BYTES + 1)
+        after = os.fstat(stream.fileno())
+    fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if len(raw) > MAX_SELECTED_REQUEST_BYTES or any(getattr(before, key) != getattr(after, key) for key in fields):
+        raise ValueError("selected request changed while reading")
+    return raw
+
+
+def decode_selected_request(raw):
+    if not isinstance(raw, bytes) or len(raw) > MAX_SELECTED_REQUEST_BYTES:
+        raise ValueError("selected request byte limit")
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate selected request key")
+            result[key] = value
+        return result
+    def invalid_number(value):
+        raise ValueError("selected request numbers must be finite integers")
+    value = json.loads(raw, object_pairs_hook=unique, parse_float=invalid_number,
+                       parse_constant=invalid_number)
+    required = {"schema", "manifestSha256", "invocationId", "sourceSnapshotSha256", "limits"}
+    if not isinstance(value, dict) or set(value) != required or value["schema"] != SELECTED_REQUEST_SCHEMA:
+        raise ValueError("closed selected request schema required")
+    for key in ("manifestSha256", "sourceSnapshotSha256"):
+        digest = value[key]
+        if not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise ValueError("selected request requires lowercase SHA256 identities")
+    if not isinstance(value["invocationId"], str) or not 1 <= len(value["invocationId"]) <= 256:
+        raise ValueError("invalid selected invocation identity")
+    limits = value["limits"]
+    maxima = {"compileSeconds": 600, "simulationSeconds": 600,
+              "totalSeconds": MAX_SELECTED_SECONDS, "logBytes": MAX_LOG_BYTES}
+    if not isinstance(limits, dict) or set(limits) != set(maxima):
+        raise ValueError("closed selected limits required")
+    if any(type(limits[key]) is not int or not 1 <= limits[key] <= maximum
+           for key, maximum in maxima.items()):
+        raise ValueError("selected limit exceeds the finite envelope")
+    return value
+
+
+class SelectedCaseDeadlineExceeded(ValueError):
+    pass
+
+
+def run_selected_case(root, manifest_path, cargo_fe2o3, cache, output, request_bytes,
+                      reference, simulator, *, runner=run_command, environment=None,
+                      clock=time.monotonic):
+    """Observe one registered positive; no native provider is accepted or invented here."""
+    output.mkdir(mode=0o700, parents=False, exist_ok=False)
+    report = {"schema": SELECTED_RESULT_SCHEMA, "complete": False, "qualified": False,
+              "coversAllRegisteredInvocations": False, "hardwareExecuted": False,
+              "grantsArtifactOrLaunchAuthority": False, "status": "request-refused",
+              "phase": "request", "commands": [], "kernels": [],
+              "application": {"status": "blocked", "attempted": False,
+                              "reason": "manifest-bound-generated-consumer-and-native-provider-unavailable"}}
+    environment = dict(os.environ if environment is None else environment)
+    try:
+        request = decode_selected_request(request_bytes)
+        report["request"] = request
+        validator, census, manifest, manifest_sha, roster = load_inputs(root, manifest_path)
+        key = request["invocationId"]
+        if request["manifestSha256"] != manifest_sha or key not in roster:
+            raise ValueError("selected request does not match the actual manifest invocation")
+        fixture, references, negative = roster[key]
+        if negative:
+            raise ValueError("selected end-to-end mode requires a positive; registered negatives retain their existing corpus gate")
+        symbols = fixture["compilerInput"]["kernelSymbols"]
+        if not symbols or len(symbols) > 64:
+            raise ValueError("selected invocation root count exceeds the finite envelope")
+        before = census.input_snapshot(validator, root, manifest, manifest_sha, fixture)
+        if snapshot_sha256(before) != request["sourceSnapshotSha256"]:
+            raise ValueError("selected request does not match the actual source snapshot")
+        report.update(invocationId=key, target=fixture["target"], sourceBefore=before)
+        limits = request["limits"]
+        deadline = clock() + limits["totalSeconds"]
+        def guard():
+            if clock() >= deadline:
+                raise SelectedCaseDeadlineExceeded("original selected attempt deadline exceeded")
+            current = census.input_snapshot(validator, root, manifest, manifest_sha, fixture)
+            if (current != before
+                    or validator.load_manifest(manifest_path, with_sha256=True)[1] != manifest_sha):
+                raise ValueError("selected source or manifest changed")
+        def bounded_runner(arguments, cwd, child_environment, log, timeout, max_log_bytes):
+            guard()
+            remaining = deadline - clock()
+            if remaining <= 0:
+                raise SelectedCaseDeadlineExceeded("original selected attempt deadline exceeded")
+            row = {"phase": report["phase"], "arguments": arguments,
+                   "timeoutSeconds": min(timeout, remaining),
+                   "maxLogBytes": min(max_log_bytes, limits["logBytes"])}
+            report["commands"].append(row)
+            outcome = runner(arguments, cwd, child_environment, log,
+                             row["timeoutSeconds"], row["maxLogBytes"])
+            row["outcome"] = outcome
+            guard()
+            return outcome
+        report["phase"] = "compile"
+        compiled = output / "compilation"
+        compilation = run_census(root, manifest_path, cargo_fe2o3, cache, compiled,
+            (fixture["target"],), limits["compileSeconds"], limits["logBytes"],
+            runner=bounded_runner, environment=environment, production=True, capture_graphs=True,
+            isolate_negative_outputs=True, invocation_ids=(key,),
+            expected_source_sha256=request["sourceSnapshotSha256"])
+        report["compilation"] = compilation
+        if compilation["prerequisiteFailures"]:
+            report["status"] = "blocked-prerequisite"
+        else:
+            if len(compilation["cases"]) != 1:
+                raise ValueError("selected compilation changed its case roster")
+            case = compilation["cases"][0]
+            if (case["id"] != key or case["fixture"] != fixture
+                    or case["references"] != [list(row) for row in references]
+                    or case["expectedNegative"] is not False
+                    or case["status"] != "production-compile-census-pass"
+                    or case.get("sourceBefore") != before or case.get("sourceAfter") != before):
+                raise ValueError("selected production compilation refused or changed its input")
+            guard()
+            simulation = load_module("tutorial_selected_simulation_v92", root / "scripts/tutorial_simulation_v92.py")
+            tools = (reference, simulator)
+            pins = [simulation.pin_executable(path) for path in tools]
+            report["tools"] = [dict(path=str(path), **pin) for path, pin in zip(tools, pins)]
+            report["phase"] = "cpu-oracle"
+            directory = output / "simulation"
+            directory.mkdir(mode=0o700)
+            for ordinal, kernel in enumerate(symbols):
+                guard()
+                request_path = directory / f"{ordinal:04d}.request.json"
+                generated = bounded_runner([str(reference), "generate", kernel], root,
+                    environment, request_path, min(120, limits["simulationSeconds"]), limits["logBytes"])
+                if not simulation.command_passed(generated):
+                    raise ValueError("selected independent request generation failed")
+                value = simulation.strict_json(simulation.read_file(request_path)[0])
+                if value["kernel"] != kernel:
+                    raise ValueError("selected independent request substituted the kernel")
+                observation = simulation.run_case(case, compiled / case["capturedGraphsV92"],
+                    request_path, reference, simulator, directory / f"{ordinal:04d}", bounded_runner,
+                    environment=environment, cwd=root, timeout=limits["simulationSeconds"])
+                report["kernels"].append({"kernel": kernel, "generation": generated,
+                                           "observation": observation})
+                guard()
+            if [simulation.pin_executable(path) for path in tools] != pins:
+                raise ValueError("selected CPU tools changed")
+            report["sourceAfter"] = census.input_snapshot(validator, root, manifest, manifest_sha, fixture)
+            guard()
+            report["phase"] = "application"
+            report["status"] = "blocked-native-prerequisite"
+    except SelectedCaseDeadlineExceeded as error:
+        report.update(status="deadline-exceeded", error=str(error))
+    except KeyboardInterrupt:
+        report.update(status="interrupted", error="selected attempt interrupted")
+        raise
+    except (OSError, ValueError, KeyError, TypeError, SystemExit) as error:
+        report.update(status="request-refused" if report["phase"] == "request" else "phase-refused",
+                      error=str(error)[:4096])
+    except Exception as error:
+        report.update(status="internal-error", error=f"{type(error).__name__}: {error}"[:4096])
+        raise
+    finally:
+        report["complete"] = True
+        try:
+            payload = json.dumps(report, indent=2, sort_keys=True, allow_nan=False) + "\n"
+            if len(payload.encode()) > MAX_LOG_BYTES:
+                raise ValueError("selected terminal receipt exceeds the finite envelope")
+        except (TypeError, ValueError):
+            report = {"schema": SELECTED_RESULT_SCHEMA, "complete": True,
+                      "status": "receipt-refused", "priorStatus": report["status"],
+                      "qualified": False, "hardwareExecuted": False,
+                      "grantsArtifactOrLaunchAuthority": False,
+                      "phase": report["phase"], "application": report["application"],
+                      "error": "invalid or oversized terminal data; inspect retained phase files"}
+            payload = json.dumps(report, sort_keys=True) + "\n"
+        with (output / "terminal.json").open("x", encoding="utf-8") as stream:
+            stream.write(payload)
+    return report
+
+
 def census_main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -333,6 +539,9 @@ def census_main(argv=None):
     parser.add_argument("--max-log-bytes", type=int, default=MAX_LOG_BYTES)
     parser.add_argument("--legacy-compile-census", action="store_true",
                         help="record only the historical compile/refusal diagnostic, never qualification")
+    parser.add_argument("--selected-request", type=Path, help="closed single-invocation request; never whole-corpus or native qualification")
+    parser.add_argument("--reference", type=Path, help="existing reviewed reference executable for selected mode")
+    parser.add_argument("--simulator", type=Path, help="existing reviewed current simulator executable for selected mode")
     args = parser.parse_args(argv)
     if not 1 <= args.timeout_seconds <= MAX_TIMEOUT_SECONDS or not 1 <= args.max_log_bytes <= MAX_LOG_BYTES:
         parser.error("timeout or log limit exceeds the finite harness envelope")
@@ -341,6 +550,23 @@ def census_main(argv=None):
     root = args.repo_root.resolve(strict=True)
     manifest = args.manifest if args.manifest.is_absolute() else root / args.manifest
     targets = ("gfx942", "gfx950") if args.target == "all" else (args.target,)
+    if args.selected_request is not None:
+        if (args.legacy_compile_census or args.target != "all" or args.reference is None
+                or args.simulator is None or not args.reference.is_absolute()
+                or not args.simulator.is_absolute() or args.timeout_seconds != 600
+                or args.max_log_bytes != MAX_LOG_BYTES):
+            parser.error("selected mode requires reviewed absolute CPU tools and request-derived target/limits, without legacy or target/limit overrides")
+        try:
+            report = run_selected_case(root, manifest, args.cargo_fe2o3, args.target_dir.resolve(),
+                args.output.resolve(), read_selected_request(args.selected_request), args.reference, args.simulator)
+        except (OSError, ValueError, SystemExit) as error:
+            print(f"tutorial selected case refused: {error}", file=sys.stderr)
+            return 2
+        print(json.dumps({"receipt": str(args.output.resolve() / "terminal.json"),
+                          "status": report["status"], "qualified": False}, sort_keys=True))
+        return 1
+    if args.reference is not None or args.simulator is not None:
+        parser.error("CPU tool paths require selected mode")
     try:
         report = run_census(root, manifest, args.cargo_fe2o3, args.target_dir.resolve(), args.output.resolve(),
                             targets, args.timeout_seconds, args.max_log_bytes,
