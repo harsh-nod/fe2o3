@@ -86,7 +86,19 @@ pub fn gfx950_fp8_gemm_simt(
             accumulator += a * b;
             depth += 1;
         }
-        if let Some(element) = output.get_block_mut(&output_block, component) {
+        if component == 0 {
+            if let Some(element) = output.get_block_mut(&output_block, 0) {
+                *element = accumulator;
+            }
+        } else if component == 1 {
+            if let Some(element) = output.get_block_mut(&output_block, 1) {
+                *element = accumulator;
+            }
+        } else if component == 2 {
+            if let Some(element) = output.get_block_mut(&output_block, 2) {
+                *element = accumulator;
+            }
+        } else if let Some(element) = output.get_block_mut(&output_block, 3) {
             *element = accumulator;
         }
         component += 1;
