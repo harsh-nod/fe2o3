@@ -76,12 +76,14 @@ pub fn tiled_gemm_general_v1(
     let tile_row = tile / tiles_per_row;
     let tile_column = tile % tiles_per_row;
 
-    let Some(tile_row_base) = tile_row.checked_mul(16) else {
+    if tile_row > usize::MAX / 16 {
         return Err(KernelError::InvalidArgument);
-    };
-    let Some(tile_column_base) = tile_column.checked_mul(16) else {
+    }
+    let tile_row_base = tile_row * 16;
+    if tile_column > usize::MAX / 16 {
         return Err(KernelError::InvalidArgument);
-    };
+    }
+    let tile_column_base = tile_column * 16;
 
     // Typed views centralize layout and padding; the output witness captures ownership.
     let output_tile = thread_index.checked_tiled_2d::<64, 16, 16, 4>();
