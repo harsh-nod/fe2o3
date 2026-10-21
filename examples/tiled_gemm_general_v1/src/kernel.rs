@@ -76,6 +76,13 @@ pub fn tiled_gemm_general_v1(
     let tile_row = tile / tiles_per_row;
     let tile_column = tile % tiles_per_row;
 
+    let Some(tile_row_base) = tile_row.checked_mul(16) else {
+        return Err(KernelError::InvalidArgument);
+    };
+    let Some(tile_column_base) = tile_column.checked_mul(16) else {
+        return Err(KernelError::InvalidArgument);
+    };
+
     // Typed views centralize layout and padding; the output witness captures ownership.
     let output_tile = thread_index.checked_tiled_2d::<64, 16, 16, 4>();
     let Ok(a_matrix) = Bf16MfmaAMatrix::row_major(a, 0, m as usize, k as usize, lda as usize)
@@ -98,8 +105,8 @@ pub fn tiled_gemm_general_v1(
     let mut rhs_pipeline =
         WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 64, 1>::current(&mut pipeline_scope);
 
-    let lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, 0);
-    let rhs = b_matrix.load_k16n16(&wave_lane, 0, tile_column * 16);
+    let lhs = a_matrix.load_m16k16(&wave_lane, tile_row_base, 0);
+    let rhs = b_matrix.load_k16n16(&wave_lane, 0, tile_column_base);
     lhs_pipeline.stage(0);
     lhs_pipeline.write(0, lane, lhs);
     lhs_pipeline.commit(0);
@@ -111,8 +118,8 @@ pub fn tiled_gemm_general_v1(
     while phase_index < phase_count {
         let future_epoch = phase_index + 1;
         let next_phase = future_epoch * 16;
-        let next_lhs = a_matrix.load_m16k16(&wave_lane, tile_row * 16, next_phase);
-        let next_rhs = b_matrix.load_k16n16(&wave_lane, next_phase, tile_column * 16);
+        let next_lhs = a_matrix.load_m16k16(&wave_lane, tile_row_base, next_phase);
+        let next_rhs = b_matrix.load_k16n16(&wave_lane, next_phase, tile_column_base);
 
         lhs_pipeline.stage(future_epoch);
         lhs_pipeline.write(future_epoch, lane, next_lhs);
