@@ -330,8 +330,10 @@ fn finite_simulate(
     limits: SimulationLimitsV1,
     events: &mut impl SimulationEventSinkV1,
 ) -> Result<SimulationExecutionV1, SimulationErrorV1> {
+    let mut observed = request.clone();
+    observed.events = EventPolicyV1::Enabled;
     sim.simulate_debugged_with_observation_options(
-        request,
+        &observed,
         TARGET,
         limits,
         finite_options(),
@@ -345,7 +347,7 @@ fn finite_mode_preserves_fractional_product_gradual_underflow_and_canaries() {
     let sim = admit(module(64));
     for (a, b, c, result) in [
         (0x3f81_u16, 0x3f7f_u16, 0, 0x4180_7f00), // 16 exact BF16 products.
-        (1, 0x3f80, 0, 0x0008_0000),              // 16 * least BF16 subnormal, no FTZ.
+        (1, 0x3f80, 0, 0x0010_0000),              // 16 * least BF16 subnormal, no FTZ.
         (0x8000, 0, 1, 1),                        // F32 subnormal accumulator survives every FMA.
     ] {
         let mut request = request(&[0; 256], &[0; 256], &[0; 256], 1, 64);
@@ -394,6 +396,7 @@ fn finite_mode_rejects_last_input_and_late_overflow_before_completions_or_stores
                 kind(finite_simulate(&sim, &req, limits(), &mut events).unwrap_err()),
                 SimulationExecutionErrorKindV1::UnsupportedMatrixInputDomain { .. }
             ));
+            assert_eq!(events.arrived, 64);
             assert_eq!((events.completed, events.writes), (0, 0));
             assert_eq!(req.arguments, original);
         }
@@ -419,6 +422,7 @@ fn finite_mode_rejects_last_input_and_late_overflow_before_completions_or_stores
             ..
         }
     ));
+    assert_eq!(events.arrived, 64);
     assert_eq!((events.completed, events.writes), (0, 0));
     assert_eq!(req.arguments, original);
 }
@@ -442,6 +446,7 @@ fn finite_precharge_exact_one_short_and_persisted_schedule_refusal() {
         kind(finite_simulate(&sim, &req, denied, &mut events).unwrap_err()),
         SimulationExecutionErrorKindV1::StepLimit { .. }
     ));
+    assert_eq!(events.arrived, 64);
     assert_eq!((events.completed, events.writes), (0, 0));
     let exact = SimulationLimitsV1 {
         max_steps: prepaid,
@@ -456,7 +461,8 @@ fn finite_precharge_exact_one_short_and_persisted_schedule_refusal() {
         kind(finite_simulate(&sim, &req, exact, &mut events).unwrap_err()),
         SimulationExecutionErrorKindV1::StepLimit { .. }
     ));
-    assert!(events.completed > 0);
+    assert_eq!(events.arrived, 64);
+    assert_eq!(events.completed, 64);
     assert!(matches!(
         sim.simulate_debugged_scheduled_with_observation_options(
             &req,
