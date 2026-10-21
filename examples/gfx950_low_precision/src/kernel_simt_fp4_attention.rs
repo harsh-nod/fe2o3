@@ -88,20 +88,20 @@ pub fn gfx950_fp4_attention_simt(
         }
         let mut denominator = 0.0_f32;
         let mut numerator = 0.0_f32;
-        token = 0;
-        while token < ATTENTION_TOKENS {
+        let mut value_token = 0_usize;
+        while value_token < ATTENTION_TOKENS {
             let mut score = 0.0_f32;
             let mut depth = 0_usize;
             while depth < GEMM_K {
                 let q = decode_fp4_e2m1_simt(query.load_or(row, depth, 0));
-                let k = decode_fp4_e2m1_simt(key.load_or(token, depth, 0));
+                let k = decode_fp4_e2m1_simt(key.load_or(value_token, depth, 0));
                 score += q * k;
                 depth += 1;
             }
             let probability = math.exp_f32(score * scale - maximum);
             denominator += probability;
-            numerator += probability * decode_fp4_e2m1_simt(value.load_or(token, column, 0));
-            token += 1;
+            numerator += probability * decode_fp4_e2m1_simt(value.load_or(value_token, column, 0));
+            value_token += 1;
         }
         let result = numerator / denominator;
         if component == 0 {
