@@ -1,12 +1,8 @@
 use std::io;
 
-use fe2o3_core::{
-    DeviceBuffer, GpuContext, KernelParams, LaunchConfig, launch_kernel_on_stream,
-};
+use fe2o3_core::{DeviceBuffer, GpuContext, KernelParams, LaunchConfig, launch_kernel_on_stream};
 use fe2o3_device::Bf16;
-use fe2o3_tiled_gemm_general_v1::reference::{
-    ReferenceProblemV1, evaluate_reference_v1,
-};
+use fe2o3_tiled_gemm_general_v1::reference::{ReferenceProblemV1, evaluate_reference_v1};
 
 const HSACO_ENV: &str = "FE2O3_GENERAL_GEMM_HSACO";
 #[cfg(not(feature = "kernel-simt-gemm-general"))]
@@ -32,8 +28,7 @@ fn qualification_workgroups(problem: ReferenceProblemV1) -> Result<u32, io::Erro
         extent.div_ceil(64)
     };
     #[cfg(not(feature = "kernel-simt-gemm-general"))]
-    let groups =
-        u64::from(problem.rows).div_ceil(16) * u64::from(problem.columns).div_ceil(16);
+    let groups = u64::from(problem.rows).div_ceil(16) * u64::from(problem.columns).div_ceil(16);
     u32::try_from(groups).map_err(|_| invalid_input("qualification grid exceeds u32"))
 }
 
@@ -68,8 +63,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let initial_output = (0..output_len)
         .map(|index| 1000.0 + index as f32)
         .collect::<Vec<_>>();
-    let expected = evaluate_reference_v1(&lhs, &rhs, &initial_output, problem)
-        .map_err(invalid_input)?;
+    let expected =
+        evaluate_reference_v1(&lhs, &rhs, &initial_output, problem).map_err(invalid_input)?;
     let workgroups = qualification_workgroups(problem)?;
 
     let context = GpuContext::new(0)?;
@@ -154,10 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!(
         "PASS {KERNEL}: {}x{}x{}, {} workgroups, max_abs_error={maximum_error:.6}",
-        problem.rows,
-        problem.columns,
-        problem.reduction,
-        workgroups,
+        problem.rows, problem.columns, problem.reduction, workgroups,
     );
     Ok(())
 }

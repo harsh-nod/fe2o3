@@ -169,31 +169,64 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
                 && let syn::Expr::Call(call) = init.expr.as_ref()
                 && let syn::Expr::Path(path) = call.func.as_ref()
             {
-                let name = path.path.segments.iter()
-                    .map(|segment| segment.ident.to_string()).collect::<Vec<_>>().join("::");
-                if matches!(name.as_str(),
-                    "Bf16MfmaAMatrix::row_major" | "Bf16MfmaBMatrix::row_major"
-                    | "StridedReadView2D::from_shared_slice")
-                {
-                    let syn::Pat::TupleStruct(pattern) = &local.pat else { panic!("Ok pattern") };
+                let name = path
+                    .path
+                    .segments
+                    .iter()
+                    .map(|segment| segment.ident.to_string())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                if matches!(
+                    name.as_str(),
+                    "Bf16MfmaAMatrix::row_major"
+                        | "Bf16MfmaBMatrix::row_major"
+                        | "StridedReadView2D::from_shared_slice"
+                ) {
+                    let syn::Pat::TupleStruct(pattern) = &local.pat else {
+                        panic!("Ok pattern")
+                    };
                     assert!(pattern.path.is_ident("Ok"));
                     assert_eq!(pattern.elems.len(), 1);
-                    let syn::Pat::Ident(binding) = &pattern.elems[0] else { panic!("Ok binding") };
-                    assert!(binding.by_ref.is_none() && binding.mutability.is_none()
-                        && binding.subpat.is_none());
+                    let syn::Pat::Ident(binding) = &pattern.elems[0] else {
+                        panic!("Ok binding")
+                    };
+                    assert!(
+                        binding.by_ref.is_none()
+                            && binding.mutability.is_none()
+                            && binding.subpat.is_none()
+                    );
                     let (_, failure) = init.diverge.as_ref().expect("checked failure branch");
-                    let syn::Expr::Block(failure) = failure.as_ref() else { panic!("failure block") };
+                    let syn::Expr::Block(failure) = failure.as_ref() else {
+                        panic!("failure block")
+                    };
                     assert!(failure.label.is_none());
                     assert_eq!(failure.block.stmts.len(), 1);
                     let syn::Stmt::Expr(syn::Expr::Return(returned), Some(_)) =
-                        &failure.block.stmts[0] else { panic!("checked error return") };
-                    let syn::Expr::Call(returned) = returned.expr.as_deref().unwrap() else { panic!("Err value") };
-                    let syn::Expr::Path(constructor) = returned.func.as_ref() else { panic!("Err constructor") };
+                        &failure.block.stmts[0]
+                    else {
+                        panic!("checked error return")
+                    };
+                    let syn::Expr::Call(returned) = returned.expr.as_deref().unwrap() else {
+                        panic!("Err value")
+                    };
+                    let syn::Expr::Path(constructor) = returned.func.as_ref() else {
+                        panic!("Err constructor")
+                    };
                     assert!(constructor.path.is_ident("Err"));
                     assert_eq!(returned.args.len(), 1);
-                    let syn::Expr::Path(error) = &returned.args[0] else { panic!("error code") };
-                    assert_eq!(error.path.segments.iter().map(|s| s.ident.to_string())
-                        .collect::<Vec<_>>().join("::"), "KernelError::InvalidArgument");
+                    let syn::Expr::Path(error) = &returned.args[0] else {
+                        panic!("error code")
+                    };
+                    assert_eq!(
+                        error
+                            .path
+                            .segments
+                            .iter()
+                            .map(|s| s.ident.to_string())
+                            .collect::<Vec<_>>()
+                            .join("::"),
+                        "KernelError::InvalidArgument"
+                    );
                     self.checked_view_let_else += 1;
                 }
             }
@@ -234,48 +267,80 @@ fn both_variants_are_real_attributed_source_and_simt_uses_checked_scalar_accesse
         assert_eq!(facts.checked_view_let_else, 2);
         if name == "simt_gemm_general_v1" {
             fn is_zero_check(expression: &syn::Expr, name: &str) -> bool {
-                let syn::Expr::Binary(binary) = expression else { return false };
+                let syn::Expr::Binary(binary) = expression else {
+                    return false;
+                };
                 matches!(binary.op, syn::BinOp::Eq(_))
                     && matches!(binary.left.as_ref(), syn::Expr::Path(path) if path.path.is_ident(name))
                     && matches!(binary.right.as_ref(), syn::Expr::Lit(lit)
                         if matches!(&lit.lit, syn::Lit::Int(value) if value.base10_parse::<u32>().ok() == Some(0)))
             }
             let statements = &kernels[0].block.stmts;
-            let (guard_index, guard) = statements.iter().enumerate().find_map(|(index, statement)| {
-                match statement {
+            let (guard_index, guard) = statements
+                .iter()
+                .enumerate()
+                .find_map(|(index, statement)| match statement {
                     syn::Stmt::Expr(syn::Expr::If(branch), _)
-                        if is_zero_check(&branch.cond, "ldc") => Some((index, branch)),
+                        if is_zero_check(&branch.cond, "ldc") =>
+                    {
+                        Some((index, branch))
+                    }
                     _ => None,
-                }
-            }).expect("explicit original stride zero guard");
-            let syn::Stmt::Expr(syn::Expr::If(empty), _) = &statements[guard_index - 1]
-                else { panic!("empty output exits before stride zero guard") };
-            let syn::Expr::Binary(condition) = empty.cond.as_ref() else { panic!("empty shape condition") };
+                })
+                .expect("explicit original stride zero guard");
+            let syn::Stmt::Expr(syn::Expr::If(empty), _) = &statements[guard_index - 1] else {
+                panic!("empty output exits before stride zero guard")
+            };
+            let syn::Expr::Binary(condition) = empty.cond.as_ref() else {
+                panic!("empty shape condition")
+            };
             assert!(matches!(condition.op, syn::BinOp::Or(_)));
             assert!(is_zero_check(&condition.left, "m") && is_zero_check(&condition.right, "n"));
             assert!(guard.else_branch.is_none() && empty.else_branch.is_none());
             assert_eq!(empty.then_branch.stmts.len(), 1);
             let syn::Stmt::Expr(syn::Expr::Return(returned), Some(_)) = &empty.then_branch.stmts[0]
-                else { panic!("empty shape return") };
-            let syn::Expr::Call(ok) = returned.expr.as_deref().unwrap() else { panic!("empty success") };
+            else {
+                panic!("empty shape return")
+            };
+            let syn::Expr::Call(ok) = returned.expr.as_deref().unwrap() else {
+                panic!("empty success")
+            };
             assert!(matches!(ok.func.as_ref(), syn::Expr::Path(path) if path.path.is_ident("Ok")));
             assert_eq!(ok.args.len(), 1);
             assert!(matches!(&ok.args[0], syn::Expr::Tuple(tuple) if tuple.elems.is_empty()));
             assert_eq!(guard.then_branch.stmts.len(), 1);
             let syn::Stmt::Expr(syn::Expr::Return(returned), Some(_)) = &guard.then_branch.stmts[0]
-                else { panic!("zero stride refusal") };
-            let syn::Expr::Call(err) = returned.expr.as_deref().unwrap() else { panic!("stride error") };
-            assert!(matches!(err.func.as_ref(), syn::Expr::Path(path) if path.path.is_ident("Err")));
+            else {
+                panic!("zero stride refusal")
+            };
+            let syn::Expr::Call(err) = returned.expr.as_deref().unwrap() else {
+                panic!("stride error")
+            };
+            assert!(
+                matches!(err.func.as_ref(), syn::Expr::Path(path) if path.path.is_ident("Err"))
+            );
             assert_eq!(err.args.len(), 1);
-            let syn::Expr::Path(code) = &err.args[0] else { panic!("stride error code") };
-            assert_eq!(code.path.segments.iter().map(|s| s.ident.to_string())
-                .collect::<Vec<_>>().join("::"), "KernelError::InvalidArgument");
+            let syn::Expr::Path(code) = &err.args[0] else {
+                panic!("stride error code")
+            };
+            assert_eq!(
+                code.path
+                    .segments
+                    .iter()
+                    .map(|s| s.ident.to_string())
+                    .collect::<Vec<_>>()
+                    .join("::"),
+                "KernelError::InvalidArgument"
+            );
             for name in ["row", "column"] {
                 let index = statements.iter().position(|statement| matches!(statement,
                     syn::Stmt::Local(local)
                         if matches!(&local.pat, syn::Pat::Ident(binding) if binding.ident == name)
                 )).unwrap();
-                assert!(guard_index < index, "stride guard precedes both division and remainder");
+                assert!(
+                    guard_index < index,
+                    "stride guard precedes both division and remainder"
+                );
             }
             assert_eq!(facts.indexing_count, 0);
             assert!(facts.calls.iter().any(|call| call == "thread::index_1d"));
@@ -477,8 +542,7 @@ fn bf16_fractional_m16n16k16_has_independent_f32_outputs_and_canaries() {
             let b = (128 + 2 * column) as i32;
             // sum((a+d)*(b-d),d=0..15)/128^2; sum(d)=120,sum(d*d)=1240.
             // All intermediates and the final binary32 result are exact here.
-            expected[row * 16 + column] = (16 * a * b + 120 * (b - a) - 1240) as f32
-                / 16384.0;
+            expected[row * 16 + column] = (16 * a * b + 120 * (b - a) - 1240) as f32 / 16384.0;
         }
     }
     let actual = evaluate_reference_v1(&lhs, &rhs, &initial, problem).unwrap();
