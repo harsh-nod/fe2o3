@@ -13,7 +13,7 @@ fn accessed_extent(rows: u32, columns: u32, stride: u32) -> u64 {
     if rows == 0 || columns == 0 {
         return 0;
     }
-    u64::from(rows - 1) * u64::from(stride) + u64::from(columns)
+    ((rows - 1) as u64) * (stride as u64) + (columns as u64)
 }
 
 /// Computes `C = alpha * A * B + beta * C` with one invocation per physical C slot.
