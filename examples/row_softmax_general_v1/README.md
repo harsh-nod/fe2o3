@@ -1,13 +1,18 @@
 # row_softmax_general_v1
 
-The original F32 SIMT source and `run-gfx942.sh` remain available. GPU
-qualification for gfx942 is pending. The gfx950 adapter selects the device
-CPU, Wave64/XNACK contract, source providers, and ROCm device-library ISA
-selector together. It is a compile-only adapter; it does not grant artifact,
-proof, launch, or hardware qualification authority. Existing host dependencies
-and the host program's runtime limitations are retained.
+This existing F32 tutorial has ordinary Rust SIMT and checked 1x64 output
+memory-tile paths. The local gfx950 adapter selects the device CPU, Wave64,
+XNACK-off source providers and reviewed ROCm ISA950 libraries together.
+The original gfx942 source/providers and shared extraction runner remain.
+Neither target is GPU-qualified until the full numerical command actually
+passes on physical hardware.
 
-Use nightly-2026-04-03, a prebuilt production extractor, and ROCm 7.2.4:
+## Build and numerical qualification
+
+Use nightly-2026-04-03, a prebuilt production extractor, and ROCm 7.2.4.
+The gfx950 adapter checks the existing reviewed 7.2.4 OCML/tool closure.
+The original gfx942 common runner needs the extractor backend directory in
+`LD_LIBRARY_PATH` when it is outside the root target.
 
 ```bash
 export FE2O3_RUSTC_EXTRACTOR=/path/to/fe2o3-rustc-extract
@@ -17,38 +22,59 @@ FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/row_softmax_general_v1/run-gfx950.sh 
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/row_softmax_general_v1/run-gfx950.sh tile
 ```
 
-The original gfx942 common runner needs the prebuilt extractor's backend
-library directory in `LD_LIBRARY_PATH` when it is outside the root target.
-The gfx950 adapter adds that directory itself. The reviewed 7.2.4 OCML/tool
-closure is checked before compilation; `FE2O3_GFX950_OCML_MANIFEST` can select
-another existing reviewed closure matching the installed ROCm. All gfx950
-attempts retain LLVM, crate binding, HSACO, notes, disassembly and hashes.
+With the appropriate physical GPU lease and visibility, the full commands are:
 
-`structured-tile` selects checked 1x64 F32 output memory tiles. These paths use
-ordinary Rust arithmetic and capability-checked stores. They do not introduce
-reduced-precision types or matrix instructions. `gfx950-target` selects the
-gfx950 source providers where needed. The default features preserve gfx942.
+```bash
+FE2O3_EXAMPLE_COMPILE_ONLY=0 bash examples/row_softmax_general_v1/run-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=0 bash examples/row_softmax_general_v1/run-gfx950.sh tile
+FE2O3_EXAMPLE_COMPILE_ONLY=0 bash examples/row_softmax_general_v1/run-gfx942.sh
+```
 
-The host `target` module checks gfx950 agent-name matching and launch extents.
-These checks do not discover a device or launch a kernel. CPU oracle tests
-cover nonquarter values, complete dynamic boundary cases, and input immutability;
-GPU comparison and device allocation canaries remain pending physical runs.
-The existing host program is not a GPU execution adapter.
+These commands compile the real kernel, inspect its target, Wave64, workgroup,
+symbol and explicit ABI metadata, then run the real HIP kernel and compare
+complete device allocations against independent CPU oracles. Compile-only
+success grants no GPU numerical or proof qualification. gfx950 attempts retain
+LLVM, source pins, crate binding, HSACO, notes, ISA and hashes.
 
-Run host tests through the installed production CLI with nightly-2026-04-03
+The explicit `qualification-legacy-hip` example feature opts into the same
+`fe2o3-core/qualification-unsafe-launch` numerical route used by the existing
+general BF16/Flash examples. It uses typed buffers, checked interior views,
+streams and owned `KernelParams`, with the documented unsafe module/launch
+boundary for the runner's trusted external HSACO. It creates no Worker V3
+publication, protected execution, proof/refinement receipt or artifact-currentness
+authority. The original `fe2o3-host` dependency and default production boundary
+remain. No verifier, proof, or receipt requirement is disabled or synthesized.
+
+All input/output allocations have leading and trailing bit canaries. Every
+input bit is checked after completion; every logical output and every guard
+or padding element is checked. Non-finite logical results reject. Empty
+outputs skip dispatch and are reported separately. Ambiguous stream completion
+aborts the qualification process before allocation/module destruction.
+
+`structured-tile` selects genuine checked F32 output memory tiles; it adds no
+matrix instructions or reduced-precision types. `gfx950-target` selects the
+gfx950 source providers. The host target/launch checks reject other processors,
+XNACK-on observations, non-Wave64 devices, and invalid/overflowed grids.
+
+Run host tests through the installed production CLI, with nightly-2026-04-03
 first on PATH and CARGO set to that toolchain's cargo:
 
 ```bash
 cd examples/row_softmax_general_v1
 cargo fe2o3 test --locked --offline --all-targets -j2 -- --test-threads=1
-cargo fe2o3 test --locked --offline --all-targets -j2 --features gfx950-target,structured-tile -- --test-threads=1
+cargo fe2o3 test --locked --offline --all-targets -j2 --features gfx950-target,qualification-legacy-hip -- --test-threads=1
+cargo fe2o3 test --locked --offline --all-targets -j2 --features gfx950-target,structured-tile,qualification-legacy-hip -- --test-threads=1
 ```
 
+The qualification fixture/validator tests are CPU-only and never initialize a
+GPU. They establish neither execution nor protected qualification.
+
 SIMT launches one Wave64 per row. Tile mode launches one Wave64 per 64-column
-output tile and repeats the complete max and sum reductions for that tile.
-Both preserve dynamic input/output strides and widths 1 through 4096.
-Use `target::gfx950_workgroups(rows, columns, tiled)` to check the rounded
-work-item count before any future launch. Tile mode requires more waves for
-wide rows; no performance claim is made. The oracle tests retain output row
-padding and trailing canaries and independently compare every logical output
-against F64 exponentials. Those are CPU reference checks, not GPU evidence.
+output tile, repeats the complete row max/sum reductions for that tile and
+clips the final column tile. Dynamic widths 1 through 4096 and independent
+input/output row strides remain supported. Tile mode's checked grid is
+`rows * ceil(columns/64)` waves, rather than SIMT's `rows` waves.
+The 48-byte explicit ABI is two `(pointer, usize length)` pairs followed by
+four `u32` dimensions/strides. The physical numerical matrix includes 28 cases:
+zero rows, multiple rows, nonquarter values, full widths, tails, strided padding
+and large logits requiring max subtraction. Every row must normalize.

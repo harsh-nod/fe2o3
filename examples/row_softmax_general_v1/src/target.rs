@@ -6,8 +6,12 @@ pub const GFX950_TARGET: &str = "gfx950:xnack-";
 /// Recognizes a gfx950 agent name with XNACK disabled or unspecified.
 /// Unknown, repeated, empty, or contradictory features are rejected.
 pub fn gfx950_agent_matches(name: &str) -> bool {
+    agent_matches("gfx950", name)
+}
+
+fn agent_matches(processor: &str, name: &str) -> bool {
     let mut parts = name.split(':');
-    if parts.next() != Some("gfx950") {
+    if parts.next() != Some(processor) {
         return false;
     }
     let mut xnack = false;
@@ -86,5 +90,36 @@ mod launch_tests {
             assert_eq!(gfx950_workgroups(u32::MAX, 1, tiled), None);
         }
         assert_eq!(gfx950_workgroups(u32::MAX / 64, 4096, true), None);
+    }
+}
+
+/// Matches a qualification device observation to the compiled source target.
+/// This does not authenticate the code object or authorize a production launch.
+pub fn qualification_target_matches(requested: &str, observed: &str, wave: u32) -> bool {
+    matches!(requested, "gfx942" | "gfx950") && wave == 64 && agent_matches(requested, observed)
+}
+
+#[cfg(test)]
+mod qualification_target_tests {
+    use super::*;
+    #[test]
+    fn observed_target_and_wave_must_match_compiled_target() {
+        for target in ["gfx942", "gfx950"] {
+            assert!(qualification_target_matches(target, target, 64));
+            assert!(qualification_target_matches(
+                target,
+                &format!("{target}:sramecc+:xnack-"),
+                64
+            ));
+            assert!(!qualification_target_matches(target, target, 32));
+            assert!(!qualification_target_matches(
+                target,
+                &format!("{target}:xnack+"),
+                64
+            ));
+        }
+        assert!(!qualification_target_matches("gfx942", "gfx950", 64));
+        assert!(!qualification_target_matches("gfx950", "gfx942", 64));
+        assert!(!qualification_target_matches("gfx1100", "gfx1100", 64));
     }
 }

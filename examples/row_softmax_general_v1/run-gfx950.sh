@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Compile-only target adapter for this existing Rust tutorial. No launch authority.
+# Build and explicitly opt into legacy-HIP numerical qualification.
+# This path grants no production Worker V3/protected execution authority.
 if [[ $# -gt 1 ]]; then printf 'usage: %s [simt|tile]\n' "$0" >&2; exit 2; fi
 MODE=${1:-simt}
-case "$MODE" in simt) FEATURES=gfx950-target ;; tile) FEATURES=gfx950-target,structured-tile ;; *) printf 'unsupported mode: %s\n' "$MODE" >&2; exit 2 ;; esac
-if [[ ${FE2O3_EXAMPLE_COMPILE_ONLY:-1} != 1 ]]; then
-    printf 'gfx950 hardware execution is pending; FE2O3_EXAMPLE_COMPILE_ONLY must be 1\n' >&2
-    exit 2
+case "$MODE" in simt) FEATURES=gfx950-target,qualification-legacy-hip ;; tile) FEATURES=gfx950-target,structured-tile,qualification-legacy-hip ;; *) printf 'unsupported mode: %s\n' "$MODE" >&2; exit 2 ;; esac
+COMPILE_ONLY=${FE2O3_EXAMPLE_COMPILE_ONLY:-0}
+if [[ $COMPILE_ONLY != 0 && $COMPILE_ONLY != 1 ]]; then
+    printf 'FE2O3_EXAMPLE_COMPILE_ONLY must be 0 or 1\n' >&2; exit 2
 fi
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
@@ -67,6 +68,24 @@ rg -q '"target-features"="-wavefrontsize32,\+wavefrontsize64,-xnack"' "$LLVM_IR"
 rg -q 'EF_AMDGPU_MACH_AMDGCN_GFX950' "$ATTEMPT/$STEM.notes"
 rg -q 'EF_AMDGPU_FEATURE_XNACK_OFF_V4' "$ATTEMPT/$STEM.notes"
 rg -q "amdhsa.target:.*amdgcn-amd-amdhsa--gfx950:xnack-" "$ATTEMPT/$STEM.notes"
+rg -q '^[[:space:]]*\.kernarg_segment_size:[[:space:]]+48$' "$ATTEMPT/$STEM.notes"
+rg -q '^[[:space:]]*\.wavefront_size:[[:space:]]+64$' "$ATTEMPT/$STEM.notes"
+rg -q '^[[:space:]]*\.max_flat_workgroup_size:[[:space:]]+64$' "$ATTEMPT/$STEM.notes"
+rg -q "^[[:space:]]*\.name:[[:space:]]+$STEM$" "$ATTEMPT/$STEM.notes"
 "$ROCM_PATH/llvm/bin/llvm-objdump" --disassemble --mcpu=gfx950 "$HSACO" > "$ATTEMPT/$STEM.isa"
 sha256sum "$LLVM_IR" "$HSACO" "$ATTEMPT/$STEM.notes" "$ATTEMPT/$STEM.isa" "$BINDING_PATH" > "$ATTEMPT/artifact-sha256.txt"
-printf 'COMPILE PASS: %s %s reached gfx950:xnack- HSACO; hardware execution skipped\nHSACO: %s\n' "$STEM" "$MODE" "$HSACO"
+if [[ $COMPILE_ONLY == 1 ]]; then
+    printf 'COMPILE PASS: %s %s reached gfx950:xnack- HSACO; hardware execution skipped\nHSACO: %s\n' "$STEM" "$MODE" "$HSACO"
+    exit 0
+fi
+(
+    cd -- "$SCRIPT_DIR"
+    env -u FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2 \
+        "FE2O3_ROW_SOFTMAX_HSACO=$HSACO" "FE2O3_CRATE_BINDING_ID_V1=$BINDING" \
+        "CARGO_TARGET_DIR=${FE2O3_ROOT_TARGET_DIR:-$REPO_ROOT/target}" \
+        CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_DEV_OPT_LEVEL=0 \
+        CARGO_PROFILE_DEV_DEBUG_ASSERTIONS=true CARGO_PROFILE_DEV_OVERFLOW_CHECKS=true \
+        rustup run "$TOOLCHAIN" cargo run --locked --offline \
+            --no-default-features --features "$FEATURES" --bin fe2o3-row-softmax-general-v1
+)
+printf 'HSACO: %s\n' "$HSACO"
