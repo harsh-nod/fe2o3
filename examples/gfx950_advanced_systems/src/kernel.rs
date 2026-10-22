@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Stable top-2 routing, weights, expert counts, and compact dispatch metadata.
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-route"))]
+#[cfg(all(any(not(target_arch = "amdgpu"), feature = "kernel-moe-route"), not(feature = "kernel-moe-route-tile")))]
 #[kernel(
     typed,
     launch(required = [256, 1, 1], max = [256, 1, 1], max_grid = [4, 1, 1]),
@@ -313,7 +313,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
 }
 
 /// Computes a routed expert partition and optional shared-expert contribution.
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-moe-expert-rank"))]
+#[cfg(all(any(not(target_arch = "amdgpu"), feature = "kernel-moe-expert-rank"), not(feature = "kernel-moe-expert-rank-simt")))]
 #[cfg_attr(
     not(feature = "ablation-expert-serial"),
     kernel(
@@ -649,7 +649,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
 }
 
 /// Adds two expert-rank partials in fixed rank order.
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-combine-expert-ranks"))]
+#[cfg(all(any(not(target_arch = "amdgpu"), feature = "kernel-combine-expert-ranks"), not(feature = "kernel-combine-expert-ranks-tile")))]
 #[cfg_attr(
     not(feature = "ablation-combine-transposed"),
     kernel(

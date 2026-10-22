@@ -124,6 +124,15 @@ compile_error!("ablation-stage-tile4 requires kernel-stage-gradient-shard");
 compile_error!("ablation-muon-broadcast16 requires kernel-muon-update");
 
 mod dimensions;
+#[cfg(feature = "kernel-moe-expert-rank-simt")]
+#[macro_use]
+mod moe_scalar_formats;
+#[cfg(feature = "kernel-moe-expert-rank-simt")]
+mod kernel_simt_moe_expert_rank;
+#[cfg(feature = "kernel-moe-route-tile")]
+mod kernel_tile_moe_route;
+#[cfg(feature = "kernel-combine-expert-ranks-tile")]
+mod kernel_tile_combine_expert_ranks;
 pub mod kernel;
 pub use dimensions::*;
 #[cfg(not(target_arch = "amdgpu"))]
