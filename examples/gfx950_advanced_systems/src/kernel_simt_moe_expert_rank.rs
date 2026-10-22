@@ -27,9 +27,9 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     let routes_base = batch * TOKENS * TOP_K;
     let math = DeviceMath::current();
     let Some(block) = index.checked_block::<64,4>() else { return; };
-    macro_rules! component {
-        ($component:literal) => {{
-            let element = lane + $component * 64;
+    // Four explicit components keep every loop visible to source control-flow checks.
+    {
+            let element = lane + 0 * 64;
             let token = element / OUTPUT;
             let column = element & (OUTPUT - 1);
             let mut first = 0.0_f32;
@@ -37,10 +37,73 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             let mut shared = 0.0_f32;
             let mut depth = 0_usize;
             while depth < HIDDEN {
-                let a = moe_decode_fp4!(activations[activation_base + token*HIDDEN + depth]);
-                let w0 = moe_decode_fp8!(expert_weights[weights_base + ((first_expert as usize)*HIDDEN + depth)*OUTPUT + column]);
-                let w1 = moe_decode_fp8!(expert_weights[weights_base + ((second_expert as usize)*HIDDEN + depth)*OUTPUT + column]);
-                let ws = moe_decode_fp8!(expert_weights[weights_base + ((ALL_EXPERTS-1)*HIDDEN + depth)*OUTPUT + column]);
+                let a = {
+                    let bits = activations[activation_base + token*HIDDEN + depth];
+                    let exponent = (bits >> 1_u8) & 3;
+                    let mantissa = (bits & 1) as f32;
+                    let magnitude = if exponent == 0 { mantissa * 0.5 }
+                    else if exponent == 1 { 1.0 + mantissa * 0.5 }
+                    else if exponent == 2 { 2.0 + mantissa }
+                    else { 4.0 + 2.0 * mantissa };
+                    if bits & 8 == 0 { magnitude } else { -magnitude }
+                };
+                let w0 = {
+                    let bits = expert_weights[weights_base + ((first_expert as usize)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                let w1 = {
+                    let bits = expert_weights[weights_base + ((second_expert as usize)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                let ws = {
+                    let bits = expert_weights[weights_base + ((ALL_EXPERTS-1)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
                 first += a * w0;
                 second += a * w1;
                 shared += a * ws;
@@ -57,11 +120,288 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             if selected1 == first_expert { result += gate1 * (first / (1.0+math.exp_f32(-first))); }
             else if selected1 == second_expert { result += gate1 * (second / (1.0+math.exp_f32(-second))); }
             if include_shared_expert != 0 { result += 0.25 * (shared / (1.0+math.exp_f32(-shared))); }
-            if let Some(slot) = output.get_block_mut(&block,$component) { *slot = result; }
-        }};
+            if let Some(slot) = output.get_block_mut(&block,0) { *slot = result; }
     }
-    component!(0);
-    component!(1);
-    component!(2);
-    component!(3);
+    {
+            let element = lane + 1 * 64;
+            let token = element / OUTPUT;
+            let column = element & (OUTPUT - 1);
+            let mut first = 0.0_f32;
+            let mut second = 0.0_f32;
+            let mut shared = 0.0_f32;
+            let mut depth = 0_usize;
+            while depth < HIDDEN {
+                let a = {
+                    let bits = activations[activation_base + token*HIDDEN + depth];
+                    let exponent = (bits >> 1_u8) & 3;
+                    let mantissa = (bits & 1) as f32;
+                    let magnitude = if exponent == 0 { mantissa * 0.5 }
+                    else if exponent == 1 { 1.0 + mantissa * 0.5 }
+                    else if exponent == 2 { 2.0 + mantissa }
+                    else { 4.0 + 2.0 * mantissa };
+                    if bits & 8 == 0 { magnitude } else { -magnitude }
+                };
+                let w0 = {
+                    let bits = expert_weights[weights_base + ((first_expert as usize)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                let w1 = {
+                    let bits = expert_weights[weights_base + ((second_expert as usize)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                let ws = {
+                    let bits = expert_weights[weights_base + ((ALL_EXPERTS-1)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                first += a * w0;
+                second += a * w1;
+                shared += a * ws;
+                depth += 1;
+            }
+            let route = routes_base + token * TOP_K;
+            let selected0 = top_experts[route];
+            let selected1 = top_experts[route+1];
+            let gate0 = top_weights[route];
+            let gate1 = top_weights[route+1];
+            let mut result = 0.0_f32;
+            if selected0 == first_expert { result += gate0 * (first / (1.0+math.exp_f32(-first))); }
+            else if selected0 == second_expert { result += gate0 * (second / (1.0+math.exp_f32(-second))); }
+            if selected1 == first_expert { result += gate1 * (first / (1.0+math.exp_f32(-first))); }
+            else if selected1 == second_expert { result += gate1 * (second / (1.0+math.exp_f32(-second))); }
+            if include_shared_expert != 0 { result += 0.25 * (shared / (1.0+math.exp_f32(-shared))); }
+            if let Some(slot) = output.get_block_mut(&block,1) { *slot = result; }
+    }
+    {
+            let element = lane + 2 * 64;
+            let token = element / OUTPUT;
+            let column = element & (OUTPUT - 1);
+            let mut first = 0.0_f32;
+            let mut second = 0.0_f32;
+            let mut shared = 0.0_f32;
+            let mut depth = 0_usize;
+            while depth < HIDDEN {
+                let a = {
+                    let bits = activations[activation_base + token*HIDDEN + depth];
+                    let exponent = (bits >> 1_u8) & 3;
+                    let mantissa = (bits & 1) as f32;
+                    let magnitude = if exponent == 0 { mantissa * 0.5 }
+                    else if exponent == 1 { 1.0 + mantissa * 0.5 }
+                    else if exponent == 2 { 2.0 + mantissa }
+                    else { 4.0 + 2.0 * mantissa };
+                    if bits & 8 == 0 { magnitude } else { -magnitude }
+                };
+                let w0 = {
+                    let bits = expert_weights[weights_base + ((first_expert as usize)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                let w1 = {
+                    let bits = expert_weights[weights_base + ((second_expert as usize)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                let ws = {
+                    let bits = expert_weights[weights_base + ((ALL_EXPERTS-1)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                first += a * w0;
+                second += a * w1;
+                shared += a * ws;
+                depth += 1;
+            }
+            let route = routes_base + token * TOP_K;
+            let selected0 = top_experts[route];
+            let selected1 = top_experts[route+1];
+            let gate0 = top_weights[route];
+            let gate1 = top_weights[route+1];
+            let mut result = 0.0_f32;
+            if selected0 == first_expert { result += gate0 * (first / (1.0+math.exp_f32(-first))); }
+            else if selected0 == second_expert { result += gate0 * (second / (1.0+math.exp_f32(-second))); }
+            if selected1 == first_expert { result += gate1 * (first / (1.0+math.exp_f32(-first))); }
+            else if selected1 == second_expert { result += gate1 * (second / (1.0+math.exp_f32(-second))); }
+            if include_shared_expert != 0 { result += 0.25 * (shared / (1.0+math.exp_f32(-shared))); }
+            if let Some(slot) = output.get_block_mut(&block,2) { *slot = result; }
+    }
+    {
+            let element = lane + 3 * 64;
+            let token = element / OUTPUT;
+            let column = element & (OUTPUT - 1);
+            let mut first = 0.0_f32;
+            let mut second = 0.0_f32;
+            let mut shared = 0.0_f32;
+            let mut depth = 0_usize;
+            while depth < HIDDEN {
+                let a = {
+                    let bits = activations[activation_base + token*HIDDEN + depth];
+                    let exponent = (bits >> 1_u8) & 3;
+                    let mantissa = (bits & 1) as f32;
+                    let magnitude = if exponent == 0 { mantissa * 0.5 }
+                    else if exponent == 1 { 1.0 + mantissa * 0.5 }
+                    else if exponent == 2 { 2.0 + mantissa }
+                    else { 4.0 + 2.0 * mantissa };
+                    if bits & 8 == 0 { magnitude } else { -magnitude }
+                };
+                let w0 = {
+                    let bits = expert_weights[weights_base + ((first_expert as usize)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                let w1 = {
+                    let bits = expert_weights[weights_base + ((second_expert as usize)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                let ws = {
+                    let bits = expert_weights[weights_base + ((ALL_EXPERTS-1)*HIDDEN + depth)*OUTPUT + column];
+                    let exponent = (bits >> 3_u8) & 15;
+                    let mantissa = bits & 7;
+                    let magnitude = if exponent == 15 && mantissa == 7 {
+                    let nan_source = (mantissa ^ 7_u8) as f32;
+                    nan_source / nan_source
+                    } else if exponent == 0 { mantissa as f32 / 512.0 }
+                    else {
+                    let exponent0 = (exponent & 1) as f32;
+                    let exponent1 = ((exponent >> 1_u8) & 1) as f32;
+                    let exponent2 = ((exponent >> 2_u8) & 1) as f32;
+                    let exponent3 = ((exponent >> 3_u8) & 1) as f32;
+                    let scale = (1.0 + exponent0) * (1.0 + 3.0 * exponent1)
+                    * (1.0 + 15.0 * exponent2) * (1.0 + 255.0 * exponent3) / 128.0;
+                    (1.0 + mantissa as f32 / 8.0) * scale
+                    };
+                    if bits & 128 == 0 { magnitude } else { -magnitude }
+                };
+                first += a * w0;
+                second += a * w1;
+                shared += a * ws;
+                depth += 1;
+            }
+            let route = routes_base + token * TOP_K;
+            let selected0 = top_experts[route];
+            let selected1 = top_experts[route+1];
+            let gate0 = top_weights[route];
+            let gate1 = top_weights[route+1];
+            let mut result = 0.0_f32;
+            if selected0 == first_expert { result += gate0 * (first / (1.0+math.exp_f32(-first))); }
+            else if selected0 == second_expert { result += gate0 * (second / (1.0+math.exp_f32(-second))); }
+            if selected1 == first_expert { result += gate1 * (first / (1.0+math.exp_f32(-first))); }
+            else if selected1 == second_expert { result += gate1 * (second / (1.0+math.exp_f32(-second))); }
+            if include_shared_expert != 0 { result += 0.25 * (shared / (1.0+math.exp_f32(-shared))); }
+            if let Some(slot) = output.get_block_mut(&block,3) { *slot = result; }
+    }
 }
