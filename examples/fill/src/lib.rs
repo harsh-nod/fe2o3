@@ -10,8 +10,6 @@ include!("reference.rs");
 
 #[cfg(feature = "structured-tile")]
 mod tiled;
-#[cfg(feature = "structured-tile")]
-pub use tiled::fill;
 
 #[cfg(not(feature = "structured-tile"))]
 #[cfg_attr(
