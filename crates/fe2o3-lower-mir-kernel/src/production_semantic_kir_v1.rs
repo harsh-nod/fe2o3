@@ -7737,16 +7737,18 @@ fn validate_effect_control_flow_v1(
         u32,
         (u32, u32),
     )],
+    total_fallback_reads: &BTreeSet<SemanticAccessSiteV1>,
     budget: &mut dyn CorrelationChargeV18,
 ) -> Result<(), ProductionMirPlironTranslationErrorV1> {
     let mut kir_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
     let mut ranked_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
+    let mut kir_optional = BTreeSet::new();
     let mut seen_ranked_effects = BTreeMap::<(u32, u32), SemanticAccessSiteV1>::new();
-    for (site, kir, operation_access_ordinal, ranked) in locations {
+    for (site, kir, operation_access_ordinal, ranked_location) in locations {
         budget
             .charge()
             .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-        if let Some(first) = seen_ranked_effects.get(ranked) {
+        if let Some(first) = seen_ranked_effects.get(ranked_location) {
             if (first.block, first.statement) != (site.block, site.statement) {
                 return Err(ProductionMirPlironTranslationErrorV1::ControlFlowMismatch {
                     first_semantic_block: first.block,
@@ -7757,7 +7759,37 @@ fn validate_effect_control_flow_v1(
             }
             continue;
         }
-        seen_ranked_effects.insert(*ranked, *site);
+        seen_ranked_effects.insert(*ranked_location, *site);
+        let kir_order = (u64::try_from(kir.operation_index)
+            .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?
+            << 32)
+            | u64::from(*operation_access_ordinal);
+        if total_fallback_reads.contains(site) {
+            for _ in &body.blocks {
+                budget
+                    .charge()
+                    .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
+            }
+            let operation = body
+                .blocks
+                .iter()
+                .find(|block| block.id == kir.block)
+                .and_then(|block| block.operations.get(kir.operation_index))
+                .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
+            if matches!(operation.kind, OperationKind::GuardedLoad { .. }) {
+                if !ranked_total_fallback_cfg_v1(ranked, *ranked_location, budget)
+                    .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?
+                {
+                    return Err(ProductionMirPlironTranslationErrorV1::ControlFlowMismatch {
+                        first_semantic_block: site.block,
+                        first_semantic_statement: site.statement,
+                        second_semantic_block: site.block,
+                        second_semantic_statement: site.statement,
+                    });
+                }
+                kir_optional.insert((kir.block.0, kir_order));
+            }
+        }
         kir_events.entry(kir.block.0).or_default().push((
             (u64::try_from(kir.operation_index)
                 .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?
@@ -7766,9 +7798,9 @@ fn validate_effect_control_flow_v1(
             *site,
         ));
         ranked_events
-            .entry(ranked.0)
+            .entry(ranked_location.0)
             .or_default()
-            .push((u64::from(ranked.1) << 32, *site));
+            .push((u64::from(ranked_location.1) << 32, *site));
     }
     for events in kir_events.values_mut().chain(ranked_events.values_mut()) {
         events.sort_unstable();
@@ -7804,6 +7836,12 @@ fn validate_effect_control_flow_v1(
         .first()
         .map(|block| block.id.0)
         .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
+    let (kir_events, kir_successors) = if kir_optional.is_empty() {
+        (kir_events, kir_successors)
+    } else {
+        expand_optional_effects_v1(&kir_events, &kir_successors, &kir_optional, budget)
+            .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?
+    };
     let kir_flow = effect_flow_signature_v1(kir_entry, &kir_events, &kir_successors, budget)
         .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
     let ranked_flow = effect_flow_signature_v1(0, &ranked_events, &ranked_successors, budget)
@@ -7842,6 +7880,211 @@ fn validate_effect_control_flow_v1(
         second_semantic_block: differing.1.block,
         second_semantic_statement: differing.1.statement,
     })
+}
+
+fn ranked_total_fallback_cfg_v1(
+    recipe: &fe2o3_pliron::ProductionRankedKernelV1,
+    location: (u32, u32),
+    budget: &mut dyn CorrelationChargeV18,
+) -> Option<bool> {
+    use fe2o3_pliron::ProductionRankedTerminatorV1 as T;
+    let a = location.0;
+    let Some(g) = a.checked_sub(2) else {
+        return Some(false);
+    };
+    let f = a.checked_add(1)?;
+    let k = a.checked_add(2)?;
+    let Some(access) = recipe.blocks().get(a as usize) else {
+        return Some(false);
+    };
+    let [
+        ProductionRankedOperationV1::Access {
+            kind: dialect_kernel::AccessKindAttr::Read,
+            view: ProductionRankedValueV1::Local(view),
+            indices,
+        },
+    ] = access.operations()
+    else {
+        return Some(false);
+    };
+    let [row, column] = indices.as_slice() else {
+        return Some(false);
+    };
+    if location.1 != 0 {
+        return Some(false);
+    }
+    let mut extents = None;
+    for block in recipe.blocks() {
+        for operation in block.operations() {
+            budget.charge()?;
+            if let ProductionRankedOperationV1::ViewInSpace {
+                result,
+                writable: false,
+                shape,
+                dynamic_extents,
+                memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                ..
+            } = operation
+            {
+                if result == view {
+                    if shape.as_slice() != [0, 0] || dynamic_extents.len() != 2 || extents.is_some()
+                    {
+                        return Some(false);
+                    }
+                    extents = Some(dynamic_extents);
+                }
+            }
+        }
+    }
+    let Some(extents) = extents else {
+        return Some(false);
+    };
+    let count = access.index_argument_count();
+    for b in [g, g + 1, f, k] {
+        budget.charge()?;
+        let Some(block) = recipe.blocks().get(b as usize) else {
+            return Some(false);
+        };
+        if block.index_argument_count() != count {
+            return Some(false);
+        }
+    }
+    if !recipe.blocks()[g as usize + 1].operations().is_empty()
+        || !recipe.blocks()[f as usize].operations().is_empty()
+    {
+        return Some(false);
+    }
+    let identity =
+        |args: &[ProductionRankedValueV1], block, budget: &mut dyn CorrelationChargeV18| {
+            if args.len() != count as usize {
+                return Some(false);
+            }
+            for (i, arg) in args.iter().enumerate() {
+                budget.charge()?;
+                if *arg
+                    != (ProductionRankedValueV1::BlockArgument {
+                        block,
+                        argument: u32::try_from(i).ok()?,
+                    })
+                {
+                    return Some(false);
+                }
+            }
+            Some(true)
+        };
+    for (b, lhs, rhs, next) in [
+        (g, *row, extents[0], g + 1),
+        (g + 1, *column, extents[1], a),
+    ] {
+        budget.charge()?;
+        let exact = match recipe.blocks()[b as usize].terminator() {
+            T::IndexLessThan {
+                lhs: l,
+                rhs: r,
+                true_block,
+                false_block,
+            } => count == 0 && *l == lhs && *r == rhs && *true_block == next && *false_block == f,
+            T::IndexLessThanArgs {
+                lhs: l,
+                rhs: r,
+                true_arguments,
+                false_arguments,
+                true_block,
+                false_block,
+            } => {
+                *l == lhs
+                    && *r == rhs
+                    && *true_block == next
+                    && *false_block == f
+                    && identity(true_arguments, b, budget)?
+                    && identity(false_arguments, b, budget)?
+            }
+            _ => false,
+        };
+        if !exact {
+            return Some(false);
+        }
+    }
+    for b in [a, f] {
+        budget.charge()?;
+        let exact = match recipe.blocks()[b as usize].terminator() {
+            T::Branch { target } => count == 0 && *target == k,
+            T::BranchArgs { arguments, target } => *target == k && identity(arguments, b, budget)?,
+            _ => false,
+        };
+        if !exact {
+            return Some(false);
+        }
+    }
+    // An external jump into a guard interior could bypass a comparison or
+    // manufacture different live arguments; only the canonical edges qualify.
+    for (b, block) in recipe.blocks().iter().enumerate() {
+        let (targets, n) = ranked_terminator_successors_v18(block.terminator());
+        for target in &targets[..n] {
+            budget.charge()?;
+            let source = u32::try_from(b).ok()?;
+            if (*target == g + 1 && source != g)
+                || (*target == a && source != g + 1)
+                || (*target == f && source != g && source != g + 1)
+                || (*target == k && source != a && source != f)
+            {
+                return Some(false);
+            }
+        }
+    }
+    Some(true)
+}
+
+// Effect order observes possible memory events, not evaluation of the guard.
+// Split conditional memory into an event edge and a no-memory continuation,
+// just as the ranked CFG materializes a total load_or fallback. Every event
+// remains present and ordinary accesses remain mandatory.
+fn expand_optional_effects_v1(
+    events: &BTreeMap<u32, Vec<(u64, SemanticAccessSiteV1)>>,
+    successors: &BTreeMap<u32, Vec<u32>>,
+    optional: &BTreeSet<(u32, u64)>,
+    budget: &mut dyn CorrelationChargeV18,
+) -> Option<(
+    BTreeMap<u32, Vec<(u64, SemanticAccessSiteV1)>>,
+    BTreeMap<u32, Vec<u32>>,
+)> {
+    let mut next = successors.keys().next_back()?.checked_add(1)?;
+    let mut expanded_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
+    let mut expanded_successors = BTreeMap::new();
+    for (&block, targets) in successors {
+        budget.charge()?;
+        let mut current = block;
+        if let Some(rows) = events.get(&block) {
+            for &(order, site) in rows {
+                budget.charge()?;
+                if optional.contains(&(block, order)) {
+                    let access = next;
+                    let continuation = next.checked_add(1)?;
+                    next = next.checked_add(2)?;
+                    budget.charge()?;
+                    expanded_successors.insert(current, vec![access, continuation]);
+                    expanded_events.insert(access, vec![(order, site)]);
+                    expanded_successors.insert(access, vec![continuation]);
+                    current = continuation;
+                } else {
+                    expanded_events
+                        .entry(current)
+                        .or_default()
+                        .push((order, site));
+                }
+            }
+        }
+        let mut copied = Vec::new();
+        for &target in targets {
+            budget.charge()?;
+            if !successors.contains_key(&target) {
+                return None;
+            }
+            copied.push(target);
+        }
+        expanded_successors.insert(current, copied);
+    }
+    Some((expanded_events, expanded_successors))
 }
 
 fn effect_flow_signature_v1(
@@ -33177,6 +33420,349 @@ mod resource_tests {
                 ..
             })
         ));
+    }
+
+    #[derive(Clone, Copy)]
+    enum FallbackGuardMutationV1 {
+        None,
+        Row,
+        ColumnExtent,
+        SkipGuard,
+        Trap,
+        ForwardedValue,
+        AccessIndex,
+        ExtraRead,
+    }
+
+    fn fallback_guard_recipe_v1(
+        n: u32,
+        mutation: FallbackGuardMutationV1,
+    ) -> ProductionRankedKernelV1 {
+        use FallbackGuardMutationV1 as M;
+        use fe2o3_pliron::ProductionRankedTerminatorV1 as T;
+        let arg = ProductionRankedValueV1::Argument;
+        let view = ProductionRankedValueIdV1::new(0);
+        let constant = ProductionRankedValueIdV1::new(1);
+        let args = |b| {
+            (0..n)
+                .map(|argument| ProductionRankedValueV1::BlockArgument { block: b, argument })
+                .collect::<Vec<_>>()
+        };
+        let branch = |b, target| {
+            if n == 0 {
+                T::Branch { target }
+            } else {
+                T::BranchArgs {
+                    arguments: args(b),
+                    target,
+                }
+            }
+        };
+        let guard = |b, lhs, rhs, next, failure| {
+            if n == 0 {
+                T::IndexLessThan {
+                    lhs,
+                    rhs,
+                    true_block: next,
+                    false_block: failure,
+                }
+            } else {
+                T::IndexLessThanArgs {
+                    lhs,
+                    rhs,
+                    true_arguments: args(b),
+                    false_arguments: if b == 2 && matches!(mutation, M::ForwardedValue) {
+                        vec![ProductionRankedValueV1::Local(constant); n as usize]
+                    } else {
+                        args(b)
+                    },
+                    true_block: next,
+                    false_block: failure,
+                }
+            }
+        };
+        let read = ProductionRankedOperationV1::Access {
+            kind: AccessKindAttr::Read,
+            view: ProductionRankedValueV1::Local(view),
+            indices: vec![
+                arg(if matches!(mutation, M::AccessIndex) {
+                    3
+                } else {
+                    2
+                }),
+                arg(3),
+            ],
+        };
+        ProductionRankedKernelV1::new(
+            "total_fallback_guard",
+            4,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::ViewInSpace {
+                            result: view,
+                            element_width: 32,
+                            writable: false,
+                            shape: vec![0, 0],
+                            dynamic_extents: vec![arg(0), arg(1)],
+                            memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                            allocation_origin: 1,
+                            noalias_class: 1,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: constant,
+                            value: 1,
+                        },
+                    ],
+                    if n == 0 {
+                        T::Branch { target: 1 }
+                    } else {
+                        T::BranchArgs {
+                            arguments: vec![ProductionRankedValueV1::Local(constant); n as usize],
+                            target: 1,
+                        }
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    n,
+                    vec![],
+                    guard(
+                        1,
+                        arg(if matches!(mutation, M::Row) { 3 } else { 2 }),
+                        arg(0),
+                        2,
+                        if matches!(mutation, M::SkipGuard) {
+                            5
+                        } else {
+                            4
+                        },
+                    ),
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    n,
+                    vec![],
+                    guard(
+                        2,
+                        arg(3),
+                        arg(if matches!(mutation, M::ColumnExtent) {
+                            0
+                        } else {
+                            1
+                        }),
+                        3,
+                        4,
+                    ),
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    n,
+                    if matches!(mutation, M::ExtraRead) {
+                        vec![read.clone(), read]
+                    } else {
+                        vec![read]
+                    },
+                    branch(3, 5),
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    n,
+                    vec![],
+                    if matches!(mutation, M::Trap) {
+                        T::Trap
+                    } else {
+                        branch(4, 5)
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(n, vec![], T::Return),
+            ],
+        )
+        .expect("guard mutation remains typed ordinary ranked CFG")
+    }
+
+    #[test]
+    fn guarded_effect_flow_requires_exact_ranked_predicates_and_live_forwarding() {
+        for n in [0, 1, 2] {
+            let recipe = fallback_guard_recipe_v1(n, FallbackGuardMutationV1::None);
+            let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: 100_000 };
+            assert_eq!(
+                ranked_total_fallback_cfg_v1(&recipe, (3, 0), &mut budget),
+                Some(true)
+            );
+        }
+    }
+
+    #[test]
+    fn guarded_effect_flow_rejects_wrong_ranked_guard_bypass_trap_and_payload() {
+        use FallbackGuardMutationV1 as M;
+        for mutation in [
+            M::Row,
+            M::ColumnExtent,
+            M::SkipGuard,
+            M::Trap,
+            M::ForwardedValue,
+            M::AccessIndex,
+            M::ExtraRead,
+        ] {
+            let recipe = fallback_guard_recipe_v1(2, mutation);
+            let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: 100_000 };
+            assert_eq!(
+                ranked_total_fallback_cfg_v1(&recipe, (3, 0), &mut budget),
+                Some(false)
+            );
+        }
+    }
+    fn optional_effect_test_site(block: u32, statement: Option<u32>) -> SemanticAccessSiteV1 {
+        SemanticAccessSiteV1 {
+            block,
+            statement,
+            ordinal: 0,
+        }
+    }
+
+    fn optional_effect_test_flow(
+        events: &[(u32, Vec<(u64, SemanticAccessSiteV1)>)],
+        successors: &[(u32, Vec<u32>)],
+        optional: &[(u32, u64)],
+    ) -> NormalizedEffectFlowV1 {
+        let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: 100_000 };
+        let (events, successors) = expand_optional_effects_v1(
+            &events.iter().cloned().collect(),
+            &successors.iter().cloned().collect(),
+            &optional.iter().copied().collect(),
+            &mut budget,
+        )
+        .unwrap();
+        effect_flow_signature_v1(0, &events, &successors, &mut budget).unwrap()
+    }
+
+    #[test]
+    fn guarded_effect_flow_matches_explicit_total_fallback() {
+        let read = optional_effect_test_site(37, None);
+        let store = optional_effect_test_site(61, Some(1));
+        let actual = optional_effect_test_flow(
+            &[(0, vec![(0, read), (1, store)])],
+            &[(0, vec![])],
+            &[(0, 0)],
+        );
+        // Two guard comparisons share the no-read fallback, then reconverge.
+        let ranked = optional_effect_test_flow(
+            &[(2, vec![(0, read)]), (4, vec![(0, store)])],
+            &[
+                (0, vec![1, 3]),
+                (1, vec![2, 3]),
+                (2, vec![4]),
+                (3, vec![4]),
+                (4, vec![]),
+            ],
+            &[],
+        );
+        assert_eq!(actual, ranked);
+        assert_eq!(actual.entry_effects, BTreeSet::from([read, store]));
+        assert_eq!(actual.next_effects, BTreeSet::from([(read, store)]));
+    }
+
+    #[test]
+    fn guarded_effect_flow_does_not_skip_ordinary_or_trapping_access() {
+        let read = optional_effect_test_site(37, None);
+        let store = optional_effect_test_site(61, Some(1));
+        let conditional = optional_effect_test_flow(
+            &[(0, vec![(0, read), (1, store)])],
+            &[(0, vec![])],
+            &[(0, 0)],
+        );
+        let mandatory =
+            optional_effect_test_flow(&[(0, vec![(0, read), (1, store)])], &[(0, vec![])], &[]);
+        let trap = optional_effect_test_flow(
+            &[(1, vec![(0, read)]), (3, vec![(0, store)])],
+            &[(0, vec![1, 2]), (1, vec![3]), (2, vec![]), (3, vec![])],
+            &[],
+        );
+        assert_ne!(conditional, mandatory);
+        assert_eq!(mandatory, trap);
+    }
+
+    #[test]
+    fn guarded_effect_flow_rejects_missing_reordered_and_foreign_effects() {
+        let read = optional_effect_test_site(37, None);
+        let store = optional_effect_test_site(61, Some(1));
+        let foreign = optional_effect_test_site(61, Some(2));
+        let original = optional_effect_test_flow(
+            &[(0, vec![(0, read), (1, store)])],
+            &[(0, vec![])],
+            &[(0, 0)],
+        );
+        for events in [
+            vec![(0, vec![(1, store)])],
+            vec![(0, vec![(0, store), (1, read)])],
+            vec![(0, vec![(0, read), (1, foreign)])],
+        ] {
+            assert_ne!(
+                original,
+                optional_effect_test_flow(&events, &[(0, vec![])], &[])
+            );
+        }
+    }
+
+    #[test]
+    fn guarded_effect_flow_preserves_loop_fallback_and_order() {
+        let read = optional_effect_test_site(37, None);
+        let store = optional_effect_test_site(61, Some(1));
+        let original = optional_effect_test_flow(
+            &[(1, vec![(0, read), (1, store)])],
+            &[(0, vec![1, 2]), (1, vec![0]), (2, vec![])],
+            &[(1, 0)],
+        );
+        let ranked = optional_effect_test_flow(
+            &[(2, vec![(0, read)]), (4, vec![(0, store)])],
+            &[
+                (0, vec![1, 5]),
+                (1, vec![2, 3]),
+                (2, vec![4]),
+                (3, vec![4]),
+                (4, vec![0]),
+                (5, vec![]),
+            ],
+            &[],
+        );
+        assert_eq!(original, ranked);
+        assert!(original.next_effects.contains(&(store, store)));
+        assert!(original.next_effects.contains(&(store, read)));
+        let mut changed = ranked;
+        changed.next_effects.remove(&(store, store));
+        assert_ne!(original, changed);
+    }
+
+    #[test]
+    fn guarded_effect_flow_handles_adjacent_predicated_accesses() {
+        let first = optional_effect_test_site(1, None);
+        let second = optional_effect_test_site(2, None);
+        let store = optional_effect_test_site(3, Some(0));
+        let flow = optional_effect_test_flow(
+            &[(0, vec![(0, first), (1, second), (2, store)])],
+            &[(0, vec![])],
+            &[(0, 0), (0, 1)],
+        );
+        assert_eq!(flow.entry_effects, BTreeSet::from([first, second, store]));
+        assert_eq!(
+            flow.next_effects,
+            BTreeSet::from([(first, second), (first, store), (second, store)])
+        );
+    }
+
+    #[test]
+    fn guarded_effect_flow_expansion_has_an_exact_finite_work_boundary() {
+        let read = optional_effect_test_site(37, None);
+        let events = BTreeMap::from([(0, vec![(0, read)])]);
+        let successors = BTreeMap::from([(0, vec![])]);
+        let optional = BTreeSet::from([(0, 0)]);
+        let mut full = UnsupportedIndexCorrelationBudgetV1 { remaining: 1000 };
+        expand_optional_effects_v1(&events, &successors, &optional, &mut full).unwrap();
+        let used = 1000 - full.remaining;
+        assert!(used > 0);
+        let mut exact = UnsupportedIndexCorrelationBudgetV1 { remaining: used };
+        assert!(expand_optional_effects_v1(&events, &successors, &optional, &mut exact).is_some());
+        let mut short = UnsupportedIndexCorrelationBudgetV1 {
+            remaining: used - 1,
+        };
+        assert!(expand_optional_effects_v1(&events, &successors, &optional, &mut short).is_none());
     }
 
     #[test]
