@@ -2,7 +2,42 @@
 
 `fill` writes `42.5_f32` to each in-bounds output element reached by a launched
 invocation. Its existing kernel body, `DisjointSlice<f32>` ABI and 64-thread
-workgroup requirement are unchanged.
+workgroup requirement are unchanged for the default SIMT selection.
+
+## Structured Output Tile
+
+The nondefault `structured-tile` feature selects a distinct 8x8 output tile:
+`Tiled2D<Index1D, 64, 8, 8, 1>`. Each lane obtains its checked
+`checked_tiled_2d` witness and writes one checked `get_tiled_2d_mut`
+component. It preserves the same invocation-to-element mapping, exact
+`0x422a0000` result bits and 64-thread workgroup. Partial final rows and
+tiles are clipped by the logical and physical bounds checks.
+
+From the repository root, use the existing source exporter and CPU simulator:
+
+```sh
+bash scripts/quickstart.sh simulate-source \
+  --crate fe2o3_fill --target gfx942 \
+  --request scripts/quickstart/fill-canary-request.json \
+  --expectation scripts/quickstart/fill-canary-expectation.json \
+  -- --package fe2o3-fill --lib --features structured-tile
+```
+
+The opt-in real-source regression exports both selections and compares every
+output byte, initialization bit and both surrounding canaries for lengths
+0, 1, 7, 8, 9, 63, 64, 65, 127, 128 and 129. It uses bounded buffer views
+and complete workgroups, including inactive tail lanes:
+
+```sh
+cargo run --locked -p cargo-fe2o3 --bin cargo-fe2o3 -- \
+  test --locked -p fe2o3-fill --test simulation -- \
+  --ignored --exact source_simulation_covers_empty_tails_and_canaries --nocapture
+```
+
+These are observation-only CPU executions, not GPU qualification or functional
+refinement proofs. `structured-tile` and `reference-proof` cannot be
+combined: the latter remains the separate signed/refinement selection of the
+original SIMT body. The unsupported GPU host executable remains unchanged.
 
 ## Default Learning Workflow
 
