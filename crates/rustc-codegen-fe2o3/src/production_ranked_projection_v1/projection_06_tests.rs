@@ -1275,12 +1275,33 @@
             .is_err()
         );
         for position in [1, 2] {
+            let state = HashMap::from([(
+                0,
+                ProjectedCapabilityValueV1::Known(ProjectedCapabilityOriginV1::ReadView(
+                    strided_read_view(),
+                )),
+            )]);
             let mut arguments = vec![
                 tensor_operand(0),
                 tensor_operand(1),
                 tensor_operand(2),
                 tensor_operand(3),
             ];
+            let direct_call = SemanticDirectCallV1::new_callable(
+                SemanticCallableIdV1::from_index(0),
+                arguments.clone(),
+                None,
+                SemanticUnwindActionV1::Unreachable,
+            )
+            .unwrap();
+            assert_eq!(
+                authenticate_strided_read_v1(&direct_call, &state, SCALAR_TYPE, &[None; 5]),
+                Some(ProjectedReadViewAccessV1 {
+                    view: strided_read_view(),
+                    row: ProjectedReadValueV1::Local(SemanticLocalIdV1::from_index(1)),
+                    column: ProjectedReadValueV1::Local(SemanticLocalIdV1::from_index(2)),
+                })
+            );
             arguments[position] = SemanticOperandV1::Copy(
                 SemanticPlaceV1::new(
                     SemanticLocalIdV1::from_index(position as u32),
