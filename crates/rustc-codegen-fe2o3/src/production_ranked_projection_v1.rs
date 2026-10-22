@@ -251,8 +251,17 @@ struct ProjectedSemanticAccessSiteV1 {
     statement: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GuardedAccessFailureV1 {
+    Trap,
+    // Only authenticated total load_or effects use this control behavior.
+    // The scalar fallback remains in semantic/native value lowering.
+    ReturnFallback,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct GuardedRankedAccessV1 {
+    failure: GuardedAccessFailureV1,
     view: ProductionRankedValueIdV1,
     indices: Vec<ProductionRankedValueV1>,
     checked_success: Option<ProductionRankedValueV1>,
@@ -5780,6 +5789,7 @@ fn project_strided_read_effects_v1(
             next_value,
         )?;
         projected.push(Some(GuardedRankedAccessV1 {
+            failure: GuardedAccessFailureV1::ReturnFallback,
             view,
             indices: vec![row, column],
             checked_success: None,
@@ -8047,6 +8057,7 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
                 }
             };
             let access = GuardedRankedAccessV1 {
+                failure: GuardedAccessFailureV1::Trap,
                 view,
                 indices: vec![index],
                 checked_success: None,
@@ -20234,6 +20245,19 @@ fn build_ranked_cfg_from_prepared_assertions_v1(
                     operations.push(operation);
                 }
                 ProjectedBlockItemV1::Guarded(access) => {
+                    if access.failure == GuardedAccessFailureV1::ReturnFallback
+                        && (access.access != AccessKindAttr::Read
+                            || access.memory_space != MemorySpaceAttr::Global
+                            || access.checked_success.is_some()
+                            || access.indices.len() != 2
+                            || access.comparisons.len() != 2
+                            || access.comparisons[0].0 != access.indices[0]
+                            || access.comparisons[1].0 != access.indices[1])
+                    {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a total read fallback without its exact rank-two read predicates",
+                        ));
+                    }
                     let predicate = GuardPredicateV1::for_access(&access);
                     let access_block = current + predicate.comparisons.len();
                     let failure_block = access_block + 1;
@@ -20247,6 +20271,7 @@ fn build_ranked_cfg_from_prepared_assertions_v1(
                             access_block,
                             failure_block,
                             live.len(),
+                            access.failure,
                         )?;
                     } else {
                         append_predicate_blocks(
@@ -20317,12 +20342,41 @@ fn build_ranked_cfg_from_prepared_assertions_v1(
                         output_extent: access.output_extent,
                         semantic_site: access.semantic_site,
                     });
-                    push_block_at(
-                        &mut blocks,
-                        failure_block,
-                        Vec::new(),
-                        ProductionRankedTerminatorV1::Trap,
-                    )?;
+                    if access.failure == GuardedAccessFailureV1::ReturnFallback {
+                        if live.is_empty() {
+                            push_block_at(
+                                &mut blocks,
+                                failure_block,
+                                Vec::new(),
+                                ProductionRankedTerminatorV1::Branch {
+                                    target: ranked_block_id(continuation)?,
+                                },
+                            )?;
+                        } else {
+                            let block = ranked_block_id(failure_block)?;
+                            push_block_at_with_index_arguments(
+                                &mut blocks,
+                                failure_block,
+                                u32::try_from(live.len()).map_err(|_| {
+                                    ProductionRankedProjectionErrorV1::Unsupported(
+                                        "live induction argument count does not fit u32",
+                                    )
+                                })?,
+                                Vec::new(),
+                                ProductionRankedTerminatorV1::BranchArgs {
+                                    arguments: live_induction_block_arguments(block, live)?,
+                                    target: ranked_block_id(continuation)?,
+                                },
+                            )?;
+                        }
+                    } else {
+                        push_block_at(
+                            &mut blocks,
+                            failure_block,
+                            Vec::new(),
+                            ProductionRankedTerminatorV1::Trap,
+                        )?;
+                    }
                     current = continuation;
                     operations = Vec::new();
                 }
@@ -21187,6 +21241,7 @@ fn append_predicate_blocks_with_index_arguments(
     true_block: usize,
     false_block: usize,
     argument_count: usize,
+    failure: GuardedAccessFailureV1,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     if predicate.comparisons.is_empty() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -21221,7 +21276,11 @@ fn append_predicate_blocks_with_index_arguments(
                 lhs,
                 rhs,
                 true_arguments: arguments.clone(),
-                false_arguments: Vec::new(),
+                false_arguments: if failure == GuardedAccessFailureV1::ReturnFallback {
+                    arguments
+                } else {
+                    Vec::new()
+                },
                 true_block: ranked_block_id(next)?,
                 false_block: ranked_block_id(false_block)?,
             },
@@ -23871,6 +23930,7 @@ fn project_place_access_with_atomic(
         guarded_sites.push(GuardedAccessSiteV1 {
             insertion_operation: operations.len(),
             access: GuardedRankedAccessV1 {
+                failure: GuardedAccessFailureV1::Trap,
                 view: view_id,
                 indices: ranked_indices,
                 checked_success: None,
@@ -40018,6 +40078,7 @@ mod tests {
         projected[2]
             .items
             .push(ProjectedBlockItemV1::Guarded(GuardedRankedAccessV1 {
+                failure: GuardedAccessFailureV1::Trap,
                 view: ProductionRankedValueIdV1::new(0),
                 indices: vec![ProductionRankedValueV1::Argument(0)],
                 checked_success: None,
