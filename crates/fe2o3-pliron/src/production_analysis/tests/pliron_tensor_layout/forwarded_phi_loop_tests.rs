@@ -300,3 +300,130 @@ fn nested_changed_outer_phi_retains_unknown_and_divergent_control() {
     let varying = nested_forwarded_outer_phi_report_v1(ForwardedLoopSelectorV1::Lane, false);
     assert_eq!(varying.status(), KernelCheckStatusV1::Rejected);
 }
+
+fn guarded_forwarded_loop_report_v1(
+    selector: ForwardedLoopSelectorV1,
+    can_trap: bool,
+) -> crate::PlironTensorLayoutReportV1 {
+    let context = &mut setup();
+    let (function, arguments) = function(context, "guarded_forwarded_loop", 3);
+    let entry = function.get_entry_block(context);
+    let (header, induction) = index_block(context, &function, "header");
+    let (body, carried) = index_block(context, &function, "body");
+    let (bypass, bypass_value) = index_block(context, &function, "bypass");
+    let (checked, checked_value) = index_block(context, &function, "checked");
+    let (join, joined) = index_block(context, &function, "join");
+    let trap = block(context, &function, "trap");
+    let exit = block(context, &function, "exit");
+    let execution = layout(context, 0, 64, 64);
+    let zero = IndexConstantOp::new(context, 0);
+    let one = IndexConstantOp::new(context, 1);
+    let cutoff = IndexConstantOp::new(context, 32);
+    let lane = InvocationIndexOp::new(context, 0, 0);
+    let enter = BranchArgsOp::new(context, vec![zero.result(context)], header);
+    let condition = IndexLessThanBranchArgsOp::new(
+        context,
+        induction,
+        arguments[0],
+        vec![induction],
+        vec![],
+        body,
+        exit,
+    );
+    let matrix = tensor(context, 64);
+    let bypass_join = BranchArgsOp::new(context, vec![bypass_value], join);
+    // The guard is subgroup-uniform, but only the selected lanes execute it.
+    // Without a proof that it succeeds, identical carried values do not
+    // establish that every lane reaches the latch (real bb180/161/164 shape).
+    let checked_join = IndexLessThanBranchArgsOp::new(
+        context,
+        arguments[1],
+        arguments[2],
+        vec![checked_value],
+        if can_trap {
+            vec![]
+        } else {
+            vec![checked_value]
+        },
+        join,
+        if can_trap { trap } else { join },
+    );
+    let next = IndexBinaryOp::new(
+        context,
+        IndexBinaryKindAttr::Add,
+        joined,
+        one.result(context),
+    );
+    let repeat = BranchArgsOp::new(context, vec![next.result(context)], header);
+    let abort = TrapOp::new(context);
+    let ret = ReturnOp::new(context);
+    append(context, entry, &execution);
+    append(context, entry, &zero);
+    append(context, entry, &one);
+    append(context, entry, &cutoff);
+    append(context, entry, &lane);
+    append(context, entry, &enter);
+    append(context, header, &condition);
+    append(context, body, &matrix);
+    match selector {
+        ForwardedLoopSelectorV1::Opaque => {
+            let split = AnalysisSplitOp::new_with_control_and_arguments(
+                context,
+                vec![],
+                vec![carried],
+                vec![carried],
+                bypass,
+                checked,
+            );
+            append(context, body, &split);
+        }
+        ForwardedLoopSelectorV1::Lane => {
+            let split = IndexLessThanBranchArgsOp::new(
+                context,
+                lane.result(context),
+                cutoff.result(context),
+                vec![carried],
+                vec![carried],
+                bypass,
+                checked,
+            );
+            append(context, body, &split);
+        }
+    }
+    append(context, bypass, &bypass_join);
+    append(context, checked, &checked_join);
+    append(context, join, &next);
+    append(context, join, &repeat);
+    append(context, trap, &abort);
+    append(context, exit, &ret);
+    verify_operation(function.get_operation(), context).unwrap();
+    run_pliron_tensor_layout_check_v1(context, &function)
+}
+
+#[test]
+fn identical_loop_payload_with_guarded_trap_retains_participation_obligation() {
+    let unknown = guarded_forwarded_loop_report_v1(ForwardedLoopSelectorV1::Opaque, true);
+    assert_eq!(unknown.status(), KernelCheckStatusV1::Incomplete);
+    assert!(unknown.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::ConvergenceAnalysisIncomplete { detail }
+            if detail.contains("unresolved branch block 1")
+    )));
+    let varying = guarded_forwarded_loop_report_v1(ForwardedLoopSelectorV1::Lane, true);
+    assert_eq!(varying.status(), KernelCheckStatusV1::Rejected);
+    assert!(varying.findings().iter().any(|finding| matches!(
+        finding,
+        PlironTensorLayoutFindingV1::DivergentSubgroupControl { controller: 1, .. }
+    )));
+}
+
+#[test]
+fn identical_loop_payload_with_reconverging_uniform_guard_remains_uniform() {
+    for selector in [
+        ForwardedLoopSelectorV1::Opaque,
+        ForwardedLoopSelectorV1::Lane,
+    ] {
+        let report = guarded_forwarded_loop_report_v1(selector, false);
+        assert!(report.is_clean(), "{:?}", report.findings());
+    }
+}
