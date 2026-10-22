@@ -190,7 +190,7 @@ strip = "debuginfo"
 
 # Real-image admission fixtures must stay within the production image bound.
 [profile.test.package.rustc-codegen-fe2o3]
-strip = "debuginfo"
+strip = "symbols"
 
 # Binding-only host tests pin the real executable within the normal image cap.
 [profile.test.package.fe2o3-vecadd]
