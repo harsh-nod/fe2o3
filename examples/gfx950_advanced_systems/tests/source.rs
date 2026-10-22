@@ -85,8 +85,8 @@ fn rust_source_is_primary_and_uses_production_lowering() {
     assert!(compact.contains(
         "dispatch_element1.wrapping_sub((dispatch_expert1asusize).wrapping_mul(DISPATCH_CAPACITY))"
     ));
-    assert!(source.contains("0xc864_3210_u32 >> (((bits & 7) as u32) * 4)"));
-    assert!(compact.contains("packed_routes>>(2*route0)"));
+    assert!(source.contains("if fp4_shift < 32 { 0xc864_3210_u32 >> fp4_shift }"));
+    assert!(compact.contains("ifshift<64{((packed_routes>>shift)&3)asu32}"));
     assert!(source.contains("route0 += 1;"));
     assert!(source.contains("route1 += 1;"));
     assert!(
