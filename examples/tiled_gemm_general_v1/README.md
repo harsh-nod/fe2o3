@@ -24,6 +24,33 @@ capability. Bounds, uniformity, convergence, ranked indexing, and disjoint
 output ownership are ordinary compiler analyses shared with every other kernel;
 none of those passes recognizes GEMM or grants it a special case.
 
+## Run on gfx950
+
+From the repository root with nightly-2026-04-03, rust-src, rustc-dev,
+cached locked dependencies and ROCm LLVM available:
+
+```bash
+bash examples/tiled_gemm_general_v1/run-gfx950.sh tile
+bash examples/tiled_gemm_general_v1/run-gfx950.sh simt
+```
+
+The default is tile. Each command compiles real Rust for gfx950:xnack- Wave64,
+preserves the compiler source/proof and crate-binding checks, finalizes with
+ROCm clang/LLD, checks target metadata and variant ISA, and executes the
+matching host symbol. Tile requires actual BF16 MFMA; SIMT rejects MFMA/WMMA.
+No device-library link is needed. FE2O3_EXAMPLE_COMPILE_ONLY=1 skips GPU work.
+
+The host checks the requested architecture, all strided outputs, unchanged
+BF16 A/B inputs, output padding and canaries. It also executes the maintained
+raw nonquarter, cancellation and fractional 16x16 cases with all 256 outputs
+and eight canaries against independent rational expectations. F32 accumulation,
+C and alpha/beta scales and the original 2e-3 tolerance are unchanged.
+
+These are ordinary external-HSACO numerical observations, not protected
+publication or native proof. Actual command results are required before
+claiming gfx950 success. gfx942 GPU execution remains pending separately;
+a gfx950 run cannot qualify gfx942.
+
 ## Run on gfx942
 
 From `examples/tiled_gemm_general_v1` in the compiler repository checkout:
