@@ -6,12 +6,12 @@ workgroup requirement are unchanged for the default SIMT selection.
 
 ## Structured Output Tile
 
-The nondefault `structured-tile` feature selects a distinct 8x8 output tile:
-`Tiled2D<Index1D, 64, 8, 8, 1>`. Each lane obtains its checked
+The nondefault `structured-tile` feature selects a distinct 64x1 output tile:
+`Tiled2D<Index1D, 64, 64, 1, 1>`. Each lane obtains its checked
 `checked_tiled_2d` witness and writes one checked `get_tiled_2d_mut`
-component. It preserves the same invocation-to-element mapping, exact
-`0x422a0000` result bits and 64-thread workgroup. Partial final rows and
-tiles are clipped by the logical and physical bounds checks.
+component. One column with unit stride maps each invocation to its original
+vector element. It preserves exact `0x422a0000` result bits and the 64-thread
+workgroup. Partial final tiles are clipped by logical and physical bounds.
 
 From the repository root, use the existing source exporter and CPU simulator:
 
