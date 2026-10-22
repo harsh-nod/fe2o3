@@ -162,9 +162,9 @@ class WholeFileFixtureBindingTests(FixtureBindingTests):
             "3199202452896fa59e0e3f7f5e7f6e656636af039d4bf5b0718febc5edf8f9d0",
             [712, 1380, 4491]),
         "gemm-tiling": (
-            "gfx942-tiled-gemm", "tiled_gemm_general_v1", 6703,
-            "a898a078ac411b17764d87c0b06681045ddccc83ea8d4314fd2a48b59e8462cd",
-            [797, 1530, 6352]),
+            "gfx942-tiled-gemm", "tiled_gemm_general_v1", 7111,
+            "ef3bbea31da5311bfb5bfb9edb9f43569e602501c079bebb16eb5f0c6b5973b4",
+            [797, 1526, 6760]),
         "moe-expert-compute": (
             "gfx942-grouped-expert-moe", "moe_grouped_expert_general_v1", 6578,
             "a4af47e5ab3cad6a16d4b0cd2fc9028d0660469a75914474a7fc0d984934bd0a",
@@ -211,6 +211,17 @@ class WholeFileFixtureBindingTests(FixtureBindingTests):
             self.assertEqual(len(physical), size)
             self.assertEqual(hashlib.sha256(physical).hexdigest(), digest)
             rows = [row for row in inventory["displayItems"] if row["lessonId"] == lesson["lessonId"]]
+            if lesson["lessonId"] == "gemm-tiling":
+                # Current-source test projection, not a published lesson refresh.
+                self.assertEqual(tab["displayedUtf8Bytes"], 6703)
+                self.assertEqual(tab["sourceSha256"],
+                                 "a898a078ac411b17764d87c0b06681045ddccc83ea8d4314fd2a48b59e8462cd")
+                tab.update(displayedUtf8Bytes=size, displayedSha256=digest, sourceSha256=digest)
+                for row, offset in zip(rows, offsets, strict=True):
+                    row["functionUtf8Offset"] = offset
+                    if row["classification"] == "kernel":
+                        self.assertEqual(row["bindingStatus"], "pending")
+                        row["bindingStatus"] = "fixture-source-contract"
             self.assertEqual([row["functionUtf8Offset"] for row in rows], offsets)
             kernels = [row for row in rows if row["classification"] == "kernel"]
             self.assertEqual(len(kernels), 1)
