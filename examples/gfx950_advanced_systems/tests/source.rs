@@ -19,7 +19,12 @@ fn rust_source_is_primary_and_uses_production_lowering() {
         assert!(source.contains(symbol));
     }
     assert_eq!(source.matches("pub fn gfx950_").count(), 8);
-    assert_eq!(source.matches("pub fn gfx950_speculative_transaction_v1(").count(), 2);
+    assert_eq!(
+        source
+            .matches("pub fn gfx950_speculative_transaction_v1(")
+            .count(),
+        2
+    );
     assert!(GFX950_ADVANCED_SYSTEMS_RUST_SOURCE_PRESENT_V1);
     assert!(GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED);
     assert!(GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER.contains("formal compiler refinement"));

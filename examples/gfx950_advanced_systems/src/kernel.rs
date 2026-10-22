@@ -709,7 +709,10 @@ pub fn gfx950_combine_expert_ranks_v1(
 
 /// Commits state only when every speculative token and score is accepted.
 #[cfg(all(
-    any(not(target_arch = "amdgpu"), feature = "kernel-speculative-transaction"),
+    any(
+        not(target_arch = "amdgpu"),
+        feature = "kernel-speculative-transaction"
+    ),
     not(feature = "kernel-speculative-transaction-tile")
 ))]
 #[cfg_attr(
@@ -1270,9 +1273,11 @@ pub fn gfx950_muon_update_4x4_v1(
     }
 }
 
-
 /// Commits state only when every speculative token and score is accepted.
-#[cfg(all(target_arch = "amdgpu", feature = "kernel-speculative-transaction-tile"))]
+#[cfg(all(
+    target_arch = "amdgpu",
+    feature = "kernel-speculative-transaction-tile"
+))]
 #[cfg_attr(
     not(feature = "ablation-speculative-recompute-prefix"),
     kernel(
@@ -1410,13 +1415,9 @@ pub fn gfx950_speculative_transaction_v1(
         let Some(status_tile) = thread::index_1d().checked_tiled_2d::<64, 1, 64, 1>() else {
             return;
         };
-        if let Some(slot) = accepted_steps.get_tiled_2d_mut(
-            &status_tile,
-            0,
-            SYSTEM_BATCHES,
-            CANDIDATES,
-            CANDIDATES,
-        ) {
+        if let Some(slot) =
+            accepted_steps.get_tiled_2d_mut(&status_tile, 0, SYSTEM_BATCHES, CANDIDATES, CANDIDATES)
+        {
             *slot = accepted_local as u32;
         }
         if let Some(slot) =
