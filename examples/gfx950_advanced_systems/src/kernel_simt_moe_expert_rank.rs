@@ -3,7 +3,7 @@
 #[cfg(feature="ablation-expert-serial")]
 compile_error!("MoE expert SIMT mode has no MFMA serial-ablation pairing");
 use crate::{ALL_EXPERTS,EXPERTS,HIDDEN,OUTPUT,SYSTEM_BATCHES,TOKENS,TOP_K};
-use fe2o3_device::{Blocked,DeviceMath,DisjointSlice,Index1D,kernel,thread};
+use fe2o3_device::{Blocked,DeviceMath,DisjointSlice,Index1D,StridedReadView2D,kernel,thread};
 #[kernel(typed,launch(required=[256,1,1],max=[256,1,1],max_grid=[4,1,1]),control_flow(loop_bounds(4,128)))]
 #[allow(clippy::too_many_arguments)]
 pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
@@ -25,6 +25,21 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     let activation_base = batch * TOKENS * HIDDEN;
     let weights_base = batch * ALL_EXPERTS * HIDDEN * OUTPUT;
     let routes_base = batch * TOKENS * TOP_K;
+    // For the admitted launch: batch<16, component<4, lane<64, hence
+    // token<16, column<16, depth<128. These retained views also check the
+    // complete parent extents before any raw lowp byte is read.
+    let Ok(activations) = StridedReadView2D::from_shared_slice(
+        activations, activation_base, TOKENS, HIDDEN, HIDDEN,
+    ) else { return; };
+    let Ok(expert_weights) = StridedReadView2D::from_shared_slice(
+        expert_weights, weights_base, ALL_EXPERTS*HIDDEN, OUTPUT, OUTPUT,
+    ) else { return; };
+    let Ok(top_experts) = StridedReadView2D::from_shared_slice(
+        top_experts, routes_base, TOKENS, TOP_K, TOP_K,
+    ) else { return; };
+    let Ok(top_weights) = StridedReadView2D::from_shared_slice(
+        top_weights, routes_base, TOKENS, TOP_K, TOP_K,
+    ) else { return; };
     let math = DeviceMath::current();
     let Some(block) = index.checked_block::<64,4>() else { return; };
     // Retain the four outputs with one explicit bounded component traversal.
@@ -39,7 +54,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             let mut depth = 0_usize;
             while depth < HIDDEN {
                 let a = {
-                    let bits = activations[activation_base + token*HIDDEN + depth];
+                    let bits = activations.load_or(token, depth, 0);
                     let exponent = (bits >> 1_u8) & 3;
                     let mantissa = (bits & 1) as f32;
                     let magnitude = if exponent == 0 { mantissa * 0.5 }
@@ -49,7 +64,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
                     if bits & 8 == 0 { magnitude } else { -magnitude }
                 };
                 let w0 = {
-                    let bits = expert_weights[weights_base + ((first_expert as usize)*HIDDEN + depth)*OUTPUT + column];
+                    let bits = expert_weights.load_or((first_expert as usize).wrapping_mul(HIDDEN).wrapping_add(depth), column, 0);
                     let exponent = (bits >> 3_u8) & 15;
                     let mantissa = bits & 7;
                     let magnitude = if exponent == 15 && mantissa == 7 {
@@ -68,7 +83,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
                     if bits & 128 == 0 { magnitude } else { -magnitude }
                 };
                 let w1 = {
-                    let bits = expert_weights[weights_base + ((second_expert as usize)*HIDDEN + depth)*OUTPUT + column];
+                    let bits = expert_weights.load_or((second_expert as usize).wrapping_mul(HIDDEN).wrapping_add(depth), column, 0);
                     let exponent = (bits >> 3_u8) & 15;
                     let mantissa = bits & 7;
                     let magnitude = if exponent == 15 && mantissa == 7 {
@@ -87,7 +102,7 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
                     if bits & 128 == 0 { magnitude } else { -magnitude }
                 };
                 let ws = {
-                    let bits = expert_weights[weights_base + ((ALL_EXPERTS-1)*HIDDEN + depth)*OUTPUT + column];
+                    let bits = expert_weights.load_or(((ALL_EXPERTS-1)*HIDDEN).wrapping_add(depth), column, 0);
                     let exponent = (bits >> 3_u8) & 15;
                     let mantissa = bits & 7;
                     let magnitude = if exponent == 15 && mantissa == 7 {
@@ -110,11 +125,10 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
                 shared += a * ws;
                 depth += 1;
             }
-            let route = routes_base + token * TOP_K;
-            let selected0 = top_experts[route];
-            let selected1 = top_experts[route+1];
-            let gate0 = top_weights[route];
-            let gate1 = top_weights[route+1];
+            let selected0 = top_experts.load_or(token, 0, 0);
+            let selected1 = top_experts.load_or(token, 1, 0);
+            let gate0 = top_weights.load_or(token, 0, 0.0);
+            let gate1 = top_weights.load_or(token, 1, 0.0);
             let mut result = 0.0_f32;
             if selected0 == first_expert { result += gate0 * (first / (1.0+math.exp_f32(-first))); }
             else if selected0 == second_expert { result += gate0 * (second / (1.0+math.exp_f32(-second))); }
