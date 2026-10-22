@@ -121,7 +121,16 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
             if selected1 == first_expert { result += gate1 * (first / (1.0+math.exp_f32(-first))); }
             else if selected1 == second_expert { result += gate1 * (second / (1.0+math.exp_f32(-second))); }
             if include_shared_expert != 0 { result += 0.25 * (shared / (1.0+math.exp_f32(-shared))); }
-            if let Some(slot) = output.get_block_mut(&block,component) { *slot = result; }
+            // Literal component calls retain the existing provider's admission contract.
+            if component == 0 {
+                if let Some(slot) = output.get_block_mut(&block,0) { *slot = result; }
+            } else if component == 1 {
+                if let Some(slot) = output.get_block_mut(&block,1) { *slot = result; }
+            } else if component == 2 {
+                if let Some(slot) = output.get_block_mut(&block,2) { *slot = result; }
+            } else if component == 3 {
+                if let Some(slot) = output.get_block_mut(&block,3) { *slot = result; }
+            }
         component += 1;
     }
 }
