@@ -2,13 +2,12 @@
 #![allow(missing_docs)]
 use crate::{ALL_EXPERTS,EXPERTS,HIDDEN,OUTPUT,SYSTEM_BATCHES,TOKENS,TOP_K};
 use fe2o3_device::{Blocked,DeviceMath,DisjointSlice,Index1D,StridedReadView2D,kernel,thread};
-#[cfg_attr(
-    not(feature = "ablation-expert-serial"),
-    kernel(typed, launch(required=[256,1,1],max=[256,1,1],max_grid=[4,1,1]), control_flow(loop_bounds(4,128)))
-)]
-#[cfg_attr(
-    feature = "ablation-expert-serial",
-    kernel(typed, launch(required=[256,1,1],max=[256,1,1],max_grid=[4,1,1]), control_flow(loop_bounds(4,128,128,128)))
+// The kernel macro visits both cfg blocks before Rust removes the inactive one:
+// one component loop, one interleaved depth loop, and three serial depth loops.
+#[kernel(
+    typed,
+    launch(required=[256,1,1],max=[256,1,1],max_grid=[4,1,1]),
+    control_flow(loop_bounds(4,128,128,128,128))
 )]
 #[allow(clippy::too_many_arguments)]
 pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
