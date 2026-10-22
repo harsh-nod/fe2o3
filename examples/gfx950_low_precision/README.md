@@ -27,11 +27,37 @@ execute the same stage, publication, uniform workgroup barrier, and
 transpose-read lifecycle, while wave-relative LDS addresses prevent aliasing.
 No output element is shared between waves or workgroups.
 
-Run the Rust source and oracle checks with:
+## Setup
+
+From the repository root, use the pinned toolchain and fetch the locked
+dependencies before offline builds. ROCm LLVM and runtime development libraries
+must be installed; the runners default to `/opt/rocm` and accept `ROCM_PATH`.
 
 ```bash
-CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
-  cargo fe2o3 test --all-targets --manifest-path Cargo.toml
+rustup toolchain install nightly-2026-04-03 --component rust-src --component rustc-dev
+export CARGO_PROFILE_DEV_DEBUG=0
+export CARGO_PROFILE_TEST_DEBUG=0
+export CARGO_PROFILE_RELEASE_DEBUG=0
+export CARGO_BUILD_JOBS=2
+export CARGO_INCREMENTAL=0
+cargo fetch --locked
+cargo fetch --locked --manifest-path examples/gfx950_low_precision/Cargo.toml
+```
+
+These are ordinary Cargo profile settings, not compiler or kernel overrides.
+Keep them for the commands below, including the default extractor build.
+
+## Host Source Checks
+
+From the repository root, build the maintained Cargo frontend for the source
+and oracle tests. The native runners do not require a separately installed
+frontend; they build their own default extractor.
+
+```bash
+cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3
+export PATH="$PWD/target/debug:$PATH"
+cargo fe2o3 test --locked --all-targets \
+  --manifest-path examples/gfx950_low_precision/Cargo.toml
 ```
 
 These match the CI host profiles and keep test executables within the pinned
@@ -49,12 +75,12 @@ LLVM profile, finalizes a COV6 object, checks symbol-scoped ISA and metadata,
 and executes a digest-pinned HSA numerical test:
 
 ```bash
-./run-fp4-gemm-gfx950.sh tile
-./run-fp4-gemm-gfx950.sh simt
-./run-fp8-gemm-gfx950.sh tile
-./run-fp8-gemm-gfx950.sh simt
-./run-fp4-attention-gfx950.sh
-./run-fp8-attention-gfx950.sh
+bash examples/gfx950_low_precision/run-fp4-gemm-gfx950.sh tile
+bash examples/gfx950_low_precision/run-fp4-gemm-gfx950.sh simt
+bash examples/gfx950_low_precision/run-fp8-gemm-gfx950.sh tile
+bash examples/gfx950_low_precision/run-fp8-gemm-gfx950.sh simt
+bash examples/gfx950_low_precision/run-fp4-attention-gfx950.sh
+bash examples/gfx950_low_precision/run-fp8-attention-gfx950.sh
 ```
 
 The FP4 and FP8 GEMM runners default to `tile`. Their `simt` selections compile
@@ -70,6 +96,26 @@ not the new SIMT counterparts.
 
 For compilation and ISA validation without GPU execution, prefix either command
 with `FE2O3_EXAMPLE_COMPILE_ONLY=1`.
+
+For a warm-cache GEMM run with a bounded native execution budget, the ordinary
+CPU build phase can be completed separately, from the repository root:
+
+```bash
+for precision in fp8 fp4; do
+  for variant in tile simt; do
+    FE2O3_EXAMPLE_COMPILE_ONLY=1 \
+      bash "examples/gfx950_low_precision/run-$precision-gemm-gfx950.sh" "$variant"
+  done
+done
+cargo test --locked --offline -p fe2o3-hsa-runtime \
+  --features hardware-qualification \
+  --test gfx950_fp8_gemm_hardware --test gfx950_fp4_gemm_hardware --no-run
+```
+
+This prebuild executes no GPU tests. The full runner still performs its normal
+build steps, reusing Cargo's cache. Cold build memory and time are separate from
+the warm native/GPU run; no private extractor or absolute scratch path is needed.
+After prebuilding, `CARGO_NET_OFFLINE=true` can be used for a no-network run.
 
 The attention runner disables Clang's implicit GPU libraries and links only an
 ordered nine-file closure accepted by the shared digest validator. It defaults
