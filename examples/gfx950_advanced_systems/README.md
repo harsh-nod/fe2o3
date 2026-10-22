@@ -178,10 +178,24 @@ and dispatch output. Its `route-redundant-lanes` variant retains the original
 full K128 dot product in every lane, instead of four cooperating K32 partials.
 
 `speculative-recompute-prefix` has source branches in both explicit modes.
-`muon-broadcast16` and `ngram-reverse-probe` remain runnable in their original
-SIMT mode; their tile wrappers currently reject ablations and need a separate
-follow-up. None of these mode descriptions extends the historical GPU or
-performance evidence to new artifacts. `combine-transposed`, `stage-tile4`,
+`muon-broadcast16` and `ngram-reverse-probe` select the same existing arithmetic
+in their original SIMT paths and checked output-tile counterparts:
+
+```bash
+FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=muon-broadcast16 bash run-muon-update-gfx950.sh tile
+FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=ngram-reverse-probe bash run-qwen-ngram-gather-gfx950.sh tile
+```
+
+Add `FE2O3_EXAMPLE_COMPILE_ONLY=1` to compile and inspect without GPU execution;
+omitting the mode argument retains each original SIMT selector. Muon retains
+the ordered sum of 16 broadcast squares and all five Newton-Schulz iterations.
+N-gram retains reverse traversal of every slot, full-key collision rejection,
+highest priority, and lowest physical-slot tie breaking. Both tile paths use
+checked `Tiled2D` stores with the original complete layout and output guards.
+Only these exact two noncanonical tile pairs are admitted by the dispatcher;
+`stage-tile4` still rejects, and the combine/route negative roles remain.
+None of these mode descriptions extends the historical GPU or performance
+evidence to new artifacts. Compile-only success is not GPU qualification. `combine-transposed`, `stage-tile4`,
 `route-owner-only`, and `route-unpacked` retain their distinct historical or
 negative roles described above.
 
