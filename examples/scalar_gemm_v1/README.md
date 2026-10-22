@@ -9,17 +9,35 @@ passes on physical hardware.
 
 ## Build and numerical qualification
 
-Use nightly-2026-04-03, a prebuilt production extractor, and ROCm 7.2.4.
-The gfx950 adapter checks the existing reviewed 7.2.4 OCML/tool closure.
-The original gfx942 common runner needs the extractor backend directory in
-`LD_LIBRARY_PATH` when it is outside the root target.
+Start in the repository root after installing the [root requirements](../../README.md#requirements),
+including the pinned nightly-2026-04-03 components. Build the production
+extractor once with the normal root compiler build, then set its path and
+loader directories for both target runners:
 
 ```bash
-export FE2O3_RUSTC_EXTRACTOR=/path/to/fe2o3-rustc-extract
+CARGO_TARGET_DIR="$PWD/target" rustup run nightly-2026-04-03 cargo build \
+    --locked --manifest-path "$PWD/Cargo.toml" \
+    -p rustc-codegen-fe2o3 --bin fe2o3-rustc-extract
+export FE2O3_RUSTC_EXTRACTOR="$PWD/target/debug/fe2o3-rustc-extract"
+extractor_dir="$(dirname -- "$FE2O3_RUSTC_EXTRACTOR")"
+sysroot="$(rustup run nightly-2026-04-03 rustc --print sysroot)"
+export LD_LIBRARY_PATH="$extractor_dir:$extractor_dir/deps:$sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export ROCM_PATH=/opt/rocm-7.2.4
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/scalar_gemm_v1/run-gfx942.sh
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/scalar_gemm_v1/run-gfx950.sh simt
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/scalar_gemm_v1/run-gfx950.sh tile
+```
+
+To reuse an already built extractor, skip the build and set
+`FE2O3_RUSTC_EXTRACTOR` to that executable before the loader setup above.
+Keep its matching backend library alongside it or in its `deps` directory.
+The gfx950 adapter checks the existing reviewed ROCm 7.2.4 OCML/tool closure.
+For an installation of ROCm 7.2.1, select its matching reviewed closure from
+the repository root before either gfx950 command:
+
+```bash
+export ROCM_PATH=/opt/rocm-7.2.1
+export FE2O3_GFX950_OCML_MANIFEST="$PWD/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.1.manifest"
 ```
 
 With the appropriate physical GPU lease and visibility, the full commands are:
