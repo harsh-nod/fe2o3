@@ -1,6 +1,6 @@
 //! Checked tile-output MoE routing; numerical routing and packed inputs are unchanged.
 #![allow(missing_docs, unused_imports, unused_assignments)]
-#[cfg(any(feature="ablation-route-redundant-lanes",feature="ablation-route-owner-only",feature="ablation-route-unpacked"))]
+#[cfg(any(feature="ablation-route-owner-only",feature="ablation-route-unpacked"))]
 compile_error!("MoE route tile mode has no qualified ablation pairing");
 use fe2o3_device::{DeviceMath, DisjointSlice, Gfx950Subgroup, Index1D, StridedReadView2D, Tiled2D, kernel, thread};
 use crate::{SYSTEM_BATCHES,TOKENS,HIDDEN,EXPERTS,TOP_K,DISPATCH_CAPACITY,COMBINE_BATCHES,OUTPUT};

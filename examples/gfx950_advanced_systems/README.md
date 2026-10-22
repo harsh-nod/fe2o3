@@ -154,6 +154,37 @@ source lane is not statically bounded. The older `route-owner-only` and
 experiments. The current `route-redundant-lanes` feature selects a live
 alternate Rust body and is part of the GPU-5 performance audit above.
 
+## Live ablations and explicit execution modes
+
+The original selectors above remain runnable. For the MoE pair, select the
+same ablation together with an explicit mode:
+
+```bash
+FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=expert-serial bash run-moe-expert-rank-gfx950.sh simt
+FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=expert-serial bash run-moe-expert-rank-gfx950.sh tile
+FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=route-redundant-lanes bash run-moe-route-gfx950.sh simt
+FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=route-redundant-lanes bash run-moe-route-gfx950.sh tile
+```
+
+Expert tile mode retains the original checked FP4/FP8 matrix views and three
+MFMAs. Its serial variant loads and evaluates each expert before loading the
+next. Expert SIMT mode decodes the same raw bytes and, with `expert-serial`,
+completes three separate K128 F32 dot products in first/second/shared order.
+All three products are computed even when shared inclusion is disabled.
+Canonical SIMT keeps its original interleaved three-accumulator loop.
+
+Route tile mode uses checked `Tiled2D` stores for every route, weight, count,
+and dispatch output. Its `route-redundant-lanes` variant retains the original
+full K128 dot product in every lane, instead of four cooperating K32 partials.
+
+`speculative-recompute-prefix` has source branches in both explicit modes.
+`muon-broadcast16` and `ngram-reverse-probe` remain runnable in their original
+SIMT mode; their tile wrappers currently reject ablations and need a separate
+follow-up. None of these mode descriptions extends the historical GPU or
+performance evidence to new artifacts. `combine-transposed`, `stage-tile4`,
+`route-owner-only`, and `route-unpacked` retain their distinct historical or
+negative roles described above.
+
 ## Historical exploratory Rust optimization evidence
 
 This section records the 2026-08-29 exploratory campaign and its then-current
