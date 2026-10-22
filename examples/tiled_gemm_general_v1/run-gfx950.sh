@@ -19,7 +19,6 @@ FE2O3_EXAMPLE_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 FE2O3_EXAMPLE_CRATE=fe2o3_tiled_gemm_general_v1
 FE2O3_EXAMPLE_HOST_BIN=fe2o3-tiled-gemm-general-v1
 FE2O3_EXAMPLE_HSACO_ENV=FE2O3_GENERAL_GEMM_HSACO
-FE2O3_EXAMPLE_LINK_DEVICE_LIBS=0
 export FE2O3_GENERAL_GEMM_TARGET=gfx950
 
 # Shared qualification runner for ordinary Rust kernels lowered to gfx950.
@@ -30,7 +29,6 @@ fe2o3_run_gfx950() {
     : "${FE2O3_EXAMPLE_STEM:?missing FE2O3_EXAMPLE_STEM}"
     : "${FE2O3_EXAMPLE_HOST_BIN:?missing FE2O3_EXAMPLE_HOST_BIN}"
     : "${FE2O3_EXAMPLE_HSACO_ENV:?missing FE2O3_EXAMPLE_HSACO_ENV}"
-    : "${FE2O3_EXAMPLE_LINK_DEVICE_LIBS:?missing FE2O3_EXAMPLE_LINK_DEVICE_LIBS}"
 
     local compile_only=${FE2O3_EXAMPLE_COMPILE_ONLY:-0}
     if [[ "$compile_only" != 0 && "$compile_only" != 1 ]]; then
@@ -44,7 +42,7 @@ fe2o3_run_gfx950() {
     fi
 
     local repo_root toolchain root_target output_dir rocm_dir sysroot extractor
-    local llvm_ir linked_ir object hsaco amd_target binding_path binding compiler_input
+    local llvm_ir object hsaco amd_target binding_path binding compiler_input
     repo_root=$(cd -- "$FE2O3_EXAMPLE_DIR/../.." && pwd)
     toolchain=${FE2O3_RUST_TOOLCHAIN:-nightly-2026-04-03}
     root_target=${FE2O3_ROOT_TARGET_DIR:-$repo_root/target}
@@ -57,7 +55,6 @@ fe2o3_run_gfx950() {
     sysroot=$(rustup run "$toolchain" rustc --print sysroot)
     extractor=${FE2O3_RUSTC_EXTRACTOR:-$root_target/debug/fe2o3-rustc-extract}
     llvm_ir="$FE2O3_RUN_WORK_DIR/$FE2O3_EXAMPLE_STEM.ll"
-    linked_ir="$FE2O3_RUN_WORK_DIR/$FE2O3_EXAMPLE_STEM.bc"
     object="$FE2O3_RUN_WORK_DIR/$FE2O3_EXAMPLE_STEM.o"
     hsaco="$output_dir/$FE2O3_EXAMPLE_STEM.hsaco"
     amd_target="$FE2O3_RUN_WORK_DIR/amd-target"
@@ -110,20 +107,6 @@ fe2o3_run_gfx950() {
     fi
 
     compiler_input=$llvm_ir
-    if [[ "$FE2O3_EXAMPLE_LINK_DEVICE_LIBS" == 1 ]]; then
-        "$rocm_dir/llvm/bin/llvm-link" \
-            "$llvm_ir" \
-            "$rocm_dir/amdgcn/bitcode/ocml.bc" \
-            "$rocm_dir/amdgcn/bitcode/oclc_isa_version_942.bc" \
-            "$rocm_dir/amdgcn/bitcode/oclc_unsafe_math_off.bc" \
-            "$rocm_dir/amdgcn/bitcode/oclc_finite_only_off.bc" \
-            -o "$linked_ir"
-        compiler_input=$linked_ir
-    elif [[ "$FE2O3_EXAMPLE_LINK_DEVICE_LIBS" != 0 ]]; then
-        printf 'FE2O3_EXAMPLE_LINK_DEVICE_LIBS must be 0 or 1\n' >&2
-        return 1
-    fi
-
     "$rocm_dir/llvm/bin/clang" -O3 -nogpulib -x ir \
         --target=amdgcn-amd-amdhsa -mcpu=gfx950 -mno-xnack \
         -c "$compiler_input" -o "$object"
