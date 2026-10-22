@@ -21,12 +21,13 @@ macro_rules! decode_fp8_e4m3_scalar {
         } else if exponent == 0 {
             (mantissa as f32) * 0.001_953_125
         } else {
-            // Compose 2^exponent from its four bits without a variable shift.
+            // Compose 2^exponent with exact, branch-free binary factors.
+            // Each bit is 0 or 1; these factors are 1 or 2, 4, 16, and 256.
             let scale = 0.007_812_5_f32
-                * if exponent & 1 != 0 { 2.0 } else { 1.0 }
-                * if exponent & 2 != 0 { 4.0 } else { 1.0 }
-                * if exponent & 4 != 0 { 16.0 } else { 1.0 }
-                * if exponent & 8 != 0 { 256.0 } else { 1.0 };
+                * (1.0 + (exponent & 1) as f32)
+                * (1.0 + ((exponent >> 1) & 1) as f32 * 3.0)
+                * (1.0 + ((exponent >> 2) & 1) as f32 * 15.0)
+                * (1.0 + ((exponent >> 3) & 1) as f32 * 255.0);
             (1.0 + (mantissa as f32) * 0.125) * scale
         };
         if bits & 0x80 != 0 {
