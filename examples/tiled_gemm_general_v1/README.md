@@ -26,10 +26,21 @@ none of those passes recognizes GEMM or grants it a special case.
 
 ## Run on gfx950
 
-From the repository root with nightly-2026-04-03, rust-src, rustc-dev,
-cached locked dependencies and ROCm LLVM available:
+From the repository root, install the pinned toolchain and fetch the locked
+dependencies. ROCm LLVM and runtime development libraries must be available;
+the runner defaults to `/opt/rocm` and accepts `ROCM_PATH`.
+For a strict native/GPU budget, complete the CPU prebuild below before the final
+two commands; a cold release host build has a separate ordinary CPU budget.
 
 ```bash
+rustup toolchain install nightly-2026-04-03 --component rust-src --component rustc-dev
+export CARGO_PROFILE_DEV_DEBUG=0
+export CARGO_PROFILE_TEST_DEBUG=0
+export CARGO_PROFILE_RELEASE_DEBUG=0
+export CARGO_BUILD_JOBS=2
+export CARGO_INCREMENTAL=0
+cargo fetch --locked
+cargo fetch --locked --manifest-path examples/tiled_gemm_general_v1/Cargo.toml
 bash examples/tiled_gemm_general_v1/run-gfx950.sh tile
 bash examples/tiled_gemm_general_v1/run-gfx950.sh simt
 ```
@@ -39,6 +50,38 @@ preserves the compiler source/proof and crate-binding checks, finalizes with
 ROCm clang/LLD, checks target metadata and variant ISA, and executes the
 matching host symbol. Tile requires actual BF16 MFMA; SIMT rejects MFMA/WMMA.
 No device-library link is needed. FE2O3_EXAMPLE_COMPILE_ONLY=1 skips GPU work.
+
+Keep the ordinary Cargo profile settings above for the default extractor and
+host builds. For a warm-cache run with a bounded native execution budget,
+prebuild the ordinary CPU phase first, using the default output directories:
+
+```bash
+out=examples/tiled_gemm_general_v1/target/fe2o3-gfx950
+for variant in tile simt; do
+  stem=tiled_gemm_general_v1
+  selection=()
+  if [ "$variant" = simt ]; then
+    stem=simt_gemm_general_v1
+    selection=(--no-default-features --features kernel-simt-gemm-general)
+  fi
+  FE2O3_EXAMPLE_COMPILE_ONLY=1 \
+    bash examples/tiled_gemm_general_v1/run-gfx950.sh "$variant"
+  binding=$(cat "$out/$stem.binding")
+  env -u FE2O3_CARGO_METADATA_BUILD_OBSERVATION_V2 \
+    FE2O3_CRATE_BINDING_ID_V1="$binding" CARGO_TARGET_DIR="$PWD/target" \
+    FE2O3_GENERAL_GEMM_TARGET=gfx950 FE2O3_GENERAL_GEMM_HSACO="$PWD/$out/$stem.hsaco" \
+    rustup run nightly-2026-04-03 cargo build --release --locked --offline -j2 \
+      --manifest-path examples/tiled_gemm_general_v1/Cargo.toml \
+      --bin fe2o3-tiled-gemm-general-v1 "${selection[@]}"
+done
+```
+
+The binding is the actual compiler-produced handoff checked by the runner, not
+a manually supplied identity. This prebuild runs no GPU program. The full
+commands still perform their normal builds and reuse Cargo's cache; cold build
+memory and time are separate from the warm native/GPU run. No private frontend
+hash, extractor override or absolute scratch path is required.
+After prebuilding, `CARGO_NET_OFFLINE=true` can be used for a no-network run.
 
 The host checks the requested architecture, all strided outputs, unchanged
 BF16 A/B inputs, output padding and canaries. It also executes the maintained
