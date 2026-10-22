@@ -104,7 +104,9 @@ HSACO=$ATTEMPT_DIR/gfx950-$PRECISION-attention.hsaco
 DISASSEMBLY=$ATTEMPT_DIR/gfx950-$PRECISION-attention.isa
 NOTES=$ATTEMPT_DIR/gfx950-$PRECISION-attention.notes
 BINDING_PATH=$ATTEMPT_DIR/crate-binding-v1
-AMD_TARGET_DIR=$ATTEMPT_DIR/amdgpu-target
+AMD_TARGET_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fe2o3-gfx950-attention-amdgpu.XXXXXX")
+trap 'rm -rf -- "${AMD_TARGET_DIR:?}"' EXIT
+chmod 700 "$AMD_TARGET_DIR"
 
 if [[ -n ${FE2O3_RUSTC_EXTRACTOR:-} ]]; then
     EXTRACTOR=$FE2O3_RUSTC_EXTRACTOR
