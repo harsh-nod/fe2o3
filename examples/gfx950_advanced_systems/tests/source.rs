@@ -18,7 +18,8 @@ fn rust_source_is_primary_and_uses_production_lowering() {
     ] {
         assert!(source.contains(symbol));
     }
-    assert_eq!(source.matches("pub fn gfx950_").count(), 7);
+    assert_eq!(source.matches("pub fn gfx950_").count(), 8);
+    assert_eq!(source.matches("pub fn gfx950_speculative_transaction_v1(").count(), 2);
     assert!(GFX950_ADVANCED_SYSTEMS_RUST_SOURCE_PRESENT_V1);
     assert!(GFX950_ADVANCED_SYSTEMS_SOURCE_LOWERING_SUPPORTED);
     assert!(GFX950_ADVANCED_SYSTEMS_SOURCE_BLOCKER.contains("formal compiler refinement"));
@@ -54,8 +55,8 @@ fn rust_source_is_primary_and_uses_production_lowering() {
     assert!(crate_root.contains("ablation-route-owner-only is rejected"));
     assert!(crate_root.contains("ablation-route-unpacked is retained only"));
     assert!(!source.contains("namespace ="));
-    assert_eq!(source.matches("max_grid = [4, 1, 1]").count(), 13);
-    assert_eq!(source.matches("launch(required = [256, 1, 1]").count(), 13);
+    assert_eq!(source.matches("max_grid = [4, 1, 1]").count(), 15);
+    assert_eq!(source.matches("launch(required = [256, 1, 1]").count(), 15);
     assert!(!source.contains("launch(required = [64, 1, 1]"));
     assert!(source.contains("let batch = global_index / 64;"));
     assert!(source.contains("RowStriped2D<Index1D, 64"));
