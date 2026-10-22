@@ -30,8 +30,12 @@ No output element is shared between waves or workgroups.
 Run the Rust source and oracle checks with:
 
 ```bash
-cargo fe2o3 test --all-targets --manifest-path Cargo.toml
+CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
+  cargo fe2o3 test --all-targets --manifest-path Cargo.toml
 ```
+
+These match the CI host profiles and keep test executables within the pinned
+host runner's 512 MiB hashing bound.
 
 The production rustc importer, V8/V9 Kernel IR schemas, exact gfx950 target
 profile, and full-module AMDGPU lowering consume all of these device terminals.
