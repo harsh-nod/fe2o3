@@ -30,6 +30,9 @@ ablation-muon-broadcast16 = []
 
 [workspace]
 
+[profile.test]
+debug = 0
+
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
 
