@@ -91,7 +91,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
         let depth = depth_group.wrapping_add(step.wrapping_mul(depth_stride));
         let bits = activations.load_or(token, depth, 0);
         let magnitude =
-            (0xc864_3210_u32.wrapping_shr(((bits & 7) as u32).wrapping_mul(4)) & 15) as f32 * 0.5;
+            ((0xc864_3210_u32 >> (((bits & 7) as u32) * 4)) & 15) as f32 * 0.5;
         let sign = 1.0 - 2.0 * ((bits >> 3) & 1) as f32;
         let activation = sign * magnitude;
         route_logit0 += activation * router_weights.load_or(0, depth, 0.0);
@@ -234,7 +234,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     let mut count = 0_u32;
     let mut record = 0_usize;
     while record < TOKENS * TOP_K {
-        let selected = (packed_routes.wrapping_shr(2_usize.wrapping_mul(record) as u32) & 3) as u32;
+        let selected = ((packed_routes >> (2 * record)) & 3) as u32;
         count = count.wrapping_add((selected == count_expert) as u32);
         record += 1;
     }
@@ -258,7 +258,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     let mut dispatched0 = -1_i32;
     let mut route0 = 0_usize;
     while route0 < TOKENS * TOP_K {
-        let selected = (packed_routes.wrapping_shr(2_usize.wrapping_mul(route0) as u32) & 3) as u32;
+        let selected = ((packed_routes >> (2 * route0)) & 3) as u32;
         let dispatch_matches = (selected == dispatch_expert0) as usize;
         let choose = ((dispatch_matches != 0) & (seen0 == wanted0)) as i32;
         dispatched0 = dispatched0.wrapping_add(
@@ -286,7 +286,7 @@ pub fn gfx950_moe_route_fp4_t16_e4_k2_v1(
     let mut dispatched1 = -1_i32;
     let mut route1 = 0_usize;
     while route1 < TOKENS * TOP_K {
-        let selected = (packed_routes.wrapping_shr(2_usize.wrapping_mul(route1) as u32) & 3) as u32;
+        let selected = ((packed_routes >> (2 * route1)) & 3) as u32;
         let dispatch_matches = (selected == dispatch_expert1) as usize;
         let choose = ((dispatch_matches != 0) & (seen1 == wanted1)) as i32;
         dispatched1 = dispatched1.wrapping_add(
