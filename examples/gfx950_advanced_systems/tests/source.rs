@@ -123,3 +123,70 @@ fn current_performance_audit_is_complete_and_conservative() {
         assert!(result["correctness"].as_str().unwrap().contains("passed"));
     }
 }
+
+#[test]
+fn a_structured_tiles_retain_complete_typed_output_contracts() {
+    let manifest = include_str!("../Cargo.toml");
+    let crate_root = include_str!("../src/lib.rs");
+    let canonical = include_str!("../src/kernel.rs");
+    let variants = [
+        (
+            "kernel-stage-gradient-shard",
+            "gfx950_stage_gradient_shard_v1",
+            include_str!("../src/kernel_tile_stage_gradient_shard.rs"),
+            1,
+        ),
+        (
+            "kernel-muon-update",
+            "gfx950_muon_update_4x4_v1",
+            include_str!("../src/kernel_tile_muon_update.rs"),
+            2,
+        ),
+        (
+            "kernel-qwen-ngram-gather",
+            "gfx950_qwen_ngram_gather_v1",
+            include_str!("../src/kernel_tile_qwen_ngram_gather.rs"),
+            1,
+        ),
+    ];
+    for (feature, symbol, tile, stores) in variants {
+        assert!(manifest.contains(&format!("{feature}-tile = [\"{feature}\"]")));
+        assert!(crate_root.contains(&format!("feature = \"{feature}-tile\"")));
+        assert!(canonical.contains(symbol));
+        assert!(canonical.contains(&format!("not(feature = \"{feature}-tile\")")));
+        assert!(
+            tile.contains(&format!("pub fn {symbol}(")),
+            "same existing export"
+        );
+        assert_eq!(tile.matches("pub fn gfx950_").count(), 1);
+        assert_eq!(tile.matches("DisjointSlice<").count(), stores);
+        assert_eq!(
+            tile.matches("Tiled2D<Index1D, 64, 1, 64, 1>").count(),
+            stores
+        );
+        assert_eq!(
+            tile.matches("checked_tiled_2d::<64, 1, 64, 1>()").count(),
+            stores
+        );
+        assert_eq!(tile.matches("get_tiled_2d_mut(").count(), stores);
+        assert!(!tile.contains("get_row_striped_2d_mut("));
+        assert!(!tile.contains("unsafe"));
+        assert!(tile.contains("let batch = global_index / 64;"));
+        assert!(tile.contains("batch >= SYSTEM_BATCHES"));
+    }
+    let stage = include_str!("../src/kernel_tile_stage_gradient_shard.rs");
+    assert!(stage.contains("let value = input[input_base.wrapping_add(element)];"));
+    let muon = include_str!("../src/kernel_tile_muon_update.rs");
+    assert_eq!(muon.matches("    muon_iteration!();").count(), 5);
+    assert!(muon.contains("subgroup.reduce_sum_f32::<64>(matrix_value * matrix_value)"));
+    assert!(muon.contains("*slot = -MUON_LEARNING_RATE * matrix_value;"));
+    assert!(muon.contains("*slot = norm;"));
+    let ngram = include_str!("../src/kernel_tile_qwen_ngram_gather.rs");
+    assert!(
+        ngram.contains(
+            "priority > best_priority || (priority == best_priority && slot < best_slot)"
+        )
+    );
+    assert!(ngram.contains("let mut best_value = -1_i32;"));
+    assert!(ngram.contains("final_probe!(15);"));
+}

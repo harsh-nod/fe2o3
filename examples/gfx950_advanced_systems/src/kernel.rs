@@ -901,7 +901,10 @@ pub fn gfx950_speculative_transaction_v1(
 }
 
 /// Probes every slot, verifies the full 3-gram, and resolves duplicate keys.
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-qwen-ngram-gather"))]
+#[cfg(all(
+    any(not(target_arch = "amdgpu"), feature = "kernel-qwen-ngram-gather"),
+    not(feature = "kernel-qwen-ngram-gather-tile")
+))]
 #[cfg_attr(
     not(feature = "ablation-ngram-reverse-probe"),
     kernel(
@@ -1044,7 +1047,10 @@ pub fn gfx950_qwen_ngram_gather_v1(
 }
 
 /// Copies one gradient shard into deterministic transport staging.
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-stage-gradient-shard"))]
+#[cfg(all(
+    any(not(target_arch = "amdgpu"), feature = "kernel-stage-gradient-shard"),
+    not(feature = "kernel-stage-gradient-shard-tile")
+))]
 #[cfg_attr(
     not(feature = "ablation-stage-tile4"),
     kernel(
@@ -1121,7 +1127,10 @@ pub fn gfx950_stage_gradient_shard_v1(
 }
 
 /// Reduces two shards and computes five Newton-Schulz Muon iterations.
-#[cfg(any(not(target_arch = "amdgpu"), feature = "kernel-muon-update"))]
+#[cfg(all(
+    any(not(target_arch = "amdgpu"), feature = "kernel-muon-update"),
+    not(feature = "kernel-muon-update-tile")
+))]
 #[cfg_attr(
     not(feature = "ablation-muon-broadcast16"),
     kernel(

@@ -6,10 +6,7 @@ if [[ $# -gt 1 ]]; then
 fi
 MODE=${1:-${FE2O3_GFX950_ADVANCED_MODE:-simt}}
 case "$MODE" in
-    simt) ;;
-    tile)
-        printf "qwen-ngram-gather requires a supported I32/U64 structured tile provider\n" >&2
-        exit 2 ;;
+    simt|tile) ;;
     *) printf "unsupported execution mode: %s\n" "$MODE" >&2; exit 2 ;;
 esac
 export FE2O3_GFX950_ADVANCED_MODE=$MODE
