@@ -17,6 +17,13 @@ fn every_stored_lowp_byte_matches_independent_reference() {
 fn checked_tile_parent_coordinates_preserve_all_dispatch_and_combine_addresses() {
     for raw in 0..1024 {
         let batch=raw/64;let lane=raw%64;
+        for component in 0..4 {
+            let packed=lane|((component&3)<<6);
+            assert_eq!(packed,lane+64*component);
+            assert!(packed<256);
+            assert_eq!(packed/16,(lane+64*component)/16);
+            assert_eq!(packed&15,(lane+64*component)%16);
+        }
         for component in 0..2 {
             let tile_row=batch*2+component;
             assert_eq!(tile_row*64+lane,batch*128+component*64+lane);

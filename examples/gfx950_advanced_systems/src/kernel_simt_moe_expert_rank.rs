@@ -45,7 +45,9 @@ pub fn gfx950_moe_expert_rank_fp4_fp8_v1(
     // Retain the four outputs with one explicit bounded component traversal.
     let mut component = 0_usize;
     while component < 4 {
-            let element = lane + component * 64;
+            // Disjoint bit fields encode lane + 64*component exactly for component<4.
+            // The masks make the complete 0..255 coordinate explicit at this use site.
+            let element = lane | ((component & 3) << 6);
             let token = element / OUTPUT;
             let column = element & (OUTPUT - 1);
             let mut first = 0.0_f32;
