@@ -355,7 +355,7 @@ fn guarded_forwarded_loop_report_v1(
         one.result(context),
     );
     let repeat = BranchArgsOp::new(context, vec![next.result(context)], header);
-    let abort = TrapOp::new(context);
+    let abort = dialect_kernel::TrapOp::new(context);
     let ret = ReturnOp::new(context);
     append(context, entry, &execution);
     append(context, entry, &zero);
