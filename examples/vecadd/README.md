@@ -68,14 +68,17 @@ compare exact bits. Empty outputs report no executable load or dispatch. Dispatc
 executable identity/release are checked by the existing reviewed runtime.
 
 Run the ordinary source CPU simulation and package controls through the
-installed production CLI, with nightly-2026-04-03 first on PATH and CARGO
-pointing to that toolchain's cargo:
+production CLI from the repository root, with nightly-2026-04-03 first on PATH:
 
 ```bash
-cd examples/vecadd
-cargo fe2o3 test --locked --offline --all-targets -j2 -- --test-threads=1
-cargo fe2o3 test --locked --offline --all-targets -j2 --features gfx950-target,qualification-legacy-hip -- --test-threads=1
-cargo fe2o3 test --locked --offline --all-targets -j2 --features gfx950-target,structured-tile,qualification-legacy-hip -- --test-threads=1
+cargo run --locked -p cargo-fe2o3 --bin cargo-fe2o3 -- \
+  test --locked --offline -p fe2o3-vecadd --all-targets -j2 -- --test-threads=1
+cargo run --locked -p cargo-fe2o3 --bin cargo-fe2o3 -- \
+  test --locked --offline -p fe2o3-vecadd --all-targets -j2 \
+  --features gfx950-target,qualification-legacy-hip -- --test-threads=1
+cargo run --locked -p cargo-fe2o3 --bin cargo-fe2o3 -- \
+  test --locked --offline -p fe2o3-vecadd --all-targets -j2 \
+  --features gfx950-target,structured-tile,qualification-legacy-hip -- --test-threads=1
 ```
 
 The original shared-body tests remain. Both real source macros are simulated
@@ -84,3 +87,16 @@ inactive indices, guarded input reads, active short-input panics, canaries
 and immutable inputs. The host target tests reject other processors, Wave32,
 XNACK-on and malformed feature strings; launch tests reject overflowing grids.
 These CPU tests never initialize a GPU and confer no GPU/proof qualification.
+
+## Publication and evidence boundary
+
+The numerical runner selects the included Vecadd SIMT and tile tests in
+the shared `gfx950_advanced_hardware` runtime fixture. Both retain the same
+17-case oracle and explicit opt-in, ignored hardware-test boundary.
+Compile-only commands do not run these tests or establish GPU execution.
+
+Historical private Vecadd testing covered both selections with 34 cases,
+32 dispatches and two empty cases, checking 4,434 outputs, 4,435 A elements,
+4,436 B elements and canaries. That observation does not qualify this public
+source revision. Current public gfx950 execution and gfx942 qualification
+remain pending until their exact public source and full commands are checked.

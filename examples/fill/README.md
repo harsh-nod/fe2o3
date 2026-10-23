@@ -103,3 +103,18 @@ selection, not the default `gfx942-fill-simulation` row (whose features remain
 execution in the coordinated protected environment.
 Evidence for the previous unannotated source does not qualify this revision.
 The compile runner and unsupported host executable are unchanged.
+
+## Compile-only package selections
+
+With the pinned toolchain, ROCm compiler tools and the matching production
+extractor available as described by the repository requirements, the existing
+gfx942 entry point selects the same library source:
+
+```sh
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/fill/run-gfx942.sh
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/fill/run-gfx942.sh structured-tile
+```
+
+The default selection remains SIMT. There is no Fill `run-gfx950.sh` in this
+package. Neither command dispatches a GPU, establishes a functional proof or
+qualifies either target. Current gfx942 hardware qualification remains pending.
