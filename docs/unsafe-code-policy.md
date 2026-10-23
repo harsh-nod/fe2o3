@@ -41,6 +41,39 @@ source inventory and remain part of the system's trust boundary.
 
 ## Implementation Rules
 
+### Softmax and Scalar GEMM Qualification Inventory Review (2026-10-23)
+
+Reviewed the unchanged qualification sources at public commit
+`2739349298149fbaa13409da24d7a494043fdb49`:
+
+- `examples/row_softmax_general_v1/src/qualification.rs`, blob
+  `982f298ec20f3a047a9a37c12147cb21513a68ed`: two unsafe blocks.
+  The raw launch uses two disjoint guarded F32 allocations, eight owned
+  pointer/length/dimension/stride parameters and the 48-byte explicit ABI.
+  Its mode-specific rounded grid and 64-thread block are checked against
+  the observed device limits before enqueue.
+- `examples/scalar_gemm_v1/src/qualification.rs`, blob
+  `e7caabe906e0b90971342f495c42b08ee59060c9`: two unsafe blocks.
+  The raw launch uses three disjoint guarded F32 allocations, nine owned
+  pointer/length/dimension parameters and the 60-byte explicit ABI. Checked
+  shapes and the rounded 256-thread grid precede enqueue and device-limit
+  checks; input views are shared and the output view is exclusive.
+
+Each file's other block loads an external HSACO through the explicitly
+opted-in `qualification-legacy-hip` escape hatch. The runner checks the
+artifact's symbol, target, Wave64, kernarg ABI, workgroup metadata and hashes;
+this path still trusts the external object's behavior, including load/unload
+code. It does not provide authenticated production loading. The existing
+safe launch API cannot express this external-object qualification contract.
+
+Both adapters retain module, argument, allocation and stream owners through
+unconditional stream synchronization, including enqueue errors. Ambiguous
+completion aborts before those owners can drop. Full input readback and output
+oracle/canary checks remain unchanged. Only these two inventory entries are
+added; all existing allowances and the tokenizer's negative controls remain.
+This review grants no protected execution, proof or GPU qualification authority
+and does not modify the adapters, kernels, or runtime.
+
 ### Vecadd Qualification Inventory Review (2026-10-23)
 
 Reviewed the following unchanged sources at public commit

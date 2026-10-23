@@ -2003,6 +2003,12 @@
   "examples/moe_grouped_expert_general_v1/src/main.rs": {
     "block": 1
   },
+  "examples/row_softmax_general_v1/src/qualification.rs": {
+    "block": 2
+  },
+  "examples/scalar_gemm_v1/src/qualification.rs": {
+    "block": 2
+  },
   "examples/tiled_gemm_general_v1/device-api/src/lib.rs": {
     "block": 6,
     "function": 6
