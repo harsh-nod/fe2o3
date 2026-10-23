@@ -192,8 +192,9 @@ The checked-in package test profile disables debug information so normal host
 test images remain within the existing admission bound; assertions, overflow
 checks and all source/oracle controls are unchanged. Host tests cover reference
 math, selected exports, source/phase ordering and physical output geometry.
-They are not GPU numerical qualification. Earlier native/GPU tables below are
-historical, source-bound records and do not qualify these newly published modes.
+They are not GPU numerical qualification. All retained native/GPU tables in this
+README describe earlier campaigns. They do not qualify this public candidate or
+its newly published modes.
 
 ## Current GPU-5 performance audit
 
