@@ -22,6 +22,10 @@ rustup run nightly-2026-04-03 cargo build \
 export FE2O3_RUSTC_EXTRACTOR="$CARGO_TARGET_DIR/debug/fe2o3-rustc-extract"
 extractor_dir="$(dirname -- "$FE2O3_RUSTC_EXTRACTOR")"
 sysroot="$(rustup run nightly-2026-04-03 rustc --print sysroot)"
+# Network-enabled setup must finish before the offline commands below.
+rustup run nightly-2026-04-03 cargo fetch --locked --manifest-path "$PWD/Cargo.toml"
+rustup run nightly-2026-04-03 cargo fetch --locked \
+    --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml"
 export LD_LIBRARY_PATH="$extractor_dir:$extractor_dir/deps:$sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export ROCM_PATH=/opt/rocm-7.2.4
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/scalar_gemm_v1/run-gfx942.sh
@@ -41,16 +45,9 @@ export ROCM_PATH=/opt/rocm-7.2.1
 export FE2O3_GFX950_OCML_MANIFEST="$PWD/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.1.manifest"
 ```
 
-Before offline commands, fetch both the checkout's dependencies and the pinned
-`rust-src` workspace dependencies in a network-enabled setup step. Fetching only
-the root lock does not populate dependencies such as `dlmalloc` used by
-`-Zbuild-std=core` resolution:
-
-```bash
-rustup run nightly-2026-04-03 cargo fetch --locked --manifest-path "$PWD/Cargo.toml"
-rustup run nightly-2026-04-03 cargo fetch --locked \
-    --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml"
-```
+The network-enabled setup above populates the effective locks before offline
+extraction. The root lock alone does not populate the pinned `rust-src`
+dependencies, including `dlmalloc` used by `-Zbuild-std=core` resolution.
 
 If Cargo's libgit2 cannot use the local TLS setup, the normal
 `CARGO_NET_GIT_FETCH_WITH_CLI=true` option uses the installed Git client without
