@@ -127,6 +127,13 @@ case "${1:-}" in
           gpt_pipeline=0
           gpt_bf16_helper=0
           case "$feature" in
+            gfx950-target,qualification-legacy-hip | gfx950-target,structured-tile,qualification-legacy-hip)
+              case "${FE2O3_EXTRACT_CRATE_V1:-}" in
+                fe2o3_row_softmax_general_v1) symbol=row_softmax_general_v1 ;;
+                fe2o3_scalar_gemm_v1) symbol=scalar_gemm_v1 ;;
+                *) exit 94 ;;
+              esac
+              ;;
             kernel-fp4-gemm)
               symbol=gfx950_fp4_gemm_rust; fp4_mfma=1 ;;
             kernel-fp8-gemm)
@@ -366,6 +373,8 @@ kernarg=0
 workgroup=64
 lds=0
 case "$key" in
+  row_softmax_general_v1) symbol=row_softmax_general_v1; kernarg=48 ;;
+  scalar_gemm_v1) symbol=scalar_gemm_v1; kernarg=60; workgroup=256 ;;
   gfx950-fp4-gemm) symbol=gfx950_fp4_gemm_rust ;;
   gfx950-fp8-gemm) symbol=gfx950_fp8_gemm_rust ;;
   gfx950-fp4-attention)
@@ -452,6 +461,8 @@ key=${key%.hsaco}
 symbol=
 kind=scalar
 case "$key" in
+  row_softmax_general_v1) symbol=row_softmax_general_v1 ;;
+  scalar_gemm_v1) symbol=scalar_gemm_v1 ;;
   gfx950-fp4-gemm) symbol=gfx950_fp4_gemm_rust; kind=fp4 ;;
   gfx950-fp8-gemm) symbol=gfx950_fp8_gemm_rust; kind=fp8 ;;
   gfx950-fp4-attention) symbol=gfx950_fp4_attention_rust; kind=fp4_attention ;;
@@ -739,7 +750,8 @@ done
 [[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 11 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
 [[ "$(grep -Fc -- '--no-default-features' "${LOG}")" -eq 1 ]]
-[[ "$(grep -Fc -- '--features' "${LOG}")" -eq 1 ]]
+[[ "$(grep -Fc -- '--features' "${LOG}")" -eq 3 ]]
+[[ "$(grep -Fc -- '--features qualification-legacy-hip' "${LOG}")" -eq 2 ]]
 [[ "$(grep -Fc -- '--no-default-features --features lds-kernel' "${LOG}")" -eq 1 ]]
 grep -F -- 'MATRIX CONTRACT expected-source-inputs-only qualified=false' "${success_output}" >/dev/null
 if grep -F -- ' cargo run ' "${LOG}" >/dev/null; then
@@ -769,18 +781,22 @@ KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
   }
 
 grep -F -- \
-  'kernel compile matrix: target=gfx950 mode=compile-only kernels=57 hardware_observed=false' \
+  'kernel compile matrix: target=gfx950 mode=compile-only kernels=61 hardware_observed=false' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
-  'MATRIX PASS target=gfx950 compiled=57 hardware_executed=0 artifacts=temporary' \
+  'MATRIX PASS target=gfx950 compiled=61 hardware_executed=0 artifacts=temporary' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX LIMITATION remaining gfx950 ablations, HIP comparators, hardware behavior, and numerical results are not covered' \
   "${gfx950_output}" >/dev/null
 for name in \
+  row-softmax-simt \
+  row-softmax-tile \
+  scalar-gemm-simt \
+  scalar-gemm-tile \
   fp4-gemm \
   fp8-gemm \
   fp4-attention \
@@ -841,8 +857,10 @@ for name in \
   [[ "$(grep -Fc -- "CASE ${name} target=gfx950 status=PASS hardware_observed=false" \
     "${gfx950_output}")" -eq 1 ]]
 done
-[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 57 ]]
+[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 61 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
+[[ "$(grep -Fc -- '--features gfx950-target\,qualification-legacy-hip --lib' "${LOG}")" -eq 2 ]]
+[[ "$(grep -Fc -- '--features gfx950-target\,structured-tile\,qualification-legacy-hip --lib' "${LOG}")" -eq 2 ]]
 for features in \
   kernel-moe-route \
   kernel-moe-expert-rank \
@@ -893,6 +911,10 @@ fi
 [[ -z "$(find "${TEST_ROOT}/tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]]
 
 for invocation in \
+  'examples/row_softmax_general_v1/run-gfx942.sh' \
+  'examples/row_softmax_general_v1/run-gfx950.sh' \
+  'examples/scalar_gemm_v1/run-gfx942.sh' \
+  'examples/scalar_gemm_v1/run-gfx950.sh' \
   'examples/gfx950_low_precision/run-fp4-gemm-gfx950.sh' \
   'examples/gfx950_low_precision/run-fp8-gemm-gfx950.sh' \
   'examples/gfx950_low_precision/run-attention-gfx950.sh fp4' \
@@ -908,8 +930,8 @@ for invocation in \
     "${TEST_ROOT}/invalid-compile-only.out" >/dev/null
 done
 
-# New ordinary-source runners cannot imply a hardware adapter.
-for package in fill vecadd moe_top2_v1 wave64_collectives_v1 workgroup_sync_v1 scalar_gemm_v1; do
+# Runners without an explicit qualification adapter stay compile-only.
+for package in fill vecadd moe_top2_v1 wave64_collectives_v1 workgroup_sync_v1; do
   set +e
   FE2O3_EXAMPLE_COMPILE_ONLY=0 bash "${REPO_ROOT}/examples/$package/run-gfx942.sh" \
     >"$TEST_ROOT/compile-only-required.out" 2>&1

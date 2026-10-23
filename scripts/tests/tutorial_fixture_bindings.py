@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import itertools
 import runpy
+import tempfile
 from pathlib import Path
 import tomllib
 import unittest
@@ -212,13 +213,13 @@ class WholeFileFixtureBindingTests(FixtureBindingTests):
             self.assertEqual(hashlib.sha256(physical).hexdigest(), digest)
             rows = [row for row in inventory["displayItems"] if row["lessonId"] == lesson["lessonId"]]
             if lesson["lessonId"] == "gemm-tiling":
-                # Current-source test projection, not a published lesson refresh.
-                self.assertEqual(tab["displayedUtf8Bytes"], 6703)
-                self.assertEqual(tab["sourceSha256"],
-                                 "a898a078ac411b17764d87c0b06681045ddccc83ea8d4314fd2a48b59e8462cd")
-                tab.update(displayedUtf8Bytes=size, displayedSha256=digest, sourceSha256=digest)
+                # The published current view is source-only; this test projection
+                # exercises its exact physical fixture without qualifying the lesson.
+                self.assertEqual(tab["displayedUtf8Bytes"], size)
+                self.assertEqual(tab["displayedSha256"], digest)
+                self.assertEqual(tab["sourceSha256"], digest)
                 for row, offset in zip(rows, offsets, strict=True):
-                    row["functionUtf8Offset"] = offset
+                    self.assertEqual(row["functionUtf8Offset"], offset)
                     if row["classification"] == "kernel":
                         self.assertEqual(row["bindingStatus"], "pending")
                         row["bindingStatus"] = "fixture-source-contract"
@@ -877,7 +878,7 @@ class RowSourceBindingTests(unittest.TestCase):
         self.assertEqual(binding["sourceSha256"], tab["sourceSha256"])
         for variant in kernel["variants"]:
             self.assertIn("gfx942/mi300x and gfx950/mi350", variant["blocker"]["reason"])
-        self.assertEqual(report["knownKernelIdentityCount"], 61)
+        self.assertEqual(report["knownKernelIdentityCount"], 65)
         self.assertEqual(report["sourceBoundVariantCount"], 22)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertFalse(report["inventoryComplete"])
@@ -1000,6 +1001,172 @@ class RowSourceBindingTests(unittest.TestCase):
             item["contractSha256"] = self.parent.source_item_contract_sha256(self.lesson_id, tab)
             with self.subTest(mutation=mutation), self.assertRaises(SystemExit):
                 self.parent.validate_source_item(ROOT, self.lesson_id, tab, {})
+
+
+class SelectedFeatureFixtureBindingTests(unittest.TestCase):
+    """Real file/contract joins; these source associations grant no execution authority."""
+
+    @classmethod
+    def setUpClass(cls):
+        for name, filename in (("parent", "validate-tutorial-kernel-manifest.py"),
+                               ("identities", "tutorial_kernel_identities.py")):
+            spec = importlib.util.spec_from_file_location(name, ROOT / "scripts" / filename)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            setattr(cls, name, module)
+
+    def document(self, features, direct=(), defaults=True, build=None, build_file=False):
+        temporary = tempfile.TemporaryDirectory(prefix="fe2o3-feature-binding-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        package = root / "pkg"
+        (package / "src").mkdir(parents=True)
+        (package / "native/src").mkdir(parents=True)
+        source = "#[kernel]\npub fn visible() {}\n"
+        (package / "src/lib.rs").write_text(source)
+        build_setting = "" if build is None else (
+            "build = false\n" if build is False else f"build = {build!r}\n")
+        (package / "Cargo.toml").write_text(
+            '[package]\nname = "feature-fixture"\nversion = "0.1.0"\nedition = "2024"\n'
+            + build_setting
+            + '[lib]\nname = "feature_fixture"\n'
+            + '[dependencies]\nnative = { path = "native", optional = true }\n'
+            + '[features]\n'
+            + "".join(f"{name} = {members!r}\n" for name, members in features.items()))
+        (package / "native/Cargo.toml").write_text(
+            '[package]\nname = "native"\nversion = "0.1.0"\nedition = "2024"\n'
+            '[features]\nunsafe-launch = []\n')
+        (package / "native/src/lib.rs").write_text("pub fn helper() {}\n")
+        if build_file:
+            (package / ("custom.rs" if isinstance(build, str) else "build.rs")).write_text(
+                "fn main() {}\n")
+        lock = package / "Cargo.lock"
+        lock.write_text(
+            'version = 4\n\n[[package]]\nname = "feature-fixture"\nversion = "0.1.0"\n'
+            'dependencies = ["native"]\n\n[[package]]\nname = "native"\nversion = "0.1.0"\n')
+        inputs = {
+            "packageManifest": "pkg/Cargo.toml",
+            "packageManifestSha256": hashlib.sha256((package / "Cargo.toml").read_bytes()).hexdigest(),
+            "cargoLockPath": "pkg/Cargo.lock",
+            "cargoLockSha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+            "sourcePaths": ["pkg/src/lib.rs"],
+            "sourceClosureSha256": self.parent.package_source_closure_sha256(
+                root, self.parent.package_rust_sources(root, "pkg/Cargo.toml", "feature fixture")),
+            "cargoTarget": {"kind": "lib", "name": "feature_fixture", "sourcePath": "src/lib.rs"},
+            "defaultFeatures": defaults, "features": sorted(direct), "kernelSymbols": ["visible"],
+        }
+        fixture = {
+            "fixtureId": "feature-alias", "target": "gfx942",
+            "matrix": {"caseId": "feature-alias", "runnerPath": "run.sh",
+                       "artifactName": "visible.hsaco", "runnerArguments": [], "environment": []},
+            "compilerInput": inputs,
+        }
+        inputs["contractSha256"] = self.parent.fixture_input_contract_sha256(fixture)
+        reference = {"kind": "fixture", "fixtureId": "feature-alias", "kernelSymbol": "visible"}
+        kernel_id = "fixture:feature-alias:visible"
+        binding = {
+            "implementationKernelId": kernel_id, "selection": reference,
+            "selectionSha256": self.identities._selection_identity(
+                inputs, "visible", self.identities._Budget(4096)),
+            "sourcePath": "pkg/src/lib.rs", "sourceSha256": hashlib.sha256(source.encode()).hexdigest(),
+            "functionUtf8Offset": source.index("visible"),
+        }
+        blocker = {"owner": "fixture-tests", "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+                   "reason": "Source association only; no execution or qualification."}
+        document = {
+            "curriculum": {"schema": "fe2o3-tutorial-curriculum-obligations-v2", "lessons": []},
+            "compilerFixtures": [fixture],
+            "kernelInventory": {
+                "schema": self.identities.SCHEMA, "negativeCases": [], "displayItems": [],
+                "kernels": [{
+                    "kernelId": kernel_id, "selections": [reference],
+                    "variants": [
+                        {"kind": "simt", "status": "source-bound", "source": binding, "blocker": blocker},
+                        {"kind": "tile", "status": "pending", "source": None, "blocker": blocker},
+                    ],
+                }],
+            },
+        }
+        return root, document, fixture
+
+    def features(self, member="dep:native"):
+        return {"default": ["base"], "base": [], "qualification": [member],
+                "nested": ["middle"], "middle": ["qualification"],
+                "local-two": ["local-one"], "local-one": ["base"]}
+
+    def check(self, root, document, cache=None):
+        return self.parent.validate_kernel_inventory(document, None, repo_root=root,
+                                                     package_cache=cache)
+
+    def test_inactive_dependency_aliases_allow_default_local_selection(self):
+        for member in ("dep:native", "native/unsafe-launch", "native?/unsafe-launch"):
+            with self.subTest(member=member):
+                root, document, fixture = self.document(self.features(member))
+                checked = self.parent.validate_compiler_input(root, fixture, "inactive alias")
+                self.assertEqual(checked["enabledFeatures"], ["base", "default"])
+                result = self.check(root, document)
+                self.assertEqual(result["sourceBoundVariantCount"], 1)
+                self.assertEqual(result["sourceBoundPairCount"], 0)
+                self.assertFalse(result["inventoryComplete"])
+
+    def test_nested_local_aliases_use_complete_transitive_closure(self):
+        root, document, fixture = self.document(self.features(), ["local-two"], defaults=False)
+        checked = self.parent.validate_compiler_input(root, fixture, "nested local")
+        self.assertEqual(checked["enabledFeatures"], ["base", "local-one", "local-two"])
+        self.assertEqual(self.check(root, document)["sourceBoundVariantCount"], 1)
+
+    def test_direct_dependency_and_unknown_aliases_remain_rejected(self):
+        for member in ("dep:native", "native/unsafe-launch", "native?/unsafe-launch", "missing"):
+            with self.subTest(member=member):
+                root, document, _ = self.document(self.features(member), ["qualification"], False)
+                with self.assertRaisesRegex(SystemExit, "requires local features without build-script cfg"):
+                    self.check(root, document)
+
+    def test_nested_local_alias_reaching_dependency_alias_remains_rejected(self):
+        root, document, fixture = self.document(self.features(), ["nested"], defaults=False)
+        checked = self.parent.validate_compiler_input(root, fixture, "nested dependency")
+        self.assertEqual(checked["enabledFeatures"], ["middle", "nested", "qualification"])
+        with self.assertRaisesRegex(SystemExit, "requires local features without build-script cfg"):
+            self.check(root, document)
+
+    def test_default_and_no_default_control_alias_reachability(self):
+        features = self.features()
+        features["default"] = ["nested"]
+        root, document, fixture = self.document(features)
+        checked = self.parent.validate_compiler_input(root, fixture, "default dependency")
+        self.assertEqual(checked["enabledFeatures"], ["default", "middle", "nested", "qualification"])
+        with self.assertRaisesRegex(SystemExit, "requires local features without build-script cfg"):
+            self.check(root, document)
+        root, document, fixture = self.document(features, defaults=False)
+        self.assertEqual(self.parent.validate_compiler_input(
+            root, fixture, "no default")["enabledFeatures"], [])
+        self.assertEqual(self.check(root, document)["sourceBoundVariantCount"], 1)
+
+    def test_auto_and_explicit_build_scripts_still_reject_with_or_without_defaults(self):
+        for build in (None, "custom.rs"):
+            for defaults in (False, True):
+                with self.subTest(build=build, defaults=defaults):
+                    root, document, _ = self.document(
+                        self.features(), defaults=defaults, build=build, build_file=True)
+                    with self.assertRaisesRegex(SystemExit, "requires local features without build-script cfg"):
+                        self.check(root, document)
+
+    def test_explicitly_disabled_build_script_retains_existing_behavior(self):
+        root, document, _ = self.document(self.features(), build=False, build_file=True)
+        self.assertEqual(self.check(root, document)["sourceBoundVariantCount"], 1)
+
+    def test_cached_local_selection_cannot_admit_later_dependency_alias(self):
+        root, document, fixture = self.document(self.features())
+        cache = {}
+        self.assertEqual(self.check(root, document, cache)["sourceBoundVariantCount"], 1)
+        inputs = fixture["compilerInput"]
+        inputs["defaultFeatures"] = False
+        inputs["features"] = ["nested"]
+        inputs["contractSha256"] = self.parent.fixture_input_contract_sha256(fixture)
+        document["kernelInventory"]["kernels"][0]["variants"][0]["source"]["selectionSha256"] = (
+            self.identities._selection_identity(inputs, "visible", self.identities._Budget(4096)))
+        with self.assertRaisesRegex(SystemExit, "requires local features without build-script cfg"):
+            self.check(root, document, cache)
 
 
 def load_tests(loader, tests, pattern):
