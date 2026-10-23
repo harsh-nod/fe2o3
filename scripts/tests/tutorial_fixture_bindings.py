@@ -247,26 +247,26 @@ class SystemsFixtureBindingTests(FixtureBindingTests):
     expected_identities = 11
     # Independent physical spans from the current source, not symbol searches.
     spans = {
-        "advanced-moe": [(1329, 14012), (14014, 27554), (27556, 29573)],
-        "speculative-mtp-verification": [(29575, 37620)],
-        "ngram-embedding-gather": [(37622, 42940)],
-        "muon-optimizer": [(42942, 45746), (45748, 52096)],
-        "moe-route-performance-lab": [(1329, 14012)],
-        "moe-expert-performance-lab": [(14014, 27554)],
-        "expert-combine-performance-lab": [(27556, 29573)],
-        "speculative-performance-lab": [(29575, 37620)],
-        "ngram-performance-lab": [(37622, 42940)],
-        "gradient-stage-performance-lab": [(42942, 45746)],
-        "muon-performance-lab": [(45748, 52096)],
+        "advanced-moe": [(1177, 14201), (14203, 27794), (27796, 29869)],
+        "speculative-mtp-verification": [(29871, 37997)],
+        "ngram-embedding-gather": [(37999, 43380)],
+        "muon-optimizer": [(43382, 46252), (46254, 52659)],
+        "moe-route-performance-lab": [(1177, 14201)],
+        "moe-expert-performance-lab": [(14203, 27794)],
+        "expert-combine-performance-lab": [(27796, 29869)],
+        "speculative-performance-lab": [(29871, 37997)],
+        "ngram-performance-lab": [(37999, 43380)],
+        "gradient-stage-performance-lab": [(43382, 46252)],
+        "muon-performance-lab": [(46254, 52659)],
     }
     coordinates = {
-        "gfx950_moe_route_fp4_t16_e4_k2_v1": 1541,
-        "gfx950_moe_expert_rank_fp4_fp8_v1": 14556,
-        "gfx950_combine_expert_ranks_v1": 28051,
-        "gfx950_speculative_transaction_v1": 30160,
-        "gfx950_qwen_ngram_gather_v1": 38139,
-        "gfx950_stage_gradient_shard_v1": 43436,
-        "gfx950_muon_update_4x4_v1": 46247,
+        "gfx950_moe_route_fp4_t16_e4_k2_v1": 1586,
+        "gfx950_moe_expert_rank_fp4_fp8_v1": 14796,
+        "gfx950_combine_expert_ranks_v1": 28347,
+        "gfx950_speculative_transaction_v1": 30537,
+        "gfx950_qwen_ngram_gather_v1": 38579,
+        "gfx950_stage_gradient_shard_v1": 43942,
+        "gfx950_muon_update_4x4_v1": 46810,
     }
     fixture_names = {
         "combine-expert-ranks", "moe-expert-rank-expert-serial", "moe-expert-rank",
@@ -289,6 +289,12 @@ class SystemsFixtureBindingTests(FixtureBindingTests):
             row for row in inventory["kernels"] if any(
                 ref["kind"] == "fixture" and ref["fixtureId"] in fixtures for ref in row["selections"])
         ]
+        # This eleven-selection display projection intentionally excludes paired
+        # counterpart identities. Its source-pair bindings are tested by the full
+        # manifest suite; retain this projection's independent pending role.
+        for kernel in inventory["kernels"]:
+            for variant in kernel["variants"]:
+                variant.update(status="pending", source=None)
         inventory["negativeCases"] = []
         inventory["displayItems"] = [
             row for row in inventory["displayItems"] if row["lessonId"] in lessons and row["tabOrdinal"] == 0
@@ -303,15 +309,39 @@ class SystemsFixtureBindingTests(FixtureBindingTests):
                    "site": document["curriculum"]["site"], "lessons": []}
         source_path = "examples/gfx950_advanced_systems/src/kernel.rs"
         physical = (ROOT / source_path).read_bytes()
-        self.assertEqual(len(physical), 52097)
+        self.assertEqual(len(physical), 60951)
         self.assertEqual(hashlib.sha256(physical).hexdigest(),
-                         "0211e451f562b961eea723fd4d5a6c5b188cfaab83ae2354ff8bcf36dd5056d6")
+                         "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab")
         for lesson in document["curriculum"]["lessons"]:
             lesson["codeTabs"] = lesson["codeTabs"][:1]
             tab = lesson["codeTabs"][0]
             self.assertEqual(tab["sourcePath"], source_path)
             spans = self.spans[lesson["lessonId"].removeprefix("gfx950-")]
             parts = [physical[start:end].decode("utf-8") for start, end in spans]
+            # Current-source test projection; historical checked-in lesson and
+            # display records remain unchanged by this fixture-only refresh.
+            joined = "\n\n".join(parts).encode("utf-8")
+            digest = hashlib.sha256(joined).hexdigest()
+            tab.update(
+                sourceCommit="1da2f6206b1edc579b7d6f222b6794da4e7af4ff",
+                displayedUtf8Bytes=len(joined), displayedSha256=digest,
+                sourceSha256=digest, sourceDigestScope="displayed",
+                sourceFragmentsSha256=[
+                    hashlib.sha256(part.encode("utf-8")).hexdigest() for part in parts
+                ],
+            )
+            for row in inventory["displayItems"]:
+                if row["lessonId"] != lesson["lessonId"]:
+                    continue
+                physical_offset = self.coordinates[row["kernelSymbol"]]
+                displayed_offset = 0
+                for lower, upper in spans:
+                    if lower <= physical_offset < upper:
+                        row["functionUtf8Offset"] = displayed_offset + physical_offset - lower
+                        break
+                    displayed_offset += upper - lower + 2
+                else:
+                    self.fail("canonical function coordinate is outside its exact physical span")
             for row in inventory["displayItems"]:
                 if row["lessonId"] != lesson["lessonId"]:
                     continue
@@ -465,7 +495,7 @@ class AttentionCfgSelectionTests(unittest.TestCase):
                 expected = sum(variant["source"] is not None
                                for row in document["kernelInventory"]["kernels"] for variant in row["variants"])
                 self.assertEqual(result["sourceBoundVariantCount"], expected)
-                self.assertEqual(result["sourceBoundPairCount"], 0)
+                self.assertEqual(result["sourceBoundPairCount"], 14)
                 self.assertFalse(result["inventoryComplete"])
                 self.assertIsNone(result["requiredPairCount"])
                 symbol, = fixture["compilerInput"]["kernelSymbols"]
@@ -630,7 +660,7 @@ class LiteralIncludeSelectionTests(unittest.TestCase):
         expected = sum(variant["source"] is not None
                        for row in document["kernelInventory"]["kernels"] for variant in row["variants"])
         self.assertEqual(result["sourceBoundVariantCount"], expected)
-        self.assertEqual(result["sourceBoundPairCount"], 0)
+        self.assertEqual(result["sourceBoundPairCount"], 14)
         self.assertFalse(result["inventoryComplete"])
         self.assertIsNone(result["requiredPairCount"])
         self.assertEqual((ROOT / binding["sourcePath"]).read_bytes()[203:209], b"vecadd")
@@ -875,9 +905,9 @@ class RowSourceBindingTests(unittest.TestCase):
         self.assertEqual(binding["sourceSha256"], tab["sourceSha256"])
         for variant in kernel["variants"]:
             self.assertIn("gfx942/mi300x and gfx950/mi350", variant["blocker"]["reason"])
-        self.assertEqual(report["knownKernelIdentityCount"], 61)
-        self.assertEqual(report["sourceBoundVariantCount"], 22)
-        self.assertEqual(report["sourceBoundPairCount"], 0)
+        self.assertEqual(report["knownKernelIdentityCount"], 68)
+        self.assertEqual(report["sourceBoundVariantCount"], 50)
+        self.assertEqual(report["sourceBoundPairCount"], 14)
         self.assertFalse(report["inventoryComplete"])
         self.assertIsNone(report["requiredPairCount"])
         self.assertEqual([(row["target"], row["deterministicSemanticRunnerAvailability"])

@@ -30,6 +30,7 @@ def load_validator():
 
 def recovered_scope(manifest):
     added_fixtures = {
+        'gfx950-moe-expert-rank-simt', 'gfx950-moe-route-tile', 'gfx950-combine-expert-ranks-tile', 'gfx950-speculative-transaction-tile', 'gfx950-qwen-ngram-gather-tile', 'gfx950-stage-gradient-shard-tile', 'gfx950-muon-update-tile',
         "gfx942-scalar-gemm", "gfx950-gpt-oss-pipelined-attention",
         "gfx950-gpt-oss-scalar-attention",
     }
@@ -55,6 +56,7 @@ def recovered_scope(manifest):
     suites = []
     for original in manifest["qualification"]["suites"]:
         if original["suiteId"] in {
+            'semantic-simulation-gfx950-moe-expert-rank-simt', 'semantic-simulation-gfx950-moe-route-tile', 'semantic-simulation-gfx950-combine-expert-ranks-tile', 'semantic-simulation-gfx950-speculative-transaction-tile', 'semantic-simulation-gfx950-qwen-ngram-gather-tile', 'semantic-simulation-gfx950-stage-gradient-shard-tile', 'semantic-simulation-gfx950-muon-update-tile',
             "cpu-reference-scalar-gemm", "semantic-simulation-scalar-gemm",
             "semantic-simulation-gfx950-gpt-oss-pipelined-attention",
             "semantic-simulation-gfx950-gpt-oss-scalar-attention",
@@ -114,11 +116,11 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             Counter(call.args[1] for call in walk.call_args_list),
             Counter({package: 1 for package in expected_packages}),
         )
-        self.assertEqual(len(fixtures), 50)
+        self.assertEqual(len(fixtures), 57)
         self.assertEqual(sum(f["target"] == "gfx942" for f in fixtures.values()), 11)
-        self.assertEqual(sum(f["target"] == "gfx950" for f in fixtures.values()), 39)
+        self.assertEqual(sum(f["target"] == "gfx950" for f in fixtures.values()), 46)
         self.assertEqual(len(self.manifest["entries"]), 25)
-        self.assertEqual(len(self.manifest["qualification"]["suites"]), 64)
+        self.assertEqual(len(self.manifest["qualification"]["suites"]), 71)
         self.assertTrue(all(e["classification"] == "compiler-produced" for e in self.manifest["entries"]))
         self.assertTrue(all(s["availability"] == "pending" for s in self.manifest["qualification"]["suites"]))
 
@@ -126,7 +128,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         payload = json.dumps(
             recovered_scope(self.manifest), sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "db1d9a0d5c5aca3b9c76a4713ddd3b22417e41ee24667efae11773dfccdc4215")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "22b3c8073aef5f3710423508ebf83d2d5ec209be7dd1bc16344b8b7772251032")
 
     def test_gemm_paired_cpu_reference_suites_keep_explicit_feature_selections(self):
         suites = {suite["suiteId"]: suite for suite in self.manifest["qualification"]["suites"]}
@@ -165,7 +167,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
         del self.manifest["curriculum"]
-        self.assertEqual(len(self.validator.validate_manifest(ROOT, self.manifest)), 50)
+        self.assertEqual(len(self.validator.validate_manifest(ROOT, self.manifest)), 57)
         with tempfile.TemporaryDirectory(prefix="fe2o3-curriculum-") as temporary:
             path = Path(temporary) / "legacy.json"
             path.write_text(json.dumps(self.manifest), encoding="utf-8")
@@ -425,7 +427,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
 
 
     def test_matrix_records_are_stable_and_do_not_execute(self):
-        for target, count in (("gfx942", 11), ("gfx950", 39)):
+        for target, count in (("gfx942", 11), ("gfx950", 46)):
             result = subprocess.run(
                 [sys.executable, str(CHECKER), "--emit-matrix", target],
                 check=True, text=True, capture_output=True,
@@ -458,11 +460,11 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(report["schema"], "fe2o3-tutorial-kernel-pair-obligations-v2")
         identities = report["kernelInventory"]
         for counts in (report, identities):
-            self.assertEqual(counts["knownVariantObligationCount"], 123)
-            self.assertEqual(counts["pendingVariantCount"], 101)
+            self.assertEqual(counts["knownVariantObligationCount"], 137)
+            self.assertEqual(counts["pendingVariantCount"], 87)
             self.assertEqual(counts["unregisteredDisplayItemCount"], 5)
         self.assertIs(identities["runtimeCensusValidated"], False)
-        self.assertEqual(identities["knownKernelIdentityCount"], 61)
+        self.assertEqual(identities["knownKernelIdentityCount"], 68)
         self.assertEqual(identities["negativeCaseCount"], 3)
         self.assertTrue(identities["unresolvedBindings"])
         self.assertIs(report["qualified"], False)
@@ -470,7 +472,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertIsNone(report["requiredPairCount"])
         self.assertEqual(report["qualifiedPairCount"], 0)
         self.assertEqual(report["requiredModes"], ["simt", "tile"])
-        self.assertEqual(len(report["fixtureSelections"]), 50)
+        self.assertEqual(len(report["fixtureSelections"]), 57)
         self.assertEqual(len(report["sourceDriverCases"]), 14)
         self.assertEqual(len(report["displayObservations"]), 58)
         self.assertEqual(sum(row["sourceItemStatus"] == "pending"
@@ -479,8 +481,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                             for row in report["displayObservations"]))
         self.assertEqual(report["stageStatus"], "not-evaluated")
         self.assertEqual(report["variantBindingStatus"], "partial")
-        self.assertEqual(report["sourceBoundVariantCount"], 22)
-        self.assertEqual(report["sourceBoundPairCount"], 0)
+        self.assertEqual(report["sourceBoundVariantCount"], 50)
+        self.assertEqual(report["sourceBoundPairCount"], 14)
         self.assertEqual(report["productionContract"], self.original["productionContract"])
 
     def kernel_pair_report(self, inventory=None):
@@ -640,8 +642,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "fecba068317d72aab10b74f7845e8f324b9de090e55bde9b8e9969817a6057e3")
-        self.assertEqual(len(inventory["kernels"]), 61)
+                         "d107b783da12a7a7f5b79a6febf29d01f7237a12465f0384f389e98dec3c5fb7")
+        self.assertEqual(len(inventory["kernels"]), 68)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
@@ -651,33 +653,59 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         bound = [(row["kernelId"], variant["kind"])
                  for row in inventory["kernels"] for variant in row["variants"]
                  if variant["status"] == "source-bound"]
-        self.assertEqual(bound, [
-            ("fixture:gfx942-fill-simulation:fill", "simt"),
-            ("fixture:gfx942-moe-top2:moe_top2_route_f32_t8_e4_k2_c4_v1", "simt"),
-            ("fixture:gfx942-scalar-gemm:scalar_gemm_v1", "simt"),
-            ("fixture:gfx942-typed-vecadd-source:vecadd", "simt"),
-            ("fixture:gfx942-wave64-collectives:wave64_collectives_v1", "simt"),
-            ("fixture:gfx942-workgroup-collectives:lds_publish_read_reduce_i32_v1", "simt"),
-            ("fixture:gfx950-attnres-aggregate-explicit-reuse:gfx950_attnres_aggregate", "simt"),
-            ("fixture:gfx950-attnres-aggregate:gfx950_attnres_aggregate", "simt"),
-            ("fixture:gfx950-compressed-hybrid-attention-division-baseline:gfx950_compressed_hybrid_attention", "simt"),
-            ("fixture:gfx950-compressed-hybrid-attention:gfx950_compressed_hybrid_attention", "simt"),
-            ("fixture:gfx950-content-sparse-attention-reciprocal-reuse:gfx950_content_sparse_attention", "simt"),
-            ("fixture:gfx950-content-sparse-attention:gfx950_content_sparse_attention", "simt"),
-            ("fixture:gfx950-deepseek-sparse-attention:gfx950_deepseek_sparse_attention", "simt"),
-            ("fixture:gfx950-four-branch-residual-explicit:gfx950_four_branch_residual", "simt"),
-            ("fixture:gfx950-four-branch-residual:gfx950_four_branch_residual", "simt"),
-            ("fixture:gfx950-kda-decode-baseline:gfx950_kda_decode", "simt"),
-            ("fixture:gfx950-kda-decode:gfx950_kda_decode", "simt"),
-            ("fixture:gfx950-kda-prefill-baseline:gfx950_kda_chunkwise_prefill", "simt"),
-            ("fixture:gfx950-kda-prefill:gfx950_kda_chunkwise_prefill", "simt"),
-            ("fixture:gfx950-mhc-sinkhorn-mix-scalar:gfx950_mhc_sinkhorn_mix", "simt"),
-            ("fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix", "simt"),
-            ("source-driver:cpu-semantic-simulation:6:row_affine_sum_u32_v1", "simt"),
-        ])
+        self.assertEqual(bound, [('fixture:gfx942-fill-simulation:fill', 'simt'),
+ ('fixture:gfx942-moe-top2:moe_top2_route_f32_t8_e4_k2_c4_v1', 'simt'),
+ ('fixture:gfx942-scalar-gemm:scalar_gemm_v1', 'simt'),
+ ('fixture:gfx942-typed-vecadd-source:vecadd', 'simt'),
+ ('fixture:gfx942-wave64-collectives:wave64_collectives_v1', 'simt'),
+ ('fixture:gfx942-workgroup-collectives:lds_publish_read_reduce_i32_v1', 'simt'),
+ ('fixture:gfx950-attnres-aggregate-explicit-reuse:gfx950_attnres_aggregate', 'simt'),
+ ('fixture:gfx950-attnres-aggregate:gfx950_attnres_aggregate', 'simt'),
+ ('fixture:gfx950-combine-expert-ranks:gfx950_combine_expert_ranks_v1', 'simt'),
+ ('fixture:gfx950-combine-expert-ranks:gfx950_combine_expert_ranks_v1', 'tile'),
+ ('fixture:gfx950-compressed-hybrid-attention-division-baseline:gfx950_compressed_hybrid_attention', 'simt'),
+ ('fixture:gfx950-compressed-hybrid-attention:gfx950_compressed_hybrid_attention', 'simt'),
+ ('fixture:gfx950-content-sparse-attention-reciprocal-reuse:gfx950_content_sparse_attention', 'simt'),
+ ('fixture:gfx950-content-sparse-attention:gfx950_content_sparse_attention', 'simt'),
+ ('fixture:gfx950-deepseek-sparse-attention:gfx950_deepseek_sparse_attention', 'simt'),
+ ('fixture:gfx950-four-branch-residual-explicit:gfx950_four_branch_residual', 'simt'),
+ ('fixture:gfx950-four-branch-residual:gfx950_four_branch_residual', 'simt'),
+ ('fixture:gfx950-kda-decode-baseline:gfx950_kda_decode', 'simt'),
+ ('fixture:gfx950-kda-decode:gfx950_kda_decode', 'simt'),
+ ('fixture:gfx950-kda-prefill-baseline:gfx950_kda_chunkwise_prefill', 'simt'),
+ ('fixture:gfx950-kda-prefill:gfx950_kda_chunkwise_prefill', 'simt'),
+ ('fixture:gfx950-mhc-sinkhorn-mix-scalar:gfx950_mhc_sinkhorn_mix', 'simt'),
+ ('fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix', 'simt'),
+ ('fixture:gfx950-moe-expert-rank:gfx950_moe_expert_rank_fp4_fp8_v1', 'simt'),
+ ('fixture:gfx950-moe-expert-rank:gfx950_moe_expert_rank_fp4_fp8_v1', 'tile'),
+ ('fixture:gfx950-moe-route:gfx950_moe_route_fp4_t16_e4_k2_v1', 'simt'),
+ ('fixture:gfx950-moe-route:gfx950_moe_route_fp4_t16_e4_k2_v1', 'tile'),
+ ('fixture:gfx950-muon-update:gfx950_muon_update_4x4_v1', 'simt'),
+ ('fixture:gfx950-muon-update:gfx950_muon_update_4x4_v1', 'tile'),
+ ('fixture:gfx950-qwen-ngram-gather:gfx950_qwen_ngram_gather_v1', 'simt'),
+ ('fixture:gfx950-qwen-ngram-gather:gfx950_qwen_ngram_gather_v1', 'tile'),
+ ('fixture:gfx950-speculative-transaction:gfx950_speculative_transaction_v1', 'simt'),
+ ('fixture:gfx950-speculative-transaction:gfx950_speculative_transaction_v1', 'tile'),
+ ('fixture:gfx950-stage-gradient-shard:gfx950_stage_gradient_shard_v1', 'simt'),
+ ('fixture:gfx950-stage-gradient-shard:gfx950_stage_gradient_shard_v1', 'tile'),
+ ('source-driver:cpu-semantic-simulation:6:row_affine_sum_u32_v1', 'simt'),
+ ('fixture:gfx950-moe-expert-rank-simt:gfx950_moe_expert_rank_fp4_fp8_v1', 'simt'),
+ ('fixture:gfx950-moe-expert-rank-simt:gfx950_moe_expert_rank_fp4_fp8_v1', 'tile'),
+ ('fixture:gfx950-moe-route-tile:gfx950_moe_route_fp4_t16_e4_k2_v1', 'simt'),
+ ('fixture:gfx950-moe-route-tile:gfx950_moe_route_fp4_t16_e4_k2_v1', 'tile'),
+ ('fixture:gfx950-combine-expert-ranks-tile:gfx950_combine_expert_ranks_v1', 'simt'),
+ ('fixture:gfx950-combine-expert-ranks-tile:gfx950_combine_expert_ranks_v1', 'tile'),
+ ('fixture:gfx950-speculative-transaction-tile:gfx950_speculative_transaction_v1', 'simt'),
+ ('fixture:gfx950-speculative-transaction-tile:gfx950_speculative_transaction_v1', 'tile'),
+ ('fixture:gfx950-qwen-ngram-gather-tile:gfx950_qwen_ngram_gather_v1', 'simt'),
+ ('fixture:gfx950-qwen-ngram-gather-tile:gfx950_qwen_ngram_gather_v1', 'tile'),
+ ('fixture:gfx950-stage-gradient-shard-tile:gfx950_stage_gradient_shard_v1', 'simt'),
+ ('fixture:gfx950-stage-gradient-shard-tile:gfx950_stage_gradient_shard_v1', 'tile'),
+ ('fixture:gfx950-muon-update-tile:gfx950_muon_update_4x4_v1', 'simt'),
+ ('fixture:gfx950-muon-update-tile:gfx950_muon_update_4x4_v1', 'tile')])
         pending = [variant for row in inventory["kernels"] for variant in row["variants"]
                    if variant["status"] == "pending"]
-        self.assertEqual(len(pending), 101)
+        self.assertEqual(len(pending), 87)
         self.assertTrue(all(variant["source"] is None for variant in pending))
         display = {(row["lessonId"], row["tabOrdinal"], row["kernelSymbol"]): row
                    for row in inventory["displayItems"]}
@@ -943,8 +971,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(self.manifest, before)
         self.assertEqual(expected["sourcePath"], "examples/fill/src/lib.rs")
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 22)
-        self.assertEqual(report["sourceBoundPairCount"], 0)
+        self.assertEqual(report["sourceBoundVariantCount"], 50)
+        self.assertEqual(report["sourceBoundPairCount"], 14)
         self.assertEqual(report["qualifiedPairCount"], 0)
         self.assertEqual(report["stageStatus"], "not-evaluated")
         self.assertIs(report["qualified"], False)
@@ -1012,8 +1040,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         foreign_id = "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1"
         binding = self.bind_source_variant(self.manifest, ROOT, kernel_id)
         report = self.kernel_pair_report()
-        self.assertEqual(report["sourceBoundVariantCount"], 23)
-        self.assertEqual(report["sourceBoundPairCount"], 0)
+        self.assertEqual(report["sourceBoundVariantCount"], 51)
+        self.assertEqual(report["sourceBoundPairCount"], 14)
         self.assertEqual(report["variantBindingStatus"], "partial")
         self.assertIs(report["qualified"], False)
         self.assertEqual(report["qualifiedPairCount"], 0)

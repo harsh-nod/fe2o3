@@ -72,6 +72,70 @@ Run the production Rust lowering and numerical verification on a gfx950 host:
 ./run-muon-update-gfx950.sh
 ```
 
+## Public paired-source milestone
+
+The explicit modes select existing ordinary Rust implementations for all seven
+kernels. Route, combine, speculative transaction, N-gram, shard staging and Muon
+retain their canonical SIMT bodies and add checked structured-tile selections.
+Expert rank retains its canonical mixed FP4/FP8 matrix-tile body and selects the
+existing raw-byte FP4/FP8 SIMT decoder with `simt`. No additional numerical
+format is advertised.
+
+| Selector | SIMT feature | Tile feature |
+| --- | --- | --- |
+| `moe-route` | `kernel-moe-route` | `kernel-moe-route-tile` |
+| `moe-expert-rank` | `kernel-moe-expert-rank-simt` | `kernel-moe-expert-rank` |
+| `combine-expert-ranks` | `kernel-combine-expert-ranks` | `kernel-combine-expert-ranks-tile` |
+| `speculative-transaction` | `kernel-speculative-transaction` | `kernel-speculative-transaction-tile` |
+| `qwen-ngram-gather` | `kernel-qwen-ngram-gather` | `kernel-qwen-ngram-gather-tile` |
+| `stage-gradient-shard` | `kernel-stage-gradient-shard` | `kernel-stage-gradient-shard-tile` |
+| `muon-update` | `kernel-muon-update` | `kernel-muon-update-tile` |
+
+From this package directory, compile and inspect each exact mode without
+launching a GPU kernel:
+
+```bash
+for selector in moe-expert-rank moe-route combine-expert-ranks \
+    speculative-transaction qwen-ngram-gather stage-gradient-shard muon-update; do
+    for mode in simt tile; do
+        FE2O3_EXAMPLE_COMPILE_ONLY=1 bash "run-$selector-gfx950.sh" "$mode"
+    done
+done
+```
+
+On a host with ROCm 7.2.4, explicitly select the checked-in closure with
+`FE2O3_GFX950_OCML_MANIFEST=../gfx950_low_precision/gfx950-ocml-rocm-7.2.4.manifest`.
+The default remains the reviewed ROCm 7.2.1 closure. The unchanged independent
+CPU contracts run with `cargo fe2o3 test --offline --all-targets`; individual
+feature selections can additionally be passed using `--no-default-features
+--features <feature>`.
+
+This source milestone uses public compiler foundation
+[PR #321](https://github.com/harsh-nod/fe2o3/pull/321),
+commit `3283b661e901d81ea30ca83ab6dd23ccc9ec0ad8`, as an explicit
+publication dependency. It does not claim that dependency was present in the
+baseline main commit `0e0963df4f230bf728a7b4605677c0ff09624adf`.
+The bounded compile campaign uses copied public compiler products built from
+`31ed896aa91bac004f4d760ad55f11345e59ed60`, whose compiler closure matches
+the dependency tree, with toolchain `nightly-2026-04-03` and the explicit
+ROCm 7.2.4 manifest.
+
+Canonical main's documented CPU command first failed its normal executable
+hashing guard: the default test image was 906,756,144 bytes, over the unchanged
+536,870,912-byte limit. The standalone `[profile.test] debug = 0` setting
+retains assertions, overflow checking and every oracle. No `CARGO_PROFILE_*`
+environment override or CLI limit increase is needed.
+
+Fixture source bindings describe exact selections. Simulation, policy,
+optimized-graph and fresh hardware qualification remain separate pending gates.
+The new counterpart simulation fixtures remain `pending-design`; their source
+bindings do not supply execution receipts. No GPU was launched for this
+publication task. No gfx942 execution or paired-source qualification is
+claimed. The historical GPU/performance campaigns below retain their original
+source and artifact identities and do not qualify these new mode selections.
+
+
+
 ## Current GPU-5 performance audit
 
 The 2026-09-05 campaign measured the current WG256/grid-`[4, 1, 1]` Rust
