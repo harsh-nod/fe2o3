@@ -323,7 +323,7 @@ pub(crate) fn exercise_occurrence_channel(
         false,
     )
     .unwrap();
-    let descriptors = [
+    let mut descriptors = vec![
         peer,
         root_pidfd,
         service.try_clone_service_root().unwrap(),
@@ -332,6 +332,11 @@ pub(crate) fn exercise_occurrence_channel(
         bytes_file(policy.canonical_bytes()),
         bytes_file(launch.canonical_bytes()),
     ];
+    let finish_control = (scenario == "commit_failure").then(|| {
+        let (control, child_control) = observer_pair().unwrap();
+        descriptors.push(child_control);
+        control
+    });
     let sources: Vec<_> = descriptors
         .iter()
         .map(|fd| rustix::io::fcntl_dupfd_cloexec(fd, 240).unwrap())
@@ -373,6 +378,7 @@ pub(crate) fn exercise_occurrence_channel(
     let mut replay_rejected = false;
     let mut mutation_rejected = false;
     let mut progress = 0;
+    let mut poison_completion_observed = false;
     loop {
         match root.step() {
             Ok(RootCompilerExecutionObserverProgressV1::Exited) => break,
@@ -388,8 +394,14 @@ pub(crate) fn exercise_occurrence_channel(
         }
         step_hook(progress);
         if scenario == "commit_failure" && progress == 5 {
-            // The Revalidated response is now sent. Let the helper inject the commit failure
-            // and assert poison before driving root containment of the abandoned operation.
+            // Initial admission, then Begin and Revalidate receive/send, take five steps.
+            // The helper stays alive through the final post-send profile check and reports all
+            // durable-commit failure and poison assertions passed before it may exit.
+            let control = finish_control.as_ref().unwrap();
+            super::super::registry::tests::await_test_control(control, b'D');
+            assert!(child.0.try_wait().unwrap().is_none());
+            poison_completion_observed = true;
+            assert_eq!(rustix::io::write(control, b"C").unwrap(), 1);
             while child.0.try_wait().unwrap().is_none() {
                 assert!(Instant::now() < deadline);
                 std::thread::sleep(Duration::from_millis(1));
@@ -399,6 +411,7 @@ pub(crate) fn exercise_occurrence_channel(
         std::thread::sleep(Duration::from_millis(1));
     }
     let status = child.0.wait().unwrap();
+    assert!(finish_control.is_none() || poison_completion_observed);
     if scenario == "replay" || scenario == "mutation" {
         assert!(if scenario == "replay" {
             replay_rejected
@@ -493,9 +506,10 @@ fn issuer_helper() {
         &ed25519_dalek::SigningKey::from_bytes(&[2; 32]),
         scenario == "commit_failure",
     );
-    if scenario == "success_held" {
-        // Close the completed protocol first, retaining the actual service/profile until
-        // the root has processed that closure. Process exit is not a readiness signal.
+    if scenario == "success_held" || scenario == "commit_failure" {
+        // Retain the actual service/profile until the parent has processed completion.
+        // For commit_failure, exercise has already asserted durable and channel poison.
+        // Process exit is not a readiness signal.
         drop(channel);
         let finish_control = inherited(207);
         assert_eq!(rustix::io::write(&finish_control, b"D").unwrap(), 1);
