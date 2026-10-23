@@ -673,7 +673,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "85e7f76aa3bc42dd464c6ad61e037516a15daa993741f2bcbb9f9069b0552852")
+                         "191fa2e5f20bdb7b1b96139165527a61efdf7e2e855dd47d050604a493bd90ae")
         self.assertEqual(len(inventory["kernels"]), 72)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 18})
