@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "823f090084313b07fadf68f8f12e539d67779fef",
-      "tree": "076cc22c0dc258239d098497cd291eafc76a772b"
+      "commit": "14fc8516f6b871d71788cc1d550dec52b70a2969",
+      "tree": "849ca75926c170f66f3d7a26416f6044abcf7bab"
     },
     "status": "pending",
     "lessons": [
@@ -2173,14 +2173,14 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 6578,
-            "displayedSha256": "a4af47e5ab3cad6a16d4b0cd2fc9028d0660469a75914474a7fc0d984934bd0a",
+            "displayedUtf8Bytes": 11320,
+            "displayedSha256": "9e31980d48320d2978823af76465f882a99263137ba828261f605e74afc110a7",
             "sourcePath": "examples/moe_grouped_expert_general_v1/src/kernel.rs",
-            "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
-            "sourceSha256": "a4af47e5ab3cad6a16d4b0cd2fc9028d0660469a75914474a7fc0d984934bd0a",
+            "sourceCommit": "d558aa97758cf553c956c5ce92178eac96bd2461",
+            "sourceSha256": "9e31980d48320d2978823af76465f882a99263137ba828261f605e74afc110a7",
             "sourceDigestScope": "file",
             "explanatory": false,
-            "evidenceId": null,
+            "evidenceId": "grouped-expert-moe-current-source-v1",
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -15103,7 +15103,18 @@
       {
         "lessonId": "moe-expert-compute",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 548,
+        "functionUtf8Offset": 915,
+        "kernelSymbol": "checked_extent_add",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary checked-extent helper or host regression test retained in the whole-file source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-expert-compute",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1145,
         "kernelSymbol": "matrix_extent",
         "classification": "helper",
         "kernelIds": [],
@@ -15114,7 +15125,7 @@
       {
         "lessonId": "moe-expert-compute",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 1209,
+        "functionUtf8Offset": 1806,
         "kernelSymbol": "moe_grouped_expert_general_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -15127,7 +15138,73 @@
       {
         "lessonId": "moe-expert-compute",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 6431,
+        "functionUtf8Offset": 7767,
+        "kernelSymbol": "expect_checked_value",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary checked-extent helper or host regression test retained in the whole-file source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-expert-compute",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 7961,
+        "kernelSymbol": "private_checked_pairs_have_no_padding",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary checked-extent helper or host regression test retained in the whole-file source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-expert-compute",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 8272,
+        "kernelSymbol": "private_checked_pairs_preserve_zero_max_and_rejection",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary checked-extent helper or host regression test retained in the whole-file source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-expert-compute",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 8691,
+        "kernelSymbol": "checked_extent_add_matches_independent_u128_oracle",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary checked-extent helper or host regression test retained in the whole-file source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-expert-compute",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 9841,
+        "kernelSymbol": "checked_extent_add_preserves_two_stage_boundaries",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary checked-extent helper or host regression test retained in the whole-file source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-expert-compute",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 10641,
+        "kernelSymbol": "checked_extent_add_does_not_narrow_to_u32",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary checked-extent helper or host regression test retained in the whole-file source, not a GPU entry."
+      },
+      {
+        "lessonId": "moe-expert-compute",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 11173,
         "kernelSymbol": "matrix_extent_excludes_trailing_padding",
         "classification": "helper",
         "kernelIds": [],
