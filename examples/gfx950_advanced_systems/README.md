@@ -251,7 +251,8 @@ FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=ngram-reverse-probe bash run-qwen-ngram-ga
 ```
 
 Add `FE2O3_EXAMPLE_COMPILE_ONLY=1` to compile and inspect without GPU execution;
-omitting the mode argument retains each original SIMT selector. Muon retains
+omitting the mode argument retains the original SIMT selector except for
+expert rank, which defaults to its original tile selector. Muon retains
 the ordered sum of 16 broadcast squares and all five Newton-Schulz iterations.
 N-gram retains reverse traversal of every slot, full-key collision rejection,
 highest priority, and lowest physical-slot tie breaking. Both tile paths use
