@@ -119,6 +119,40 @@ cargo fe2o3 test --locked --all-targets \
 VERUS=/absolute/path/to/verus examples/wave64_collectives_v1/run-verus.sh
 ```
 
+## Checked 8x8 output-tile variant
+
+The opt-in `tile-kernel` feature selects `src/tiled_kernel.rs` alongside the
+unchanged default SIMT source. All three outputs use
+`DisjointSlice<f32, Tiled2D<Index1D, 64, 8, 8, 1>>`, one checked tile witness,
+and `get_tiled_2d_mut(&tile, 0, 8, 8, 8)`. Physical lane `lane` owns coordinate
+`(lane / 8, lane % 8)` and therefore flat output index `lane` in each distinct
+allocation. The mask, input and output guards, three convergent collective
+calls, arithmetic, and inactive positive-zero publication remain unchanged.
+This is structured output ownership; collective arithmetic remains explicit.
+
+`tests/tile_source_model_correspondence.rs` admits only a separately encoded
+whole-file AST, checks semantic and tile-geometry mutations, interprets the
+8x8 publication mapping, and compares all 4,359 masks across the same four
+input families with the independent oracle. Its process check requires the
+exact tile source, checker, oracle and feature selection in the current outer
+commit. The original checker, committed-tree check, mutation cases, source
+identities and Verus proofs remain unchanged. The original 13-obligation
+source/CPU proof is **not** a formal receipt for the tile source. These new
+checks establish reviewed structural/model correspondence, not semantic Rust
+refinement or device execution. No current source-to-KIR relation is supplied.
+
+Run the feature-isolated host checks after committing the exact files:
+
+```sh
+cargo fe2o3 test --locked --all-targets \
+  --manifest-path examples/wave64_collectives_v1/Cargo.toml --features tile-kernel
+```
+
+Device compilation must still enter the ordinary general compiler for each
+selection. Compiler failures, historical source/KIR theorems, and pending
+protected execution keep their separate roles; this addition grants no
+artifact, load, launch, or GPU qualification.
+
 ## Boundary
 
 The reviewed structural relation does not prove semantic source-to-model
