@@ -1210,7 +1210,7 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
             }
         }
         "gfx950_content_sparse_attention" | "gfx950_compressed_hybrid_attention" => {
-            if case == SPARSE_ATTENTION {
+            if [SPARSE_ATTENTION, SPARSE_ATTENTION_SIMT].contains(&case) {
                 let mut physical_q = Vec::new();
                 let mut key = Vec::new();
                 let mut value = Vec::new();
@@ -2150,8 +2150,10 @@ fn plans_for(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
         KDA_DECODE,
         KDA_PREFILL,
         SPARSE_ATTENTION,
+        SPARSE_ATTENTION_SIMT,
         DEEPSEEK_SPARSE_ATTENTION,
         HYBRID_ATTENTION,
+        HYBRID_ATTENTION_SIMT,
         ATTNRES,
         FOUR_BRANCH,
         MHC,
@@ -3294,6 +3296,103 @@ fn deepseek_oracles_reject_every_corrupted_output_word() {
         }
         output_sizes.sort_unstable();
         assert_eq!(output_sizes, [1024, 1024, 1024]);
+    }
+}
+
+
+#[cfg(feature = "hardware-test-hooks")]
+const SPARSE_ATTENTION_SIMT: AdvancedCase = AdvancedCase {
+    label: "gfx950 content sparse attention SIMT",
+    static_lds_bytes: 0,
+    ..SPARSE_ATTENTION
+};
+
+
+#[cfg(feature = "hardware-test-hooks")]
+const HYBRID_ATTENTION_SIMT: AdvancedCase = AdvancedCase {
+    label: "gfx950 compressed hybrid attention SIMT",
+    static_lds_bytes: 0,
+    ..HYBRID_ATTENTION
+};
+
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_content_sparse_attention_tile_rust_cov6_matches_cpu_reference,
+    SPARSE_ATTENTION
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_content_sparse_attention_simt_rust_cov6_matches_cpu_reference,
+    SPARSE_ATTENTION_SIMT
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_compressed_hybrid_attention_tile_rust_cov6_matches_cpu_reference,
+    HYBRID_ATTENTION
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_compressed_hybrid_attention_simt_rust_cov6_matches_cpu_reference,
+    HYBRID_ATTENTION_SIMT
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn gfx950_attention_simt_cases_preserve_independent_oracle_payloads() {
+    for (tile, simt) in [
+        (SPARSE_ATTENTION, SPARSE_ATTENTION_SIMT),
+        (HYBRID_ATTENTION, HYBRID_ATTENTION_SIMT),
+    ] {
+        assert_eq!(tile.static_lds_bytes, 8192);
+        assert_eq!(simt.static_lds_bytes, 0);
+        assert_eq!(tile.export, simt.export);
+        assert_eq!(tile.descriptor, simt.descriptor);
+        assert_eq!(tile.args, simt.args);
+        assert_eq!(tile.workgroup_x, simt.workgroup_x);
+        let tile_plans = plans_for(tile).expect("tile oracle plans");
+        let simt_plans = plans_for(simt).expect("SIMT oracle plans");
+        assert_eq!(tile_plans.len(), simt_plans.len());
+        for (tile_plan, simt_plan) in tile_plans.iter().zip(&simt_plans) {
+            assert_eq!(tile_plan.args.len(), simt_plan.args.len());
+            assert_eq!(tile_plan.buffers.len(), simt_plan.buffers.len());
+            for (tile_buffer, simt_buffer) in tile_plan.buffers.iter().zip(&simt_plan.buffers) {
+                assert_eq!(tile_buffer.name, simt_buffer.name);
+                assert_eq!(tile_buffer.initial, simt_buffer.initial);
+                assert_eq!(tile_buffer.body_offset, simt_buffer.body_offset);
+                assert_eq!(tile_buffer.elements, simt_buffer.elements);
+                assert_eq!(tile_buffer.immutable, simt_buffer.immutable);
+                match (&tile_buffer.expected, &simt_buffer.expected) {
+                    (None, None) => {}
+                    (
+                        Some(ExpectedOutput::F32 {
+                            values: tile_values,
+                            absolute_tolerance: tile_absolute,
+                            relative_tolerance: tile_relative,
+                            exact_mask: tile_mask,
+                        }),
+                        Some(ExpectedOutput::F32 {
+                            values: simt_values,
+                            absolute_tolerance: simt_absolute,
+                            relative_tolerance: simt_relative,
+                            exact_mask: simt_mask,
+                        }),
+                    ) => {
+                        assert_eq!(value_bytes(tile_values), value_bytes(simt_values));
+                        assert_eq!(tile_absolute, simt_absolute);
+                        assert_eq!(tile_relative, simt_relative);
+                        assert_eq!(tile_mask, simt_mask);
+                    }
+                    (
+                        Some(ExpectedOutput::U32(tile_values)),
+                        Some(ExpectedOutput::U32(simt_values)),
+                    ) => {
+                        assert_eq!(tile_values, simt_values);
+                    }
+                    _ => panic!("tile and SIMT attention oracle output contracts differ"),
+                }
+            }
+        }
     }
 }
 
