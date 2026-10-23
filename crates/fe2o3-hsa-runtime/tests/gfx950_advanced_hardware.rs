@@ -3328,21 +3328,40 @@ fn gpt_oss_finite_router_edge_is_an_additional_guarded_full_fixture() -> Result<
         };
         assert_eq!(values, &vec![(1 << 7) | (2 << 14) | (3 << 21); 1024]);
         assert_eq!(route.elements, 1024);
-        for buffer in &edge.buffers {
+        let inputs = gpt_oss_reference::finite_router_edge_batch_inputs();
+        let expected_inputs = [
+            value_bytes(&inputs.hidden_f32),
+            value_bytes(&inputs.router_f32),
+            value_bytes(&inputs.query_bf16),
+            value_bytes(&inputs.key_transposed_bf16),
+            value_bytes(&inputs.value_f32),
+            value_bytes(&inputs.sinks_f32),
+            value_bytes(&inputs.expert_activation_blocks_fp4),
+            value_bytes(&inputs.expert_weight_blocks_fp4),
+            value_bytes(&inputs.activation_scales),
+            value_bytes(&inputs.expert_weight_scales),
+        ];
+        let input_count = if case.args.len() == 13 { 10 } else { 2 };
+        for (buffer, bytes) in edge.buffers.iter().zip(&expected_inputs).take(input_count) {
+            assert!(buffer.immutable && buffer.expected.is_none());
+            assert_eq!(buffer.body_offset, 0);
+            assert_eq!(&buffer.initial, bytes);
+        }
+        for buffer in edge
+            .buffers
+            .iter()
+            .filter(|buffer| buffer.expected.is_some())
+        {
             assert_eq!(buffer.body_offset, GUARD_BYTES);
             assert_eq!(&buffer.initial[..GUARD_BYTES], &[PREFIX_BYTE; GUARD_BYTES]);
             assert_eq!(
                 &buffer.initial[buffer.initial.len() - GUARD_BYTES..],
                 &[SUFFIX_BYTE; GUARD_BYTES]
             );
-            if buffer.expected.is_some() {
-                assert!(
-                    verify_buffer(buffer, &buffer.initial).is_err(),
-                    "unwritten poison must not satisfy edge fixture"
-                );
-            } else {
-                assert!(buffer.immutable);
-            }
+            assert!(
+                verify_buffer(buffer, &buffer.initial).is_err(),
+                "unwritten poison must not satisfy edge fixture"
+            );
         }
         if case.args.len() == 13 {
             for index in [10, 11] {
