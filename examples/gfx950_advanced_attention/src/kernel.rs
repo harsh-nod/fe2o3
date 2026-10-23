@@ -694,7 +694,11 @@ fn deepseek_attention_score_v1(q: &[f32], k: &[f32], token: usize) -> Option<f32
 }
 
 /// Selects two content blocks, retains three tokens, and computes one 16-value output.
-#[cfg(all(target_arch = "amdgpu", feature = "kernel-content-sparse-attention"))]
+#[cfg(all(
+    target_arch = "amdgpu",
+    feature = "kernel-content-sparse-attention",
+    not(feature = "kernel-content-sparse-attention-simt")
+))]
 #[cfg_attr(
     not(feature = "kernel-content-sparse-attention-reciprocal-reuse-v1"),
     kernel(
@@ -1635,7 +1639,11 @@ pub fn gfx950_deepseek_sparse_attention(
 }
 
 /// Mixes a four-token local window with three four-token compressed global blocks.
-#[cfg(all(target_arch = "amdgpu", feature = "kernel-compressed-hybrid-attention"))]
+#[cfg(all(
+    target_arch = "amdgpu",
+    feature = "kernel-compressed-hybrid-attention",
+    not(feature = "kernel-compressed-hybrid-attention-simt")
+))]
 #[cfg_attr(
     not(feature = "kernel-compressed-hybrid-attention-division-baseline-v1"),
     kernel(
