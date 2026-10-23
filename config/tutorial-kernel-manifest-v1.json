@@ -13481,44 +13481,22 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-decode-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-decode-simt",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "50770d871044428b928905ebb8a7d880f31723a75b7664c02dce6861979110fa",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_simt.rs",
-              "sourceSha256": "c11a30ec166078b5b8113b598141cf1cfd7152e1c818c77165dc8838b69c78f6",
-              "functionUtf8Offset": 1164
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-decode-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-decode-tile",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "caa9d92f532ac4e69adf5aa85297fea672710b9b6dfb9a2ec2426a56aa54688a",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile.rs",
-              "sourceSha256": "f1395ee1048bf4bc063417191c2e8890da32273256285a3e2e25c64a16ad984d",
-              "functionUtf8Offset": 1311
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           }
         ]
@@ -13535,44 +13513,22 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-held-fragments-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-held-fragments-simt",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "6d75544906311a7f659a7a41dcf2e03735bce97191e2907aef0fde430c01bd6e",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments_simt.rs",
-              "sourceSha256": "4a6e260ef9a635ea37d22174b616dc0c92e17066440c37aedab9916e7e803887",
-              "functionUtf8Offset": 1259
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-held-fragments-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-held-fragments-tile",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "6aa3d89dabe35b35387ee29a3d9c2732affdc3d25f8b0be20a046abee4939a17",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments_tile.rs",
-              "sourceSha256": "42d42b3fababed80685da0d527b6b5e0cfde76ca2a4bf7fa4efde108f38fb483",
-              "functionUtf8Offset": 1413
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           }
         ]
@@ -13589,44 +13545,22 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-interleaved-stores-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-interleaved-stores-simt",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "a6c69ff9663044194c3c43c47e0401745216be775ba636b2911370f79e9073c6",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores_simt.rs",
-              "sourceSha256": "f00c07e132ec509f5e0938c42fa64be84103da4ea7d58ad845c044dabe5abb09",
-              "functionUtf8Offset": 1133
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-interleaved-stores-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-interleaved-stores-tile",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "d7ea895c6e0a1eafd2c58490ace67295554c7150366f407a659d75a056ed1241",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores_tile.rs",
-              "sourceSha256": "770135f4b401f9f5daeb2849747c02c390e19dc4a51056320d2a1b1fc2a92eec",
-              "functionUtf8Offset": 1441
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           }
         ]
@@ -13686,44 +13620,22 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-attention-simt:gfx950_gpt_oss_120b_attention_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-materialized-attention-simt",
-                "kernelSymbol": "gfx950_gpt_oss_120b_attention_v1"
-              },
-              "selectionSha256": "457337ac62773654a682236b6c0b791dc99e4b5c63c61214c3ef6c41381b9c40",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_simt_components.rs",
-              "sourceSha256": "f69dd909e88af3f56ddf304bf769c58b39a32e45bb647197deec1ce9cd375562",
-              "functionUtf8Offset": 9069
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-attention-tile:gfx950_gpt_oss_120b_attention_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-materialized-attention-tile",
-                "kernelSymbol": "gfx950_gpt_oss_120b_attention_v1"
-              },
-              "selectionSha256": "e71b492eed844ed6f249cc9540c2985c8912cb56bff9b6531242ac993a5b295a",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile_components.rs",
-              "sourceSha256": "959c46ac1d1cc4d9035df9d4c6d571c763bfe8a29ff1fd0d4fe8e6473e858374",
-              "functionUtf8Offset": 9479
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           }
         ]
@@ -13783,44 +13695,22 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-expert-simt:gfx950_gpt_oss_120b_expert_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-materialized-expert-simt",
-                "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1"
-              },
-              "selectionSha256": "ee8242ebd7b7e663f10b53f0968bb1575c207bf0b0926f49bd493c4143fb2157",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_simt_components.rs",
-              "sourceSha256": "f69dd909e88af3f56ddf304bf769c58b39a32e45bb647197deec1ce9cd375562",
-              "functionUtf8Offset": 16099
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-expert-tile:gfx950_gpt_oss_120b_expert_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-materialized-expert-tile",
-                "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1"
-              },
-              "selectionSha256": "8501c75c913f6604d02740eaf84041be5b1e660b377487f561ab45d505b6bdef",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile_components.rs",
-              "sourceSha256": "959c46ac1d1cc4d9035df9d4c6d571c763bfe8a29ff1fd0d4fe8e6473e858374",
-              "functionUtf8Offset": 16732
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           }
         ]
@@ -14052,44 +13942,22 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-router-simt:gfx950_gpt_oss_120b_router_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-materialized-router-simt",
-                "kernelSymbol": "gfx950_gpt_oss_120b_router_v1"
-              },
-              "selectionSha256": "99d62bc121c88277339be2ae261e8892385ec6cbfa60bcfd0b1be48379e47039",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_simt_components.rs",
-              "sourceSha256": "f69dd909e88af3f56ddf304bf769c58b39a32e45bb647197deec1ce9cd375562",
-              "functionUtf8Offset": 850
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-router-tile:gfx950_gpt_oss_120b_router_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-materialized-router-tile",
-                "kernelSymbol": "gfx950_gpt_oss_120b_router_v1"
-              },
-              "selectionSha256": "2cfdc3d2bd18176612f3d416fc2953c2755c21add2330ad79708df00a743feb6",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile_components.rs",
-              "sourceSha256": "959c46ac1d1cc4d9035df9d4c6d571c763bfe8a29ff1fd0d4fe8e6473e858374",
-              "functionUtf8Offset": 1043
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           }
         ]
@@ -14407,44 +14275,22 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-serial-router-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-serial-router-simt",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "c4399e2f8bb6c7eade9a2c44019974f92c758db16d90fa1e4fc0d559a0cc4553",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_simt.rs",
-              "sourceSha256": "c11a30ec166078b5b8113b598141cf1cfd7152e1c818c77165dc8838b69c78f6",
-              "functionUtf8Offset": 1164
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-serial-router-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-serial-router-tile",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "d693cb8a879d5b30eb103ed9d8ed39f6b1b654916e452b68eb2a78ec73708b8f",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile.rs",
-              "sourceSha256": "f1395ee1048bf4bc063417191c2e8890da32273256285a3e2e25c64a16ad984d",
-              "functionUtf8Offset": 1311
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           }
         ]
@@ -14461,44 +14307,22 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-pipelined-attention-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-pipelined-attention-simt",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "63588180268251e47afda8325e7c843b5140713037632ef326f336b2f0fb32d2",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention_simt.rs",
-              "sourceSha256": "f2e691c00ede20f81c4e7d62a2d34e811b4c6d8694a4d56a971c6a75233051eb",
-              "functionUtf8Offset": 1314
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-pipelined-attention-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-pipelined-attention-tile",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "7e3571ecf2a9c52d9bcea7a54a00f8ea2da622c9a60e0dfdc9b5d36f2e7b936e",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention_tile.rs",
-              "sourceSha256": "7d969173af4df0d1cbe142aa5b75efa9093781c6b9611135eb1a1a07dace4501",
-              "functionUtf8Offset": 1537
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           }
         ]
@@ -14515,44 +14339,22 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-scalar-attention-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-scalar-attention-simt",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "a53d0505fcb72ace7f0d826f8fe571593cf5a55914c58ddf139d377a81335c3c",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention_simt.rs",
-              "sourceSha256": "7200a593f7760b9bc7127867944c085ba4111e938f10727ff5b0727d4230dbce",
-              "functionUtf8Offset": 2908
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "source-bound",
-            "source": {
-              "implementationKernelId": "fixture:gfx950-gpt-oss-scalar-attention-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
-              "selection": {
-                "kind": "fixture",
-                "fixtureId": "gfx950-gpt-oss-scalar-attention-tile",
-                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
-              },
-              "selectionSha256": "2b9a5275ca6c11bf7e7c2280d18233267ef6b85df2bde18dfdf269eeb970f19a",
-              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile.rs",
-              "sourceSha256": "f1395ee1048bf4bc063417191c2e8890da32273256285a3e2e25c64a16ad984d",
-              "functionUtf8Offset": 1311
-            },
+            "status": "pending",
+            "source": null,
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           }
         ]
@@ -14601,22 +14403,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-decode-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-decode-simt",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "50770d871044428b928905ebb8a7d880f31723a75b7664c02dce6861979110fa",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_simt.rs",
+              "sourceSha256": "c11a30ec166078b5b8113b598141cf1cfd7152e1c818c77165dc8838b69c78f6",
+              "functionUtf8Offset": 1164
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-decode-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-decode-tile",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "caa9d92f532ac4e69adf5aa85297fea672710b9b6dfb9a2ec2426a56aa54688a",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile.rs",
+              "sourceSha256": "f1395ee1048bf4bc063417191c2e8890da32273256285a3e2e25c64a16ad984d",
+              "functionUtf8Offset": 1311
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           }
         ]
@@ -14633,22 +14457,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-held-fragments-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-held-fragments-simt",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "6d75544906311a7f659a7a41dcf2e03735bce97191e2907aef0fde430c01bd6e",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments_simt.rs",
+              "sourceSha256": "4a6e260ef9a635ea37d22174b616dc0c92e17066440c37aedab9916e7e803887",
+              "functionUtf8Offset": 1259
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-held-fragments-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-held-fragments-tile",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "6aa3d89dabe35b35387ee29a3d9c2732affdc3d25f8b0be20a046abee4939a17",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments_tile.rs",
+              "sourceSha256": "42d42b3fababed80685da0d527b6b5e0cfde76ca2a4bf7fa4efde108f38fb483",
+              "functionUtf8Offset": 1413
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           }
         ]
@@ -14665,22 +14511,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-interleaved-stores-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-interleaved-stores-simt",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "a6c69ff9663044194c3c43c47e0401745216be775ba636b2911370f79e9073c6",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores_simt.rs",
+              "sourceSha256": "f00c07e132ec509f5e0938c42fa64be84103da4ea7d58ad845c044dabe5abb09",
+              "functionUtf8Offset": 1133
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-interleaved-stores-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-interleaved-stores-tile",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "d7ea895c6e0a1eafd2c58490ace67295554c7150366f407a659d75a056ed1241",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores_tile.rs",
+              "sourceSha256": "770135f4b401f9f5daeb2849747c02c390e19dc4a51056320d2a1b1fc2a92eec",
+              "functionUtf8Offset": 1441
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           }
         ]
@@ -14697,22 +14565,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-attention-simt:gfx950_gpt_oss_120b_attention_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-materialized-attention-simt",
+                "kernelSymbol": "gfx950_gpt_oss_120b_attention_v1"
+              },
+              "selectionSha256": "457337ac62773654a682236b6c0b791dc99e4b5c63c61214c3ef6c41381b9c40",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_simt_components.rs",
+              "sourceSha256": "f69dd909e88af3f56ddf304bf769c58b39a32e45bb647197deec1ce9cd375562",
+              "functionUtf8Offset": 9069
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-attention-tile:gfx950_gpt_oss_120b_attention_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-materialized-attention-tile",
+                "kernelSymbol": "gfx950_gpt_oss_120b_attention_v1"
+              },
+              "selectionSha256": "e71b492eed844ed6f249cc9540c2985c8912cb56bff9b6531242ac993a5b295a",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile_components.rs",
+              "sourceSha256": "959c46ac1d1cc4d9035df9d4c6d571c763bfe8a29ff1fd0d4fe8e6473e858374",
+              "functionUtf8Offset": 9479
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           }
         ]
@@ -14729,22 +14619,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-expert-simt:gfx950_gpt_oss_120b_expert_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-materialized-expert-simt",
+                "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1"
+              },
+              "selectionSha256": "ee8242ebd7b7e663f10b53f0968bb1575c207bf0b0926f49bd493c4143fb2157",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_simt_components.rs",
+              "sourceSha256": "f69dd909e88af3f56ddf304bf769c58b39a32e45bb647197deec1ce9cd375562",
+              "functionUtf8Offset": 16099
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-expert-tile:gfx950_gpt_oss_120b_expert_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-materialized-expert-tile",
+                "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1"
+              },
+              "selectionSha256": "8501c75c913f6604d02740eaf84041be5b1e660b377487f561ab45d505b6bdef",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile_components.rs",
+              "sourceSha256": "959c46ac1d1cc4d9035df9d4c6d571c763bfe8a29ff1fd0d4fe8e6473e858374",
+              "functionUtf8Offset": 16732
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           }
         ]
@@ -14761,22 +14673,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-router-simt:gfx950_gpt_oss_120b_router_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-materialized-router-simt",
+                "kernelSymbol": "gfx950_gpt_oss_120b_router_v1"
+              },
+              "selectionSha256": "99d62bc121c88277339be2ae261e8892385ec6cbfa60bcfd0b1be48379e47039",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_simt_components.rs",
+              "sourceSha256": "f69dd909e88af3f56ddf304bf769c58b39a32e45bb647197deec1ce9cd375562",
+              "functionUtf8Offset": 850
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-materialized-router-tile:gfx950_gpt_oss_120b_router_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-materialized-router-tile",
+                "kernelSymbol": "gfx950_gpt_oss_120b_router_v1"
+              },
+              "selectionSha256": "2cfdc3d2bd18176612f3d416fc2953c2755c21add2330ad79708df00a743feb6",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile_components.rs",
+              "sourceSha256": "959c46ac1d1cc4d9035df9d4c6d571c763bfe8a29ff1fd0d4fe8e6473e858374",
+              "functionUtf8Offset": 1043
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           }
         ]
@@ -14793,22 +14727,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-serial-router-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-serial-router-simt",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "c4399e2f8bb6c7eade9a2c44019974f92c758db16d90fa1e4fc0d559a0cc4553",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_simt.rs",
+              "sourceSha256": "c11a30ec166078b5b8113b598141cf1cfd7152e1c818c77165dc8838b69c78f6",
+              "functionUtf8Offset": 1164
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-serial-router-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-serial-router-tile",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "d693cb8a879d5b30eb103ed9d8ed39f6b1b654916e452b68eb2a78ec73708b8f",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile.rs",
+              "sourceSha256": "f1395ee1048bf4bc063417191c2e8890da32273256285a3e2e25c64a16ad984d",
+              "functionUtf8Offset": 1311
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           }
         ]
@@ -15733,22 +15689,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-pipelined-attention-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-pipelined-attention-simt",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "63588180268251e47afda8325e7c843b5140713037632ef326f336b2f0fb32d2",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention_simt.rs",
+              "sourceSha256": "f2e691c00ede20f81c4e7d62a2d34e811b4c6d8694a4d56a971c6a75233051eb",
+              "functionUtf8Offset": 1314
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-pipelined-attention-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-pipelined-attention-tile",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "7e3571ecf2a9c52d9bcea7a54a00f8ea2da622c9a60e0dfdc9b5d36f2e7b936e",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention_tile.rs",
+              "sourceSha256": "7d969173af4df0d1cbe142aa5b75efa9093781c6b9611135eb1a1a07dace4501",
+              "functionUtf8Offset": 1537
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           }
         ]
@@ -15765,22 +15743,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-scalar-attention-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-scalar-attention-simt",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "a53d0505fcb72ace7f0d826f8fe571593cf5a55914c58ddf139d377a81335c3c",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention_simt.rs",
+              "sourceSha256": "7200a593f7760b9bc7127867944c085ba4111e938f10727ff5b0727d4230dbce",
+              "functionUtf8Offset": 2908
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-gpt-oss-scalar-attention-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-gpt-oss-scalar-attention-tile",
+                "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+              },
+              "selectionSha256": "2b9a5275ca6c11bf7e7c2280d18233267ef6b85df2bde18dfdf269eeb970f19a",
+              "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel_tile.rs",
+              "sourceSha256": "f1395ee1048bf4bc063417191c2e8890da32273256285a3e2e25c64a16ad984d",
+              "functionUtf8Offset": 1311
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact Rust source association only; per-target simulation, final artifacts and hardware qualification remain pending."
             }
           }
         ]
