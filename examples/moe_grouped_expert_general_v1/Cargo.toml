@@ -11,6 +11,11 @@ publish = false
 members = []
 resolver = "3"
 
+[features]
+default = ["kernel-tile-moe-expert"]
+kernel-tile-moe-expert = []
+kernel-simt-moe-expert = []
+
 [dependencies]
 fe2o3-device = { path = "../../crates/fe2o3-device" }
 
