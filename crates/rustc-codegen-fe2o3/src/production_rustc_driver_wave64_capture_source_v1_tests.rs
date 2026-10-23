@@ -73,15 +73,15 @@ impl Case {
     fn permits_ranked_only(self) -> bool {
         self.expectation == Expectation::InertCapture
             && self.scalar == Scalar::F32
-            && matches!(self.operation, Operation::Inclusive | Operation::Exclusive)
+            && matches!(self.operation, Operation::Reduce | Operation::Inclusive | Operation::Exclusive)
     }
 
     fn requires_ranked_only(self) -> bool {
-        // This exact source row already reached ranked verification. Other
-        // permitted rows remain conditional until their actual outcomes run.
+        // Only these exact non-retained gfx942 rows have been observed reaching
+        // ranked verification. Every other permitted row remains conditional.
         self.permits_ranked_only()
             && !self.gfx950
-            && self.operation == Operation::Inclusive
+            && matches!(self.operation, Operation::Reduce | Operation::Inclusive)
             && !self.retained
     }
 
@@ -146,7 +146,7 @@ impl Report {
             return Err("wave capture report lost its exact case or distinct outcome".into());
         }
         if case.requires_ranked_only() && self.ranked_only.is_none() {
-            return Err("observed gfx942 f32 inclusive ranked witness regressed to refusal".into());
+            return Err("observed gfx942 non-retained f32 ranked witness regressed to refusal".into());
         }
         if let Some(ranked) = &self.ranked_only {
             if !case.permits_ranked_only()
@@ -325,7 +325,7 @@ fn observe_capture(tcx: TyCtxt<'_>, case: Case) -> Result<Report, String> {
         Err(error) => return Err(format!("unexpected pre-materialization refusal: {error:?}")),
         Ok(ranked) => {
             if !case.permits_ranked_only() {
-                return Err("source outside the reviewed f32 scans reached ranked checks".into());
+                return Err("source outside the reviewed f32 collectives reached ranked checks".into());
             }
             // Read the actual returned stage; no target lowering, artifact
             // publication or launch is performed by this source-capture test.
@@ -590,11 +590,44 @@ fn observed_ranked_witness_cannot_regress_to_refusal_without_requiring_gfx950_su
 }
 
 #[test]
+fn observed_gfx942_nonretained_f32_reduction_keeps_actual_ranked_stage_requirement() {
+    // Report-contract control only. The actual source subprocess must still
+    // return and validate its real ranked stage; this is no native receipt.
+    let mut report = ranked_report_control();
+    report.case.operation = Operation::Reduce;
+    report.retained_scan_helpers = 0;
+    assert!(report.case.permits_ranked_only());
+    assert!(report.case.requires_ranked_only());
+    report.validate(report.case).unwrap();
+    report.ranked_only.as_mut().unwrap().grants_artifact_or_launch_authority = true;
+    assert!(report.validate(report.case).is_err());
+    report.ranked_only.as_mut().unwrap().grants_artifact_or_launch_authority = false;
+    for scalar in [Scalar::U32, Scalar::I32] {
+        report.case.scalar = scalar;
+        assert!(!report.case.permits_ranked_only());
+        assert!(report.validate(report.case).is_err());
+    }
+    report.case.scalar = Scalar::F32;
+    report.ranked_only = None;
+    report.refusal = "historical pre-ranked refusal control".into();
+    assert!(report.validate(report.case).is_err());
+    // No unobserved gfx950 or retained reduction is made mandatory.
+    for (gfx950, retained) in [(true, false), (false, true), (true, true)] {
+        report.case.gfx950 = gfx950;
+        report.case.retained = retained;
+        report.retained_wrapper_functions = usize::from(retained);
+        assert!(report.case.permits_ranked_only());
+        assert!(!report.case.requires_ranked_only());
+        report.validate(report.case).unwrap();
+    }
+}
+
+#[test]
 fn wave64_capture_cases_keep_scalar_scan_and_hostile_boundaries_distinct() {
     let cases = capture_cases();
     assert_eq!(cases.len(), 52);
-    assert_eq!(cases.iter().filter(|case| case.permits_ranked_only()).count(), 8);
-    assert_eq!(cases.iter().filter(|case| case.requires_ranked_only()).count(), 1);
+    assert_eq!(cases.iter().filter(|case| case.permits_ranked_only()).count(), 12);
+    assert_eq!(cases.iter().filter(|case| case.requires_ranked_only()).count(), 2);
     assert_eq!(cases.iter().filter(|case| case.expectation != Expectation::InertCapture).count(), 16);
     let mut identities = std::collections::BTreeSet::new();
     for case in cases {

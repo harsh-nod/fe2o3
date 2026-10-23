@@ -104,8 +104,8 @@ These are historical pins, not identities of current source or general Kernel IR
 abstract-model theorem suite with 10 obligations and three expected negatives.
 Its runner labels it historical; it does not establish a current source-to-KIR
 proof or bind the present compiler output. Current source/CPU proof identities
-are updated separately. Fresh Verus qualification of those current identities
-remains pending; earlier proof execution is not inherited.
+are updated separately. The command below reruns the current identity proofs with the pinned
+Verus release; earlier proof execution is not inherited.
 
 The live exact-syntax source/CPU checker now requires the current trap-only
 spelling. Reinserting the retired `return` or substituting its exact old source
