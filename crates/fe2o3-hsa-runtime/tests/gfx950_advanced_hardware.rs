@@ -126,6 +126,19 @@ mod attention_reference;
 #[path = "../../../examples/gfx950_gpt_oss_decode/src/reference.rs"]
 mod gpt_oss_reference;
 #[cfg(feature = "hardware-test-hooks")]
+mod dimensions {
+    pub(super) use super::{
+        ALL_EXPERTS, ATTENTION_TOKENS_V1, CANDIDATES, CHANNELS_V1, DEEPSEEK_SPARSE_TOP_K_V1,
+        DISPATCH_CAPACITY, DRAFT_STEPS, EXPERTS, GRADIENT_SHARDS, HEAD_DIMENSION_V1, HIDDEN,
+        KDA_CHUNK_TOKENS_V1, KDA_KEY_DIMENSION_V1, KDA_STATE_ELEMENTS_V1, KDA_VALUE_DIMENSION_V1,
+        MIXING_STREAMS_V1, MUON_DIM, MUON_ELEMENTS, MUON_ITERATIONS, MUON_LEARNING_RATE, NGRAM,
+        OUTPUT, PREFILL_TOKENS_V1, QUERIES, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1,
+        SINKHORN_ITERATIONS_V1, STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS,
+        TOKENS_PER_BLOCK_V1, TOP_K,
+    };
+}
+
+#[cfg(feature = "hardware-test-hooks")]
 #[path = "../../../examples/gfx950_advanced_systems/src/reference.rs"]
 mod systems_reference;
 
@@ -883,9 +896,16 @@ fn input<T: Copy>(name: &'static str, values: &[T]) -> PlannedBuffer {
 fn output(name: &'static str, expected: ExpectedOutput) -> PlannedBuffer {
     let mut initial = vec![PREFIX_BYTE; GUARD_BYTES];
     match &expected {
-        ExpectedOutput::F32 { values, .. } => {
-            for _ in values {
-                initial.extend_from_slice(&F32_POISON_BITS.to_le_bytes());
+        ExpectedOutput::F32 {
+            values, exact_mask, ..
+        } => {
+            for (index, value) in values.iter().enumerate() {
+                let poison = if exact_mask.as_ref().is_some_and(|mask| mask[index]) {
+                    !value.to_bits()
+                } else {
+                    F32_POISON_BITS
+                };
+                initial.extend_from_slice(&poison.to_le_bytes());
             }
         }
         ExpectedOutput::U32(values) => {
@@ -1910,26 +1930,29 @@ fn systems_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
                 priorities.len(),
                 SYSTEM_BATCHES * QUERIES,
             ];
-            Ok(vec![LaunchPlan {
-                label: case.label.into(),
-                buffers: vec![
-                    input("queries", &queries),
-                    input("table_hashes", &hashes),
-                    input("table_grams", &grams),
-                    input("table_values", &values),
-                    input("priorities", &priorities),
-                    output("output", ExpectedOutput::I32(expected)),
-                ],
-                args: (0..6)
-                    .map(|buffer| PlannedArg::Slice {
-                        buffer,
-                        elements: lengths[buffer],
-                    })
-                    .collect(),
-            }])
+            Ok(vec![
+                LaunchPlan {
+                    label: case.label.into(),
+                    buffers: vec![
+                        input("queries", &queries),
+                        input("table_hashes", &hashes),
+                        input("table_grams", &grams),
+                        input("table_values", &values),
+                        input("priorities", &priorities),
+                        output("output", ExpectedOutput::I32(expected)),
+                    ],
+                    args: (0..6)
+                        .map(|buffer| PlannedArg::Slice {
+                            buffer,
+                            elements: lengths[buffer],
+                        })
+                        .collect(),
+                },
+                ngram_integer_plan(case),
+            ])
         }
         "gfx950_stage_gradient_shard_v1" => {
-            let shards = make_muon_shards();
+            let shards = make_stage_shards();
             Ok((0..GRADIENT_SHARDS)
                 .map(|shard| {
                     let values = (0..SYSTEM_BATCHES)
@@ -2552,6 +2575,13 @@ fn verify_buffer(plan: &PlannedBuffer, actual: &[u8]) -> Result<(), BoxError> {
             let actual = decode_f32(body)?;
             let mut maximum_error = 0.0_f32;
             for (index, (actual, expected)) in actual.iter().zip(values).enumerate() {
+                if exact_mask.as_ref().is_some_and(|mask| mask[index]) {
+                    require(
+                        actual.to_bits() == expected.to_bits(),
+                        format!("{}[{index}] is not bitwise exact", plan.name),
+                    )?;
+                    continue;
+                }
                 let error = (actual - expected).abs();
                 let tolerance = absolute_tolerance + relative_tolerance * expected.abs();
                 require(
@@ -2561,12 +2591,6 @@ fn verify_buffer(plan: &PlannedBuffer, actual: &[u8]) -> Result<(), BoxError> {
                         plan.name
                     ),
                 )?;
-                if exact_mask.as_ref().is_some_and(|mask| mask[index]) {
-                    require(
-                        actual.to_bits() == expected.to_bits(),
-                        format!("{}[{index}] is not bitwise exact", plan.name),
-                    )?;
-                }
                 maximum_error = maximum_error.max(error);
             }
             println!(
@@ -3762,4 +3786,506 @@ fn gfx950_vecadd_tile_rust_cov6_matches_cpu_reference() -> Result<(), BoxError> 
 fn gfx950_vecadd_profile_cpu_inspection() -> Result<(), BoxError> {
     let (bytes, _) = read_pinned_hsaco()?;
     inspect_profile(vecadd_qualification::CASE, &bytes)
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+const MOE_ROUTE_TILE: AdvancedCase = MOE_ROUTE;
+#[cfg(feature = "hardware-test-hooks")]
+const MOE_EXPERT_SIMT: AdvancedCase = MOE_EXPERT;
+#[cfg(feature = "hardware-test-hooks")]
+const COMBINE_TILE: AdvancedCase = COMBINE;
+#[cfg(feature = "hardware-test-hooks")]
+const STAGE_SHARD_TILE: AdvancedCase = STAGE_SHARD;
+#[cfg(feature = "hardware-test-hooks")]
+const MUON_TILE: AdvancedCase = MUON;
+#[cfg(feature = "hardware-test-hooks")]
+const NGRAM_GATHER_TILE: AdvancedCase = NGRAM_GATHER;
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_moe_route_tile_rust_cov6_matches_cpu_reference,
+    MOE_ROUTE_TILE
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_moe_expert_rank_simt_rust_cov6_matches_cpu_reference,
+    MOE_EXPERT_SIMT
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_combine_expert_ranks_tile_rust_cov6_matches_cpu_reference,
+    COMBINE_TILE
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_speculative_transaction_simt_rust_cov6_matches_cpu_reference,
+    SPECULATIVE
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_speculative_transaction_tile_rust_cov6_matches_cpu_reference,
+    SPECULATIVE
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_stage_gradient_shard_tile_rust_cov6_matches_cpu_reference,
+    STAGE_SHARD_TILE
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_muon_update_tile_rust_cov6_matches_cpu_reference,
+    MUON_TILE
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_qwen_ngram_gather_tile_rust_cov6_matches_cpu_reference,
+    NGRAM_GATHER_TILE
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+fn make_stage_shards() -> Vec<f32> {
+    let special = [
+        0x0000_0000_u32,
+        0x8000_0000,
+        0x0000_0001,
+        0x8000_0001,
+        0x007f_ffff,
+        0x807f_ffff,
+        0x0080_0000,
+        0x8080_0000,
+        0x7f7f_ffff,
+        0xff7f_ffff,
+        0x7f80_0000,
+        0xff80_0000,
+        0x7fc0_00a5,
+        0x7fc1_2345,
+        0xffc5_4321,
+        0x3f80_0001,
+    ];
+    (0..SYSTEM_BATCHES * GRADIENT_SHARDS * MUON_ELEMENTS)
+        .map(|index| {
+            let batch = index / (GRADIENT_SHARDS * MUON_ELEMENTS);
+            let shard = index / MUON_ELEMENTS % GRADIENT_SHARDS;
+            let element = index % MUON_ELEMENTS;
+            let bits = if batch < 2 {
+                special[(element + shard * 5 + batch * 3) % special.len()]
+            } else {
+                // Vary all mantissa bits across both shards and all later batches.
+                0x3e00_0000 | ((index as u32).wrapping_mul(0x0045_d9f3) & 0x807f_ffff)
+            };
+            f32::from_bits(bits)
+        })
+        .collect()
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn ngram_integer_plan(case: AdvancedCase) -> LaunchPlan {
+    let mut queries = vec![0; SYSTEM_BATCHES * QUERIES * NGRAM];
+    let mut hashes = vec![0; SYSTEM_BATCHES * TABLE_SIZE];
+    let mut grams = vec![0; SYSTEM_BATCHES * TABLE_SIZE * NGRAM];
+    let mut values = vec![0; SYSTEM_BATCHES * TABLE_SIZE];
+    let mut priorities = vec![i32::MIN; SYSTEM_BATCHES * TABLE_SIZE];
+    for batch in 0..SYSTEM_BATCHES {
+        for query in 0..QUERIES {
+            let base = (batch * QUERIES + query) * NGRAM;
+            queries[base..base + NGRAM].copy_from_slice(&[
+                i32::MIN + (batch * QUERIES + query) as i32,
+                -16_777_217 - query as i32,
+                i32::MAX - batch as i32,
+            ]);
+        }
+        // Force a wrapped probe order: slot14 is visited before slot1, but
+        // absolute slot1 must win their equal-priority tie.
+        let first = batch * QUERIES * NGRAM;
+        while hash_gram(&queries[first..first + NGRAM]) as usize & (TABLE_SIZE - 1) != 14 {
+            queries[first + 1] = queries[first + 1].wrapping_add(1);
+        }
+        for (query, slot, priority, value) in [
+            (0, 14, 7, 16_777_217),
+            (0, 1, 7, -16_777_219),
+            (1, 3, -8, 3),
+            (1, 8, 12, i32::MAX),
+            (2, 5, i32::MIN, i32::MIN),
+            (3, 4, i32::MAX, 99),
+            (4, 7, 0, i32::MAX),
+            (5, 9, i32::MAX - 1, -123_456_789),
+        ] {
+            let query_base = (batch * QUERIES + query) * NGRAM;
+            let table_slot = batch * TABLE_SIZE + slot;
+            hashes[table_slot] = hash_gram(&queries[query_base..query_base + NGRAM]);
+            let gram_base = table_slot * NGRAM;
+            grams[gram_base..gram_base + NGRAM]
+                .copy_from_slice(&queries[query_base..query_base + NGRAM]);
+            if query == 3 {
+                // Matching hash and higher priority cannot override full-key mismatch.
+                grams[gram_base + 2] ^= 1;
+            }
+            priorities[table_slot] = priority;
+            values[table_slot] = value;
+        }
+    }
+    let expected =
+        systems_reference::batched_ngram_reference(&queries, &hashes, &grams, &values, &priorities);
+    let lengths = [
+        queries.len(),
+        hashes.len(),
+        grams.len(),
+        values.len(),
+        priorities.len(),
+        SYSTEM_BATCHES * QUERIES,
+    ];
+    LaunchPlan {
+        label: format!(
+            "{} signed integers, collision, priority and wrapped tie",
+            case.label
+        ),
+        buffers: vec![
+            input("queries", &queries),
+            input("table_hashes", &hashes),
+            input("table_grams", &grams),
+            input("table_values", &values),
+            input("priorities", &priorities),
+            output("output", ExpectedOutput::I32(expected)),
+        ],
+        args: lengths
+            .into_iter()
+            .enumerate()
+            .map(|(buffer, elements)| PlannedArg::Slice { buffer, elements })
+            .collect(),
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn fixture_expected_bytes(plan: &PlannedBuffer) -> Vec<u8> {
+    let body = match plan.expected.as_ref().expect("output reference") {
+        ExpectedOutput::F32 { values, .. } => value_bytes(values),
+        ExpectedOutput::U32(values) => value_bytes(values),
+        ExpectedOutput::I32(values) => value_bytes(values),
+    };
+    let mut actual = plan.initial.clone();
+    actual[GUARD_BYTES..GUARD_BYTES + body.len()].copy_from_slice(&body);
+    actual
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn exact_f32_verification_preserves_payloads_zero_and_unwritten_detection() {
+    let values = vec![
+        f32::from_bits(F32_POISON_BITS),
+        f32::from_bits(0x7fc1_2345),
+        f32::from_bits(0xffc5_4321),
+        0.0,
+        -0.0,
+        f32::from_bits(1),
+        f32::from_bits(0x8000_0001),
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::from_bits(0x3f80_0001),
+    ];
+    let plan = output(
+        "raw_bits",
+        ExpectedOutput::F32 {
+            exact_mask: Some(vec![true; values.len()]),
+            values,
+            absolute_tolerance: 0.0,
+            relative_tolerance: 0.0,
+        },
+    );
+    let actual = fixture_expected_bytes(&plan);
+    verify_buffer(&plan, &actual).expect("all exact bits, including NaNs");
+    assert!(
+        verify_buffer(&plan, &plan.initial).is_err(),
+        "unwritten NaN poison must fail"
+    );
+    // A mutation at every element rejects payload changes, +0/-0 changes and
+    // incomplete last-element writes without relying on floating arithmetic.
+    for element in 0..plan.elements {
+        let mut changed = actual.clone();
+        changed[GUARD_BYTES + element * 4 + 3] ^= 0x80;
+        assert!(verify_buffer(&plan, &changed).is_err(), "element {element}");
+    }
+    let mut changed_payload = actual.clone();
+    changed_payload[GUARD_BYTES + 4] ^= 1;
+    assert!(verify_buffer(&plan, &changed_payload).is_err());
+    let mut changed_guard = actual.clone();
+    changed_guard[0] ^= 1;
+    assert!(verify_buffer(&plan, &changed_guard).is_err());
+    let tolerance_plan = f32_output("finite_only", vec![f32::NAN], 0.0);
+    assert!(verify_buffer(&tolerance_plan, &fixture_expected_bytes(&tolerance_plan)).is_err());
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn stage_tile_and_simt_keep_two_complete_bitwise_shard_plans() {
+    assert_eq!(STAGE_SHARD_TILE, STAGE_SHARD);
+    let plans = systems_plans(STAGE_SHARD_TILE).expect("stage plans");
+    assert_eq!(plans.len(), GRADIENT_SHARDS);
+    let mut first_input = None;
+    for plan in &plans {
+        assert_eq!(plan.buffers[0].elements, 256);
+        let output = &plan.buffers[1];
+        assert_eq!(output.elements, 256);
+        let Some(ExpectedOutput::F32 {
+            values,
+            exact_mask: Some(mask),
+            ..
+        }) = &output.expected
+        else {
+            panic!("full exact stage reference")
+        };
+        assert_eq!(mask.len(), 256);
+        assert!(mask.iter().all(|exact| *exact));
+        assert_eq!(value_bytes(values), plan.buffers[0].initial);
+        for bits in [
+            0_u32,
+            0x8000_0000,
+            0x7fc0_00a5,
+            0x7fc1_2345,
+            0xffc5_4321,
+            1,
+            0x8000_0001,
+        ] {
+            assert!(values.iter().any(|value| value.to_bits() == bits));
+        }
+        let actual = fixture_expected_bytes(output);
+        verify_buffer(output, &actual).expect("complete stage reference");
+        assert!(verify_buffer(output, &output.initial).is_err());
+        let mut omitted_last = actual.clone();
+        let last = GUARD_BYTES + 255 * 4;
+        omitted_last[last..last + 4].copy_from_slice(&output.initial[last..last + 4]);
+        assert!(
+            verify_buffer(output, &omitted_last).is_err(),
+            "last output is mandatory"
+        );
+        if let Some(first) = &first_input {
+            assert_ne!(first, &plan.buffers[0].initial, "two distinct shard inputs");
+        } else {
+            first_input = Some(plan.buffers[0].initial.clone());
+        }
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn ngram_tile_and_simt_keep_full_integer_collision_priority_and_tie_plans() {
+    assert_eq!(NGRAM_GATHER_TILE, NGRAM_GATHER);
+    let plans = systems_plans(NGRAM_GATHER_TILE).expect("ngram plans");
+    assert_eq!(
+        plans.len(),
+        2,
+        "preserve original plan and add integer edge cases"
+    );
+    for plan in &plans {
+        let output = &plan.buffers[5];
+        assert_eq!(output.elements, SYSTEM_BATCHES * QUERIES);
+        verify_buffer(output, &fixture_expected_bytes(output)).expect("complete integer output");
+        assert!(verify_buffer(output, &output.initial).is_err());
+    }
+    let edge = &plans[1];
+    let Some(ExpectedOutput::I32(values)) = &edge.buffers[5].expected else {
+        panic!("integer output")
+    };
+    for batch in 0..SYSTEM_BATCHES {
+        assert_eq!(
+            &values[batch * QUERIES..(batch + 1) * QUERIES],
+            &[
+                -16_777_219,
+                i32::MAX,
+                i32::MIN,
+                -1,
+                i32::MAX,
+                -123_456_789,
+                -1,
+                -1
+            ]
+        );
+    }
+    let mut corrupted = fixture_expected_bytes(&edge.buffers[5]);
+    let last = GUARD_BYTES + (SYSTEM_BATCHES * QUERIES - 1) * 4;
+    corrupted[last] ^= 1;
+    assert!(verify_buffer(&edge.buffers[5], &corrupted).is_err());
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn muon_tile_and_simt_keep_complete_independent_arithmetic_reference() {
+    assert_eq!(MUON_TILE, MUON);
+    let plans = systems_plans(MUON_TILE).expect("Muon plans");
+    assert_eq!(plans.len(), 1);
+    let plan = &plans[0];
+    assert_eq!(
+        plan.buffers[0].elements,
+        SYSTEM_BATCHES * GRADIENT_SHARDS * MUON_ELEMENTS
+    );
+    for (buffer, count) in [(&plan.buffers[1], 256), (&plan.buffers[2], 16)] {
+        assert_eq!(buffer.elements, count);
+        let Some(ExpectedOutput::F32 {
+            values,
+            absolute_tolerance,
+            relative_tolerance,
+            exact_mask,
+        }) = &buffer.expected
+        else {
+            panic!("full Muon arithmetic oracle")
+        };
+        assert_eq!(values.len(), count);
+        assert!(values.iter().all(|value| value.is_finite()));
+        assert_eq!(*absolute_tolerance, 2.0e-6);
+        assert_eq!(*relative_tolerance, 0.0);
+        assert!(exact_mask.is_none());
+        verify_buffer(buffer, &fixture_expected_bytes(buffer)).expect("full reference output");
+        let mut corrupted = fixture_expected_bytes(buffer);
+        let last = GUARD_BYTES + (count - 1) * 4;
+        corrupted[last..last + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(verify_buffer(buffer, &corrupted).is_err());
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn speculative_oracle_rejects_every_corrupted_output_word() {
+    for case in [SPECULATIVE] {
+        let plans = plans_for(case).expect("complete existing oracle plans");
+        assert_eq!(plans.len(), 1);
+        let mut output_sizes = Vec::new();
+        for buffer in &plans[0].buffers {
+            if buffer.immutable {
+                assert!(buffer.expected.is_none());
+                continue;
+            }
+            let expected = buffer
+                .expected
+                .as_ref()
+                .expect("every output has an oracle");
+            let (bytes, floating) = match expected {
+                ExpectedOutput::F32 {
+                    values, exact_mask, ..
+                } => {
+                    if let Some(mask) = exact_mask {
+                        assert_eq!(mask.len(), values.len());
+                        assert!(mask.iter().any(|&exact| exact));
+                        assert!(mask.iter().any(|&exact| !exact));
+                    }
+                    (value_bytes(values), true)
+                }
+                ExpectedOutput::U32(values) => (value_bytes(values), false),
+                ExpectedOutput::I32(_) => panic!("these kernels have no signed output"),
+            };
+            output_sizes.push(expected.element_count());
+            let mut valid = buffer.initial.clone();
+            valid[buffer.body_offset..buffer.body_offset + bytes.len()].copy_from_slice(&bytes);
+            verify_buffer(buffer, &valid).expect("full original expected output accepted");
+            assert!(verify_buffer(buffer, &buffer.initial).is_err());
+            for word in 0..expected.element_count() {
+                let offset = buffer.body_offset + word * 4;
+                let saved: [u8; 4] = valid[offset..offset + 4].try_into().unwrap();
+                let corrupt = if floating {
+                    f32::NAN.to_le_bytes()
+                } else {
+                    (u32::from_le_bytes(saved) ^ 1).to_le_bytes()
+                };
+                valid[offset..offset + 4].copy_from_slice(&corrupt);
+                assert!(
+                    verify_buffer(buffer, &valid).is_err(),
+                    "unverified {} word {word}",
+                    buffer.name
+                );
+                valid[offset..offset + 4].copy_from_slice(&saved);
+            }
+        }
+        output_sizes.sort_unstable();
+        assert_eq!(output_sizes, [128, 128, 1024]);
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn gfx950_moe_modes_preserve_independent_oracle_payloads() {
+    for (tile, simt) in [
+        (MOE_ROUTE, MOE_ROUTE_TILE),
+        (MOE_EXPERT, MOE_EXPERT_SIMT),
+        (COMBINE, COMBINE_TILE),
+    ] {
+        assert_eq!(tile.static_lds_bytes, 0);
+        assert_eq!(simt.static_lds_bytes, 0);
+        assert_eq!(tile.export, simt.export);
+        assert_eq!(tile.descriptor, simt.descriptor);
+        assert_eq!(tile.args, simt.args);
+        assert_eq!(tile.workgroup_x, simt.workgroup_x);
+        let tile_plans = plans_for(tile).expect("tile oracle plans");
+        let simt_plans = plans_for(simt).expect("SIMT oracle plans");
+        assert_eq!(tile_plans.len(), simt_plans.len());
+        for (tile_plan, simt_plan) in tile_plans.iter().zip(&simt_plans) {
+            assert_eq!(tile_plan.args.len(), simt_plan.args.len());
+            for (left, right) in tile_plan.args.iter().zip(&simt_plan.args) {
+                match (left, right) {
+                    (
+                        PlannedArg::Slice {
+                            buffer: a,
+                            elements: x,
+                        },
+                        PlannedArg::Slice {
+                            buffer: b,
+                            elements: y,
+                        },
+                    ) => {
+                        assert_eq!(a, b);
+                        assert_eq!(x, y);
+                    }
+                    (PlannedArg::Pointer { buffer: a }, PlannedArg::Pointer { buffer: b }) => {
+                        assert_eq!(a, b)
+                    }
+                    (PlannedArg::U32(a), PlannedArg::U32(b)) => assert_eq!(a, b),
+                    _ => panic!("MoE mode ABI argument kinds differ"),
+                }
+            }
+            assert_eq!(tile_plan.buffers.len(), simt_plan.buffers.len());
+            for (tile_buffer, simt_buffer) in tile_plan.buffers.iter().zip(&simt_plan.buffers) {
+                assert_eq!(tile_buffer.name, simt_buffer.name);
+                assert_eq!(tile_buffer.initial, simt_buffer.initial);
+                assert_eq!(tile_buffer.body_offset, simt_buffer.body_offset);
+                assert_eq!(tile_buffer.elements, simt_buffer.elements);
+                assert_eq!(tile_buffer.immutable, simt_buffer.immutable);
+                match (&tile_buffer.expected, &simt_buffer.expected) {
+                    (None, None) => {}
+                    (
+                        Some(ExpectedOutput::F32 {
+                            values: tile_values,
+                            absolute_tolerance: tile_absolute,
+                            relative_tolerance: tile_relative,
+                            exact_mask: tile_mask,
+                        }),
+                        Some(ExpectedOutput::F32 {
+                            values: simt_values,
+                            absolute_tolerance: simt_absolute,
+                            relative_tolerance: simt_relative,
+                            exact_mask: simt_mask,
+                        }),
+                    ) => {
+                        assert_eq!(value_bytes(tile_values), value_bytes(simt_values));
+                        assert_eq!(tile_absolute, simt_absolute);
+                        assert_eq!(tile_relative, simt_relative);
+                        assert_eq!(tile_mask, simt_mask);
+                    }
+                    (
+                        Some(ExpectedOutput::U32(tile_values)),
+                        Some(ExpectedOutput::U32(simt_values)),
+                    ) => {
+                        assert_eq!(tile_values, simt_values);
+                    }
+                    (Some(ExpectedOutput::I32(left)), Some(ExpectedOutput::I32(right))) => {
+                        assert_eq!(left, right);
+                    }
+                    _ => panic!("MoE mode oracle output contracts differ"),
+                }
+            }
+        }
+    }
 }

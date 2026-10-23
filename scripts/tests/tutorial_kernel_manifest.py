@@ -30,6 +30,7 @@ def load_validator():
 
 def recovered_scope(manifest):
     added_fixtures = {
+        'gfx950-moe-expert-rank-simt', 'gfx950-moe-route-tile', 'gfx950-combine-expert-ranks-tile', 'gfx950-speculative-transaction-tile', 'gfx950-qwen-ngram-gather-tile', 'gfx950-stage-gradient-shard-tile', 'gfx950-muon-update-tile',
         "gfx942-scalar-gemm", "gfx950-gpt-oss-pipelined-attention",
         "gfx950-gpt-oss-scalar-attention",
         "gfx950-row-softmax-simt", "gfx950-row-softmax-tile",
@@ -84,6 +85,7 @@ def recovered_scope(manifest):
     suites = []
     for original in manifest["qualification"]["suites"]:
         if original["suiteId"] in {
+            'semantic-simulation-gfx950-moe-expert-rank-simt', 'semantic-simulation-gfx950-moe-route-tile', 'semantic-simulation-gfx950-combine-expert-ranks-tile', 'semantic-simulation-gfx950-speculative-transaction-tile', 'semantic-simulation-gfx950-qwen-ngram-gather-tile', 'semantic-simulation-gfx950-stage-gradient-shard-tile', 'semantic-simulation-gfx950-muon-update-tile',
             "cpu-reference-scalar-gemm", "semantic-simulation-scalar-gemm",
             "semantic-simulation-gfx950-gpt-oss-pipelined-attention",
             "semantic-simulation-gfx950-gpt-oss-scalar-attention",
@@ -218,7 +220,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         payload = json.dumps(
             recovered_scope(self.manifest), sort_keys=True, separators=(",", ":"), ensure_ascii=True
         ).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "db1d9a0d5c5aca3b9c76a4713ddd3b22417e41ee24667efae11773dfccdc4215")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "22b3c8073aef5f3710423508ebf83d2d5ec209be7dd1bc16344b8b7772251032")
 
     def test_gemm_paired_cpu_reference_suites_keep_explicit_feature_selections(self):
         suites = {suite["suiteId"]: suite for suite in self.manifest["qualification"]["suites"]}

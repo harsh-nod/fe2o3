@@ -195,6 +195,49 @@ case "$SUITE:$FEATURE:$ADVANCED_MODE" in
         TEST=${TEST/_rust_cov6/_tile_rust_cov6} ;;
 esac
 
+# Explicit systems modes select existing Rust bodies and their unchanged ABI oracles.
+if [[ $SUITE == systems ]]; then
+    SYSTEMS_MODE=${FE2O3_GFX950_ADVANCED_MODE:-canonical}
+    case "$SYSTEMS_MODE" in
+        canonical|simt|tile) ;;
+        *) printf 'unsupported systems execution mode: %s\n' "$SYSTEMS_MODE" >&2; exit 2 ;;
+    esac
+    if [[ $SYSTEMS_MODE == tile && $SYSTEMS_ABLATION != canonical ]]; then
+        case "$FEATURE:$SYSTEMS_ABLATION" in
+            kernel-muon-update:muon-broadcast16|kernel-qwen-ngram-gather:ngram-reverse-probe) ;;
+            kernel-stage-gradient-shard:*|kernel-muon-update:*|kernel-qwen-ngram-gather:*)
+                printf 'structured tile mode requires the canonical systems arithmetic\n' >&2
+                exit 2 ;;
+        esac
+    fi
+    case "$FEATURE:$SYSTEMS_MODE" in
+        kernel-moe-route:tile)
+            BUILD_FEATURES=$BUILD_FEATURES,kernel-moe-route-tile
+            TEST=gfx950_moe_route_tile_rust_cov6_matches_cpu_reference ;;
+        kernel-moe-expert-rank:simt)
+            BUILD_FEATURES=$BUILD_FEATURES,kernel-moe-expert-rank-simt
+            TEST=gfx950_moe_expert_rank_simt_rust_cov6_matches_cpu_reference
+            ISA=scalar ;;
+        kernel-combine-expert-ranks:tile)
+            BUILD_FEATURES=$BUILD_FEATURES,kernel-combine-expert-ranks-tile
+            TEST=gfx950_combine_expert_ranks_tile_rust_cov6_matches_cpu_reference ;;
+        kernel-speculative-transaction:simt)
+            TEST=gfx950_speculative_transaction_simt_rust_cov6_matches_cpu_reference ;;
+        kernel-speculative-transaction:tile)
+            BUILD_FEATURES=$BUILD_FEATURES,kernel-speculative-transaction-tile
+            TEST=gfx950_speculative_transaction_tile_rust_cov6_matches_cpu_reference ;;
+        kernel-qwen-ngram-gather:tile)
+            BUILD_FEATURES=$BUILD_FEATURES,kernel-qwen-ngram-gather-tile
+            TEST=gfx950_qwen_ngram_gather_tile_rust_cov6_matches_cpu_reference ;;
+        kernel-stage-gradient-shard:tile)
+            BUILD_FEATURES=$BUILD_FEATURES,kernel-stage-gradient-shard-tile
+            TEST=gfx950_stage_gradient_shard_tile_rust_cov6_matches_cpu_reference ;;
+        kernel-muon-update:tile)
+            BUILD_FEATURES=$BUILD_FEATURES,kernel-muon-update-tile
+            TEST=gfx950_muon_update_tile_rust_cov6_matches_cpu_reference ;;
+    esac
+fi
+
 if [[ $SUITE == attention ]]; then
     CRATE=fe2o3_gfx950_advanced_attention
 elif [[ $SUITE == systems ]]; then
@@ -217,6 +260,9 @@ elif [[ $SUITE == attention && $ADVANCED_MODE == simt ]]; then
 fi
 if [[ $SUITE == systems && $SYSTEMS_ABLATION != canonical ]]; then
     OUTPUT_SUFFIX=$FEATURE-$SYSTEMS_ABLATION
+fi
+if [[ $SUITE == systems && ${SYSTEMS_MODE:-canonical} != canonical ]]; then
+    OUTPUT_SUFFIX=$OUTPUT_SUFFIX-$SYSTEMS_MODE
 fi
 OUTPUT_ROOT=${FE2O3_GFX950_ADVANCED_OUTPUT_DIR:-$SCRIPT_DIR/target/fe2o3-$OUTPUT_SUFFIX}
 ROCM_PATH=${ROCM_PATH:-/opt/rocm}

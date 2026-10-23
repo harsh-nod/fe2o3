@@ -171,20 +171,22 @@ case "${1:-}" in
               symbol=gfx950_four_branch_residual; ocml_calls=1 ;;
             kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1 | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-simt | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-tile)
               symbol=gfx950_mhc_sinkhorn_mix; ocml_calls=1 ;;
-            kernel-moe-route)
+            kernel-moe-route | kernel-moe-route,kernel-moe-route-tile)
               symbol=gfx950_moe_route_fp4_t16_e4_k2_v1; ocml_calls=1 ;;
+            kernel-moe-expert-rank,kernel-moe-expert-rank-simt)
+              symbol=gfx950_moe_expert_rank_fp4_fp8_v1; ocml_calls=1 ;;
             kernel-moe-expert-rank | kernel-moe-expert-rank,ablation-expert-serial)
               symbol=gfx950_moe_expert_rank_fp4_fp8_v1; mixed_mfma=3
               ocml_calls=1 ;;
-            kernel-combine-expert-ranks)
+            kernel-combine-expert-ranks | kernel-combine-expert-ranks,kernel-combine-expert-ranks-tile)
               symbol=gfx950_combine_expert_ranks_v1 ;;
-            kernel-speculative-transaction | kernel-speculative-transaction,ablation-speculative-recompute-prefix)
+            kernel-speculative-transaction | kernel-speculative-transaction,ablation-speculative-recompute-prefix | kernel-speculative-transaction,kernel-speculative-transaction-tile)
               symbol=gfx950_speculative_transaction_v1 ;;
-            kernel-qwen-ngram-gather | kernel-qwen-ngram-gather,ablation-ngram-reverse-probe)
+            kernel-qwen-ngram-gather | kernel-qwen-ngram-gather,ablation-ngram-reverse-probe | kernel-qwen-ngram-gather,kernel-qwen-ngram-gather-tile)
               symbol=gfx950_qwen_ngram_gather_v1 ;;
-            kernel-stage-gradient-shard)
+            kernel-stage-gradient-shard | kernel-stage-gradient-shard,kernel-stage-gradient-shard-tile)
               symbol=gfx950_stage_gradient_shard_v1 ;;
-            kernel-muon-update | kernel-muon-update,ablation-muon-broadcast16)
+            kernel-muon-update | kernel-muon-update,ablation-muon-broadcast16 | kernel-muon-update,kernel-muon-update-tile)
               symbol=gfx950_muon_update_4x4_v1 ;;
             kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores)
               symbol=gfx950_gpt_oss_120b_decode_megakernel_v1
@@ -523,6 +525,11 @@ esac
 if [[ $key == kernel-gpt-oss-* && ${FE2O3_GFX950_ADVANCED_MODE:-canonical} == simt ]]; then
   if [[ $kind == gpt_oss_pipeline ]]; then kind=gpt_oss_pipeline_simt; else kind=scalar; fi
 fi
+# Mock control only: mirror the exact selected expert LLVM path, never GPU evidence.
+if [[ $key == kernel-moe-expert-rank ]] &&
+   ! grep -Fq -- '@llvm.amdgcn.mfma' "${artifact%.hsaco}.ll"; then
+  kind=scalar
+fi
 printf '0000000000000000 <%s>:\n' "$symbol"
 case "$kind" in
   fp4)
@@ -797,13 +804,13 @@ KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
   }
 
 grep -F -- \
-  'kernel compile matrix: target=gfx950 mode=compile-only kernels=77 hardware_observed=false' \
+  'kernel compile matrix: target=gfx950 mode=compile-only kernels=84 hardware_observed=false' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
-  'MATRIX PASS target=gfx950 compiled=77 hardware_executed=0 artifacts=temporary' \
+  'MATRIX PASS target=gfx950 compiled=84 hardware_executed=0 artifacts=temporary' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX LIMITATION remaining gfx950 ablations, HIP comparators, hardware behavior, and numerical results are not covered' \
@@ -885,11 +892,18 @@ for name in \
   gpt-oss-scalar-attention-simt \
   gpt-oss-scalar-attention-tile \
   gpt-oss-serial-router-simt \
-  gpt-oss-serial-router-tile; do
+  gpt-oss-serial-router-tile \
+  moe-expert-rank-simt \
+  moe-route-tile \
+  combine-expert-ranks-tile \
+  speculative-transaction-tile \
+  qwen-ngram-gather-tile \
+  stage-gradient-shard-tile \
+  muon-update-tile; do
   [[ "$(grep -Fc -- "CASE ${name} target=gfx950 status=PASS hardware_observed=false" \
     "${gfx950_output}")" -eq 1 ]]
 done
-[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 77 ]]
+[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 84 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
 [[ "$(grep -Fc -- '--features gfx950-target\,qualification-legacy-hip --lib' "${LOG}")" -eq 2 ]]
 [[ "$(grep -Fc -- '--features gfx950-target\,structured-tile\,qualification-legacy-hip --lib' "${LOG}")" -eq 2 ]]
