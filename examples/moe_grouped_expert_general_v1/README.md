@@ -10,13 +10,23 @@ operation implements the scalar path. The tile path uses BF16 MFMA with F32 accu
 
 ## gfx950 Paired Commands
 
-From the repository root, with the same pinned toolchain and dependencies:
+Use nightly-2026-04-03 with the components in the repository's
+[toolchain requirements](../../docs/getting-started.md#requirements). Cargo uses
+the committed lockfiles and its normal dependency resolution; offline commands
+require those inputs to be fetched first.
+
+The tested compile configuration uses ROCm 7.2.4 LLVM tools (`clang`, `ld.lld`,
+`llvm-objdump`, `llvm-readobj`). Numerical GPU runs additionally require that
+installation's HIP/HSA runtimes and a gfx950 Wave64 device. `ROCM_PATH` defaults
+to `/opt/rocm`; point it at the ROCm 7.2.4 installation being used.
+
+From the repository root:
 
 ```bash
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/moe_grouped_expert_general_v1/run-gfx950.sh tile
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/moe_grouped_expert_general_v1/run-gfx950.sh simt
-bash examples/moe_grouped_expert_general_v1/run-gfx950.sh tile
-bash examples/moe_grouped_expert_general_v1/run-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=0 bash examples/moe_grouped_expert_general_v1/run-gfx950.sh tile
+FE2O3_EXAMPLE_COMPILE_ONLY=0 bash examples/moe_grouped_expert_general_v1/run-gfx950.sh simt
 ```
 
 The package-local runner compiles for gfx950:xnack- Wave64, verifies the actual
@@ -26,12 +36,12 @@ The host rejects an unsupported or mismatched requested/observed target before
 loading the module. Full runs check every logical output and stride padding,
 eight trailing bitwise canaries, and all immutable input buffers.
 Compilation is not hardware validation; record actual paired full-run results
-separately before claiming gfx950 qualification.
+separately before claiming gfx950 qualification. This public candidate has no
+fresh GPU qualification; historical private-source results do not qualify it.
 
 ## Existing gfx942 Commands (GPU Validation Pending)
 
-Use the repository's pinned nightly-2026-04-03 toolchain with rust-src/rustc-dev
-and the existing provisioned dependencies. From the repository root:
+Use the same pinned toolchain and dependency setup above. From the repository root:
 
 ```bash
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/moe_grouped_expert_general_v1/run-gfx942.sh tile
@@ -70,3 +80,10 @@ The scalar reduction order differs from MFMA; unchanged numerical tolerances,
 not bitwise/native/protected proof equivalence, define fixture comparison.
 New source and authored tests require actual compilation and execution before
 any pass claim. gfx942 GPU validation remains pending. These are target-specific qualification commands, not model serving or release.
+
+Host tests use the repository's [supported cargo-fe2o3 workflow](../../README.md#typed-kernel-authoring):
+
+```bash
+cargo fe2o3 test --locked --manifest-path examples/moe_grouped_expert_general_v1/Cargo.toml --all-targets
+cargo fe2o3 test --locked --manifest-path examples/moe_grouped_expert_general_v1/Cargo.toml --all-targets --no-default-features --features kernel-simt-moe-expert
+```
