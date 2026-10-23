@@ -15,10 +15,11 @@ extractor once with the normal root compiler build, then set its path and
 loader directories for both target runners:
 
 ```bash
-CARGO_TARGET_DIR="$PWD/target" rustup run nightly-2026-04-03 cargo build \
+export CARGO_TARGET_DIR="$(realpath -m -- "${CARGO_TARGET_DIR:-$PWD/target}")"
+rustup run nightly-2026-04-03 cargo build \
     --locked --manifest-path "$PWD/Cargo.toml" \
     -p rustc-codegen-fe2o3 --bin fe2o3-rustc-extract
-export FE2O3_RUSTC_EXTRACTOR="$PWD/target/debug/fe2o3-rustc-extract"
+export FE2O3_RUSTC_EXTRACTOR="$CARGO_TARGET_DIR/debug/fe2o3-rustc-extract"
 extractor_dir="$(dirname -- "$FE2O3_RUSTC_EXTRACTOR")"
 sysroot="$(rustup run nightly-2026-04-03 rustc --print sysroot)"
 export LD_LIBRARY_PATH="$extractor_dir:$extractor_dir/deps:$sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -39,6 +40,22 @@ the repository root before either gfx950 command:
 export ROCM_PATH=/opt/rocm-7.2.1
 export FE2O3_GFX950_OCML_MANIFEST="$PWD/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.1.manifest"
 ```
+
+Before offline commands, fetch the root, this standalone package, and pinned
+`rust-src` workspace dependencies in a network-enabled setup step. The root
+lock alone does not populate either standalone or `-Zbuild-std=core` inputs:
+
+```bash
+rustup run nightly-2026-04-03 cargo fetch --locked --manifest-path "$PWD/Cargo.toml"
+rustup run nightly-2026-04-03 cargo fetch --locked \
+    --manifest-path "$PWD/examples/row_softmax_general_v1/Cargo.toml"
+rustup run nightly-2026-04-03 cargo fetch --locked \
+    --manifest-path "$sysroot/lib/rustlib/src/rust/library/Cargo.toml"
+```
+
+If Cargo's libgit2 cannot use the local TLS setup, the normal
+`CARGO_NET_GIT_FETCH_WITH_CLI=true` option uses the installed Git client without
+disabling certificate verification. No lock or toolchain pin needs changing.
 
 With the appropriate physical GPU lease and visibility, the full commands are:
 
@@ -74,8 +91,17 @@ matrix instructions or reduced-precision types. `gfx950-target` selects the
 gfx950 source providers. The host target/launch checks reject other processors,
 XNACK-on observations, non-Wave64 devices, and invalid/overflowed grids.
 
-Run host tests through the installed production CLI, with nightly-2026-04-03
-first on PATH and CARGO set to that toolchain's cargo:
+Run host tests through the production CLI. If it is not installed, build it
+from this same checkout, then select its binary and the pinned Cargo:
+
+```bash
+# From the repository root; CARGO_TARGET_DIR is the absolute path selected above.
+rustup run nightly-2026-04-03 cargo build --locked -p cargo-fe2o3 --bin cargo-fe2o3
+export CARGO="$(rustup which --toolchain nightly-2026-04-03 cargo)"
+export PATH="$CARGO_TARGET_DIR/debug:$(dirname -- "$CARGO"):$PATH"
+```
+
+Then run all package targets with the default Cargo profiles:
 
 ```bash
 cd examples/row_softmax_general_v1
@@ -86,6 +112,12 @@ cargo fe2o3 test --locked --offline --all-targets -j2 --features gfx950-target,s
 
 The qualification fixture/validator tests are CPU-only and never initialize a
 GPU. They establish neither execution nor protected qualification.
+
+The retained padding test uses input `[0,0,-9,1,1,-8]`, eight initial `-7`
+outputs, two rows, two logical columns, input stride three, and output stride
+four. The complete expected allocation is
+`[0.5,0.5,-7,-7,0.5,0.5,-7,-7]`. This small example does not replace the full
+strided nonquarter, wide-row, large-logit, and negative validation matrices.
 
 SIMT launches one Wave64 per row. Tile mode launches one Wave64 per 64-column
 output tile, repeats the complete row max/sum reductions for that tile and
