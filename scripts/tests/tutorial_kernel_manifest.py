@@ -219,7 +219,43 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "3c68e18d65cc09b4d8e58fbcd3dcbb0c2cd638a74eb41912e7a0c9543699da73")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "1f0536f065d9f7a71b97b1a42a0b7e99ca4168d19ba47999dbed10da1c061166")
+
+    def test_public_grouped_expert_moe_display_keeps_physical_identity_and_history(self):
+        lesson = self.curriculum_lesson("moe-expert-compute")
+        tab = lesson["codeTabs"][0]
+        source = (ROOT / "examples/moe_grouped_expert_general_v1/src/kernel.rs").read_bytes()
+        self.assertEqual(len(source), 11320)
+        self.assertEqual(tab["sourceCommit"], "d558aa97758cf553c956c5ce92178eac96bd2461")
+        self.assertEqual(tab["displayedUtf8Bytes"], len(source))
+        self.assertEqual(tab["displayedSha256"], hashlib.sha256(source).hexdigest())
+        self.assertEqual(tab["sourceSha256"], tab["displayedSha256"])
+        self.assertEqual(tab["evidenceId"], "grouped-expert-moe-current-source-v1")
+        self.assertIsNone(tab["sourceItem"])
+        self.assertEqual(tab["sourceItemStatus"], "pending")
+        rows = [r for r in self.manifest["kernelInventory"]["displayItems"]
+                if r["lessonId"] == "moe-expert-compute" and r["tabOrdinal"] == 0]
+        actual = self.validator.ordinary_rust_function_items(source.decode("utf-8"))
+        self.assertEqual([(r["kernelSymbol"], r["functionUtf8Offset"]) for r in rows],
+                         [(r["kernelSymbol"], r["functionUtf8Offset"]) for r in actual])
+        self.assertEqual(len(rows), 10)
+        kernel = next(r for r in rows if r["classification"] == "kernel")
+        self.assertEqual(kernel["bindingStatus"], "fixture-source-contract")
+        self.assertEqual(kernel["kernelIds"],
+                         ["fixture:gfx942-grouped-expert-moe:moe_grouped_expert_general_v1"])
+        self.assertTrue(all(v["status"] == "pending" and v["sourceItems"] == []
+                            for v in lesson["variants"]))
+        self.assertEqual(lesson["codeTabs"][3]["sourceCommit"],
+                         "308d8fa00fa41e098b2a1a47bbfea1bc29735464")
+        self.assertEqual(lesson["codeTabs"][4]["sourceCommit"],
+                         "af0fd523e3b774377a9c5192cf0511e34fa19735")
+
+    def test_public_grouped_expert_moe_rejects_its_old_physical_kernel_offset(self):
+        kernel = next(r for r in self.manifest["kernelInventory"]["displayItems"]
+                      if r["lessonId"] == "moe-expert-compute" and r["classification"] == "kernel")
+        self.assertEqual(kernel["functionUtf8Offset"], 1806)
+        kernel["functionUtf8Offset"] = 1209
+        self.reject("fixture display differs from the exact current source occurrence")
 
     def test_current_public_gemm_display_matches_source_without_transferring_receipts(self):
         lesson = self.curriculum_lesson("gemm-tiling")
@@ -726,10 +762,10 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                           "74f125543a556cdfaa32e26a625c27bbdd84fef69fa691b43ee1225bc24533c9")
         self.assertEqual(len(inventory["kernels"]), 65)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
-                         {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 18})
+                         {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 25})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
                          {"pending": 7, "source-driver-contract": 14, "fixture-source-contract": 62,
-                          "not-applicable": 44})
+                          "not-applicable": 51})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
                  for row in inventory["kernels"] for variant in row["variants"]
