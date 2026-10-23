@@ -28,6 +28,8 @@ MAX_INCLUDE_DEPTH = 32
 # Bound that work separately from newly materialized records and attributes:
 # the current 68-fixture catalog needs 4,324 visits but only 1,651 records.
 MAX_SOURCE_ITEM_VISITS = 8192
+# Exported report rows reduce record capacity, not physical attribute work.
+MAX_ATTRIBUTE_VISITS = 4096
 BUILTIN_DERIVES = frozenset({"Clone", "Copy", "Debug", "Default", "Eq", "PartialEq", "Ord", "PartialOrd", "Hash"})
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 KERNEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}")
@@ -93,12 +95,16 @@ def _name_token_matches(encoded: bytes, offset: int, symbol: str) -> bool:
 
 
 class _Budget:
-    def __init__(self, maximum: int, *, source_item_limit: int | None = None):
+    def __init__(self, maximum: int, *, source_item_limit: int | None = None,
+                 attribute_limit: int | None = None):
         if type(maximum) is not int or maximum < 0:
             _fail("record limit must be a nonnegative integer")
         if source_item_limit is not None and (type(source_item_limit) is not int or source_item_limit < 0):
             _fail("source item visit limit must be a nonnegative integer")
+        if attribute_limit is not None and (type(attribute_limit) is not int or attribute_limit < 0):
+            _fail("attribute visit limit must be a nonnegative integer")
         self.maximum = maximum
+        self.attribute_limit = attribute_limit
         self.source_item_limit = source_item_limit
         self.used = 0
         self.attribute_visits = 0
@@ -121,7 +127,8 @@ class _Budget:
         self.fragment_match_bytes += amount
 
     def visit_attribute(self) -> None:
-        if self.attribute_visits >= self.maximum:
+        limit = self.maximum if self.attribute_limit is None else self.attribute_limit
+        if self.attribute_visits >= limit:
             _fail("fixture selection attributes exceed their aggregate visit bound")
         self.attribute_visits += 1
 
@@ -814,7 +821,8 @@ def validate_kernel_inventory(
     existing validators. With no runtime, selection coverage is checked but
     occurrence coverage and source/display joins remain explicitly unvalidated.
     """
-    budget = _Budget(max_records, source_item_limit=MAX_SOURCE_ITEM_VISITS)
+    budget = _Budget(max_records, source_item_limit=MAX_SOURCE_ITEM_VISITS,
+                     attribute_limit=MAX_ATTRIBUTE_VISITS)
     if (not isinstance(manifest, dict) or not isinstance(manifest.get("curriculum"), dict)
             or manifest["curriculum"].get("schema") != "fe2o3-tutorial-curriculum-obligations-v2"):
         _fail("the identity extension requires the existing V2 curriculum")
