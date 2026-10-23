@@ -677,7 +677,7 @@ chmod 700 "$TEST_ROOT/mode-env-bin/python3"
 export MATRIX_TEST_PYTHON
 PATH="$TEST_ROOT/mode-env-bin:$FAKE_BIN:/usr/bin:/bin" \
 CARGO=cargo ROCM_PATH="$FAKE_ROCM" FE2O3_GFX950_OCML_MANIFEST="$GFX950_MANIFEST_724" \
-FE2O3_GFX950_ADVANCED_MODE=invalid-inherited-mode TMPDIR="$TEST_ROOT/tmp" \
+FE2O3_GFX950_ADVANCED_MODE=invalid-inherited-mode ROCR_VISIBLE_DEVICES= HIP_VISIBLE_DEVICES= TMPDIR="$TEST_ROOT/tmp" \
 KERNEL_MATRIX_TEST_LOG="$LOG" KERNEL_MATRIX_TEST_SYSROOT="$TEST_ROOT/sysroot" \
   bash "$MATRIX_SCRIPT" gfx950 >"$TEST_ROOT/mode-env.out" 2>&1 || {
     cat "$TEST_ROOT/mode-env.out" >&2; exit 1;

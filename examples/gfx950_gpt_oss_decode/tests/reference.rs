@@ -30,6 +30,27 @@ fn stable_router_breaks_ties_by_lower_expert_id() {
 }
 
 #[test]
+fn finite_router_logits_below_legacy_floor_keep_all_experts_eligible() {
+    use fe2o3_gfx950_gpt_oss_decode::reference::finite_router_edge_batch_inputs;
+
+    let inputs = finite_router_edge_batch_inputs();
+    let score = inputs.router_f32[0];
+    assert!(score.is_finite() && score < -1.0e30);
+    assert_eq!(decode_bf16(encode_bf16(score)).to_bits(), score.to_bits());
+    let result = reference_batch(&inputs);
+    assert_eq!(result.top4, vec![[0, 1, 2, 3]; PROFILE_ITEMS]);
+    let packed = (1 << 7) | (2 << 14) | (3 << 21);
+    assert_eq!(result.packed_top4, vec![packed; PACKED_ROUTE_ELEMENTS]);
+    assert!(result.attention.iter().all(|value| value.is_finite()));
+    assert!(result.expert.iter().all(|value| value.is_finite()));
+    assert_eq!(
+        result.attention.len(),
+        PROFILE_ITEMS * ATTENTION_TILE_ELEMENTS
+    );
+    assert_eq!(result.expert.len(), PROFILE_ITEMS * EXPERT_TILE_ELEMENTS);
+}
+
+#[test]
 fn deterministic_profile_routes_dynamically_and_matches_packed_ids() {
     let inputs = deterministic_inputs();
     let first = reference(&inputs);

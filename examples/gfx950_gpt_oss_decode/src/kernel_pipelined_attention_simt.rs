@@ -17,6 +17,7 @@ use crate::{
 };
 
 const ATTENTION_SCALE: f32 = 0.125;
+// Empty slots are identified by u32::MAX, never by a numerical score floor.
 const ROUTER_FLOOR: f32 = -1.0e30;
 
 /// Experiments with double-buffered LDS Q/K fragments; qualification is tracked in README.
@@ -118,8 +119,10 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         {
             let mut candidate_score = subgroup.broadcast_f32::<64>(local_logit0, source & 63);
             let mut candidate_id = source.wrapping_mul(2);
-            let take = ((candidate_score > best0)
-                | ((candidate_score == best0) & (candidate_id < id0)))
+            let take = ((candidate_id != u32::MAX)
+                & ((id0 == u32::MAX)
+                    | (candidate_score > best0)
+                    | ((candidate_score == best0) & (candidate_id < id0))))
                 as u32;
             let choose = take as f32;
             let keep = 1.0 - choose;
@@ -133,8 +136,10 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
             candidate_id = old_id
                 .wrapping_mul(take)
                 .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
-            let take = ((candidate_score > best1)
-                | ((candidate_score == best1) & (candidate_id < id1)))
+            let take = ((candidate_id != u32::MAX)
+                & ((id1 == u32::MAX)
+                    | (candidate_score > best1)
+                    | ((candidate_score == best1) & (candidate_id < id1))))
                 as u32;
             let choose = take as f32;
             let keep = 1.0 - choose;
@@ -148,8 +153,10 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
             candidate_id = old_id
                 .wrapping_mul(take)
                 .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
-            let take = ((candidate_score > best2)
-                | ((candidate_score == best2) & (candidate_id < id2)))
+            let take = ((candidate_id != u32::MAX)
+                & ((id2 == u32::MAX)
+                    | (candidate_score > best2)
+                    | ((candidate_score == best2) & (candidate_id < id2))))
                 as u32;
             let choose = take as f32;
             let keep = 1.0 - choose;
@@ -163,8 +170,10 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
             candidate_id = old_id
                 .wrapping_mul(take)
                 .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
-            let take = ((candidate_score > best3)
-                | ((candidate_score == best3) & (candidate_id < id3)))
+            let take = ((candidate_id != u32::MAX)
+                & ((id3 == u32::MAX)
+                    | (candidate_score > best3)
+                    | ((candidate_score == best3) & (candidate_id < id3))))
                 as u32;
             let choose = take as f32;
             let keep = 1.0 - choose;
@@ -178,8 +187,10 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
         {
             let mut candidate_score = subgroup.broadcast_f32::<64>(local_logit1, source & 63);
             let mut candidate_id = source.wrapping_mul(2).wrapping_add(1);
-            let take = ((candidate_score > best0)
-                | ((candidate_score == best0) & (candidate_id < id0)))
+            let take = ((candidate_id != u32::MAX)
+                & ((id0 == u32::MAX)
+                    | (candidate_score > best0)
+                    | ((candidate_score == best0) & (candidate_id < id0))))
                 as u32;
             let choose = take as f32;
             let keep = 1.0 - choose;
@@ -193,8 +204,10 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
             candidate_id = old_id
                 .wrapping_mul(take)
                 .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
-            let take = ((candidate_score > best1)
-                | ((candidate_score == best1) & (candidate_id < id1)))
+            let take = ((candidate_id != u32::MAX)
+                & ((id1 == u32::MAX)
+                    | (candidate_score > best1)
+                    | ((candidate_score == best1) & (candidate_id < id1))))
                 as u32;
             let choose = take as f32;
             let keep = 1.0 - choose;
@@ -208,8 +221,10 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
             candidate_id = old_id
                 .wrapping_mul(take)
                 .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
-            let take = ((candidate_score > best2)
-                | ((candidate_score == best2) & (candidate_id < id2)))
+            let take = ((candidate_id != u32::MAX)
+                & ((id2 == u32::MAX)
+                    | (candidate_score > best2)
+                    | ((candidate_score == best2) & (candidate_id < id2))))
                 as u32;
             let choose = take as f32;
             let keep = 1.0 - choose;
@@ -223,8 +238,10 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
             candidate_id = old_id
                 .wrapping_mul(take)
                 .wrapping_add(candidate_id.wrapping_mul(take ^ 1));
-            let take = ((candidate_score > best3)
-                | ((candidate_score == best3) & (candidate_id < id3)))
+            let take = ((candidate_id != u32::MAX)
+                & ((id3 == u32::MAX)
+                    | (candidate_score > best3)
+                    | ((candidate_score == best3) & (candidate_id < id3))))
                 as u32;
             let choose = take as f32;
             let keep = 1.0 - choose;

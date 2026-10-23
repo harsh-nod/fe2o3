@@ -2037,7 +2037,19 @@ const GPT_OSS_EXPERT_TILE: AdvancedCase = AdvancedCase {
 
 #[cfg(feature = "hardware-test-hooks")]
 fn gpt_oss_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
-    let inputs = gpt_oss_reference::deterministic_batch_inputs();
+    gpt_oss_plans_for_fixture(case, false)
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn gpt_oss_plans_for_fixture(
+    case: AdvancedCase,
+    finite_router_edge: bool,
+) -> Result<Vec<LaunchPlan>, BoxError> {
+    let inputs = if finite_router_edge {
+        gpt_oss_reference::finite_router_edge_batch_inputs()
+    } else {
+        gpt_oss_reference::deterministic_batch_inputs()
+    };
     let expected = gpt_oss_reference::reference_batch(&inputs);
     let row_major = [
         GPT_OSS_TILE,
@@ -2074,10 +2086,17 @@ fn gpt_oss_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
-    require(
-        expected.top4.len() == 16 && expected.top4[0][0] == 127 && expected.top4[1][0] == 0,
-        "deterministic GPT-OSS batch did not select alternating experts 127 and 0",
-    )?;
+    if finite_router_edge {
+        require(
+            expected.top4 == vec![[0, 1, 2, 3]; 16],
+            "finite below-floor GPT-OSS router fixture lost stable ties",
+        )?;
+    } else {
+        require(
+            expected.top4.len() == 16 && expected.top4[0][0] == 127 && expected.top4[1][0] == 0,
+            "deterministic GPT-OSS batch did not select alternating experts 127 and 0",
+        )?;
+    }
     let lengths = [
         inputs.hidden_f32.len(),
         inputs.router_f32.len(),
@@ -2094,7 +2113,11 @@ fn gpt_oss_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
         expected.packed_top4.len(),
     ];
     Ok(vec![LaunchPlan {
-        label: case.label.into(),
+        label: if finite_router_edge {
+            format!("{} finite below-floor router", case.label)
+        } else {
+            case.label.into()
+        },
         buffers: vec![
             input("hidden_f32", &inputs.hidden_f32),
             input("router_f32", &inputs.router_f32),
@@ -2181,7 +2204,15 @@ fn gpt_oss_single_plan(case: AdvancedCase) -> Result<LaunchPlan, BoxError> {
 
 #[cfg(feature = "hardware-test-hooks")]
 fn gpt_oss_component_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
-    let mut plans = gpt_oss_plans(
+    gpt_oss_component_plans_for_fixture(case, false)
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn gpt_oss_component_plans_for_fixture(
+    case: AdvancedCase,
+    finite_router_edge: bool,
+) -> Result<Vec<LaunchPlan>, BoxError> {
+    let mut plans = gpt_oss_plans_for_fixture(
         if [
             GPT_OSS_ROUTER_TILE,
             GPT_OSS_ATTENTION_TILE,
@@ -2193,6 +2224,7 @@ fn gpt_oss_component_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxErr
         } else {
             GPT_OSS
         },
+        finite_router_edge,
     )?;
     let case = if case == GPT_OSS_ROUTER_TILE {
         GPT_OSS_ROUTER_COMPONENT
@@ -2236,7 +2268,11 @@ fn gpt_oss_component_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxErr
         .map(|buffer| buffer.elements)
         .collect::<Vec<_>>();
     Ok(vec![LaunchPlan {
-        label: case.label.into(),
+        label: if finite_router_edge {
+            format!("{} finite below-floor router", case.label)
+        } else {
+            case.label.into()
+        },
         buffers,
         args: lengths
             .into_iter()
@@ -2249,7 +2285,10 @@ fn gpt_oss_component_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxErr
 #[cfg(feature = "hardware-test-hooks")]
 fn plans_for(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
     if [GPT_OSS, GPT_OSS_PIPELINED, GPT_OSS_TILE].contains(&case) {
-        return gpt_oss_plans(case);
+        let mut plans = gpt_oss_plans(case)?;
+        // Add the edge fixture; never replace the original nonuniform 16-item case.
+        plans.extend(gpt_oss_plans_for_fixture(case, true)?);
+        return Ok(plans);
     }
     if [
         GPT_OSS_ROUTER_COMPONENT,
@@ -2261,7 +2300,11 @@ fn plans_for(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
     ]
     .contains(&case)
     {
-        return gpt_oss_component_plans(case);
+        let mut plans = gpt_oss_component_plans(case)?;
+        if [GPT_OSS_ROUTER_COMPONENT, GPT_OSS_ROUTER_TILE].contains(&case) {
+            plans.extend(gpt_oss_component_plans_for_fixture(case, true)?);
+        }
+        return Ok(plans);
     }
     if [
         KDA_DECODE,
@@ -3265,6 +3308,54 @@ fn output_poison_cannot_match_an_unwritten_expected_element() {
 #[test]
 #[ignore = "requires feature hardware-test-hooks and caller-supplied gfx950 HSACO"]
 fn gfx950_advanced_hardware_tests_require_explicit_hooks() {}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn gpt_oss_finite_router_edge_is_an_additional_guarded_full_fixture() -> Result<(), BoxError> {
+    for case in [
+        GPT_OSS,
+        GPT_OSS_PIPELINED,
+        GPT_OSS_TILE,
+        GPT_OSS_ROUTER_COMPONENT,
+        GPT_OSS_ROUTER_TILE,
+    ] {
+        let plans = plans_for(case)?;
+        assert_eq!(plans.len(), 2);
+        let edge = &plans[1];
+        let route = edge.buffers.last().ok_or("route output absent")?;
+        let Some(ExpectedOutput::U32(values)) = &route.expected else {
+            return Err("route output kind changed".into());
+        };
+        assert_eq!(values, &vec![(1 << 7) | (2 << 14) | (3 << 21); 1024]);
+        assert_eq!(route.elements, 1024);
+        for buffer in &edge.buffers {
+            assert_eq!(buffer.body_offset, GUARD_BYTES);
+            assert_eq!(&buffer.initial[..GUARD_BYTES], &[PREFIX_BYTE; GUARD_BYTES]);
+            assert_eq!(
+                &buffer.initial[buffer.initial.len() - GUARD_BYTES..],
+                &[SUFFIX_BYTE; GUARD_BYTES]
+            );
+            if buffer.expected.is_some() {
+                assert!(
+                    verify_buffer(buffer, &buffer.initial).is_err(),
+                    "unwritten poison must not satisfy edge fixture"
+                );
+            } else {
+                assert!(buffer.immutable);
+            }
+        }
+        if case.args.len() == 13 {
+            for index in [10, 11] {
+                let Some(ExpectedOutput::F32 { values, .. }) = &edge.buffers[index].expected else {
+                    return Err("float output kind changed".into());
+                };
+                assert_eq!(values.len(), 4096);
+                assert!(values.iter().all(|value| value.is_finite()));
+            }
+        }
+    }
+    Ok(())
+}
 
 #[cfg(feature = "hardware-test-hooks")]
 #[test]
