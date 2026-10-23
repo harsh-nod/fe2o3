@@ -207,7 +207,7 @@ case "${1:-}" in
             *) exit 94 ;;
           esac
           if [[ $feature == kernel-gpt-oss-* && ${FE2O3_GFX950_ADVANCED_MODE:-canonical} == simt ]]; then
-            fp4_mfma=0; bf16_mfma=0; gpt_bf16_helper=0
+            fp4_mfma=0; bf16_mfma=0
           fi
           {
             printf '%s\n' 'target triple = "amdgcn-amd-amdhsa"'
@@ -468,6 +468,7 @@ cat >"${FAKE_ROCM}/llvm/bin/llvm-objdump" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 artifact=${!#}
+if [[ $artifact != /* ]]; then artifact=$PWD/$artifact; fi
 key=${artifact##*/}
 key=${key%.hsaco}
 attention_simt=0
@@ -571,6 +572,9 @@ esac
 if [[ $kind == gpt_oss_pipeline || $kind == gpt_oss_pipeline_simt ]]; then
   for _ in {1..10}; do printf '%s\n' s_barrier; done
 fi
+if [[ $kind == gpt_oss_pipeline_simt ]]; then
+  printf '%s\n' ds_write_b64 ds_read_b64
+fi
 EOF
 
 chmod 700 \
@@ -581,6 +585,22 @@ chmod 700 \
   "${FAKE_ROCM}/llvm/bin/ld.lld" \
   "${FAKE_ROCM}/llvm/bin/llvm-readobj" \
   "${FAKE_ROCM}/llvm/bin/llvm-objdump"
+
+# The real runner disassembles a basename from the isolated attempt directory.
+for name in content-sparse-attention compressed-hybrid-attention; do
+  directory="$TEST_ROOT/objdump-controls/$name-simt"
+  mkdir -p "$directory"
+  absolute=$("$FAKE_ROCM/llvm/bin/llvm-objdump" "$directory/kernel-$name.hsaco")
+  relative=$(cd "$directory" && "$FAKE_ROCM/llvm/bin/llvm-objdump" "kernel-$name.hsaco")
+  [[ $absolute == "$relative" ]]
+  grep -Fq ds_bpermute_b32 <<< "$relative"
+  ! grep -Eq 'v_mfma_|ds_read_b64_tr_b' <<< "$relative"
+done
+pipeline=$(FE2O3_GFX950_ADVANCED_MODE=simt "$FAKE_ROCM/llvm/bin/llvm-objdump" kernel-gpt-oss-decode-pipelined-attention.hsaco)
+[[ $(grep -Fxc s_barrier <<< "$pipeline") -eq 10 ]]
+grep -Fxq ds_write_b64 <<< "$pipeline"
+grep -Fxq ds_read_b64 <<< "$pipeline"
+! grep -Fq v_mfma_ <<< "$pipeline"
 
 write_fixture_manifest() {
   local rocm_version=$1
@@ -732,6 +752,7 @@ grep -F 'MATRIX PASS target=gfx950 compiled=2 hardware_executed=0' "$TEST_ROOT/m
 printf 'runner controls passed: selector=5 runtime-visibility=10 unfused-runtime-only=1 actual-matrix-mode-env=2 (mock artifacts; no GPU)\n'
 if [[ $TEST_SCOPE == --runner-controls ]]; then exit 0; fi
 
+: >"${LOG}"
 success_output="${TEST_ROOT}/success.out"
 # Parent settings must not replace the manifest's per-case selections.
 PATH="${FAKE_BIN}:/usr/bin:/bin" \
