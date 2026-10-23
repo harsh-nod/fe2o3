@@ -1241,7 +1241,14 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                     for fixture in sorted(self.original["compilerFixtures"], key=lambda row: row["fixtureId"])
                     for symbol in fixture["compilerInput"]["kernelSymbols"]]
         self.assertEqual([(row["fixtureId"], row["selection"]["kernelSymbol"]) for row in rows], expected)
-        ablations = [row for row in rows if row["selection"]["kernelSymbol"] == "gfx950_attnres_aggregate"]
+        attnres = [row for row in rows if row["selection"]["kernelSymbol"] == "gfx950_attnres_aggregate"]
+        self.assertEqual({row["fixtureId"] for row in attnres}, {
+            "gfx950-attnres-aggregate", "gfx950-attnres-aggregate-explicit-reuse",
+            "gfx950-attnres-aggregate-simt", "gfx950-attnres-aggregate-tile",
+        })
+        ablations = [row for row in attnres if row["fixtureId"] in {
+            "gfx950-attnres-aggregate", "gfx950-attnres-aggregate-explicit-reuse",
+        }]
         self.assertEqual(len(ablations), 2)
         self.assertNotEqual(ablations[0]["selection"]["features"], ablations[1]["selection"]["features"])
         self.assertNotEqual(ablations[0]["compilerInputContractSha256"], ablations[1]["compilerInputContractSha256"])
