@@ -40,7 +40,29 @@ if [[ $SUITE == systems ]]; then
             exit 2 ;;
     esac
 fi
-BUILD_FEATURES=$FEATURE${EXTRA_FEATURE:+,$EXTRA_FEATURE}
+ADVANCED_MODE=${FE2O3_GFX950_ADVANCED_MODE:-canonical}
+MODE_FEATURE=
+if [[ $ADVANCED_MODE != canonical ]]; then
+    case "$SUITE:$FEATURE:$ADVANCED_MODE" in
+        attention:kernel-kda-decode:simt|attention:kernel-kda-prefill:simt|\
+        attention:kernel-deepseek-sparse-attention:simt|attention:kernel-deepseek-sparse-attention-leader-exp-v1:simt) ;;
+        attention:kernel-kda-decode:tile|attention:kernel-kda-prefill:tile) MODE_FEATURE=$FEATURE-tile ;;
+        attention:kernel-deepseek-sparse-attention:tile|attention:kernel-deepseek-sparse-attention-leader-exp-v1:tile)
+            MODE_FEATURE=kernel-deepseek-sparse-attention-tile ;;
+        attention:kernel-content-sparse-attention:tile|attention:kernel-compressed-hybrid-attention:tile|\
+        attention:kernel-content-sparse-attention-reciprocal-reuse-v1:tile|attention:kernel-compressed-hybrid-attention-division-baseline-v1:tile) ;;
+        attention:kernel-content-sparse-attention:simt|attention:kernel-compressed-hybrid-attention:simt)
+            MODE_FEATURE=$FEATURE-simt ;;
+        attention:kernel-attnres-aggregate:simt|attention:kernel-attnres-aggregate:tile) MODE_FEATURE=$FEATURE-$ADVANCED_MODE ;;
+        attention:kernel-four-branch-residual:simt|attention:kernel-four-branch-residual:tile) MODE_FEATURE=$FEATURE-$ADVANCED_MODE ;;
+        attention:kernel-mhc-sinkhorn-mix:simt|attention:kernel-mhc-sinkhorn-mix:tile) MODE_FEATURE=$FEATURE-$ADVANCED_MODE ;;
+        *)
+            printf 'unsupported advanced mode pairing: %s:%s:%s\n' \
+                "$SUITE" "$FEATURE" "$ADVANCED_MODE" >&2
+            exit 2 ;;
+    esac
+fi
+BUILD_FEATURES=$FEATURE${EXTRA_FEATURE:+,$EXTRA_FEATURE}${MODE_FEATURE:+,$MODE_FEATURE}
 case "$SUITE:$FEATURE" in
     attention:kernel-kda-decode)
         SYMBOL=gfx950_kda_decode; KERNARG=128; WG=256; LDS=0; OCML=0
@@ -134,6 +156,23 @@ case "$SUITE:$FEATURE" in
         exit 2 ;;
 esac
 
+# Explicit SIMT selects retained canonical Wave16 arithmetic.
+case "$SUITE:$FEATURE:$ADVANCED_MODE" in
+    attention:kernel-kda-decode:simt|attention:kernel-kda-decode:tile|\
+    attention:kernel-kda-prefill:simt|attention:kernel-kda-prefill:tile|\
+    attention:kernel-deepseek-sparse-attention:simt|attention:kernel-deepseek-sparse-attention:tile|\
+    attention:kernel-deepseek-sparse-attention-leader-exp-v1:simt|attention:kernel-deepseek-sparse-attention-leader-exp-v1:tile)
+        TEST=${TEST/_rust_cov6/_${ADVANCED_MODE}_rust_cov6} ;;
+esac
+
+case "$SUITE:$FEATURE:$ADVANCED_MODE" in
+    attention:kernel-content-sparse-attention:simt|attention:kernel-compressed-hybrid-attention:simt)
+        TEST=${TEST/_rust_cov6/_simt_rust_cov6}
+        LDS=0; ISA=fp8_attention_simt ;;
+    attention:kernel-content-sparse-attention:tile|attention:kernel-compressed-hybrid-attention:tile)
+        TEST=${TEST/_rust_cov6/_tile_rust_cov6} ;;
+esac
+
 if [[ $SUITE == attention ]]; then
     CRATE=fe2o3_gfx950_advanced_attention
 elif [[ $SUITE == systems ]]; then
@@ -146,6 +185,14 @@ REPO_ROOT=${FE2O3_REPO_ROOT:-$(cd -- "$COMMON_DIR/../.." && pwd -P)}
 TOOLCHAIN=${FE2O3_RUST_TOOLCHAIN:-nightly-2026-04-03}
 ROOT_TARGET_DIR=${FE2O3_ROOT_TARGET_DIR:-$REPO_ROOT/target}
 OUTPUT_SUFFIX=$FEATURE
+if [[ -n $MODE_FEATURE ]]; then
+    OUTPUT_SUFFIX=$FEATURE-$ADVANCED_MODE
+elif [[ $SUITE == attention && $ADVANCED_MODE == simt ]]; then
+    case "$FEATURE" in
+        kernel-kda-decode|kernel-kda-prefill|kernel-deepseek-sparse-attention|kernel-deepseek-sparse-attention-leader-exp-v1)
+            OUTPUT_SUFFIX=$FEATURE-simt ;;
+    esac
+fi
 if [[ $SUITE == systems && $SYSTEMS_ABLATION != canonical ]]; then
     OUTPUT_SUFFIX=$FEATURE-$SYSTEMS_ABLATION
 fi
@@ -303,6 +350,10 @@ elif [[ $ISA == kda_matrix ]]; then
     grep -Fq -- 'call i32 @llvm.amdgcn.ds.bpermute' "$LLVM_IR" || { printf 'LLVM validation failed: KDA Wave16 exchange is absent\n' >&2; exit 1; }
     require_count "$LLVM_IR" '@llvm.amdgcn.mfma' 0 'unexpected KDA MFMA references'
     require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected KDA transpose references'
+elif [[ $ISA == fp8_attention_simt ]]; then
+    require_count "$LLVM_IR" '@llvm.amdgcn.mfma' 0 'unexpected SIMT MFMA references'
+    require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected SIMT transpose references'
+    grep -Fq -- 'call i32 @llvm.amdgcn.ds.bpermute' "$LLVM_IR" || { printf 'LLVM validation failed: SIMT Wave16 exchange is absent\n' >&2; exit 1; }
 elif [[ $ISA == fp8_attention ]]; then
     require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 1 'FP8 MFMA call'
     require_count "$LLVM_IR" 'i32 0, i32 0, i32 0, i32 0, i32 0, i32 0)' 1 'FP8 selectors and disabled scaling controls'
@@ -411,6 +462,9 @@ elif [[ $ISA == gpt_oss_expert ]]; then
 elif [[ $ISA == kda_matrix ]]; then
     [[ $(grep -Fc -- 'ds_bpermute_b32' <<< "$KERNEL_ISA" || true) -gt 0 ]] || { printf 'ISA validation failed: KDA Wave16 exchange is absent\n' >&2; exit 1; }
     ! grep -Eq -- 'v_mfma_|ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || { printf 'ISA validation failed: KDA unexpectedly emitted tensor/transpose instructions\n' >&2; exit 1; }
+elif [[ $ISA == fp8_attention_simt ]]; then
+    [[ $(grep -Fc -- 'ds_bpermute_b32' <<< "$KERNEL_ISA" || true) -gt 0 ]] || { printf 'ISA validation failed: SIMT Wave16 exchange is absent\n' >&2; exit 1; }
+    ! grep -Eq -- 'v_mfma_|ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || { printf 'ISA validation failed: SIMT emitted tensor/transpose instructions\n' >&2; exit 1; }
 elif [[ $ISA == fp8_attention ]]; then
     [[ $(grep -Fc -- 'ds_read_b64_tr_b8' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four B8 transpose instructions\n' >&2; exit 1; }
     [[ $(grep -Ec -- 'ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four total transpose instructions\n' >&2; exit 1; }

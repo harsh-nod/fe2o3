@@ -127,25 +127,29 @@ case "${1:-}" in
               symbol=gfx950_fp8_attention_rust; fp8_mfma=1
               transpose=llvm.amdgcn.ds.read.tr8.b64.v2i32
               transpose_calls=4; ocml_calls=4; lds=8192 ;;
-            kernel-kda-decode | kernel-kda-decode-baseline-v1)
+            kernel-kda-decode,kernel-kda-decode-tile | kernel-kda-decode | kernel-kda-decode-baseline-v1)
               symbol=gfx950_kda_decode ;;
-            kernel-kda-prefill | kernel-kda-prefill-baseline-v1)
+            kernel-kda-prefill,kernel-kda-prefill-tile | kernel-kda-prefill | kernel-kda-prefill-baseline-v1)
               symbol=gfx950_kda_chunkwise_prefill ;;
+            kernel-content-sparse-attention,kernel-content-sparse-attention-simt)
+              symbol=gfx950_content_sparse_attention; ocml_calls=1 ;;
+            kernel-compressed-hybrid-attention,kernel-compressed-hybrid-attention-simt)
+              symbol=gfx950_compressed_hybrid_attention; ocml_calls=1 ;;
             kernel-content-sparse-attention | kernel-content-sparse-attention-reciprocal-reuse-v1)
               symbol=gfx950_content_sparse_attention; fp8_mfma=1
               transpose=llvm.amdgcn.ds.read.tr8.b64.v2i32
               transpose_calls=4; ocml_calls=1; lds=8192 ;;
-            kernel-deepseek-sparse-attention)
+            kernel-deepseek-sparse-attention | kernel-deepseek-sparse-attention,kernel-deepseek-sparse-attention-tile)
               symbol=gfx950_deepseek_sparse_attention; ocml_calls=1 ;;
             kernel-compressed-hybrid-attention | kernel-compressed-hybrid-attention-division-baseline-v1)
               symbol=gfx950_compressed_hybrid_attention; fp8_mfma=1
               transpose=llvm.amdgcn.ds.read.tr8.b64.v2i32
               transpose_calls=4; ocml_calls=1; lds=8192 ;;
-            kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1)
+            kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1 | kernel-attnres-aggregate,kernel-attnres-aggregate-simt | kernel-attnres-aggregate,kernel-attnres-aggregate-tile)
               symbol=gfx950_attnres_aggregate; ocml_calls=1 ;;
-            kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1)
+            kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1 | kernel-four-branch-residual,kernel-four-branch-residual-simt | kernel-four-branch-residual,kernel-four-branch-residual-tile)
               symbol=gfx950_four_branch_residual; ocml_calls=1 ;;
-            kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1)
+            kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1 | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-simt | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-tile)
               symbol=gfx950_mhc_sinkhorn_mix; ocml_calls=1 ;;
             kernel-moe-route)
               symbol=gfx950_moe_route_fp4_t16_e4_k2_v1; ocml_calls=1 ;;
@@ -183,7 +187,7 @@ case "${1:-}" in
           {
             printf '%s\n' 'target triple = "amdgcn-amd-amdhsa"'
             printf 'define amdgpu_kernel void @%s() #0 {\n' "$symbol"
-            if [[ $feature == kernel-kda-* ]]; then
+            if [[ $feature == kernel-kda-* || $feature == kernel-content-sparse-attention,kernel-content-sparse-attention-simt || $feature == kernel-compressed-hybrid-attention,kernel-compressed-hybrid-attention-simt ]]; then
               printf '  %%kda = call i32 @llvm.amdgcn.ds.bpermute(i32 0, i32 0)\n'
             fi
             for ((index = 0; index < bf16_mfma; index++)); do
@@ -293,6 +297,10 @@ set -Eeuo pipefail
 artifact=${!#}
 key=${artifact##*/}
 key=${key%.hsaco}
+attention_simt=0
+case "$artifact" in
+  */content-sparse-attention-simt/*|*/compressed-hybrid-attention-simt/*) attention_simt=1 ;;
+esac
 symbol=
 kernarg=0
 workgroup=64
@@ -304,21 +312,23 @@ case "$key" in
     symbol=gfx950_fp4_attention_rust; kernarg=64; lds=4096 ;;
   gfx950-fp8-attention)
     symbol=gfx950_fp8_attention_rust; kernarg=64; lds=8192 ;;
-  kernel-kda-decode | kernel-kda-decode-baseline-v1)
+  kernel-kda-decode,kernel-kda-decode-tile | kernel-kda-decode | kernel-kda-decode-baseline-v1)
     symbol=gfx950_kda_decode; kernarg=128; workgroup=256 ;;
-  kernel-kda-prefill | kernel-kda-prefill-baseline-v1)
+  kernel-kda-prefill,kernel-kda-prefill-tile | kernel-kda-prefill | kernel-kda-prefill-baseline-v1)
     symbol=gfx950_kda_chunkwise_prefill; kernarg=144; workgroup=256 ;;
   kernel-content-sparse-attention | kernel-content-sparse-attention-reciprocal-reuse-v1)
-    symbol=gfx950_content_sparse_attention; kernarg=96; lds=8192 ;;
-  kernel-deepseek-sparse-attention)
+    symbol=gfx950_content_sparse_attention; kernarg=96; lds=8192
+    if [[ $attention_simt -eq 1 ]]; then lds=0; fi ;;
+  kernel-deepseek-sparse-attention | kernel-deepseek-sparse-attention,kernel-deepseek-sparse-attention-tile)
     symbol=gfx950_deepseek_sparse_attention; kernarg=112 ;;
   kernel-compressed-hybrid-attention | kernel-compressed-hybrid-attention-division-baseline-v1)
-    symbol=gfx950_compressed_hybrid_attention; kernarg=80; lds=8192 ;;
-  kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1)
+    symbol=gfx950_compressed_hybrid_attention; kernarg=80; lds=8192
+    if [[ $attention_simt -eq 1 ]]; then lds=0; fi ;;
+  kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1 | kernel-attnres-aggregate,kernel-attnres-aggregate-simt | kernel-attnres-aggregate,kernel-attnres-aggregate-tile)
     symbol=gfx950_attnres_aggregate; kernarg=48 ;;
-  kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1)
+  kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1 | kernel-four-branch-residual,kernel-four-branch-residual-simt | kernel-four-branch-residual,kernel-four-branch-residual-tile)
     symbol=gfx950_four_branch_residual; kernarg=64 ;;
-  kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1)
+  kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1 | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-simt | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-tile)
     symbol=gfx950_mhc_sinkhorn_mix; kernarg=48 ;;
   kernel-moe-route)
     symbol=gfx950_moe_route_fp4_t16_e4_k2_v1; kernarg=96; workgroup=256 ;;
@@ -381,6 +391,10 @@ set -Eeuo pipefail
 artifact=${!#}
 key=${artifact##*/}
 key=${key%.hsaco}
+attention_simt=0
+case "$artifact" in
+  */content-sparse-attention-simt/*|*/compressed-hybrid-attention-simt/*) attention_simt=1 ;;
+esac
 symbol=
 kind=scalar
 case "$key" in
@@ -388,20 +402,22 @@ case "$key" in
   gfx950-fp8-gemm) symbol=gfx950_fp8_gemm_rust; kind=fp8 ;;
   gfx950-fp4-attention) symbol=gfx950_fp4_attention_rust; kind=fp4_attention ;;
   gfx950-fp8-attention) symbol=gfx950_fp8_attention_rust; kind=fp8_attention ;;
-  kernel-kda-decode | kernel-kda-decode-baseline-v1)
+  kernel-kda-decode,kernel-kda-decode-tile | kernel-kda-decode | kernel-kda-decode-baseline-v1)
     symbol=gfx950_kda_decode; kind=kda ;;
-  kernel-kda-prefill | kernel-kda-prefill-baseline-v1)
+  kernel-kda-prefill,kernel-kda-prefill-tile | kernel-kda-prefill | kernel-kda-prefill-baseline-v1)
     symbol=gfx950_kda_chunkwise_prefill; kind=kda ;;
   kernel-content-sparse-attention | kernel-content-sparse-attention-reciprocal-reuse-v1)
-    symbol=gfx950_content_sparse_attention; kind=fp8_attention ;;
-  kernel-deepseek-sparse-attention) symbol=gfx950_deepseek_sparse_attention ;;
+    symbol=gfx950_content_sparse_attention; kind=fp8_attention
+    if [[ $attention_simt -eq 1 ]]; then kind=scalar_attention; fi ;;
+  kernel-deepseek-sparse-attention | kernel-deepseek-sparse-attention,kernel-deepseek-sparse-attention-tile) symbol=gfx950_deepseek_sparse_attention ;;
   kernel-compressed-hybrid-attention | kernel-compressed-hybrid-attention-division-baseline-v1)
-    symbol=gfx950_compressed_hybrid_attention; kind=fp8_attention ;;
-  kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1)
+    symbol=gfx950_compressed_hybrid_attention; kind=fp8_attention
+    if [[ $attention_simt -eq 1 ]]; then kind=scalar_attention; fi ;;
+  kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1 | kernel-attnres-aggregate,kernel-attnres-aggregate-simt | kernel-attnres-aggregate,kernel-attnres-aggregate-tile)
     symbol=gfx950_attnres_aggregate ;;
-  kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1)
+  kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1 | kernel-four-branch-residual,kernel-four-branch-residual-simt | kernel-four-branch-residual,kernel-four-branch-residual-tile)
     symbol=gfx950_four_branch_residual ;;
-  kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1)
+  kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1 | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-simt | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-tile)
     symbol=gfx950_mhc_sinkhorn_mix ;;
   kernel-moe-route) symbol=gfx950_moe_route_fp4_t16_e4_k2_v1 ;;
   kernel-moe-expert-rank)
@@ -436,7 +452,7 @@ case "$kind" in
     printf '%s\n' 'ds_read_b64_tr_b8' 'ds_read_b64_tr_b8' \
       'ds_read_b64_tr_b8' 'ds_read_b64_tr_b8'
     printf '%s\n' 'v_mfma_f32_16x16x128_f8f6f4' ;;
-  kda)
+  kda|scalar_attention)
     printf '%s\n' 'ds_bpermute_b32' ;;
   mixed)
     printf '%s\n' \
@@ -604,6 +620,7 @@ ROCM_PATH="${FAKE_ROCM}" \
 FE2O3_GFX950_OCML_MANIFEST="${GFX950_MANIFEST_724}" \
 FE2O3_EXAMPLE_CARGO_ARGS=--no-default-features \
 FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=expert-serial \
+FE2O3_GFX950_ADVANCED_MODE=invalid-inherited-mode \
 FE2O3_ADVANCED_SUITE=undeclared-parent-suite \
 FE2O3_ADVANCED_SCRIPT_DIR="${TEST_ROOT}/absent-parent-suite" \
 TMPDIR="${TEST_ROOT}/tmp" \
@@ -615,13 +632,13 @@ KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
   }
 
 grep -F -- \
-  'kernel compile matrix: target=gfx950 mode=compile-only kernels=39 hardware_observed=false' \
+  'kernel compile matrix: target=gfx950 mode=compile-only kernels=55 hardware_observed=false' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
-  'MATRIX PASS target=gfx950 compiled=39 hardware_executed=0 artifacts=temporary' \
+  'MATRIX PASS target=gfx950 compiled=55 hardware_executed=0 artifacts=temporary' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX LIMITATION remaining gfx950 ablations, HIP comparators, hardware behavior, and numerical results are not covered' \
@@ -631,6 +648,16 @@ for name in \
   fp8-gemm \
   fp4-attention \
   fp8-attention \
+  kda-decode-simt \
+  kda-decode-tile \
+  kda-prefill-simt \
+  kda-prefill-tile \
+  content-sparse-attention-simt \
+  content-sparse-attention-tile \
+  deepseek-sparse-attention-simt \
+  deepseek-sparse-attention-tile \
+  compressed-hybrid-attention-simt \
+  compressed-hybrid-attention-tile \
   kda-decode \
   kda-decode-baseline \
   kda-prefill \
@@ -641,6 +668,12 @@ for name in \
   compressed-hybrid-attention \
   compressed-hybrid-attention-division-baseline \
   attnres-aggregate \
+  attnres-aggregate-simt \
+  attnres-aggregate-tile \
+  four-branch-residual-simt \
+  four-branch-residual-tile \
+  mhc-sinkhorn-mix-simt \
+  mhc-sinkhorn-mix-tile \
   attnres-aggregate-explicit-reuse \
   four-branch-residual \
   four-branch-residual-explicit \
@@ -669,7 +702,7 @@ for name in \
   [[ "$(grep -Fc -- "CASE ${name} target=gfx950 status=PASS hardware_observed=false" \
     "${gfx950_output}")" -eq 1 ]]
 done
-[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 39 ]]
+[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 55 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
 for features in \
   kernel-moe-route \
@@ -689,6 +722,15 @@ for features in \
   'kernel-qwen-ngram-gather\,ablation-ngram-reverse-probe' \
   'kernel-muon-update\,ablation-muon-broadcast16'; do
   [[ "$(grep -Fc -- "--features ${features}" "${LOG}")" -eq 1 ]]
+done
+for features in \
+  'kernel-attnres-aggregate\,kernel-attnres-aggregate-simt' \
+  'kernel-attnres-aggregate\,kernel-attnres-aggregate-tile' \
+  'kernel-four-branch-residual\,kernel-four-branch-residual-simt' \
+  'kernel-four-branch-residual\,kernel-four-branch-residual-tile' \
+  'kernel-mhc-sinkhorn-mix\,kernel-mhc-sinkhorn-mix-simt' \
+  'kernel-mhc-sinkhorn-mix\,kernel-mhc-sinkhorn-mix-tile'; do
+  [[ "$(grep -Fc -- "--features ${features} --lib" "${LOG}")" -eq 1 ]]
 done
 if grep -F -- ' cargo test ' "${LOG}" >/dev/null; then
   printf '%s\n' 'gfx950 compile-only matrix unexpectedly executed a hardware test' >&2
