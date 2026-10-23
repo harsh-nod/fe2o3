@@ -160,7 +160,31 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "8eed77833d36817e5b01530cb316cc0fa9702a2d6bd5ae3eb4e45506ad047e48")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "2a5618e55a5e967b1f9e6af05ffb81f94ccc3104ee728b6721bb4af38e0642fb")
+
+    def test_current_public_gemm_display_matches_source_without_transferring_receipts(self):
+        lesson = self.curriculum_lesson("gemm-tiling")
+        tab = lesson["codeTabs"][0]
+        source = (ROOT / "examples/tiled_gemm_general_v1/src/kernel.rs").read_bytes()
+        self.assertEqual(tab["sourceCommit"], "0e0963df4f230bf728a7b4605677c0ff09624adf")
+        self.assertEqual(tab["displayedUtf8Bytes"], len(source))
+        self.assertEqual(tab["displayedSha256"], hashlib.sha256(source).hexdigest())
+        self.assertEqual(tab["sourceSha256"], tab["displayedSha256"])
+        self.assertEqual(tab["evidenceId"], "tiled-gemm-current-source-v1")
+        self.assertEqual(tab["sourceItemStatus"], "pending")
+        self.assertIsNone(tab["sourceItem"])
+        rows = [row for row in self.manifest["kernelInventory"]["displayItems"]
+                if row["lessonId"] == "gemm-tiling" and row["tabOrdinal"] == 0]
+        actual = self.validator.ordinary_rust_function_items(source.decode("utf-8"))
+        self.assertEqual([(row["kernelSymbol"], row["functionUtf8Offset"]) for row in rows],
+                         [(row["kernelSymbol"], row["functionUtf8Offset"]) for row in actual])
+        kernel = next(row for row in rows if row["classification"] == "kernel")
+        self.assertEqual(kernel["bindingStatus"], "pending")
+        self.assertEqual(kernel["kernelIds"], ["fixture:gfx942-tiled-gemm:tiled_gemm_general_v1"])
+        self.assertTrue(all(variant["status"] == "pending" and variant["sourceItems"] == []
+                            for variant in lesson["variants"]))
+        self.assertEqual(lesson["codeTabs"][5]["sourceCommit"],
+                         "9006001157e2c3062e44088634e467b0f8963ee0")
 
     def test_legacy_manifests_remain_accepted_but_required_curriculum_cannot_be_omitted(self):
         self.manifest.pop("kernelInventory", None)
@@ -640,7 +664,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "fecba068317d72aab10b74f7845e8f324b9de090e55bde9b8e9969817a6057e3")
+                         "535853762c65d69edd0460d47203d67932562c561c1fb6a57d2a6c2e38214a90")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 18})
