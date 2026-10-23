@@ -9933,11 +9933,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/flash_attention_general_v1/Cargo.toml",
-        "packageManifestSha256": "069fbfdfd2b91eadc8b4c285fa4d40f5fb6aeb72761411d1372c47b126616c1e",
+        "packageManifestSha256": "c2bb1d3473b4347bd4f2a264fb0b171cbc0a642143694c4ee008946f344d5b9c",
         "sourcePaths": [
           "examples/flash_attention_general_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "e842d89971b13495d6b4be382f55c7375edffe1c13b9ca12828914f7cc04e872",
+        "sourceClosureSha256": "e6a7504b5256ff3c3bc883d09b7c8f5df05e866c92c25080eadb9000561c35ec",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_flash_attention_general_v1",
@@ -9950,7 +9950,7 @@
         ],
         "cargoLockPath": "examples/flash_attention_general_v1/Cargo.lock",
         "cargoLockSha256": "4ca3f1a55a797d962e262b8bcf602a32ab210c1ccafcc7cd3b14223cefe3f42e",
-        "contractSha256": "f9c7b3e30865ac1dc94fc314e951d6857f2e5fadb94252806920d58e4970e025"
+        "contractSha256": "52b102b1b1a61dddde353ae561298b2d194b4d1123559e980c843c9db5c284d0"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-flash-attention.request.json",
