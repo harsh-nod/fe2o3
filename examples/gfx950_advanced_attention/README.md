@@ -113,6 +113,56 @@ numerical verification on a gfx950 host:
 ./run-mhc-sinkhorn-mix-gfx950.sh
 ```
 
+## Explicit modes for the five attention families
+
+Each wrapper accepts `simt` or `tile`; omitting the argument retains its
+original source selection and arithmetic. Existing ablation features and their
+historical positive or negative roles remain unchanged.
+
+| Family | SIMT selection | Tile selection | Stored input and output contract |
+| --- | --- | --- | --- |
+| KDA decode | Original Wave16 recurrence | Checked `Tiled2D<Index1D,256,16,16,1>` state/output ownership | Raw F32; complete value-major state and every replicated output |
+| KDA chunkwise prefill | Original Wave16/WY two-chunk recurrence | Checked 16x16 state and both output planes | Raw F32; all eight token outputs and final state, original rounding order |
+| Content-sparse attention | Ordinary Rust E4M3 decode, scalar dot products and subgroup selection | Original checked FP8 matrix views and MFMA path | Raw FP8 E4M3 Q/K/V, F32 accumulation, all selected U32 IDs and gated F32 outputs |
+| DeepSeek sparse attention | Original indexed F32/Wave16 path | Checked 16x16 ownership of all three F32 output planes | Original U32 indices, sentinel/masking/duplicate behavior, maximum and normalizer |
+| Compressed-hybrid attention | Ordinary Rust E4M3 decode, scalar dot products and subgroup blend | Original checked FP8 matrix views and MFMA path | Raw FP8 E4M3 Q/K/V, F32 local/global normalization and gated output |
+
+KDA and DeepSeek tile modes preserve their canonical arithmetic and physical
+layouts. KDA is ordinary Rust SIMT with subgroup reductions and zero MFMA
+instructions. The two FP8 SIMT modes retain the raw byte format; they do not
+replace FP8 inputs with rounded F32 data. Their LLVM and ISA checks require
+subgroup exchange and reject MFMA/transpose instructions. The original FP8
+tile checks continue to require their matrix and transpose instructions.
+
+From the repository root, compile the exact ten selections without a GPU launch:
+
+```bash
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-kda-decode-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-kda-decode-gfx950.sh tile
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-kda-chunkwise-prefill-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-kda-chunkwise-prefill-gfx950.sh tile
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-content-sparse-attention-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-content-sparse-attention-gfx950.sh tile
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-deepseek-sparse-attention-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-deepseek-sparse-attention-gfx950.sh tile
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-compressed-hybrid-attention-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-compressed-hybrid-attention-gfx950.sh tile
+```
+
+`run-kda-prefill-gfx950.sh` remains an alias of chunkwise prefill and accepts
+the same arguments. The scripts use the existing nightly-2026-04-03 extraction
+route and validate the reviewed ROCm closure. For an installed ROCm 7.2.4
+closure, select the checked-in manifest with
+`FE2O3_GFX950_OCML_MANIFEST=$PWD/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.4.manifest`.
+An existing compatible extractor may be selected through
+`FE2O3_RUSTC_EXTRACTOR`; otherwise the normal runner builds it from the checkout.
+
+Both modes retain the original independent HSA oracle plans, every output
+word, input immutability and canary checks. Compile-only and host-test results
+do not establish GPU execution or formal refinement. The hardware receipts
+below remain tied to their historical sources; they do not qualify these
+newly selectable pairs. gfx950 is the current scope; gfx942 remains pending.
+
 ## Performance audit
 
 [`PERFORMANCE_AUDIT.md`](PERFORMANCE_AUDIT.md) gives the per-kernel external
