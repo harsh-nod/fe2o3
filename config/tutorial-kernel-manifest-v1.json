@@ -8705,6 +8705,942 @@
             ]
           }
         ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-decode-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-decode-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-decode-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-decode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-decode-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-decode-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-decode-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-decode-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-decode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-decode-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-held-fragments-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-held-fragments,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-held-fragments-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-held-fragments-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-held-fragments-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-held-fragments-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-held-fragments-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-held-fragments,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-held-fragments-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-held-fragments-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-held-fragments-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-held-fragments-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-interleaved-stores-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-interleaved-stores,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-interleaved-stores-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-interleaved-stores-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-interleaved-stores-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-interleaved-stores-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-interleaved-stores-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-interleaved-stores,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-interleaved-stores-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-interleaved-stores-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-interleaved-stores-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-interleaved-stores-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-attention-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-attention-component,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-attention-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-attention-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-attention-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-attention-component,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-attention-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-attention-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-expert-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-expert-component,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-expert-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-expert-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-expert-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-expert-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-expert-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-expert-component,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-expert-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-expert-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-expert-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-expert-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-router-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-mode-simt,kernel-gpt-oss-router-component"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-router-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-router-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-router-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-router-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-router-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-mode-tile,kernel-gpt-oss-router-component"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-router-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-router-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-router-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-router-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-pipelined-attention-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-pipelined-attention,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-pipelined-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-pipelined-attention-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-pipelined-attention-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-pipelined-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-pipelined-attention-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-pipelined-attention,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-pipelined-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-pipelined-attention-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-pipelined-attention-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-pipelined-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-scalar-attention-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-scalar-attention,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-scalar-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-scalar-attention-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-scalar-attention-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-scalar-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-scalar-attention-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-scalar-attention,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-scalar-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-scalar-attention-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-scalar-attention-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-scalar-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-serial-router-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-router-serial,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-serial-router-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-serial-router-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-serial-router-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-serial-router-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-serial-router-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-router-serial,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-serial-router-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-serial-router-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-serial-router-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-serial-router-tile"
+            ]
+          }
+        ]
       }
     ],
     "status": "pending"
@@ -9887,11 +10823,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
-        "packageManifestSha256": "1484767f5ee0a034b315cb5dbf76e2e7fd3e3fd7201066c3d39163546eecf395",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel.rs"
         ],
-        "sourceClosureSha256": "358f442f7da6ebf8a42a6059f8cd4f6ec9d65eaec45f297e16b01296add086a8",
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9906,7 +10842,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
-        "contractSha256": "d99f973c384a5f24dec101b55f499af5fda6220e479779a80cff9bb5a1fe7a3f"
+        "contractSha256": "813912c6dea2dced76ef9606f9ce048420fffc2658ab6536cefc2eb64a8b185a"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9936,11 +10872,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
-        "packageManifestSha256": "1484767f5ee0a034b315cb5dbf76e2e7fd3e3fd7201066c3d39163546eecf395",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments.rs"
         ],
-        "sourceClosureSha256": "358f442f7da6ebf8a42a6059f8cd4f6ec9d65eaec45f297e16b01296add086a8",
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -9955,7 +10891,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
-        "contractSha256": "ecfde5b4e8bf872f75857a06d5c8e5cc1507242bafad6f934eab126f00eb089a"
+        "contractSha256": "c163842772ab9128a9dc005bdfa47c5317e3a39722341913d7e385902916ec5b"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -9985,11 +10921,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
-        "packageManifestSha256": "1484767f5ee0a034b315cb5dbf76e2e7fd3e3fd7201066c3d39163546eecf395",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores.rs"
         ],
-        "sourceClosureSha256": "358f442f7da6ebf8a42a6059f8cd4f6ec9d65eaec45f297e16b01296add086a8",
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -10004,7 +10940,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
-        "contractSha256": "b6463f535ed0f4341d5641836f343f8ee9cbb29b0c804571e1351ad80cfde66c"
+        "contractSha256": "6ffac88fab65ae09071c5fc87d07654ba0565e81f74f6ca95407c491cf9f8510"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -10034,11 +10970,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
-        "packageManifestSha256": "1484767f5ee0a034b315cb5dbf76e2e7fd3e3fd7201066c3d39163546eecf395",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_components.rs"
         ],
-        "sourceClosureSha256": "358f442f7da6ebf8a42a6059f8cd4f6ec9d65eaec45f297e16b01296add086a8",
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -10053,7 +10989,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
-        "contractSha256": "dadf66abd339c29437a13e42d9404bae36f6d0112a7bec8590bb4b2e950f8fed"
+        "contractSha256": "2112eb8f161462b48f266619c4302094495b4ae59e13c8204b90e94b9b7ab29b"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-attention.request.json",
@@ -10083,11 +11019,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
-        "packageManifestSha256": "1484767f5ee0a034b315cb5dbf76e2e7fd3e3fd7201066c3d39163546eecf395",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_components.rs"
         ],
-        "sourceClosureSha256": "358f442f7da6ebf8a42a6059f8cd4f6ec9d65eaec45f297e16b01296add086a8",
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -10102,7 +11038,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
-        "contractSha256": "fcb3ea0a64063793f6401934f3fcfde27dc8501d0f18677369e53351a6f7edb2"
+        "contractSha256": "9596804986b9d554c26414bf1dd3eb3e956733d2286b12ad4daba4054c66e83f"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-expert.request.json",
@@ -10132,11 +11068,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
-        "packageManifestSha256": "1484767f5ee0a034b315cb5dbf76e2e7fd3e3fd7201066c3d39163546eecf395",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_components.rs"
         ],
-        "sourceClosureSha256": "358f442f7da6ebf8a42a6059f8cd4f6ec9d65eaec45f297e16b01296add086a8",
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -10151,7 +11087,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
-        "contractSha256": "44351cc48f34e64d653f1b7fa9d118fd2f26d5a25aa2433b2e4d2d40628577ca"
+        "contractSha256": "086ff12f2a8c10b99d5251295094e3ec4fec8b7ceadaf89783c72731f0b1bfb7"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-router.request.json",
@@ -10181,11 +11117,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
-        "packageManifestSha256": "1484767f5ee0a034b315cb5dbf76e2e7fd3e3fd7201066c3d39163546eecf395",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention.rs"
         ],
-        "sourceClosureSha256": "358f442f7da6ebf8a42a6059f8cd4f6ec9d65eaec45f297e16b01296add086a8",
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -10200,7 +11136,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
-        "contractSha256": "c47c88f7c584e32deed3b1a9703ab628ea7e9fbbb95177630a5591a5dd782e94"
+        "contractSha256": "fbcfbc516a37c7333eabb6ef24032fcf13f104e2c22b0ff68e46e3c19cf2231b"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention.request.json",
@@ -10230,11 +11166,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
-        "packageManifestSha256": "1484767f5ee0a034b315cb5dbf76e2e7fd3e3fd7201066c3d39163546eecf395",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention.rs"
         ],
-        "sourceClosureSha256": "358f442f7da6ebf8a42a6059f8cd4f6ec9d65eaec45f297e16b01296add086a8",
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -10249,7 +11185,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
-        "contractSha256": "d14846bc29436cda78beb5d2028b9d094302b60a77454ed8f8decf9e3d53ac28"
+        "contractSha256": "a252827a2ffd133684267f81ec798a4870aef94d20041d726403d64fcb665fff"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention.request.json",
@@ -10279,11 +11215,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
-        "packageManifestSha256": "1484767f5ee0a034b315cb5dbf76e2e7fd3e3fd7201066c3d39163546eecf395",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
         "sourcePaths": [
           "examples/gfx950_gpt_oss_decode/src/kernel_router_serial.rs"
         ],
-        "sourceClosureSha256": "358f442f7da6ebf8a42a6059f8cd4f6ec9d65eaec45f297e16b01296add086a8",
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_gpt_oss_decode",
@@ -10298,7 +11234,7 @@
         ],
         "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
         "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
-        "contractSha256": "385320e09670d3c732bcb9d1d431e6d60b580b5197d2122c2954c62f024968dc"
+        "contractSha256": "80998e10c5fb3bef63054d2fd10755531777b9815b4b2ed8df487ab07c144c77"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-120b-decode-megakernel.request.json",
@@ -11081,6 +12017,906 @@
         "canonicalKirVersion": 12,
         "status": "pending-reconciliation"
       }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-decode-simt",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-decode-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-decode-simt",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode.hsaco",
+        "runnerArguments": [
+          "optimized-simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_simt.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode",
+          "kernel-gpt-oss-mode-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "a0d8740ead892c639b9ad63920a2d8d6be762881450e0f14ab4c293e09c3efce"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-decode-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-decode-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-decode-tile",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-decode-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-decode-tile",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode.hsaco",
+        "runnerArguments": [
+          "optimized-tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_tile.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode",
+          "kernel-gpt-oss-mode-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "c26c914e311182f23977952521e0b170aa08496103554e07936426e47fde4b82"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-decode-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-decode-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-held-fragments-simt",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-held-fragments-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-held-fragments-simt",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-held-fragments.hsaco",
+        "runnerArguments": [
+          "held-fragments-simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments_simt.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-held-fragments",
+          "kernel-gpt-oss-mode-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "d1b276c881020332f2883a0c64f97bbbbb360f333d5abeebc80ee4e7f12d46dd"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-held-fragments-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-held-fragments-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-held-fragments-tile",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-held-fragments-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-held-fragments-tile",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-held-fragments.hsaco",
+        "runnerArguments": [
+          "held-fragments-tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments_tile.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-held-fragments",
+          "kernel-gpt-oss-mode-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "063d12d7880eb18389196048b184e6f3d230d07c6142c436aed90a7bba4d7df8"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-held-fragments-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-held-fragments-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-interleaved-stores-simt",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-interleaved-stores-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-interleaved-stores-simt",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-interleaved-stores.hsaco",
+        "runnerArguments": [
+          "interleaved-stores-simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores_simt.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-interleaved-stores",
+          "kernel-gpt-oss-mode-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "96a57b24a5f6377b0281c7196995b4f04dccc3e52033ec44bb628facc19b6781"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-interleaved-stores-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-interleaved-stores-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-interleaved-stores-tile",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-interleaved-stores-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-interleaved-stores-tile",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-interleaved-stores.hsaco",
+        "runnerArguments": [
+          "interleaved-stores-tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores_tile.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-interleaved-stores",
+          "kernel-gpt-oss-mode-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "6750d4f80156faed4cb92c60994f8e26258704d633bc951d9bd2f643dfef2d31"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-interleaved-stores-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-interleaved-stores-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-materialized-attention-simt",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-materialized-attention-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-materialized-attention-simt",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-attention-component.hsaco",
+        "runnerArguments": [
+          "materialized-attention-simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_simt_components.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-attention-component",
+          "kernel-gpt-oss-mode-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_attention_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "1b0540519be425a133be38cc3dfb492b3cea51fbf331271f4aa0a8825f05d959"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-attention-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-attention-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-materialized-attention-tile",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-materialized-attention-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-materialized-attention-tile",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-attention-component.hsaco",
+        "runnerArguments": [
+          "materialized-attention-tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_tile_components.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-attention-component",
+          "kernel-gpt-oss-mode-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_attention_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "2272ee887df70e9a3fa9d0a33c5cee29347c094984fb8b8ee36974af8687230a"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-attention-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-attention-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-materialized-expert-simt",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-materialized-expert-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-materialized-expert-simt",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-expert-component.hsaco",
+        "runnerArguments": [
+          "materialized-expert-simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_simt_components.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-expert-component",
+          "kernel-gpt-oss-mode-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_expert_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "fa49ec3862ecfc94525aa5a3b3be5a960b08f329780409cd2923bf9083015d21"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-expert-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-expert-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-materialized-expert-tile",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-materialized-expert-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-materialized-expert-tile",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-expert-component.hsaco",
+        "runnerArguments": [
+          "materialized-expert-tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_tile_components.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-expert-component",
+          "kernel-gpt-oss-mode-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_expert_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "3b7388b5ff08f6760a190281f792119600eb26df6768244723b72a5f4d3fd55c"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-expert-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-expert-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-materialized-router-simt",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-materialized-router-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-materialized-router-simt",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-router-component.hsaco",
+        "runnerArguments": [
+          "materialized-router-simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_simt_components.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-mode-simt",
+          "kernel-gpt-oss-router-component"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_router_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "bd0e728a9de43d7de80527cf06915af713bf21d2c2436bc4eb5046140e0db21d"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-router-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-router-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-materialized-router-tile",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-materialized-router-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-materialized-router-tile",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-router-component.hsaco",
+        "runnerArguments": [
+          "materialized-router-tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_tile_components.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-mode-tile",
+          "kernel-gpt-oss-router-component"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_router_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "8c81a9b16d2a314d663384914c8059e6ca7e431fb4ce1b31eb3e4da87d91cb64"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-router-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-materialized-router-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-pipelined-attention-simt",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-pipelined-attention-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-pipelined-attention-simt",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-pipelined-attention.hsaco",
+        "runnerArguments": [
+          "pipelined-attention-simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention_simt.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-pipelined-attention",
+          "kernel-gpt-oss-mode-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "ad153b05c78f6c470ef4778bed07d7e42e4d601d2c364398767a685e09cbf48c"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-pipelined-attention-tile",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-pipelined-attention-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-pipelined-attention-tile",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-pipelined-attention.hsaco",
+        "runnerArguments": [
+          "pipelined-attention-tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention_tile.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-pipelined-attention",
+          "kernel-gpt-oss-mode-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "b2be67dd25e0a8e3f0a117e1b4e11be5fbca01e47a838690f8ce2e40289542db"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-pipelined-attention-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-scalar-attention-simt",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-scalar-attention-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-scalar-attention-simt",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-scalar-attention.hsaco",
+        "runnerArguments": [
+          "scalar-attention-simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention_simt.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-scalar-attention",
+          "kernel-gpt-oss-mode-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "333546ab385e9f59dc3573a7e40b98ee20cd8dce3e9e428e3b151e24b418f405"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-scalar-attention-tile",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-scalar-attention-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-scalar-attention-tile",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-scalar-attention.hsaco",
+        "runnerArguments": [
+          "scalar-attention-tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_tile.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-scalar-attention",
+          "kernel-gpt-oss-mode-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "de7b9a57314fcec383d3ec12a9ee681c75c6fe32e0e995c705e80fd47563c3f8"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-scalar-attention-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-serial-router-simt",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-serial-router-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-serial-router-simt",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-router-serial.hsaco",
+        "runnerArguments": [
+          "serial-router-simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_simt.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-router-serial",
+          "kernel-gpt-oss-mode-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "e2b32989f11721124b870cf4d28f59f615c1568f87ccd78e58b3beea73f323ce"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-serial-router-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-serial-router-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-gpt-oss-serial-router-tile",
+      "testId": "kernel-compile-matrix/gfx950/gpt-oss-serial-router-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "gpt-oss-serial-router-tile",
+        "runnerPath": "examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh",
+        "artifactName": "kernel-gpt-oss-decode-router-serial.hsaco",
+        "runnerArguments": [
+          "serial-router-tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_gpt_oss_decode/Cargo.toml",
+        "packageManifestSha256": "2721a51e5766d28e4e3eecff5454dcc22c43c8de87f465468105def88b66a1bc",
+        "sourcePaths": [
+          "examples/gfx950_gpt_oss_decode/src/kernel_tile.rs"
+        ],
+        "sourceClosureSha256": "ec3a83d8d4d0ea2180e0b43525337af42408b1fe165054aa5fc4266aefa91348",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_gpt_oss_decode",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-gpt-oss-decode-router-serial",
+          "kernel-gpt-oss-mode-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_gpt_oss_120b_decode_megakernel_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_gpt_oss_decode/Cargo.lock",
+        "cargoLockSha256": "864c83c87273da9b1bd6eac60fc878b58b95153d70fff144940212fd02ab8ca5",
+        "contractSha256": "161130fd19e75e6c9104ee9726d6e239dbfd4853e0205e82c9b2672e5380ec52"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-serial-router-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-gpt-oss-serial-router-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
     }
   ],
   "entries": [
@@ -11329,18 +13165,51 @@
       "sourcePaths": [
         "examples/gfx950_gpt_oss_decode/src/kernel.rs",
         "examples/gfx950_gpt_oss_decode/src/kernel_components.rs",
-        "examples/gfx950_gpt_oss_decode/src/kernel_router_serial.rs"
+        "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments_simt.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_held_fragments_tile.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores_simt.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_interleaved_stores_tile.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention_simt.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_pipelined_attention_tile.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_router_serial.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_scalar_attention_simt.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_simt.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_simt_components.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_tile.rs",
+        "examples/gfx950_gpt_oss_decode/src/kernel_tile_components.rs"
       ],
       "compilerFixtureIds": [
         "gfx950-gpt-oss-decode",
+        "gfx950-gpt-oss-decode-simt",
+        "gfx950-gpt-oss-decode-tile",
         "gfx950-gpt-oss-held-fragments",
+        "gfx950-gpt-oss-held-fragments-simt",
+        "gfx950-gpt-oss-held-fragments-tile",
         "gfx950-gpt-oss-interleaved-stores",
+        "gfx950-gpt-oss-interleaved-stores-simt",
+        "gfx950-gpt-oss-interleaved-stores-tile",
         "gfx950-gpt-oss-materialized-attention",
+        "gfx950-gpt-oss-materialized-attention-simt",
+        "gfx950-gpt-oss-materialized-attention-tile",
         "gfx950-gpt-oss-materialized-expert",
+        "gfx950-gpt-oss-materialized-expert-simt",
+        "gfx950-gpt-oss-materialized-expert-tile",
         "gfx950-gpt-oss-materialized-router",
+        "gfx950-gpt-oss-materialized-router-simt",
+        "gfx950-gpt-oss-materialized-router-tile",
         "gfx950-gpt-oss-pipelined-attention",
+        "gfx950-gpt-oss-pipelined-attention-simt",
+        "gfx950-gpt-oss-pipelined-attention-tile",
         "gfx950-gpt-oss-scalar-attention",
-        "gfx950-gpt-oss-serial-router"
+        "gfx950-gpt-oss-scalar-attention-simt",
+        "gfx950-gpt-oss-scalar-attention-tile",
+        "gfx950-gpt-oss-serial-router",
+        "gfx950-gpt-oss-serial-router-simt",
+        "gfx950-gpt-oss-serial-router-tile"
       ],
       "requiredGates": [
         "production-compile",
@@ -13769,6 +15638,582 @@
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
               "reason": "A genuine mixed source implementation and per-target source, simulator, native artifact, generated-host and direct-KFD qualification remain pending on gfx942/mi300x and gfx950/mi350."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-decode-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-decode-simt",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-decode-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-decode-tile",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-held-fragments-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-held-fragments-simt",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-held-fragments-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-held-fragments-tile",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-interleaved-stores-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-interleaved-stores-simt",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-interleaved-stores-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-interleaved-stores-tile",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-materialized-attention-simt:gfx950_gpt_oss_120b_attention_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-materialized-attention-simt",
+            "kernelSymbol": "gfx950_gpt_oss_120b_attention_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-materialized-attention-tile:gfx950_gpt_oss_120b_attention_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-materialized-attention-tile",
+            "kernelSymbol": "gfx950_gpt_oss_120b_attention_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-materialized-expert-simt:gfx950_gpt_oss_120b_expert_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-materialized-expert-simt",
+            "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-materialized-expert-tile:gfx950_gpt_oss_120b_expert_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-materialized-expert-tile",
+            "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-materialized-router-simt:gfx950_gpt_oss_120b_router_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-materialized-router-simt",
+            "kernelSymbol": "gfx950_gpt_oss_120b_router_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-materialized-router-tile:gfx950_gpt_oss_120b_router_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-materialized-router-tile",
+            "kernelSymbol": "gfx950_gpt_oss_120b_router_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-pipelined-attention-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-pipelined-attention-simt",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-pipelined-attention-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-pipelined-attention-tile",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-scalar-attention-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-scalar-attention-simt",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-scalar-attention-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-scalar-attention-tile",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-serial-router-simt:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-serial-router-simt",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-gpt-oss-serial-router-tile:gfx950_gpt_oss_120b_decode_megakernel_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-gpt-oss-serial-router-tile",
+            "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
             }
           }
         ]

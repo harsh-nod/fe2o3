@@ -103,6 +103,10 @@ case "${1:-}" in
             shift
           done
           [[ -n $feature ]] || exit 93
+          case "$feature" in
+            kernel-gpt-oss-*,kernel-gpt-oss-mode-simt|kernel-gpt-oss-*,kernel-gpt-oss-mode-tile)
+              feature=${feature%,*} ;;
+          esac
           symbol=
           fp4_mfma=0
           fp8_mfma=0
@@ -182,6 +186,9 @@ case "${1:-}" in
               symbol=gfx950_gpt_oss_120b_expert_v1; fp4_mfma=4 ;;
             *) exit 94 ;;
           esac
+          if [[ $feature == kernel-gpt-oss-* && ${FE2O3_GFX950_ADVANCED_MODE:-canonical} == simt ]]; then
+            fp4_mfma=0; bf16_mfma=0; gpt_bf16_helper=0
+          fi
           {
             printf '%s\n' 'target triple = "amdgcn-amd-amdhsa"'
             if ((gpt_bf16_helper)); then
@@ -456,6 +463,9 @@ case "$key" in
     symbol=gfx950_gpt_oss_120b_expert_v1; kind=gpt_oss_expert ;;
   *) exit 99 ;;
 esac
+if [[ $key == kernel-gpt-oss-* && ${FE2O3_GFX950_ADVANCED_MODE:-canonical} == simt ]]; then
+  if [[ $kind == gpt_oss_pipeline ]]; then kind=gpt_oss_pipeline_simt; else kind=scalar; fi
+fi
 printf '0000000000000000 <%s>:\n' "$symbol"
 case "$kind" in
   fp4)
@@ -491,10 +501,10 @@ case "$kind" in
     for _ in 1 2 3 4; do
       printf '%s\n' 'v_mfma_f32_16x16x128_f8f6f4 cbsz:4'
     done ;;
-  scalar)
+  scalar | gpt_oss_pipeline_simt)
     printf '%s\n' 's_endpgm' ;;
 esac
-if [[ $kind == gpt_oss_pipeline ]]; then
+if [[ $kind == gpt_oss_pipeline || $kind == gpt_oss_pipeline_simt ]]; then
   for _ in {1..10}; do printf '%s\n' s_barrier; done
 fi
 EOF
@@ -651,13 +661,13 @@ KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
   }
 
 grep -F -- \
-  'kernel compile matrix: target=gfx950 mode=compile-only kernels=39 hardware_observed=false' \
+  'kernel compile matrix: target=gfx950 mode=compile-only kernels=57 hardware_observed=false' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
-  'MATRIX PASS target=gfx950 compiled=39 hardware_executed=0 artifacts=temporary' \
+  'MATRIX PASS target=gfx950 compiled=57 hardware_executed=0 artifacts=temporary' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX LIMITATION remaining gfx950 ablations, HIP comparators, hardware behavior, and numerical results are not covered' \
@@ -701,11 +711,29 @@ for name in \
   gpt-oss-interleaved-stores \
   gpt-oss-materialized-router \
   gpt-oss-materialized-attention \
-  gpt-oss-materialized-expert; do
+  gpt-oss-materialized-expert \
+  gpt-oss-decode-simt \
+  gpt-oss-decode-tile \
+  gpt-oss-held-fragments-simt \
+  gpt-oss-held-fragments-tile \
+  gpt-oss-interleaved-stores-simt \
+  gpt-oss-interleaved-stores-tile \
+  gpt-oss-materialized-attention-simt \
+  gpt-oss-materialized-attention-tile \
+  gpt-oss-materialized-expert-simt \
+  gpt-oss-materialized-expert-tile \
+  gpt-oss-materialized-router-simt \
+  gpt-oss-materialized-router-tile \
+  gpt-oss-pipelined-attention-simt \
+  gpt-oss-pipelined-attention-tile \
+  gpt-oss-scalar-attention-simt \
+  gpt-oss-scalar-attention-tile \
+  gpt-oss-serial-router-simt \
+  gpt-oss-serial-router-tile; do
   [[ "$(grep -Fc -- "CASE ${name} target=gfx950 status=PASS hardware_observed=false" \
     "${gfx950_output}")" -eq 1 ]]
 done
-[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 39 ]]
+[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 57 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
 for features in \
   kernel-moe-route \

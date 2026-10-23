@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-    printf 'usage: %s <optimized|serial-router|held-fragments|scalar-attention|pipelined-attention|interleaved-stores|materialized|materialized-router|materialized-attention|materialized-expert>\n' "$0" >&2
+    printf 'usage: %s <optimized|serial-router|held-fragments|scalar-attention|pipelined-attention|interleaved-stores|materialized|materialized-router|materialized-attention|materialized-expert|<selection>-simt|<selection>-tile>\n' "$0" >&2
     exit 2
 fi
 
@@ -10,6 +10,16 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 REPO_ROOT=$(cd -- "$SCRIPT_DIR/../.." && pwd -P)
 COMMON=$SCRIPT_DIR/../gfx950_advanced_attention/run-gfx950.sh
 VARIANT=$1
+case "$VARIANT" in
+    optimized-simt|optimized-tile|serial-router-simt|serial-router-tile|held-fragments-simt|held-fragments-tile|scalar-attention-simt|scalar-attention-tile|pipelined-attention-simt|pipelined-attention-tile|interleaved-stores-simt|interleaved-stores-tile|materialized-router-simt|materialized-router-tile|materialized-attention-simt|materialized-attention-tile|materialized-expert-simt|materialized-expert-tile)
+        MODE=${VARIANT##*-}
+        VARIANT=${VARIANT%-*}
+        if [[ -n ${FE2O3_GFX950_ADVANCED_MODE:-} && $FE2O3_GFX950_ADVANCED_MODE != "$MODE" ]]; then
+            printf 'GPT-OSS alias conflicts with FE2O3_GFX950_ADVANCED_MODE\n' >&2
+            exit 2
+        fi
+        export FE2O3_GFX950_ADVANCED_MODE=$MODE ;;
+esac
 case "$VARIANT" in
     optimized) FEATURE=kernel-gpt-oss-decode ;;
     serial-router) FEATURE=kernel-gpt-oss-decode-router-serial ;;

@@ -153,6 +153,12 @@ FE2O3_EXAMPLE_COMPILE_ONLY=1 FE2O3_GFX950_ADVANCED_MODE=tile \
   bash examples/gfx950_gpt_oss_decode/run-gfx950.sh
 ```
 
+The ablation runner also accepts explicit `<selection>-simt` and
+`<selection>-tile` aliases for each of the nine table rows, using `optimized`
+for the fused default. For example, `run-ablation-gfx950.sh scalar-attention-tile`
+selects only that existing implementation. A conflicting inherited mode is
+rejected. The aggregate `materialized` command retains its three original roles.
+
 The same mode variable applies to `run-ablation-gfx950.sh`, including
 `scalar-attention` and `pipelined-attention`. Runtime commands require one
 explicit `ROCR_VISIBLE_DEVICES` UUID or ordinal. The native compiler/proof,
