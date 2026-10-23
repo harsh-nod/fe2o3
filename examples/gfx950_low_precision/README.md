@@ -109,8 +109,8 @@ changed pairs.
 For compilation and ISA validation without GPU execution, prefix a command
 with `FE2O3_EXAMPLE_COMPILE_ONLY=1`.
 
-For a warm-cache GEMM run with a bounded native execution budget, the ordinary
-CPU build phase can be completed separately, from the repository root:
+To compile the GEMM artifacts and build the host fixtures without GPU
+execution, run the following ordinary CPU steps from the repository root:
 
 ```bash
 for precision in fp8 fp4; do
@@ -132,10 +132,12 @@ CARGO_PROFILE_DEV_DEBUG=0 cargo build --locked -p rustc-codegen-fe2o3 \
   --lib --bin fe2o3-rustc-extract
 ```
 
-This prebuild executes no GPU tests. The full runner still performs its normal
-build steps, reusing Cargo's cache. Cold build memory and time are separate from
-the warm native/GPU run; no private extractor or absolute scratch path is needed.
-After prebuilding, `CARGO_NET_OFFLINE=true` can be used for a no-network run.
+This optional prebuild executes no GPU tests. It uses a different dev profile
+from the unprefixed runner commands above, so those commands may rebuild the
+compiler with their default dev profile. This command establishes no bounded
+warm-cache or default-bootstrap result. The full runner retains its normal
+build steps; no private extractor or absolute scratch path is needed.
+With all required inputs cached, `CARGO_NET_OFFLINE=true` selects a no-network run.
 
 The attention runner disables Clang's implicit GPU libraries and links only an
 ordered nine-file closure accepted by the shared digest validator. It defaults

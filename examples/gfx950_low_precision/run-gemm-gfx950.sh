@@ -121,6 +121,10 @@ if [[ ! -f $EXTRACTOR || -L $EXTRACTOR || ! -x $EXTRACTOR ]]; then
     exit 1
 fi
 
+# Preserve a checked caller-relative override when Cargo changes directory.
+EXTRACTOR_DIR=$(cd -- "$(dirname -- "$EXTRACTOR")" && pwd -P)
+EXTRACTOR=$EXTRACTOR_DIR/$(basename -- "$EXTRACTOR")
+
 SYSROOT=$("$RUSTUP" run "$TOOLCHAIN" rustc --print sysroot)
 (
     cd -- "$SCRIPT_DIR"
