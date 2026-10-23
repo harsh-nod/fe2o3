@@ -9692,8 +9692,7 @@ fn validate_constant(constant: &Constant, target: LoweringTarget) -> Result<(), 
         | Constant::U32(_)
         | Constant::U64(_)
         | Constant::Index(_) => Ok(()),
-        Constant::F32Bits(bits) if !f32::from_bits(*bits).is_nan() => Ok(()),
-        Constant::F32Bits(_) => Err("G1 rejects NaN f32 constants because LLVM's widened hexadecimal spelling does not preserve every payload".to_string()),
+        Constant::F32Bits(_) => Ok(()),
         Constant::F16Bits(_) | Constant::Bf16Bits(_) if target.supports_narrow_float() => Ok(()),
         Constant::F64Bits(_) if target.supports_f64() => Ok(()),
         _ => Err(format!("G1 does not lower constant {constant:?}")),
@@ -9961,7 +9960,12 @@ fn constant_value(constant: &Constant) -> Option<String> {
         Constant::U64(value) => Some(value.to_string()),
         Constant::Index(value) => Some(value.to_string()),
         Constant::F16Bits(value) | Constant::Bf16Bits(value) => Some(value.to_string()),
-        Constant::F32Bits(bits) if !f32::from_bits(*bits).is_nan() => Some(format!(
+        // Widening a NaN can quiet it or change its payload. LLVM's equal-width
+        // constant bitcast preserves every original bit, including sign and sNaN.
+        Constant::F32Bits(bits) if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 => {
+            Some(format!("bitcast (i32 {bits} to float)"))
+        }
+        Constant::F32Bits(bits) => Some(format!(
             "0x{:016X}",
             f64::from(f32::from_bits(*bits)).to_bits()
         )),
@@ -10207,6 +10211,89 @@ mod tests {
         }
         for symbol in ["", "42fill", "fill.kernel", "fill-kernel", "fill\nret void"] {
             assert!(!is_safe_symbol(symbol), "{symbol}");
+        }
+    }
+
+    #[test]
+    fn f32_literals_round_trip_exact_bits_through_llvm() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+
+        let mut cases = vec![
+            0,
+            0x8000_0000,
+            1,
+            0x007f_ffff,
+            0x0080_0000,
+            0x3f80_0000,
+            0x7f7f_ffff,
+            0x7f80_0000,
+            0xff80_0000,
+            0x7fc0_0042,
+            0x7fff_ffff,
+            0xffff_ffff,
+        ];
+        for sign in [0, 0x8000_0000] {
+            for bit in 0..23 {
+                cases.push(sign | 0x7f80_0000 | (1 << bit));
+                cases.push(sign | 0x7fc0_0000 | (1 << bit));
+            }
+        }
+        cases.sort_unstable();
+        cases.dedup();
+        let mut text = String::new();
+        for bits in &cases {
+            let constant = Constant::F32Bits(*bits);
+            for target in [
+                LoweringTarget::Baseline,
+                LoweringTarget::Gfx942StrictFloatV1,
+                LoweringTarget::Gfx942XnackMinusV1,
+                LoweringTarget::Gfx950XnackMinusV1,
+            ] {
+                validate_constant(&constant, target).unwrap();
+            }
+            let literal = constant_value(&constant).unwrap();
+            if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
+                assert_eq!(literal, format!("bitcast (i32 {bits} to float)"));
+            } else {
+                assert_eq!(
+                    literal,
+                    format!("0x{:016X}", f64::from(f32::from_bits(*bits)).to_bits())
+                );
+            }
+            text.push_str(&format!(
+                "@bits_{bits:08x} = constant i32 bitcast (float {literal} to i32)\n"
+            ));
+        }
+        // Parse the actual formatter output and fold the inverse bitcast, rather
+        // than comparing two independently hand-written LLVM spellings.
+        fn run(tool: &str, input: &[u8]) -> Vec<u8> {
+            let mut child = Command::new(tool)
+                .args(["-o", "-", "-"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            child.stdin.take().unwrap().write_all(input).unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "{tool}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output.stdout
+        }
+        let bitcode = run("llvm-as", text.as_bytes());
+        let decoded = String::from_utf8(run("llvm-dis", &bitcode)).unwrap();
+        for bits in cases {
+            let prefix = format!("@bits_{bits:08x} = constant i32 ");
+            let values: Vec<_> = decoded
+                .lines()
+                .filter_map(|line| line.strip_prefix(&prefix))
+                .collect();
+            assert_eq!(values.len(), 1, "{decoded}");
+            assert_eq!(values[0].parse::<i64>().unwrap() as u32, bits);
         }
     }
 
