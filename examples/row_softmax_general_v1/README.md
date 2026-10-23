@@ -101,6 +101,11 @@ export PATH="$CARGO_TARGET_DIR/debug:$(dirname -- "$CARGO"):$PATH"
 
 Then run all package targets with the default Cargo profiles:
 
+This standalone package's checked-in test profile omits debug information while
+keeping debug assertions and overflow checks enabled. Normal test commands stay
+inside the existing CLI's bounded executable hashing limit without
+`CARGO_PROFILE_*` overrides; the native compiler limits are unchanged.
+
 ```bash
 cd examples/row_softmax_general_v1
 cargo fe2o3 test --locked --offline --all-targets -j2 -- --test-threads=1

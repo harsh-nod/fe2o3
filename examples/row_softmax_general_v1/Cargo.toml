@@ -31,3 +31,8 @@ default = []
 structured-tile = []
 gfx950-target = []
 qualification-legacy-hip = []
+
+[profile.test]
+debug = 0
+debug-assertions = true
+overflow-checks = true
