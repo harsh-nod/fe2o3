@@ -1099,8 +1099,11 @@
     "function": 1
   },
   "crates/fe2o3-hsa-runtime/tests/gfx950_advanced_hardware.rs": {
-    "block": 17,
-    "function": 1
+    "block": 18,
+    "function": 2
+  },
+  "crates/fe2o3-hsa-runtime/tests/gfx950_advanced_hardware/vecadd.rs": {
+    "block": 4
   },
   "crates/fe2o3-hsa-runtime/tests/gfx950_attention_hardware.rs": {
     "block": 9,
@@ -2009,6 +2012,9 @@
   },
   "examples/tiled_gemm_general_v1/tests/kernel_source.rs": {
     "block": 1
+  },
+  "examples/vecadd/src/qualification.rs": {
+    "block": 2
   },
   "scripts/qualification-host-link-proxy.rs": {
     "block": 1,
