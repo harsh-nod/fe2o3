@@ -120,10 +120,31 @@
             ],
         )
         .unwrap();
-        let mut lowering = SemanticFunctionLoweringV1::new(
+        // The current transport planner needs a real shared ledger even when
+        // this private fixture has no nominal references or source owner.
+        let semantic_function = SemanticFunctionIdV1::from_index(0);
+        let semantic_ssa = plan_semantic_function_ssa_with_module_v1(
+            semantic_function,
+            &function,
+            &types,
+            &[],
+            ProductionSemanticSsaLimitsV1::default(),
+        )
+        .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+        let call_returns =
+            CallReturnBufferV1::for_function(&function, &[], &BTreeMap::new(), 0, &mut budget)?;
+        let mut lowering = SemanticFunctionLoweringV1::new_interprocedural(
             &types,
             &[],
             &function,
+            &semantic_ssa,
+            semantic_function,
+            semantic_function,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Vec::new(),
             SemanticParameterBindingsV1 {
                 declarations: &[],
                 values: &[],
@@ -132,10 +153,18 @@
             },
             None,
             Some([64, 1, 1]),
-            BTreeSet::new(),
+            BTreeSet::new().into(),
             1,
             false,
             64,
+            PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, 64)),
+            None,
+            call_returns,
+            Some(&mut budget),
+            SemanticEmissionPlacementV1::default(),
+            None,
+            None,
+            None,
         )?;
         lowering.next_value = 50;
         lowering.locals[1] = Some(context);
@@ -255,17 +284,21 @@
             SemanticValueBindingV1::Unit,
             SemanticValueBindingV1::MathContext,
         ] {
+            let error = raw_shuffle_materializer_fixture(
+                ScalarType::F32,
+                ScalarType::U32,
+                Some(64),
+                None,
+                context,
+                ScalarType::F32,
+                true,
+            )
+            .unwrap_err();
             assert!(
-                raw_shuffle_materializer_fixture(
-                    ScalarType::F32,
-                    ScalarType::U32,
-                    Some(64),
-                    None,
-                    context,
-                    ScalarType::F32,
-                    true,
-                )
-                .is_err()
+                matches!(&error, ProductionSemanticKirErrorV1::Unsupported {
+                    detail: "Wave64 shuffle lacks compiler-issued collective context", ..
+                }),
+                "expected an actual context refusal, got {error:?}",
             );
         }
         for (source_scalar, bound, constant, scalar, value_scalar, destination) in [
@@ -326,17 +359,21 @@
                 false,
             ),
         ] {
+            let error = raw_shuffle_materializer_fixture(
+                scalar,
+                source_scalar,
+                bound,
+                constant,
+                SemanticValueBindingV1::CollectiveContext,
+                value_scalar,
+                destination,
+            )
+            .unwrap_err();
             assert!(
-                raw_shuffle_materializer_fixture(
-                    scalar,
-                    source_scalar,
-                    bound,
-                    constant,
-                    SemanticValueBindingV1::CollectiveContext,
-                    value_scalar,
-                    destination,
-                )
-                .is_err()
+                matches!(&error, ProductionSemanticKirErrorV1::Unsupported {
+                    detail: "Wave64 shuffle requires exact u32/i32/f32 and an authenticated u32 lane below 64", ..
+                }),
+                "expected an actual lane/type refusal, got {error:?}",
             );
         }
     }

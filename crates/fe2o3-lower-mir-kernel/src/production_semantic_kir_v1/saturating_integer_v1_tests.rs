@@ -70,10 +70,35 @@ mod saturating_integer_v1_tests {
         )
         .unwrap();
         let types = [unit_type()];
-        let mut lowering = SemanticFunctionLoweringV1::new(
+        // Keep the fixture constructor and materialization on one finite ledger.
+        let semantic_function = SemanticFunctionIdV1::from_index(0);
+        let semantic_ssa = plan_semantic_function_ssa_with_module_v1(
+            semantic_function,
+            &function,
+            &types,
+            &[],
+            ProductionSemanticSsaLimitsV1::default(),
+        )
+        .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
+        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+        let call_returns = CallReturnBufferV1::for_function(
+            &function,
+            &[],
+            &BTreeMap::new(),
+            0,
+            &mut budget,
+        )?;
+        let mut lowering = SemanticFunctionLoweringV1::new_interprocedural(
             &types,
             &[],
             &function,
+            &semantic_ssa,
+            semantic_function,
+            semantic_function,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Vec::new(),
             SemanticParameterBindingsV1 {
                 declarations: &[],
                 values: &[],
@@ -82,10 +107,18 @@ mod saturating_integer_v1_tests {
             },
             None,
             None,
-            BTreeSet::new(),
+            BTreeSet::new().into(),
             1,
             false,
             limit,
+            PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, limit)),
+            None,
+            call_returns,
+            Some(&mut budget),
+            SemanticEmissionPlacementV1::default(),
+            None,
+            None,
+            None,
         )?;
         lowering.next_value = 2;
         if let Some(bound) = source_bound {
@@ -238,10 +271,36 @@ mod saturating_integer_v1_tests {
                     ],
                 )
                 .unwrap();
-                let mut lowering = SemanticFunctionLoweringV1::new(
+                // Keep the fixture constructor and materialization on one finite ledger.
+                let semantic_function = SemanticFunctionIdV1::from_index(0);
+                let semantic_ssa = plan_semantic_function_ssa_with_module_v1(
+                    semantic_function,
+                    &function,
+                    &types,
+                    &callables,
+                    ProductionSemanticSsaLimitsV1::default(),
+                )
+                .unwrap();
+                let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+                let mut budget = ArgumentBudgetV1::new(&mut work, 1_000_000);
+                let call_returns = CallReturnBufferV1::for_function(
+                    &function,
+                    &callables,
+                    &BTreeMap::new(),
+                    0,
+                    &mut budget,
+                )
+                .unwrap();
+                let mut lowering = SemanticFunctionLoweringV1::new_interprocedural(
                     &types,
                     &callables,
                     &function,
+                    &semantic_ssa,
+                    semantic_function,
+                    semantic_function,
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                    Vec::new(),
                     SemanticParameterBindingsV1 {
                         declarations: &[(0, 1, scalar_ty), (1, 2, scalar_ty)],
                         values: &[ValueId(0), ValueId(1)],
@@ -250,10 +309,18 @@ mod saturating_integer_v1_tests {
                     },
                     None,
                     None,
-                    BTreeSet::new(),
+                    BTreeSet::new().into(),
                     1,
                     false,
                     64,
+                    PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, 64)),
+                    None,
+                    call_returns,
+                    Some(&mut budget),
+                    SemanticEmissionPlacementV1::default(),
+                    None,
+                    None,
+                    None,
                 )
                 .unwrap();
                 let mut operations = Vec::new();
