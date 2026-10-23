@@ -629,7 +629,7 @@ class AttentionCfgSelectionTests(unittest.TestCase):
                 expected = sum(variant["source"] is not None
                                for row in document["kernelInventory"]["kernels"] for variant in row["variants"])
                 self.assertEqual(result["sourceBoundVariantCount"], expected)
-                self.assertEqual(result["sourceBoundPairCount"], 8)
+                self.assertEqual(result["sourceBoundPairCount"], 31)
                 self.assertFalse(result["inventoryComplete"])
                 self.assertIsNone(result["requiredPairCount"])
                 symbol, = fixture["compilerInput"]["kernelSymbols"]
@@ -776,6 +776,19 @@ class LiteralIncludeSelectionTests(unittest.TestCase):
             lambda _: (self.library, sources, []), self.parent.ordinary_rust_function_items,
             syntax, budget if budget is not None else self.identities._Budget(4096))
 
+    def test_catalog_attribute_capacity_has_an_exact_finite_boundary(self):
+        self.assertEqual(self.identities.MAX_ATTRIBUTE_VISITS, 8192)
+        budget = self.identities._Budget(4096, attribute_limit=self.identities.MAX_ATTRIBUTE_VISITS)
+        for _ in range(8192):
+            budget.visit_attribute()
+        self.assertEqual(budget.attribute_visits, 8192)
+        with self.assertRaisesRegex(self.identities.KernelInventoryError, "aggregate visit bound"):
+            budget.visit_attribute()
+        self.assertEqual(budget.attribute_visits, 8192)
+        self.assertEqual(budget.maximum, 4096)
+        self.assertEqual(self.identities.MAX_SOURCE_ITEM_VISITS, 8192)
+        self.assertEqual(self.identities.MAX_RUNTIME_BYTES, 16 * 1024 * 1024)
+
     def sources(self, prefix='include!("body.rs");\n', body=None):
         return {self.library: prefix + self.kernel,
                 "pkg/src/body.rs": self.definition if body is None else body}
@@ -805,7 +818,7 @@ class LiteralIncludeSelectionTests(unittest.TestCase):
         expected = sum(variant["source"] is not None
                        for row in document["kernelInventory"]["kernels"] for variant in row["variants"])
         self.assertEqual(result["sourceBoundVariantCount"], expected)
-        self.assertEqual(result["sourceBoundPairCount"], 8)
+        self.assertEqual(result["sourceBoundPairCount"], 31)
         self.assertFalse(result["inventoryComplete"])
         self.assertIsNone(result["requiredPairCount"])
         self.assertEqual((ROOT / binding["sourcePath"]).read_bytes()[299:305], b"vecadd")
@@ -1050,9 +1063,9 @@ class RowSourceBindingTests(unittest.TestCase):
         self.assertEqual(binding["sourceSha256"], tab["sourceSha256"])
         for variant in kernel["variants"]:
             self.assertIn("gfx942/mi300x and gfx950/mi350", variant["blocker"]["reason"])
-        self.assertEqual(report["knownKernelIdentityCount"], 94)
-        self.assertEqual(report["sourceBoundVariantCount"], 30)
-        self.assertEqual(report["sourceBoundPairCount"], 8)
+        self.assertEqual(report["knownKernelIdentityCount"], 101)
+        self.assertEqual(report["sourceBoundVariantCount"], 76)
+        self.assertEqual(report["sourceBoundPairCount"], 31)
         self.assertFalse(report["inventoryComplete"])
         self.assertIsNone(report["requiredPairCount"])
         self.assertEqual([(row["target"], row["deterministicSemanticRunnerAvailability"])

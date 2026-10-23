@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "deb09c286cb4a4aef5aec73302f1c3e213462dbd",
-      "tree": "22dcbf9b89cebbfa79378af2329d63aa7bbd6245"
+      "commit": "efa20b131dabe95ca7a78243122cf2de58f1ad67",
+      "tree": "92458379446921518e2defea3fface8dfe466bce"
     },
     "status": "pending",
     "lessons": [
@@ -457,7 +457,7 @@
                 "packageManifest": "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/Cargo.toml",
                 "packageManifestSha256": "8c816db43da65108b02b41b06781687bfab338407e5948648b8c623762da2f85",
                 "cargoLockPath": "Cargo.lock",
-                "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
+                "cargoLockSha256": "d95b94ed4468331b02e7a34b1a3fbe82961da1cb4967c8bc41840383434f8c09",
                 "sourcePaths": [
                   "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs"
                 ],
@@ -673,7 +673,7 @@
                   }
                 }
               ],
-              "contractSha256": "6aac36b2f08d1575d79b05e52c82fcd5a85ea3a2a71a94f54135e8a362d6d70c"
+              "contractSha256": "c681875f148530d0594ec4119dd75510ec9621a078cac64d963e7c360714f3ea"
             },
             "sourceItemStatus": "contract-bound"
           },
@@ -780,7 +780,7 @@
               "kind": "source-driver",
               "compilerInput": {
                 "packageManifest": "examples/workgroup_sync_v1/Cargo.toml",
-                "packageManifestSha256": "74736a259ca5e51e267d493ad15622f2e887e2ea3c915cdda127ef12f33a3016",
+                "packageManifestSha256": "77414533e8720fc2c3abf76c0584b739654109ecb6390ea4c16a8a589678dd8d",
                 "cargoLockPath": "examples/workgroup_sync_v1/Cargo.lock",
                 "cargoLockSha256": "094a848e57f6940ffa1a91ec3a3ac90f5185e178043eaa0c47a03782f3308ec0",
                 "sourcePaths": [
@@ -820,7 +820,7 @@
                   }
                 }
               ],
-              "contractSha256": "1020db699bfb636bef539f572ec52ae80ef963b66c4ddf52d2fac20ed8213506"
+              "contractSha256": "6755765e3160f68661461a6d143ef7f97b463d7bad137f2a3f9f808db9e2e736"
             },
             "sourceItemStatus": "contract-bound"
           },
@@ -958,8 +958,8 @@
             "kind": "result",
             "label": "Expected result",
             "language": "text",
-            "displayedUtf8Bytes": 118,
-            "displayedSha256": "0de3da55087d3ac5ce2bac1b4223d64957358fa4bc7707b24e8b44d864194af4",
+            "displayedUtf8Bytes": 225,
+            "displayedSha256": "71b1538fb1fb5fee49fbed7d3b80d04ff38dc8b5899ff2605c12722b3e2d1ef4",
             "sourcePath": null,
             "sourceCommit": null,
             "sourceSha256": null,
@@ -1936,14 +1936,14 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 16061,
-            "displayedSha256": "f160e1391e1b354657049b5b11d745428fbbfb8fb6e5e2fceb4143ac93e7b00b",
+            "displayedUtf8Bytes": 34804,
+            "displayedSha256": "72fd0148eb5a29c0747ec6b96616eeb4aed15939b365890846c49e1c1d0fbc50",
             "sourcePath": "examples/flash_attention_general_v1/src/kernel.rs",
-            "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
-            "sourceSha256": "f160e1391e1b354657049b5b11d745428fbbfb8fb6e5e2fceb4143ac93e7b00b",
+            "sourceCommit": "055ffa8dccc70fccc7675721f98f2b096abd68e7",
+            "sourceSha256": "72fd0148eb5a29c0747ec6b96616eeb4aed15939b365890846c49e1c1d0fbc50",
             "sourceDigestScope": "file",
             "explanatory": false,
-            "evidenceId": null,
+            "evidenceId": "flash-attention-current-source-v1",
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -3071,11 +3071,11 @@
             "kind": "kernel",
             "label": "Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 20521,
-            "displayedSha256": "69650ea2502ee149949d6cbec3e909032ede026be47ca52568bda455b9d9ef2c",
+            "displayedUtf8Bytes": 10537,
+            "displayedSha256": "1868eedc608691d53c7f90358540a8546a54af90a1b9bbf6f38b21a38117bb07",
             "sourcePath": "examples/gfx950_low_precision/src/kernel.rs",
-            "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
-            "sourceSha256": "69650ea2502ee149949d6cbec3e909032ede026be47ca52568bda455b9d9ef2c",
+            "sourceCommit": "34aa704c5bc3e3c84ad904dfcf7f044374e7dcd8",
+            "sourceSha256": "1868eedc608691d53c7f90358540a8546a54af90a1b9bbf6f38b21a38117bb07",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
@@ -3198,18 +3198,18 @@
             "kind": "kernel",
             "label": "Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 28244,
-            "displayedSha256": "c2131eeb0bf55ad7d272076655f5d3144bf61aa2ed04e3960cca3e09a854929c",
+            "displayedUtf8Bytes": 28495,
+            "displayedSha256": "597f67584c129e67b9dce7972315d8fce986e4a7f002575f6ef41345f568300e",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "3d10825df93a86644cc5a5b006cadd45f71afb91",
-            "sourceSha256": "c2131eeb0bf55ad7d272076655f5d3144bf61aa2ed04e3960cca3e09a854929c",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "597f67584c129e67b9dce7972315d8fce986e4a7f002575f6ef41345f568300e",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "cce2f0b75d205c2a11e199e813dda79521cd9000ec5d589de7dae045c7e42ca2",
-              "14021f7543d77ecf1d5aaba727d996a8553c8ea0bc034145862757db68f84e89",
-              "11cdfd804fea2b5f981f3b8b35826730df57bf89e1166cfba0133195dd6811f8"
+              "ae4d43e6d6c0c138af1231c7a6905ceadd5c80cb18d9b95e07f28a565c6cac76",
+              "8e1ae077dca417ea6c9b477dba99a82e1b6f9b93f78161d4ac5dd22bef227093",
+              "b8ae7aaac1e98068851ac70a8d93972d4160e4e67db4a13137a3a4dd37c8b816"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -3503,16 +3503,16 @@
             "kind": "kernel",
             "label": "Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 15899,
-            "displayedSha256": "8af6b4374d55d1cda9a8c5b8488df3b29dd280690fcf5f643d0d3a7776fd21bd",
+            "displayedUtf8Bytes": 15968,
+            "displayedSha256": "611fed39499572579a1f80b7aa855926e219791fc71085e330d0e564ffcdab8b",
             "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-            "sourceCommit": "3d10825df93a86644cc5a5b006cadd45f71afb91",
-            "sourceSha256": "8af6b4374d55d1cda9a8c5b8488df3b29dd280690fcf5f643d0d3a7776fd21bd",
+            "sourceCommit": "154a8c08c9995efffd56894768d04f0b91124e62",
+            "sourceSha256": "611fed39499572579a1f80b7aa855926e219791fc71085e330d0e564ffcdab8b",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "8af6b4374d55d1cda9a8c5b8488df3b29dd280690fcf5f643d0d3a7776fd21bd"
+              "611fed39499572579a1f80b7aa855926e219791fc71085e330d0e564ffcdab8b"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -3765,16 +3765,16 @@
             "kind": "kernel",
             "label": "Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 7552,
-            "displayedSha256": "f1d09336b950f0a71e8fc81beeff438ce19ba045c46d6865db833175fba0b1e1",
+            "displayedUtf8Bytes": 7624,
+            "displayedSha256": "aa2436df9d8635507b8d29fba15054afdbf3e18347f8dce338c9ff2b30d15332",
             "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-            "sourceCommit": "3d10825df93a86644cc5a5b006cadd45f71afb91",
-            "sourceSha256": "f1d09336b950f0a71e8fc81beeff438ce19ba045c46d6865db833175fba0b1e1",
+            "sourceCommit": "154a8c08c9995efffd56894768d04f0b91124e62",
+            "sourceSha256": "aa2436df9d8635507b8d29fba15054afdbf3e18347f8dce338c9ff2b30d15332",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "f1d09336b950f0a71e8fc81beeff438ce19ba045c46d6865db833175fba0b1e1"
+              "aa2436df9d8635507b8d29fba15054afdbf3e18347f8dce338c9ff2b30d15332"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -4082,16 +4082,16 @@
             "kind": "kernel",
             "label": "Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 8045,
-            "displayedSha256": "2730064fc70eca25fc1f18933ac2d71899f48a4467338a49cd9800e9fa2a5fcd",
+            "displayedUtf8Bytes": 8126,
+            "displayedSha256": "2ba7eab1adc144eaeda5dd4af486d08751cca15a397e1e37332681ea31344ccc",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "3d10825df93a86644cc5a5b006cadd45f71afb91",
-            "sourceSha256": "2730064fc70eca25fc1f18933ac2d71899f48a4467338a49cd9800e9fa2a5fcd",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "2ba7eab1adc144eaeda5dd4af486d08751cca15a397e1e37332681ea31344ccc",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "2730064fc70eca25fc1f18933ac2d71899f48a4467338a49cd9800e9fa2a5fcd"
+              "2ba7eab1adc144eaeda5dd4af486d08751cca15a397e1e37332681ea31344ccc"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -4231,16 +4231,16 @@
             "kind": "kernel",
             "label": "Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 5318,
-            "displayedSha256": "ec93dc1a8b806b1c777a846517b42319b5dcfb5cc86d1fff4dda1b87d7d91b9c",
+            "displayedUtf8Bytes": 5381,
+            "displayedSha256": "07466eb90124408a905cc46752961ba5f12ac427cf41c59f23f25f6b435d5945",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "3d10825df93a86644cc5a5b006cadd45f71afb91",
-            "sourceSha256": "ec93dc1a8b806b1c777a846517b42319b5dcfb5cc86d1fff4dda1b87d7d91b9c",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "07466eb90124408a905cc46752961ba5f12ac427cf41c59f23f25f6b435d5945",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "ec93dc1a8b806b1c777a846517b42319b5dcfb5cc86d1fff4dda1b87d7d91b9c"
+              "07466eb90124408a905cc46752961ba5f12ac427cf41c59f23f25f6b435d5945"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -4380,17 +4380,17 @@
             "kind": "kernel",
             "label": "Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 9154,
-            "displayedSha256": "df2ded4e4f5fa4fe6e170f2701097d9087ef0929c318768b8c5ac83fa63896f5",
+            "displayedUtf8Bytes": 9277,
+            "displayedSha256": "b408f9edc331402727311192aa3fbbb74da7753bf0de0f03692d5032802cf4f7",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "3d10825df93a86644cc5a5b006cadd45f71afb91",
-            "sourceSha256": "df2ded4e4f5fa4fe6e170f2701097d9087ef0929c318768b8c5ac83fa63896f5",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "b408f9edc331402727311192aa3fbbb74da7753bf0de0f03692d5032802cf4f7",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "b94ce8b5548c59ee9a661e6e36184e0b8049f0635581d5c8753265defa8b90c9",
-              "9a692941b8c346bf79b88287202cd9ee7803be9ac45218c083427df396b8938b"
+              "50f95ebd0b1534488fcf103c20793965ad2a5dcbb2961a6a0bf34ec08e77248d",
+              "2eba6ccfae90464a367ee679084d53794f2ceb3622b60d5d06addd55a41d7876"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -5116,16 +5116,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 20421,
-            "displayedSha256": "0a06ba5894d9afa1504dd036f9a0c8a4b3deb242156f37d5930f047d5ec1d5f1",
+            "displayedUtf8Bytes": 10437,
+            "displayedSha256": "db02c7da83c25654b6a87590caff9d84965ac91e4ebbac52cbf6ebaf8aa91001",
             "sourcePath": "examples/gfx950_low_precision/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "0a06ba5894d9afa1504dd036f9a0c8a4b3deb242156f37d5930f047d5ec1d5f1",
+            "sourceCommit": "34aa704c5bc3e3c84ad904dfcf7f044374e7dcd8",
+            "sourceSha256": "db02c7da83c25654b6a87590caff9d84965ac91e4ebbac52cbf6ebaf8aa91001",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "0a06ba5894d9afa1504dd036f9a0c8a4b3deb242156f37d5930f047d5ec1d5f1"
+              "db02c7da83c25654b6a87590caff9d84965ac91e4ebbac52cbf6ebaf8aa91001"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -5452,16 +5452,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 15899,
-            "displayedSha256": "8af6b4374d55d1cda9a8c5b8488df3b29dd280690fcf5f643d0d3a7776fd21bd",
+            "displayedUtf8Bytes": 15968,
+            "displayedSha256": "611fed39499572579a1f80b7aa855926e219791fc71085e330d0e564ffcdab8b",
             "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "8af6b4374d55d1cda9a8c5b8488df3b29dd280690fcf5f643d0d3a7776fd21bd",
+            "sourceCommit": "154a8c08c9995efffd56894768d04f0b91124e62",
+            "sourceSha256": "611fed39499572579a1f80b7aa855926e219791fc71085e330d0e564ffcdab8b",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "8af6b4374d55d1cda9a8c5b8488df3b29dd280690fcf5f643d0d3a7776fd21bd"
+              "611fed39499572579a1f80b7aa855926e219791fc71085e330d0e564ffcdab8b"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -5676,16 +5676,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 7552,
-            "displayedSha256": "f1d09336b950f0a71e8fc81beeff438ce19ba045c46d6865db833175fba0b1e1",
+            "displayedUtf8Bytes": 7624,
+            "displayedSha256": "aa2436df9d8635507b8d29fba15054afdbf3e18347f8dce338c9ff2b30d15332",
             "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "f1d09336b950f0a71e8fc81beeff438ce19ba045c46d6865db833175fba0b1e1",
+            "sourceCommit": "154a8c08c9995efffd56894768d04f0b91124e62",
+            "sourceSha256": "aa2436df9d8635507b8d29fba15054afdbf3e18347f8dce338c9ff2b30d15332",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "f1d09336b950f0a71e8fc81beeff438ce19ba045c46d6865db833175fba0b1e1"
+              "aa2436df9d8635507b8d29fba15054afdbf3e18347f8dce338c9ff2b30d15332"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -6124,16 +6124,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 12683,
-            "displayedSha256": "cce2f0b75d205c2a11e199e813dda79521cd9000ec5d589de7dae045c7e42ca2",
+            "displayedUtf8Bytes": 12827,
+            "displayedSha256": "ae4d43e6d6c0c138af1231c7a6905ceadd5c80cb18d9b95e07f28a565c6cac76",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "cce2f0b75d205c2a11e199e813dda79521cd9000ec5d589de7dae045c7e42ca2",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "ae4d43e6d6c0c138af1231c7a6905ceadd5c80cb18d9b95e07f28a565c6cac76",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "cce2f0b75d205c2a11e199e813dda79521cd9000ec5d589de7dae045c7e42ca2"
+              "ae4d43e6d6c0c138af1231c7a6905ceadd5c80cb18d9b95e07f28a565c6cac76"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -6236,16 +6236,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 13540,
-            "displayedSha256": "14021f7543d77ecf1d5aaba727d996a8553c8ea0bc034145862757db68f84e89",
+            "displayedUtf8Bytes": 13591,
+            "displayedSha256": "8e1ae077dca417ea6c9b477dba99a82e1b6f9b93f78161d4ac5dd22bef227093",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "14021f7543d77ecf1d5aaba727d996a8553c8ea0bc034145862757db68f84e89",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "8e1ae077dca417ea6c9b477dba99a82e1b6f9b93f78161d4ac5dd22bef227093",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "14021f7543d77ecf1d5aaba727d996a8553c8ea0bc034145862757db68f84e89"
+              "8e1ae077dca417ea6c9b477dba99a82e1b6f9b93f78161d4ac5dd22bef227093"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -6348,16 +6348,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 2017,
-            "displayedSha256": "11cdfd804fea2b5f981f3b8b35826730df57bf89e1166cfba0133195dd6811f8",
+            "displayedUtf8Bytes": 2073,
+            "displayedSha256": "b8ae7aaac1e98068851ac70a8d93972d4160e4e67db4a13137a3a4dd37c8b816",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "11cdfd804fea2b5f981f3b8b35826730df57bf89e1166cfba0133195dd6811f8",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "b8ae7aaac1e98068851ac70a8d93972d4160e4e67db4a13137a3a4dd37c8b816",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "11cdfd804fea2b5f981f3b8b35826730df57bf89e1166cfba0133195dd6811f8"
+              "b8ae7aaac1e98068851ac70a8d93972d4160e4e67db4a13137a3a4dd37c8b816"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -6460,16 +6460,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 8045,
-            "displayedSha256": "2730064fc70eca25fc1f18933ac2d71899f48a4467338a49cd9800e9fa2a5fcd",
+            "displayedUtf8Bytes": 8126,
+            "displayedSha256": "2ba7eab1adc144eaeda5dd4af486d08751cca15a397e1e37332681ea31344ccc",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "2730064fc70eca25fc1f18933ac2d71899f48a4467338a49cd9800e9fa2a5fcd",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "2ba7eab1adc144eaeda5dd4af486d08751cca15a397e1e37332681ea31344ccc",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "2730064fc70eca25fc1f18933ac2d71899f48a4467338a49cd9800e9fa2a5fcd"
+              "2ba7eab1adc144eaeda5dd4af486d08751cca15a397e1e37332681ea31344ccc"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -6572,16 +6572,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 5318,
-            "displayedSha256": "ec93dc1a8b806b1c777a846517b42319b5dcfb5cc86d1fff4dda1b87d7d91b9c",
+            "displayedUtf8Bytes": 5381,
+            "displayedSha256": "07466eb90124408a905cc46752961ba5f12ac427cf41c59f23f25f6b435d5945",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "ec93dc1a8b806b1c777a846517b42319b5dcfb5cc86d1fff4dda1b87d7d91b9c",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "07466eb90124408a905cc46752961ba5f12ac427cf41c59f23f25f6b435d5945",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "ec93dc1a8b806b1c777a846517b42319b5dcfb5cc86d1fff4dda1b87d7d91b9c"
+              "07466eb90124408a905cc46752961ba5f12ac427cf41c59f23f25f6b435d5945"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -6684,16 +6684,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 2804,
-            "displayedSha256": "b94ce8b5548c59ee9a661e6e36184e0b8049f0635581d5c8753265defa8b90c9",
+            "displayedUtf8Bytes": 2870,
+            "displayedSha256": "50f95ebd0b1534488fcf103c20793965ad2a5dcbb2961a6a0bf34ec08e77248d",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "b94ce8b5548c59ee9a661e6e36184e0b8049f0635581d5c8753265defa8b90c9",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "50f95ebd0b1534488fcf103c20793965ad2a5dcbb2961a6a0bf34ec08e77248d",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "b94ce8b5548c59ee9a661e6e36184e0b8049f0635581d5c8753265defa8b90c9"
+              "50f95ebd0b1534488fcf103c20793965ad2a5dcbb2961a6a0bf34ec08e77248d"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -6796,16 +6796,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 6348,
-            "displayedSha256": "9a692941b8c346bf79b88287202cd9ee7803be9ac45218c083427df396b8938b",
+            "displayedUtf8Bytes": 6405,
+            "displayedSha256": "2eba6ccfae90464a367ee679084d53794f2ceb3622b60d5d06addd55a41d7876",
             "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "9a692941b8c346bf79b88287202cd9ee7803be9ac45218c083427df396b8938b",
+            "sourceCommit": "6fa38652e105b16a83dcd5e800c91d3ae42a9781",
+            "sourceSha256": "2eba6ccfae90464a367ee679084d53794f2ceb3622b60d5d06addd55a41d7876",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "9a692941b8c346bf79b88287202cd9ee7803be9ac45218c083427df396b8938b"
+              "2eba6ccfae90464a367ee679084d53794f2ceb3622b60d5d06addd55a41d7876"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -6908,16 +6908,16 @@
             "kind": "kernel",
             "label": "fe2o3 Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 20810,
-            "displayedSha256": "fdc428f33edbcebe6ca7764c537db58e68009115d740fc21a8252253db8d4081",
+            "displayedUtf8Bytes": 21538,
+            "displayedSha256": "4fbd84c0a5d264256f6058acc838007033fea20b01f19ae03a46e80c36522c27",
             "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel.rs",
-            "sourceCommit": "e5351640e3df3868205bc68eac8d5ff5556352ea",
-            "sourceSha256": "fdc428f33edbcebe6ca7764c537db58e68009115d740fc21a8252253db8d4081",
+            "sourceCommit": "d670b3cfc3a04f39dcf37bd9e6b3d3bf1a9bbfba",
+            "sourceSha256": "4fbd84c0a5d264256f6058acc838007033fea20b01f19ae03a46e80c36522c27",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "fdc428f33edbcebe6ca7764c537db58e68009115d740fc21a8252253db8d4081"
+              "4fbd84c0a5d264256f6058acc838007033fea20b01f19ae03a46e80c36522c27"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -10479,8 +10479,8 @@
           "fill"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
-        "contractSha256": "8ca391ece0e49f74249ad424688c9d003dc603e97b896d5778e36653dfe156ee"
+        "cargoLockSha256": "d95b94ed4468331b02e7a34b1a3fbe82961da1cb4967c8bc41840383434f8c09",
+        "contractSha256": "b534324b2aa0f473b4467042b0057c18abe4996914e430abf599c38561b65c12"
       },
       "simulation": {
         "requestPath": "scripts/quickstart/fill-request.json",
@@ -10749,8 +10749,8 @@
           "scalar_gemm_v1"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
-        "contractSha256": "d5173bb012e149e6d272f9c3a52ce98ed96e3442f26954249db0ea6db7c3c720"
+        "cargoLockSha256": "d95b94ed4468331b02e7a34b1a3fbe82961da1cb4967c8bc41840383434f8c09",
+        "contractSha256": "032e5f1980634cf971cf4ee859acb20df17e708a166dc072767689497e894a0c"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-scalar-gemm.request.json",
@@ -10839,8 +10839,8 @@
           "vecadd"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
-        "contractSha256": "8988097e8eda6f1ca07fdc4ec16b9610f1de46e302d26537331adc2c850177fd"
+        "cargoLockSha256": "d95b94ed4468331b02e7a34b1a3fbe82961da1cb4967c8bc41840383434f8c09",
+        "contractSha256": "18a525e9ec780d24962dd8bc9befc207e4499b318e04fcda9ca7470f07849f6f"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-typed-vecadd-source.request.json",
@@ -10913,7 +10913,7 @@
       },
       "compilerInput": {
         "packageManifest": "examples/workgroup_sync_v1/Cargo.toml",
-        "packageManifestSha256": "74736a259ca5e51e267d493ad15622f2e887e2ea3c915cdda127ef12f33a3016",
+        "packageManifestSha256": "77414533e8720fc2c3abf76c0584b739654109ecb6390ea4c16a8a589678dd8d",
         "sourcePaths": [
           "examples/workgroup_sync_v1/src/kernel.rs"
         ],
@@ -10932,7 +10932,7 @@
         ],
         "cargoLockPath": "examples/workgroup_sync_v1/Cargo.lock",
         "cargoLockSha256": "094a848e57f6940ffa1a91ec3a3ac90f5185e178043eaa0c47a03782f3308ec0",
-        "contractSha256": "23ff35f83905b0c7bb3204395109178ae420684028291c35f738e59d432b14a1"
+        "contractSha256": "c5ddc1138ae5d2ce72568305a726c81689cd2be64d2bac0a681a6b20a78e0925"
       },
       "simulation": {
         "requestPath": "examples/workgroup_sync_v1/reduce-i32-request.json",
@@ -13857,8 +13857,8 @@
           "scalar_gemm_v1"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
-        "contractSha256": "22f93627a73d5dacea0335d31e0f5d46f0f6a760016645998f06b162b29f38a6"
+        "cargoLockSha256": "d95b94ed4468331b02e7a34b1a3fbe82961da1cb4967c8bc41840383434f8c09",
+        "contractSha256": "d53fd09030423e50fb193c1f72ced040d8d23199b2d8f05050d0c9e3aeb1a729"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-scalar-gemm-simt.request.json",
@@ -13908,8 +13908,8 @@
           "scalar_gemm_v1"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
-        "contractSha256": "eecce161c8aa5fcf1a3a000c3645f16c9e46397acf2ff86d8f9fa309eb2f6d02"
+        "cargoLockSha256": "d95b94ed4468331b02e7a34b1a3fbe82961da1cb4967c8bc41840383434f8c09",
+        "contractSha256": "f89b937f89b9bd97ab1d79b51cf6d3ba1ccd88e0680e248cb58a619df9087829"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-scalar-gemm-tile.request.json",
@@ -15634,7 +15634,7 @@
                 "fixtureId": "gfx942-fill-simulation",
                 "kernelSymbol": "fill"
               },
-              "selectionSha256": "97ca9ff5ebab7eee1a2db156e2edaf4c4f8f455542b027d387b5900a75430c9e",
+              "selectionSha256": "61fa1ac3e310d3bf743a85cbd7dabd0a64526a417c7902857193fc2e9eb0007a",
               "sourcePath": "examples/fill/src/lib.rs",
               "sourceSha256": "81b6f547ae89ef77a9b85e9d6589586910a2f92f050c7ffa45b45a9e188f32fa",
               "functionUtf8Offset": 677
@@ -15848,7 +15848,7 @@
                 "fixtureId": "gfx942-scalar-gemm",
                 "kernelSymbol": "scalar_gemm_v1"
               },
-              "selectionSha256": "53f64e34d455768bf0196ba022f004dc705df9437d027655bfb8919914b0d50b",
+              "selectionSha256": "762c3484fb2b4cea84d7c890becec0e89d6fc84e36433e499189c813d3427c8c",
               "sourcePath": "examples/scalar_gemm_v1/src/kernel.rs",
               "sourceSha256": "b3a21a1fdd7f6fbede2437551500cabddb4500d4a07371f821a2c9a8ab620b21",
               "functionUtf8Offset": 673
@@ -15923,7 +15923,7 @@
                 "fixtureId": "gfx942-typed-vecadd-source",
                 "kernelSymbol": "vecadd"
               },
-              "selectionSha256": "d740646fe99db1be1150070ba452697f2d87757b5b2fe2b326a440b27614e763",
+              "selectionSha256": "b0f5c7cd6888b8faa11e5ba1743d1e617ddf8a82bac2caea8d23a8447e66526a",
               "sourcePath": "examples/vecadd/src/lib.rs",
               "sourceSha256": "96a6d5774c0d36661540829025194c918100abcce53fed91cae3c909aea67345",
               "functionUtf8Offset": 299
@@ -16009,7 +16009,7 @@
                 "fixtureId": "gfx942-workgroup-collectives",
                 "kernelSymbol": "lds_publish_read_reduce_i32_v1"
               },
-              "selectionSha256": "8377de26fcf69292e8c778a4eed50e8c6f3930bf81d9eec89b67759a6e5382f3",
+              "selectionSha256": "179cffaf3d09773a4ae80eb9551f96cdc889cb112479c671bf32cf114d6e1f5a",
               "sourcePath": "examples/workgroup_sync_v1/src/kernel.rs",
               "sourceSha256": "b0074b426ef8ad0b9eea91e933e76dd03240852ce4ce976ccc89c1f2c7f1b515",
               "functionUtf8Offset": 1194
@@ -18262,7 +18262,7 @@
                 "tabOrdinal": 6,
                 "caseOrdinal": 0
               },
-              "selectionSha256": "b445d2e1a298846e1dc122420091b638af11671a308eda81ff38fbc713082645",
+              "selectionSha256": "0ffcac0aae27c5d4bee3227fbf4cde87b26ce5a3aeed5721eb68913009df6926",
               "sourcePath": "examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs",
               "sourceSha256": "07adc0c50f24e51cb3d6c6bcb6cc1c8c6ff2a772c45ee2153435601eca2f39df",
               "functionUtf8Offset": 885
@@ -20213,7 +20213,51 @@
       {
         "lessonId": "flash-attention",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 885,
+        "functionUtf8Offset": 1174,
+        "kernelSymbol": "checked_output_rows",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1480,
+        "kernelSymbol": "checked_extent_add",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 1786,
+        "kernelSymbol": "checked_head_row_offset",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2428,
+        "kernelSymbol": "row_group_component",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 2517,
         "kernelSymbol": "matrix_extent",
         "classification": "helper",
         "kernelIds": [],
@@ -20224,7 +20268,7 @@
       {
         "lessonId": "flash-attention",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 1688,
+        "functionUtf8Offset": 3320,
         "kernelSymbol": "flash_attention_general_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -20237,7 +20281,172 @@
       {
         "lessonId": "flash-attention",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 15154,
+        "functionUtf8Offset": 19160,
+        "kernelSymbol": "expect_checked_value",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 19354,
+        "kernelSymbol": "aligned_row_group_components_match_u128_at_full_width",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 20201,
+        "kernelSymbol": "row_group_composition_does_not_claim_general_addition",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 20526,
+        "kernelSymbol": "private_checked_pairs_have_no_padding",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 21019,
+        "kernelSymbol": "private_checked_pairs_preserve_zero_max_and_rejection",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 21799,
+        "kernelSymbol": "validated_head_stride_products_match_full_width_oracle",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 23944,
+        "kernelSymbol": "checked_head_row_offset_preserves_full_width_and_tile_layout",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 26314,
+        "kernelSymbol": "checked_read_view_errors_keep_public_kernel_mapping",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 27580,
+        "kernelSymbol": "checked_bf16_matrix_errors_keep_public_kernel_mapping",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 29032,
+        "kernelSymbol": "checked_extent_add_matches_independent_u128_oracle",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 30182,
+        "kernelSymbol": "checked_extent_add_preserves_two_stage_boundaries",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 30982,
+        "kernelSymbol": "checked_extent_add_does_not_narrow_to_u32",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 31514,
+        "kernelSymbol": "checked_output_rows_matches_independent_full_width_oracle",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 32759,
+        "kernelSymbol": "checked_output_rows_preserves_zero_and_overflow_boundaries",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 33363,
+        "kernelSymbol": "nonfinite_masks_are_excluded_before_each_tile_softmax_row",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary helper or source-contract test retained in the complete source, not a GPU entry."
+      },
+      {
+        "lessonId": "flash-attention",
+        "tabOrdinal": 0,
+        "functionUtf8Offset": 33897,
         "kernelSymbol": "matrix_extent_excludes_trailing_padding",
         "classification": "helper",
         "kernelIds": [],
@@ -20248,7 +20457,7 @@
       {
         "lessonId": "flash-attention",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 15319,
+        "functionUtf8Offset": 34062,
         "kernelSymbol": "score_mfma_uses_workgroup_double_buffering",
         "classification": "helper",
         "kernelIds": [],
@@ -20364,7 +20573,7 @@
       {
         "lessonId": "gfx950-advanced-moe",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 13227,
+        "functionUtf8Offset": 13422,
         "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -20378,7 +20587,7 @@
       {
         "lessonId": "gfx950-advanced-moe",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 26722,
+        "functionUtf8Offset": 26973,
         "kernelSymbol": "gfx950_combine_expert_ranks_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -20482,7 +20691,7 @@
       {
         "lessonId": "gfx950-compressed-hybrid-attention",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 582,
+        "functionUtf8Offset": 654,
         "kernelSymbol": "gfx950_compressed_hybrid_attention",
         "classification": "kernel",
         "kernelIds": [
@@ -20496,7 +20705,7 @@
       {
         "lessonId": "gfx950-compressed-hybrid-performance-lab",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 582,
+        "functionUtf8Offset": 654,
         "kernelSymbol": "gfx950_compressed_hybrid_attention",
         "classification": "kernel",
         "kernelIds": [
@@ -20510,7 +20719,7 @@
       {
         "lessonId": "gfx950-content-sparse-performance-lab",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 575,
+        "functionUtf8Offset": 644,
         "kernelSymbol": "gfx950_content_sparse_attention",
         "classification": "kernel",
         "kernelIds": [
@@ -20550,7 +20759,7 @@
       {
         "lessonId": "gfx950-expert-combine-performance-lab",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 495,
+        "functionUtf8Offset": 551,
         "kernelSymbol": "gfx950_combine_expert_ranks_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -20784,7 +20993,7 @@
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
         "tabOrdinal": 6,
-        "functionUtf8Offset": 1057,
+        "functionUtf8Offset": 1074,
         "kernelSymbol": "widen_bf16",
         "classification": "helper",
         "kernelIds": [],
@@ -20806,6 +21015,17 @@
         "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
+        "lessonId": "gfx950-gpt-oss-120b-megakernel",
+        "tabOrdinal": 6,
+        "functionUtf8Offset": 24885,
+        "kernelSymbol": "authenticated_bf16_widening_matches_preserved_decoder_for_all_patterns",
+        "classification": "helper",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary source-contract test retained in the whole-file scalar-attention source, not a GPU entry."
+      },
+      {
         "lessonId": "gfx950-gpt-oss-megakernel-performance-lab",
         "tabOrdinal": 0,
         "functionUtf8Offset": 221,
@@ -20821,7 +21041,7 @@
       {
         "lessonId": "gfx950-gradient-stage-performance-lab",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 494,
+        "functionUtf8Offset": 560,
         "kernelSymbol": "gfx950_stage_gradient_shard_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -20834,7 +21054,7 @@
       {
         "lessonId": "gfx950-indexed-sparse-attention",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 575,
+        "functionUtf8Offset": 644,
         "kernelSymbol": "gfx950_content_sparse_attention",
         "classification": "kernel",
         "kernelIds": [
@@ -20913,7 +21133,7 @@
       {
         "lessonId": "gfx950-moe-expert-performance-lab",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 542,
+        "functionUtf8Offset": 593,
         "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -20940,7 +21160,7 @@
       {
         "lessonId": "gfx950-muon-optimizer",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 494,
+        "functionUtf8Offset": 560,
         "kernelSymbol": "gfx950_stage_gradient_shard_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -20953,7 +21173,7 @@
       {
         "lessonId": "gfx950-muon-optimizer",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 3305,
+        "functionUtf8Offset": 3428,
         "kernelSymbol": "gfx950_muon_update_4x4_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -20967,7 +21187,7 @@
       {
         "lessonId": "gfx950-muon-performance-lab",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 499,
+        "functionUtf8Offset": 556,
         "kernelSymbol": "gfx950_muon_update_4x4_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -20981,7 +21201,7 @@
       {
         "lessonId": "gfx950-ngram-embedding-gather",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 517,
+        "functionUtf8Offset": 580,
         "kernelSymbol": "gfx950_qwen_ngram_gather_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -20995,7 +21215,7 @@
       {
         "lessonId": "gfx950-ngram-performance-lab",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 517,
+        "functionUtf8Offset": 580,
         "kernelSymbol": "gfx950_qwen_ngram_gather_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -21009,7 +21229,7 @@
       {
         "lessonId": "gfx950-speculative-mtp-verification",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 585,
+        "functionUtf8Offset": 666,
         "kernelSymbol": "gfx950_speculative_transaction_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -21023,7 +21243,7 @@
       {
         "lessonId": "gfx950-speculative-performance-lab",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 585,
+        "functionUtf8Offset": 666,
         "kernelSymbol": "gfx950_speculative_transaction_v1",
         "classification": "kernel",
         "kernelIds": [
