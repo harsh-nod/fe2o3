@@ -149,7 +149,7 @@ class FixtureBindingTests(unittest.TestCase):
 
 
 class WholeFileFixtureBindingTests(FixtureBindingTests):
-    expected_displays = 13
+    expected_displays = 20
     changed_source_error = "exact current source occurrence"
     # Independent whole-file sizes, digests and every displayed function offset.
     sources = {
@@ -166,9 +166,9 @@ class WholeFileFixtureBindingTests(FixtureBindingTests):
             "ef3bbea31da5311bfb5bfb9edb9f43569e602501c079bebb16eb5f0c6b5973b4",
             [797, 1526, 6760]),
         "moe-expert-compute": (
-            "gfx942-grouped-expert-moe", "moe_grouped_expert_general_v1", 6578,
-            "a4af47e5ab3cad6a16d4b0cd2fc9028d0660469a75914474a7fc0d984934bd0a",
-            [548, 1209, 6431]),
+            "gfx942-grouped-expert-moe", "moe_grouped_expert_general_v1", 11320,
+            "9e31980d48320d2978823af76465f882a99263137ba828261f605e74afc110a7",
+            [915, 1145, 1806, 7767, 7961, 8272, 8691, 9841, 10641, 11173]),
     }
 
     def document(self):
@@ -192,7 +192,7 @@ class WholeFileFixtureBindingTests(FixtureBindingTests):
         self.assertEqual(len(inventory["kernels"]), self.expected_identities)
         self.assertEqual(len(inventory["displayItems"]), self.expected_displays)
         helpers = [row for row in inventory["displayItems"] if row["classification"] == "helper"]
-        self.assertEqual(len(helpers), 9)
+        self.assertEqual(len(helpers), 16)
         self.assertTrue(all(row["bindingStatus"] == "not-applicable" and row["kernelIds"] == []
                             for row in helpers))
         document["curriculum"]["lessons"] = [
