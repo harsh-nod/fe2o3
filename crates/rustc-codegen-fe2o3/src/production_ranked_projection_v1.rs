@@ -426,6 +426,7 @@ struct IntrinsicProjectionV1 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ProjectedPipelineScalarV1 {
     Value(ProductionRankedValueV1),
+    GuardedIndex,
     Induction {
         induction: usize,
     },
@@ -439,6 +440,13 @@ enum ProjectedPipelineScalarV1 {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ProjectedPipelineEffectV1 {
+    // The actual source comparison computes this value once; its true edge
+    // dominates every associated access using the same ranked SSA result.
+    Guard {
+        index: ProjectedPipelineScalarV1,
+        bound: ProductionRankedValueV1,
+        access_block: usize,
+    },
     Create {
         owner: usize,
         result: Option<ProductionRankedValueIdV1>,
@@ -9249,7 +9257,12 @@ fn project_workgroup_pipeline_pending_v1<'facts>(
                 let owner = pipeline_call_owner_v1(call, &owners)?;
                 let contract = &pending[owner];
                 let epoch = scalar_projector.project_root(block_index, &call.arguments()[1])?;
-                let index = scalar_projector.project_root(block_index, &call.arguments()[2])?;
+                let index = project_pipeline_guarded_index_v1(
+                    &mut scalar_projector,
+                    block_index,
+                    &call.arguments()[2],
+                    &mut effects,
+                )?;
                 let view = contract
                     .view
                     .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
@@ -9286,6 +9299,101 @@ fn project_workgroup_pipeline_pending_v1<'facts>(
         }
     }
     Ok(effects)
+}
+
+// Preserve a source LessThan guard that the uniform-only switch projector cannot
+// represent. This is an association of an existing true edge with an exact
+// unsigned value, not an inferred range or a newly inserted runtime check.
+fn project_pipeline_guarded_index_v1(
+    projector: &mut PipelineScalarProjectorV1<'_, '_, '_, '_, '_>,
+    use_block: usize,
+    operand: &SemanticOperandV1,
+    effects: &mut [Option<ProjectedPipelineEffectV1>],
+) -> Result<ProjectedPipelineScalarV1, ProductionRankedProjectionErrorV1> {
+    let use_site = ScalarAssignmentSiteV1 {
+        block: use_block,
+        statement: projector.function.blocks()[use_block].statements().len(),
+    };
+    let bounds = projector
+        .assertion_proofs
+        .authenticated_strict_unsigned_bounds_v1(operand, use_site, use_site)?;
+    for (_, site) in bounds {
+        let block = &projector.function.blocks()[site.block];
+        let SemanticStatementKindV1::Assign(assignment) = block.statements()[site.statement].kind()
+        else {
+            continue;
+        };
+        let SemanticRvalueKindV1::Binary {
+            operation: SemanticBinaryOpV1::LessThan,
+            left,
+            right,
+        } = assignment.value().kind()
+        else {
+            continue;
+        };
+        let local = assignment.destination().local().index() as usize;
+        let SemanticTerminatorKindV1::SwitchInt {
+            discriminant,
+            targets,
+        } = block.terminator().kind()
+        else {
+            continue;
+        };
+        // The demonstrated contract is one direct true edge into one read/write
+        // block. Do not manufacture transport through unrelated paths or loops.
+        if !assignment.destination().projections().is_empty()
+            || simple_operand_local(discriminant).map(|v| v.index() as usize) != Some(local)
+            || projector
+                .assertion_proofs
+                .definition_counts
+                .get(local)
+                .copied()
+                != Some(1)
+            || projector
+                .assertion_proofs
+                .address_escaped
+                .get(local)
+                .copied()
+                != Some(false)
+            || targets.otherwise().target().index() as usize != use_block
+            || projector.assertion_proofs.graph.predecessors[use_block].as_slice() != [site.block]
+            || !matches!(
+                projector
+                    .types
+                    .get(discriminant.ty().index() as usize)
+                    .map(SemanticTypeDeclV1::shape),
+                Some(SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Bool))
+            )
+            || !projector
+                .assertion_proofs
+                .comparison_edge_authenticates_each_dynamic_use_v1(
+                    site.block, use_block, use_block,
+                )?
+            || effects[site.block].is_some()
+        {
+            continue;
+        }
+        // The source SSA capture records operands at the comparison statement,
+        // not at this block's terminator (which uses only the boolean result).
+        projector.work = 0;
+        let index = projector.project_operand(left, site, &mut HashSet::new())?;
+        if !matches!(index, ProjectedPipelineScalarV1::Binary { .. }) {
+            continue;
+        }
+        projector.work = 0;
+        let ProjectedPipelineScalarV1::Value(bound) =
+            projector.project_operand(right, site, &mut HashSet::new())?
+        else {
+            continue;
+        };
+        effects[site.block] = Some(ProjectedPipelineEffectV1::Guard {
+            index,
+            bound,
+            access_block: use_block,
+        });
+        return Ok(ProjectedPipelineScalarV1::GuardedIndex);
+    }
+    projector.project_root(use_block, operand)
 }
 
 fn pipeline_call_owner_v1(
@@ -20314,6 +20422,46 @@ fn build_ranked_cfg_from_prepared_assertions_v1(
         .max()
         .map_or(0, |value| value.saturating_add(1));
     let pipeline_values = prepare_pipeline_values_v1(&mut projected_blocks, &mut next_value)?;
+    let mut pipeline_guards = Vec::new();
+    for (guard, projected) in projected_blocks.iter().enumerate() {
+        for item in &projected.items {
+            if let ProjectedBlockItemV1::Pipeline(ProjectedPipelineEffectV1::Guard {
+                index:
+                    ProjectedPipelineScalarV1::Binary {
+                        result: Some(index),
+                        ..
+                    },
+                bound,
+                access_block,
+            }) = item
+            {
+                if projected
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, ProjectedBlockItemV1::Guarded(_)))
+                    || projected_blocks[*access_block]
+                        .items
+                        .iter()
+                        .any(|item| matches!(item, ProjectedBlockItemV1::Guarded(_)))
+                {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a pipeline source guard requires an unexpanded direct access edge",
+                    ));
+                }
+                pipeline_guards.try_reserve(1).map_err(|_| {
+                    ProductionRankedProjectionErrorV1::Unsupported(
+                        "pipeline guard edge storage cannot be reserved",
+                    )
+                })?;
+                pipeline_guards.push((
+                    projected_target(&base_blocks, guard)?,
+                    projected_target(&base_blocks, *access_block)?,
+                    ProductionRankedValueV1::Local(*index),
+                    *bound,
+                ));
+            }
+        }
+    }
     let mut blocks = Vec::with_capacity(block_count);
     blocks.push(ProductionRankedBlockV1::new(
         entry_operations,
@@ -20488,7 +20636,8 @@ fn build_ranked_cfg_from_prepared_assertions_v1(
                     let access = match &effect {
                         ProjectedPipelineEffectV1::Access { kind, .. } => Some(*kind),
                         ProjectedPipelineEffectV1::Create { .. }
-                        | ProjectedPipelineEffectV1::Event { .. } => None,
+                        | ProjectedPipelineEffectV1::Event { .. }
+                        | ProjectedPipelineEffectV1::Guard { .. } => None,
                     };
                     let first_operation = operations.len();
                     materialize_pipeline_effect_v1(
@@ -21004,6 +21153,63 @@ fn build_ranked_cfg_from_prepared_assertions_v1(
             "semantic CFG projection produced a non-canonical block inventory",
         ));
     }
+    for (guard, access, index, bound) in pipeline_guards {
+        let guard_block = &blocks[guard];
+        let (mut true_arguments, false_arguments, true_block, false_block) =
+            match guard_block.terminator() {
+                ProductionRankedTerminatorV1::AnalysisSplit {
+                    first_block,
+                    second_block,
+                    ..
+                } if *second_block == ranked_block_id(access)? => {
+                    (Vec::new(), Vec::new(), *second_block, *first_block)
+                }
+                ProductionRankedTerminatorV1::AnalysisSplitArgs {
+                    first_arguments,
+                    second_arguments,
+                    first_block,
+                    second_block,
+                    ..
+                } if *second_block == ranked_block_id(access)? => (
+                    second_arguments.clone(),
+                    first_arguments.clone(),
+                    *second_block,
+                    *first_block,
+                ),
+                _ => {
+                    return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                        "a pipeline source guard lost its exact direct true edge",
+                    ));
+                }
+            };
+        let access_block = &blocks[access];
+        if true_arguments.len() != access_block.index_argument_count() as usize {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "a pipeline source guard changed the access argument prefix",
+            ));
+        }
+        true_arguments.push(index);
+        blocks[guard] = ProductionRankedBlockV1::with_index_arguments(
+            guard_block.index_argument_count(),
+            guard_block.operations().to_vec(),
+            ProductionRankedTerminatorV1::IndexLessThanArgs {
+                lhs: index,
+                rhs: bound,
+                true_arguments,
+                false_arguments,
+                true_block,
+                false_block,
+            },
+        );
+        let access_block = &blocks[access];
+        blocks[access] = ProductionRankedBlockV1::with_index_arguments(
+            access_block.index_argument_count().checked_add(1).ok_or(
+                ProductionRankedProjectionErrorV1::Unsupported("too many pipeline guard arguments"),
+            )?,
+            access_block.operations().to_vec(),
+            access_block.terminator().clone(),
+        );
+    }
     Ok((blocks, sources, executable_effect_sources))
 }
 
@@ -21053,6 +21259,9 @@ fn prepare_pipeline_values_v1(
                 continue;
             };
             match effect {
+                ProjectedPipelineEffectV1::Guard { index, .. } => {
+                    prepare_pipeline_scalar_v1(index, next_value)?;
+                }
                 ProjectedPipelineEffectV1::Create { owner, result, .. } => {
                     let value = (*result).ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                         "a workgroup pipeline creation result was not prepared",
@@ -21114,6 +21323,9 @@ fn materialize_pipeline_effect_v1(
     pipeline_values: &HashMap<usize, ProductionRankedValueV1>,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     match effect {
+        ProjectedPipelineEffectV1::Guard { index, .. } => {
+            materialize_pipeline_scalar_v1(index, block, live, operations)?;
+        }
         ProjectedPipelineEffectV1::Create { owner, result, .. } => {
             let result = result.ok_or(ProductionRankedProjectionErrorV1::Incomplete(
                 "a workgroup pipeline creation result was not prepared",
@@ -21189,6 +21401,12 @@ fn materialize_pipeline_scalar_v1(
 ) -> Result<ProductionRankedValueV1, ProductionRankedProjectionErrorV1> {
     match scalar {
         ProjectedPipelineScalarV1::Value(value) => Ok(value),
+        ProjectedPipelineScalarV1::GuardedIndex => Ok(ProductionRankedValueV1::BlockArgument {
+            block,
+            argument: u32::try_from(live.len()).map_err(|_| {
+                ProductionRankedProjectionErrorV1::Unsupported("too many pipeline guard arguments")
+            })?,
+        }),
         ProjectedPipelineScalarV1::Induction { induction } => {
             let argument = live
                 .iter()
@@ -24276,6 +24494,10 @@ mod cold_compile_error_tests;
 
 #[cfg(test)]
 mod tests {
+    mod pipeline_guard_tests {
+        use super::*;
+        include!("production_ranked_projection_v1/pipeline_guard_v1_tests.rs");
+    }
     mod workgroup_pipeline_payload_tests {
         use super::*;
         include!("production_ranked_projection_v1/workgroup_pipeline_payload_v1_tests.rs");
