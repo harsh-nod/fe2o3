@@ -6,7 +6,8 @@ memory-tile paths. `structured-tile` selects the latter. The original
 tile body does not extend that theorem or establish machine-code refinement.
 
 Start at the repository root with the [root requirements](../../README.md#requirements),
-including nightly-2026-04-03 and ROCm 7.2.4. Build the normal production
+including nightly-2026-04-03 and ROCm 7.2.4 (or the gfx950 ROCm 7.2.1
+alternative below). Build the normal production
 extractor, or reuse an already built matching extractor/backend pair:
 
 ```bash
@@ -23,6 +24,21 @@ FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/vecadd/run-gfx942.sh
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/vecadd/run-gfx950.sh simt
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/vecadd/run-gfx950.sh tile
 ```
+
+For an installed ROCm 7.2.1 toolchain, the gfx950 runner also accepts the
+checked-in 7.2.1 tool/bitcode manifest. From the repository root, replace the
+ROCm setup above with the following before running the gfx950 commands:
+
+```bash
+export ROCM_PATH=/opt/rocm-7.2.1
+export FE2O3_GFX950_OCML_MANIFEST="$PWD/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.1.manifest"
+export LD_LIBRARY_PATH="$ROCM_PATH/lib:$ROCM_PATH/lib64:$extractor_dir:$extractor_dir/deps:$sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+The runner still validates the exact selected manifest, clang, linker and
+bitcode files. Vecadd has no OCML calls and still links no OCML libraries:
+the manifest is shared tool validation, not an OCML linkage requirement.
+The kernel, oracle, checks and qualification scope remain unchanged.
 
 The gfx942 runner remains compile-only. The gfx950 runner selects gfx950,
 Wave64, and XNACK-off together and checks the emitted target, kernel symbol,
@@ -96,7 +112,15 @@ the shared `gfx950_advanced_hardware` runtime fixture. Both retain the same
 Compile-only commands do not run these tests or establish GPU execution.
 
 Historical private Vecadd testing covered both selections with 34 cases,
-32 dispatches and two empty cases, checking 4,434 outputs, 4,435 A elements,
-4,436 B elements and canaries. That observation does not qualify this public
-source revision. Current public gfx950 execution and gfx942 qualification
-remain pending until their exact public source and full commands are checked.
+32 dispatches and two empty cases. That observation does not qualify this
+public source revision. The current 17-case matrix checks 4,434 outputs,
+4,435 A elements, 4,436 B elements and canaries per selection: 8,868 logical
+outputs across both selections.
+
+On 2026-10-23, public source
+[`5a03850`](https://github.com/harsh-nod/fe2o3/commit/5a03850ab2e10db0250412de03e0c269cce4c09b)
+passed both full gfx950 commands with a matching reused compiler,
+nightly-2026-04-03 and ROCm 7.2.1. This documentation-only descendant
+preserves those kernel and runtime inputs; it has no separate GPU replay.
+gfx942 GPU validation, protected execution authority and whole-site acceptance
+remain pending.
