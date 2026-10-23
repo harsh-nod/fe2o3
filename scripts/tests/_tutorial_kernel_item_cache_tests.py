@@ -16,6 +16,74 @@ def make_loader(fixture_tests, identities, previous=None):
                 kwargs.pop("rust_syntax", self.syntax), budget,
                 function_cache=functions, item_cache=cache, **kwargs)
 
+        def attribute_heavy_selection(self):
+            self.sources[self.library] = (
+                "#[allow(dead_code)]\n" * 100 + "fn helper() {}\nmod left;\n")
+            self.bind()
+
+        def test_reserved_report_rows_do_not_reduce_attribute_capacity(self):
+            self.attribute_heavy_selection()
+            budgets = []
+            visit = identities._Budget.visit_attribute
+
+            def counted(budget):
+                if not budgets:
+                    budgets.append(budget)
+                return visit(budget)
+
+            # Report rows consume record capacity, not attribute traversal work.
+            with mock.patch.object(identities._Budget, "visit_attribute", counted):
+                result = self.validate(False, max_records=100)
+            self.assertEqual(result["sourceBoundVariantCount"], 1)
+            self.assertFalse(result["inventoryComplete"])
+            self.assertEqual(budgets[0].attribute_visits, 102)
+            self.assertLess(budgets[0].used, 100)
+
+        def test_inventory_attribute_limit_has_exact_and_one_short_boundaries(self):
+            self.attribute_heavy_selection()
+            for limit in (102, 101):
+                with self.subTest(limit=limit), mock.patch.object(identities, "MAX_ATTRIBUTE_VISITS", limit):
+                    if limit == 102:
+                        self.assertEqual(self.validate(False, max_records=100)["sourceBoundVariantCount"], 1)
+                    else:
+                        with self.assertRaisesRegex(identities.KernelInventoryError, "attributes.*visit bound"):
+                            self.validate(False, max_records=100)
+            with self.assertRaisesRegex(identities.KernelInventoryError, "record bound"):
+                self.validate(False, max_records=1)
+
+        def test_attribute_allowance_keeps_inactive_attribute_validation(self):
+            self.attribute_heavy_selection()
+            self.sources[self.library] += '#[cfg(feature = "never")] #[unknown] fn hidden() {}\n'
+            with self.assertRaisesRegex(identities.KernelInventoryError, "unsupported fixture selection attribute"):
+                self.validate(False, max_records=100)
+
+        def test_separate_attribute_limit_charges_replays_and_keeps_item_limit(self):
+            source = "#[inline] fn helper() {}\n"
+            for explicit_limit, successful_visits in ((None, 2), (3, 3)):
+                with self.subTest(explicit_limit=explicit_limit):
+                    cache, functions = {}, {}
+                    budget = identities._Budget(2, source_item_limit=4, attribute_limit=explicit_limit)
+                    for _ in range(successful_visits):
+                        self.declarations(source, budget, cache, functions)
+                    self.assertEqual((budget.used, budget.attribute_visits), (2, successful_visits))
+                    with self.assertRaisesRegex(identities.KernelInventoryError, "attributes.*visit bound"):
+                        self.declarations(source, budget, cache, functions)
+            cache, functions = {}, {}
+            budget = identities._Budget(2, source_item_limit=1, attribute_limit=3)
+            self.declarations(source, budget, cache, functions)
+            with self.assertRaisesRegex(identities.KernelInventoryError, "source items.*visit bound"):
+                self.declarations(source, budget, cache, functions)
+
+        def test_separate_attribute_limit_refuses_invalid_values_and_zero_work(self):
+            for value in (-1, True, 1.5, "3"):
+                with self.subTest(value=value), self.assertRaisesRegex(
+                        identities.KernelInventoryError, "attribute visit limit must be a nonnegative integer"):
+                    identities._Budget(2, attribute_limit=value)
+            budget = identities._Budget(2, attribute_limit=0)
+            with self.assertRaisesRegex(identities.KernelInventoryError, "attributes.*visit bound"):
+                self.declarations("#[inline] fn helper() {}\n", budget, {}, {})
+            self.assertEqual(budget.attribute_visits, 0)
+
         def large_feature_catalog(self):
             # Distinct features replay one shared library with many ordinary
             # items. Coordinates are reusable; feature decisions and visits are not.
