@@ -36,8 +36,9 @@ export LD_LIBRARY_PATH="$ROCM_PATH/lib:$ROCM_PATH/lib64:$extractor_dir:$extracto
 ```
 
 The runner still validates the exact selected manifest, clang, linker and
-bitcode files; this alternative does not bypass those checks or change the
-kernel, oracle or qualification scope.
+bitcode files. Vecadd has no OCML calls and still links no OCML libraries:
+the manifest is shared tool validation, not an OCML linkage requirement.
+The kernel, oracle, checks and qualification scope remain unchanged.
 
 The gfx942 runner remains compile-only. The gfx950 runner selects gfx950,
 Wave64, and XNACK-off together and checks the emitted target, kernel symbol,
@@ -111,7 +112,8 @@ the shared `gfx950_advanced_hardware` runtime fixture. Both retain the same
 Compile-only commands do not run these tests or establish GPU execution.
 
 Historical private Vecadd testing covered both selections with 34 cases,
-32 dispatches and two empty cases, checking 4,434 outputs, 4,435 A elements,
-4,436 B elements and canaries. That observation does not qualify this public
-source revision. Current public gfx950 execution and gfx942 qualification
+32 dispatches and two empty cases. That observation does not qualify this
+public source revision. The current 17-case matrix checks 4,434 outputs,
+4,435 A elements, 4,436 B elements and canaries per selection: 8,868 logical
+outputs across both selections. Current public gfx950 execution and gfx942 qualification
 remain pending until their exact public source and full commands are checked.
