@@ -8769,7 +8769,7 @@
       },
       "compilerInput": {
         "packageManifest": "examples/flash_attention_general_v1/Cargo.toml",
-        "packageManifestSha256": "a57f3102a04da9958633ca8b7e5c676d4c8ad2f59711c9eab3b68d81874d2937",
+        "packageManifestSha256": "c2bb1d3473b4347bd4f2a264fb0b171cbc0a642143694c4ee008946f344d5b9c",
         "sourcePaths": [
           "examples/flash_attention_general_v1/src/kernel.rs"
         ],
@@ -8786,7 +8786,7 @@
         ],
         "cargoLockPath": "examples/flash_attention_general_v1/Cargo.lock",
         "cargoLockSha256": "4ca3f1a55a797d962e262b8bcf602a32ab210c1ccafcc7cd3b14223cefe3f42e",
-        "contractSha256": "8eba69727b87a27defb04f3d2e779b8bc3ede3413c200ce0a3b63b0ea686a54e"
+        "contractSha256": "52b102b1b1a61dddde353ae561298b2d194b4d1123559e980c843c9db5c284d0"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-flash-attention.request.json",
