@@ -169,6 +169,21 @@ compile_error!("select one SIMT, tile, or legacy ablation mode for an advanced m
 ))]
 mod kernel_tile_mixing;
 
+#[cfg(all(
+    target_arch = "amdgpu",
+    any(
+        all(
+            feature = "kernel-kda-decode-tile",
+            feature = "kernel-kda-decode-baseline-v1"
+        ),
+        all(
+            feature = "kernel-kda-prefill-tile",
+            feature = "kernel-kda-prefill-baseline-v1"
+        )
+    )
+))]
+compile_error!("a KDA tile feature must not be combined with its canonical ablation");
+
 pub mod kernel;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;
