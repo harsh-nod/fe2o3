@@ -780,13 +780,13 @@
               "kind": "source-driver",
               "compilerInput": {
                 "packageManifest": "examples/workgroup_sync_v1/Cargo.toml",
-                "packageManifestSha256": "2f476b82fb77f5bda8b202b354976f27a7a986292fd46515bfea6287e629afa8",
+                "packageManifestSha256": "77414533e8720fc2c3abf76c0584b739654109ecb6390ea4c16a8a589678dd8d",
                 "cargoLockPath": "examples/workgroup_sync_v1/Cargo.lock",
                 "cargoLockSha256": "094a848e57f6940ffa1a91ec3a3ac90f5185e178043eaa0c47a03782f3308ec0",
                 "sourcePaths": [
                   "examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs"
                 ],
-                "sourceClosureSha256": "9f26935616495277bb53992bc6a0056ec86735c5f732fa2a0fe8c876d292f191",
+                "sourceClosureSha256": "92a6cacc38043a752f7787aab42d2cea3da5d4dbe427c72639349ce8bf4dc0bb",
                 "cargoTarget": {
                   "kind": "lib",
                   "name": "fe2o3_workgroup_sync_v1",
@@ -820,7 +820,7 @@
                   }
                 }
               ],
-              "contractSha256": "f0cfc47252992c3ffc01ada1cf44e7a4d92bdb0dcca94c7341155bb57b8a5c73"
+              "contractSha256": "6755765e3160f68661461a6d143ef7f97b463d7bad137f2a3f9f808db9e2e736"
             },
             "sourceItemStatus": "contract-bound"
           },
@@ -9174,11 +9174,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/workgroup_sync_v1/Cargo.toml",
-        "packageManifestSha256": "2f476b82fb77f5bda8b202b354976f27a7a986292fd46515bfea6287e629afa8",
+        "packageManifestSha256": "77414533e8720fc2c3abf76c0584b739654109ecb6390ea4c16a8a589678dd8d",
         "sourcePaths": [
           "examples/workgroup_sync_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "9f26935616495277bb53992bc6a0056ec86735c5f732fa2a0fe8c876d292f191",
+        "sourceClosureSha256": "92a6cacc38043a752f7787aab42d2cea3da5d4dbe427c72639349ce8bf4dc0bb",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_workgroup_sync_v1",
@@ -9193,7 +9193,7 @@
         ],
         "cargoLockPath": "examples/workgroup_sync_v1/Cargo.lock",
         "cargoLockSha256": "094a848e57f6940ffa1a91ec3a3ac90f5185e178043eaa0c47a03782f3308ec0",
-        "contractSha256": "8a9b210fb18b18437e44d8a72f2c589e8f7ecb62bd50c7548019d8a35371a2c8"
+        "contractSha256": "c5ddc1138ae5d2ce72568305a726c81689cd2be64d2bac0a681a6b20a78e0925"
       },
       "simulation": {
         "requestPath": "examples/workgroup_sync_v1/reduce-i32-request.json",
@@ -11952,7 +11952,7 @@
                 "fixtureId": "gfx942-workgroup-collectives",
                 "kernelSymbol": "lds_publish_read_reduce_i32_v1"
               },
-              "selectionSha256": "6d0bcf9db5d7c0912a55746452d2200d713a6779022c67e3313beabbd80e2fb5",
+              "selectionSha256": "179cffaf3d09773a4ae80eb9551f96cdc889cb112479c671bf32cf114d6e1f5a",
               "sourcePath": "examples/workgroup_sync_v1/src/kernel.rs",
               "sourceSha256": "b0074b426ef8ad0b9eea91e933e76dd03240852ce4ce976ccc89c1f2c7f1b515",
               "functionUtf8Offset": 1194
@@ -13740,7 +13740,7 @@
                 "tabOrdinal": 6,
                 "caseOrdinal": 0
               },
-              "selectionSha256": "c4e7322196b3ce4270ce21a41963b6c369887820c3f7ff5ea60ab135ac30ee6d",
+              "selectionSha256": "0ffcac0aae27c5d4bee3227fbf4cde87b26ce5a3aeed5721eb68913009df6926",
               "sourcePath": "examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs",
               "sourceSha256": "07adc0c50f24e51cb3d6c6bcb6cc1c8c6ff2a772c45ee2153435601eca2f39df",
               "functionUtf8Offset": 885
