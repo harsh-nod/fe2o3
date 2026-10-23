@@ -640,12 +640,12 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             inventory, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
         ).encode("ascii")
         self.assertEqual(hashlib.sha256(payload).hexdigest(),
-                         "fecba068317d72aab10b74f7845e8f324b9de090e55bde9b8e9969817a6057e3")
+                         "8cfc00f61ec316803d920696e106949359d0cd039f78f5cab62d0cd59ea19504")
         self.assertEqual(len(inventory["kernels"]), 61)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 18})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 7, "source-driver-contract": 14, "fixture-source-contract": 62,
+                         {"pending": 8, "source-driver-contract": 14, "fixture-source-contract": 61,
                           "not-applicable": 44})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
