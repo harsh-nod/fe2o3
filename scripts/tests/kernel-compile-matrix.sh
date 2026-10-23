@@ -739,6 +739,10 @@ fi
 [[ -z "$(find "${TEST_ROOT}/tmp" -mindepth 1 -maxdepth 1 -print -quit)" ]]
 
 for invocation in \
+  'examples/row_softmax_general_v1/run-gfx942.sh' \
+  'examples/row_softmax_general_v1/run-gfx950.sh' \
+  'examples/scalar_gemm_v1/run-gfx942.sh' \
+  'examples/scalar_gemm_v1/run-gfx950.sh' \
   'examples/gfx950_low_precision/run-fp4-gemm-gfx950.sh' \
   'examples/gfx950_low_precision/run-fp8-gemm-gfx950.sh' \
   'examples/gfx950_low_precision/run-attention-gfx950.sh fp4' \
@@ -754,8 +758,8 @@ for invocation in \
     "${TEST_ROOT}/invalid-compile-only.out" >/dev/null
 done
 
-# New ordinary-source runners cannot imply a hardware adapter.
-for package in fill vecadd moe_top2_v1 wave64_collectives_v1 workgroup_sync_v1 scalar_gemm_v1; do
+# Runners without an explicit qualification adapter stay compile-only.
+for package in fill vecadd moe_top2_v1 wave64_collectives_v1 workgroup_sync_v1; do
   set +e
   FE2O3_EXAMPLE_COMPILE_ONLY=0 bash "${REPO_ROOT}/examples/$package/run-gfx942.sh" \
     >"$TEST_ROOT/compile-only-required.out" 2>&1
