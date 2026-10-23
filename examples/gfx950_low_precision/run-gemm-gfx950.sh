@@ -293,6 +293,21 @@ if [[ $COMPILE_ONLY == 1 ]]; then
     printf 'HSACO: %s\n' "$HSACO"
     exit 0
 fi
+# Reject missing or ambiguous selectors before the single numerical invocation.
+TEST_LIST=$ATTEMPT_DIR/hardware-test-list.txt
+(
+    cd -- "$REPO_ROOT"
+    CARGO_TARGET_DIR="$ROOT_TARGET_DIR" \
+        "$RUSTUP" run "$TOOLCHAIN" "$CARGO_BIN" test --locked \
+        -p fe2o3-hsa-runtime --features hardware-qualification \
+        --test "$HARDWARE_TEST_TARGET" "$HARDWARE_TEST" -- --ignored --exact --list
+) > "$TEST_LIST"
+if ! grep -Fxq -- "$HARDWARE_TEST: test" "$TEST_LIST" ||
+   ! grep -Fxq -- '1 test, 0 benchmarks' "$TEST_LIST"; then
+    printf 'hardware selector must discover exactly one ignored test: %s\n' "$HARDWARE_TEST" >&2
+    exit 1
+fi
+
 HSACO_SHA256=$("$SHA256SUM" -- "$HSACO" | awk '{ print $1 }')
 (
     cd -- "$REPO_ROOT"

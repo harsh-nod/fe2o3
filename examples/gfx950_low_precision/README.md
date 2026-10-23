@@ -35,17 +35,15 @@ must be installed; the runners default to `/opt/rocm` and accept `ROCM_PATH`.
 
 ```bash
 rustup toolchain install nightly-2026-04-03 --component rust-src --component rustc-dev
-export CARGO_PROFILE_DEV_DEBUG=0
-export CARGO_PROFILE_TEST_DEBUG=0
-export CARGO_PROFILE_RELEASE_DEBUG=0
 export CARGO_BUILD_JOBS=2
 export CARGO_INCREMENTAL=0
 cargo fetch --locked
 cargo fetch --locked --manifest-path examples/gfx950_low_precision/Cargo.toml
 ```
 
-These are ordinary Cargo profile settings, not compiler or kernel overrides.
-Keep them for the commands below, including the default extractor build.
+The job and incremental settings bound ordinary Cargo build parallelism.
+The standalone package uses a checked-in test profile with debug information
+disabled; assertions and overflow checks retain their normal test defaults.
 
 ## Host Source Checks
 
@@ -60,8 +58,8 @@ cargo fe2o3 test --locked --all-targets \
   --manifest-path examples/gfx950_low_precision/Cargo.toml
 ```
 
-These match the CI host profiles and keep test executables within the pinned
-host runner's 512 MiB hashing bound.
+The checked-in test profile keeps the standalone test executables within the
+pinned host runner's 512 MiB hashing bound without profile environment overrides.
 
 The production rustc importer, V8/V9 Kernel IR schemas, exact gfx950 target
 profile, and full-module AMDGPU lowering consume all of these device terminals.
@@ -79,7 +77,8 @@ bash examples/gfx950_low_precision/run-fp4-gemm-gfx950.sh tile
 bash examples/gfx950_low_precision/run-fp4-gemm-gfx950.sh simt
 bash examples/gfx950_low_precision/run-fp8-gemm-gfx950.sh tile
 bash examples/gfx950_low_precision/run-fp8-gemm-gfx950.sh simt
-bash examples/gfx950_low_precision/run-fp4-attention-gfx950.sh
+bash examples/gfx950_low_precision/run-fp4-attention-gfx950.sh tile
+bash examples/gfx950_low_precision/run-fp4-attention-gfx950.sh simt
 bash examples/gfx950_low_precision/run-fp8-attention-gfx950.sh tile
 bash examples/gfx950_low_precision/run-fp8-attention-gfx950.sh simt
 ```
@@ -95,15 +94,17 @@ Both selections require `gfx950:xnack-`; this does not add gfx942 support.
 The historical hardware receipts below cover the four original tile kernels,
 not the new SIMT counterparts.
 
-The FP8 attention runner also accepts `tile` (the default) and `simt`.
-The SIMT selection compiles
-`src/kernel_simt_attention.rs::gfx950_fp8_attention_simt`: scalar E4M3
-decoding, F32 dot products, stable softmax, and F32 value accumulation. It uses
+The FP4 and FP8 attention runners also accept `tile` (the default) and `simt`.
+Their SIMT selections compile
+`src/kernel_simt_fp4_attention.rs::gfx950_fp4_attention_simt` and
+`src/kernel_simt_attention.rs::gfx950_fp8_attention_simt`: scalar E2M1 or E4M3
+decoding, F32 dot products, stable softmax, and F32 value accumulation. Each uses
 the same four-slice ABI, 16 independent heads, WG256/grid4 geometry, full
-CPU oracle, immutable inputs, and output canaries as tile. Tile uses 8 KiB of
-static LDS per workgroup; SIMT uses none. Both value paths use the complete
-E4M3 decoder, including subnormals, signed zero, exponent-15 finite values,
-and NaNs. The historical receipts below do not qualify this changed pair.
+CPU oracle, immutable inputs, and output canaries as tile. Tile uses 4 KiB
+(FP4) or 8 KiB (FP8) of static LDS per workgroup; SIMT uses none. The FP8 value
+paths use the complete E4M3 decoder, including subnormals, signed zero,
+exponent-15 finite values, and NaNs. Historical receipts do not qualify these
+changed pairs.
 
 For compilation and ISA validation without GPU execution, prefix a command
 with `FE2O3_EXAMPLE_COMPILE_ONLY=1`.
@@ -123,6 +124,14 @@ cargo test --locked --offline -p fe2o3-hsa-runtime \
   --test gfx950_fp8_gemm_hardware --test gfx950_fp4_gemm_hardware --no-run
 ```
 
+For the compiler prebuild, CI uses the following explicit debug profile. This
+is an ordinary CPU build phase, separate from the bounded native run:
+
+```bash
+CARGO_PROFILE_DEV_DEBUG=0 cargo build --locked -p rustc-codegen-fe2o3 \
+  --lib --bin fe2o3-rustc-extract
+```
+
 This prebuild executes no GPU tests. The full runner still performs its normal
 build steps, reusing Cargo's cache. Cold build memory and time are separate from
 the warm native/GPU run; no private extractor or absolute scratch path is needed.
@@ -135,7 +144,7 @@ to `gfx950-ocml-rocm-7.2.1.manifest`; the separately reviewed
 `FE2O3_GFX950_OCML_MANIFEST`. Both manifests pin every device library plus
 Clang and LLD. The tile runner requires one scaled gfx950 MFMA, two B4 or four B8
 transpose reads, one uniform publication barrier, and the exact static LDS
-allocation before dispatch. The FP8 SIMT selection instead checks scalar
+allocation before dispatch. The FP4 and FP8 SIMT selections instead check scalar
 arithmetic and byte loads, absence of MFMA and transpose operations, and
 zero static LDS.
 
@@ -150,7 +159,7 @@ and reject caller-supplied providers. A measured native protected-worker build
 still requires matching LLVM/LLD development packages; this does not block the
 ordinary Rust-to-HSACO runners above.
 
-## Current WG256/grid4 numerical qualification
+## Historical WG256/grid4 tile receipts
 
 On 2026-09-03, all four production Rust wrappers completed extraction,
 gfx950:xnack- COV6 finalization, symbol-scoped ISA inspection, and numerical

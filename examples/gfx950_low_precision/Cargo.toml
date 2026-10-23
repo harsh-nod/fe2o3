@@ -31,3 +31,7 @@ fe2o3-host = { path = "../../crates/fe2o3-host" }
 [lib]
 name = "fe2o3_gfx950_low_precision"
 path = "src/lib.rs"
+
+# Keep standalone host-test images within the pinned runner hashing bound.
+[profile.test]
+debug = 0
