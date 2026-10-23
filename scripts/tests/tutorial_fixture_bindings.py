@@ -212,13 +212,13 @@ class WholeFileFixtureBindingTests(FixtureBindingTests):
             self.assertEqual(hashlib.sha256(physical).hexdigest(), digest)
             rows = [row for row in inventory["displayItems"] if row["lessonId"] == lesson["lessonId"]]
             if lesson["lessonId"] == "gemm-tiling":
-                # Current-source test projection, not a published lesson refresh.
-                self.assertEqual(tab["displayedUtf8Bytes"], 6703)
-                self.assertEqual(tab["sourceSha256"],
-                                 "a898a078ac411b17764d87c0b06681045ddccc83ea8d4314fd2a48b59e8462cd")
-                tab.update(displayedUtf8Bytes=size, displayedSha256=digest, sourceSha256=digest)
+                # The published current view is source-only; this test projection
+                # exercises its exact physical fixture without qualifying the lesson.
+                self.assertEqual(tab["displayedUtf8Bytes"], size)
+                self.assertEqual(tab["displayedSha256"], digest)
+                self.assertEqual(tab["sourceSha256"], digest)
                 for row, offset in zip(rows, offsets, strict=True):
-                    row["functionUtf8Offset"] = offset
+                    self.assertEqual(row["functionUtf8Offset"], offset)
                     if row["classification"] == "kernel":
                         self.assertEqual(row["bindingStatus"], "pending")
                         row["bindingStatus"] = "fixture-source-contract"
