@@ -556,7 +556,8 @@ class AdapterComponents(unittest.TestCase):
 
     def test_controlled_environment_does_not_accept_inherited_selection(self) -> None:
         for name in ("RUSTC", "RUSTC_BOOTSTRAP", "CARGO_PROFILE_TEST_OPT_LEVEL", "CARGO_TARGET_X_RUNNER",
-                     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_JOBS", "FE2O3_EXAMPLE_CARGO_ARGS", "LD_LIBRARY_PATH"):
+                     "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER", "CARGO_BUILD_JOBS", "FE2O3_EXAMPLE_CARGO_ARGS",
+                     "LD_LIBRARY_PATH", "LD_PRELOAD", "LD_AUDIT", "DYLD_LIBRARY_PATH"):
             with patch.dict(os.environ, {name: "hostile"}, clear=True), self.assertRaises(adapter.ObservationError):
                 adapter.environment()
         with patch.dict(os.environ, {"PATH": "/usr/bin", "FE2O3_TUTORIAL_CPU_OUTPUT_ROOT": str(self.root)}, clear=True):
@@ -619,7 +620,8 @@ class AdapterComponents(unittest.TestCase):
             elif change == "precedence":
                 config_path.write_text("# original config.toml\n")
                 config_path = config_path.with_name("config")
-        toolpaths = {name: write("tools/" + name) for name in ("cargo", "rustc", "rustup")}
+        toolpaths = {name: write("tools/bin/" + name) for name in ("cargo", "rustc", "rustup")}
+        write("tools/lib/librustc_driver-fixture.so", "pinned runtime")
         output = Path(tempfile.mkdtemp(prefix="observation-", dir=self.root))
         arguments = ["examples/fixture/Cargo.toml", "lib", *feature_options]
         declaration = source_manifest(arguments)
@@ -658,6 +660,7 @@ class AdapterComponents(unittest.TestCase):
                         stream.write("\n# metadata interval mutation\n")
                 return json.dumps(driver_metadata if label == "driver-metadata" else metadata).encode()
             if label == "driver-build":
+                self.assertEqual(env["LD_LIBRARY_PATH"], str(toolpaths["rustc"].parent.parent / "lib"))
                 self.assertEqual(argv, [str(toolpaths["cargo"]), "build", "--locked", "--offline",
                                         "-p", "cargo-fe2o3", "--bin", "cargo-fe2o3", "--target", host,
                                         "--message-format=json"])
@@ -910,7 +913,8 @@ class BatchComponents(unittest.TestCase):
         self.write("rust-toolchain.toml", '[toolchain]\nchannel="nightly-2026-04-03"\n')
         self.driver_manifest = self.write("crates/cargo-fe2o3/Cargo.toml")
         self.driver_source = self.write("crates/cargo-fe2o3/src/main.rs")
-        self.tools = {name: self.write("tools/" + name) for name in ("cargo", "rustc", "rustup")}
+        self.tools = {name: self.write("tools/bin/" + name) for name in ("cargo", "rustc", "rustup")}
+        self.runtime = self.write("tools/lib/librustc_driver-fixture.so", "pinned runtime")
         self.cargo_home = self.base / "cargo-home"
         self.cargo_home.mkdir()
         self.output = self.base / "evidence"
@@ -1060,6 +1064,61 @@ class BatchComponents(unittest.TestCase):
             self.assertEqual(adapter.digest(payload), item["observation"]["sha256"])
             result.append(json.loads(payload))
         return result
+
+    def test_pinned_runtime_reaches_cargo_build_scripts_and_suites(self) -> None:
+        self.prepare(1)
+        observation = self.run_batch()
+        self.assertEqual(observation["outcome"], "passed")
+        for label, _, env, *_ in self.calls:
+            if label in {"driver-metadata", "driver-build", "suite-metadata", "suite"}:
+                self.assertEqual(env.get("LD_LIBRARY_PATH"), str(self.runtime.parent), label)
+        common = json.loads(Path(observation["common"]["path"]).read_bytes())
+        self.assertEqual(common["plan"]["tools"]["runtime:" + self.runtime.name],
+                         {"path": str(self.runtime), "sha256": adapter.digest(self.runtime.read_bytes())})
+
+    def test_pinned_runtime_mutation_or_roster_drift_refuses_before_reuse(self) -> None:
+        for phase in ("driver-metadata", "driver-build", "suite"):
+            for change in ("bytes", "add", "remove", "symlink"):
+                with self.subTest(phase=phase, change=change):
+                    self.temporary.cleanup()
+                    self.setUp()
+                    self.prepare(2)
+                    def mutate(label, index, data, record):
+                        if label != phase or (label == "suite" and index != 0):
+                            return
+                        if change == "bytes":
+                            self.runtime.write_text("changed runtime")
+                        elif change == "add":
+                            self.runtime.with_name("libextra.so").write_text("extra")
+                        else:
+                            self.runtime.unlink()
+                            if change == "symlink":
+                                self.runtime.symlink_to(self.tools["rustc"])
+                    observation = self.run_batch(mutate=mutate)
+                    self.assertNotEqual(observation["outcome"], "passed")
+                    self.assertFalse(self.records(observation)[1]["attempted"])
+                    if phase == "driver-metadata":
+                        self.assertNotIn("driver-build", [call[0] for call in self.calls])
+
+    def test_pinned_runtime_missing_or_escaping_directory_refuses_discovery(self) -> None:
+        for change in ("missing", "symlink", "foreign-cargo"):
+            with self.subTest(change=change):
+                self.temporary.cleanup()
+                self.setUp()
+                self.prepare(1)
+                if change == "foreign-cargo":
+                    self.tools["cargo"] = self.write("foreign/bin/cargo")
+                else:
+                    directory = self.runtime.parent
+                    self.runtime.unlink()
+                    directory.rmdir()
+                    if change == "symlink":
+                        other = self.root / "foreign-lib"
+                        other.mkdir()
+                        directory.symlink_to(other, target_is_directory=True)
+                observation = self.run_batch()
+                self.assertNotEqual(observation["outcome"], "passed")
+                self.assertNotIn("driver-build", [call[0] for call in self.calls])
 
     def test_generic_twelve_suite_batch_builds_one_driver_and_fresh_suite_dirs(self) -> None:
         self.prepare(12)

@@ -605,6 +605,25 @@ def require_child_success(phases: list[dict[str, Any]], label: str) -> None:
         raise ObservationError(f"{label} failed; see retained process status/logs", "unavailable")
 
 
+def toolchain_runtime(rustc: Path) -> tuple[Path, dict[str, Path]]:
+    require(rustc.parent.name == "bin", "unexpected pinned rustc layout")
+    directory = rustc.parent.parent / "lib"
+    require(directory.resolve(strict=True) == directory and directory.is_dir(),
+            "noncanonical pinned runtime directory")
+    libraries = sorted(directory.glob("*.so*"))
+    require(1 <= len(libraries) <= 64, "invalid pinned runtime library count")
+    return directory, {"runtime:" + path.name: path for path in libraries}
+
+
+def check_tools(tools: dict[str, Path], plan: dict[str, Any], message: str) -> None:
+    directory, libraries = toolchain_runtime(tools["rustc"])
+    require(str(directory) == plan["runtimeLibraryPath"]
+            and libraries == {name: path for name, path in tools.items() if name.startswith("runtime:")},
+            "pinned runtime library roster changed")
+    for name, path in tools.items():
+        require(digest(read_regular(path, MAX_INPUT_BYTES)) == plan["tools"][name]["sha256"], message)
+
+
 def discover_tools(root: Path, env: dict[str, str], output: Path, deadline: float,
                    phases: list[dict[str, Any]], plan: dict[str, Any]) -> tuple[dict[str, Path], str]:
     toolchain = tomllib.loads(read_regular(root / "rust-toolchain.toml").decode("utf-8"))["toolchain"]["channel"]
@@ -622,6 +641,15 @@ def discover_tools(root: Path, env: dict[str, str], output: Path, deadline: floa
         payload = read_regular(path, MAX_INPUT_BYTES)
         tools[name] = path
         plan["tools"][name] = {"path": str(path), "sha256": digest(payload)}
+    require(tools["cargo"].parent == tools["rustc"].parent, "pinned toolchain directories differ")
+    runtime, libraries = toolchain_runtime(tools["rustc"])
+    for name, path in libraries.items():
+        plan["tools"][name] = {"path": str(path), "sha256": digest(read_regular(path, MAX_INPUT_BYTES))}
+    tools.update(libraries)
+    plan["runtimeLibraryPath"] = str(runtime)
+    # Caller LD_* overrides remain forbidden. Raw Cargo and its build-script
+    # descendants need the same pinned runtime directory that rustup supplies.
+    env["LD_LIBRARY_PATH"] = str(runtime)
     versions = child([str(tools["rustc"]), "-vV"], root, env, output, "rustc-version", deadline, phases)
     require_child_success(phases, "rustc version")
     hosts = [line[6:] for line in versions.decode("utf-8").splitlines() if line.startswith("host: ")]
@@ -710,9 +738,7 @@ def execute(root: Path, arguments: list[str], output: Path, started: float,
     expected = selected_target(root, suite_metadata, manifest, configuration["selector"])
     plan["selectedTarget"] = expected
     plan["host"] = host
-    for name, path in tools.items():
-        require(digest(read_regular(path, MAX_INPUT_BYTES)) == plan["tools"][name]["sha256"],
-                "tool changed before baseline")
+    check_tools(tools, plan, "tool changed before baseline")
     local_roots = sorted({Path(package["manifest_path"]).parent for metadata in metadata_records
                           for package in metadata["packages"] if package.get("source") is None})
     require(all(path.is_relative_to(root) for path in local_roots), "local dependency escapes repository")
@@ -751,8 +777,7 @@ def execute(root: Path, arguments: list[str], output: Path, started: float,
         require(configuration_snapshot(config_paths, deadline) == configs
                 and footprint(local_roots, files, deadline) == before, "input drift during postflight validation")
         require(digest(read_regular(driver, MAX_INPUT_BYTES)) == plan["driverSha256"], "driver custody changed")
-        for name, path in tools.items():
-            require(digest(read_regular(path, MAX_INPUT_BYTES)) == plan["tools"][name]["sha256"], "tool changed")
+        check_tools(tools, plan, "tool changed")
     if error is not None:
         raise error
 
@@ -840,9 +865,7 @@ def execute_batch(root: Path, output: Path, started: float, observation: dict[st
             require(configuration_candidates(root, base_env) == config_paths,
                     "configuration candidate paths changed")
             require(configuration_snapshot(config_paths, until) == configs, "configuration input drift")
-            for name, path in tools.items():
-                require(digest(read_regular(path, MAX_INPUT_BYTES)) == shared_plan["tools"][name]["sha256"],
-                        "tool changed")
+            check_tools(tools, shared_plan, "tool changed")
 
         def check_plans() -> None:
             # One full fresh validator pass covers all fixture contracts. The
@@ -890,7 +913,8 @@ def execute_batch(root: Path, output: Path, started: float, observation: dict[st
             suite_dir = output / f"suite-{current:02d}"
             suite_dir.mkdir(mode=0o700)
             plan = dict(original_plan)
-            plan.update(tools=shared_plan["tools"], host=host, driverSha256=shared_plan["driverSha256"])
+            plan.update(tools=shared_plan["tools"], host=host, driverSha256=shared_plan["driverSha256"],
+                        runtimeLibraryPath=shared_plan["runtimeLibraryPath"])
             record: dict[str, Any] = {"schema": "fe2o3-tutorial-cpu-reference-observation-v1",
                 **NO_AUTHORITY, "executionMode": "batch-shared-private-driver", "plan": plan,
                 "commonObservation": common_reference, "commonElapsedSeconds": common_seconds,
