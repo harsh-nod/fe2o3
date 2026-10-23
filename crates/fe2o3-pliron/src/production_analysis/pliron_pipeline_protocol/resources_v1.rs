@@ -46,6 +46,14 @@ fn pipeline_equivalence_query_upper_bound_v1(
         )?,
         2,
     )?;
+    let optional_read_queries = if census.index_lt_branch_candidates == 0 {
+        0
+    } else {
+        checked_pipeline_product_v1(
+            checked_pipeline_product_v1(census.pipeline_creates, accesses_squared)?,
+            census.max_operation_arity,
+        )?
+    };
     // Every candidate header can perform B fixed-point rounds over all edge
     // operands while propagating its induction value.
     let loop_queries = checked_pipeline_product_v1(
@@ -62,6 +70,13 @@ fn pipeline_equivalence_query_upper_bound_v1(
         coordinate_queries,
         loop_queries,
         loop_scalar_queries,
+        // Child and containing-loop invariants each recheck every edge once.
+        checked_pipeline_product_v1(
+            checked_pipeline_product_v1(census.index_lt_branch_candidates, census.operands)?,
+            2,
+        )?,
+        // Optional reads query initialized coordinates without establishing coverage.
+        optional_read_queries,
         event_queries,
         dynamic_queries,
     ])
@@ -203,6 +218,33 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
         checked_pipeline_product_v1(census.block_arguments, 2)?,
         checked_pipeline_product_v1(census.successors, census.blocks.max(1))?,
         blocks_cubed,
+        // Bottom-up child containment is at most C²*B for C candidate
+        // headers. Exactly one existing topology pass runs per candidate.
+        // The once-per-candidate effect
+        // and all-edge invariant scans; no trip-count-dependent work.
+        checked_pipeline_product_v1(
+            checked_pipeline_product_v1(
+                checked_pipeline_product_v1(
+                    census.index_lt_branch_candidates,
+                    census.index_lt_branch_candidates,
+                )?,
+                census.blocks,
+            )?,
+            16,
+        )?,
+        checked_pipeline_product_v1(
+            checked_pipeline_product_v1(
+                census.index_lt_branch_candidates,
+                checked_pipeline_sum_v1(&[
+                    census.blocks,
+                    census.successors,
+                    census.operations,
+                    census.operands,
+                    1,
+                ])?,
+            )?,
+            16,
+        )?,
         equivalence_work,
         uniformity_work,
         concrete_work,
@@ -218,6 +260,11 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
         // Dominators and every retained loop summary: prologue/body/drain,
         // body membership, induction key/value pairs, and fixed metadata.
         checked_pipeline_product_v1(blocks_squared, 8)?,
+        if census.index_lt_branch_candidates == 0 {
+            0
+        } else {
+            checked_pipeline_product_v1(blocks_squared, 2)?
+        },
         checked_pipeline_product_v1(
             certificates,
             census
@@ -234,6 +281,14 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
     ])?;
     let temporary = checked_pipeline_sum_v1(&[
         concrete_temporary,
+        if census.index_lt_branch_candidates == 0 {
+            0
+        } else {
+            checked_pipeline_sum_v1(&[
+                checked_pipeline_product_v1(census.blocks, 16)?,
+                checked_pipeline_product_v1(census.successors, 2)?,
+            ])?
+        },
         // Dominator fixed points overlap CFG inventories and the current loop
         // candidate's predecessor/member/frontier construction.
         checked_pipeline_product_v1(blocks_squared, 6)?,

@@ -309,6 +309,7 @@ fn verify_dynamic_accesses(
     let mut empty_consuming_windows = 0_usize;
     let mut staged_writes = 0;
     let mut consuming_reads = 0;
+    let mut coverage_reads = 0;
     for action in actions {
         match action {
             DynamicPipelineActionV1::Event(event) => match event.kind {
@@ -400,13 +401,42 @@ fn verify_dynamic_accesses(
                     staging_coordinates.push(access.indices[1..].to_vec());
                     staged_writes += 1;
                 } else {
-                    consuming_coordinates.push(access.indices[1..].to_vec());
                     consuming_reads += 1;
+                    if summary.optional_blocks.contains(&access.site.block()) {
+                        // A zero-trip or bypassable child cannot establish
+                        // coverage. Still authenticate its read against the
+                        // already initialized tile and its live consume epoch.
+                        let initialized = canonical_coordinates.as_ref().is_some_and(|rows| {
+                            rows.iter().any(|row| {
+                                row.len() == access.indices.len() - 1
+                                    && row.iter().zip(&access.indices[1..]).all(|(left, right)| {
+                                        index_values_equivalent(
+                                            context,
+                                            *left,
+                                            *right,
+                                            equivalence_resources,
+                                        )
+                                    })
+                            })
+                        });
+                        if !initialized {
+                            return Err(invalid(
+                                pipeline,
+                                Some(access.site),
+                                "optional nested read is not in the initialized symbolic tile",
+                            ));
+                        }
+                    } else {
+                        consuming_coordinates.push(access.indices[1..].to_vec());
+                        coverage_reads += 1;
+                    }
                 }
             }
         }
     }
-    if consuming_reads != 0 && (empty_staging_windows != 0 || empty_consuming_windows != 0) {
+    if (consuming_reads != 0 && empty_staging_windows != 0)
+        || (coverage_reads != 0 && empty_consuming_windows != 0)
+    {
         return Err(invalid(
             pipeline,
             None,
