@@ -12,8 +12,23 @@ up to 4,096 logical keys and depth 1,024 in both passes, not just the fixture.
 
 ## Paired Commands
 
-Use the repository's pinned nightly-2026-04-03 with rust-src/rustc-dev and the
-existing offline dependency/toolchain setup. From the repository root:
+Use the repository's pinned nightly-2026-04-03 and components described in
+[Getting started: requirements](../../docs/getting-started.md#requirements).
+Cargo resolves the committed lockfiles using its normal dependency setup; an
+offline run requires those dependencies to be fetched first. From the repository
+root, the gfx950 milestone commands are:
+
+```bash
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/flash_attention_general_v1/run-gfx950.sh tile
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/flash_attention_general_v1/run-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=0 bash examples/flash_attention_general_v1/run-gfx950.sh tile
+FE2O3_EXAMPLE_COMPILE_ONLY=0 bash examples/flash_attention_general_v1/run-gfx950.sh simt
+```
+
+See [gfx950 compilation and numerical execution](GFX950.md). Compilation alone
+does not qualify GPU execution, and this public candidate has no fresh GPU result.
+
+The gfx942 runner remains available; **gfx942 GPU validation is pending**:
 
 ```bash
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/flash_attention_general_v1/run-gfx942.sh tile
