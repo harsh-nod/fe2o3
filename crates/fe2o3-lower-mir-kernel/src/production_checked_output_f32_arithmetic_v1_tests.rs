@@ -435,7 +435,7 @@ fn exact_source_nan_payload_is_not_replaced_by_nan_class_equivalence() {
                 if mutation.is_none() {
                     let admitted = result.unwrap();
                     admitted.verify_equivalence(&mut budget).unwrap();
-                    native::reject_actual_literal_nan(&admitted, profile);
+                    native::check_actual_literal_nan(&admitted, profile);
                 } else {
                     assert!(matches!(
                         result,
