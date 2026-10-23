@@ -349,27 +349,37 @@ class AttentionCfgSelectionTests(unittest.TestCase):
     )
     # Independent physical coordinates include feature-distinct same-name entries.
     coordinates = {
-        "gfx950-attnres-aggregate": ("kernel.rs", 66203),
-        "gfx950-attnres-aggregate-simt": ("kernel.rs", 66203),
+        "gfx950-attnres-aggregate": ("kernel.rs", 66487),
+        "gfx950-attnres-aggregate-simt": ("kernel.rs", 66487),
         "gfx950-attnres-aggregate-tile": ("kernel_tile_mixing.rs", 760),
-        "gfx950-four-branch-residual-simt": ("kernel.rs", 70077),
+        "gfx950-four-branch-residual-simt": ("kernel.rs", 70361),
         "gfx950-four-branch-residual-tile": ("kernel_tile_mixing.rs", 3060),
-        "gfx950-mhc-sinkhorn-mix-simt": ("kernel.rs", 73192),
+        "gfx950-mhc-sinkhorn-mix-simt": ("kernel.rs", 73476),
         "gfx950-mhc-sinkhorn-mix-tile": ("kernel_tile_mixing.rs", 4836),
         "gfx950-attnres-aggregate-explicit-reuse": ("ablation.rs", 1111),
-        "gfx950-compressed-hybrid-attention": ("kernel.rs", 55423),
-        "gfx950-compressed-hybrid-attention-division-baseline": ("kernel.rs", 55423),
-        "gfx950-content-sparse-attention": ("kernel.rs", 24024),
-        "gfx950-content-sparse-attention-reciprocal-reuse": ("kernel.rs", 24024),
-        "gfx950-deepseek-sparse-attention": ("kernel.rs", 42129),
-        "gfx950-four-branch-residual": ("kernel.rs", 70077),
+        "gfx950-compressed-hybrid-attention": ("kernel.rs", 55707),
+        "gfx950-compressed-hybrid-attention-division-baseline": ("kernel.rs", 55707),
+        "gfx950-content-sparse-attention": ("kernel.rs", 24166),
+        "gfx950-content-sparse-attention-reciprocal-reuse": ("kernel.rs", 24166),
+        "gfx950-deepseek-sparse-attention": ("kernel.rs", 42341),
+        "gfx950-four-branch-residual": ("kernel.rs", 70361),
         "gfx950-four-branch-residual-explicit": ("ablation.rs", 3730),
-        "gfx950-kda-decode": ("kernel.rs", 10324),
+        "gfx950-kda-decode": ("kernel.rs", 10351),
         "gfx950-kda-decode-baseline": ("kda_baseline.rs", 1610),
-        "gfx950-kda-prefill": ("kernel.rs", 15126),
+        "gfx950-kda-prefill": ("kernel.rs", 15199),
         "gfx950-kda-prefill-baseline": ("kda_baseline.rs", 4908),
-        "gfx950-mhc-sinkhorn-mix": ("kernel.rs", 73192),
+        "gfx950-mhc-sinkhorn-mix": ("kernel.rs", 73476),
         "gfx950-mhc-sinkhorn-mix-scalar": ("ablation.rs", 5895),
+        "gfx950-compressed-hybrid-attention-simt": ("kernel_simt_compressed_hybrid.rs", 537),
+        "gfx950-compressed-hybrid-attention-tile": ("kernel.rs", 55707),
+        "gfx950-content-sparse-attention-simt": ("kernel_simt_content_sparse.rs", 557),
+        "gfx950-content-sparse-attention-tile": ("kernel.rs", 24166),
+        "gfx950-deepseek-sparse-attention-simt": ("kernel.rs", 42341),
+        "gfx950-deepseek-sparse-attention-tile": ("kernel.rs", 88905),
+        "gfx950-kda-decode-simt": ("kernel.rs", 10351),
+        "gfx950-kda-decode-tile": ("kernel.rs", 80355),
+        "gfx950-kda-prefill-simt": ("kernel.rs", 15199),
+        "gfx950-kda-prefill-tile": ("kernel.rs", 84152),
     }
 
     @classmethod
@@ -410,6 +420,11 @@ class AttentionCfgSelectionTests(unittest.TestCase):
 
     def test_real_library_uses_transitive_feature_aliases(self):
         aliases = {
+            "kernel-kda-decode-tile": None,
+            "kernel-kda-prefill-tile": None,
+            "kernel-deepseek-sparse-attention-tile": None,
+            "kernel-content-sparse-attention-simt": "kernel_simt_content_sparse",
+            "kernel-compressed-hybrid-attention-simt": "kernel_simt_compressed_hybrid",
             "kernel-kda-decode-baseline-v1": "kda_baseline",
             "kernel-kda-prefill-baseline-v1": "kda_baseline",
             "kernel-content-sparse-attention-reciprocal-reuse-v1": "ablation",
@@ -427,6 +442,8 @@ class AttentionCfgSelectionTests(unittest.TestCase):
         }
         for alias, module in aliases.items():
             expected = [module, "kernel", "dimensions"] if module else ["kernel", "dimensions"]
+            if alias in ("kernel-content-sparse-attention-simt", "kernel-compressed-hybrid-attention-simt"):
+                expected = ["kernel", module, "dimensions"]
             base = self.cargo["features"][alias]
             for direct in ([alias], [alias, *base]):
                 with self.subTest(direct=direct):
@@ -455,8 +472,9 @@ class AttentionCfgSelectionTests(unittest.TestCase):
         document = copy.deepcopy(self.original)
         fixture = next(row for row in document["compilerFixtures"] if row["fixtureId"] == fixture_id)
         symbol, = fixture["compilerInput"]["kernelSymbols"]
+        selection = {"kind": "fixture", "fixtureId": fixture_id, "kernelSymbol": symbol}
         kernel = next(row for row in document["kernelInventory"]["kernels"]
-                      if row["kernelId"] == f"fixture:{fixture_id}:{symbol}")
+                      if selection in row["selections"])
         filename, offset = self.coordinates[fixture_id]
         path = "examples/gfx950_advanced_attention/src/" + filename
         binding = {
@@ -484,17 +502,28 @@ class AttentionCfgSelectionTests(unittest.TestCase):
                 expected = sum(variant["source"] is not None
                                for row in document["kernelInventory"]["kernels"] for variant in row["variants"])
                 self.assertEqual(result["sourceBoundVariantCount"], expected)
-                self.assertEqual(result["sourceBoundPairCount"], 3)
+                self.assertEqual(result["sourceBoundPairCount"], 8)
                 self.assertFalse(result["inventoryComplete"])
                 self.assertIsNone(result["requiredPairCount"])
                 symbol, = fixture["compilerInput"]["kernelSymbols"]
                 identities.setdefault(symbol, []).append(binding["selectionSha256"])
-        self.assertEqual(sorted(map(len, identities.values())), [1, 2, 2, 2, 2, 4, 4, 4])
-        self.assertTrue(all(len(values) == len(set(values)) for values in identities.values()))
+        self.assertEqual(sorted(map(len, identities.values())), [3, 4, 4, 4, 4, 4, 4, 4])
+        alias_symbols = {
+            "gfx950_kda_decode", "gfx950_kda_chunkwise_prefill",
+            "gfx950_content_sparse_attention", "gfx950_deepseek_sparse_attention",
+            "gfx950_compressed_hybrid_attention",
+        }
+        for symbol, values in identities.items():
+            self.assertEqual(len(values) - len(set(values)), int(symbol in alias_symbols))
+        for stem in ("kda-decode", "kda-prefill", "content-sparse-attention",
+                     "deepseek-sparse-attention", "compressed-hybrid-attention"):
+            simt = self.source_document("gfx950-" + stem + "-simt")[2]
+            tile = self.source_document("gfx950-" + stem + "-tile")[2]
+            self.assertNotEqual(simt["selectionSha256"], tile["selectionSha256"])
 
     def test_same_named_host_fallback_cannot_replace_the_selected_source(self):
         document, _, binding = self.source_document("gfx950-attnres-aggregate")
-        binding["functionUtf8Offset"] = 68157
+        binding["functionUtf8Offset"] = 68441
         with self.assertRaisesRegex(SystemExit, "exact current source occurrence"):
             self.parent.validate_kernel_inventory(document, None, repo_root=ROOT)
 
@@ -649,7 +678,7 @@ class LiteralIncludeSelectionTests(unittest.TestCase):
         expected = sum(variant["source"] is not None
                        for row in document["kernelInventory"]["kernels"] for variant in row["variants"])
         self.assertEqual(result["sourceBoundVariantCount"], expected)
-        self.assertEqual(result["sourceBoundPairCount"], 3)
+        self.assertEqual(result["sourceBoundPairCount"], 8)
         self.assertFalse(result["inventoryComplete"])
         self.assertIsNone(result["requiredPairCount"])
         self.assertEqual((ROOT / binding["sourcePath"]).read_bytes()[203:209], b"vecadd")
@@ -894,9 +923,9 @@ class RowSourceBindingTests(unittest.TestCase):
         self.assertEqual(binding["sourceSha256"], tab["sourceSha256"])
         for variant in kernel["variants"]:
             self.assertIn("gfx942/mi300x and gfx950/mi350", variant["blocker"]["reason"])
-        self.assertEqual(report["knownKernelIdentityCount"], 67)
-        self.assertEqual(report["sourceBoundVariantCount"], 25)
-        self.assertEqual(report["sourceBoundPairCount"], 3)
+        self.assertEqual(report["knownKernelIdentityCount"], 72)
+        self.assertEqual(report["sourceBoundVariantCount"], 30)
+        self.assertEqual(report["sourceBoundPairCount"], 8)
         self.assertFalse(report["inventoryComplete"])
         self.assertIsNone(report["requiredPairCount"])
         self.assertEqual([(row["target"], row["deterministicSemanticRunnerAvailability"])
