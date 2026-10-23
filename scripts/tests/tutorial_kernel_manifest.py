@@ -295,7 +295,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "b619f676add6b856473506f202fc02eb8b53cf26742e53ad9066cd2ed872e208")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "ceaeacd49df67f52ea62446779c3b2cd4365f311361c646df5dd0ee497000052")
 
     def test_public_grouped_expert_moe_display_keeps_physical_identity_and_history(self):
         lesson = self.curriculum_lesson("moe-expert-compute")

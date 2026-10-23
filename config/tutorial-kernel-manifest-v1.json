@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "efa20b131dabe95ca7a78243122cf2de58f1ad67",
-      "tree": "92458379446921518e2defea3fface8dfe466bce"
+      "commit": "2cb465f4cb0cd17f3679140813dc2e16893d0304",
+      "tree": "ad6b0082c1510d32aef563097e61bcba288a20cd"
     },
     "status": "pending",
     "lessons": [
@@ -1131,8 +1131,8 @@
             "kind": "host",
             "label": "Run checks",
             "language": "bash",
-            "displayedUtf8Bytes": 212,
-            "displayedSha256": "595314d1462d97bbccc25b1c0da5070639fca4e0e6387b59c0e7fcb8f9678211",
+            "displayedUtf8Bytes": 207,
+            "displayedSha256": "f5799cce691237d6485fcf57701825573609e0116cdb842f21ee8387745db6b4",
             "sourcePath": null,
             "sourceCommit": null,
             "sourceSha256": null,
@@ -1600,8 +1600,8 @@
             "kind": "verus",
             "label": "Verus proof",
             "language": "bash",
-            "displayedUtf8Bytes": 98,
-            "displayedSha256": "02234b3f6485a0bda395f9ed1d9c8af6f0e0df485c94014c89853792f1fa1f4c",
+            "displayedUtf8Bytes": 303,
+            "displayedSha256": "304bd7511531a9dceaf6ea0d71faa4629db97f7e93400c4affa62411951292af",
             "sourcePath": "examples/tiled_gemm_v1/verus/lds_tiled_slice1_source_refinement.rs",
             "sourceCommit": "5a45239aeeda3ca64cf16beb7fb1d3589e649bfe",
             "sourceSha256": null,
