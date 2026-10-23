@@ -58,41 +58,101 @@ pub mod kernel_components;
     target_arch = "amdgpu",
     feature = "kernel-gpt-oss-decode-held-fragments"
 ))]
-#[cfg_attr(
+#[cfg(not(any(
     feature = "kernel-gpt-oss-mode-simt",
-    path = "kernel_held_fragments_simt.rs"
-)]
-#[cfg_attr(
-    feature = "kernel-gpt-oss-mode-tile",
-    path = "kernel_held_fragments_tile.rs"
-)]
+    feature = "kernel-gpt-oss-mode-tile"
+)))]
 pub mod kernel_held_fragments;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-held-fragments"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-simt")]
+pub mod kernel_held_fragments_simt;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-held-fragments"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-simt")]
+pub use kernel_held_fragments_simt as kernel_held_fragments;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-held-fragments"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-tile")]
+pub mod kernel_held_fragments_tile;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-held-fragments"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-tile")]
+pub use kernel_held_fragments_tile as kernel_held_fragments;
 #[cfg(any(
     target_arch = "amdgpu",
     feature = "kernel-gpt-oss-decode-interleaved-stores"
 ))]
-#[cfg_attr(
+#[cfg(not(any(
     feature = "kernel-gpt-oss-mode-simt",
-    path = "kernel_interleaved_stores_simt.rs"
-)]
-#[cfg_attr(
-    feature = "kernel-gpt-oss-mode-tile",
-    path = "kernel_interleaved_stores_tile.rs"
-)]
+    feature = "kernel-gpt-oss-mode-tile"
+)))]
 pub mod kernel_interleaved_stores;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-interleaved-stores"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-simt")]
+pub mod kernel_interleaved_stores_simt;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-interleaved-stores"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-simt")]
+pub use kernel_interleaved_stores_simt as kernel_interleaved_stores;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-interleaved-stores"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-tile")]
+pub mod kernel_interleaved_stores_tile;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-interleaved-stores"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-tile")]
+pub use kernel_interleaved_stores_tile as kernel_interleaved_stores;
 #[cfg(any(
     target_arch = "amdgpu",
     feature = "kernel-gpt-oss-decode-pipelined-attention"
 ))]
-#[cfg_attr(
+#[cfg(not(any(
     feature = "kernel-gpt-oss-mode-simt",
-    path = "kernel_pipelined_attention_simt.rs"
-)]
-#[cfg_attr(
-    feature = "kernel-gpt-oss-mode-tile",
-    path = "kernel_pipelined_attention_tile.rs"
-)]
+    feature = "kernel-gpt-oss-mode-tile"
+)))]
 pub mod kernel_pipelined_attention;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-pipelined-attention"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-simt")]
+pub mod kernel_pipelined_attention_simt;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-pipelined-attention"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-simt")]
+pub use kernel_pipelined_attention_simt as kernel_pipelined_attention;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-pipelined-attention"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-tile")]
+pub mod kernel_pipelined_attention_tile;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-pipelined-attention"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-tile")]
+pub use kernel_pipelined_attention_tile as kernel_pipelined_attention;
 #[cfg(any(
     target_arch = "amdgpu",
     feature = "kernel-gpt-oss-decode-router-serial"
@@ -106,11 +166,20 @@ pub mod kernel_router_serial;
     target_arch = "amdgpu",
     feature = "kernel-gpt-oss-decode-scalar-attention"
 ))]
-#[cfg_attr(
-    feature = "kernel-gpt-oss-mode-simt",
-    path = "kernel_scalar_attention_simt.rs"
-)]
+#[cfg(not(any(feature = "kernel-gpt-oss-mode-simt")))]
 pub mod kernel_scalar_attention;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-scalar-attention"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-simt")]
+pub mod kernel_scalar_attention_simt;
+#[cfg(any(
+    target_arch = "amdgpu",
+    feature = "kernel-gpt-oss-decode-scalar-attention"
+))]
+#[cfg(feature = "kernel-gpt-oss-mode-simt")]
+pub use kernel_scalar_attention_simt as kernel_scalar_attention;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;
 
