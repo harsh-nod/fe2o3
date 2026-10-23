@@ -16483,11 +16483,11 @@
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
         "tabOrdinal": 4,
-        "functionUtf8Offset": 16455,
-        "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1",
+        "functionUtf8Offset": 1395,
+        "kernelSymbol": "gfx950_gpt_oss_120b_router_v1",
         "classification": "kernel",
         "kernelIds": [
-          "fixture:gfx950-gpt-oss-materialized-expert:gfx950_gpt_oss_120b_expert_v1"
+          "fixture:gfx950-gpt-oss-materialized-router:gfx950_gpt_oss_120b_router_v1"
         ],
         "negativeCases": [],
         "bindingStatus": "fixture-source-contract",
@@ -16496,11 +16496,11 @@
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
         "tabOrdinal": 4,
-        "functionUtf8Offset": 16455,
-        "kernelSymbol": "gfx950_gpt_oss_120b_expert_v1",
+        "functionUtf8Offset": 9610,
+        "kernelSymbol": "gfx950_gpt_oss_120b_attention_v1",
         "classification": "kernel",
         "kernelIds": [
-          "fixture:gfx950-gpt-oss-materialized-expert:gfx950_gpt_oss_120b_expert_v1"
+          "fixture:gfx950-gpt-oss-materialized-attention:gfx950_gpt_oss_120b_attention_v1"
         ],
         "negativeCases": [],
         "bindingStatus": "fixture-source-contract",
@@ -16535,15 +16535,13 @@
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
         "tabOrdinal": 6,
-        "functionUtf8Offset": 3041,
-        "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
-        "classification": "kernel",
-        "kernelIds": [
-          "fixture:gfx950-gpt-oss-scalar-attention:gfx950_gpt_oss_120b_decode_megakernel_v1"
-        ],
+        "functionUtf8Offset": 1057,
+        "kernelSymbol": "widen_bf16",
+        "classification": "helper",
+        "kernelIds": [],
         "negativeCases": [],
-        "bindingStatus": "fixture-source-contract",
-        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
+        "bindingStatus": "not-applicable",
+        "reason": "Ordinary BF16 conversion helper retained in the whole-file scalar-attention source, not a GPU entry."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
