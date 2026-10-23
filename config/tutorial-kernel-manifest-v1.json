@@ -4,8 +4,8 @@
     "schema": "fe2o3-tutorial-curriculum-obligations-v2",
     "site": {
       "repository": "harsh-nod/fe2o3-kernels",
-      "commit": "a6359449558e24e507162147834cfbf213743243",
-      "tree": "3675dd973028529fc5e63b04dae87f5577ba06cd"
+      "commit": "deb09c286cb4a4aef5aec73302f1c3e213462dbd",
+      "tree": "22dcbf9b89cebbfa79378af2329d63aa7bbd6245"
     },
     "status": "pending",
     "lessons": [
@@ -457,7 +457,7 @@
                 "packageManifest": "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/Cargo.toml",
                 "packageManifestSha256": "8c816db43da65108b02b41b06781687bfab338407e5948648b8c623762da2f85",
                 "cargoLockPath": "Cargo.lock",
-                "cargoLockSha256": "0a8dd6b3b5dc4be74f5670b5ef8a9881f6a8610362001de713e6007c0fd5ce4f",
+                "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
                 "sourcePaths": [
                   "crates/rustc-codegen-fe2o3/tests/fixtures/production-ranked-bounds-device/src/lib.rs"
                 ],
@@ -673,7 +673,7 @@
                   }
                 }
               ],
-              "contractSha256": "3138452d1f89c1ea5066b4af417e228018864d0fc2dc1d9ff7b3ef2e76c0d79c"
+              "contractSha256": "6aac36b2f08d1575d79b05e52c82fcd5a85ea3a2a71a94f54135e8a362d6d70c"
             },
             "sourceItemStatus": "contract-bound"
           },
@@ -1405,14 +1405,14 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 6703,
-            "displayedSha256": "a898a078ac411b17764d87c0b06681045ddccc83ea8d4314fd2a48b59e8462cd",
+            "displayedUtf8Bytes": 7111,
+            "displayedSha256": "ef3bbea31da5311bfb5bfb9edb9f43569e602501c079bebb16eb5f0c6b5973b4",
             "sourcePath": "examples/tiled_gemm_general_v1/src/kernel.rs",
-            "sourceCommit": "9006001157e2c3062e44088634e467b0f8963ee0",
-            "sourceSha256": "a898a078ac411b17764d87c0b06681045ddccc83ea8d4314fd2a48b59e8462cd",
+            "sourceCommit": "0e0963df4f230bf728a7b4605677c0ff09624adf",
+            "sourceSha256": "ef3bbea31da5311bfb5bfb9edb9f43569e602501c079bebb16eb5f0c6b5973b4",
             "sourceDigestScope": "file",
             "explanatory": false,
-            "evidenceId": "workgroup-pipeline-source-v1",
+            "evidenceId": "tiled-gemm-current-source-v1",
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -1809,14 +1809,14 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 3979,
-            "displayedSha256": "b7f65c16395ea89c590aaee800167a9dceea620e55765044f423eadf9360e04d",
+            "displayedUtf8Bytes": 4483,
+            "displayedSha256": "06896717d72deee6e52f957979c796a19ebb22146e9512abf7fdd3c5de366ba8",
             "sourcePath": "examples/row_softmax_general_v1/src/kernel.rs",
-            "sourceCommit": "bfa616c996fa529da67f2f6c32e7829213914e3e",
-            "sourceSha256": "b7f65c16395ea89c590aaee800167a9dceea620e55765044f423eadf9360e04d",
+            "sourceCommit": "044b85871308076c7a15d1c20c7794069fd73bb2",
+            "sourceSha256": "06896717d72deee6e52f957979c796a19ebb22146e9512abf7fdd3c5de366ba8",
             "sourceDigestScope": "file",
             "explanatory": false,
-            "evidenceId": null,
+            "evidenceId": "row-softmax-current-source-v1",
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -8705,6 +8705,234 @@
             ]
           }
         ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-row-softmax-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/row_softmax_general_v1/Cargo.toml",
+            "lib",
+            "--no-default-features",
+            "--features",
+            "gfx950-target,qualification-legacy-hip"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "The exact mode-specific adapter, independent oracle and fresh qualification remain pending; this command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "softmax-invariant",
+            "fixtureIds": [
+              "gfx950-row-softmax-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-row-softmax-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-row-softmax-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode-specific adapter, independent oracle and fresh qualification remain pending; this command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "softmax-invariant",
+            "fixtureIds": [
+              "gfx950-row-softmax-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-row-softmax-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/row_softmax_general_v1/Cargo.toml",
+            "lib",
+            "--no-default-features",
+            "--features",
+            "gfx950-target,qualification-legacy-hip,structured-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "The exact mode-specific adapter, independent oracle and fresh qualification remain pending; this command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "softmax-invariant",
+            "fixtureIds": [
+              "gfx950-row-softmax-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-row-softmax-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-row-softmax-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode-specific adapter, independent oracle and fresh qualification remain pending; this command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "softmax-invariant",
+            "fixtureIds": [
+              "gfx950-row-softmax-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-scalar-gemm-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/scalar_gemm_v1/Cargo.toml",
+            "lib",
+            "--no-default-features",
+            "--features",
+            "gfx950-target,qualification-legacy-hip"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "The exact mode-specific adapter, independent oracle and fresh qualification remain pending; this command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gemm-proof-plan",
+            "fixtureIds": [
+              "gfx950-scalar-gemm-simt"
+            ]
+          },
+          {
+            "lessonId": "gemm-tiling",
+            "fixtureIds": [
+              "gfx950-scalar-gemm-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-scalar-gemm-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-scalar-gemm-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode-specific adapter, independent oracle and fresh qualification remain pending; this command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gemm-proof-plan",
+            "fixtureIds": [
+              "gfx950-scalar-gemm-simt"
+            ]
+          },
+          {
+            "lessonId": "gemm-tiling",
+            "fixtureIds": [
+              "gfx950-scalar-gemm-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-scalar-gemm-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/scalar_gemm_v1/Cargo.toml",
+            "lib",
+            "--no-default-features",
+            "--features",
+            "gfx950-target,qualification-legacy-hip,structured-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "The exact mode-specific adapter, independent oracle and fresh qualification remain pending; this command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gemm-proof-plan",
+            "fixtureIds": [
+              "gfx950-scalar-gemm-tile"
+            ]
+          },
+          {
+            "lessonId": "gemm-tiling",
+            "fixtureIds": [
+              "gfx950-scalar-gemm-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-scalar-gemm-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-scalar-gemm-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode-specific adapter, independent oracle and fresh qualification remain pending; this command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gemm-proof-plan",
+            "fixtureIds": [
+              "gfx950-scalar-gemm-tile"
+            ]
+          },
+          {
+            "lessonId": "gemm-tiling",
+            "fixtureIds": [
+              "gfx950-scalar-gemm-tile"
+            ]
+          }
+        ]
       }
     ],
     "status": "pending"
@@ -8740,8 +8968,8 @@
           "fill"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "0a8dd6b3b5dc4be74f5670b5ef8a9881f6a8610362001de713e6007c0fd5ce4f",
-        "contractSha256": "eb05cd3b45c6c5f0914f3cde07443288122a6fa0d1dd8c383b5f5a502b401817"
+        "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
+        "contractSha256": "8ca391ece0e49f74249ad424688c9d003dc603e97b896d5778e36653dfe156ee"
       },
       "simulation": {
         "requestPath": "scripts/quickstart/fill-request.json",
@@ -8949,11 +9177,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/row_softmax_general_v1/Cargo.toml",
-        "packageManifestSha256": "05745c2c356a338d753352db5d002628ba3781c7eff94ef446de841e6768a009",
+        "packageManifestSha256": "452b1fcc56131d30a79e8a373dc2f5bb53fe3e72c750504f17129f32db4ef11c",
         "sourcePaths": [
           "examples/row_softmax_general_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "0d4a5f327dca1d15788960f4692305bde678571f1e8d0377862bd7e2f77de609",
+        "sourceClosureSha256": "4eb04e2d3c46e99b3f36d513e6e35b9697e343988b01da3a494b83eaab37aa77",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_row_softmax_general_v1",
@@ -8965,8 +9193,8 @@
           "row_softmax_general_v1"
         ],
         "cargoLockPath": "examples/row_softmax_general_v1/Cargo.lock",
-        "cargoLockSha256": "fc67234f7d30eb5e7b99713ae802e6d96e23be5a31c7a92b749ae9399547ad6f",
-        "contractSha256": "c16cb57a094d776abf7835370c79e43f9118de5d495ebde29894475f4a00096c"
+        "cargoLockSha256": "9be1f1b390108d23e7509e343d49dcb36e72d2dbb816f4c6a8d460594ef01fa3",
+        "contractSha256": "bb3a2e13eb36ef6342ccc3288583b644e06d602bc87b90833926f95960fd5976"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-row-softmax.request.json",
@@ -8994,11 +9222,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/scalar_gemm_v1/Cargo.toml",
-        "packageManifestSha256": "9e556ad2d047154ef5470d4d57cf066e344285badbeaa9016b1988bc221f59ce",
+        "packageManifestSha256": "8e4114d8db3b6a08accee2f8c9ff5113936196b43d0726910231b1a291ff0def",
         "sourcePaths": [
           "examples/scalar_gemm_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "5214b579d4a91f6c01704826fda96f03c76c46ba0c9ecb83437112001c607fd1",
+        "sourceClosureSha256": "a51a461311d732c1bb553dc5f68a45196d34af2ba801751410c3cbf691a7b565",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_scalar_gemm_v1",
@@ -9010,8 +9238,8 @@
           "scalar_gemm_v1"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "0a8dd6b3b5dc4be74f5670b5ef8a9881f6a8610362001de713e6007c0fd5ce4f",
-        "contractSha256": "1253bd02c15cfbcb73ded4718cf4d52e64ab6be527a7ba79ff4114481ed48828"
+        "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
+        "contractSha256": "d5173bb012e149e6d272f9c3a52ce98ed96e3442f26954249db0ea6db7c3c720"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-scalar-gemm.request.json",
@@ -9100,8 +9328,8 @@
           "vecadd"
         ],
         "cargoLockPath": "Cargo.lock",
-        "cargoLockSha256": "0a8dd6b3b5dc4be74f5670b5ef8a9881f6a8610362001de713e6007c0fd5ce4f",
-        "contractSha256": "a8e3e0ca061c0c2fdfca8f48df87514b137ab450b40f01d9d5822fa42422666e"
+        "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
+        "contractSha256": "8988097e8eda6f1ca07fdc4ec16b9610f1de46e302d26537331adc2c850177fd"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-typed-vecadd-source.request.json",
@@ -11081,6 +11309,208 @@
         "canonicalKirVersion": 12,
         "status": "pending-reconciliation"
       }
+    },
+    {
+      "fixtureId": "gfx950-row-softmax-simt",
+      "testId": "kernel-compile-matrix/gfx950/row-softmax-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "row-softmax-simt",
+        "runnerPath": "examples/row_softmax_general_v1/run-gfx950.sh",
+        "artifactName": "row_softmax_general_v1.hsaco",
+        "runnerArguments": [
+          "simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/row_softmax_general_v1/Cargo.toml",
+        "packageManifestSha256": "452b1fcc56131d30a79e8a373dc2f5bb53fe3e72c750504f17129f32db4ef11c",
+        "sourcePaths": [
+          "examples/row_softmax_general_v1/src/kernel.rs"
+        ],
+        "sourceClosureSha256": "4eb04e2d3c46e99b3f36d513e6e35b9697e343988b01da3a494b83eaab37aa77",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_row_softmax_general_v1",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "gfx950-target",
+          "qualification-legacy-hip"
+        ],
+        "kernelSymbols": [
+          "row_softmax_general_v1"
+        ],
+        "cargoLockPath": "examples/row_softmax_general_v1/Cargo.lock",
+        "cargoLockSha256": "9be1f1b390108d23e7509e343d49dcb36e72d2dbb816f4c6a8d460594ef01fa3",
+        "contractSha256": "3167c848aac408aeb3ff70f2cfd8602abb6f1048d5bf99dfb082cd7269cf77a1"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-row-softmax-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-row-softmax-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-row-softmax-tile",
+      "testId": "kernel-compile-matrix/gfx950/row-softmax-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "row-softmax-tile",
+        "runnerPath": "examples/row_softmax_general_v1/run-gfx950.sh",
+        "artifactName": "row_softmax_general_v1.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/row_softmax_general_v1/Cargo.toml",
+        "packageManifestSha256": "452b1fcc56131d30a79e8a373dc2f5bb53fe3e72c750504f17129f32db4ef11c",
+        "sourcePaths": [
+          "examples/row_softmax_general_v1/src/kernel_tile.rs"
+        ],
+        "sourceClosureSha256": "4eb04e2d3c46e99b3f36d513e6e35b9697e343988b01da3a494b83eaab37aa77",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_row_softmax_general_v1",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "gfx950-target",
+          "qualification-legacy-hip",
+          "structured-tile"
+        ],
+        "kernelSymbols": [
+          "row_softmax_general_v1"
+        ],
+        "cargoLockPath": "examples/row_softmax_general_v1/Cargo.lock",
+        "cargoLockSha256": "9be1f1b390108d23e7509e343d49dcb36e72d2dbb816f4c6a8d460594ef01fa3",
+        "contractSha256": "d9bdcdfea194e1b01d825dd7764b2c394e7468605986f82100ab71e6e1b4c89c"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-row-softmax-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-row-softmax-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-scalar-gemm-simt",
+      "testId": "kernel-compile-matrix/gfx950/scalar-gemm-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "scalar-gemm-simt",
+        "runnerPath": "examples/scalar_gemm_v1/run-gfx950.sh",
+        "artifactName": "scalar_gemm_v1.hsaco",
+        "runnerArguments": [
+          "simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/scalar_gemm_v1/Cargo.toml",
+        "packageManifestSha256": "8e4114d8db3b6a08accee2f8c9ff5113936196b43d0726910231b1a291ff0def",
+        "sourcePaths": [
+          "examples/scalar_gemm_v1/src/kernel.rs"
+        ],
+        "sourceClosureSha256": "a51a461311d732c1bb553dc5f68a45196d34af2ba801751410c3cbf691a7b565",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_scalar_gemm_v1",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "gfx950-target",
+          "qualification-legacy-hip"
+        ],
+        "kernelSymbols": [
+          "scalar_gemm_v1"
+        ],
+        "cargoLockPath": "Cargo.lock",
+        "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
+        "contractSha256": "22f93627a73d5dacea0335d31e0f5d46f0f6a760016645998f06b162b29f38a6"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-scalar-gemm-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-scalar-gemm-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-scalar-gemm-tile",
+      "testId": "kernel-compile-matrix/gfx950/scalar-gemm-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "scalar-gemm-tile",
+        "runnerPath": "examples/scalar_gemm_v1/run-gfx950.sh",
+        "artifactName": "scalar_gemm_v1.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/scalar_gemm_v1/Cargo.toml",
+        "packageManifestSha256": "8e4114d8db3b6a08accee2f8c9ff5113936196b43d0726910231b1a291ff0def",
+        "sourcePaths": [
+          "examples/scalar_gemm_v1/src/kernel_tile.rs"
+        ],
+        "sourceClosureSha256": "a51a461311d732c1bb553dc5f68a45196d34af2ba801751410c3cbf691a7b565",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_scalar_gemm_v1",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "gfx950-target",
+          "qualification-legacy-hip",
+          "structured-tile"
+        ],
+        "kernelSymbols": [
+          "scalar_gemm_v1"
+        ],
+        "cargoLockPath": "Cargo.lock",
+        "cargoLockSha256": "13d52e4728d76cf977b481a90fb1c3c4f555e7cab710a23c5167c69517c218bd",
+        "contractSha256": "eecce161c8aa5fcf1a3a000c3645f16c9e46397acf2ff86d8f9fa309eb2f6d02"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-scalar-gemm-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-scalar-gemm-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
     }
   ],
   "entries": [
@@ -11147,7 +11577,9 @@
       "compilerFixtureIds": [
         "gfx942-gemm-autoresearch",
         "gfx942-scalar-gemm",
-        "gfx942-tiled-gemm"
+        "gfx942-tiled-gemm",
+        "gfx950-scalar-gemm-simt",
+        "gfx950-scalar-gemm-tile"
       ],
       "requiredGates": [
         "production-compile",
@@ -11166,7 +11598,9 @@
       "compilerFixtureIds": [
         "gfx942-gemm-autoresearch",
         "gfx942-scalar-gemm",
-        "gfx942-tiled-gemm"
+        "gfx942-tiled-gemm",
+        "gfx950-scalar-gemm-simt",
+        "gfx950-scalar-gemm-tile"
       ],
       "requiredGates": [
         "production-compile",
@@ -11519,7 +11953,9 @@
         "examples/row_softmax_general_v1/src/kernel.rs"
       ],
       "compilerFixtureIds": [
-        "gfx942-row-softmax"
+        "gfx942-row-softmax",
+        "gfx950-row-softmax-simt",
+        "gfx950-row-softmax-tile"
       ],
       "requiredGates": [
         "production-compile",
@@ -11577,7 +12013,7 @@
                 "fixtureId": "gfx942-fill-simulation",
                 "kernelSymbol": "fill"
               },
-              "selectionSha256": "042faaac87c1583008c64d0fbe1ae4d3068e910d2a7c15347eb5ddc7a43e67cd",
+              "selectionSha256": "97ca9ff5ebab7eee1a2db156e2edaf4c4f8f455542b027d387b5900a75430c9e",
               "sourcePath": "examples/fill/src/lib.rs",
               "sourceSha256": "21b26bbd0d54f8966bade4ed80e2cb2457e89ecf13e9469eb0c9c030e3a8f6f3",
               "functionUtf8Offset": 392
@@ -11791,7 +12227,7 @@
                 "fixtureId": "gfx942-scalar-gemm",
                 "kernelSymbol": "scalar_gemm_v1"
               },
-              "selectionSha256": "634972cd82369b3ef7c3922b2497d1c14a3286838d783b7c9b969350019f4591",
+              "selectionSha256": "53f64e34d455768bf0196ba022f004dc705df9437d027655bfb8919914b0d50b",
               "sourcePath": "examples/scalar_gemm_v1/src/kernel.rs",
               "sourceSha256": "b3a21a1fdd7f6fbede2437551500cabddb4500d4a07371f821a2c9a8ab620b21",
               "functionUtf8Offset": 673
@@ -11866,7 +12302,7 @@
                 "fixtureId": "gfx942-typed-vecadd-source",
                 "kernelSymbol": "vecadd"
               },
-              "selectionSha256": "1dbc4b0f7c55e938aa2b995d67714019e23fb0adee09074e3be9981d209e7ffa",
+              "selectionSha256": "d740646fe99db1be1150070ba452697f2d87757b5b2fe2b326a440b27614e763",
               "sourcePath": "examples/vecadd/src/lib.rs",
               "sourceSha256": "60ea857d0aaba57e05fc30691b15908c188e449c789c39abd27abf4c35b017e2",
               "functionUtf8Offset": 203
@@ -13772,6 +14208,134 @@
             }
           }
         ]
+      },
+      {
+        "kernelId": "fixture:gfx950-row-softmax-simt:row_softmax_general_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-row-softmax-simt",
+            "kernelSymbol": "row_softmax_general_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "The exact runner selects a native dependency feature, outside direct local-feature source association; source proof, simulation and hardware qualification remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "The exact runner selects a native dependency feature, outside direct local-feature source association; source proof, simulation and hardware qualification remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-row-softmax-tile:row_softmax_general_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-row-softmax-tile",
+            "kernelSymbol": "row_softmax_general_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "The exact runner selects a native dependency feature, outside direct local-feature source association; source proof, simulation and hardware qualification remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "The exact runner selects a native dependency feature, outside direct local-feature source association; source proof, simulation and hardware qualification remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-scalar-gemm-simt:scalar_gemm_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-scalar-gemm-simt",
+            "kernelSymbol": "scalar_gemm_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "The exact runner selects a native dependency feature, outside direct local-feature source association; source proof, simulation and hardware qualification remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "The exact runner selects a native dependency feature, outside direct local-feature source association; source proof, simulation and hardware qualification remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-scalar-gemm-tile:scalar_gemm_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-scalar-gemm-tile",
+            "kernelSymbol": "scalar_gemm_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "The exact runner selects a native dependency feature, outside direct local-feature source association; source proof, simulation and hardware qualification remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "The exact runner selects a native dependency feature, outside direct local-feature source association; source proof, simulation and hardware qualification remain pending."
+            }
+          }
+        ]
       }
     ],
     "negativeCases": [
@@ -14371,7 +14935,7 @@
       {
         "lessonId": "gemm-tiling",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 1530,
+        "functionUtf8Offset": 1526,
         "kernelSymbol": "tiled_gemm_general_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -14379,12 +14943,12 @@
         ],
         "negativeCases": [],
         "bindingStatus": "pending",
-        "reason": "The published whole-file display remains at its historical source revision. The current GEMM fixture source has changed; refresh the lesson snapshot and exact occurrence binding after the compatible public core revision is accepted. Kernel identity and required variant obligations are retained."
+        "reason": "The whole-file view authenticates the current public source revision only. This display refresh establishes no compiler or execution receipt; its registered kernel identity and required variant obligations remain pending separate qualification."
       },
       {
         "lessonId": "gemm-tiling",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 6352,
+        "functionUtf8Offset": 6760,
         "kernelSymbol": "strided_extents_include_only_accessed_elements",
         "classification": "helper",
         "kernelIds": [],
@@ -15317,7 +15881,7 @@
       {
         "lessonId": "softmax-invariant",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 508,
+        "functionUtf8Offset": 646,
         "kernelSymbol": "accessed_extent",
         "classification": "helper",
         "kernelIds": [],
@@ -15328,7 +15892,7 @@
       {
         "lessonId": "softmax-invariant",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 1121,
+        "functionUtf8Offset": 1259,
         "kernelSymbol": "row_softmax_general_v1",
         "classification": "kernel",
         "kernelIds": [
@@ -15341,7 +15905,7 @@
       {
         "lessonId": "softmax-invariant",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 3826,
+        "functionUtf8Offset": 4330,
         "kernelSymbol": "accessed_extent_excludes_trailing_padding",
         "classification": "helper",
         "kernelIds": [],
