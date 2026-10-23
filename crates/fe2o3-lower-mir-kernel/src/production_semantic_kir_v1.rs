@@ -84,6 +84,8 @@ include!("production_pre_ranked_v1.rs");
 include!("production_bf16_call_parameters_v1.rs");
 include!("production_bf16_call_capture_v1.rs");
 include!("production_bf16_call_full_wave_v1.rs");
+#[path = "production_wave64_reference_call_v1.rs"]
+mod wave64_reference_call_v1;
 include!("production_bf16_call_replay_v1.rs");
 include!("production_bf16_call_coverage_v1.rs");
 include!("production_bf16_call_resources_v1.rs");
@@ -2103,12 +2105,16 @@ impl ProductionSemanticKirOwnerV1 {
         semantic: ProductionSemanticMirOwnerV1,
         limits: ProductionSemanticKirLimitsV1,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
-        let semantic_ssa = ProductionSemanticSsaOwnerV1::try_new(
+        let mut semantic_ssa = ProductionSemanticSsaOwnerV1::try_new(
             semantic,
             ProductionSemanticSsaLimitsV1::default(),
         )
         .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
-        let (module, correspondence) = lower_module(&semantic_ssa, limits, None)?;
+        let (module, correspondence) = if ordinary_source_has_raw_wave64_shuffle_v1(semantic_ssa.source_semantic()) {
+            capture_and_lower_fresh_wave64_source_v1(&mut semantic_ssa, limits)?
+        } else {
+            lower_module(&semantic_ssa, limits, None)?
+        };
         let canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module(module.clone())?;
         let owner = Self {
             semantic_ssa,
@@ -7728,121 +7734,11 @@ struct NormalizedEffectFlowV1 {
     next_effects: BTreeSet<(SemanticAccessSiteV1, SemanticAccessSiteV1)>,
 }
 
-fn validate_effect_control_flow_v1(
-    body: &FunctionBody,
-    ranked: &fe2o3_pliron::ProductionRankedKernelV1,
-    locations: &[(
-        SemanticAccessSiteV1,
-        FunctionOperationLocation,
-        u32,
-        (u32, u32),
-    )],
-    budget: &mut dyn CorrelationChargeV18,
-) -> Result<(), ProductionMirPlironTranslationErrorV1> {
-    let mut kir_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
-    let mut ranked_events = BTreeMap::<u32, Vec<(u64, SemanticAccessSiteV1)>>::new();
-    let mut seen_ranked_effects = BTreeMap::<(u32, u32), SemanticAccessSiteV1>::new();
-    for (site, kir, operation_access_ordinal, ranked) in locations {
-        budget
-            .charge()
-            .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-        if let Some(first) = seen_ranked_effects.get(ranked) {
-            if (first.block, first.statement) != (site.block, site.statement) {
-                return Err(ProductionMirPlironTranslationErrorV1::ControlFlowMismatch {
-                    first_semantic_block: first.block,
-                    first_semantic_statement: first.statement,
-                    second_semantic_block: site.block,
-                    second_semantic_statement: site.statement,
-                });
-            }
-            continue;
-        }
-        seen_ranked_effects.insert(*ranked, *site);
-        kir_events.entry(kir.block.0).or_default().push((
-            (u64::try_from(kir.operation_index)
-                .map_err(|_| ProductionMirPlironTranslationErrorV1::ResourceLimit)?
-                << 32)
-                | u64::from(*operation_access_ordinal),
-            *site,
-        ));
-        ranked_events
-            .entry(ranked.0)
-            .or_default()
-            .push((u64::from(ranked.1) << 32, *site));
-    }
-    for events in kir_events.values_mut().chain(ranked_events.values_mut()) {
-        events.sort_unstable();
-    }
-    let kir_successors = body
-        .blocks
-        .iter()
-        .map(|block| {
-            let successors = kir_terminator_successors_v1(block.terminator.as_ref()?)?;
-            Some((block.id.0, successors))
-        })
-        .collect::<Option<BTreeMap<_, _>>>()
-        .ok_or(ProductionMirPlironTranslationErrorV1::ControlFlowMismatch {
-            first_semantic_block: 0,
-            first_semantic_statement: None,
-            second_semantic_block: 0,
-            second_semantic_statement: None,
-        })?;
-    let ranked_successors = ranked
-        .blocks()
-        .iter()
-        .enumerate()
-        .map(|(block, contents)| {
-            Some((
-                u32::try_from(block).ok()?,
-                ranked_terminator_successors_v1(contents.terminator()),
-            ))
-        })
-        .collect::<Option<BTreeMap<_, _>>>()
-        .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-    let kir_entry = body
-        .blocks
-        .first()
-        .map(|block| block.id.0)
-        .ok_or(ProductionMirPlironTranslationErrorV1::KernelShape)?;
-    let kir_flow = effect_flow_signature_v1(kir_entry, &kir_events, &kir_successors, budget)
-        .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-    let ranked_flow = effect_flow_signature_v1(0, &ranked_events, &ranked_successors, budget)
-        .ok_or(ProductionMirPlironTranslationErrorV1::ResourceLimit)?;
-    if kir_flow == ranked_flow {
-        return Ok(());
-    }
-    let differing = kir_flow
-        .next_effects
-        .symmetric_difference(&ranked_flow.next_effects)
-        .next()
-        .copied()
-        .or_else(|| {
-            kir_flow
-                .entry_effects
-                .symmetric_difference(&ranked_flow.entry_effects)
-                .next()
-                .copied()
-                .map(|site| (site, site))
-        })
-        .unwrap_or((
-            SemanticAccessSiteV1 {
-                block: 0,
-                statement: None,
-                ordinal: 0,
-            },
-            SemanticAccessSiteV1 {
-                block: 0,
-                statement: None,
-                ordinal: 0,
-            },
-        ));
-    Err(ProductionMirPlironTranslationErrorV1::ControlFlowMismatch {
-        first_semantic_block: differing.0.block,
-        first_semantic_statement: differing.0.statement,
-        second_semantic_block: differing.1.block,
-        second_semantic_statement: differing.1.statement,
-    })
-}
+#[path = "production_semantic_kir_v1/effect_control_flow_v1.rs"]
+mod effect_control_flow_v1;
+use effect_control_flow_v1::validate_effect_control_flow_v1;
+#[cfg(test)]
+use effect_control_flow_v1::{expand_optional_effects_v1, ranked_total_fallback_cfg_v1};
 
 fn effect_flow_signature_v1(
     entry: u32,
@@ -9179,7 +9075,8 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
         &mut argument_work,
         limits.max_argument_correspondence_storage,
     );
-    require_execution_free_types_v29(semantic.types(), &mut argument_budget)?;
+    let mut check = |argument_budget: &mut ArgumentBudgetV1<'_>| {
+    require_execution_free_types_v29(semantic.types(), argument_budget)?;
     argument_budget.reserve_storage(CallReturnBufferV1::bytes(
         correspondence.call_returns.len(),
         correspondence.call_result_components.len(),
@@ -9191,11 +9088,11 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
         correspondence.call_returns.len(),
         argument_product_v1(expected_functions.len(), 4)?,
     ])?)?;
-    let call_targets = CallTargetIndexV1::new(module, &expected_functions, &mut argument_budget)?;
+    let call_targets = CallTargetIndexV1::new(module, &expected_functions, argument_budget)?;
     validate_call_component_pool_v1(
         &correspondence.call_returns,
         &correspondence.call_result_components,
-        &mut argument_budget,
+        argument_budget,
     )?;
     for expected_function in &expected_functions {
         let correspondence_owner = match expected_function.role {
@@ -9210,7 +9107,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
             .get(expected_function.semantic_function.index() as usize)
             .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
         let target =
-            call_targets.physical(&expected_function.kernel_ir_function, &mut argument_budget)?;
+            call_targets.physical(&expected_function.kernel_ir_function, argument_budget)?;
         if target.role
             != match expected_function.role {
                 SemanticKirFunctionRoleV1::KernelEntry => {
@@ -9332,8 +9229,8 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
         ) {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
-        validate_parameter_correspondence_v1(
-            semantic,
+        validate_parameter_correspondence_with_wave64_v1(
+            owner,
             expected_function,
             target,
             ArgumentTraceV1 {
@@ -9350,7 +9247,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
                     .get(ignored_parameter_offset..ignored_parameter_end)
                     .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
             },
-            &mut argument_budget,
+            argument_budget,
         )?;
         let call_return_end = call_return_offset
             + correspondence.call_returns[call_return_offset..]
@@ -9368,7 +9265,7 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
             &correspondence.call_returns[call_return_offset..call_return_end],
             &correspondence.call_result_components,
             &correspondence.terminator_operation_spans[terminator_offset..terminator_end],
-            &mut argument_budget,
+            argument_budget,
         )?;
         call_return_offset = call_return_end;
         block_offset = block_end;
@@ -9390,9 +9287,18 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
     }
     Ok(())
+    };
+    if ordinary_source_has_raw_wave64_shuffle_v1(owner.source_semantic()) {
+        with_canonical_call_scratch_v1(&mut argument_budget, |budget| {
+            with_wave64_retained_source_input_v1(owner, budget, |budget| check(budget))
+        })
+    } else {
+        check(&mut argument_budget)
+    }
 }
 
 include!("production_argument_correspondence_v1.rs");
+include!("production_wave64_nominal_parameter_replay_v1.rs");
 include!("production_argument_view_v1.rs");
 include!("production_conditional_output_binding_v1.rs");
 include!("production_conditional_source_translation_v1.rs");
@@ -11094,6 +11000,7 @@ struct LoweredFunctionPlanV1 {
 #[derive(Clone)]
 struct LoweredFunctionSignatureV1 {
     bf16_nominal: bool,
+    wave64_nominal: bool,
     parameter_semantic_types: Vec<SemanticTypeIdV1>,
     call_arguments: Vec<HelperCallArgumentV1>,
     parameter_types: Vec<Type>,
@@ -11110,6 +11017,7 @@ struct HelperCallArgumentV1 {
 
 #[derive(Clone)]
 enum PlannedParameterLocalBindingV1 {
+    Wave64Nominal { local: usize, semantic_type: SemanticTypeIdV1, descriptor: Wave64NominalReferenceDescriptorV1, values: Vec<ValueDef> },
     Bf16Nominal {
         local: usize,
         semantic_type: SemanticTypeIdV1,
@@ -11466,6 +11374,7 @@ fn lower_one_semantic_function_for_composition_v1<'facts>(
     execution: Option<ExecutionAvailabilityV29<'_>>,
     ordered_composition: Option<OrderedCompositionPermitV1>,
     bf16: Option<&mut Bf16CallEmissionStateV1<'_>>,
+    wave64_source_owner: Option<&ProductionSemanticSsaOwnerV1>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     lower_one_semantic_function_with_composition_v1(
         semantic,
@@ -11488,7 +11397,8 @@ fn lower_one_semantic_function_for_composition_v1<'facts>(
         None,
         ordered_composition,
         bf16,
-    )
+        wave64_source_owner,
+)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -11513,6 +11423,7 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
     lifecycle: Option<&mut dyn ExecutionLifecycleConsumerV29>,
     ordered_composition: Option<OrderedCompositionPermitV1>,
     bf16: Option<&mut Bf16CallEmissionStateV1<'_>>,
+    wave64_source_owner: Option<&ProductionSemanticSsaOwnerV1>,
 ) -> Result<LoweredFunctionResultV1, ProductionSemanticKirErrorV1> {
     if ordered_composition.is_some_and(|permit| !permit.matches(semantic)) {
         return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
@@ -11581,7 +11492,8 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
                 })
             }
             PlannedParameterLocalBindingV1::Flattened { .. }
-            | PlannedParameterLocalBindingV1::Bf16Nominal { .. } => None,
+            | PlannedParameterLocalBindingV1::Bf16Nominal { .. }
+            | PlannedParameterLocalBindingV1::Wave64Nominal { .. } => None,
         }
     }));
     let failure_block = has_runtime_assert
@@ -11625,7 +11537,8 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
             Some(consumer) => Some(&mut *consumer as &mut (dyn ExecutionLifecycleConsumerV29 + '_)),
             None => None,
         },
-    )?;
+        wave64_source_owner,
+)?;
     lowering.ordered_composition = ordered_composition.is_some();
     lowering.execution_calls = match execution_calls {
         Some(consumer) => Some(&mut *consumer as &mut (dyn ExecutionDefinedCallConsumerV29 + '_)),
@@ -12083,6 +11996,46 @@ fn retained_ranked_launch_root_v1(
     })
 }
 
+// The normal standalone constructor has just created this SSA owner, so it
+// has no prior occurrence receipt. Capture and materialization share the same
+// existing fresh argument-work/storage profile; do not reset a second ledger.
+fn capture_and_lower_fresh_wave64_source_v1(
+    owner: &mut ProductionSemanticSsaOwnerV1,
+    limits: ProductionSemanticKirLimitsV1,
+) -> Result<(Module, SemanticKirCorrespondenceV1), ProductionSemanticKirErrorV1> {
+    let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(
+        limits.max_argument_correspondence_work,
+    );
+    let mut budget = ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
+    let receipt = owner.try_capture_occurrences_with_budget_v1(&mut budget).map_err(|error| {
+        use fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1 as Capture;
+        match error {
+            Capture::Replay(error) => ProductionSemanticKirErrorV1::SemanticSsa(error),
+            Capture::Resource(error) => ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error),
+            Capture::CaptureMismatch { function, block } => unsupported(
+                function.index(), block.map(|block| block.get()), None,
+                "original Wave64 source occurrence capture did not join its SSA owner",
+            ),
+            Capture::AlreadyCaptured => ArgumentResourceV1::Accounting.into(),
+        }
+    })?;
+    // Capture transfers its real installed payload at the old floor. Reserve
+    // that exact receipt before any subsequent controlled lowering allocation.
+    let input = receipt.retained_storage();
+    budget.reserve_storage(input)?;
+    let result = lower_module_with_call_budget_v1(owner, limits, None, None, &mut budget);
+    // This is the input charge only. Call outputs retain the existing receipt
+    // and denial history; lower_module's Result cleanup restores its own floor.
+    budget.release_storage(input)?;
+    let result = result?;
+    if budget.storage() != CallReturnBufferV1::bytes(
+        result.1.call_returns.len(), result.1.call_result_components.len(),
+    )? {
+        return Err(ArgumentResourceV1::Accounting.into());
+    }
+    Ok(result)
+}
+
 fn lower_module(
     owner: &ProductionSemanticSsaOwnerV1,
     limits: ProductionSemanticKirLimitsV1,
@@ -12159,13 +12112,13 @@ fn lower_module_for_helper_admission_v1(
         limits.max_argument_correspondence_work,
     );
     let mut budget = ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
-    let result = match admission {
+    let lower = |budget: &mut ArgumentBudgetV1<'_>| match admission {
         HelperLoweringAdmissionV1::RawPure => lower_module_with_call_budget_v1(
             owner,
             limits,
             authenticated_launch_roots,
             assert_origins,
-            &mut budget,
+            budget,
         ),
         HelperLoweringAdmissionV1::PendingOrderedComposition(_)
         | HelperLoweringAdmissionV1::PendingBf16Nominal(_) => {
@@ -12179,11 +12132,16 @@ fn lower_module_for_helper_admission_v1(
                 limits,
                 authenticated_launch_roots,
                 assert_origins,
-                &mut budget,
+                budget,
                 admission,
             )
         }
-    }?;
+    };
+    let result = if ordinary_source_has_raw_wave64_shuffle_v1(owner.source_semantic()) {
+        with_wave64_retained_source_input_v1(owner, &mut budget, lower)?
+    } else {
+        lower(&mut budget)?
+    };
     if budget.storage()
         != CallReturnBufferV1::bytes(
             result.1.call_returns.len(),
@@ -13023,14 +12981,10 @@ fn lower_single_root_module(
                 closure_budget,
                 call_budget,
             )?,
-            _ => direct_scalar_helper_plan_v1(
-                semantic,
-                selected_root,
-                function_id,
-                defined_function_ids[&function_id].clone(),
-                limits.max_operations,
-                closure_budget,
-            )?,
+            _ => match checked_wave64_helper_parameter_plan_v1(owner, selected_root, function_id, defined_function_ids[&function_id].clone(), limits.max_operations, closure_budget, call_budget)? {
+                Some(plan) => plan,
+                None => direct_scalar_helper_plan_v1(semantic, selected_root, function_id, defined_function_ids[&function_id].clone(), limits.max_operations, closure_budget)?,
+            },
         };
         plans.push(plan);
     }
@@ -13069,6 +13023,7 @@ fn lower_single_root_module(
             (
                 plan.semantic_function,
                 LoweredFunctionSignatureV1 {
+                    wave64_nominal: plan.parameter_local_bindings.iter().any(|binding| matches!(binding, PlannedParameterLocalBindingV1::Wave64Nominal { .. })),
                     bf16_nominal: plan.parameter_local_bindings.iter().any(|binding| {
                         matches!(binding, PlannedParameterLocalBindingV1::Bf16Nominal { .. })
                     }),
@@ -13200,7 +13155,8 @@ fn lower_single_root_module(
                         HelperLoweringAdmissionV1::PendingBf16Nominal(state) => Some(state),
                         _ => None,
                     },
-                )?;
+                    Some(owner),
+)?;
                 remaining_operations = remaining_operations
                     .checked_sub(lowered.emitted_operations)
                     .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
@@ -13422,6 +13378,8 @@ fn semantic_source_argument_for_kir_parameter_v1(
     }
 }
 
+include!("production_wave64_nominal_reference_descriptor_v1.rs");
+include!("production_wave64_nominal_source_transport_v1.rs");
 include!("production_semantic_kir_v1/semantic_ssa_transport_01.rs");
 include!("production_semantic_kir_v1/semantic_ssa_intrinsics_01.rs");
 include!("production_semantic_kir_v1/gfx942_inline_v30.rs");
@@ -13483,6 +13441,7 @@ include!("production_emission_read_only_v1.rs");
 include!("production_semantic_kir_v1/function_construction_v1.rs");
 
 struct SemanticFunctionLoweringV1<'a, 'service> {
+    wave64_references: CheckedWave64ReferenceLocalsV1<'a>,
     ordered_composition: bool,
     emission_work: Option<&'service mut dyn SemanticEmissionBudgetV1>,
     scoped_memory: Option<ScopedMemoryRecorderV29>,
@@ -13551,7 +13510,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         clippy::too_many_arguments,
         reason = "Test-only adapter mirrors the production lowering constructor"
     )]
-    fn new(
+    fn new<'work>(
         types: &'a [SemanticTypeDeclV1],
         callables: &'a [SemanticCallableDeclV1],
         function: &'a SemanticFunctionDeclV1,
@@ -13562,6 +13521,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         launch_rank: u8,
         authenticated_ranked_control: bool,
         max_operations: usize,
+        budget: &'service mut ArgumentBudgetV1<'work>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let semantic_function = SemanticFunctionIdV1::from_index(0);
         let semantic_ssa = plan_semantic_function_ssa_with_module_v1(
@@ -13572,8 +13532,14 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             ProductionSemanticSsaLimitsV1::default(),
         )
         .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
-        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
-        let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+        // Construction and subsequent emission retain the caller's same ledger.
+        let call_returns = CallReturnBufferV1::for_function(
+            function,
+            callables,
+            &BTreeMap::new(),
+            0,
+            &mut *budget,
+        )?;
         Self::new_interprocedural(
             types,
             callables,
@@ -13593,18 +13559,13 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             max_operations,
             PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, max_operations)),
             None,
-            CallReturnBufferV1::for_function(
-                function,
-                callables,
-                &BTreeMap::new(),
-                0,
-                &mut budget,
-            )?,
-            None,
+            call_returns,
+            Some(budget),
             SemanticEmissionPlacementV1::default(),
             None,
             None,
-        )
+            None,
+)
     }
 
     fn begin_block(
@@ -13709,15 +13670,11 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             } else {
                 ExecutionCfgRepresentationV29::LegacyAbi
             };
-            let binding = promoted
-                .transport
-                .binding_from_transport_with_representation_v29(
-                    self.types,
-                    promoted.transport_semantic_type,
-                    &parameters,
-                    &promoted.kernel_types,
-                    representation,
-                )?;
+            let binding = if let SemanticPromotedTransportV1::CheckedWave64Reference(descriptor)=promoted.transport {
+                let mut selected=None;
+                self.wave64_references.with_descriptor_v1(descriptor,self.emission_work.as_deref_mut().ok_or(ArgumentResourceV1::Accounting)?,&mut |guard,_|{selected=Some(guard.reconstruct_v1(self.types,promoted.transport_semantic_type,&parameters)?);Ok(())})?;
+                selected.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+            }else{promoted.transport.binding_from_transport_with_representation_v29(self.types,promoted.transport_semantic_type,&parameters,&promoted.kernel_types,representation)?};
             if let SemanticValueBindingV1::DynamicLds {
                 base,
                 len,
@@ -13734,6 +13691,12 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 self.emitted_unsigned_constants
                     .insert(*byte_len, *byte_extent);
             }
+            if let SemanticValueBindingV1::WaveLane { value, wave } = &binding
+                && wave.width == 64
+            {
+                self.emitted_unsigned_exclusive_bounds.insert(*value, 64);
+            }
+            if self.wave64_references.rank_locals.contains(&local) || self.wave64_references.locals.contains_key(&local) { self.wave64_references.seed_arithmetic_bound_v1(local,&binding,self.emission_work.as_deref_mut().ok_or(ArgumentResourceV1::Accounting)?,&mut self.emitted_unsigned_exclusive_bounds)?; }
             self.locals[local as usize] = Some(binding);
             let block_argument = SsaValueV1::BlockArgument {
                 block: SsaBlockIdV1::new(block.index()),
@@ -13771,6 +13734,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                         .clone(),
                 )?;
             }
+            self.seed_checked_wave64_shift_parameter_v1(block, local, block_argument)?;
             if nominal_cfg {
                 self.with_emission_budget_v1(|_, budget| {
                     for value in parameters {
@@ -14481,10 +14445,13 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                         )
                     })?;
                 let promoted = &self.control_flow_ssa.promoted[&local];
-                let values = promoted
-                    .transport
-                    .transport_values(binding, &promoted.kernel_types)
-                    .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?;
+                let values = if let SemanticPromotedTransportV1::CheckedWave64Reference(descriptor)=promoted.transport {
+                    let mut selected=Vec::new();
+                    self.wave64_references.with_descriptor_v1(descriptor,self.emission_work.as_deref_mut().ok_or(ArgumentResourceV1::Accounting)?,&mut |guard,budget|{
+                        budget.charge_work(promoted.kernel_types.len())?;
+                        guard.visit_values_v1(binding,&promoted.kernel_types,&mut LegacyTransportCollectorV1(&mut selected)).map_err(|detail|unsupported(0,Some(block.index()),None,detail))?;Ok(())
+                    })?;selected
+                }else{promoted.transport.transport_values(binding,&promoted.kernel_types).map_err(|detail|unsupported(0,Some(block.index()),None,detail))?};
                 (values, promoted.kernel_types.len())
             };
             if values.len() != expected_count {
@@ -15109,6 +15076,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             ),
             SemanticRvalueKindV1::Borrow { place, .. }
             | SemanticRvalueKindV1::AddressOf { place, .. } => {
+                if let Some(binding) = self.try_lower_checked_wave64_snapshot_borrow_v1(block, statement, result_type, value)? { return Ok(binding); }
                 if let Some(binding) = self.try_lower_source_address_v29(
                     block,
                     statement,
@@ -17491,14 +17459,10 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                     "complete-body source requires exact MIR36/KIR19 materialization",
                 ));
             }
-            SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex { .. } => {
-                return Err(unsupported(
-                    0,
-                    Some(block.index()),
-                    None,
-                    "gfx942 Wave64 shuffle requires checked participation, lane and convergence materialization",
-                ));
-            }
+            SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex { element, .. } => self
+                .lower_intrinsic_gfx942_wave64_shuffle_index_v1(
+                    block, call, *element, operations,
+                )?,
             SemanticCompilerIntrinsicOperationV1::Execution(_) => {
                 return Err(unsupported(
                     0,
@@ -22307,6 +22271,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             }
             let projection = &place.projections()[projection_index];
             if projection.kind() == SemanticProjectionKindV1::Dereference {
+                if matches!(binding,SemanticValueBindingV1::CollectiveContext) && self.wave64_references.locals.contains_key(&place.local().index()) && !self.checked_wave64_deref_v1(place.local().index(),current_type,projection)? { return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch); }
                 source_value = false;
             }
             binding = match (binding, projection.kind()) {
@@ -22405,6 +22370,27 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 {
                     binding
                 }
+                (binding @ SemanticValueBindingV1::WaveLane { .. }, SemanticProjectionKindV1::Field(_))
+                    if access == SourceReferenceAccessV29::Read => {
+                    let carrier_type = place.projections()[..projection_index]
+                        .last()
+                        .map_or(self.function.locals()[index].ty(), |previous| previous.result_type());
+                    self.with_emission_budget_v1(|this, budget| {
+                        wave_lane_arithmetic_field_v1(
+                            this.types,
+                            &this.control_flow_ssa.compiler_issued_bindings,
+                            carrier_type,
+                            projection,
+                            &binding,
+                            budget,
+                        )?.ok_or_else(|| unsupported(
+                            this.semantic_function.index(), Some(block.index()), statement,
+                            "wave lane field is not its exact issued u32 arithmetic component",
+                        ))
+                    })?
+                }
+                (binding @ SemanticValueBindingV1::Aggregate(_), SemanticProjectionKindV1::Dereference)
+                    if self.checked_wave64_deref_v1(place.local().index(),current_type,projection)? => binding,
                 (
                     SemanticValueBindingV1::Aggregate(mut fields),
                     SemanticProjectionKindV1::Field(field),
@@ -22786,6 +22772,12 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             operations.len(),
             self.emitted_operations,
         )?;
+        let wave64_unsigned_bound = wave64_unsigned_bound_v1(
+            &ty,
+            &kind,
+            &self.emitted_unsigned_exclusive_bounds,
+            &self.emitted_unsigned_constants,
+        );
         let emitted_unsigned_constant = match &kind {
             OperationKind::Constant(Constant::U8(value)) => Some(u64::from(*value)),
             OperationKind::Constant(Constant::U16(value)) => Some(u64::from(*value)),
@@ -22848,6 +22840,9 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         }
         if let Some(mask) = emitted_u32_bitand_mask {
             self.emitted_u32_bitand_masks.insert(id, mask);
+        }
+        if let Some(bound) = wave64_unsigned_bound {
+            self.emitted_unsigned_exclusive_bounds.insert(id, bound);
         }
         Ok(SemanticValueBindingV1::Value { id, ty })
     }
@@ -25089,6 +25084,76 @@ fn lower_scalar_type(
     fe2o3_pliron::source_argument_v1::lower_scalar_type(types, ty).map_err(Into::into)
 }
 
+// Exclusive bounds on immutable emitted unsigned SSA values. No helper summary,
+// branch assumption or caller-asserted mask can seed this map.
+fn wave64_unsigned_bound_v1(
+    ty: &Type,
+    kind: &OperationKind,
+    bounds: &BTreeMap<ValueId, u128>,
+    constants: &BTreeMap<ValueId, u64>,
+) -> Option<u128> {
+    let limit = match ty {
+        Type::Scalar(ScalarType::U8) => 1_u128 << 8,
+        Type::Scalar(ScalarType::U16) => 1_u128 << 16,
+        Type::Scalar(ScalarType::U32) => 1_u128 << 32,
+        Type::Scalar(ScalarType::U64 | ScalarType::Index) => 1_u128 << 64,
+        _ => return None,
+    };
+    let bound = match kind {
+        OperationKind::Constant(Constant::U8(value)) => Some(u128::from(*value) + 1),
+        OperationKind::Constant(Constant::U16(value)) => Some(u128::from(*value) + 1),
+        OperationKind::Constant(Constant::U32(value)) => Some(u128::from(*value) + 1),
+        OperationKind::Constant(Constant::U64(value) | Constant::Index(value)) => {
+            Some(u128::from(*value) + 1)
+        }
+        OperationKind::Wave(WaveOperation {
+            kind: WaveOperationKind::LaneId,
+            width: WaveWidth::Wave64,
+            active_lanes: 64,
+            ..
+        }) if ty == &Type::Scalar(ScalarType::U32) => Some(64),
+        OperationKind::Cast {
+            kind: CastKind::ZeroExtend | CastKind::Truncate,
+            value,
+            ..
+        } => bounds.get(value).copied(),
+        OperationKind::Binary {
+            op: BinaryOp::Remainder,
+            lhs,
+            rhs,
+        } => {
+            let divisor = u128::from(*constants.get(rhs)?);
+            (divisor != 0).then(|| bounds.get(lhs).copied().unwrap_or(limit).min(divisor))
+        }
+        OperationKind::Binary {
+            op: BinaryOp::BitXor,
+            lhs,
+            rhs,
+        } => {
+            let left = *bounds.get(lhs)?;
+            let right = *bounds.get(rhs)?;
+            left.max(right).checked_next_power_of_two()
+        }
+        OperationKind::Binary {
+            op: BinaryOp::BitAnd,
+            lhs,
+            rhs,
+        } => match (bounds.get(lhs), bounds.get(rhs)) {
+            (Some(left), Some(right)) => Some((*left).min(*right)),
+            (Some(bound), None) | (None, Some(bound)) => Some(*bound),
+            (None, None) => None,
+        },
+        OperationKind::Select {
+            true_value,
+            false_value,
+            ..
+        } => Some((*bounds.get(true_value)?).max(*bounds.get(false_value)?)),
+        _ => None,
+    }?;
+    // Never use a truncating conversion to assert a value-preserving transport.
+    (bound != 0 && bound <= limit).then_some(bound)
+}
+
 const fn workgroup_reduction_scalar_supported_v1(ty: &Type) -> bool {
     matches!(
         ty,
@@ -26389,6 +26454,10 @@ mod resource_tests {
         )
         .unwrap();
         let callables = [callable];
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &callables,
@@ -26405,6 +26474,7 @@ mod resource_tests {
             1,
             false,
             32,
+            &mut test_emission_budget,
         )?;
         lowering.locals[1] = Some(SemanticValueBindingV1::Value {
             id: ValueId(0),
@@ -26690,6 +26760,10 @@ mod resource_tests {
                 vec![block],
             )
             .unwrap();
+            let mut test_emission_work =
+                fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+            let mut test_emission_budget =
+                ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
             let mut lowering = SemanticFunctionLoweringV1::new(
                 &types,
                 &[],
@@ -26706,6 +26780,7 @@ mod resource_tests {
                 1,
                 false,
                 max_operations.max(2),
+                &mut test_emission_budget,
             )
             .unwrap();
             lowering.max_operations = max_operations;
@@ -26864,6 +26939,10 @@ mod resource_tests {
             vec![block],
         )
         .unwrap();
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &[],
@@ -26880,6 +26959,7 @@ mod resource_tests {
             1,
             false,
             max_operations,
+            &mut test_emission_budget,
         )
         .unwrap();
         lowering.locals[1] = Some(SemanticValueBindingV1::Value {
@@ -27486,6 +27566,10 @@ mod resource_tests {
         )
         .unwrap();
         let callables = [callable];
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &callables,
@@ -27502,6 +27586,7 @@ mod resource_tests {
             1,
             false,
             16,
+            &mut test_emission_budget,
         )
         .unwrap();
         lowering.locals[1] = Some(input_binding);
@@ -28162,6 +28247,10 @@ mod resource_tests {
             vec![block],
         )
         .unwrap();
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &[],
@@ -28178,6 +28267,7 @@ mod resource_tests {
             1,
             false,
             1024,
+            &mut test_emission_budget,
         )?;
         let value = |id, ty| SemanticValueBindingV1::Value {
             id: ValueId(id),
@@ -28449,6 +28539,10 @@ mod resource_tests {
             blocks,
         )
         .unwrap();
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &callables,
@@ -28465,6 +28559,7 @@ mod resource_tests {
             1,
             false,
             64,
+            &mut test_emission_budget,
         )?;
         lowering.locals[1] = Some(SemanticValueBindingV1::MatrixContext);
         for (local, role, storage, base) in [
@@ -29796,6 +29891,10 @@ mod resource_tests {
             vec![block],
         )
         .unwrap();
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &[],
@@ -29812,6 +29911,7 @@ mod resource_tests {
             1,
             false,
             16,
+            &mut test_emission_budget,
         )
         .unwrap();
         lowering.locals[0] = Some(SemanticValueBindingV1::Unmaterialized);
@@ -33177,6 +33277,349 @@ mod resource_tests {
                 ..
             })
         ));
+    }
+
+    #[derive(Clone, Copy)]
+    enum FallbackGuardMutationV1 {
+        None,
+        Row,
+        ColumnExtent,
+        SkipGuard,
+        Trap,
+        ForwardedValue,
+        AccessIndex,
+        ExtraRead,
+    }
+
+    fn fallback_guard_recipe_v1(
+        n: u32,
+        mutation: FallbackGuardMutationV1,
+    ) -> ProductionRankedKernelV1 {
+        use FallbackGuardMutationV1 as M;
+        use fe2o3_pliron::ProductionRankedTerminatorV1 as T;
+        let arg = ProductionRankedValueV1::Argument;
+        let view = ProductionRankedValueIdV1::new(0);
+        let constant = ProductionRankedValueIdV1::new(1);
+        let args = |b| {
+            (0..n)
+                .map(|argument| ProductionRankedValueV1::BlockArgument { block: b, argument })
+                .collect::<Vec<_>>()
+        };
+        let branch = |b, target| {
+            if n == 0 {
+                T::Branch { target }
+            } else {
+                T::BranchArgs {
+                    arguments: args(b),
+                    target,
+                }
+            }
+        };
+        let guard = |b, lhs, rhs, next, failure| {
+            if n == 0 {
+                T::IndexLessThan {
+                    lhs,
+                    rhs,
+                    true_block: next,
+                    false_block: failure,
+                }
+            } else {
+                T::IndexLessThanArgs {
+                    lhs,
+                    rhs,
+                    true_arguments: args(b),
+                    false_arguments: if b == 2 && matches!(mutation, M::ForwardedValue) {
+                        vec![ProductionRankedValueV1::Local(constant); n as usize]
+                    } else {
+                        args(b)
+                    },
+                    true_block: next,
+                    false_block: failure,
+                }
+            }
+        };
+        let read = ProductionRankedOperationV1::Access {
+            kind: AccessKindAttr::Read,
+            view: ProductionRankedValueV1::Local(view),
+            indices: vec![
+                arg(if matches!(mutation, M::AccessIndex) {
+                    3
+                } else {
+                    2
+                }),
+                arg(3),
+            ],
+        };
+        ProductionRankedKernelV1::new(
+            "total_fallback_guard",
+            4,
+            vec![
+                ProductionRankedBlockV1::new(
+                    vec![
+                        ProductionRankedOperationV1::ViewInSpace {
+                            result: view,
+                            element_width: 32,
+                            writable: false,
+                            shape: vec![0, 0],
+                            dynamic_extents: vec![arg(0), arg(1)],
+                            memory_space: dialect_kernel::MemorySpaceAttr::Global,
+                            allocation_origin: 1,
+                            noalias_class: 1,
+                        },
+                        ProductionRankedOperationV1::IndexConstant {
+                            result: constant,
+                            value: 1,
+                        },
+                    ],
+                    if n == 0 {
+                        T::Branch { target: 1 }
+                    } else {
+                        T::BranchArgs {
+                            arguments: vec![ProductionRankedValueV1::Local(constant); n as usize],
+                            target: 1,
+                        }
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    n,
+                    vec![],
+                    guard(
+                        1,
+                        arg(if matches!(mutation, M::Row) { 3 } else { 2 }),
+                        arg(0),
+                        2,
+                        if matches!(mutation, M::SkipGuard) {
+                            5
+                        } else {
+                            4
+                        },
+                    ),
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    n,
+                    vec![],
+                    guard(
+                        2,
+                        arg(3),
+                        arg(if matches!(mutation, M::ColumnExtent) {
+                            0
+                        } else {
+                            1
+                        }),
+                        3,
+                        4,
+                    ),
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    n,
+                    if matches!(mutation, M::ExtraRead) {
+                        vec![read.clone(), read]
+                    } else {
+                        vec![read]
+                    },
+                    branch(3, 5),
+                ),
+                ProductionRankedBlockV1::with_index_arguments(
+                    n,
+                    vec![],
+                    if matches!(mutation, M::Trap) {
+                        T::Trap
+                    } else {
+                        branch(4, 5)
+                    },
+                ),
+                ProductionRankedBlockV1::with_index_arguments(n, vec![], T::Return),
+            ],
+        )
+        .expect("guard mutation remains typed ordinary ranked CFG")
+    }
+
+    #[test]
+    fn guarded_effect_flow_requires_exact_ranked_predicates_and_live_forwarding() {
+        for n in [0, 1, 2] {
+            let recipe = fallback_guard_recipe_v1(n, FallbackGuardMutationV1::None);
+            let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: 100_000 };
+            assert_eq!(
+                ranked_total_fallback_cfg_v1(&recipe, (3, 0), &mut budget),
+                Some(true)
+            );
+        }
+    }
+
+    #[test]
+    fn guarded_effect_flow_rejects_wrong_ranked_guard_bypass_trap_and_payload() {
+        use FallbackGuardMutationV1 as M;
+        for mutation in [
+            M::Row,
+            M::ColumnExtent,
+            M::SkipGuard,
+            M::Trap,
+            M::ForwardedValue,
+            M::AccessIndex,
+            M::ExtraRead,
+        ] {
+            let recipe = fallback_guard_recipe_v1(2, mutation);
+            let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: 100_000 };
+            assert_eq!(
+                ranked_total_fallback_cfg_v1(&recipe, (3, 0), &mut budget),
+                Some(false)
+            );
+        }
+    }
+    fn optional_effect_test_site(block: u32, statement: Option<u32>) -> SemanticAccessSiteV1 {
+        SemanticAccessSiteV1 {
+            block,
+            statement,
+            ordinal: 0,
+        }
+    }
+
+    fn optional_effect_test_flow(
+        events: &[(u32, Vec<(u64, SemanticAccessSiteV1)>)],
+        successors: &[(u32, Vec<u32>)],
+        optional: &[(u32, u64)],
+    ) -> NormalizedEffectFlowV1 {
+        let mut budget = UnsupportedIndexCorrelationBudgetV1 { remaining: 100_000 };
+        let (events, successors) = expand_optional_effects_v1(
+            &events.iter().cloned().collect(),
+            &successors.iter().cloned().collect(),
+            &optional.iter().copied().collect(),
+            &mut budget,
+        )
+        .unwrap();
+        effect_flow_signature_v1(0, &events, &successors, &mut budget).unwrap()
+    }
+
+    #[test]
+    fn guarded_effect_flow_matches_explicit_total_fallback() {
+        let read = optional_effect_test_site(37, None);
+        let store = optional_effect_test_site(61, Some(1));
+        let actual = optional_effect_test_flow(
+            &[(0, vec![(0, read), (1, store)])],
+            &[(0, vec![])],
+            &[(0, 0)],
+        );
+        // Two guard comparisons share the no-read fallback, then reconverge.
+        let ranked = optional_effect_test_flow(
+            &[(2, vec![(0, read)]), (4, vec![(0, store)])],
+            &[
+                (0, vec![1, 3]),
+                (1, vec![2, 3]),
+                (2, vec![4]),
+                (3, vec![4]),
+                (4, vec![]),
+            ],
+            &[],
+        );
+        assert_eq!(actual, ranked);
+        assert_eq!(actual.entry_effects, BTreeSet::from([read, store]));
+        assert_eq!(actual.next_effects, BTreeSet::from([(read, store)]));
+    }
+
+    #[test]
+    fn guarded_effect_flow_does_not_skip_ordinary_or_trapping_access() {
+        let read = optional_effect_test_site(37, None);
+        let store = optional_effect_test_site(61, Some(1));
+        let conditional = optional_effect_test_flow(
+            &[(0, vec![(0, read), (1, store)])],
+            &[(0, vec![])],
+            &[(0, 0)],
+        );
+        let mandatory =
+            optional_effect_test_flow(&[(0, vec![(0, read), (1, store)])], &[(0, vec![])], &[]);
+        let trap = optional_effect_test_flow(
+            &[(1, vec![(0, read)]), (3, vec![(0, store)])],
+            &[(0, vec![1, 2]), (1, vec![3]), (2, vec![]), (3, vec![])],
+            &[],
+        );
+        assert_ne!(conditional, mandatory);
+        assert_eq!(mandatory, trap);
+    }
+
+    #[test]
+    fn guarded_effect_flow_rejects_missing_reordered_and_foreign_effects() {
+        let read = optional_effect_test_site(37, None);
+        let store = optional_effect_test_site(61, Some(1));
+        let foreign = optional_effect_test_site(61, Some(2));
+        let original = optional_effect_test_flow(
+            &[(0, vec![(0, read), (1, store)])],
+            &[(0, vec![])],
+            &[(0, 0)],
+        );
+        for events in [
+            vec![(0, vec![(1, store)])],
+            vec![(0, vec![(0, store), (1, read)])],
+            vec![(0, vec![(0, read), (1, foreign)])],
+        ] {
+            assert_ne!(
+                original,
+                optional_effect_test_flow(&events, &[(0, vec![])], &[])
+            );
+        }
+    }
+
+    #[test]
+    fn guarded_effect_flow_preserves_loop_fallback_and_order() {
+        let read = optional_effect_test_site(37, None);
+        let store = optional_effect_test_site(61, Some(1));
+        let original = optional_effect_test_flow(
+            &[(1, vec![(0, read), (1, store)])],
+            &[(0, vec![1, 2]), (1, vec![0]), (2, vec![])],
+            &[(1, 0)],
+        );
+        let ranked = optional_effect_test_flow(
+            &[(2, vec![(0, read)]), (4, vec![(0, store)])],
+            &[
+                (0, vec![1, 5]),
+                (1, vec![2, 3]),
+                (2, vec![4]),
+                (3, vec![4]),
+                (4, vec![0]),
+                (5, vec![]),
+            ],
+            &[],
+        );
+        assert_eq!(original, ranked);
+        assert!(original.next_effects.contains(&(store, store)));
+        assert!(original.next_effects.contains(&(store, read)));
+        let mut changed = ranked;
+        changed.next_effects.remove(&(store, store));
+        assert_ne!(original, changed);
+    }
+
+    #[test]
+    fn guarded_effect_flow_handles_adjacent_predicated_accesses() {
+        let first = optional_effect_test_site(1, None);
+        let second = optional_effect_test_site(2, None);
+        let store = optional_effect_test_site(3, Some(0));
+        let flow = optional_effect_test_flow(
+            &[(0, vec![(0, first), (1, second), (2, store)])],
+            &[(0, vec![])],
+            &[(0, 0), (0, 1)],
+        );
+        assert_eq!(flow.entry_effects, BTreeSet::from([first, second, store]));
+        assert_eq!(
+            flow.next_effects,
+            BTreeSet::from([(first, second), (first, store), (second, store)])
+        );
+    }
+
+    #[test]
+    fn guarded_effect_flow_expansion_has_an_exact_finite_work_boundary() {
+        let read = optional_effect_test_site(37, None);
+        let events = BTreeMap::from([(0, vec![(0, read)])]);
+        let successors = BTreeMap::from([(0, vec![])]);
+        let optional = BTreeSet::from([(0, 0)]);
+        let mut full = UnsupportedIndexCorrelationBudgetV1 { remaining: 1000 };
+        expand_optional_effects_v1(&events, &successors, &optional, &mut full).unwrap();
+        let used = 1000 - full.remaining;
+        assert!(used > 0);
+        let mut exact = UnsupportedIndexCorrelationBudgetV1 { remaining: used };
+        assert!(expand_optional_effects_v1(&events, &successors, &optional, &mut exact).is_some());
+        let mut short = UnsupportedIndexCorrelationBudgetV1 {
+            remaining: used - 1,
+        };
+        assert!(expand_optional_effects_v1(&events, &successors, &optional, &mut short).is_none());
     }
 
     #[test]

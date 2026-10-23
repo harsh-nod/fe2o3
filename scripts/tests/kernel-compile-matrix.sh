@@ -7,6 +7,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 readonly REPO_ROOT
+TEST_SCOPE=${1:-all}
+if [[ $# -gt 1 || ( $TEST_SCOPE != all && $TEST_SCOPE != --runner-controls ) ]]; then
+  printf 'usage: %s [--runner-controls]\n' "$0" >&2
+  exit 2
+fi
+if [[ $TEST_SCOPE == all ]]; then
 python3 "${REPO_ROOT}/scripts/tests/tutorial_kernel_manifest.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/issue272_m0_contract.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_occurrences.py"
@@ -14,6 +20,7 @@ python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_identities.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_fixture_bindings.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_source_census.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_reproduction_plan.py"
+fi
 
 # Keep the interpreter that passed the manifest checks when isolating Cargo and
 # ROCm through FAKE_BIN. /usr/bin/python3 may be older than the required Python.
@@ -103,6 +110,10 @@ case "${1:-}" in
             shift
           done
           [[ -n $feature ]] || exit 93
+          case "$feature" in
+            kernel-gpt-oss-*,kernel-gpt-oss-mode-simt|kernel-gpt-oss-*,kernel-gpt-oss-mode-tile)
+              feature=${feature%,*} ;;
+          esac
           symbol=
           fp4_mfma=0
           fp8_mfma=0
@@ -113,6 +124,8 @@ case "${1:-}" in
           ocml_calls=0
           lds=0
           extra_target_function=0
+          gpt_pipeline=0
+          gpt_bf16_helper=0
           case "$feature" in
             kernel-fp4-gemm)
               symbol=gfx950_fp4_gemm_rust; fp4_mfma=1 ;;
@@ -167,10 +180,10 @@ case "${1:-}" in
               fp4_mfma=4; bf16_mfma=4; ocml_calls=1 ;;
             kernel-gpt-oss-decode-scalar-attention)
               symbol=gfx950_gpt_oss_120b_decode_megakernel_v1
-              fp4_mfma=4; ocml_calls=1 ;;
+              fp4_mfma=4; ocml_calls=1; gpt_bf16_helper=1 ;;
             kernel-gpt-oss-decode-pipelined-attention)
               symbol=gfx950_gpt_oss_120b_decode_megakernel_v1
-              fp4_mfma=4; bf16_mfma=4; ocml_calls=1; lds=8192 ;;
+              fp4_mfma=4; bf16_mfma=1; ocml_calls=1; lds=8192; gpt_pipeline=1 ;;
             kernel-gpt-oss-router-component)
               symbol=gfx950_gpt_oss_120b_router_v1 ;;
             kernel-gpt-oss-attention-component)
@@ -180,10 +193,20 @@ case "${1:-}" in
               symbol=gfx950_gpt_oss_120b_expert_v1; fp4_mfma=4 ;;
             *) exit 94 ;;
           esac
+          if [[ $feature == kernel-gpt-oss-* && ${FE2O3_GFX950_ADVANCED_MODE:-canonical} == simt ]]; then
+            fp4_mfma=0; bf16_mfma=0; gpt_bf16_helper=0
+          fi
           {
             printf '%s\n' 'target triple = "amdgcn-amd-amdhsa"'
-            printf 'define amdgpu_kernel void @%s() #0 {\n' "$symbol"
-            if [[ $feature == kernel-kda-* ]]; then
+            if ((gpt_bf16_helper)); then
+              printf 'define amdgpu_kernel void @%s() #0 !reqd_work_group_size !0 {\n' "$symbol"
+              for _ in 1 2 3 4 5; do
+                printf '  call float @__fe2o3_bf16_to_f32_v1(i16 0)\n'
+              done
+            else
+              printf 'define amdgpu_kernel void @%s() #0 {\n' "$symbol"
+            fi
+            if [[ $feature == kernel-kda-* || ( $feature == kernel-gpt-oss-* && ${FE2O3_GFX950_ADVANCED_MODE:-canonical} == simt ) ]]; then
               printf '  %%kda = call i32 @llvm.amdgcn.ds.bpermute(i32 0, i32 0)\n'
             fi
             for ((index = 0; index < bf16_mfma; index++)); do
@@ -204,12 +227,34 @@ case "${1:-}" in
             for ((index = 0; index < ocml_calls; index++)); do
               printf '  %%e%s = call float @__ocml_exp_f32(float 0.0)\n' "$index"
             done
-            if ((lds > 0)); then
+            if ((gpt_pipeline)); then
+              for ring in q k; do
+                printf '@%s = internal addrspace(3) global [512 x i64] undef, align 8\n' "$ring"
+              done
+              for _ in 1 2 3 4; do
+                printf '%s\n' '  call void asm sideeffect "s_barrier", ""()'
+                printf '%s\n' '  fence syncscope("workgroup") release'
+                printf '%s\n' '  fence syncscope("workgroup") acquire'
+              done
+            elif ((lds > 0)); then
               printf '@lds = internal addrspace(3) global [%s x i8] undef, align 64\n' "$lds"
               printf '  call void asm sideeffect "s_barrier", ""()\n'
             fi
             printf '  ret void\n}\n'
+            if ((gpt_bf16_helper)); then
+              printf '%s\n' 'attributes #0 = { nounwind "amdgpu-flat-work-group-size"="256,256" "target-features"="-wavefrontsize32,+wavefrontsize64,-xnack" "target-cpu"="gfx950" }'
+              cat <<'LLVM'
+define internal float @__fe2o3_bf16_to_f32_v1(i16 %bits) alwaysinline nounwind "target-cpu"="gfx950" "denormal-fp-math-f32"="ieee,ieee" "unsafe-fp-math"="false" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "approx-func-fp-math"="false" "fp-contract"="off" {
+entry:
+  %wide = zext i16 %bits to i32
+  %shifted = shl i32 %wide, 16
+  %result = bitcast i32 %shifted to float
+  ret float %result
+}
+LLVM
+            else
             printf 'attributes #0 = { "target-cpu"="gfx950" "target-features"="-wavefrontsize32,+wavefrontsize64,-xnack" }\n'
+            fi
             if ((extra_target_function > 0)); then
               printf 'define internal float @decode_fp4_e2m1(i8 %%bits) #1 {\n'
               printf '  ret float 0.0\n}\n'
@@ -229,7 +274,30 @@ case "${1:-}" in
           exit 95
         fi
         ;;
-      run | test)
+      test)
+        [[ -n $KERNEL_MATRIX_TEST_SELECTOR_CASE ]] || exit 96
+        args=("$@")
+        selector=
+        while (($#)); do
+          if [[ $1 == --test ]]; then selector=$3; break; fi
+          shift
+        done
+        [[ -n $selector ]] || exit 96
+        if [[ " $* " == *' --list '* ]]; then
+          case $KERNEL_MATRIX_TEST_SELECTOR_CASE in
+            present) printf '%s: test\n' "$selector" ;;
+            absent) printf '0 tests, 0 benchmarks\n' ;;
+            duplicate) printf '%s: test\n%s: test\n' "$selector" "$selector" ;;
+            wrong) printf 'another_test: test\n' ;;
+            list-failure) exit 79 ;;
+            *) exit 96 ;;
+          esac
+        else
+          [[ $FE2O3_RUN_GFX950_ADVANCED_HARDWARE == 1 ]] || exit 96
+          printf 'MOCK HARDWARE SELECTOR EXECUTED %s\n' "$selector"
+        fi
+        ;;
+      run)
         printf '%s\n' 'hardware/host execution was reached in compile-only mode' >&2
         exit 96
         ;;
@@ -411,8 +479,10 @@ case "$key" in
   kernel-qwen-ngram-gather) symbol=gfx950_qwen_ngram_gather_v1 ;;
   kernel-stage-gradient-shard) symbol=gfx950_stage_gradient_shard_v1 ;;
   kernel-muon-update) symbol=gfx950_muon_update_4x4_v1 ;;
-  kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores | kernel-gpt-oss-decode-pipelined-attention)
+  kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores)
     symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kind=gpt_oss ;;
+  kernel-gpt-oss-decode-pipelined-attention)
+    symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kind=gpt_oss_pipeline ;;
   kernel-gpt-oss-decode-scalar-attention)
     symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kind=gpt_oss_expert ;;
   kernel-gpt-oss-router-component)
@@ -423,6 +493,9 @@ case "$key" in
     symbol=gfx950_gpt_oss_120b_expert_v1; kind=gpt_oss_expert ;;
   *) exit 99 ;;
 esac
+if [[ $key == kernel-gpt-oss-* && ${FE2O3_GFX950_ADVANCED_MODE:-canonical} == simt ]]; then
+  if [[ $kind == gpt_oss_pipeline ]]; then kind=gpt_oss_pipeline_simt; else kind=scalar; fi
+fi
 printf '0000000000000000 <%s>:\n' "$symbol"
 case "$kind" in
   fp4)
@@ -443,7 +516,7 @@ case "$kind" in
       'v_mfma_f32_16x16x128_f8f6f4 cbsz:4' \
       'v_mfma_f32_16x16x128_f8f6f4 cbsz:4' \
       'v_mfma_f32_16x16x128_f8f6f4 cbsz:4' ;;
-  gpt_oss)
+  gpt_oss | gpt_oss_pipeline)
     for _ in 1 2 3 4; do
       printf '%s\n' 'v_mfma_f32_16x16x16_bf16'
     done
@@ -458,9 +531,12 @@ case "$kind" in
     for _ in 1 2 3 4; do
       printf '%s\n' 'v_mfma_f32_16x16x128_f8f6f4 cbsz:4'
     done ;;
-  scalar)
+  scalar | gpt_oss_pipeline_simt)
     printf '%s\n' 's_endpgm' ;;
 esac
+if [[ $kind == gpt_oss_pipeline || $kind == gpt_oss_pipeline_simt ]]; then
+  for _ in {1..10}; do printf '%s\n' s_barrier; done
+fi
 EOF
 
 chmod 700 \
@@ -545,6 +621,83 @@ set -e
 grep -F -- 'gfx950 OCML input digest mismatch: ocml.bc' \
   <<<"${bad_digest_output}" >/dev/null
 
+
+# Exercise the real runner with the existing inert Cargo and ROCm fixtures.
+for selector_case in present absent duplicate wrong list-failure; do
+  out="$TEST_ROOT/selector-$selector_case.out"
+  set +e
+  PATH="$FAKE_BIN:/usr/bin:/bin" CARGO=cargo ROCM_PATH="$FAKE_ROCM" \
+  FE2O3_GFX950_OCML_MANIFEST="$GFX950_MANIFEST_724" \
+  FE2O3_EXAMPLE_COMPILE_ONLY=0 ROCR_VISIBLE_DEVICES=0 \
+  CARGO_TARGET_DIR="$TEST_ROOT/host-selector-target" \
+  FE2O3_ROOT_TARGET_DIR="$TEST_ROOT/host-selector-target" \
+  FE2O3_GFX950_ADVANCED_OUTPUT_DIR="$TEST_ROOT/selector-$selector_case" \
+  TMPDIR="$TEST_ROOT/tmp" KERNEL_MATRIX_TEST_LOG="$LOG" \
+  KERNEL_MATRIX_TEST_SYSROOT="$TEST_ROOT/sysroot" \
+  KERNEL_MATRIX_TEST_SELECTOR_CASE=$selector_case \
+    bash "$REPO_ROOT/examples/gfx950_gpt_oss_decode/run-gfx950.sh" >"$out" 2>&1
+  rc=$?
+  set -e
+  if [[ $selector_case == present ]]; then
+    [[ $rc -eq 0 ]] || { cat "$out" >&2; exit 1; }
+    grep -F 'MOCK HARDWARE SELECTOR EXECUTED gfx950_gpt_oss_layer_tile_rust_cov6_matches_cpu_reference' "$out" >/dev/null
+  else
+    [[ $rc -ne 0 ]] || { cat "$out" >&2; exit 1; }
+    ! grep -F 'MOCK HARDWARE SELECTOR EXECUTED' "$out"
+    ! grep -F 'production Rust gfx950 build and qualification-oracle numerical run' "$out"
+  fi
+done
+for wrapper in run-gfx950.sh run-unfused-gfx950.sh; do
+for visibility in '' '0,1' '-1' 'GPU-0123' 'GPU-0123456789abcdeg'; do
+  : >"$LOG"
+  set +e
+  PATH="$FAKE_BIN:/usr/bin:/bin" ROCR_VISIBLE_DEVICES=$visibility \
+  KERNEL_MATRIX_TEST_LOG="$LOG" \
+    bash "$REPO_ROOT/examples/gfx950_gpt_oss_decode/$wrapper" \
+    >"$TEST_ROOT/runtime-visibility.out" 2>&1
+  rc=$?
+  set -e
+  [[ $rc -eq 2 && ! -s $LOG ]]
+  grep -F 'GPT-OSS runtime requires' "$TEST_ROOT/runtime-visibility.out" >/dev/null
+done
+
+done
+set +e
+FE2O3_EXAMPLE_COMPILE_ONLY=1 ROCR_VISIBLE_DEVICES=0 \
+  bash "$REPO_ROOT/examples/gfx950_gpt_oss_decode/run-unfused-gfx950.sh" \
+  >"$TEST_ROOT/unfused-runtime-only.out" 2>&1
+rc=$?
+set -e
+[[ $rc -eq 2 ]]
+grep -F 'unfused HIP comparator is runtime-only' "$TEST_ROOT/unfused-runtime-only.out" >/dev/null
+
+# Mock only enumeration: the actual matrix must clear MODE before both wrappers.
+mkdir -p "$TEST_ROOT/mode-env-bin"
+cat >"$TEST_ROOT/mode-env-bin/python3" <<'EOF'
+#!/usr/bin/env bash
+if [[ " $* " == *' --emit-matrix gfx950 '* ]]; then
+  printf '%s\n' \
+    'mode-default|examples/gfx950_gpt_oss_decode/run-gfx950.sh|kernel-gpt-oss-decode.hsaco|||fixture-default' \
+    'mode-simt|examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh|kernel-gpt-oss-decode.hsaco|optimized-simt||fixture-simt'
+else
+  exec "$MATRIX_TEST_PYTHON" "$@"
+fi
+EOF
+chmod 700 "$TEST_ROOT/mode-env-bin/python3"
+: >"$LOG"
+export MATRIX_TEST_PYTHON
+PATH="$TEST_ROOT/mode-env-bin:$FAKE_BIN:/usr/bin:/bin" \
+CARGO=cargo ROCM_PATH="$FAKE_ROCM" FE2O3_GFX950_OCML_MANIFEST="$GFX950_MANIFEST_724" \
+FE2O3_GFX950_ADVANCED_MODE=invalid-inherited-mode ROCR_VISIBLE_DEVICES= HIP_VISIBLE_DEVICES= TMPDIR="$TEST_ROOT/tmp" \
+KERNEL_MATRIX_TEST_LOG="$LOG" KERNEL_MATRIX_TEST_SYSROOT="$TEST_ROOT/sysroot" \
+  bash "$MATRIX_SCRIPT" gfx950 >"$TEST_ROOT/mode-env.out" 2>&1 || {
+    cat "$TEST_ROOT/mode-env.out" >&2; exit 1;
+  }
+grep -F 'MATRIX PASS target=gfx950 compiled=2 hardware_executed=0' "$TEST_ROOT/mode-env.out" >/dev/null
+[[ $(grep -Fc -- ' cargo check ' "$LOG") -eq 2 ]]
+printf 'runner controls passed: selector=5 runtime-visibility=10 unfused-runtime-only=1 actual-matrix-mode-env=2 (mock artifacts; no GPU)\n'
+if [[ $TEST_SCOPE == --runner-controls ]]; then exit 0; fi
+
 success_output="${TEST_ROOT}/success.out"
 # Parent settings must not replace the manifest's per-case selections.
 PATH="${FAKE_BIN}:/usr/bin:/bin" \
@@ -604,6 +757,7 @@ ROCM_PATH="${FAKE_ROCM}" \
 FE2O3_GFX950_OCML_MANIFEST="${GFX950_MANIFEST_724}" \
 FE2O3_EXAMPLE_CARGO_ARGS=--no-default-features \
 FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=expert-serial \
+FE2O3_GFX950_ADVANCED_MODE=tile \
 FE2O3_ADVANCED_SUITE=undeclared-parent-suite \
 FE2O3_ADVANCED_SCRIPT_DIR="${TEST_ROOT}/absent-parent-suite" \
 TMPDIR="${TEST_ROOT}/tmp" \
@@ -615,13 +769,13 @@ KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
   }
 
 grep -F -- \
-  'kernel compile matrix: target=gfx950 mode=compile-only kernels=39 hardware_observed=false' \
+  'kernel compile matrix: target=gfx950 mode=compile-only kernels=57 hardware_observed=false' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
-  'MATRIX PASS target=gfx950 compiled=39 hardware_executed=0 artifacts=temporary' \
+  'MATRIX PASS target=gfx950 compiled=57 hardware_executed=0 artifacts=temporary' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX LIMITATION remaining gfx950 ablations, HIP comparators, hardware behavior, and numerical results are not covered' \
@@ -665,11 +819,29 @@ for name in \
   gpt-oss-interleaved-stores \
   gpt-oss-materialized-router \
   gpt-oss-materialized-attention \
-  gpt-oss-materialized-expert; do
+  gpt-oss-materialized-expert \
+  gpt-oss-decode-simt \
+  gpt-oss-decode-tile \
+  gpt-oss-held-fragments-simt \
+  gpt-oss-held-fragments-tile \
+  gpt-oss-interleaved-stores-simt \
+  gpt-oss-interleaved-stores-tile \
+  gpt-oss-materialized-attention-simt \
+  gpt-oss-materialized-attention-tile \
+  gpt-oss-materialized-expert-simt \
+  gpt-oss-materialized-expert-tile \
+  gpt-oss-materialized-router-simt \
+  gpt-oss-materialized-router-tile \
+  gpt-oss-pipelined-attention-simt \
+  gpt-oss-pipelined-attention-tile \
+  gpt-oss-scalar-attention-simt \
+  gpt-oss-scalar-attention-tile \
+  gpt-oss-serial-router-simt \
+  gpt-oss-serial-router-tile; do
   [[ "$(grep -Fc -- "CASE ${name} target=gfx950 status=PASS hardware_observed=false" \
     "${gfx950_output}")" -eq 1 ]]
 done
-[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 39 ]]
+[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 57 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
 for features in \
   kernel-moe-route \
