@@ -1021,11 +1021,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                                and row["classification"] == "kernel")
                 identity = f"fixture:{fixture_id}:{symbol}"
                 self.assertEqual(display["kernelIds"], [identity])
-                self.assertEqual(display["bindingStatus"],
-                                 "pending" if variant == "pipelined-attention" else "fixture-source-contract")
-                if variant == "pipelined-attention":
-                    self.assertIn("8192 bytes of LDS", display["reason"])
-                    self.assertIn("https://github.com/harsh-nod/fe2o3/issues/271", display["reason"])
+                self.assertEqual(display["bindingStatus"], "fixture-source-contract")
                 identities.append(identity)
         self.assertEqual(len(set(identities)), 2)
         report = self.kernel_pair_report()
@@ -1084,10 +1080,13 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         tab = next(row for row in lesson["codeTabs"] if row["ordinal"] == 5)
         display = next(row for row in self.manifest["kernelInventory"]["displayItems"]
                        if row["lessonId"] == lesson_id and row["tabOrdinal"] == 5)
-        self.assertEqual(display["bindingStatus"], "pending")
-        self.assertEqual(display["functionUtf8Offset"], 1508)
-        self.assertEqual(tab["displayedUtf8Bytes"], 22863)
-        self.assertEqual(tab["displayedSha256"], "faf9bc589658b1381e1042c71b952881488261cc85ff86c21dbb7f1f1a83a460")
+        self.assertEqual(display["bindingStatus"], "fixture-source-contract")
+        # Reintroduce the retained historical snapshot only in this negative
+        # fixture; the live tab now displays the corrected current source.
+        display.update(bindingStatus="pending", functionUtf8Offset=1508)
+        tab.update(displayedUtf8Bytes=22863,
+                   displayedSha256="faf9bc589658b1381e1042c71b952881488261cc85ff86c21dbb7f1f1a83a460",
+                   sourceSha256="faf9bc589658b1381e1042c71b952881488261cc85ff86c21dbb7f1f1a83a460")
         self.assertEqual(tab["sourceSha256"], tab["displayedSha256"])
         source = (ROOT / tab["sourcePath"]).read_bytes()
         self.assertNotEqual(hashlib.sha256(source).hexdigest(), tab["sourceSha256"])
@@ -1112,6 +1111,11 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(len(rows), 6)
         ids = {identity for row in rows for identity in row["kernelIds"]}
         kernels = [row for row in document["kernelInventory"]["kernels"] if row["kernelId"] in ids]
+        # This isolated display fixture intentionally excludes the paired
+        # implementations, so it cannot retain their cross-kernel bindings.
+        for kernel in kernels:
+            for variant in kernel["variants"]:
+                variant.update(status="pending", source=None)
         fixtures = {ref["fixtureId"] for row in kernels for ref in row["selections"]}
         document["compilerFixtures"] = [row for row in document["compilerFixtures"] if row["fixtureId"] in fixtures]
         lesson = next(row for row in document["curriculum"]["lessons"]
@@ -1153,6 +1157,9 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                                         if row["fixtureId"] == fixture_id]
         inventory = document["kernelInventory"]
         inventory["kernels"] = [row for row in inventory["kernels"] if row["kernelId"] == kernel_id]
+        for kernel in inventory["kernels"]:
+            for variant in kernel["variants"]:
+                variant.update(status="pending", source=None)
         inventory["negativeCases"] = []
         inventory["displayItems"] = [row for row in inventory["displayItems"]
                                      if row["lessonId"] in lessons and row["tabOrdinal"] == 0]
@@ -1165,7 +1172,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             lesson["codeTabs"] = lesson["codeTabs"][:1]
             tab = lesson["codeTabs"][0]
             physical = (ROOT / tab["sourcePath"]).read_bytes()
-            excerpt = physical[1261:1261 + tab["displayedUtf8Bytes"]].decode("utf-8")
+            excerpt = physical[1338:1338 + tab["displayedUtf8Bytes"]].decode("utf-8")
             runtime["lessons"].append({"id": lesson["lessonId"], "codeTabs": [
                 {**tab, "displayedCode": excerpt, "sourceFragments": [excerpt]},
             ]})
@@ -1298,8 +1305,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
 
     def test_real_source_bound_variant_report_does_not_qualify_or_complete_census(self):
         # A physical source association, not a new tile implementation or receipt.
-        kernel_id = "fixture:gfx950-gpt-oss-serial-router:gfx950_gpt_oss_120b_decode_megakernel_v1"
-        foreign_id = "fixture:gfx950-gpt-oss-held-fragments:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        kernel_id = "fixture:gfx950-gpt-oss-serial-router-simt:gfx950_gpt_oss_120b_decode_megakernel_v1"
+        foreign_id = "fixture:gfx950-gpt-oss-held-fragments-simt:gfx950_gpt_oss_120b_decode_megakernel_v1"
         binding = self.bind_source_variant(self.manifest, ROOT, kernel_id)
         report = self.kernel_pair_report()
         self.assertEqual(report["sourceBoundVariantCount"], 77)
