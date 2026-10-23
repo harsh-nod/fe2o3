@@ -193,11 +193,11 @@
             "kind": "kernel",
             "label": "Kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 552,
-            "displayedSha256": "21b26bbd0d54f8966bade4ed80e2cb2457e89ecf13e9469eb0c9c030e3a8f6f3",
+            "displayedUtf8Bytes": 837,
+            "displayedSha256": "81b6f547ae89ef77a9b85e9d6589586910a2f92f050c7ffa45b45a9e188f32fa",
             "sourcePath": "examples/fill/src/lib.rs",
-            "sourceCommit": "b9378bdbee0dd1e284a1c31b25c3614c5c2039fe",
-            "sourceSha256": "21b26bbd0d54f8966bade4ed80e2cb2457e89ecf13e9469eb0c9c030e3a8f6f3",
+            "sourceCommit": "7404720885b13ee77bef4c48364993b463f25a6a",
+            "sourceSha256": "81b6f547ae89ef77a9b85e9d6589586910a2f92f050c7ffa45b45a9e188f32fa",
             "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
@@ -388,11 +388,11 @@
             "kind": "kernel",
             "label": "Current source [SOURCE-ONLY]",
             "language": "rust",
-            "displayedUtf8Bytes": 369,
-            "displayedSha256": "60ea857d0aaba57e05fc30691b15908c188e449c789c39abd27abf4c35b017e2",
+            "displayedUtf8Bytes": 859,
+            "displayedSha256": "96a6d5774c0d36661540829025194c918100abcce53fed91cae3c909aea67345",
             "sourcePath": "examples/vecadd/src/lib.rs",
-            "sourceCommit": "302aabc3ed80fe39d5655fbb39fca7cb5859bd9c",
-            "sourceSha256": "60ea857d0aaba57e05fc30691b15908c188e449c789c39abd27abf4c35b017e2",
+            "sourceCommit": "7404720885b13ee77bef4c48364993b463f25a6a",
+            "sourceSha256": "96a6d5774c0d36661540829025194c918100abcce53fed91cae3c909aea67345",
             "sourceDigestScope": "file",
             "explanatory": false,
             "evidenceId": null,
@@ -10288,11 +10288,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/fill/Cargo.toml",
-        "packageManifestSha256": "9cb53d0cb11998a6ada2bec84545e460a001b2b3487256073fdee458adeac011",
+        "packageManifestSha256": "5a605e0600a4543c7e43243529d1bddac9b7d63070d9c9543b1ce4783894d5be",
         "sourcePaths": [
           "examples/fill/src/lib.rs"
         ],
-        "sourceClosureSha256": "62c363798da65e3e0766e40b644053fab0fc4a683819b53b82a305e1a1c1b9c3",
+        "sourceClosureSha256": "cb336229b8a20de9cdb3b39f602be80e097eb4eb56f27c05dbdfecf3ec6d0257",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_fill",
@@ -10648,11 +10648,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/vecadd/Cargo.toml",
-        "packageManifestSha256": "68de605d3af20f4a4b181b0cbac91af3994546b85ab6d4f135689e306a1dbe99",
+        "packageManifestSha256": "ae57176496b0b21ef479fcb97461894db098a4714a1be29bd92722eee503dbf3",
         "sourcePaths": [
           "examples/vecadd/src/lib.rs"
         ],
-        "sourceClosureSha256": "6aaff39873fcae52349273f25783a6d84e5bb206a103ec580780eaa52f5d11b7",
+        "sourceClosureSha256": "2568e0432796d2f029c1d0ba52f07953504919868c475b3ba4dd8ec7af5899fd",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_vecadd",
@@ -15098,8 +15098,8 @@
               },
               "selectionSha256": "97ca9ff5ebab7eee1a2db156e2edaf4c4f8f455542b027d387b5900a75430c9e",
               "sourcePath": "examples/fill/src/lib.rs",
-              "sourceSha256": "21b26bbd0d54f8966bade4ed80e2cb2457e89ecf13e9469eb0c9c030e3a8f6f3",
-              "functionUtf8Offset": 392
+              "sourceSha256": "81b6f547ae89ef77a9b85e9d6589586910a2f92f050c7ffa45b45a9e188f32fa",
+              "functionUtf8Offset": 677
             },
             "blocker": {
               "owner": "issue275-integration",
@@ -15387,8 +15387,8 @@
               },
               "selectionSha256": "d740646fe99db1be1150070ba452697f2d87757b5b2fe2b326a440b27614e763",
               "sourcePath": "examples/vecadd/src/lib.rs",
-              "sourceSha256": "60ea857d0aaba57e05fc30691b15908c188e449c789c39abd27abf4c35b017e2",
-              "functionUtf8Offset": 203
+              "sourceSha256": "96a6d5774c0d36661540829025194c918100abcce53fed91cae3c909aea67345",
+              "functionUtf8Offset": 299
             },
             "blocker": {
               "owner": "issue275-integration",
@@ -20158,7 +20158,7 @@
       {
         "lessonId": "first-fill",
         "tabOrdinal": 0,
-        "functionUtf8Offset": 392,
+        "functionUtf8Offset": 677,
         "kernelSymbol": "fill",
         "classification": "kernel",
         "kernelIds": [
@@ -20315,7 +20315,7 @@
       {
         "lessonId": "typed-vecadd",
         "tabOrdinal": 5,
-        "functionUtf8Offset": 203,
+        "functionUtf8Offset": 299,
         "kernelSymbol": "vecadd",
         "classification": "kernel",
         "kernelIds": [
@@ -20324,6 +20324,17 @@
         "negativeCases": [],
         "bindingStatus": "fixture-source-contract",
         "reason": "Exact current whole-file source occurrence matches the existing fixture selection; source association only, not execution or pair qualification."
+      },
+      {
+        "lessonId": "typed-vecadd",
+        "tabOrdinal": 5,
+        "functionUtf8Offset": 567,
+        "kernelSymbol": "vecadd",
+        "classification": "kernel",
+        "kernelIds": [],
+        "negativeCases": [],
+        "bindingStatus": "pending",
+        "reason": "The cfg-selected structured-tile declaration is present in the displayed source; the existing default-feature fixture selects SIMT, and tile source/export/simulation/hardware qualification remains pending."
       },
       {
         "lessonId": "lds-barriers-atomics",

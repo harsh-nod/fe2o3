@@ -761,8 +761,8 @@ class LiteralIncludeSelectionTests(unittest.TestCase):
             "selectionSha256": self.identities._selection_identity(
                 fixture["compilerInput"], "vecadd", self.identities._Budget(4096)),
             "sourcePath": "examples/vecadd/src/lib.rs",
-            "sourceSha256": "60ea857d0aaba57e05fc30691b15908c188e449c789c39abd27abf4c35b017e2",
-            "functionUtf8Offset": 203,
+            "sourceSha256": "96a6d5774c0d36661540829025194c918100abcce53fed91cae3c909aea67345",
+            "functionUtf8Offset": 299,
         }
         kernel["variants"][0].update(status="source-bound", source=binding)
         return document, fixture, binding
@@ -778,7 +778,7 @@ class LiteralIncludeSelectionTests(unittest.TestCase):
         self.assertEqual(result["sourceBoundPairCount"], 8)
         self.assertFalse(result["inventoryComplete"])
         self.assertIsNone(result["requiredPairCount"])
-        self.assertEqual((ROOT / binding["sourcePath"]).read_bytes()[203:209], b"vecadd")
+        self.assertEqual((ROOT / binding["sourcePath"]).read_bytes()[299:305], b"vecadd")
 
     def test_real_vecadd_included_bytes_remain_part_of_authenticated_closure(self):
         document, fixture, _ = self.document()

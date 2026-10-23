@@ -611,8 +611,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         identities = report["kernelInventory"]
         for counts in (report, identities):
             self.assertEqual(counts["knownVariantObligationCount"], 189)
-            self.assertEqual(counts["pendingVariantCount"], 159)
-            self.assertEqual(counts["unregisteredDisplayItemCount"], 5)
+            self.assertEqual(counts["pendingVariantCount"], 141)
+            self.assertEqual(counts["unregisteredDisplayItemCount"], 6)
         self.assertIs(identities["runtimeCensusValidated"], False)
         self.assertEqual(identities["knownKernelIdentityCount"], 94)
         self.assertEqual(identities["negativeCaseCount"], 3)
@@ -795,9 +795,9 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
                           "74f125543a556cdfaa32e26a625c27bbdd84fef69fa691b43ee1225bc24533c9")
         self.assertEqual(len(inventory["kernels"]), 94)
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
-                         {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 25})
+                         {"kernel": 81, "required-negative": 3, "conceptual": 26, "helper": 25})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 8, "source-driver-contract": 14, "fixture-source-contract": 61,
+                         {"pending": 9, "source-driver-contract": 14, "fixture-source-contract": 61,
                           "not-applicable": 51})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])
@@ -1115,8 +1115,8 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
     def test_current_fill_display_binds_source_and_historical_display_refuses(self):
         lesson = self.curriculum_lesson()
         tab = lesson["codeTabs"][0]
-        self.assertEqual(tab["sourceCommit"], "b9378bdbee0dd1e284a1c31b25c3614c5c2039fe")
-        self.assertEqual(tab["displayedUtf8Bytes"], 552)
+        self.assertEqual(tab["sourceCommit"], "7404720885b13ee77bef4c48364993b463f25a6a")
+        self.assertEqual(tab["displayedUtf8Bytes"], 837)
         self.assertEqual(tab["sourceSha256"], tab["displayedSha256"])
         current = (ROOT / "examples/fill/src/lib.rs").read_bytes()
         self.assertEqual(hashlib.sha256(current).hexdigest(), tab["sourceSha256"])
