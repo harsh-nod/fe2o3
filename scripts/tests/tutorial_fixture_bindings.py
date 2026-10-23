@@ -408,7 +408,8 @@ class AttentionCfgSelectionTests(unittest.TestCase):
     def test_real_library_selects_each_single_base_feature(self):
         for feature in self.base_features:
             with self.subTest(feature=feature):
-                self.assertEqual(self.declarations(self.library, [feature]), ([], ["kernel", "dimensions"]))
+                self.assertEqual(self.declarations(self.library, [feature]),
+                             ([], [("kernel", None), ("dimensions", None)]))
                 self.assertEqual(self.declarations(self.dimensions, [feature]), ([], []))
 
     def test_real_library_rejects_zero_and_each_pair_of_base_features(self):
@@ -447,7 +448,8 @@ class AttentionCfgSelectionTests(unittest.TestCase):
             base = self.cargo["features"][alias]
             for direct in ([alias], [alias, *base]):
                 with self.subTest(direct=direct):
-                    self.assertEqual(self.declarations(self.library, direct), ([], expected))
+                    self.assertEqual(self.declarations(self.library, direct),
+                                 ([], [(module, None) for module in expected]))
         with self.assertRaisesRegex(self.identities.KernelInventoryError, "unsupported fixture item"):
             self.declarations(self.library, ["kernel-kda-decode-baseline-v1",
                                              "kernel-kda-prefill-baseline-v1"])
