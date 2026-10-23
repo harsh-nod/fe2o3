@@ -876,7 +876,7 @@ class RowSourceBindingTests(unittest.TestCase):
         self.assertEqual(binding["sourceSha256"], tab["sourceSha256"])
         for variant in kernel["variants"]:
             self.assertIn("gfx942/mi300x and gfx950/mi350", variant["blocker"]["reason"])
-        self.assertEqual(report["knownKernelIdentityCount"], 61)
+        self.assertEqual(report["knownKernelIdentityCount"], 65)
         self.assertEqual(report["sourceBoundVariantCount"], 22)
         self.assertEqual(report["sourceBoundPairCount"], 0)
         self.assertFalse(report["inventoryComplete"])

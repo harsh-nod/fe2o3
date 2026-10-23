@@ -219,7 +219,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
             ["cpu-semantic-simulation", "reductions-scans", "gemm-tiling", "softmax-invariant"],
         )
         payload = json.dumps(curriculum, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
-        self.assertEqual(hashlib.sha256(payload).hexdigest(), "2a5618e55a5e967b1f9e6af05ffb81f94ccc3104ee728b6721bb4af38e0642fb")
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), "3c68e18d65cc09b4d8e58fbcd3dcbb0c2cd638a74eb41912e7a0c9543699da73")
 
     def test_current_public_gemm_display_matches_source_without_transferring_receipts(self):
         lesson = self.curriculum_lesson("gemm-tiling")
