@@ -153,6 +153,39 @@ selection. Compiler failures, historical source/KIR theorems, and pending
 protected execution keep their separate roles; this addition grants no
 artifact, load, launch, or GPU qualification.
 
+## gfx950 compile-only source path
+
+Compile both current source selections from this checkout with the pinned
+`nightly-2026-04-03` toolchain and ROCm 7.2.4:
+
+```sh
+ROCM_PATH=/opt/rocm-7.2.4 bash examples/wave64_collectives_v1/run-gfx950.sh
+# Or select one source:
+ROCM_PATH=/opt/rocm-7.2.4 bash examples/wave64_collectives_v1/run-gfx950.sh simt
+ROCM_PATH=/opt/rocm-7.2.4 bash examples/wave64_collectives_v1/run-gfx950.sh tile
+```
+
+The runner builds the general compiler from this checkout using the checked-in
+normal test profile (`cargo build --locked --profile test`). Device compilation
+uses ordinary `cargo check --release --locked -Zbuild-std=core`, with Wave64
+and XNACK-off target features. Each selection gets a fresh attempt directory,
+source binding, LLVM output, linked gfx950 code object, metadata and disassembly.
+No private compiler or runtime directory is required. `FE2O3_ROOT_TARGET_DIR`
+and `FE2O3_OUTPUT_DIR` select build/output directories; an explicitly supplied
+`FE2O3_RUSTC_EXTRACTOR` selects an existing compiler executable.
+
+This command performs CPU compilation and artifact inspection only. It does not
+launch a GPU kernel, validate numerical device output, prove LLVM/ISA refinement,
+or grant artifact or execution authority. Unsupported compiler behavior fails
+the command; there is no fixture or historical-template fallback.
+The existing `run-gfx942.sh` remains a separate compile-only entry point.
+The deleted Worker V2 launcher and pending Worker V3 hardware route retain the
+status described below.
+
+The standalone package also declares its normal test profile in `Cargo.toml`.
+This keeps the genuine `cargo fe2o3 test` executables within the existing
+host-test image limit; it does not change the oracle or structural assertions.
+
 ## Boundary
 
 The reviewed structural relation does not prove semantic source-to-model
