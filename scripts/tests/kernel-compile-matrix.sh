@@ -647,18 +647,29 @@ for selector_case in present absent duplicate wrong list-failure; do
     ! grep -F 'production Rust gfx950 build and qualification-oracle numerical run' "$out"
   fi
 done
+for wrapper in run-gfx950.sh run-unfused-gfx950.sh; do
 for visibility in '' '0,1' '-1' 'GPU-0123' 'GPU-0123456789abcdeg'; do
   : >"$LOG"
   set +e
   PATH="$FAKE_BIN:/usr/bin:/bin" ROCR_VISIBLE_DEVICES=$visibility \
   KERNEL_MATRIX_TEST_LOG="$LOG" \
-    bash "$REPO_ROOT/examples/gfx950_gpt_oss_decode/run-gfx950.sh" \
+    bash "$REPO_ROOT/examples/gfx950_gpt_oss_decode/$wrapper" \
     >"$TEST_ROOT/runtime-visibility.out" 2>&1
   rc=$?
   set -e
   [[ $rc -eq 2 && ! -s $LOG ]]
   grep -F 'GPT-OSS runtime requires' "$TEST_ROOT/runtime-visibility.out" >/dev/null
 done
+
+done
+set +e
+FE2O3_EXAMPLE_COMPILE_ONLY=1 ROCR_VISIBLE_DEVICES=0 \
+  bash "$REPO_ROOT/examples/gfx950_gpt_oss_decode/run-unfused-gfx950.sh" \
+  >"$TEST_ROOT/unfused-runtime-only.out" 2>&1
+rc=$?
+set -e
+[[ $rc -eq 2 ]]
+grep -F 'unfused HIP comparator is runtime-only' "$TEST_ROOT/unfused-runtime-only.out" >/dev/null
 
 # Mock only enumeration: the actual matrix must clear MODE before both wrappers.
 mkdir -p "$TEST_ROOT/mode-env-bin"
@@ -684,7 +695,7 @@ KERNEL_MATRIX_TEST_LOG="$LOG" KERNEL_MATRIX_TEST_SYSROOT="$TEST_ROOT/sysroot" \
   }
 grep -F 'MATRIX PASS target=gfx950 compiled=2 hardware_executed=0' "$TEST_ROOT/mode-env.out" >/dev/null
 [[ $(grep -Fc -- ' cargo check ' "$LOG") -eq 2 ]]
-printf 'runner controls passed: selector=5 runtime-visibility=5 actual-matrix-mode-env=2 (mock artifacts; no GPU)\n'
+printf 'runner controls passed: selector=5 runtime-visibility=10 unfused-runtime-only=1 actual-matrix-mode-env=2 (mock artifacts; no GPU)\n'
 if [[ $TEST_SCOPE == --runner-controls ]]; then exit 0; fi
 
 success_output="${TEST_ROOT}/success.out"
