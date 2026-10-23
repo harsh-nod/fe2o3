@@ -786,7 +786,7 @@
                 "sourcePaths": [
                   "examples/workgroup_sync_v1/src/kernel_row_affine_u32.rs"
                 ],
-                "sourceClosureSha256": "9f26935616495277bb53992bc6a0056ec86735c5f732fa2a0fe8c876d292f191",
+                "sourceClosureSha256": "92a6cacc38043a752f7787aab42d2cea3da5d4dbe427c72639349ce8bf4dc0bb",
                 "cargoTarget": {
                   "kind": "lib",
                   "name": "fe2o3_workgroup_sync_v1",
@@ -10342,7 +10342,7 @@
         "sourcePaths": [
           "examples/workgroup_sync_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "9f26935616495277bb53992bc6a0056ec86735c5f732fa2a0fe8c876d292f191",
+        "sourceClosureSha256": "92a6cacc38043a752f7787aab42d2cea3da5d4dbe427c72639349ce8bf4dc0bb",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_workgroup_sync_v1",
