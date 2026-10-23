@@ -7101,7 +7101,13 @@
               "gfx950-four-branch-residual",
               "gfx950-four-branch-residual-explicit",
               "gfx950-mhc-sinkhorn-mix",
-              "gfx950-mhc-sinkhorn-mix-scalar"
+              "gfx950-mhc-sinkhorn-mix-scalar",
+              "gfx950-attnres-aggregate-simt",
+              "gfx950-attnres-aggregate-tile",
+              "gfx950-four-branch-residual-simt",
+              "gfx950-four-branch-residual-tile",
+              "gfx950-mhc-sinkhorn-mix-simt",
+              "gfx950-mhc-sinkhorn-mix-tile"
             ]
           },
           {
@@ -8705,6 +8711,150 @@
             ]
           }
         ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-attnres-aggregate-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-attnres-aggregate-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-attnres-gr-mhc",
+            "fixtureIds": [
+              "gfx950-attnres-aggregate-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-attnres-aggregate-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-attnres-aggregate-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-attnres-gr-mhc",
+            "fixtureIds": [
+              "gfx950-attnres-aggregate-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-four-branch-residual-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-four-branch-residual-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-attnres-gr-mhc",
+            "fixtureIds": [
+              "gfx950-four-branch-residual-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-four-branch-residual-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-four-branch-residual-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-attnres-gr-mhc",
+            "fixtureIds": [
+              "gfx950-four-branch-residual-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-mhc-sinkhorn-mix-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-mhc-sinkhorn-mix-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-attnres-gr-mhc",
+            "fixtureIds": [
+              "gfx950-mhc-sinkhorn-mix-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-mhc-sinkhorn-mix-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-mhc-sinkhorn-mix-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-attnres-gr-mhc",
+            "fixtureIds": [
+              "gfx950-mhc-sinkhorn-mix-tile"
+            ]
+          }
+        ]
       }
     ],
     "status": "pending"
@@ -9221,11 +9371,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kernel.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -9240,7 +9390,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "8c493898842c29603e8f46981e05e70de05d5cc52a7938a968a3865892cf7936"
+        "contractSha256": "13818f3bfe0ff60064ce4689224d4be82299ddcd2d2675bd818dd82c42f9a4a9"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-attnres-aggregate.request.json",
@@ -9270,11 +9420,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/ablation.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -9289,7 +9439,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "e53567529c19d65eeeac6e3cc91a1a4cb8d0832475fcc78af480644e2acbbc44"
+        "contractSha256": "bb1ae9dcd269ab820ac1087daf665a97558ab836b16b0051515de0e92c6631ba"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-attnres-aggregate.request.json",
@@ -9364,11 +9514,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kernel.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -9383,7 +9533,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "b2e4bdfa9392cca4b43d9e3d95345f0362ae5c3b632d7e31bcc831a615f84ba1"
+        "contractSha256": "89237a4295c41e6e5f3d16cd08133b8d13c7e3888e3eb8aee84a6309b2d08d1e"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-compressed-hybrid-attention.request.json",
@@ -9413,11 +9563,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kernel.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -9432,7 +9582,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "289dbfff82267f085f111e03450adcc280e41abe97ba4871e7f991d3c9a38f29"
+        "contractSha256": "e05ad6fe204505f7ad9f6295ff841ab2440df8dc3a7800ab464e464694915f62"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-compressed-hybrid-attention.request.json",
@@ -9460,11 +9610,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kernel.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -9479,7 +9629,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "1657925221af8229c945742b9c8f5c532459479455364d0b18989332c535a8fb"
+        "contractSha256": "780234f8f6fdeccd73bd223db82cb61858be5d25f2d6ae908ce4819e40deb782"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-content-sparse-attention.request.json",
@@ -9509,11 +9659,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kernel.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -9528,7 +9678,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "9f804e8c2f7353b931a2547e2f119530dc4bb77d7e866957c9a2c59e52401a19"
+        "contractSha256": "5fbd7970508f8270977d9b35ac4a390c62291193a3dfa15443d312b490f7334c"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-content-sparse-attention.request.json",
@@ -9556,11 +9706,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kernel.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -9575,7 +9725,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "4e7591afeab98a7284b75f1127451ceabe17e032827449128e700ba552d70cbe"
+        "contractSha256": "7c7888f8c99c81768b50375bf4c2c6d9e175646f3f7771d9ed92e759e4f66872"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-deepseek-sparse-attention.request.json",
@@ -9603,11 +9753,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kernel.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -9622,7 +9772,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "c0f85956f2718f3857b6638341ffaff39d4ecffce2551a13f90d65dbd6c77081"
+        "contractSha256": "f50d58d5a7f91370b59a300af3e36f1d4f3ee47ac4b835a7327425ac5b67298b"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-four-branch-residual.request.json",
@@ -9652,11 +9802,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/ablation.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -9671,7 +9821,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "2ee32aa69e19c498563f123daf6064cded578344d8c01a83e363c178620098e0"
+        "contractSha256": "0043da5c495b26bd51bc8fdd124b285da5a826c51d27a19684e8f2fc8e8908f3"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-four-branch-residual.request.json",
@@ -10326,11 +10476,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kernel.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -10345,7 +10495,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "c58dbd86ca1aa710df8f714ae5d4aa717454239e4427a9cee7d22eceeb8c8f0d"
+        "contractSha256": "e280765005b5741b9f4be766bc55d907ac74c1a7a9aef127e27d8e15e4c079b5"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-decode.request.json",
@@ -10375,11 +10525,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kda_baseline.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -10394,7 +10544,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "cb6a9f3e838a54d8fa0ad63c338d2755c6747ab8dac68efe6f32440ae00ca556"
+        "contractSha256": "041cb4c63526b3390ff80c794f9e99a7128db685ac3c9ba8ae3514e4f57fe032"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-decode.request.json",
@@ -10422,11 +10572,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kernel.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -10441,7 +10591,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "4bd869a6fb60301463f96675e22b2b148e09917242acac9e4533706e6530a349"
+        "contractSha256": "62c3ca4a17a49c632ce736f7495f55ff27f5f2c11e4f555f5c9fa3d3708a6533"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-chunkwise-prefill.request.json",
@@ -10471,11 +10621,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kda_baseline.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -10490,7 +10640,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "e72753c1d723ab58969f85f0b1c72a1026816c7a5f82a3655a9f9d674f55945f"
+        "contractSha256": "267aed663d269b19ca7244ce58b197ead389df84c9e5d71f9fbb4f014f778c58"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-kda-chunkwise-prefill.request.json",
@@ -10518,11 +10668,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/kernel.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -10537,7 +10687,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "b33c24cc28e4729ebd608530694c3cf8a7d54045b1af4afe94fee7af813bf3b5"
+        "contractSha256": "97310c731346b54fa0cb80899437b32bbe441bdadb337eb473aa280a82e87639"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-mhc-sinkhorn-mix.request.json",
@@ -10567,11 +10717,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
-        "packageManifestSha256": "8b2ab43081523420ce6921b3469893c561eb583e280f066061201681b998720e",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
         "sourcePaths": [
           "examples/gfx950_advanced_attention/src/ablation.rs"
         ],
-        "sourceClosureSha256": "6778cb65b96784571fade4d87dd56cfecdafd71c9791ef038cd0b29a557387bb",
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_attention",
@@ -10586,7 +10736,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
         "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
-        "contractSha256": "818bfa92275ec989a7838f8894bcf06f6a50e9a4f541ecb8ca04728bf80b8690"
+        "contractSha256": "7d9996d5151f4f2396a39311a192dead53af65848f0d07adec125f87ac850fec"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-mhc-sinkhorn-mix.request.json",
@@ -11081,6 +11231,306 @@
         "canonicalKirVersion": 12,
         "status": "pending-reconciliation"
       }
+    },
+    {
+      "fixtureId": "gfx950-attnres-aggregate-simt",
+      "testId": "kernel-compile-matrix/gfx950/attnres-aggregate-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "attnres-aggregate-simt",
+        "runnerPath": "examples/gfx950_advanced_attention/run-attnres-aggregate-gfx950.sh",
+        "artifactName": "kernel-attnres-aggregate.hsaco",
+        "runnerArguments": [
+          "simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
+        "sourcePaths": [
+          "examples/gfx950_advanced_attention/src/kernel.rs"
+        ],
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_attention",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-attnres-aggregate",
+          "kernel-attnres-aggregate-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_attnres_aggregate"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
+        "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
+        "contractSha256": "323c008bccc792a173c4015c3dcaa9e78dd8da2f412dfb45420a3668e7b6efeb"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-attnres-aggregate.request.json",
+        "requestSha256": "7d26dfed1e48f4d1c04d6c5e75d79b339ec8e02168b07d07f6f1dbaca48c5f32",
+        "requestBytes": 74106,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-attnres-aggregate.expectation.json",
+        "expectationSha256": "a34bc20ea2dd0b9311e5f375d7d59f677a91d9c7c1811fa142bfbefb314edd83",
+        "expectationBytes": 9417,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-reconciliation"
+      }
+    },
+    {
+      "fixtureId": "gfx950-attnres-aggregate-tile",
+      "testId": "kernel-compile-matrix/gfx950/attnres-aggregate-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "attnres-aggregate-tile",
+        "runnerPath": "examples/gfx950_advanced_attention/run-attnres-aggregate-gfx950.sh",
+        "artifactName": "kernel-attnres-aggregate.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
+        "sourcePaths": [
+          "examples/gfx950_advanced_attention/src/kernel_tile_mixing.rs"
+        ],
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_attention",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-attnres-aggregate",
+          "kernel-attnres-aggregate-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_attnres_aggregate"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
+        "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
+        "contractSha256": "a2e681cfdfd7e730a91a2b2e02d0e53bb81685adb9dc07385ba18379d4543e40"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-attnres-aggregate.request.json",
+        "requestSha256": "7d26dfed1e48f4d1c04d6c5e75d79b339ec8e02168b07d07f6f1dbaca48c5f32",
+        "requestBytes": 74106,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-attnres-aggregate.expectation.json",
+        "expectationSha256": "a34bc20ea2dd0b9311e5f375d7d59f677a91d9c7c1811fa142bfbefb314edd83",
+        "expectationBytes": 9417,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-reconciliation"
+      }
+    },
+    {
+      "fixtureId": "gfx950-four-branch-residual-simt",
+      "testId": "kernel-compile-matrix/gfx950/four-branch-residual-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "four-branch-residual-simt",
+        "runnerPath": "examples/gfx950_advanced_attention/run-four-branch-residual-gfx950.sh",
+        "artifactName": "kernel-four-branch-residual.hsaco",
+        "runnerArguments": [
+          "simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
+        "sourcePaths": [
+          "examples/gfx950_advanced_attention/src/kernel.rs"
+        ],
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_attention",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-four-branch-residual",
+          "kernel-four-branch-residual-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_four_branch_residual"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
+        "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
+        "contractSha256": "b8f46b51c8f2517fed92637edd2f97619641ad924fb4b2e259851156764e387d"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-four-branch-residual.request.json",
+        "requestSha256": "72c41b86563686e437ba2c5b9ecc62c6d895d7cdfd6c7c0594e1dda5b8757b06",
+        "requestBytes": 82383,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-four-branch-residual.expectation.json",
+        "expectationSha256": "979c84d372d2f7d4eb72de863df853af5f4a6b539fc8526ea6bc45f32fc71be8",
+        "expectationBytes": 9420,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-reconciliation"
+      }
+    },
+    {
+      "fixtureId": "gfx950-four-branch-residual-tile",
+      "testId": "kernel-compile-matrix/gfx950/four-branch-residual-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "four-branch-residual-tile",
+        "runnerPath": "examples/gfx950_advanced_attention/run-four-branch-residual-gfx950.sh",
+        "artifactName": "kernel-four-branch-residual.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
+        "sourcePaths": [
+          "examples/gfx950_advanced_attention/src/kernel_tile_mixing.rs"
+        ],
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_attention",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-four-branch-residual",
+          "kernel-four-branch-residual-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_four_branch_residual"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
+        "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
+        "contractSha256": "d0af6b7c37a4605b06d95978b2eb38288542c24e8e950aec0468d8f86385ea09"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-four-branch-residual.request.json",
+        "requestSha256": "72c41b86563686e437ba2c5b9ecc62c6d895d7cdfd6c7c0594e1dda5b8757b06",
+        "requestBytes": 82383,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-four-branch-residual.expectation.json",
+        "expectationSha256": "979c84d372d2f7d4eb72de863df853af5f4a6b539fc8526ea6bc45f32fc71be8",
+        "expectationBytes": 9420,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-reconciliation"
+      }
+    },
+    {
+      "fixtureId": "gfx950-mhc-sinkhorn-mix-simt",
+      "testId": "kernel-compile-matrix/gfx950/mhc-sinkhorn-mix-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "mhc-sinkhorn-mix-simt",
+        "runnerPath": "examples/gfx950_advanced_attention/run-mhc-sinkhorn-mix-gfx950.sh",
+        "artifactName": "kernel-mhc-sinkhorn-mix.hsaco",
+        "runnerArguments": [
+          "simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
+        "sourcePaths": [
+          "examples/gfx950_advanced_attention/src/kernel.rs"
+        ],
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_attention",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-mhc-sinkhorn-mix",
+          "kernel-mhc-sinkhorn-mix-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_mhc_sinkhorn_mix"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
+        "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
+        "contractSha256": "42365fa50806785ee0d58588ab173fa509b1e44135461fd143adef6cb015316b"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-mhc-sinkhorn-mix.request.json",
+        "requestSha256": "0e14fe4f81e76471ce587dd826f90f2516f8be1d097e332f31d65a74217a6cc6",
+        "requestBytes": 18809,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-mhc-sinkhorn-mix.expectation.json",
+        "expectationSha256": "4237da565915654710710b260d33fe4571921507ff6228f8d7a40102dc4069a0",
+        "expectationBytes": 9416,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-reconciliation"
+      }
+    },
+    {
+      "fixtureId": "gfx950-mhc-sinkhorn-mix-tile",
+      "testId": "kernel-compile-matrix/gfx950/mhc-sinkhorn-mix-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "mhc-sinkhorn-mix-tile",
+        "runnerPath": "examples/gfx950_advanced_attention/run-mhc-sinkhorn-mix-gfx950.sh",
+        "artifactName": "kernel-mhc-sinkhorn-mix.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
+        "packageManifestSha256": "d813a1990e2513825fe381cd1c7e3c71daf2bac2125a862950444ef14296b86b",
+        "sourcePaths": [
+          "examples/gfx950_advanced_attention/src/kernel_tile_mixing.rs"
+        ],
+        "sourceClosureSha256": "35951a4e7f7edadc38100e27e134546633403dc86f121c30a7d6df7815dc3e48",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_attention",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-mhc-sinkhorn-mix",
+          "kernel-mhc-sinkhorn-mix-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_mhc_sinkhorn_mix"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_attention/Cargo.lock",
+        "cargoLockSha256": "4a4d559e74050db29ce76ba099fc56b03e2cd814cfb9bef7e5f05c1584fc21fe",
+        "contractSha256": "6ec205163c45da68eb9541e7b8af96d17f3db369fc15981e20933c709f01322f"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-mhc-sinkhorn-mix.request.json",
+        "requestSha256": "0e14fe4f81e76471ce587dd826f90f2516f8be1d097e332f31d65a74217a6cc6",
+        "requestBytes": 18809,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-mhc-sinkhorn-mix.expectation.json",
+        "expectationSha256": "4237da565915654710710b260d33fe4571921507ff6228f8d7a40102dc4069a0",
+        "expectationBytes": 9416,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-reconciliation"
+      }
     }
   ],
   "entries": [
@@ -11202,7 +11652,8 @@
       "classification": "compiler-produced",
       "packageManifest": "examples/gfx950_advanced_attention/Cargo.toml",
       "sourcePaths": [
-        "examples/gfx950_advanced_attention/src/kernel.rs"
+        "examples/gfx950_advanced_attention/src/kernel.rs",
+        "examples/gfx950_advanced_attention/src/kernel_tile_mixing.rs"
       ],
       "compilerFixtureIds": [
         "gfx950-attnres-aggregate",
@@ -11210,7 +11661,13 @@
         "gfx950-four-branch-residual",
         "gfx950-four-branch-residual-explicit",
         "gfx950-mhc-sinkhorn-mix",
-        "gfx950-mhc-sinkhorn-mix-scalar"
+        "gfx950-mhc-sinkhorn-mix-scalar",
+        "gfx950-attnres-aggregate-simt",
+        "gfx950-attnres-aggregate-tile",
+        "gfx950-four-branch-residual-simt",
+        "gfx950-four-branch-residual-tile",
+        "gfx950-mhc-sinkhorn-mix-simt",
+        "gfx950-mhc-sinkhorn-mix-tile"
       ],
       "requiredGates": [
         "production-compile",
@@ -11995,7 +12452,7 @@
                 "fixtureId": "gfx950-attnres-aggregate-explicit-reuse",
                 "kernelSymbol": "gfx950_attnres_aggregate"
               },
-              "selectionSha256": "954e6806bb31f3c05d0c455a226f8bdda8ce5af7a7ae314aee13bf2e8471a96d",
+              "selectionSha256": "23b8e67a036f94b2a93ed03482a2f95a80ad18ca14743e1466b6302d91eff10e",
               "sourcePath": "examples/gfx950_advanced_attention/src/ablation.rs",
               "sourceSha256": "e5bd1cabc0d0e54610fb9b0e9ba3ac68843b6e442518a63776f1526023e19730",
               "functionUtf8Offset": 1111
@@ -12032,31 +12489,42 @@
             "kind": "simt",
             "status": "source-bound",
             "source": {
-              "implementationKernelId": "fixture:gfx950-attnres-aggregate:gfx950_attnres_aggregate",
+              "implementationKernelId": "fixture:gfx950-attnres-aggregate-simt:gfx950_attnres_aggregate",
               "selection": {
                 "kind": "fixture",
-                "fixtureId": "gfx950-attnres-aggregate",
+                "fixtureId": "gfx950-attnres-aggregate-simt",
                 "kernelSymbol": "gfx950_attnres_aggregate"
               },
-              "selectionSha256": "2ba46eb3f29a202892a459596f08f9465b1d724cb5cc78d104aa4ad312ffc7ef",
+              "selectionSha256": "f42189940a80c9e1c3d0ad9416260dd9dc6dbe43ba6e64d77a072054b8dce315",
               "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
-              "functionUtf8Offset": 66151
+              "sourceSha256": "b97a8177e810f011b70c91a4488b3e574ee0a759b999744209828b9afeba466f",
+              "functionUtf8Offset": 66203
             },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
+              "reason": "Exact simt source is associated; per-target simulation, runtime, proof, and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-attnres-aggregate-tile:gfx950_attnres_aggregate",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-attnres-aggregate-tile",
+                "kernelSymbol": "gfx950_attnres_aggregate"
+              },
+              "selectionSha256": "e3895a14423e1d1e9d15278a2cee024815cc5245493ece47e48c7dab0cd4877e",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel_tile_mixing.rs",
+              "sourceSha256": "bbd587558466392915ba40796c0bf29486d27db723c9de9965238ea01328046b",
+              "functionUtf8Offset": 760
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact tile source is associated; per-target simulation, runtime, proof, and hardware qualification remain pending."
             }
           }
         ]
@@ -12113,9 +12581,9 @@
                 "fixtureId": "gfx950-compressed-hybrid-attention-division-baseline",
                 "kernelSymbol": "gfx950_compressed_hybrid_attention"
               },
-              "selectionSha256": "2c929e3092b835470085adfec0951d2fad3dfa7a183dbf3c31516243af90d018",
+              "selectionSha256": "b334e40260fc6d74c09888cad542d1bf384321cfb163c644c8168a96e3247f5c",
               "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "sourceSha256": "b97a8177e810f011b70c91a4488b3e574ee0a759b999744209828b9afeba466f",
               "functionUtf8Offset": 55423
             },
             "blocker": {
@@ -12156,9 +12624,9 @@
                 "fixtureId": "gfx950-compressed-hybrid-attention",
                 "kernelSymbol": "gfx950_compressed_hybrid_attention"
               },
-              "selectionSha256": "0800f56837ad81d917934c3d62e179d6e3fabfd4ca2db54469df709cb383dd02",
+              "selectionSha256": "d56c8533dbd8f72c12be785485e39e0d1a43f717d2828f091e0709e05582c3ae",
               "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "sourceSha256": "b97a8177e810f011b70c91a4488b3e574ee0a759b999744209828b9afeba466f",
               "functionUtf8Offset": 55423
             },
             "blocker": {
@@ -12199,9 +12667,9 @@
                 "fixtureId": "gfx950-content-sparse-attention-reciprocal-reuse",
                 "kernelSymbol": "gfx950_content_sparse_attention"
               },
-              "selectionSha256": "e8871fa28d893c0aa0a40f8b58514fec174811eccfb1862281b6993c8a53296d",
+              "selectionSha256": "a906b69454d34d3525f43fc1aebbd50ebf248e4b1e3d80bd759c8853936b0b29",
               "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "sourceSha256": "b97a8177e810f011b70c91a4488b3e574ee0a759b999744209828b9afeba466f",
               "functionUtf8Offset": 24024
             },
             "blocker": {
@@ -12242,9 +12710,9 @@
                 "fixtureId": "gfx950-content-sparse-attention",
                 "kernelSymbol": "gfx950_content_sparse_attention"
               },
-              "selectionSha256": "4fecba07973f3b96ab6ff600535ca70a510d6e355c483dc4ffa00eb6943084a4",
+              "selectionSha256": "33fed5034428d919f863a01e748adb56ec5923fb154b46cbe8f5b1e8ad020885",
               "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "sourceSha256": "b97a8177e810f011b70c91a4488b3e574ee0a759b999744209828b9afeba466f",
               "functionUtf8Offset": 24024
             },
             "blocker": {
@@ -12285,9 +12753,9 @@
                 "fixtureId": "gfx950-deepseek-sparse-attention",
                 "kernelSymbol": "gfx950_deepseek_sparse_attention"
               },
-              "selectionSha256": "908974bc1dca47b6f33003e8aacd6c9668d104d1d5669493704b093fc237f1c6",
+              "selectionSha256": "13371fd7f76ee6ad4879a672620e3414bee54d52e47cf2003b8dd475b6324588",
               "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "sourceSha256": "b97a8177e810f011b70c91a4488b3e574ee0a759b999744209828b9afeba466f",
               "functionUtf8Offset": 42129
             },
             "blocker": {
@@ -12328,7 +12796,7 @@
                 "fixtureId": "gfx950-four-branch-residual-explicit",
                 "kernelSymbol": "gfx950_four_branch_residual"
               },
-              "selectionSha256": "1965bbfd4ac3a3d6b07c5946d5e35a131dab3f5edf0d7d988c9f3fc6e75c0964",
+              "selectionSha256": "e1e358f5e9011c88377908c07ff1817c9a8ac90104fbb529db2a134555dea507",
               "sourcePath": "examples/gfx950_advanced_attention/src/ablation.rs",
               "sourceSha256": "e5bd1cabc0d0e54610fb9b0e9ba3ac68843b6e442518a63776f1526023e19730",
               "functionUtf8Offset": 3730
@@ -12365,31 +12833,42 @@
             "kind": "simt",
             "status": "source-bound",
             "source": {
-              "implementationKernelId": "fixture:gfx950-four-branch-residual:gfx950_four_branch_residual",
+              "implementationKernelId": "fixture:gfx950-four-branch-residual-simt:gfx950_four_branch_residual",
               "selection": {
                 "kind": "fixture",
-                "fixtureId": "gfx950-four-branch-residual",
+                "fixtureId": "gfx950-four-branch-residual-simt",
                 "kernelSymbol": "gfx950_four_branch_residual"
               },
-              "selectionSha256": "3a1ce674e11334adb6520cccb574618476098675b66c5045f8a01a89cd13a0dc",
+              "selectionSha256": "e57f735115c75aed9d2ac499be1da53a3c932b89d89fa57851b2b89226d371c6",
               "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
-              "functionUtf8Offset": 69970
+              "sourceSha256": "b97a8177e810f011b70c91a4488b3e574ee0a759b999744209828b9afeba466f",
+              "functionUtf8Offset": 70077
             },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
+              "reason": "Exact simt source is associated; per-target simulation, runtime, proof, and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-four-branch-residual-tile:gfx950_four_branch_residual",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-four-branch-residual-tile",
+                "kernelSymbol": "gfx950_four_branch_residual"
+              },
+              "selectionSha256": "78b936a505dff2faa329545dea44caf812f048da56fd401eeee9783f91beabf7",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel_tile_mixing.rs",
+              "sourceSha256": "bbd587558466392915ba40796c0bf29486d27db723c9de9965238ea01328046b",
+              "functionUtf8Offset": 3060
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact tile source is associated; per-target simulation, runtime, proof, and hardware qualification remain pending."
             }
           }
         ]
@@ -12766,7 +13245,7 @@
                 "fixtureId": "gfx950-kda-decode-baseline",
                 "kernelSymbol": "gfx950_kda_decode"
               },
-              "selectionSha256": "59459fca6e2baae9c04543a328e6849e70e016e8bd48679ca4607ff39b09401d",
+              "selectionSha256": "673ca99fe056c91c0223765abfb392c9d4a4bc4d1160891042d0f9c021ed3b4d",
               "sourcePath": "examples/gfx950_advanced_attention/src/kda_baseline.rs",
               "sourceSha256": "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455",
               "functionUtf8Offset": 1610
@@ -12809,9 +13288,9 @@
                 "fixtureId": "gfx950-kda-decode",
                 "kernelSymbol": "gfx950_kda_decode"
               },
-              "selectionSha256": "d78ab368e5c98cb1a03407db80823bc175183f4b3b345035ba35bfdb609fb4f7",
+              "selectionSha256": "572966a06a373aff16d903c00280ff00a72aee55e21b89b32cf3188c4244e828",
               "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "sourceSha256": "b97a8177e810f011b70c91a4488b3e574ee0a759b999744209828b9afeba466f",
               "functionUtf8Offset": 10324
             },
             "blocker": {
@@ -12852,7 +13331,7 @@
                 "fixtureId": "gfx950-kda-prefill-baseline",
                 "kernelSymbol": "gfx950_kda_chunkwise_prefill"
               },
-              "selectionSha256": "c062ca8eb9da1acb5923d055d1abdb0200bc693f59c49dd0fa9ba8ce3a697c7d",
+              "selectionSha256": "6d77c6f9f45ca0a3f28c764377f73b8bfff1247e6e64fa4f06f24c458ee236fe",
               "sourcePath": "examples/gfx950_advanced_attention/src/kda_baseline.rs",
               "sourceSha256": "44a5f7b196b4a62bf197cb694290b7a71db8f2d9c168b3fa3b018c725eae2455",
               "functionUtf8Offset": 4908
@@ -12895,9 +13374,9 @@
                 "fixtureId": "gfx950-kda-prefill",
                 "kernelSymbol": "gfx950_kda_chunkwise_prefill"
               },
-              "selectionSha256": "c72385fcac21097cc5d28577211de148ba920215fc86bb12e83fc4645f7ff0bf",
+              "selectionSha256": "7dbffe2f226784ce9b01d7d8d7e94c129be226753d3fdb3947f5e9607186b06a",
               "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
+              "sourceSha256": "b97a8177e810f011b70c91a4488b3e574ee0a759b999744209828b9afeba466f",
               "functionUtf8Offset": 15126
             },
             "blocker": {
@@ -12938,7 +13417,7 @@
                 "fixtureId": "gfx950-mhc-sinkhorn-mix-scalar",
                 "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
               },
-              "selectionSha256": "2a6091df527146506c352aa6602961c55f7783946b99ddd61a67aefa72a9d5d5",
+              "selectionSha256": "7d5e66d95a7907fd4e5812948d1b7fce4a2a945239d45ba354d5f141fe2e9e57",
               "sourcePath": "examples/gfx950_advanced_attention/src/ablation.rs",
               "sourceSha256": "e5bd1cabc0d0e54610fb9b0e9ba3ac68843b6e442518a63776f1526023e19730",
               "functionUtf8Offset": 5895
@@ -12975,31 +13454,42 @@
             "kind": "simt",
             "status": "source-bound",
             "source": {
-              "implementationKernelId": "fixture:gfx950-mhc-sinkhorn-mix:gfx950_mhc_sinkhorn_mix",
+              "implementationKernelId": "fixture:gfx950-mhc-sinkhorn-mix-simt:gfx950_mhc_sinkhorn_mix",
               "selection": {
                 "kind": "fixture",
-                "fixtureId": "gfx950-mhc-sinkhorn-mix",
+                "fixtureId": "gfx950-mhc-sinkhorn-mix-simt",
                 "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
               },
-              "selectionSha256": "61e7d5a18282ca9a904a5ab62dcca0dad68d88166aaca3c8b2d638ad4d5528d5",
+              "selectionSha256": "ffe202ba2361bc44dab40198069e7b93f7dc38ec54c2b890b17f16a1a8ab3103",
               "sourcePath": "examples/gfx950_advanced_attention/src/kernel.rs",
-              "sourceSha256": "b37d2717079a596f0efac2de38bf670e96364f931b01622fc59b5e2506f11240",
-              "functionUtf8Offset": 73034
+              "sourceSha256": "b97a8177e810f011b70c91a4488b3e574ee0a759b999744209828b9afeba466f",
+              "functionUtf8Offset": 73192
             },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "SIMT source is associated; required per-target source export, simulation, final artifact, and KFD evidence remain pending."
+              "reason": "Exact simt source is associated; per-target simulation, runtime, proof, and hardware qualification remain pending."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-mhc-sinkhorn-mix-tile:gfx950_mhc_sinkhorn_mix",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-mhc-sinkhorn-mix-tile",
+                "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
+              },
+              "selectionSha256": "34af44def3d988a379e2fa5df63045e2093e7ee57b904329221c9796226e6f47",
+              "sourcePath": "examples/gfx950_advanced_attention/src/kernel_tile_mixing.rs",
+              "sourceSha256": "bbd587558466392915ba40796c0bf29486d27db723c9de9965238ea01328046b",
+              "functionUtf8Offset": 4836
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact tile source is associated; per-target simulation, runtime, proof, and hardware qualification remain pending."
             }
           }
         ]
@@ -13769,6 +14259,198 @@
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
               "reason": "A genuine mixed source implementation and per-target source, simulator, native artifact, generated-host and direct-KFD qualification remain pending on gfx942/mi300x and gfx950/mi350."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-attnres-aggregate-simt:gfx950_attnres_aggregate",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-attnres-aggregate-simt",
+            "kernelSymbol": "gfx950_attnres_aggregate"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-attnres-aggregate-tile:gfx950_attnres_aggregate",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-attnres-aggregate-tile",
+            "kernelSymbol": "gfx950_attnres_aggregate"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-four-branch-residual-simt:gfx950_four_branch_residual",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-four-branch-residual-simt",
+            "kernelSymbol": "gfx950_four_branch_residual"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-four-branch-residual-tile:gfx950_four_branch_residual",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-four-branch-residual-tile",
+            "kernelSymbol": "gfx950_four_branch_residual"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-mhc-sinkhorn-mix-simt:gfx950_mhc_sinkhorn_mix",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-mhc-sinkhorn-mix-simt",
+            "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-mhc-sinkhorn-mix-tile:gfx950_mhc_sinkhorn_mix",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-mhc-sinkhorn-mix-tile",
+            "kernelSymbol": "gfx950_mhc_sinkhorn_mix"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "pending",
+            "source": null,
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
             }
           }
         ]

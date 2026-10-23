@@ -143,6 +143,32 @@ mod ablation;
 ))]
 mod kda_baseline;
 
+#[cfg(all(
+    target_arch = "amdgpu",
+    any(
+        all(feature = "kernel-attnres-aggregate-simt", feature = "kernel-attnres-aggregate-tile"),
+        all(feature = "kernel-attnres-aggregate-simt", feature = "kernel-attnres-aggregate-explicit-reuse-v1"),
+        all(feature = "kernel-attnres-aggregate-tile", feature = "kernel-attnres-aggregate-explicit-reuse-v1"),
+        all(feature = "kernel-four-branch-residual-simt", feature = "kernel-four-branch-residual-tile"),
+        all(feature = "kernel-four-branch-residual-simt", feature = "kernel-four-branch-residual-explicit-v1"),
+        all(feature = "kernel-four-branch-residual-tile", feature = "kernel-four-branch-residual-explicit-v1"),
+        all(feature = "kernel-mhc-sinkhorn-mix-simt", feature = "kernel-mhc-sinkhorn-mix-tile"),
+        all(feature = "kernel-mhc-sinkhorn-mix-simt", feature = "kernel-mhc-sinkhorn-mix-scalar-v1"),
+        all(feature = "kernel-mhc-sinkhorn-mix-tile", feature = "kernel-mhc-sinkhorn-mix-scalar-v1")
+    )
+))]
+compile_error!("select one SIMT, tile, or legacy ablation mode for an advanced mixing kernel");
+
+#[cfg(all(
+    target_arch = "amdgpu",
+    any(
+        feature = "kernel-attnres-aggregate-tile",
+        feature = "kernel-four-branch-residual-tile",
+        feature = "kernel-mhc-sinkhorn-mix-tile"
+    )
+))]
+mod kernel_tile_mixing;
+
 pub mod kernel;
 #[cfg(not(target_arch = "amdgpu"))]
 pub mod reference;
