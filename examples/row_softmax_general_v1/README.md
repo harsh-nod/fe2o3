@@ -78,6 +78,10 @@ publication, protected execution, proof/refinement receipt or artifact-currentne
 authority. The original `fe2o3-host` dependency and default production boundary
 remain. No verifier, proof, or receipt requirement is disabled or synthesized.
 
+The host `fe2o3-core` dependency is optional: only
+`qualification-legacy-hip` enables it and its native launch support. Default
+and `structured-tile` CPU tests do not select HIP through this package.
+
 All input/output allocations have leading and trailing bit canaries. Every
 input bit is checked after completion; every logical output and every guard
 or padding element is checked. Non-finite logical results reject. Empty

@@ -21,16 +21,19 @@ SHA256SUM=sha256sum
 OUTPUT_ROOT=${FE2O3_OUTPUT_DIR:-$SCRIPT_DIR/target/fe2o3-gfx950-$MODE}
 : "${FE2O3_RUSTC_EXTRACTOR:?set the prebuilt production extractor path}"
 EXTRACTOR=$FE2O3_RUSTC_EXTRACTOR
+if [[ $EXTRACTOR != /* ]]; then EXTRACTOR="$PWD/$EXTRACTOR"; fi
 if [[ ! -f $EXTRACTOR || -L $EXTRACTOR || ! -x $EXTRACTOR ]]; then
     printf 'extractor must be a regular executable: %s\n' "$EXTRACTOR" >&2; exit 1
 fi
 EXTRACTOR_DIR=$(cd -- "$(dirname -- "$EXTRACTOR")" && pwd -P)
+EXTRACTOR="$EXTRACTOR_DIR/$(basename -- "$EXTRACTOR")"
 SYSROOT=$(rustup run "$TOOLCHAIN" rustc --print sysroot)
 source "$REPO_ROOT/examples/gfx950_low_precision/gfx950-ocml-closure.sh"
 FE2O3_GFX950_OCML_MANIFEST=${FE2O3_GFX950_OCML_MANIFEST:-$REPO_ROOT/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.4.manifest} validate_gfx950_ocml_closure
 OCML_ARGS=()
 OCML_ARGS=("${GFX950_OCML_CLANG_ARGS[@]}")
 mkdir -p -- "$OUTPUT_ROOT"
+OUTPUT_ROOT=$(cd -- "$OUTPUT_ROOT" && pwd -P)
 ATTEMPT=$(mktemp -d "$OUTPUT_ROOT/attempt.XXXXXX")
 chmod 700 "$ATTEMPT"
 LLVM_IR=$ATTEMPT/$STEM.ll
