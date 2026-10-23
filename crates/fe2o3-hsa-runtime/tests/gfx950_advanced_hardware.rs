@@ -1262,7 +1262,7 @@ fn attention_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
             }
         }
         "gfx950_content_sparse_attention" | "gfx950_compressed_hybrid_attention" => {
-            if case == SPARSE_ATTENTION {
+            if [SPARSE_ATTENTION, SPARSE_ATTENTION_SIMT].contains(&case) {
                 let mut physical_q = Vec::new();
                 let mut key = Vec::new();
                 let mut value = Vec::new();
@@ -2310,8 +2310,10 @@ fn plans_for(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
         KDA_DECODE,
         KDA_PREFILL,
         SPARSE_ATTENTION,
+        SPARSE_ATTENTION_SIMT,
         DEEPSEEK_SPARSE_ATTENTION,
         HYBRID_ATTENTION,
+        HYBRID_ATTENTION_SIMT,
         ATTNRES,
         FOUR_BRANCH,
         MHC,
@@ -3441,4 +3443,273 @@ fn gpt_oss_tile_fixture_preserves_all_values_and_guards() -> Result<(), BoxError
         );
     }
     Ok(())
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_kda_decode_simt_rust_cov6_matches_cpu_reference,
+    KDA_DECODE
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_kda_decode_tile_rust_cov6_matches_cpu_reference,
+    KDA_DECODE
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_kda_chunkwise_prefill_simt_rust_cov6_matches_cpu_reference,
+    KDA_PREFILL
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_kda_chunkwise_prefill_tile_rust_cov6_matches_cpu_reference,
+    KDA_PREFILL
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_deepseek_sparse_attention_simt_rust_cov6_matches_cpu_reference,
+    DEEPSEEK_SPARSE_ATTENTION
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_deepseek_sparse_attention_tile_rust_cov6_matches_cpu_reference,
+    DEEPSEEK_SPARSE_ATTENTION
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn gfx950_kda_c_oracle_maps_all_value_major_state_and_eight_token_words() {
+    // Distinct exact f32 values identify every logical coordinate. These raw
+    // oracle layouts are shared by canonical SIMT and checked tile.
+    let state: Vec<f32> = (0..256)
+        .map(|i| f32::from_bits(0x3f000001 + i as u32))
+        .collect();
+    let tokens: Vec<f32> = (0..128)
+        .map(|i| f32::from_bits(0x3e800001 + i as u32))
+        .collect();
+    let physical = kda_state_value_major(&state);
+    for batch in 0..4 {
+        for value in 0..16 {
+            for key in 0..16 {
+                let parent_row = batch * 16 + value;
+                let tile_address = parent_row * 16 + key;
+                assert_eq!(tile_address, batch * 256 + value * 16 + key);
+                assert_eq!(
+                    physical[value * 16 + key].to_bits(),
+                    state[key * 16 + value].to_bits()
+                );
+                for chunk in 0..2 {
+                    let packed = kda_replicated_chunk_output(&tokens, chunk);
+                    assert_eq!(
+                        packed[value * 16 + key].to_bits(),
+                        tokens[(chunk * 4 + key / 4) * 16 + value].to_bits()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn gfx950_kda_oracle_checks_every_f32_state_and_token_output_word() {
+    // Canonical SIMT and checked tile use these same complete oracle plans.
+    for (case, output_count) in [(KDA_DECODE, 2), (KDA_PREFILL, 3)] {
+        let plans = plans_for(case).expect("complete KDA plans");
+        assert_eq!(plans.len(), 1);
+        let mut outputs = 0;
+        for buffer in &plans[0].buffers {
+            if buffer.immutable {
+                assert!(buffer.expected.is_none());
+                continue;
+            }
+            let Some(ExpectedOutput::F32 {
+                values, exact_mask, ..
+            }) = &buffer.expected
+            else {
+                panic!("every KDA output must retain its f32 oracle");
+            };
+            assert_eq!(
+                values.len(),
+                MULTIGRID_WORKGROUPS_V1 * KDA_STATE_ELEMENTS_V1
+            );
+            assert!(values.iter().all(|value| value.is_finite()));
+            assert!(exact_mask.is_none());
+            let bytes = value_bytes(values);
+            assert_eq!(bytes.len(), values.len() * 4);
+            let mut valid = buffer.initial.clone();
+            valid[buffer.body_offset..buffer.body_offset + bytes.len()].copy_from_slice(&bytes);
+            verify_buffer(buffer, &valid).expect("complete expected f32 bytes accepted");
+            assert!(
+                verify_buffer(buffer, &buffer.initial).is_err(),
+                "unwritten output must fail"
+            );
+            for word in 0..values.len() {
+                let offset = buffer.body_offset + word * 4;
+                let saved: [u8; 4] = valid[offset..offset + 4].try_into().unwrap();
+                valid[offset..offset + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+                assert!(
+                    verify_buffer(buffer, &valid).is_err(),
+                    "unverified output word {word}"
+                );
+                valid[offset..offset + 4].copy_from_slice(&saved);
+            }
+            outputs += 1;
+        }
+        assert_eq!(outputs, output_count);
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn deepseek_oracles_reject_every_corrupted_output_word() {
+    for case in [DEEPSEEK_SPARSE_ATTENTION] {
+        let plans = plans_for(case).expect("complete existing oracle plans");
+        assert_eq!(plans.len(), 1);
+        let mut output_sizes = Vec::new();
+        for buffer in &plans[0].buffers {
+            if buffer.immutable {
+                assert!(buffer.expected.is_none());
+                continue;
+            }
+            let expected = buffer
+                .expected
+                .as_ref()
+                .expect("every output has an oracle");
+            let (bytes, floating) = match expected {
+                ExpectedOutput::F32 {
+                    values, exact_mask, ..
+                } => {
+                    if let Some(mask) = exact_mask {
+                        assert_eq!(mask.len(), values.len());
+                        assert!(mask.iter().any(|&exact| exact));
+                        assert!(mask.iter().any(|&exact| !exact));
+                    }
+                    (value_bytes(values), true)
+                }
+                ExpectedOutput::U32(values) => (value_bytes(values), false),
+                ExpectedOutput::I32(_) => panic!("these kernels have no signed output"),
+            };
+            output_sizes.push(expected.element_count());
+            let mut valid = buffer.initial.clone();
+            valid[buffer.body_offset..buffer.body_offset + bytes.len()].copy_from_slice(&bytes);
+            verify_buffer(buffer, &valid).expect("full original expected output accepted");
+            assert!(verify_buffer(buffer, &buffer.initial).is_err());
+            for word in 0..expected.element_count() {
+                let offset = buffer.body_offset + word * 4;
+                let saved: [u8; 4] = valid[offset..offset + 4].try_into().unwrap();
+                let corrupt = if floating {
+                    f32::NAN.to_le_bytes()
+                } else {
+                    (u32::from_le_bytes(saved) ^ 1).to_le_bytes()
+                };
+                valid[offset..offset + 4].copy_from_slice(&corrupt);
+                assert!(
+                    verify_buffer(buffer, &valid).is_err(),
+                    "unverified {} word {word}",
+                    buffer.name
+                );
+                valid[offset..offset + 4].copy_from_slice(&saved);
+            }
+        }
+        output_sizes.sort_unstable();
+        assert_eq!(output_sizes, [1024, 1024, 1024]);
+    }
+}
+
+
+#[cfg(feature = "hardware-test-hooks")]
+const SPARSE_ATTENTION_SIMT: AdvancedCase = AdvancedCase {
+    label: "gfx950 content sparse attention SIMT",
+    static_lds_bytes: 0,
+    ..SPARSE_ATTENTION
+};
+
+
+#[cfg(feature = "hardware-test-hooks")]
+const HYBRID_ATTENTION_SIMT: AdvancedCase = AdvancedCase {
+    label: "gfx950 compressed hybrid attention SIMT",
+    static_lds_bytes: 0,
+    ..HYBRID_ATTENTION
+};
+
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_content_sparse_attention_tile_rust_cov6_matches_cpu_reference,
+    SPARSE_ATTENTION
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_content_sparse_attention_simt_rust_cov6_matches_cpu_reference,
+    SPARSE_ATTENTION_SIMT
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_compressed_hybrid_attention_tile_rust_cov6_matches_cpu_reference,
+    HYBRID_ATTENTION
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_compressed_hybrid_attention_simt_rust_cov6_matches_cpu_reference,
+    HYBRID_ATTENTION_SIMT
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn gfx950_attention_simt_cases_preserve_independent_oracle_payloads() {
+    for (tile, simt) in [
+        (SPARSE_ATTENTION, SPARSE_ATTENTION_SIMT),
+        (HYBRID_ATTENTION, HYBRID_ATTENTION_SIMT),
+    ] {
+        assert_eq!(tile.static_lds_bytes, 8192);
+        assert_eq!(simt.static_lds_bytes, 0);
+        assert_eq!(tile.export, simt.export);
+        assert_eq!(tile.descriptor, simt.descriptor);
+        assert_eq!(tile.args, simt.args);
+        assert_eq!(tile.workgroup_x, simt.workgroup_x);
+        let tile_plans = plans_for(tile).expect("tile oracle plans");
+        let simt_plans = plans_for(simt).expect("SIMT oracle plans");
+        assert_eq!(tile_plans.len(), simt_plans.len());
+        for (tile_plan, simt_plan) in tile_plans.iter().zip(&simt_plans) {
+            assert_eq!(tile_plan.args.len(), simt_plan.args.len());
+            assert_eq!(tile_plan.buffers.len(), simt_plan.buffers.len());
+            for (tile_buffer, simt_buffer) in tile_plan.buffers.iter().zip(&simt_plan.buffers) {
+                assert_eq!(tile_buffer.name, simt_buffer.name);
+                assert_eq!(tile_buffer.initial, simt_buffer.initial);
+                assert_eq!(tile_buffer.body_offset, simt_buffer.body_offset);
+                assert_eq!(tile_buffer.elements, simt_buffer.elements);
+                assert_eq!(tile_buffer.immutable, simt_buffer.immutable);
+                match (&tile_buffer.expected, &simt_buffer.expected) {
+                    (None, None) => {}
+                    (
+                        Some(ExpectedOutput::F32 {
+                            values: tile_values,
+                            absolute_tolerance: tile_absolute,
+                            relative_tolerance: tile_relative,
+                            exact_mask: tile_mask,
+                        }),
+                        Some(ExpectedOutput::F32 {
+                            values: simt_values,
+                            absolute_tolerance: simt_absolute,
+                            relative_tolerance: simt_relative,
+                            exact_mask: simt_mask,
+                        }),
+                    ) => {
+                        assert_eq!(value_bytes(tile_values), value_bytes(simt_values));
+                        assert_eq!(tile_absolute, simt_absolute);
+                        assert_eq!(tile_relative, simt_relative);
+                        assert_eq!(tile_mask, simt_mask);
+                    }
+                    (
+                        Some(ExpectedOutput::U32(tile_values)),
+                        Some(ExpectedOutput::U32(simt_values)),
+                    ) => {
+                        assert_eq!(tile_values, simt_values);
+                    }
+                    _ => panic!("tile and SIMT attention oracle output contracts differ"),
+                }
+            }
+        }
+    }
 }
