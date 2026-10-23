@@ -797,7 +797,7 @@ class TutorialKernelSourceContractTests(unittest.TestCase):
         self.assertEqual(Counter(row["classification"] for row in inventory["displayItems"]),
                          {"kernel": 80, "required-negative": 3, "conceptual": 26, "helper": 25})
         self.assertEqual(Counter(row["bindingStatus"] for row in inventory["displayItems"]),
-                         {"pending": 7, "source-driver-contract": 14, "fixture-source-contract": 62,
+                         {"pending": 8, "source-driver-contract": 14, "fixture-source-contract": 61,
                           "not-applicable": 51})
         self.assertEqual([row["caseOrdinal"] for row in inventory["negativeCases"]], [6, 7, 8])
         bound = [(row["kernelId"], variant["kind"])

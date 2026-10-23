@@ -10378,11 +10378,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gemm_autoresearch_v1/Cargo.toml",
-        "packageManifestSha256": "44789cfe4a214f59e60a62f917eb9a16a0bc9e85f069fe100d83f01c16672b79",
+        "packageManifestSha256": "319a298f6638b475e6fbffd529cb857c620910921d6456320917f02e875f5507",
         "sourcePaths": [
           "examples/gemm_autoresearch_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "27aacc5240c9a85df607f1a4a9f38eed8105a86954c6efdced16c507969d7e03",
+        "sourceClosureSha256": "8bbc130e3a807806c13de78f1d0364b7437372686f00fe47c046a75aec122bb2",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gemm_autoresearch_v1",
@@ -10395,7 +10395,7 @@
         ],
         "cargoLockPath": "examples/gemm_autoresearch_v1/Cargo.lock",
         "cargoLockSha256": "0cd2dffcdd0cbb97213e8c10863fbd46c59d592cb9a5b1c3708da07b0b392d9e",
-        "contractSha256": "ecd932bdfc30e1dc5ee327e35cc159420e5cdbf1339eda906518921b8920269a"
+        "contractSha256": "00797d632d486a30dab8e547ff58629aaace8442db63bffc8079bc54823e3f99"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-gemm-autoresearch.request.json",
@@ -19207,8 +19207,8 @@
           "fixture:gfx942-gemm-autoresearch:gemm_autoresearch_v1"
         ],
         "negativeCases": [],
-        "bindingStatus": "fixture-source-contract",
-        "reason": "The exact whole-file display and physical function offset bind the registered fixture source selection only; historical execution evidence does not qualify a SIMT/tile pair."
+        "bindingStatus": "pending",
+        "reason": "Historical winning candidate at the retained public source pin is not the current package body. Its existing identity and execution record are retained; a fresh current-source association is pending."
       },
       {
         "lessonId": "gemm-autoresearch",

@@ -159,9 +159,9 @@ class WholeFileFixtureBindingTests(FixtureBindingTests):
             "f160e1391e1b354657049b5b11d745428fbbfb8fb6e5e2fceb4143ac93e7b00b",
             [885, 1688, 15154, 15319]),
         "gemm-autoresearch": (
-            "gfx942-gemm-autoresearch", "gemm_autoresearch_v1", 4842,
-            "3199202452896fa59e0e3f7f5e7f6e656636af039d4bf5b0718febc5edf8f9d0",
-            [712, 1380, 4491]),
+            "gfx942-gemm-autoresearch", "gemm_autoresearch_v1", 5194,
+            "abae10d3a6657c89358a5fecf72359d120b917d0664f7df51de3f7b61b1b4f54",
+            [719, 1383, 4843]),
         "gemm-tiling": (
             "gfx942-tiled-gemm", "tiled_gemm_general_v1", 7111,
             "ef3bbea31da5311bfb5bfb9edb9f43569e602501c079bebb16eb5f0c6b5973b4",
@@ -212,6 +212,17 @@ class WholeFileFixtureBindingTests(FixtureBindingTests):
             self.assertEqual(len(physical), size)
             self.assertEqual(hashlib.sha256(physical).hexdigest(), digest)
             rows = [row for row in inventory["displayItems"] if row["lessonId"] == lesson["lessonId"]]
+            if lesson["lessonId"] == "gemm-autoresearch":
+                # Current-source test projection; the published snapshot stays historical.
+                self.assertEqual(tab["displayedUtf8Bytes"], 4842)
+                self.assertEqual(tab["sourceSha256"],
+                                 "3199202452896fa59e0e3f7f5e7f6e656636af039d4bf5b0718febc5edf8f9d0")
+                tab.update(displayedUtf8Bytes=size, displayedSha256=digest, sourceSha256=digest)
+                for row, offset in zip(rows, offsets, strict=True):
+                    row["functionUtf8Offset"] = offset
+                    if row["classification"] == "kernel":
+                        self.assertEqual(row["bindingStatus"], "pending")
+                        row["bindingStatus"] = "fixture-source-contract"
             if lesson["lessonId"] == "gemm-tiling":
                 # The published current view is source-only; this test projection
                 # exercises its exact physical fixture without qualifying the lesson.
@@ -232,6 +243,60 @@ class WholeFileFixtureBindingTests(FixtureBindingTests):
                 {**tab, "displayedCode": physical.decode("utf-8"), "sourceFragments": None},
             ]})
         return document, runtime
+
+    def historical_autoresearch_document(self):
+        document = copy.deepcopy(self.original)
+        fixture_id = "gfx942-gemm-autoresearch"
+        identity = "fixture:gfx942-gemm-autoresearch:gemm_autoresearch_v1"
+        document["compilerFixtures"] = [row for row in document["compilerFixtures"]
+                                        if row["fixtureId"] == fixture_id]
+        inventory = document["kernelInventory"]
+        inventory["kernels"] = [row for row in inventory["kernels"] if row["kernelId"] == identity]
+        inventory["negativeCases"] = []
+        inventory["displayItems"] = [row for row in inventory["displayItems"]
+                                    if row["lessonId"] == "gemm-autoresearch" and row["tabOrdinal"] == 0]
+        document["curriculum"]["lessons"] = [row for row in document["curriculum"]["lessons"]
+                                           if row["lessonId"] == "gemm-autoresearch"]
+        lesson = document["curriculum"]["lessons"][0]
+        lesson["codeTabs"] = lesson["codeTabs"][:1]
+        tab = lesson["codeTabs"][0]
+        historical = (ROOT / "scripts/tests/fixtures/gemm-autoresearch-winning-0e.rs.txt").read_bytes()
+        self.assertEqual(len(historical), 4842)
+        self.assertEqual(hashlib.sha256(historical).hexdigest(),
+                         "3199202452896fa59e0e3f7f5e7f6e656636af039d4bf5b0718febc5edf8f9d0")
+        runtime = {"schema": self.parent.SITE_INVENTORY_SCHEMA,
+                   "site": document["curriculum"]["site"], "lessons": [
+                       {"id": "gemm-autoresearch", "codeTabs": [
+                           {**tab, "displayedCode": historical.decode("utf-8"), "sourceFragments": None}]}]}
+        self.parent.validate_site_inventory(document["curriculum"], runtime)
+        return document, runtime
+
+    def test_historical_autoresearch_pending_preserves_source_and_identity(self):
+        document, runtime = self.historical_autoresearch_document()
+        tab = document["curriculum"]["lessons"][0]["codeTabs"][0]
+        self.assertEqual(tab["sourceCommit"], "9006001157e2c3062e44088634e467b0f8963ee0")
+        self.assertIsNone(tab["sourceItem"])
+        self.assertEqual(tab["sourceItemStatus"], "pending")
+        rows = document["kernelInventory"]["displayItems"]
+        self.assertEqual([row["functionUtf8Offset"] for row in rows], [712, 1380, 4491])
+        kernel = next(row for row in rows if row["classification"] == "kernel")
+        self.assertEqual(kernel["kernelIds"], ["fixture:gfx942-gemm-autoresearch:gemm_autoresearch_v1"])
+        self.assertEqual(kernel["bindingStatus"], "pending")
+        self.parent.validate_kernel_inventory(document, runtime, repo_root=ROOT)
+
+    def test_historical_autoresearch_cannot_claim_current_fixture(self):
+        document, runtime = self.historical_autoresearch_document()
+        kernel = next(row for row in document["kernelInventory"]["displayItems"]
+                      if row["classification"] == "kernel")
+        kernel["bindingStatus"] = "fixture-source-contract"
+        with self.assertRaisesRegex(SystemExit, "exact current source occurrence"):
+            self.parent.validate_kernel_inventory(document, runtime, repo_root=ROOT)
+
+    def test_historical_autoresearch_modified_bytes_do_not_reuse_old_digest(self):
+        document, runtime = self.historical_autoresearch_document()
+        runtime["lessons"][0]["codeTabs"][0]["displayedCode"] += "\n"
+        with self.assertRaises(SystemExit):
+            self.parent.validate_site_inventory(document["curriculum"], runtime)
 
     def test_different_compilation_feature_rejects(self):
         document, runtime = self.document()
