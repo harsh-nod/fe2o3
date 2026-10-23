@@ -9084,7 +9084,7 @@
       },
       "compilerInput": {
         "packageManifest": "examples/vecadd/Cargo.toml",
-        "packageManifestSha256": "2560d2b102ea88166f62ea4aa7f794b385805c3fcb3a47d81ba514c92f183135",
+        "packageManifestSha256": "ae57176496b0b21ef479fcb97461894db098a4714a1be29bd92722eee503dbf3",
         "sourcePaths": [
           "examples/vecadd/src/lib.rs"
         ],
@@ -9101,7 +9101,7 @@
         ],
         "cargoLockPath": "Cargo.lock",
         "cargoLockSha256": "e1bdb7008c2771f7f52f1b337337ff95f9e37c547e3b99a79c2e516a26c18bc9",
-        "contractSha256": "c32f8c93231ae96791ec92ebc5327862a399e4aa9fbe8e4aa4e140fcf4471a67"
+        "contractSha256": "dcc871e825f025f1354b0b0d2202d5da392d4b7c7513e188799f5140780daa7a"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-typed-vecadd-source.request.json",
@@ -11866,7 +11866,7 @@
                 "fixtureId": "gfx942-typed-vecadd-source",
                 "kernelSymbol": "vecadd"
               },
-              "selectionSha256": "56e1ded2720ae699aab10c8a64ce69515d47031a84d46ba364fb4a435dbaae40",
+              "selectionSha256": "30110af37cd9adad5a91752f8f82064d04e09503431a59ee3d4e5d0dbb86c2f5",
               "sourcePath": "examples/vecadd/src/lib.rs",
               "sourceSha256": "96a6d5774c0d36661540829025194c918100abcce53fed91cae3c909aea67345",
               "functionUtf8Offset": 299

@@ -196,6 +196,9 @@ strip = "debuginfo"
 [profile.test.package.fe2o3-vecadd]
 strip = "debuginfo"
 
+[profile.test.package.fe2o3-fill]
+strip = "debuginfo"
+
 [profile.test.package.fe2o3-scalar-gemm-v1]
 strip = "debuginfo"
 
