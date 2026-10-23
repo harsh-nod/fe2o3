@@ -40,7 +40,28 @@ if [[ $SUITE == systems ]]; then
             exit 2 ;;
     esac
 fi
-BUILD_FEATURES=$FEATURE${EXTRA_FEATURE:+,$EXTRA_FEATURE}
+ADVANCED_MODE=${FE2O3_GFX950_ADVANCED_MODE:-canonical}
+MODE_FEATURE=
+if [[ $ADVANCED_MODE != canonical ]]; then
+    case "$SUITE:$FEATURE:$ADVANCED_MODE" in
+        gpt_oss:kernel-gpt-oss-decode:simt|gpt_oss:kernel-gpt-oss-decode:tile|\
+        gpt_oss:kernel-gpt-oss-decode-router-serial:simt|gpt_oss:kernel-gpt-oss-decode-router-serial:tile|\
+        gpt_oss:kernel-gpt-oss-decode-held-fragments:simt|gpt_oss:kernel-gpt-oss-decode-held-fragments:tile|\
+        gpt_oss:kernel-gpt-oss-decode-interleaved-stores:simt|gpt_oss:kernel-gpt-oss-decode-interleaved-stores:tile|\
+        gpt_oss:kernel-gpt-oss-decode-scalar-attention:simt|gpt_oss:kernel-gpt-oss-decode-scalar-attention:tile|\
+        gpt_oss:kernel-gpt-oss-decode-pipelined-attention:simt|gpt_oss:kernel-gpt-oss-decode-pipelined-attention:tile|\
+        gpt_oss:kernel-gpt-oss-router-component:simt|gpt_oss:kernel-gpt-oss-router-component:tile|\
+        gpt_oss:kernel-gpt-oss-attention-component:simt|gpt_oss:kernel-gpt-oss-attention-component:tile|\
+        gpt_oss:kernel-gpt-oss-expert-component:simt|gpt_oss:kernel-gpt-oss-expert-component:tile)
+            MODE_FEATURE=kernel-gpt-oss-mode-$ADVANCED_MODE ;;
+        *)
+            printf 'unsupported advanced mode pairing: %s:%s:%s\n' \
+                "$SUITE" "$FEATURE" "$ADVANCED_MODE" >&2
+            exit 2 ;;
+    esac
+fi
+MODE=$ADVANCED_MODE
+BUILD_FEATURES=$FEATURE${EXTRA_FEATURE:+,$EXTRA_FEATURE}${MODE_FEATURE:+,$MODE_FEATURE}
 case "$SUITE:$FEATURE" in
     attention:kernel-kda-decode)
         SYMBOL=gfx950_kda_decode; KERNARG=128; WG=256; LDS=0; OCML=0
@@ -119,7 +140,7 @@ case "$SUITE:$FEATURE" in
         TEST=gfx950_gpt_oss_layer_tile_rust_cov6_matches_cpu_reference; ISA=gpt_oss_scalar_attention ;;
     gpt_oss:kernel-gpt-oss-decode-pipelined-attention)
         SYMBOL=gfx950_gpt_oss_120b_decode_megakernel_v1; KERNARG=208; WG=256; LDS=8192; OCML=1
-        TEST=gfx950_gpt_oss_pipelined_attention_rust_cov6_matches_cpu_reference; ISA=gpt_oss ;;
+        TEST=gfx950_gpt_oss_pipelined_attention_rust_cov6_matches_cpu_reference; ISA=gpt_oss_pipeline ;;
     gpt_oss:kernel-gpt-oss-router-component)
         SYMBOL=gfx950_gpt_oss_120b_router_v1; KERNARG=48; WG=256; LDS=0; OCML=0
         TEST=gfx950_gpt_oss_router_component_rust_cov6_matches_cpu_reference; ISA=scalar ;;
@@ -134,6 +155,18 @@ case "$SUITE:$FEATURE" in
         exit 2 ;;
 esac
 
+if [[ $SUITE == gpt_oss && $MODE == simt ]]; then
+    ISA=gpt_oss_simt
+    if [[ $FEATURE == kernel-gpt-oss-decode-pipelined-attention ]]; then ISA=gpt_oss_pipeline_simt; fi
+elif [[ $SUITE == gpt_oss && $MODE == tile ]]; then
+    case "$FEATURE" in
+        kernel-gpt-oss-decode-held-fragments|kernel-gpt-oss-decode-interleaved-stores|kernel-gpt-oss-decode-pipelined-attention)
+            # Checked 4x64 tiles preserve the original blocked physical layout.
+            ;;
+        *) TEST=${TEST/_rust_cov6/_tile_rust_cov6} ;;
+    esac
+fi
+
 if [[ $SUITE == attention ]]; then
     CRATE=fe2o3_gfx950_advanced_attention
 elif [[ $SUITE == systems ]]; then
@@ -146,6 +179,7 @@ REPO_ROOT=${FE2O3_REPO_ROOT:-$(cd -- "$COMMON_DIR/../.." && pwd -P)}
 TOOLCHAIN=${FE2O3_RUST_TOOLCHAIN:-nightly-2026-04-03}
 ROOT_TARGET_DIR=${FE2O3_ROOT_TARGET_DIR:-$REPO_ROOT/target}
 OUTPUT_SUFFIX=$FEATURE
+if [[ -n $MODE_FEATURE ]]; then OUTPUT_SUFFIX=$FEATURE-$ADVANCED_MODE; fi
 if [[ $SUITE == systems && $SYSTEMS_ABLATION != canonical ]]; then
     OUTPUT_SUFFIX=$FEATURE-$SYSTEMS_ABLATION
 fi
@@ -277,10 +311,61 @@ require_regex_count() {
 require_count "$LLVM_IR" 'target triple = "amdgcn-amd-amdhsa"' 1 'AMDGPU HSA target triple'
 require_count "$LLVM_IR" 'define amdgpu_kernel' 1 'kernel definition'
 require_count "$LLVM_IR" "define amdgpu_kernel void @$SYMBOL(" 1 "$SYMBOL definition"
-require_count "$LLVM_IR" '"target-cpu"="gfx950"' 1 'gfx950 function target binding'
+if [[ $SUITE == gpt_oss && $FEATURE == kernel-gpt-oss-decode-scalar-attention ]]; then
+    # Authenticated Bf16::to_f32 emits one exact alwaysinline conversion helper.
+    # Keep the kernel binding and admit only this additional pinned definition.
+    require_count "$LLVM_IR" '"target-cpu"="gfx950"' 2 'gfx950 kernel and BF16 helper target bindings'
+    require_regex_count "$LLVM_IR" '^define ' 2 'sole kernel and BF16 helper definitions'
+    require_regex_count "$LLVM_IR" "^define amdgpu_kernel void @$SYMBOL\\(.*\\) #0 !reqd_work_group_size !0 \\{$" 1 'kernel attribute group binding'
+    require_count "$LLVM_IR" 'attributes #0 = { nounwind "amdgpu-flat-work-group-size"="256,256" "target-features"="-wavefrontsize32,+wavefrontsize64,-xnack" "target-cpu"="gfx950"' 1 'bound Wave64 gfx950 kernel attributes'
+    require_count "$LLVM_IR" 'define internal float @__fe2o3_bf16_to_f32_v1(' 1 'authenticated BF16 helper definition'
+    require_count "$LLVM_IR" 'call float @__fe2o3_bf16_to_f32_v1(' 5 'raw BF16 Q/K conversion sites'
+    BF16_HELPER=$(sed -n '/^define internal float @__fe2o3_bf16_to_f32_v1(/,/^}/p' "$LLVM_IR")
+    EXPECTED_BF16_HELPER=$(cat <<'LLVM'
+define internal float @__fe2o3_bf16_to_f32_v1(i16 %bits) alwaysinline nounwind "target-cpu"="gfx950" "denormal-fp-math-f32"="ieee,ieee" "unsafe-fp-math"="false" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "approx-func-fp-math"="false" "fp-contract"="off" {
+entry:
+  %wide = zext i16 %bits to i32
+  %shifted = shl i32 %wide, 16
+  %result = bitcast i32 %shifted to float
+  ret float %result
+}
+LLVM
+)
+    if [[ $BF16_HELPER != "$EXPECTED_BF16_HELPER" ]]; then
+        printf 'LLVM validation failed: authenticated BF16 helper body differs\n' >&2
+        exit 1
+    fi
+else
+    require_count "$LLVM_IR" '"target-cpu"="gfx950"' 1 'gfx950 function target binding'
+fi
 require_count "$LLVM_IR" '"target-features"="-wavefrontsize32,+wavefrontsize64,-xnack"' 1 'Wave64/xnack- target binding'
 require_count "$LLVM_IR" '@llvm.experimental.constrained.sqrt.f32' 0 'gfx950-incompatible constrained sqrt references'
-if [[ $ISA == gpt_oss ]]; then
+if [[ $ISA == gpt_oss_simt || $ISA == gpt_oss_pipeline_simt ]]; then
+    require_count "$LLVM_IR" '@llvm.amdgcn.mfma' 0 'unexpected SIMT MFMA references'
+    require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected SIMT transpose references'
+    grep -Fq -- 'call i32 @llvm.amdgcn.ds.bpermute' "$LLVM_IR" || { printf 'LLVM validation failed: GPT-OSS SIMT subgroup exchange is absent\n' >&2; exit 1; }
+    if [[ $ISA == gpt_oss_pipeline_simt ]]; then
+        require_count "$LLVM_IR" 'internal addrspace(3) global [512 x i64] undef, align 8' 2 'two raw-BF16 4096-byte LDS rings'
+        require_count "$LLVM_IR" 'asm sideeffect "s_barrier"' 4 'pipeline wait barrier sites'
+        require_count "$LLVM_IR" 'fence syncscope("workgroup") release' 4 'pipeline release fences'
+        require_count "$LLVM_IR" 'fence syncscope("workgroup") acquire' 4 'pipeline acquire fences'
+        require_count "$SCRIPT_DIR/src/kernel_pipelined_attention_simt.rs" 'while phase_index < 4' 1 'four-phase SIMT pipeline loop'
+        require_count "$SCRIPT_DIR/src/kernel_pipelined_attention_simt.rs" 'control_flow(loop_bounds(2880, 64, 4, 4, 4, 16, 4, 128))' 1 'authenticated SIMT pipeline bounds'
+    fi
+elif [[ $ISA == gpt_oss_pipeline ]]; then
+    require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(' 1 'loop-carried BF16 MFMA call'
+    require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 4 'FP4 MFMA calls'
+    require_count "$LLVM_IR" 'i32 4, i32 4, i32 0, i32 0, i32 0, i32 0)' 4 'FP4 selectors and disabled scaling controls'
+    require_count "$LLVM_IR" '@llvm.amdgcn.ds.read.tr' 0 'unexpected transpose references with pretransposed KV cache'
+    require_count "$LLVM_IR" 'internal addrspace(3) global [512 x i64] undef, align 8' 2 'two 4096-byte LDS pipeline arrays'
+    require_count "$LLVM_IR" 'asm sideeffect "s_barrier"' 4 'pipeline wait barrier sites'
+    require_count "$LLVM_IR" 'fence syncscope("workgroup") release' 4 'pipeline release fences'
+    require_count "$LLVM_IR" 'fence syncscope("workgroup") acquire' 4 'pipeline acquire fences'
+    PIPELINE_SOURCE=$SCRIPT_DIR/src/kernel_pipelined_attention.rs
+    if [[ $MODE == tile ]]; then PIPELINE_SOURCE=$SCRIPT_DIR/src/kernel_pipelined_attention_tile.rs; fi
+    require_count "$PIPELINE_SOURCE" 'while phase_index < 4' 1 'four-phase source loop'
+    require_count "$PIPELINE_SOURCE" 'control_flow(loop_bounds(2880, 64, 4, 16))' 1 'authenticated pipeline source loop bounds'
+elif [[ $ISA == gpt_oss ]]; then
     require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.f32.16x16x16bf16.1k(' 4 'BF16 MFMA calls'
     require_count "$LLVM_IR" 'call <4 x float> @llvm.amdgcn.mfma.scale.f32.16x16x128.f8f6f4.v8i32.v8i32(' 4 'FP4 MFMA calls'
     require_count "$LLVM_IR" 'i32 4, i32 4, i32 0, i32 0, i32 0, i32 0)' 4 'FP4 selectors and disabled scaling controls'
@@ -381,7 +466,14 @@ if [[ -z $KERNEL_ISA ]]; then
     printf 'ISA validation failed: %s is absent\n' "$SYMBOL" >&2
     exit 1
 fi
-if [[ $ISA == gpt_oss ]]; then
+if [[ $ISA == gpt_oss_pipeline ]]; then
+    [[ $(grep -Fc -- 'v_mfma_f32_16x16x16_bf16' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four BF16 MFMAs\n' >&2; exit 1; }
+    [[ $(grep -Fc -- 'v_mfma_f32_16x16x128_f8f6f4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four FP4 MFMAs\n' >&2; exit 1; }
+    [[ $(grep -c -- 'v_mfma_' <<< "$KERNEL_ISA" || true) -eq 8 ]] || { printf 'ISA validation failed: unexpected additional MFMA\n' >&2; exit 1; }
+    [[ $(grep -Fc -- 'cbsz:4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected cbsz:4 on all FP4 MFMAs\n' >&2; exit 1; }
+    ! grep -Eq -- 'ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || { printf 'ISA validation failed: pretransposed KV path emitted a transpose instruction\n' >&2; exit 1; }
+    [[ $(grep -Ec -- '(^|[[:space:]])s_barrier([[:space:]]|$)' <<< "$KERNEL_ISA" || true) -eq 10 ]] || { printf 'ISA validation failed: expected ten barriers in the unrolled four-phase pipeline\n' >&2; exit 1; }
+elif [[ $ISA == gpt_oss ]]; then
     [[ $(grep -Fc -- 'v_mfma_f32_16x16x16_bf16' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four BF16 MFMAs\n' >&2; exit 1; }
     [[ $(grep -Fc -- 'v_mfma_f32_16x16x128_f8f6f4' <<< "$KERNEL_ISA" || true) -eq 4 ]] || { printf 'ISA validation failed: expected exactly four FP4 MFMAs\n' >&2; exit 1; }
     [[ $(grep -c -- 'v_mfma_' <<< "$KERNEL_ISA" || true) -eq 8 ]] || { printf 'ISA validation failed: unexpected additional MFMA\n' >&2; exit 1; }
@@ -427,6 +519,11 @@ elif [[ $ISA == mixed_expert ]]; then
     ! grep -Eq -- 'ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || { printf 'ISA validation failed: unexpected transpose instruction in mixed expert kernel\n' >&2; exit 1; }
 else
     ! grep -Eq -- 'v_mfma_|ds_read_b64_tr_b[[:digit:]]+' <<< "$KERNEL_ISA" || { printf 'ISA validation failed: unexpected tensor/transpose instruction in scalar kernel\n' >&2; exit 1; }
+fi
+if [[ $ISA == gpt_oss_pipeline_simt ]]; then
+    [[ $(grep -Ec -- '(^|[[:space:]])s_barrier([[:space:]]|$)' <<< "$KERNEL_ISA" || true) -eq 10 ]] || { printf 'ISA validation failed: expected ten SIMT pipeline barriers\n' >&2; exit 1; }
+    grep -Eq -- 'ds_(write|write2)_b(64|128)' <<< "$KERNEL_ISA" || { printf 'ISA validation failed: SIMT LDS publication absent\n' >&2; exit 1; }
+    grep -Eq -- 'ds_(read|read2)_b(64|128)' <<< "$KERNEL_ISA" || { printf 'ISA validation failed: SIMT LDS consumption absent\n' >&2; exit 1; }
 fi
 for forbidden in v_cvt_f32_fp4 v_cvt_f32_fp8 v_dot; do
     ! grep -Fq -- "$forbidden" <<< "$KERNEL_ISA" || { printf 'ISA validation failed: low-precision fallback is present: %s\n' "$forbidden" >&2; exit 1; }

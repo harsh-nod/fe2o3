@@ -113,6 +113,8 @@ case "${1:-}" in
           ocml_calls=0
           lds=0
           extra_target_function=0
+          gpt_pipeline=0
+          gpt_bf16_helper=0
           case "$feature" in
             kernel-fp4-gemm)
               symbol=gfx950_fp4_gemm_rust; fp4_mfma=1 ;;
@@ -167,10 +169,10 @@ case "${1:-}" in
               fp4_mfma=4; bf16_mfma=4; ocml_calls=1 ;;
             kernel-gpt-oss-decode-scalar-attention)
               symbol=gfx950_gpt_oss_120b_decode_megakernel_v1
-              fp4_mfma=4; ocml_calls=1 ;;
+              fp4_mfma=4; ocml_calls=1; gpt_bf16_helper=1 ;;
             kernel-gpt-oss-decode-pipelined-attention)
               symbol=gfx950_gpt_oss_120b_decode_megakernel_v1
-              fp4_mfma=4; bf16_mfma=4; ocml_calls=1; lds=8192 ;;
+              fp4_mfma=4; bf16_mfma=1; ocml_calls=1; lds=8192; gpt_pipeline=1 ;;
             kernel-gpt-oss-router-component)
               symbol=gfx950_gpt_oss_120b_router_v1 ;;
             kernel-gpt-oss-attention-component)
@@ -182,7 +184,14 @@ case "${1:-}" in
           esac
           {
             printf '%s\n' 'target triple = "amdgcn-amd-amdhsa"'
-            printf 'define amdgpu_kernel void @%s() #0 {\n' "$symbol"
+            if ((gpt_bf16_helper)); then
+              printf 'define amdgpu_kernel void @%s() #0 !reqd_work_group_size !0 {\n' "$symbol"
+              for _ in 1 2 3 4 5; do
+                printf '  call float @__fe2o3_bf16_to_f32_v1(i16 0)\n'
+              done
+            else
+              printf 'define amdgpu_kernel void @%s() #0 {\n' "$symbol"
+            fi
             if [[ $feature == kernel-kda-* ]]; then
               printf '  %%kda = call i32 @llvm.amdgcn.ds.bpermute(i32 0, i32 0)\n'
             fi
@@ -204,12 +213,34 @@ case "${1:-}" in
             for ((index = 0; index < ocml_calls; index++)); do
               printf '  %%e%s = call float @__ocml_exp_f32(float 0.0)\n' "$index"
             done
-            if ((lds > 0)); then
+            if ((gpt_pipeline)); then
+              for ring in q k; do
+                printf '@%s = internal addrspace(3) global [512 x i64] undef, align 8\n' "$ring"
+              done
+              for _ in 1 2 3 4; do
+                printf '%s\n' '  call void asm sideeffect "s_barrier", ""()'
+                printf '%s\n' '  fence syncscope("workgroup") release'
+                printf '%s\n' '  fence syncscope("workgroup") acquire'
+              done
+            elif ((lds > 0)); then
               printf '@lds = internal addrspace(3) global [%s x i8] undef, align 64\n' "$lds"
               printf '  call void asm sideeffect "s_barrier", ""()\n'
             fi
             printf '  ret void\n}\n'
+            if ((gpt_bf16_helper)); then
+              printf '%s\n' 'attributes #0 = { nounwind "amdgpu-flat-work-group-size"="256,256" "target-features"="-wavefrontsize32,+wavefrontsize64,-xnack" "target-cpu"="gfx950" }'
+              cat <<'LLVM'
+define internal float @__fe2o3_bf16_to_f32_v1(i16 %bits) alwaysinline nounwind "target-cpu"="gfx950" "denormal-fp-math-f32"="ieee,ieee" "unsafe-fp-math"="false" "no-infs-fp-math"="false" "no-nans-fp-math"="false" "no-signed-zeros-fp-math"="false" "approx-func-fp-math"="false" "fp-contract"="off" {
+entry:
+  %wide = zext i16 %bits to i32
+  %shifted = shl i32 %wide, 16
+  %result = bitcast i32 %shifted to float
+  ret float %result
+}
+LLVM
+            else
             printf 'attributes #0 = { "target-cpu"="gfx950" "target-features"="-wavefrontsize32,+wavefrontsize64,-xnack" }\n'
+            fi
             if ((extra_target_function > 0)); then
               printf 'define internal float @decode_fp4_e2m1(i8 %%bits) #1 {\n'
               printf '  ret float 0.0\n}\n'
@@ -411,8 +442,10 @@ case "$key" in
   kernel-qwen-ngram-gather) symbol=gfx950_qwen_ngram_gather_v1 ;;
   kernel-stage-gradient-shard) symbol=gfx950_stage_gradient_shard_v1 ;;
   kernel-muon-update) symbol=gfx950_muon_update_4x4_v1 ;;
-  kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores | kernel-gpt-oss-decode-pipelined-attention)
+  kernel-gpt-oss-decode | kernel-gpt-oss-decode-router-serial | kernel-gpt-oss-decode-held-fragments | kernel-gpt-oss-decode-interleaved-stores)
     symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kind=gpt_oss ;;
+  kernel-gpt-oss-decode-pipelined-attention)
+    symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kind=gpt_oss_pipeline ;;
   kernel-gpt-oss-decode-scalar-attention)
     symbol=gfx950_gpt_oss_120b_decode_megakernel_v1; kind=gpt_oss_expert ;;
   kernel-gpt-oss-router-component)
@@ -443,7 +476,7 @@ case "$kind" in
       'v_mfma_f32_16x16x128_f8f6f4 cbsz:4' \
       'v_mfma_f32_16x16x128_f8f6f4 cbsz:4' \
       'v_mfma_f32_16x16x128_f8f6f4 cbsz:4' ;;
-  gpt_oss)
+  gpt_oss | gpt_oss_pipeline)
     for _ in 1 2 3 4; do
       printf '%s\n' 'v_mfma_f32_16x16x16_bf16'
     done
@@ -461,6 +494,9 @@ case "$kind" in
   scalar)
     printf '%s\n' 's_endpgm' ;;
 esac
+if [[ $kind == gpt_oss_pipeline ]]; then
+  for _ in {1..10}; do printf '%s\n' s_barrier; done
+fi
 EOF
 
 chmod 700 \

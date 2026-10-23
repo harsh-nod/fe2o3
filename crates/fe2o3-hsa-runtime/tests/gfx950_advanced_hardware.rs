@@ -1961,14 +1961,49 @@ fn pack_mfma_blocked_output(logical_row_major: &[f32]) -> Result<Vec<f32>, BoxEr
     Ok(physical)
 }
 
+// GPT-OSS tile variants retain every input/guard and expose row-major 16x16 outputs.
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_TILE: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS tile",
+    ..GPT_OSS
+};
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_ROUTER_TILE: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS router tile",
+    ..GPT_OSS_ROUTER_COMPONENT
+};
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_ATTENTION_TILE: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS attention tile",
+    ..GPT_OSS_ATTENTION_COMPONENT
+};
+#[cfg(feature = "hardware-test-hooks")]
+const GPT_OSS_EXPERT_TILE: AdvancedCase = AdvancedCase {
+    label: "gfx950 GPT-OSS expert tile",
+    ..GPT_OSS_EXPERT_COMPONENT
+};
+
 #[cfg(feature = "hardware-test-hooks")]
 fn gpt_oss_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
     let inputs = gpt_oss_reference::deterministic_batch_inputs();
     let expected = gpt_oss_reference::reference_batch(&inputs);
+    let row_major = [
+        GPT_OSS_TILE,
+        GPT_OSS_ROUTER_TILE,
+        GPT_OSS_ATTENTION_TILE,
+        GPT_OSS_EXPERT_TILE,
+    ]
+    .contains(&case);
     let expected_attention = expected
         .attention
         .chunks_exact(16 * 16)
-        .map(pack_mfma_blocked_output)
+        .map(|tile| {
+            if row_major {
+                Ok(tile.to_vec())
+            } else {
+                pack_mfma_blocked_output(tile)
+            }
+        })
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .flatten()
@@ -1976,7 +2011,13 @@ fn gpt_oss_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
     let expected_expert = expected
         .expert
         .chunks_exact(16 * 16)
-        .map(pack_mfma_blocked_output)
+        .map(|tile| {
+            if row_major {
+                Ok(tile.to_vec())
+            } else {
+                pack_mfma_blocked_output(tile)
+            }
+        })
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
         .flatten()
@@ -2088,7 +2129,28 @@ fn gpt_oss_single_plan(case: AdvancedCase) -> Result<LaunchPlan, BoxError> {
 
 #[cfg(feature = "hardware-test-hooks")]
 fn gpt_oss_component_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
-    let mut plans = gpt_oss_plans(GPT_OSS)?;
+    let mut plans = gpt_oss_plans(
+        if [
+            GPT_OSS_ROUTER_TILE,
+            GPT_OSS_ATTENTION_TILE,
+            GPT_OSS_EXPERT_TILE,
+        ]
+        .contains(&case)
+        {
+            GPT_OSS_TILE
+        } else {
+            GPT_OSS
+        },
+    )?;
+    let case = if case == GPT_OSS_ROUTER_TILE {
+        GPT_OSS_ROUTER_COMPONENT
+    } else if case == GPT_OSS_ATTENTION_TILE {
+        GPT_OSS_ATTENTION_COMPONENT
+    } else if case == GPT_OSS_EXPERT_TILE {
+        GPT_OSS_EXPERT_COMPONENT
+    } else {
+        case
+    };
     let full = plans.pop().ok_or("GPT-OSS launch plan is absent")?;
     require(plans.is_empty(), "GPT-OSS launch plan was duplicated")?;
     let indices: &[usize] = if case == GPT_OSS_ROUTER_COMPONENT {
@@ -2134,13 +2196,16 @@ fn gpt_oss_component_plans(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxErr
 
 #[cfg(feature = "hardware-test-hooks")]
 fn plans_for(case: AdvancedCase) -> Result<Vec<LaunchPlan>, BoxError> {
-    if [GPT_OSS, GPT_OSS_PIPELINED].contains(&case) {
+    if [GPT_OSS, GPT_OSS_PIPELINED, GPT_OSS_TILE].contains(&case) {
         return gpt_oss_plans(case);
     }
     if [
         GPT_OSS_ROUTER_COMPONENT,
         GPT_OSS_ATTENTION_COMPONENT,
         GPT_OSS_EXPERT_COMPONENT,
+        GPT_OSS_ROUTER_TILE,
+        GPT_OSS_ATTENTION_TILE,
+        GPT_OSS_EXPERT_TILE,
     ]
     .contains(&case)
     {
@@ -3056,6 +3121,26 @@ hardware_case!(
     GPT_OSS_EXPERT_COMPONENT
 );
 #[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_gpt_oss_layer_tile_tile_rust_cov6_matches_cpu_reference,
+    GPT_OSS_TILE
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_gpt_oss_router_component_tile_rust_cov6_matches_cpu_reference,
+    GPT_OSS_ROUTER_TILE
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_gpt_oss_attention_component_tile_rust_cov6_matches_cpu_reference,
+    GPT_OSS_ATTENTION_TILE
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_gpt_oss_expert_component_tile_rust_cov6_matches_cpu_reference,
+    GPT_OSS_EXPERT_TILE
+);
+#[cfg(feature = "hardware-test-hooks")]
 #[test]
 #[ignore = "non-authoritative: requires the exact HIP gfx950:xnack- comparator HSACO and MI350"]
 fn gfx950_gpt_oss_unfused_hip_matches_cpu_reference() -> Result<(), BoxError> {
@@ -3124,3 +3209,70 @@ fn output_poison_cannot_match_an_unwritten_expected_element() {
 #[test]
 #[ignore = "requires feature hardware-test-hooks and caller-supplied gfx950 HSACO"]
 fn gfx950_advanced_hardware_tests_require_explicit_hooks() {}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn gpt_oss_tile_fixture_preserves_all_values_and_guards() -> Result<(), BoxError> {
+    let canonical = gpt_oss_plans(GPT_OSS)?.remove(0);
+    let tiled = gpt_oss_plans(GPT_OSS_TILE)?.remove(0);
+    assert_eq!(canonical.buffers.len(), 13);
+    assert_eq!(tiled.buffers.len(), 13);
+    for i in 0..10 {
+        assert!(tiled.buffers[i].immutable);
+        assert_eq!(canonical.buffers[i].initial, tiled.buffers[i].initial);
+    }
+    for i in [10, 11] {
+        let ExpectedOutput::F32 {
+            values: logical, ..
+        } = tiled.buffers[i].expected.as_ref().unwrap()
+        else {
+            panic!("float tile expected")
+        };
+        let ExpectedOutput::F32 {
+            values: blocked, ..
+        } = canonical.buffers[i].expected.as_ref().unwrap()
+        else {
+            panic!("float tile expected")
+        };
+        assert_eq!(logical.len(), 4096);
+        assert_eq!(blocked.len(), 4096);
+        for item in 0..16 {
+            for lane in 0..64 {
+                for component in 0..4 {
+                    let logical_offset =
+                        item * 256 + ((lane / 16) * 4 + component) * 16 + lane % 16;
+                    let packed_offset = item * 256 + component * 64 + lane;
+                    assert_eq!(logical[logical_offset], blocked[packed_offset]);
+                }
+            }
+        }
+        assert_eq!(tiled.buffers[i].body_offset, GUARD_BYTES);
+        assert_eq!(
+            &tiled.buffers[i].initial[..GUARD_BYTES],
+            &[PREFIX_BYTE; GUARD_BYTES]
+        );
+        let initial = &tiled.buffers[i].initial;
+        assert_eq!(
+            &initial[initial.len() - GUARD_BYTES..],
+            &[SUFFIX_BYTE; GUARD_BYTES]
+        );
+    }
+    assert_eq!(tiled.buffers[12].elements, 1024);
+    assert_eq!(canonical.buffers[12].initial, tiled.buffers[12].initial);
+    for (case, count) in [
+        (GPT_OSS_ROUTER_TILE, 3),
+        (GPT_OSS_ATTENTION_TILE, 5),
+        (GPT_OSS_EXPERT_TILE, 6),
+    ] {
+        let plan = plans_for(case)?.remove(0);
+        assert_eq!(plan.buffers.len(), count);
+        assert_eq!(plan.args.len(), count);
+        assert!(
+            plan.buffers
+                .iter()
+                .filter(|b| b.expected.is_some())
+                .all(|b| b.body_offset == GUARD_BYTES)
+        );
+    }
+    Ok(())
+}
