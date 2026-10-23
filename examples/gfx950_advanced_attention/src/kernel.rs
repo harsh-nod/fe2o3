@@ -85,21 +85,21 @@ macro_rules! decode_fp8_e4m3_v1 {
         let exponent = (bits >> 3_u8) & 0xf;
         let mantissa = bits & 0x7;
         let magnitude = if exponent == 0xf && mantissa == 0x7 {
-            let nan_source = f32::from(mantissa ^ 7_u8);
+            let nan_source = (mantissa ^ 7_u8) as f32;
             nan_source / nan_source
         } else if exponent == 0 {
-            f32::from(mantissa) / 512.0
+            mantissa as f32 / 512.0
         } else {
-            let exponent0 = f32::from(exponent & 0x1);
-            let exponent1 = f32::from((exponent >> 1_u8) & 0x1);
-            let exponent2 = f32::from((exponent >> 2_u8) & 0x1);
-            let exponent3 = f32::from((exponent >> 3_u8) & 0x1);
+            let exponent0 = (exponent & 0x1) as f32;
+            let exponent1 = ((exponent >> 1_u8) & 0x1) as f32;
+            let exponent2 = ((exponent >> 2_u8) & 0x1) as f32;
+            let exponent3 = ((exponent >> 3_u8) & 0x1) as f32;
             let scale = (1.0 + exponent0)
                 * (1.0 + 3.0 * exponent1)
                 * (1.0 + 15.0 * exponent2)
                 * (1.0 + 255.0 * exponent3)
                 / 128.0;
-            (1.0 + f32::from(mantissa) / 8.0) * scale
+            (1.0 + mantissa as f32 / 8.0) * scale
         };
         if bits & 0x80 == 0 {
             magnitude
