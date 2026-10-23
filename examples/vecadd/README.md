@@ -6,7 +6,8 @@ memory-tile paths. `structured-tile` selects the latter. The original
 tile body does not extend that theorem or establish machine-code refinement.
 
 Start at the repository root with the [root requirements](../../README.md#requirements),
-including nightly-2026-04-03 and ROCm 7.2.4. Build the normal production
+including nightly-2026-04-03 and ROCm 7.2.4 (or the gfx950 ROCm 7.2.1
+alternative below). Build the normal production
 extractor, or reuse an already built matching extractor/backend pair:
 
 ```bash
@@ -23,6 +24,20 @@ FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/vecadd/run-gfx942.sh
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/vecadd/run-gfx950.sh simt
 FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/vecadd/run-gfx950.sh tile
 ```
+
+For an installed ROCm 7.2.1 toolchain, the gfx950 runner also accepts the
+checked-in 7.2.1 tool/bitcode manifest. From the repository root, replace the
+ROCm setup above with the following before running the gfx950 commands:
+
+```bash
+export ROCM_PATH=/opt/rocm-7.2.1
+export FE2O3_GFX950_OCML_MANIFEST="$PWD/examples/gfx950_low_precision/gfx950-ocml-rocm-7.2.1.manifest"
+export LD_LIBRARY_PATH="$ROCM_PATH/lib:$ROCM_PATH/lib64:$extractor_dir:$extractor_dir/deps:$sysroot/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+```
+
+The runner still validates the exact selected manifest, clang, linker and
+bitcode files; this alternative does not bypass those checks or change the
+kernel, oracle or qualification scope.
 
 The gfx942 runner remains compile-only. The gfx950 runner selects gfx950,
 Wave64, and XNACK-off together and checks the emitted target, kernel symbol,
