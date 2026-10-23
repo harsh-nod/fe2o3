@@ -44,6 +44,9 @@ use v12_preflight::reject_unsupported_v12_module;
 mod checked_load_grouping_v1;
 pub use checked_load_grouping_v1::lower_compiler_module_to_gfx950_xnack_minus_llvm_ir_with_checked_load_grouping_v1;
 
+#[path = "lowering/wave64_helper_context_v1.rs"]
+mod wave64_helper_context_v1;
+
 #[path = "lowering/ordered_region_v16.rs"]
 mod ordered_region_v16;
 pub use ordered_region_v16::lower_canonical_v16_compiler_module_to_gfx942_xnack_minus_llvm_ir;
@@ -1564,6 +1567,12 @@ fn lower_compiler_module_with_checked_load_context_v1(
         ordered_owner,
     )?;
 
+    let wave64_context = if ordered_owner.is_none()
+        && bf16_context.is_none() && debug_line.is_none() && !checked_load_grouping_v1
+    {
+        wave64_helper_context_v1::Context::check_with_physical_v1(module, target, physical)?
+    } else { None };
+
     let mut kernel_lowerers = Vec::with_capacity(kernels.len());
     for kernel in &kernels {
         let workgroup_size = validate_launch(module, kernel, target)?;
@@ -1608,6 +1617,10 @@ fn lower_compiler_module_with_checked_load_context_v1(
                 }),
         )?;
         lowerer.checked_load_grouping_v1 = checked_load_grouping_v1;
+        lowerer.wave64_helper_context_v1 = wave64_context.as_ref();
+        if let Some(workgroup) = wave64_context.as_ref()
+            .and_then(|context| context.helper_workgroup(module, lowerer.function))
+        { lowerer.workgroup_size = Some(workgroup); }
         lowerer.ordered_region_v16 =
             matches!(ordered_owner, Some(OrderedModuleOwner::RegionV16(_)));
         lowerer.ordered_program_v17 =
@@ -1643,6 +1656,10 @@ fn lower_compiler_module_with_checked_load_context_v1(
             target,
         )?;
         lowerer.checked_load_grouping_v1 = checked_load_grouping_v1;
+        lowerer.wave64_helper_context_v1 = wave64_context.as_ref();
+        if let Some(workgroup) = wave64_context.as_ref()
+            .and_then(|context| context.helper_workgroup(module, lowerer.function))
+        { lowerer.workgroup_size = Some(workgroup); }
         lowerer.ordered_composition_v1 = match ordered_owner {
             Some(OrderedModuleOwner::CompositionV1(owner)) => Some(owner),
             _ => None,
@@ -2260,6 +2277,11 @@ fn validate_convergent_cfg(
     {
         return Err(physical_launch_v2::invalid(lowerer.module));
     }
+    if lowerer.wave64_helper_context_v1.is_some_and(|context| {
+        !context.matches_physical_input_v1(lowerer.module, lowerer.function, physical)
+    }) {
+        return Err(physical_launch_v2::invalid(lowerer.module));
+    }
     let body = lowerer.body("function body is missing during convergent CFG validation")?;
     let convergent_operations = body
         .blocks
@@ -2285,16 +2307,19 @@ fn validate_convergent_cfg(
         return Ok(());
     }
 
-    let report = match physical {
-        Some(physical) => physical.analyze(),
-        None => fe2o3_kernel_analysis::analyze_kernel_entry(lowerer.module, lowerer.function),
-    };
+    let report = if let Some(context) = lowerer.wave64_helper_context_v1 {
+        context.report(lowerer.module, lowerer.function)
+            .ok_or_else(|| wave64_helper_context_v1::owner_mismatch(lowerer.module))?.clone()
+    } else if let Some(physical) = physical { physical.analyze() }
+    else { fe2o3_kernel_analysis::analyze_kernel_entry(lowerer.module, lowerer.function) };
     if let Some(diagnostic) = report.diagnostics().iter().find(|diagnostic| {
         matches!(
             diagnostic,
             fe2o3_kernel_analysis::Diagnostic::Unsupported { .. }
         ) && !lowerer.native_bf16_helper.is_some_and(|context| {
             context.admits_root_call_diagnostic(lowerer.module, lowerer.function, diagnostic)
+        }) && !lowerer.wave64_helper_context_v1.is_some_and(|context| {
+            context.admits_call_diagnostic(lowerer.function, diagnostic)
         })
     }) {
         return Err(LoweringErrors::one(
@@ -3074,6 +3099,9 @@ fn emit_compiler_module(
     }
 
     for (index, lowerer) in kernels.iter().enumerate() {
+        let convergence = lowerer.wave64_helper_context_v1.is_some_and(|context|
+            context.function_is_convergent(lowerer.module, lowerer.function))
+            .then_some(" convergent").unwrap_or("");
         let wave_attribute = lowerer
             .wave_width
             .map_or("", |width| target.wave_target_feature(width));
@@ -3083,7 +3111,7 @@ fn emit_compiler_module(
             Some(bounds) => {
                 writeln!(
                     output,
-                    "attributes #{index} = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{},{}\" \"amdgpu-waves-per-eu\"=\"{},{}\"{wave_attribute}{} }}",
+                    "attributes #{index} = {{ nounwind{convergence} \"amdgpu-flat-work-group-size\"=\"{},{}\" \"amdgpu-waves-per-eu\"=\"{},{}\"{wave_attribute}{} }}",
                     bounds.minimum_flat_workgroup_size(),
                     bounds.maximum_flat_workgroup_size(),
                     bounds.minimum_waves_per_execution_unit(),
@@ -3095,7 +3123,7 @@ fn emit_compiler_module(
             None => {
                 writeln!(
                     output,
-                    "attributes #{index} = {{ nounwind \"amdgpu-flat-work-group-size\"=\"{flat_workgroup_size},{flat_workgroup_size}\"{wave_attribute}{} }}",
+                    "attributes #{index} = {{ nounwind{convergence} \"amdgpu-flat-work-group-size\"=\"{flat_workgroup_size},{flat_workgroup_size}\"{wave_attribute}{} }}",
                     target.llvm_function_attributes()
                 )
                 .unwrap();
@@ -4040,6 +4068,7 @@ struct FunctionLowerer<'a> {
     ordered_debug_line_v17: Option<OrderedProgramDebugLineV17<'a>>,
     ordered_composition_v1: Option<&'a fe2o3_kernel_ir::VerifiedOrderedProgramCompositionV1>,
     native_bf16_helper: Option<&'a NativeBf16HelperContextV1<'a>>,
+    wave64_helper_context_v1: Option<&'a wave64_helper_context_v1::Context<'a>>,
 }
 
 #[derive(Clone, Copy)]
@@ -4394,6 +4423,7 @@ impl<'a> FunctionLowerer<'a> {
             ordered_debug_line_v17: None,
             ordered_composition_v1: None,
             native_bf16_helper: None,
+            wave64_helper_context_v1: None,
         })
     }
 
@@ -4430,6 +4460,7 @@ impl<'a> FunctionLowerer<'a> {
             ordered_debug_line_v17: None,
             ordered_composition_v1: None,
             native_bf16_helper: None,
+            wave64_helper_context_v1: None,
         })
     }
 
@@ -4461,6 +4492,7 @@ impl<'a> FunctionLowerer<'a> {
             ordered_debug_line_v17: None,
             ordered_composition_v1: None,
             native_bf16_helper: None,
+            wave64_helper_context_v1: None,
         })
     }
 
@@ -6311,6 +6343,9 @@ impl<'a> FunctionLowerer<'a> {
             .unwrap();
         } else {
             let result = llvm_result_type(self.function);
+            let convergence = self.wave64_helper_context_v1.is_some_and(|context|
+                context.function_is_convergent(self.module, self.function))
+                .then_some(" convergent").unwrap_or("");
             let wave_attribute = self
                 .wave_width
                 .map_or("", |width| self.target.wave_target_feature(width));
@@ -6327,7 +6362,7 @@ impl<'a> FunctionLowerer<'a> {
             };
             writeln!(
                 output,
-                "define {linkage}{result} @{}({parameters}) nounwind{wave_attribute}{} {{",
+                "define {linkage}{result} @{}({parameters}) nounwind{convergence}{wave_attribute}{} {{",
                 self.symbol,
                 self.target.llvm_function_attributes(),
             )
@@ -7303,6 +7338,9 @@ impl<'a> FunctionLowerer<'a> {
                     .expect("compiler-module call emission requires a symbol table")
                     .get(callee)
                     .expect("compiler-module preflight rejected kernel-entry calls");
+                let convergence = self.wave64_helper_context_v1.is_some_and(|context|
+                    context.call_is_convergent(self.module, self.function, block, operation_index, callee))
+                    .then_some(" convergent").unwrap_or("");
                 let arguments = arguments
                     .iter()
                     .map(|argument| {
@@ -7326,10 +7364,10 @@ impl<'a> FunctionLowerer<'a> {
                     .collect::<Vec<_>>()
                     .join(", ");
                 match callee_function.signature.results.as_slice() {
-                    [] => writeln!(output, "  call void @{symbol}({arguments})").unwrap(),
+                    [] => writeln!(output, "  call void @{symbol}({arguments}){convergence}").unwrap(),
                     [result] => writeln!(
                         output,
-                        "  {} = call {} @{symbol}({arguments})",
+                        "  {} = call {} @{symbol}({arguments}){convergence}",
                         result_name.expect("verified call result"),
                         llvm_type(result)
                     )
@@ -7338,7 +7376,7 @@ impl<'a> FunctionLowerer<'a> {
                         let result_type = llvm_result_type(callee_function);
                         writeln!(
                             output,
-                            "  %helper.call.{}.{} = call {result_type} @{symbol}({arguments})",
+                            "  %helper.call.{}.{} = call {result_type} @{symbol}({arguments}){convergence}",
                             block.0, operation_index,
                         )
                         .unwrap();
