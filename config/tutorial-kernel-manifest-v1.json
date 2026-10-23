@@ -8859,7 +8859,7 @@
       },
       "compilerInput": {
         "packageManifest": "examples/moe_grouped_expert_general_v1/Cargo.toml",
-        "packageManifestSha256": "8149d5868b62c202c49b5841583d70f1c4407ca353fb581a00be99d0ef098dec",
+        "packageManifestSha256": "f9e0fcb7de49ed6e61b014add1d121b04f4b1925d382fe685f1dc4199ea505c1",
         "sourcePaths": [
           "examples/moe_grouped_expert_general_v1/src/kernel.rs"
         ],
@@ -8876,7 +8876,7 @@
         ],
         "cargoLockPath": "examples/moe_grouped_expert_general_v1/Cargo.lock",
         "cargoLockSha256": "c39ea25acdf01ba776cf1f19b805eca39975e261256da22921d1462e18a07c0b",
-        "contractSha256": "488f5751befbe5927f0490401569431d1c5cddabbb5468bb5a2e47d4d920414b"
+        "contractSha256": "e868d82ea6eef11020cea0108db6d81298e70a74003df0a44f9aaf38bae070a8"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-grouped-expert-moe.request.json",

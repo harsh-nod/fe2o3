@@ -30,3 +30,6 @@ path = "src/main.rs"
 [lib]
 name = "fe2o3_moe_grouped_expert_general_v1"
 path = "src/lib.rs"
+
+[profile.test]
+debug = 0
