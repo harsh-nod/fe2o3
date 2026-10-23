@@ -206,7 +206,8 @@ def validate_kernel_inventory(
         if (cargo["package"].get("build") not in (None, False)
                 or (cargo["package"].get("build") is not False and (package["packageRoot"] / "build.rs").exists())
                 or any(member not in cargo.get("features", {})
-                       for members in cargo.get("features", {}).values() for member in members)):
+                       for feature in checked["enabledFeatures"]
+                       for member in cargo.get("features", {})[feature])):
             fail("direct fixture binding requires local features without build-script cfg")
         sources = {}
         for path, source in package["packageSources"]:
