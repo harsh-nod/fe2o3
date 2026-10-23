@@ -28,12 +28,18 @@ case "$VARIANT" in
     *) printf 'unknown GPT-OSS ablation variant: %s\n' "$VARIANT" >&2; exit 2 ;;
 esac
 
-GPU=${ROCR_VISIBLE_DEVICES:-5}
-if [[ $GPU != 5 && $GPU != 6 ]]; then
-    printf 'GPT-OSS ablations require physical GPU 5 or 6, got %s\n' "$GPU" >&2
+GPU=${ROCR_VISIBLE_DEVICES:-}
+if [[ -z $GPU && ${FE2O3_EXAMPLE_COMPILE_ONLY:-0} != 1 ]]; then
+    printf 'GPT-OSS runtime requires one explicit ROCR_VISIBLE_DEVICES UUID or ordinal\n' >&2
     exit 2
 fi
-export ROCR_VISIBLE_DEVICES=$GPU
+if [[ -n $GPU ]]; then
+    if [[ ! $GPU =~ ^([0-9]+|GPU-[[:xdigit:]]{16})$ ]]; then
+        printf 'GPT-OSS runtime requires a single GPU UUID or ordinal, got %s\n' "$GPU" >&2
+        exit 2
+    fi
+    export ROCR_VISIBLE_DEVICES=$GPU
+fi
 unset HIP_VISIBLE_DEVICES
 TARGET_DIR=${CARGO_TARGET_DIR:-$REPO_ROOT/target}
 if [[ $TARGET_DIR != /* ]]; then

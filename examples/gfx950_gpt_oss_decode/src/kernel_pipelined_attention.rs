@@ -1,9 +1,8 @@
-//! Compiler-rejected two-stage BF16 attention-pipeline experiment.
+//! Two-stage BF16 attention pipeline with checked whole-profile operand views.
 //!
-//! This file is retained as a documented counterexample, not as a kernel to
-//! copy: the compiler rejects the retained pipeline scalar temporary because it
-//! has multiple definitions. Its phase comments show the intended experiment,
-//! while the tutorial clearly separates it from runnable variants.
+//! Historical versions were rejected for a retained scalar temporary and for
+//! workgroup convergence. This source retains those checks and the pipeline
+//! lifecycle; current native and numerical qualification is recorded in README.
 
 #![allow(missing_docs)]
 
@@ -23,7 +22,7 @@ use crate::{
 const ATTENTION_SCALE: f32 = 0.125;
 const ROUTER_FLOOR: f32 = -1.0e30;
 
-/// Experiments with double-buffered LDS Q/K fragments; currently has no HSACO.
+/// Experiments with double-buffered LDS Q/K fragments; qualification is tracked in README.
 #[cfg(any(
     not(target_arch = "amdgpu"),
     feature = "kernel-gpt-oss-decode-pipelined-attention"
@@ -85,8 +84,8 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     // Checked views establish offsets and strides before the experimental phase.
     let Ok(hidden) = StridedReadView2D::from_shared_slice(
         hidden_f32,
-        item_index.wrapping_mul(HIDDEN_SIZE),
-        1,
+        0,
+        crate::PROFILE_ITEMS,
         HIDDEN_SIZE,
         HIDDEN_SIZE,
     ) else {
@@ -103,7 +102,7 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let mut local_logit1 = 0.0_f32;
     let mut depth = 0_usize;
     while depth < HIDDEN_SIZE {
-        let activation = hidden.load_or(0, depth, 0.0);
+        let activation = hidden.load_or(item_index, depth, 0.0);
         local_logit0 += activation * router.load_or(local_expert0, depth, 0.0);
         local_logit1 += activation * router.load_or(local_expert1, depth, 0.0);
         depth += 1;
@@ -247,8 +246,8 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     // Intended design: overlap the next Q/K tile in two LDS stages with current MFMA.
     let Ok(query) = Bf16MfmaAMatrix::row_major(
         query_bf16,
-        item_index.wrapping_mul(MATRIX_ROWS * HEAD_DIM),
-        MATRIX_ROWS,
+        0,
+        crate::PROFILE_ITEMS * MATRIX_ROWS,
         HEAD_DIM,
         HEAD_DIM,
     ) else {
@@ -256,8 +255,8 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     };
     let Ok(key) = Bf16MfmaBMatrix::row_major(
         key_transposed_bf16,
-        item_index.wrapping_mul(HEAD_DIM * CONTEXT_TOKENS),
-        HEAD_DIM,
+        0,
+        crate::PROFILE_ITEMS * HEAD_DIM,
         CONTEXT_TOKENS,
         CONTEXT_TOKENS,
     ) else {
@@ -270,11 +269,17 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     let mut key_pipeline =
         WorkgroupPipeline::<Bf16MfmaBFragment<'_>, 2, 256, 1>::current(&mut pipeline_scope);
 
+    let query_item_row = item_index.wrapping_mul(MATRIX_ROWS);
+    let key_item_row = item_index.wrapping_mul(HEAD_DIM);
     query_pipeline.stage(0);
-    query_pipeline.write(0, pipeline_lane, query.load_m16k16(&lane, 0, 0));
+    query_pipeline.write(
+        0,
+        pipeline_lane,
+        query.load_m16k16(&lane, query_item_row, 0),
+    );
     query_pipeline.commit(0);
     key_pipeline.stage(0);
-    key_pipeline.write(0, pipeline_lane, key.load_k16n16(&lane, 0, 0));
+    key_pipeline.write(0, pipeline_lane, key.load_k16n16(&lane, key_item_row, 0));
     key_pipeline.commit(0);
 
     let mut scores = F32AccumulatorFragment::zero(&lane);
@@ -282,8 +287,15 @@ pub fn gfx950_gpt_oss_120b_decode_megakernel_v1(
     while phase_index < 4 {
         let future_epoch = phase_index + 1;
         let next_phase = future_epoch * 16;
-        let next_query = query.load_m16k16(&lane, 0, next_phase);
-        let next_key = key.load_k16n16(&lane, next_phase, 0);
+        let next_query = query.load_m16k16(&lane, query_item_row, next_phase);
+        // The final speculative epoch must not cross into the next item's K.
+        // The checked B load zero-fills a reduction row outside the whole profile.
+        let next_key_row = if future_epoch < 4 {
+            key_item_row.wrapping_add(next_phase)
+        } else {
+            crate::PROFILE_ITEMS * HEAD_DIM
+        };
+        let next_key = key.load_k16n16(&lane, next_key_row, 0);
 
         query_pipeline.stage(future_epoch);
         query_pipeline.write(future_epoch, pipeline_lane, next_query);

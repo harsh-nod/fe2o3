@@ -18,6 +18,9 @@ kernel-gpt-oss-router-component = []
 kernel-gpt-oss-attention-component = []
 kernel-gpt-oss-expert-component = []
 
+kernel-gpt-oss-mode-simt = []
+kernel-gpt-oss-mode-tile = []
+
 [workspace]
 
 [dependencies]
