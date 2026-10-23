@@ -347,3 +347,8 @@ fn nested_write_to_other_storage_is_not_a_read_only_child() {
         false,
     );
 }
+
+#[cfg(test)]
+mod full_writer_domain {
+    include!("pipeline_domain_v1_tests.rs");
+}

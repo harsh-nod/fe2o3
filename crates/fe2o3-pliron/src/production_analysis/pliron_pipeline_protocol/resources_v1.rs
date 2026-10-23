@@ -323,3 +323,100 @@ pub(crate) fn preflight_pipeline_protocol_resource_upper_bound_v1(
     )?;
     limits.require(ProductionAnalysisResourcePhaseV1::PipelineProtocol, bound)
 }
+
+// Supplemental reservation only when the existing pointwise route needs the
+// exact guarded full-workgroup domain. Concrete/no-new-route budgets stay exact.
+fn pipeline_full_writer_domain_resource_bound_v1(
+    census: ProductionAnalysisInputCensusV1,
+) -> Result<ProductionAnalysisResourceUpperBoundV1, ProductionAnalysisResourceLimitV1> {
+    let phase = ProductionAnalysisResourcePhaseV1::PipelineProtocol;
+    let base = preflight_pipeline_protocol_resource_upper_bound_v1(
+        census,
+        ProductionAnalysisResourceLimitsV1::production_hard_ceiling(),
+    )?;
+    let live = base
+        .peak_storage_upper_bound()
+        .checked_sub(base.retained_storage_upper_bound())
+        .ok_or_else(pipeline_resource_overflow_v1)?;
+    // Geometry/owner scans, at most two uniform queries per preheader block,
+    // one existing topology pass, and all incoming edge/payload visits per read.
+    let op_inputs = checked_pipeline_sum_v1(&[census.operations, census.operands, 1])?;
+    let operations = checked_pipeline_sum_v1(&[census.operations, 1])?;
+    let blocks = checked_pipeline_sum_v1(&[census.blocks, 1])?;
+    let (queries, pairs) = pipeline_full_writer_domain_equivalence_limits_v1(census)?;
+    let work = checked_pipeline_sum_v1(&[
+        checked_pipeline_product_v1(queries, 2)?,
+        checked_pipeline_product_v1(pairs, 8)?,
+        1,
+        checked_pipeline_product_v1(operations, 32)?,
+        // Finite-child replay may query each child argument's type. A block
+        // argument type lookup searches that block's argument roster.
+        checked_pipeline_product_v1(
+            census.index_lt_branch_candidates,
+            checked_pipeline_product_v1(
+                checked_pipeline_product_v1(census.block_arguments, census.block_arguments)?,
+                8,
+            )?,
+        )?,
+        checked_pipeline_product_v1(
+            census.blocks,
+            checked_pipeline_sum_v1(&[
+                checked_pipeline_product_v1(op_inputs, 32)?,
+                checked_pipeline_product_v1(census.blocks, blocks)?,
+            ])?,
+        )?,
+        // Outgoing edge payloads can repeat values whose defining result or
+        // argument roster must be searched by each child replay's type query.
+        checked_pipeline_product_v1(
+            census.index_lt_branch_candidates,
+            checked_pipeline_product_v1(
+                census.operands,
+                checked_pipeline_product_v1(
+                    checked_pipeline_sum_v1(&[census.results, census.block_arguments])?,
+                    8,
+                )?,
+            )?,
+        )?,
+        checked_pipeline_product_v1(
+            census.ranked_accesses,
+            checked_pipeline_sum_v1(&[
+                census.blocks,
+                census.successors,
+                census.operands,
+                census.results,
+                census.block_arguments,
+                1,
+            ])?,
+        )?
+        .checked_mul(32)
+        .ok_or_else(pipeline_resource_overflow_v1)?,
+    ])?;
+    let temporary = checked_pipeline_sum_v1(&[
+        live,
+        checked_pipeline_product_v1(census.blocks, 16)?,
+        checked_pipeline_product_v1(pairs, 3)?,
+        checked_pipeline_product_v1(EQUIVALENCE_REJECTING_ATTEMPTS_V1, 16)?,
+        checked_pipeline_product_v1(census.successors, 2)?,
+        checked_pipeline_product_v1(op_inputs, 8)?,
+        checked_pipeline_product_v1(census.ranked_accesses, 8)?,
+    ])?;
+    ProductionAnalysisResourceUpperBoundV1::checked_phase(phase, work, 0, temporary)
+}
+
+fn pipeline_full_writer_domain_equivalence_limits_v1(
+    census: ProductionAnalysisInputCensusV1,
+) -> Result<(usize, usize), ProductionAnalysisResourceLimitV1> {
+    let queries = checked_pipeline_product_v1(
+        checked_pipeline_product_v1(
+            census.index_lt_branch_candidates,
+            checked_pipeline_sum_v1(&[census.operands, 3])?,
+        )?,
+        2,
+    )?;
+    let values = checked_pipeline_sum_v1(&[census.results, census.block_arguments])?;
+    let pairs = checked_pipeline_product_v1(values, values)?.min(checked_pipeline_product_v1(
+        queries,
+        MAX_EQUIVALENCE_WORK_V1,
+    )?);
+    Ok((queries, pairs))
+}

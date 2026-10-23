@@ -891,6 +891,18 @@ fn verify_one_pipeline(
             ));
         }
     }
+    let domain_reads = full_workgroup_initialized_reads_v1(
+        context,
+        control,
+        concrete_indices,
+        pipeline,
+        summary,
+        schedule,
+        accesses,
+        uniform_roots,
+        uniformity_visit_limit,
+        equivalence_resources,
+    )?;
     let (staged_writes, consuming_reads, access_refinement_proven) = verify_dynamic_schedule(
         context,
         pipeline,
@@ -900,6 +912,7 @@ fn verify_one_pipeline(
             schedule,
             accesses,
             summary,
+            domain_reads: &domain_reads,
         },
         equivalence_resources,
     )?;
