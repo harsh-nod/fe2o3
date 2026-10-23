@@ -22,7 +22,7 @@ EXCERPTS = {
     "gfx950-fp4-attention": (8718, 8818, 8898),
     "gfx950-fp8-attention": (18512, 18612, 18692),
 }
-SOURCE_SHA256 = "2ce9d0e21d4e38c807d35ec16940f31fb4f07dd63f05827295a5424fedd54f7c"
+SOURCE_SHA256 = "219691cbccdd6f71ac86a7f54c27f7891e8b022484ca7efffcfc59a12e4b29af"
 
 
 class FixtureBindingTests(unittest.TestCase):
@@ -68,6 +68,35 @@ class FixtureBindingTests(unittest.TestCase):
             performance = lesson["lessonId"].endswith("-performance-lab")
             name = lesson["lessonId"].removesuffix("-performance-lab")
             start = EXCERPTS[name][int(performance)]
+            if name == "gfx950-fp8-attention":
+                # Current-source test projection, not a published lesson refresh.
+                historical_size, historical_digest, size, digest = (
+                    (20521, "69650ea2502ee149949d6cbec3e909032ede026be47ca52568bda455b9d9ef2c",
+                     10537, "1868eedc608691d53c7f90358540a8546a54af90a1b9bbf6f38b21a38117bb07"),
+                    (20421, "0a06ba5894d9afa1504dd036f9a0c8a4b3deb242156f37d5930f047d5ec1d5f1",
+                     10437, "db02c7da83c25654b6a87590caff9d84965ac91e4ebbac52cbf6ebaf8aa91001"),
+                )[int(performance)]
+                self.assertEqual(tab["displayedUtf8Bytes"], historical_size)
+                self.assertEqual(tab["displayedSha256"], historical_digest)
+                self.assertEqual(tab["sourceSha256"], historical_digest)
+                current = physical[start:start + size].decode("utf-8")
+                self.assertEqual(hashlib.sha256(current.encode("utf-8")).hexdigest(), digest)
+                historical_live = {**tab, "displayedCode": current,
+                                   "sourceFragments": [current] if tab["sourceFragmentsSha256"] is not None else None}
+                # Current bytes cannot acquire the retained historical display binding.
+                with self.assertRaisesRegex(SystemExit, "displayed bytes do not match"):
+                    self.parent.validate_site_inventory(
+                        {"site": runtime["site"], "lessons": [
+                            {"lessonId": lesson["lessonId"], "codeTabs": [tab]},
+                        ]},
+                        {"schema": runtime["schema"], "site": runtime["site"], "lessons": [
+                            {"id": lesson["lessonId"], "codeTabs": [historical_live]},
+                        ]},
+                    )
+                tab.update(displayedUtf8Bytes=size, displayedSha256=digest, sourceSha256=digest)
+                if tab["sourceFragmentsSha256"] is not None:
+                    self.assertEqual(tab["sourceFragmentsSha256"], [historical_digest])
+                    tab["sourceFragmentsSha256"] = [digest]
             excerpt = physical[start:start + tab["displayedUtf8Bytes"]].decode("utf-8")
             row = next(row for row in inventory["displayItems"] if row["lessonId"] == lesson["lessonId"])
             self.assertEqual(start + row["functionUtf8Offset"], EXCERPTS[name][2])
