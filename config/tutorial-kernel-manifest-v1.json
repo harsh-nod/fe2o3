@@ -8859,11 +8859,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/moe_grouped_expert_general_v1/Cargo.toml",
-        "packageManifestSha256": "e933e55b0e4a4e64a6b55ae0399b9eaa8fb1c9ea87b0f88a8ea491f4a590fd4f",
+        "packageManifestSha256": "f9e0fcb7de49ed6e61b014add1d121b04f4b1925d382fe685f1dc4199ea505c1",
         "sourcePaths": [
           "examples/moe_grouped_expert_general_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "e84644d93400017718588894cf54dbad87319453467bc80188cb840ffc87be89",
+        "sourceClosureSha256": "95d8d57bcfbe7391424da0ff9c041f9cb1c84ecb18fc3a81778cf78dd7d5d09e",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_moe_grouped_expert_general_v1",
@@ -8876,7 +8876,7 @@
         ],
         "cargoLockPath": "examples/moe_grouped_expert_general_v1/Cargo.lock",
         "cargoLockSha256": "c39ea25acdf01ba776cf1f19b805eca39975e261256da22921d1462e18a07c0b",
-        "contractSha256": "f2ab2210df4d9e2393803a00616446734042660cc2639595bfe254c5f079b31f"
+        "contractSha256": "e868d82ea6eef11020cea0108db6d81298e70a74003df0a44f9aaf38bae070a8"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-grouped-expert-moe.request.json",
