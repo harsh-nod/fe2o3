@@ -251,8 +251,17 @@ struct ProjectedSemanticAccessSiteV1 {
     statement: Option<usize>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GuardedAccessFailureV1 {
+    Trap,
+    // Only authenticated total load_or effects use this control behavior.
+    // The scalar fallback remains in semantic/native value lowering.
+    ReturnFallback,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct GuardedRankedAccessV1 {
+    failure: GuardedAccessFailureV1,
     view: ProductionRankedValueIdV1,
     indices: Vec<ProductionRankedValueV1>,
     checked_success: Option<ProductionRankedValueV1>,
@@ -5780,6 +5789,7 @@ fn project_strided_read_effects_v1(
             next_value,
         )?;
         projected.push(Some(GuardedRankedAccessV1 {
+            failure: GuardedAccessFailureV1::ReturnFallback,
             view,
             indices: vec![row, column],
             checked_success: None,
@@ -8047,6 +8057,7 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
                 }
             };
             let access = GuardedRankedAccessV1 {
+                failure: GuardedAccessFailureV1::Trap,
                 view,
                 indices: vec![index],
                 checked_success: None,
@@ -17245,16 +17256,31 @@ impl<'a> SemanticAssertProofsV1<'a> {
             }
             let zero_target = targets.values()[0].edge().target().index() as usize;
             let nonzero_target = targets.otherwise().target().index() as usize;
+            let statement_count = block.statements().len();
+            let mut capture = ScalarAssignmentSiteV1 {
+                block: switch_block,
+                statement: statement_count,
+            };
             let discriminant_is_tested = self.local_is_value_preserving_alias_of(
                 discriminant_local,
                 local,
                 switch_block,
-                block.statements().len(),
-                None,
+                statement_count,
+                Some(&mut capture),
             )?;
             let discriminant_is_tested = discriminant_is_tested
                 && (discriminant_local == local
-                    || !self.block_defines_local(switch_block, local)?);
+                    || if capture.block != switch_block || capture.statement > statement_count {
+                        false
+                    } else {
+                        self.charge(statement_count - capture.statement)?;
+                        !self.block_defines_local_in_statement_range_v1(
+                            switch_block,
+                            local,
+                            capture.statement,
+                            statement_count,
+                        )?
+                    });
             let excluding_target = if discriminant_is_tested {
                 Some(nonzero_target)
             } else {
@@ -17531,36 +17557,52 @@ impl<'a> SemanticAssertProofsV1<'a> {
         };
         let left_local = simple_operand_local(left).map(|value| value.index() as usize);
         let right_local = simple_operand_local(right).map(|value| value.index() as usize);
+        let mut left_capture = site;
         let left_is_tested = if let Some(left_local) = left_local {
             self.local_is_value_preserving_alias_of(
                 left_local,
                 tested_local,
                 site.block,
                 site.statement,
-                None,
+                Some(&mut left_capture),
             )?
         } else {
             false
         };
+        let mut right_capture = site;
         let right_is_tested = if let Some(right_local) = right_local {
             self.local_is_value_preserving_alias_of(
                 right_local,
                 tested_local,
                 site.block,
                 site.statement,
-                None,
+                Some(&mut right_capture),
             )?
         } else {
             false
         };
-        let compares_tested_local_to_zero = left_is_tested
-            && self.operand_is_exact_unsigned_zero(right)
-            || right_is_tested && self.operand_is_exact_unsigned_zero(left);
-        if !compares_tested_local_to_zero {
+        let capture = if left_is_tested && self.operand_is_exact_unsigned_zero(right) {
+            left_capture
+        } else if right_is_tested && self.operand_is_exact_unsigned_zero(left) {
+            right_capture
+        } else {
             return Ok(None);
-        }
-        if site.block == switch_block && self.block_defines_local(switch_block, tested_local)? {
-            return Ok(None);
+        };
+        if site.block == switch_block {
+            let statement_count = self.function.blocks()[switch_block].statements().len();
+            if capture.block != switch_block || capture.statement > statement_count {
+                return Ok(None);
+            }
+            // Initialization before the observed value is valid; later writes are not.
+            self.charge(statement_count - capture.statement)?;
+            if self.block_defines_local_in_statement_range_v1(
+                switch_block,
+                tested_local,
+                capture.statement,
+                statement_count,
+            )? {
+                return Ok(None);
+            }
         }
         Ok(match operation {
             SemanticBinaryOpV1::Equal => Some(false_target),
@@ -20203,6 +20245,19 @@ fn build_ranked_cfg_from_prepared_assertions_v1(
                     operations.push(operation);
                 }
                 ProjectedBlockItemV1::Guarded(access) => {
+                    if access.failure == GuardedAccessFailureV1::ReturnFallback
+                        && (access.access != AccessKindAttr::Read
+                            || access.memory_space != MemorySpaceAttr::Global
+                            || access.checked_success.is_some()
+                            || access.indices.len() != 2
+                            || access.comparisons.len() != 2
+                            || access.comparisons[0].0 != access.indices[0]
+                            || access.comparisons[1].0 != access.indices[1])
+                    {
+                        return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                            "a total read fallback without its exact rank-two read predicates",
+                        ));
+                    }
                     let predicate = GuardPredicateV1::for_access(&access);
                     let access_block = current + predicate.comparisons.len();
                     let failure_block = access_block + 1;
@@ -20216,6 +20271,7 @@ fn build_ranked_cfg_from_prepared_assertions_v1(
                             access_block,
                             failure_block,
                             live.len(),
+                            access.failure,
                         )?;
                     } else {
                         append_predicate_blocks(
@@ -20286,12 +20342,41 @@ fn build_ranked_cfg_from_prepared_assertions_v1(
                         output_extent: access.output_extent,
                         semantic_site: access.semantic_site,
                     });
-                    push_block_at(
-                        &mut blocks,
-                        failure_block,
-                        Vec::new(),
-                        ProductionRankedTerminatorV1::Trap,
-                    )?;
+                    if access.failure == GuardedAccessFailureV1::ReturnFallback {
+                        if live.is_empty() {
+                            push_block_at(
+                                &mut blocks,
+                                failure_block,
+                                Vec::new(),
+                                ProductionRankedTerminatorV1::Branch {
+                                    target: ranked_block_id(continuation)?,
+                                },
+                            )?;
+                        } else {
+                            let block = ranked_block_id(failure_block)?;
+                            push_block_at_with_index_arguments(
+                                &mut blocks,
+                                failure_block,
+                                u32::try_from(live.len()).map_err(|_| {
+                                    ProductionRankedProjectionErrorV1::Unsupported(
+                                        "live induction argument count does not fit u32",
+                                    )
+                                })?,
+                                Vec::new(),
+                                ProductionRankedTerminatorV1::BranchArgs {
+                                    arguments: live_induction_block_arguments(block, live)?,
+                                    target: ranked_block_id(continuation)?,
+                                },
+                            )?;
+                        }
+                    } else {
+                        push_block_at(
+                            &mut blocks,
+                            failure_block,
+                            Vec::new(),
+                            ProductionRankedTerminatorV1::Trap,
+                        )?;
+                    }
                     current = continuation;
                     operations = Vec::new();
                 }
@@ -21156,6 +21241,7 @@ fn append_predicate_blocks_with_index_arguments(
     true_block: usize,
     false_block: usize,
     argument_count: usize,
+    failure: GuardedAccessFailureV1,
 ) -> Result<(), ProductionRankedProjectionErrorV1> {
     if predicate.comparisons.is_empty() {
         return Err(ProductionRankedProjectionErrorV1::Unsupported(
@@ -21190,7 +21276,11 @@ fn append_predicate_blocks_with_index_arguments(
                 lhs,
                 rhs,
                 true_arguments: arguments.clone(),
-                false_arguments: Vec::new(),
+                false_arguments: if failure == GuardedAccessFailureV1::ReturnFallback {
+                    arguments
+                } else {
+                    Vec::new()
+                },
                 true_block: ranked_block_id(next)?,
                 false_block: ranked_block_id(false_block)?,
             },
@@ -23840,6 +23930,7 @@ fn project_place_access_with_atomic(
         guarded_sites.push(GuardedAccessSiteV1 {
             insertion_operation: operations.len(),
             access: GuardedRankedAccessV1 {
+                failure: GuardedAccessFailureV1::Trap,
                 view: view_id,
                 indices: ranked_indices,
                 checked_success: None,
@@ -39987,6 +40078,7 @@ mod tests {
         projected[2]
             .items
             .push(ProjectedBlockItemV1::Guarded(GuardedRankedAccessV1 {
+                failure: GuardedAccessFailureV1::Trap,
                 view: ProductionRankedValueIdV1::new(0),
                 indices: vec![ProductionRankedValueV1::Argument(0)],
                 checked_success: None,
