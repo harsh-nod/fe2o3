@@ -8705,6 +8705,942 @@
             ]
           }
         ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-decode-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-decode-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-decode-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-decode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-decode-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-decode-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-decode-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-decode-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-decode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-decode-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-held-fragments-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-held-fragments,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-held-fragments-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-held-fragments-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-held-fragments-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-held-fragments-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-held-fragments-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-held-fragments,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-held-fragments-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-held-fragments-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-held-fragments-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-held-fragments-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-interleaved-stores-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-interleaved-stores,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-interleaved-stores-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-interleaved-stores-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-interleaved-stores-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-interleaved-stores-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-interleaved-stores-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-interleaved-stores,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-interleaved-stores-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-interleaved-stores-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-interleaved-stores-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-interleaved-stores-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-attention-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-attention-component,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-attention-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-attention-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-attention-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-attention-component,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-attention-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-attention-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-expert-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-expert-component,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-expert-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-expert-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-expert-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-expert-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-expert-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-expert-component,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-expert-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-expert-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-expert-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-expert-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-router-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-mode-simt,kernel-gpt-oss-router-component"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-router-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-router-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-router-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-router-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-materialized-router-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-mode-tile,kernel-gpt-oss-router-component"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-router-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-materialized-router-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-materialized-router-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-materialized-router-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-pipelined-attention-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-pipelined-attention,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-pipelined-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-pipelined-attention-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-pipelined-attention-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-pipelined-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-pipelined-attention-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-pipelined-attention,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-pipelined-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-pipelined-attention-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-pipelined-attention-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-pipelined-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-scalar-attention-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-scalar-attention,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-scalar-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-scalar-attention-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-scalar-attention-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-scalar-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-scalar-attention-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-scalar-attention,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-scalar-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-scalar-attention-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-scalar-attention-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-scalar-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-serial-router-simt",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-router-serial,kernel-gpt-oss-mode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-serial-router-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-serial-router-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-serial-router-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-serial-router-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "cpu-reference-gfx950-gpt-oss-serial-router-tile",
+        "gate": "cpu-reference",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-cpu-reference.sh",
+          "arguments": [
+            "examples/gfx950_gpt_oss_decode/Cargo.toml",
+            "test",
+            "reference",
+            "--no-default-features",
+            "--features",
+            "kernel-gpt-oss-decode-router-serial,kernel-gpt-oss-mode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 1200
+        },
+        "unavailableReason": "Exact source-mode CPU oracle command is a pending qualification obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-serial-router-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-gpt-oss-serial-router-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-gpt-oss-serial-router-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "New source mode requires its own source-produced Bundle V7 / KIR V12 oracle; no canonical or other-mode retained KIR is admitted.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-gpt-oss-120b-megakernel",
+            "fixtureIds": [
+              "gfx950-gpt-oss-serial-router-tile"
+            ]
+          }
+        ]
       }
     ],
     "status": "pending"
