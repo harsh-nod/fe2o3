@@ -141,11 +141,11 @@ case "${1:-}" in
               symbol=gfx950_compressed_hybrid_attention; fp8_mfma=1
               transpose=llvm.amdgcn.ds.read.tr8.b64.v2i32
               transpose_calls=4; ocml_calls=1; lds=8192 ;;
-            kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1)
+            kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1 | kernel-attnres-aggregate,kernel-attnres-aggregate-simt | kernel-attnres-aggregate,kernel-attnres-aggregate-tile)
               symbol=gfx950_attnres_aggregate; ocml_calls=1 ;;
-            kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1)
+            kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1 | kernel-four-branch-residual,kernel-four-branch-residual-simt | kernel-four-branch-residual,kernel-four-branch-residual-tile)
               symbol=gfx950_four_branch_residual; ocml_calls=1 ;;
-            kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1)
+            kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1 | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-simt | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-tile)
               symbol=gfx950_mhc_sinkhorn_mix; ocml_calls=1 ;;
             kernel-moe-route)
               symbol=gfx950_moe_route_fp4_t16_e4_k2_v1; ocml_calls=1 ;;
@@ -314,11 +314,11 @@ case "$key" in
     symbol=gfx950_deepseek_sparse_attention; kernarg=112 ;;
   kernel-compressed-hybrid-attention | kernel-compressed-hybrid-attention-division-baseline-v1)
     symbol=gfx950_compressed_hybrid_attention; kernarg=80; lds=8192 ;;
-  kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1)
+  kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1 | kernel-attnres-aggregate,kernel-attnres-aggregate-simt | kernel-attnres-aggregate,kernel-attnres-aggregate-tile)
     symbol=gfx950_attnres_aggregate; kernarg=48 ;;
-  kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1)
+  kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1 | kernel-four-branch-residual,kernel-four-branch-residual-simt | kernel-four-branch-residual,kernel-four-branch-residual-tile)
     symbol=gfx950_four_branch_residual; kernarg=64 ;;
-  kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1)
+  kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1 | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-simt | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-tile)
     symbol=gfx950_mhc_sinkhorn_mix; kernarg=48 ;;
   kernel-moe-route)
     symbol=gfx950_moe_route_fp4_t16_e4_k2_v1; kernarg=96; workgroup=256 ;;
@@ -397,11 +397,11 @@ case "$key" in
   kernel-deepseek-sparse-attention) symbol=gfx950_deepseek_sparse_attention ;;
   kernel-compressed-hybrid-attention | kernel-compressed-hybrid-attention-division-baseline-v1)
     symbol=gfx950_compressed_hybrid_attention; kind=fp8_attention ;;
-  kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1)
+  kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1 | kernel-attnres-aggregate,kernel-attnres-aggregate-simt | kernel-attnres-aggregate,kernel-attnres-aggregate-tile)
     symbol=gfx950_attnres_aggregate ;;
-  kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1)
+  kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1 | kernel-four-branch-residual,kernel-four-branch-residual-simt | kernel-four-branch-residual,kernel-four-branch-residual-tile)
     symbol=gfx950_four_branch_residual ;;
-  kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1)
+  kernel-mhc-sinkhorn-mix | kernel-mhc-sinkhorn-mix-scalar-v1 | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-simt | kernel-mhc-sinkhorn-mix,kernel-mhc-sinkhorn-mix-tile)
     symbol=gfx950_mhc_sinkhorn_mix ;;
   kernel-moe-route) symbol=gfx950_moe_route_fp4_t16_e4_k2_v1 ;;
   kernel-moe-expert-rank)
@@ -604,6 +604,7 @@ ROCM_PATH="${FAKE_ROCM}" \
 FE2O3_GFX950_OCML_MANIFEST="${GFX950_MANIFEST_724}" \
 FE2O3_EXAMPLE_CARGO_ARGS=--no-default-features \
 FE2O3_GFX950_SYSTEMS_ABLATION_VARIANT=expert-serial \
+FE2O3_GFX950_ADVANCED_MODE=invalid-inherited-mode \
 FE2O3_ADVANCED_SUITE=undeclared-parent-suite \
 FE2O3_ADVANCED_SCRIPT_DIR="${TEST_ROOT}/absent-parent-suite" \
 TMPDIR="${TEST_ROOT}/tmp" \
@@ -615,13 +616,13 @@ KERNEL_MATRIX_TEST_SYSROOT="${TEST_ROOT}/sysroot" \
   }
 
 grep -F -- \
-  'kernel compile matrix: target=gfx950 mode=compile-only kernels=39 hardware_observed=false' \
+  'kernel compile matrix: target=gfx950 mode=compile-only kernels=45 hardware_observed=false' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX PREREQUISITE target=gfx950 exact manifest-pinned ROCm 7.2.1 or 7.2.4 Clang/LLD/device-library closure required' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
-  'MATRIX PASS target=gfx950 compiled=39 hardware_executed=0 artifacts=temporary' \
+  'MATRIX PASS target=gfx950 compiled=45 hardware_executed=0 artifacts=temporary' \
   "${gfx950_output}" >/dev/null
 grep -F -- \
   'MATRIX LIMITATION remaining gfx950 ablations, HIP comparators, hardware behavior, and numerical results are not covered' \
@@ -641,6 +642,12 @@ for name in \
   compressed-hybrid-attention \
   compressed-hybrid-attention-division-baseline \
   attnres-aggregate \
+  attnres-aggregate-simt \
+  attnres-aggregate-tile \
+  four-branch-residual-simt \
+  four-branch-residual-tile \
+  mhc-sinkhorn-mix-simt \
+  mhc-sinkhorn-mix-tile \
   attnres-aggregate-explicit-reuse \
   four-branch-residual \
   four-branch-residual-explicit \
@@ -669,7 +676,7 @@ for name in \
   [[ "$(grep -Fc -- "CASE ${name} target=gfx950 status=PASS hardware_observed=false" \
     "${gfx950_output}")" -eq 1 ]]
 done
-[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 39 ]]
+[[ "$(grep -Fc -- ' cargo check ' "${LOG}")" -eq 45 ]]
 [[ "$(grep -Fc -- ' cargo build ' "${LOG}")" -eq 1 ]]
 for features in \
   kernel-moe-route \
@@ -689,6 +696,15 @@ for features in \
   'kernel-qwen-ngram-gather\,ablation-ngram-reverse-probe' \
   'kernel-muon-update\,ablation-muon-broadcast16'; do
   [[ "$(grep -Fc -- "--features ${features}" "${LOG}")" -eq 1 ]]
+done
+for features in \
+  'kernel-attnres-aggregate\,kernel-attnres-aggregate-simt' \
+  'kernel-attnres-aggregate\,kernel-attnres-aggregate-tile' \
+  'kernel-four-branch-residual\,kernel-four-branch-residual-simt' \
+  'kernel-four-branch-residual\,kernel-four-branch-residual-tile' \
+  'kernel-mhc-sinkhorn-mix\,kernel-mhc-sinkhorn-mix-simt' \
+  'kernel-mhc-sinkhorn-mix\,kernel-mhc-sinkhorn-mix-tile'; do
+  [[ "$(grep -Fc -- "--features ${features} --lib" "${LOG}")" -eq 1 ]]
 done
 if grep -F -- ' cargo test ' "${LOG}" >/dev/null; then
   printf '%s\n' 'gfx950 compile-only matrix unexpectedly executed a hardware test' >&2

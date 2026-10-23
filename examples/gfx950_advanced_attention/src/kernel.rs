@@ -1912,7 +1912,8 @@ pub fn gfx950_compressed_hybrid_attention(
 #[cfg(all(
     target_arch = "amdgpu",
     feature = "kernel-attnres-aggregate",
-    not(feature = "kernel-attnres-aggregate-explicit-reuse-v1")
+    not(feature = "kernel-attnres-aggregate-explicit-reuse-v1"),
+    not(feature = "kernel-attnres-aggregate-tile")
 ))]
 #[kernel(
     typed,
@@ -2018,7 +2019,8 @@ pub fn gfx950_attnres_aggregate(
 #[cfg(all(
     target_arch = "amdgpu",
     feature = "kernel-four-branch-residual",
-    not(feature = "kernel-four-branch-residual-explicit-v1")
+    not(feature = "kernel-four-branch-residual-explicit-v1"),
+    not(feature = "kernel-four-branch-residual-tile")
 ))]
 #[kernel(
     typed,
@@ -2104,7 +2106,8 @@ pub fn gfx950_four_branch_residual(
 #[cfg(all(
     target_arch = "amdgpu",
     feature = "kernel-mhc-sinkhorn-mix",
-    not(feature = "kernel-mhc-sinkhorn-mix-scalar-v1")
+    not(feature = "kernel-mhc-sinkhorn-mix-scalar-v1"),
+    not(feature = "kernel-mhc-sinkhorn-mix-tile")
 ))]
 #[kernel(
     typed,

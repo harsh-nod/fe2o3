@@ -327,3 +327,30 @@ roofline. This is expected for a single-wave latency tutorial: the roofline
 excludes dispatch latency and does not provide a dependency-throughput bound
 for the 16 logical exponentials. It is a strict resource bound, not a claimed
 attainable single-wave latency.
+
+
+### Explicit SIMT and checked tile mixing modes
+
+The three F32 mixing tutorials accept an optional `simt` or `tile` argument.
+Without a mode argument or environment override, the canonical selection
+remains unchanged. Existing ablations remain available. SIMT uses
+the existing ordinary Rust body. Tile preserves its F32 operation order and
+writes through checked `DisjointSlice<f32, Tiled2D<Index1D, 64, 4, 16, 1>>`
+coordinates covering the same 1,024 outputs.
+
+From the repository root, compile each selection without launching a GPU:
+
+```bash
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-attnres-aggregate-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-attnres-aggregate-gfx950.sh tile
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-four-branch-residual-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-four-branch-residual-gfx950.sh tile
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-mhc-sinkhorn-mix-gfx950.sh simt
+FE2O3_EXAMPLE_COMPILE_ONLY=1 bash examples/gfx950_advanced_attention/run-mhc-sinkhorn-mix-gfx950.sh tile
+```
+
+Use the toolchain and ROCm prerequisites documented above. From this package,
+host reference and coordinate checks run with
+`cargo test --locked --offline --all-targets -j2 -- --test-threads=1`.
+They do not execute the GPU tile body. Compile-only success does not establish
+runtime or hardware qualification.

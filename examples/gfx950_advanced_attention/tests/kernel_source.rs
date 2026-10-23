@@ -8,6 +8,7 @@ use fe2o3_gfx950_advanced_attention::{
 use syn::{Item, Visibility};
 
 const LIB_SOURCE: &str = include_str!("../src/lib.rs");
+const DIMENSIONS_SOURCE: &str = include_str!("../src/dimensions.rs");
 const CARGO_MANIFEST: &str = include_str!("../Cargo.toml");
 const SOURCE: &str = include_str!("../src/kernel.rs");
 const ABLATION_SOURCE: &str = include_str!("../src/ablation.rs");
@@ -165,7 +166,7 @@ fn package_states_the_production_source_and_evidence_boundary() {
     assert_eq!(GFX950_ADVANCED_ATTENTION_GRID_V1, [4, 1, 1]);
     assert!(GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1);
     assert!(
-        LIB_SOURCE.contains("GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = true")
+        DIMENSIONS_SOURCE.contains("GFX950_ADVANCED_ATTENTION_SOURCE_LOWERING_SUPPORTED_V1: bool = true")
     );
     assert!(GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1.contains("formal compiler refinement"));
     assert!(GFX950_ADVANCED_ATTENTION_SOURCE_BLOCKER_V1.contains("protected publication"));

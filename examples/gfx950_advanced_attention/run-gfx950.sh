@@ -40,7 +40,20 @@ if [[ $SUITE == systems ]]; then
             exit 2 ;;
     esac
 fi
-BUILD_FEATURES=$FEATURE${EXTRA_FEATURE:+,$EXTRA_FEATURE}
+ADVANCED_MODE=${FE2O3_GFX950_ADVANCED_MODE:-canonical}
+MODE_FEATURE=
+if [[ $ADVANCED_MODE != canonical ]]; then
+    case "$SUITE:$FEATURE:$ADVANCED_MODE" in
+        attention:kernel-attnres-aggregate:simt|attention:kernel-attnres-aggregate:tile) MODE_FEATURE=$FEATURE-$ADVANCED_MODE ;;
+        attention:kernel-four-branch-residual:simt|attention:kernel-four-branch-residual:tile) MODE_FEATURE=$FEATURE-$ADVANCED_MODE ;;
+        attention:kernel-mhc-sinkhorn-mix:simt|attention:kernel-mhc-sinkhorn-mix:tile) MODE_FEATURE=$FEATURE-$ADVANCED_MODE ;;
+        *)
+            printf 'unsupported advanced mode pairing: %s:%s:%s\n' \
+                "$SUITE" "$FEATURE" "$ADVANCED_MODE" >&2
+            exit 2 ;;
+    esac
+fi
+BUILD_FEATURES=$FEATURE${EXTRA_FEATURE:+,$EXTRA_FEATURE}${MODE_FEATURE:+,$MODE_FEATURE}
 case "$SUITE:$FEATURE" in
     attention:kernel-kda-decode)
         SYMBOL=gfx950_kda_decode; KERNARG=128; WG=256; LDS=0; OCML=0
@@ -146,6 +159,9 @@ REPO_ROOT=${FE2O3_REPO_ROOT:-$(cd -- "$COMMON_DIR/../.." && pwd -P)}
 TOOLCHAIN=${FE2O3_RUST_TOOLCHAIN:-nightly-2026-04-03}
 ROOT_TARGET_DIR=${FE2O3_ROOT_TARGET_DIR:-$REPO_ROOT/target}
 OUTPUT_SUFFIX=$FEATURE
+if [[ -n $MODE_FEATURE ]]; then
+    OUTPUT_SUFFIX=$FEATURE-$ADVANCED_MODE
+fi
 if [[ $SUITE == systems && $SYSTEMS_ABLATION != canonical ]]; then
     OUTPUT_SUFFIX=$FEATURE-$SYSTEMS_ABLATION
 fi
