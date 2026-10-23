@@ -17,7 +17,10 @@ macro_rules! decode_fp8_e4m3_scalar {
         // Scalar arithmetic keeps bit-conversion library calls out of the decoder.
         // Every finite result and each power-of-two factor is exact in F32.
         let magnitude = if exponent == 15 && mantissa == 7 {
-            f32::NAN
+            // E4M3 defines a NaN class, not a widened F32 literal payload.
+            // Keep the input-derived operation in the supported strict-F32 path.
+            let zero = mantissa as f32 - 7.0;
+            zero / zero
         } else if exponent == 0 {
             (mantissa as f32) * 0.001_953_125
         } else {

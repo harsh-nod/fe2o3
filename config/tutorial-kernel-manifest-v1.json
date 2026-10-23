@@ -9703,7 +9703,7 @@
         "sourcePaths": [
           "examples/gfx950_low_precision/src/kernel.rs"
         ],
-        "sourceClosureSha256": "84a751370f7615a5f19e8967aff90950bea005ceedd94a4263c68592bbaba929",
+        "sourceClosureSha256": "7e0a062de073f981f0b4e7b95faf862dfe73cab6d2955fba0fcac70b36e65296",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_low_precision",
@@ -9718,7 +9718,7 @@
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
         "cargoLockSha256": "d5740510d8cdda90a91bc2126e0c17613529bacfdd49fc5958e5147b4f5ce4ec",
-        "contractSha256": "b6f2eb9c842eadd75cbcc4a88a06285aa6de43a711edbf2c9561d8edc0d66b31"
+        "contractSha256": "b90b15ed60e80beb91fd6657401c5433da45efced6043ce63ef2fe3c6034de1c"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp4-attention.request.json",
@@ -9750,7 +9750,7 @@
         "sourcePaths": [
           "examples/gfx950_low_precision/src/kernel.rs"
         ],
-        "sourceClosureSha256": "84a751370f7615a5f19e8967aff90950bea005ceedd94a4263c68592bbaba929",
+        "sourceClosureSha256": "7e0a062de073f981f0b4e7b95faf862dfe73cab6d2955fba0fcac70b36e65296",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_low_precision",
@@ -9765,7 +9765,7 @@
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
         "cargoLockSha256": "d5740510d8cdda90a91bc2126e0c17613529bacfdd49fc5958e5147b4f5ce4ec",
-        "contractSha256": "c2369e8cb92df724e32c5e0ba50327f76cc93c76c834576d72d102a88007ab83"
+        "contractSha256": "d5dfde7379af5b39c9372e97a1b2c55873a81c6a48cb1255f7133199d53b4d69"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp4-gemm.request.json",
@@ -9797,7 +9797,7 @@
         "sourcePaths": [
           "examples/gfx950_low_precision/src/kernel.rs"
         ],
-        "sourceClosureSha256": "84a751370f7615a5f19e8967aff90950bea005ceedd94a4263c68592bbaba929",
+        "sourceClosureSha256": "7e0a062de073f981f0b4e7b95faf862dfe73cab6d2955fba0fcac70b36e65296",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_low_precision",
@@ -9812,7 +9812,7 @@
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
         "cargoLockSha256": "d5740510d8cdda90a91bc2126e0c17613529bacfdd49fc5958e5147b4f5ce4ec",
-        "contractSha256": "3b3b7a6e5ef08706bee11430c0cb6204a4781b5e7dd51b1ea00d9bbc87215633"
+        "contractSha256": "1ff9a58c3180cec8c718dbca9b493a8d60458b342f40ca2a0966bc22ddd64635"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp8-attention.request.json",
@@ -9844,7 +9844,7 @@
         "sourcePaths": [
           "examples/gfx950_low_precision/src/kernel.rs"
         ],
-        "sourceClosureSha256": "84a751370f7615a5f19e8967aff90950bea005ceedd94a4263c68592bbaba929",
+        "sourceClosureSha256": "7e0a062de073f981f0b4e7b95faf862dfe73cab6d2955fba0fcac70b36e65296",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_low_precision",
@@ -9859,7 +9859,7 @@
         ],
         "cargoLockPath": "examples/gfx950_low_precision/Cargo.lock",
         "cargoLockSha256": "d5740510d8cdda90a91bc2126e0c17613529bacfdd49fc5958e5147b4f5ce4ec",
-        "contractSha256": "1316e78b8fba96c081104a1c49f6e757f3ede6bf7e59ed8fb9714a73678211ae"
+        "contractSha256": "18682f63618f1a46dbc570c8004253bc584fbfd484d5f08aab0bbbcfb8cb47e4"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-fp8-gemm.request.json",
