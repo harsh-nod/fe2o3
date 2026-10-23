@@ -107,6 +107,19 @@ const SYSTEM_BATCHES: usize = 16;
 const COMBINE_BATCHES: usize = 4;
 
 #[cfg(feature = "hardware-test-hooks")]
+mod dimensions {
+    pub(super) use super::{
+        ALL_EXPERTS, ATTENTION_TOKENS_V1, CANDIDATES, CHANNELS_V1, DEEPSEEK_SPARSE_TOP_K_V1,
+        DISPATCH_CAPACITY, DRAFT_STEPS, EXPERTS, GRADIENT_SHARDS, HEAD_DIMENSION_V1, HIDDEN,
+        KDA_CHUNK_TOKENS_V1, KDA_KEY_DIMENSION_V1, KDA_STATE_ELEMENTS_V1, KDA_VALUE_DIMENSION_V1,
+        MIXING_STREAMS_V1, MUON_DIM, MUON_ELEMENTS, MUON_ITERATIONS, MUON_LEARNING_RATE, NGRAM,
+        OUTPUT, PREFILL_TOKENS_V1, QUERIES, SELECTED_BLOCKS_V1, SELECTED_TOKENS_V1,
+        SINKHORN_ITERATIONS_V1, STATE_WIDTH, SYSTEM_BATCHES, TABLE_SIZE, TOKENS,
+        TOKENS_PER_BLOCK_V1, TOP_K,
+    };
+}
+
+#[cfg(feature = "hardware-test-hooks")]
 #[path = "../../../examples/gfx950_advanced_attention/src/reference.rs"]
 mod attention_reference;
 #[cfg(feature = "hardware-test-hooks")]
@@ -2258,6 +2271,31 @@ unsafe fn dispatch(
     resolution: &HsaKernelResolutionObservationV1,
     explicit: &[u8],
 ) -> Result<(), BoxError> {
+    // SAFETY: preserve the existing fixed geometry and reviewed launch boundary.
+    unsafe {
+        dispatch_with_grid(
+            case,
+            adapter,
+            executable,
+            kernel,
+            resolution,
+            explicit,
+            case.grid_x(),
+        )
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+unsafe fn dispatch_with_grid(
+    case: AdvancedCase,
+    adapter: &mut ReviewedHsaRuntimeAdapterV1,
+    executable: &ReviewedHsaExecutableV1,
+    kernel: &ReviewedHsaKernelV1,
+    resolution: &HsaKernelResolutionObservationV1,
+    explicit: &[u8],
+    grid_x: u32,
+) -> Result<(), BoxError> {
+    require(grid_x != 0, "zero workgroups must not dispatch")?;
     let size = kernarg_size(case.args);
     require(
         resolution.export_symbol() == case.export
@@ -2269,7 +2307,7 @@ unsafe fn dispatch(
             case.label
         ),
     )?;
-    let geometry = HsaLaunchGeometryV1::new([case.grid_x(), 1, 1], [case.workgroup_x, 1, 1], 0);
+    let geometry = HsaLaunchGeometryV1::new([grid_x, 1, 1], [case.workgroup_x, 1, 1], 0);
     let mut storage = RuntimeKernarg::new(size)?;
     let kernarg = storage.bytes_mut();
     kernarg.copy_from_slice(explicit);
@@ -3124,3 +3162,27 @@ fn output_poison_cannot_match_an_unwritten_expected_element() {
 #[test]
 #[ignore = "requires feature hardware-test-hooks and caller-supplied gfx950 HSACO"]
 fn gfx950_advanced_hardware_tests_require_explicit_hooks() {}
+// Vecadd shares the reviewed runtime boundary, with its own complete F32 oracle.
+#[cfg(feature = "hardware-test-hooks")]
+#[path = "gfx950_advanced_hardware/vecadd.rs"]
+mod vecadd_qualification;
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+#[ignore = "non-authoritative: requires a digest-pinned Rust gfx950 HSACO and independently leased MI350"]
+fn gfx950_vecadd_rust_cov6_matches_cpu_reference() -> Result<(), BoxError> {
+    vecadd_qualification::run()
+}
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+#[ignore = "non-authoritative: requires a digest-pinned Rust gfx950 tile HSACO and independently leased MI350"]
+fn gfx950_vecadd_tile_rust_cov6_matches_cpu_reference() -> Result<(), BoxError> {
+    vecadd_qualification::run()
+}
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+#[ignore = "CPU-only metadata inspection of an explicitly pinned vecadd HSACO; no GPU initialization"]
+fn gfx950_vecadd_profile_cpu_inspection() -> Result<(), BoxError> {
+    let (bytes, _) = read_pinned_hsaco()?;
+    inspect_profile(vecadd_qualification::CASE, &bytes)
+}
