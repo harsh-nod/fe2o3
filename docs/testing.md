@@ -320,7 +320,11 @@ scripts/run-tutorial-cpu-reference.sh examples/gfx950_advanced_attention/Cargo.t
 ```
 
 Use `scripts/run-tutorial-cpu-reference.sh --batch` to observe all declared CPU
-suites, up to twelve. The batch builds one private driver and gives each suite
+suites, up to the finite limit of 36. This covers the current 14 original suites
+and 22 mode-specific additions. The total scheduler allowance is the sum of
+suite deadlines: 43,200 seconds for 36 suites at 1,200 seconds each, compared
+with 16,800 seconds for the previous 14-suite limit. The per-suite deadline
+remains 1,200 seconds. The batch builds one private driver and gives each suite
 an independent private target directory and its declared deadline. The entire
 common setup cost counts against every suite's budget; earlier suite execution
 does not count against later suites. Shared source, configuration and tool

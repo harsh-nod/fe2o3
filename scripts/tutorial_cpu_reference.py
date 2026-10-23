@@ -34,7 +34,7 @@ MAX_INPUT_BYTES = 256 * 1024 * 1024
 MAX_FILE = 16 * 1024 * 1024
 MAX_MANIFEST = 1024 * 1024
 MAX_SECONDS = 1200
-MAX_BATCH_SUITES = 14
+MAX_BATCH_SUITES = 36
 # Match the existing managed runner's pinned_executable::MAX_EXECUTABLE_BYTES.
 # This is an on-disk observation limit, not executed-image provenance.
 MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024

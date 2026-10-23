@@ -25,6 +25,47 @@ adapter = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(adapter)
 
 
+# Ordered original 14 suites, then the 18 GPT and four row/scalar mode additions.
+# These expectations must not be derived from the manifest under test.
+CPU_SUITE_CONFIGURATIONS = {
+    "cpu-reference-flash-attention": (True, []),
+    "cpu-reference-gemm-autoresearch": (True, []),
+    "cpu-reference-gfx950-advanced-attention": (True, []),
+    "cpu-reference-gfx950-advanced-systems": (True, []),
+    "cpu-reference-gfx950-gpt-oss-decode": (True, []),
+    "cpu-reference-gfx950-low-precision": (True, []),
+    "cpu-reference-moe-grouped-expert": (True, []),
+    "cpu-reference-moe-top2": (True, []),
+    "cpu-reference-row-softmax": (True, []),
+    "cpu-reference-tiled-gemm-paired-default": (True, []),
+    "cpu-reference-tiled-gemm-paired-simt": (False, ["kernel-simt-gemm-general"]),
+    "cpu-reference-tiled-gemm": (True, []),
+    "cpu-reference-typed-vecadd": (True, []),
+    "cpu-reference-scalar-gemm": (True, []),
+    "cpu-reference-gfx950-gpt-oss-decode-simt": (False, ["kernel-gpt-oss-decode", "kernel-gpt-oss-mode-simt"]),
+    "cpu-reference-gfx950-gpt-oss-decode-tile": (False, ["kernel-gpt-oss-decode", "kernel-gpt-oss-mode-tile"]),
+    "cpu-reference-gfx950-gpt-oss-held-fragments-simt": (False, ["kernel-gpt-oss-decode-held-fragments", "kernel-gpt-oss-mode-simt"]),
+    "cpu-reference-gfx950-gpt-oss-held-fragments-tile": (False, ["kernel-gpt-oss-decode-held-fragments", "kernel-gpt-oss-mode-tile"]),
+    "cpu-reference-gfx950-gpt-oss-interleaved-stores-simt": (False, ["kernel-gpt-oss-decode-interleaved-stores", "kernel-gpt-oss-mode-simt"]),
+    "cpu-reference-gfx950-gpt-oss-interleaved-stores-tile": (False, ["kernel-gpt-oss-decode-interleaved-stores", "kernel-gpt-oss-mode-tile"]),
+    "cpu-reference-gfx950-gpt-oss-materialized-attention-simt": (False, ["kernel-gpt-oss-attention-component", "kernel-gpt-oss-mode-simt"]),
+    "cpu-reference-gfx950-gpt-oss-materialized-attention-tile": (False, ["kernel-gpt-oss-attention-component", "kernel-gpt-oss-mode-tile"]),
+    "cpu-reference-gfx950-gpt-oss-materialized-expert-simt": (False, ["kernel-gpt-oss-expert-component", "kernel-gpt-oss-mode-simt"]),
+    "cpu-reference-gfx950-gpt-oss-materialized-expert-tile": (False, ["kernel-gpt-oss-expert-component", "kernel-gpt-oss-mode-tile"]),
+    "cpu-reference-gfx950-gpt-oss-materialized-router-simt": (False, ["kernel-gpt-oss-mode-simt", "kernel-gpt-oss-router-component"]),
+    "cpu-reference-gfx950-gpt-oss-materialized-router-tile": (False, ["kernel-gpt-oss-mode-tile", "kernel-gpt-oss-router-component"]),
+    "cpu-reference-gfx950-gpt-oss-pipelined-attention-simt": (False, ["kernel-gpt-oss-decode-pipelined-attention", "kernel-gpt-oss-mode-simt"]),
+    "cpu-reference-gfx950-gpt-oss-pipelined-attention-tile": (False, ["kernel-gpt-oss-decode-pipelined-attention", "kernel-gpt-oss-mode-tile"]),
+    "cpu-reference-gfx950-gpt-oss-scalar-attention-simt": (False, ["kernel-gpt-oss-decode-scalar-attention", "kernel-gpt-oss-mode-simt"]),
+    "cpu-reference-gfx950-gpt-oss-scalar-attention-tile": (False, ["kernel-gpt-oss-decode-scalar-attention", "kernel-gpt-oss-mode-tile"]),
+    "cpu-reference-gfx950-gpt-oss-serial-router-simt": (False, ["kernel-gpt-oss-decode-router-serial", "kernel-gpt-oss-mode-simt"]),
+    "cpu-reference-gfx950-gpt-oss-serial-router-tile": (False, ["kernel-gpt-oss-decode-router-serial", "kernel-gpt-oss-mode-tile"]),
+    "cpu-reference-gfx950-row-softmax-simt": (False, ["gfx950-target", "qualification-legacy-hip"]),
+    "cpu-reference-gfx950-row-softmax-tile": (False, ["gfx950-target", "qualification-legacy-hip", "structured-tile"]),
+    "cpu-reference-gfx950-scalar-gemm-simt": (False, ["gfx950-target", "qualification-legacy-hip"]),
+    "cpu-reference-gfx950-scalar-gemm-tile": (False, ["gfx950-target", "qualification-legacy-hip", "structured-tile"]),
+}
+
 def source_manifest(arguments: list[str]) -> dict:
     return {
         "qualification": {"suites": [{
@@ -151,18 +192,30 @@ class AdapterComponents(unittest.TestCase):
         payload = source.read_bytes()
         manifest = adapter.decode_json(payload)
         suites = [suite for suite in manifest["qualification"]["suites"] if suite["gate"] == "cpu-reference"]
-        self.assertEqual(len(suites), 14)
+        self.assertEqual([suite["suiteId"] for suite in suites], list(CPU_SUITE_CONFIGURATIONS))
         featureful = []
         for suite in suites:
-            plan = adapter.select_suite(manifest, suite["command"]["arguments"])
+            arguments = suite["command"]["arguments"]
+            plan = adapter.select_suite(manifest, arguments)
             self.assertEqual(plan["suiteId"], suite["suiteId"])
-            expected = (["kernel-simt-gemm-general"]
-                        if suite["suiteId"] == "cpu-reference-tiled-gemm-paired-simt" else [])
-            self.assertEqual(plan["hostConfiguration"]["features"], expected)
-            self.assertEqual(plan["hostConfiguration"]["defaultFeatures"], not bool(expected))
-            if expected:
+            defaults, features = CPU_SUITE_CONFIGURATIONS[suite["suiteId"]]
+            self.assertEqual(plan["hostConfiguration"]["features"], features)
+            self.assertEqual(plan["hostConfiguration"]["defaultFeatures"], defaults)
+            if features:
                 featureful.append(suite["suiteId"])
-        self.assertEqual(featureful, ["cpu-reference-tiled-gemm-paired-simt"])
+                # A featureful suite must not silently enable defaults or accept
+                # an extra feature while retaining the same advertised identity.
+                changed_defaults = [arg for arg in arguments if arg != "--no-default-features"]
+                changed_features = arguments.copy()
+                feature_index = changed_features.index("--features") + 1
+                changed_features[feature_index] = ",".join(sorted([*features, "unexpected-feature"]))
+                for changed in (changed_defaults, changed_features):
+                    with self.subTest(suite=suite["suiteId"], arguments=changed), \
+                            self.assertRaises(adapter.ObservationError):
+                        adapter.select_suite(manifest, changed)
+        self.assertEqual(featureful, [identity for identity, (_, features)
+                                     in CPU_SUITE_CONFIGURATIONS.items() if features])
+        self.assertEqual(len(featureful), 23)
         self.assertEqual(source.read_bytes(), payload)
 
     def test_source_loader_uses_the_existing_validator_before_selecting(self) -> None:
@@ -1053,20 +1106,42 @@ class BatchComponents(unittest.TestCase):
                 self.assertNotIn("--features", argv)
                 self.assertNotIn("--no-default-features", argv)
 
-    def test_fourteen_unique_suites_are_the_exact_batch_limit(self) -> None:
+    def test_original_fourteen_unique_suites_retain_their_batch_contract(self) -> None:
         self.prepare(14)
-        self.assertEqual(adapter.MAX_BATCH_SUITES, 14)
         observation = self.run_batch()
         self.assertEqual(observation["outcome"], "passed")
         self.assertEqual(len(self.records(observation)), 14)
+        self.assertEqual(observation["schedulerLimitSeconds"], 16800)
         self.assertEqual(len(self.calls), 33)
         self.assertEqual([call[0] for call in self.calls].count("driver-build"), 1)
         suites = [call for call in self.calls if call[0] == "suite"]
         self.assertEqual(len({call[2]["CARGO_TARGET_DIR"] for call in suites}), 14)
 
-    def test_fifteen_unique_suites_refuse_the_limit_before_execution(self) -> None:
-        self.prepare(15)
-        with self.assertRaisesRegex(adapter.ObservationError, "between 1 and 14"):
+    def test_thirty_six_unique_suites_are_the_exact_batch_limit(self) -> None:
+        self.prepare(36)
+        self.assertEqual(adapter.MAX_BATCH_SUITES, 36)
+        observation = self.run_batch()
+        self.assertEqual(observation["outcome"], "passed")
+        self.assertEqual(observation["declaredSuiteCount"], 36)
+        self.assertEqual(observation["schedulerLimitSeconds"], 43200)
+        self.assertEqual(len(self.calls), 77)
+        self.assertEqual([call[0] for call in self.calls].count("driver-build"), 1)
+        suites = [call for call in self.calls if call[0] == "suite"]
+        self.assertEqual(len({call[2]["CARGO_TARGET_DIR"] for call in suites}), 36)
+        records = self.records(observation)
+        self.assertEqual([record["plan"]["suiteId"] for record in records],
+                         [f"cpu-{index}" for index in range(36)])
+        for record in records:
+            self.assertEqual(record["plan"]["declaredCommand"]["timeoutSeconds"], 1200)
+            self.assertEqual(record["commonElapsedSeconds"], 5.0)
+            self.assertEqual(record["ownElapsedSeconds"], 2.0)
+            self.assertEqual(record["chargedElapsedSeconds"], 7.0)
+            self.assertTrue(all(record[key] is False for key in adapter.NO_AUTHORITY))
+        self.assertTrue(observation["finalSharedInputsUnchanged"])
+
+    def test_thirty_seven_unique_suites_refuse_the_limit_before_execution(self) -> None:
+        self.prepare(37)
+        with self.assertRaisesRegex(adapter.ObservationError, "between 1 and 36"):
             adapter.batch_plans(self.declaration)
         self.assertEqual(self.calls, [])
 
@@ -1078,7 +1153,7 @@ class BatchComponents(unittest.TestCase):
             if mutation == "empty":
                 manifest["qualification"]["suites"] = []
             elif mutation == "overcap":
-                manifest["qualification"]["suites"] *= 15
+                manifest["qualification"]["suites"] *= 37
             elif mutation.startswith("duplicate"):
                 extra = copy.deepcopy(suite)
                 if mutation == "duplicate-command":
@@ -1298,8 +1373,9 @@ class BatchComponents(unittest.TestCase):
         self.assertTrue(all("manifestSha256" in plan and "validatorSha256" in plan for plan in plans))
         source = Path(__file__).resolve().parents[2] / "config/tutorial-kernel-manifest-v1.json"
         manifest = adapter.decode_json(source.read_bytes())
-        expected = [suite["suiteId"] for suite in manifest["qualification"]["suites"] if suite["gate"] == "cpu-reference"]
-        self.assertEqual(len(expected), 14)
+        expected = list(CPU_SUITE_CONFIGURATIONS)
+        self.assertEqual([suite["suiteId"] for suite in manifest["qualification"]["suites"]
+                          if suite["gate"] == "cpu-reference"], expected)
         self.assertEqual([plan["suiteId"] for plan in adapter.batch_plans(manifest)], expected)
         self.declaration["qualification"]["suites"][0]["command"]["arguments"].extend(["--features", "missing"])
         self.tutorial.write_text(json.dumps(self.declaration))
