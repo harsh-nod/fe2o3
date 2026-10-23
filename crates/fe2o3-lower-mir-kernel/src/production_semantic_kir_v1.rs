@@ -13510,7 +13510,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         clippy::too_many_arguments,
         reason = "Test-only adapter mirrors the production lowering constructor"
     )]
-    fn new(
+    fn new<'work>(
         types: &'a [SemanticTypeDeclV1],
         callables: &'a [SemanticCallableDeclV1],
         function: &'a SemanticFunctionDeclV1,
@@ -13521,6 +13521,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
         launch_rank: u8,
         authenticated_ranked_control: bool,
         max_operations: usize,
+        budget: &'service mut ArgumentBudgetV1<'work>,
     ) -> Result<Self, ProductionSemanticKirErrorV1> {
         let semantic_function = SemanticFunctionIdV1::from_index(0);
         let semantic_ssa = plan_semantic_function_ssa_with_module_v1(
@@ -13531,8 +13532,14 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             ProductionSemanticSsaLimitsV1::default(),
         )
         .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
-        let mut work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(usize::MAX);
-        let mut budget = ArgumentBudgetV1::new(&mut work, usize::MAX);
+        // Construction and subsequent emission retain the caller's same ledger.
+        let call_returns = CallReturnBufferV1::for_function(
+            function,
+            callables,
+            &BTreeMap::new(),
+            0,
+            &mut *budget,
+        )?;
         Self::new_interprocedural(
             types,
             callables,
@@ -13552,14 +13559,8 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             max_operations,
             PrivateArrayRecorderWorkV1::Owned(PrivateArrayLazyBudgetV1::new(1, max_operations)),
             None,
-            CallReturnBufferV1::for_function(
-                function,
-                callables,
-                &BTreeMap::new(),
-                0,
-                &mut budget,
-            )?,
-            None,
+            call_returns,
+            Some(budget),
             SemanticEmissionPlacementV1::default(),
             None,
             None,
@@ -26453,6 +26454,10 @@ mod resource_tests {
         )
         .unwrap();
         let callables = [callable];
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &callables,
@@ -26469,6 +26474,7 @@ mod resource_tests {
             1,
             false,
             32,
+            &mut test_emission_budget,
         )?;
         lowering.locals[1] = Some(SemanticValueBindingV1::Value {
             id: ValueId(0),
@@ -26754,6 +26760,10 @@ mod resource_tests {
                 vec![block],
             )
             .unwrap();
+            let mut test_emission_work =
+                fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+            let mut test_emission_budget =
+                ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
             let mut lowering = SemanticFunctionLoweringV1::new(
                 &types,
                 &[],
@@ -26770,6 +26780,7 @@ mod resource_tests {
                 1,
                 false,
                 max_operations.max(2),
+                &mut test_emission_budget,
             )
             .unwrap();
             lowering.max_operations = max_operations;
@@ -26928,6 +26939,10 @@ mod resource_tests {
             vec![block],
         )
         .unwrap();
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &[],
@@ -26944,6 +26959,7 @@ mod resource_tests {
             1,
             false,
             max_operations,
+            &mut test_emission_budget,
         )
         .unwrap();
         lowering.locals[1] = Some(SemanticValueBindingV1::Value {
@@ -27550,6 +27566,10 @@ mod resource_tests {
         )
         .unwrap();
         let callables = [callable];
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &callables,
@@ -27566,6 +27586,7 @@ mod resource_tests {
             1,
             false,
             16,
+            &mut test_emission_budget,
         )
         .unwrap();
         lowering.locals[1] = Some(input_binding);
@@ -28226,6 +28247,10 @@ mod resource_tests {
             vec![block],
         )
         .unwrap();
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &[],
@@ -28242,6 +28267,7 @@ mod resource_tests {
             1,
             false,
             1024,
+            &mut test_emission_budget,
         )?;
         let value = |id, ty| SemanticValueBindingV1::Value {
             id: ValueId(id),
@@ -28513,6 +28539,10 @@ mod resource_tests {
             blocks,
         )
         .unwrap();
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &callables,
@@ -28529,6 +28559,7 @@ mod resource_tests {
             1,
             false,
             64,
+            &mut test_emission_budget,
         )?;
         lowering.locals[1] = Some(SemanticValueBindingV1::MatrixContext);
         for (local, role, storage, base) in [
@@ -29860,6 +29891,10 @@ mod resource_tests {
             vec![block],
         )
         .unwrap();
+        let mut test_emission_work =
+            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_budget =
+            ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
             &types,
             &[],
@@ -29876,6 +29911,7 @@ mod resource_tests {
             1,
             false,
             16,
+            &mut test_emission_budget,
         )
         .unwrap();
         lowering.locals[0] = Some(SemanticValueBindingV1::Unmaterialized);
