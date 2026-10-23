@@ -7,6 +7,12 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 readonly REPO_ROOT
+TEST_SCOPE=${1:-all}
+if [[ $# -gt 1 || ( $TEST_SCOPE != all && $TEST_SCOPE != --runner-controls ) ]]; then
+  printf 'usage: %s [--runner-controls]\n' "$0" >&2
+  exit 2
+fi
+if [[ $TEST_SCOPE == all ]]; then
 python3 "${REPO_ROOT}/scripts/tests/tutorial_kernel_manifest.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/issue272_m0_contract.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_occurrences.py"
@@ -14,6 +20,7 @@ python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_kernel_identities.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_fixture_bindings.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_source_census.py"
 python3 -I -B "${REPO_ROOT}/scripts/tests/tutorial_reproduction_plan.py"
+fi
 
 # Keep the interpreter that passed the manifest checks when isolating Cargo and
 # ROCm through FAKE_BIN. /usr/bin/python3 may be older than the required Python.
@@ -199,7 +206,7 @@ case "${1:-}" in
             else
               printf 'define amdgpu_kernel void @%s() #0 {\n' "$symbol"
             fi
-            if [[ $feature == kernel-kda-* ]]; then
+            if [[ $feature == kernel-kda-* || ( $feature == kernel-gpt-oss-* && ${FE2O3_GFX950_ADVANCED_MODE:-canonical} == simt ) ]]; then
               printf '  %%kda = call i32 @llvm.amdgcn.ds.bpermute(i32 0, i32 0)\n'
             fi
             for ((index = 0; index < bf16_mfma; index++)); do
@@ -267,7 +274,30 @@ LLVM
           exit 95
         fi
         ;;
-      run | test)
+      test)
+        [[ -n $KERNEL_MATRIX_TEST_SELECTOR_CASE ]] || exit 96
+        args=("$@")
+        selector=
+        while (($#)); do
+          if [[ $1 == --test ]]; then selector=$3; break; fi
+          shift
+        done
+        [[ -n $selector ]] || exit 96
+        if [[ " $* " == *' --list '* ]]; then
+          case $KERNEL_MATRIX_TEST_SELECTOR_CASE in
+            present) printf '%s: test\n' "$selector" ;;
+            absent) printf '0 tests, 0 benchmarks\n' ;;
+            duplicate) printf '%s: test\n%s: test\n' "$selector" "$selector" ;;
+            wrong) printf 'another_test: test\n' ;;
+            list-failure) exit 79 ;;
+            *) exit 96 ;;
+          esac
+        else
+          [[ $FE2O3_RUN_GFX950_ADVANCED_HARDWARE == 1 ]] || exit 96
+          printf 'MOCK HARDWARE SELECTOR EXECUTED %s\n' "$selector"
+        fi
+        ;;
+      run)
         printf '%s\n' 'hardware/host execution was reached in compile-only mode' >&2
         exit 96
         ;;
@@ -590,6 +620,72 @@ set -e
 [[ ${bad_digest_status} -eq 1 ]]
 grep -F -- 'gfx950 OCML input digest mismatch: ocml.bc' \
   <<<"${bad_digest_output}" >/dev/null
+
+
+# Exercise the real runner with the existing inert Cargo and ROCm fixtures.
+for selector_case in present absent duplicate wrong list-failure; do
+  out="$TEST_ROOT/selector-$selector_case.out"
+  set +e
+  PATH="$FAKE_BIN:/usr/bin:/bin" CARGO=cargo ROCM_PATH="$FAKE_ROCM" \
+  FE2O3_GFX950_OCML_MANIFEST="$GFX950_MANIFEST_724" \
+  FE2O3_EXAMPLE_COMPILE_ONLY=0 ROCR_VISIBLE_DEVICES=0 \
+  CARGO_TARGET_DIR="$TEST_ROOT/host-selector-target" \
+  FE2O3_ROOT_TARGET_DIR="$TEST_ROOT/host-selector-target" \
+  FE2O3_GFX950_ADVANCED_OUTPUT_DIR="$TEST_ROOT/selector-$selector_case" \
+  TMPDIR="$TEST_ROOT/tmp" KERNEL_MATRIX_TEST_LOG="$LOG" \
+  KERNEL_MATRIX_TEST_SYSROOT="$TEST_ROOT/sysroot" \
+  KERNEL_MATRIX_TEST_SELECTOR_CASE=$selector_case \
+    bash "$REPO_ROOT/examples/gfx950_gpt_oss_decode/run-gfx950.sh" >"$out" 2>&1
+  rc=$?
+  set -e
+  if [[ $selector_case == present ]]; then
+    [[ $rc -eq 0 ]] || { cat "$out" >&2; exit 1; }
+    grep -F 'MOCK HARDWARE SELECTOR EXECUTED gfx950_gpt_oss_layer_tile_rust_cov6_matches_cpu_reference' "$out" >/dev/null
+  else
+    [[ $rc -ne 0 ]] || { cat "$out" >&2; exit 1; }
+    ! grep -F 'MOCK HARDWARE SELECTOR EXECUTED' "$out"
+    ! grep -F 'production Rust gfx950 build and qualification-oracle numerical run' "$out"
+  fi
+done
+for visibility in '' '0,1' '-1' 'GPU-0123' 'GPU-0123456789abcdeg'; do
+  : >"$LOG"
+  set +e
+  PATH="$FAKE_BIN:/usr/bin:/bin" ROCR_VISIBLE_DEVICES=$visibility \
+  KERNEL_MATRIX_TEST_LOG="$LOG" \
+    bash "$REPO_ROOT/examples/gfx950_gpt_oss_decode/run-gfx950.sh" \
+    >"$TEST_ROOT/runtime-visibility.out" 2>&1
+  rc=$?
+  set -e
+  [[ $rc -eq 2 && ! -s $LOG ]]
+  grep -F 'GPT-OSS runtime requires' "$TEST_ROOT/runtime-visibility.out" >/dev/null
+done
+
+# Mock only enumeration: the actual matrix must clear MODE before both wrappers.
+mkdir -p "$TEST_ROOT/mode-env-bin"
+cat >"$TEST_ROOT/mode-env-bin/python3" <<'EOF'
+#!/usr/bin/env bash
+if [[ " $* " == *' --emit-matrix gfx950 '* ]]; then
+  printf '%s\n' \
+    'mode-default|examples/gfx950_gpt_oss_decode/run-gfx950.sh|kernel-gpt-oss-decode.hsaco|||fixture-default' \
+    'mode-simt|examples/gfx950_gpt_oss_decode/run-ablation-gfx950.sh|kernel-gpt-oss-decode.hsaco|optimized-simt||fixture-simt'
+else
+  exec "$MATRIX_TEST_PYTHON" "$@"
+fi
+EOF
+chmod 700 "$TEST_ROOT/mode-env-bin/python3"
+: >"$LOG"
+export MATRIX_TEST_PYTHON
+PATH="$TEST_ROOT/mode-env-bin:$FAKE_BIN:/usr/bin:/bin" \
+CARGO=cargo ROCM_PATH="$FAKE_ROCM" FE2O3_GFX950_OCML_MANIFEST="$GFX950_MANIFEST_724" \
+FE2O3_GFX950_ADVANCED_MODE=invalid-inherited-mode TMPDIR="$TEST_ROOT/tmp" \
+KERNEL_MATRIX_TEST_LOG="$LOG" KERNEL_MATRIX_TEST_SYSROOT="$TEST_ROOT/sysroot" \
+  bash "$MATRIX_SCRIPT" gfx950 >"$TEST_ROOT/mode-env.out" 2>&1 || {
+    cat "$TEST_ROOT/mode-env.out" >&2; exit 1;
+  }
+grep -F 'MATRIX PASS target=gfx950 compiled=2 hardware_executed=0' "$TEST_ROOT/mode-env.out" >/dev/null
+[[ $(grep -Fc -- ' cargo check ' "$LOG") -eq 2 ]]
+printf 'runner controls passed: selector=5 runtime-visibility=5 actual-matrix-mode-env=2 (mock artifacts; no GPU)\n'
+if [[ $TEST_SCOPE == --runner-controls ]]; then exit 0; fi
 
 success_output="${TEST_ROOT}/success.out"
 # Parent settings must not replace the manifest's per-case selections.
